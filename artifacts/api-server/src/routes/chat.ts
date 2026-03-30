@@ -63,8 +63,8 @@ router.post("/speak", async (req, res) => {
     return;
   }
 
-  const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
-  const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID;
+  const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY?.trim();
+  const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID?.trim();
 
   if (!ELEVENLABS_API_KEY || !ELEVENLABS_VOICE_ID) {
     res.status(500).json({ error: "ElevenLabs API key or Voice ID not configured" });
