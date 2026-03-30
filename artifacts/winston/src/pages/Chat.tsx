@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect, KeyboardEvent, ChangeEvent } from "react";
-import { Send, Play, Loader2, Disc3 } from "lucide-react";
+import { useState, useRef, useEffect, useCallback, KeyboardEvent, ChangeEvent } from "react";
+import { Send, Play, Pause, Loader2, Disc3 } from "lucide-react";
 import { useSendMessage, useTextToSpeech } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -10,7 +10,52 @@ interface Message {
   role: "user" | "assistant";
   content: string;
   audioBase64?: string;
-  isPlaying?: boolean;
+  mimeType?: string;
+}
+
+function useBrowserTTS() {
+  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const [speaking, setSpeaking] = useState(false);
+
+  const speak = useCallback((text: string, onEnd?: () => void) => {
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 0.92;
+    utterance.pitch = 1.0;
+    utterance.volume = 1.0;
+
+    const voices = window.speechSynthesis.getVoices();
+    const preferred = voices.find(
+      (v) =>
+        v.lang.startsWith("en") &&
+        (v.name.includes("Daniel") ||
+          v.name.includes("Samantha") ||
+          v.name.includes("Google UK") ||
+          v.name.includes("Alex") ||
+          v.name.includes("Male"))
+    );
+    if (preferred) utterance.voice = preferred;
+
+    utterance.onstart = () => setSpeaking(true);
+    utterance.onend = () => {
+      setSpeaking(false);
+      onEnd?.();
+    };
+    utterance.onerror = () => {
+      setSpeaking(false);
+      onEnd?.();
+    };
+
+    utteranceRef.current = utterance;
+    window.speechSynthesis.speak(utterance);
+  }, []);
+
+  const stop = useCallback(() => {
+    window.speechSynthesis.cancel();
+    setSpeaking(false);
+  }, []);
+
+  return { speak, stop, speaking };
 }
 
 export default function Chat() {
@@ -22,7 +67,7 @@ export default function Chat() {
     },
   ]);
   const [input, setInput] = useState("");
-  const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
+  const [playingId, setPlayingId] = useState<string | null>(null);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -30,54 +75,86 @@ export default function Chat() {
 
   const sendMessageMutation = useSendMessage();
   const ttsMutation = useTextToSpeech();
+  const browserTTS = useBrowserTTS();
 
-  // Scroll to bottom on new messages
   useEffect(() => {
     if (scrollRef.current) {
-      scrollRef.current.scrollTo({
-        top: scrollRef.current.scrollHeight,
-        behavior: "smooth",
-      });
+      scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
     }
   }, [messages, sendMessageMutation.isPending]);
 
-  // Clean up audio on unmount
   useEffect(() => {
     return () => {
-      if (audioRef.current) {
-        audioRef.current.pause();
-      }
+      audioRef.current?.pause();
+      window.speechSynthesis.cancel();
     };
   }, []);
 
-  const handlePlayAudio = (messageId: string, base64: string, mimeType: string = "audio/mpeg") => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      if (playingAudioId === messageId) {
-        setPlayingAudioId(null);
+  const playElevenLabsAudio = useCallback(
+    (messageId: string, base64: string, mimeType = "audio/mpeg") => {
+      audioRef.current?.pause();
+      if (playingId === messageId) {
+        setPlayingId(null);
         return;
       }
-    }
+      const audio = new Audio(`data:${mimeType};base64,${base64}`);
+      audio.onended = () => setPlayingId(null);
+      audio.onerror = () => setPlayingId(null);
+      audioRef.current = audio;
+      audio.play().catch(() => setPlayingId(null));
+      setPlayingId(messageId);
+    },
+    [playingId]
+  );
 
-    const audioUrl = `data:${mimeType};base64,${base64}`;
-    const audio = new Audio(audioUrl);
-    
-    audio.onended = () => {
-      setPlayingAudioId(null);
-    };
-    
-    audio.onerror = () => {
-      setPlayingAudioId(null);
-      console.error("Error playing audio");
-    };
+  const playBrowserTTS = useCallback(
+    (messageId: string, text: string) => {
+      if (playingId === messageId && browserTTS.speaking) {
+        browserTTS.stop();
+        setPlayingId(null);
+        return;
+      }
+      audioRef.current?.pause();
+      setPlayingId(messageId);
+      browserTTS.speak(text, () => setPlayingId(null));
+    },
+    [playingId, browserTTS]
+  );
 
-    audioRef.current = audio;
-    audio.play().catch(err => {
-      console.error("Playback failed:", err);
-      setPlayingAudioId(null);
-    });
-    setPlayingAudioId(messageId);
-  };
+  const speakReply = useCallback(
+    (messageId: string, text: string) => {
+      ttsMutation.mutate(
+        { data: { text } },
+        {
+          onSuccess: (ttsData) => {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === messageId
+                  ? { ...m, audioBase64: ttsData.audioBase64, mimeType: ttsData.mimeType }
+                  : m
+              )
+            );
+            playElevenLabsAudio(messageId, ttsData.audioBase64, ttsData.mimeType);
+          },
+          onError: () => {
+            playBrowserTTS(messageId, text);
+          },
+        }
+      );
+    },
+    [ttsMutation, playElevenLabsAudio, playBrowserTTS]
+  );
+
+  const handlePlay = useCallback(
+    (msg: Message) => {
+      if (msg.audioBase64) {
+        playElevenLabsAudio(msg.id, msg.audioBase64, msg.mimeType);
+      } else {
+        playBrowserTTS(msg.id, msg.content);
+      }
+    },
+    [playElevenLabsAudio, playBrowserTTS]
+  );
 
   const submitMessage = () => {
     if (!input.trim() || sendMessageMutation.isPending) return;
@@ -88,55 +165,28 @@ export default function Chat() {
       content: input.trim(),
     };
 
-    const historyForApi = messages.map(m => ({ role: m.role, content: m.content }));
-    
+    const historyForApi = messages.map((m) => ({ role: m.role, content: m.content }));
+
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
 
-    // Reset textarea height
     if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = "auto";
     }
 
     sendMessageMutation.mutate(
-      {
-        data: {
-          message: userMsg.content,
-          history: historyForApi,
-        },
-      },
+      { data: { message: userMsg.content, history: historyForApi } },
       {
         onSuccess: (data) => {
-          const assistantMsgId = Date.now().toString();
+          const assistantMsgId = (Date.now() + 1).toString();
           const assistantMsg: Message = {
             id: assistantMsgId,
             role: "assistant",
             content: data.reply,
           };
-          
           setMessages((prev) => [...prev, assistantMsg]);
-
-          // Automatically trigger TTS for Winston's reply
-          ttsMutation.mutate(
-            { data: { text: data.reply } },
-            {
-              onSuccess: (ttsData) => {
-                setMessages((prev) => 
-                  prev.map((msg) => 
-                    msg.id === assistantMsgId 
-                      ? { ...msg, audioBase64: ttsData.audioBase64 } 
-                      : msg
-                  )
-                );
-                // Auto-play the newly generated audio
-                handlePlayAudio(assistantMsgId, ttsData.audioBase64, ttsData.mimeType);
-              },
-            }
-          );
+          speakReply(assistantMsgId, data.reply);
         },
-        onError: () => {
-          // Add a temporary error message or handle gracefully
-        }
       }
     );
   };
@@ -150,7 +200,7 @@ export default function Chat() {
 
   const handleInput = (e: ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
-    e.target.style.height = 'auto';
+    e.target.style.height = "auto";
     e.target.style.height = `${Math.min(e.target.scrollHeight, 200)}px`;
   };
 
@@ -164,13 +214,13 @@ export default function Chat() {
           </Avatar>
           <div>
             <h1 className="text-xl font-serif font-medium text-foreground tracking-wide">Winston</h1>
-            <p className="text-xs text-muted-foreground font-medium tracking-widest uppercase">ALWAYS HERE</p>
+            <p className="text-xs text-muted-foreground font-medium tracking-widest uppercase">Always Here</p>
           </div>
         </div>
       </header>
 
       {/* Chat Area */}
-      <div 
+      <div
         ref={scrollRef}
         className="flex-1 overflow-y-auto p-4 sm:p-6 pb-24 sm:pb-32 space-y-8"
       >
@@ -188,35 +238,39 @@ export default function Chat() {
               }`}
             >
               <div className="whitespace-pre-wrap font-sans">{msg.content}</div>
-              
-              {msg.role === "assistant" && msg.audioBase64 && (
+
+              {msg.role === "assistant" && (
                 <div className="mt-4 pt-3 border-t border-white/5 flex items-center gap-2">
                   <Button
                     variant="ghost"
                     size="icon"
                     className={`h-8 w-8 rounded-full transition-colors ${
-                      playingAudioId === msg.id 
-                        ? "bg-primary/20 text-primary hover:bg-primary/30 hover:text-primary" 
+                      playingId === msg.id
+                        ? "bg-primary/20 text-primary hover:bg-primary/30 hover:text-primary"
                         : "text-muted-foreground hover:text-primary hover:bg-primary/10"
                     }`}
-                    onClick={() => handlePlayAudio(msg.id, msg.audioBase64!)}
+                    onClick={() => handlePlay(msg)}
                     data-testid={`button-play-audio-${msg.id}`}
                   >
-                    {playingAudioId === msg.id ? (
-                      <Disc3 className="h-4 w-4 animate-spin" />
+                    {playingId === msg.id ? (
+                      ttsMutation.isPending && !msg.audioBase64 ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Disc3 className="h-4 w-4 animate-spin" />
+                      )
                     ) : (
                       <Play className="h-4 w-4 fill-current ml-0.5" />
                     )}
                   </Button>
                   <span className="text-xs text-muted-foreground/70 font-medium">
-                    {playingAudioId === msg.id ? "Playing..." : "Listen"}
+                    {playingId === msg.id ? "Playing..." : "Listen"}
                   </span>
                 </div>
               )}
             </div>
           </div>
         ))}
-        
+
         {sendMessageMutation.isPending && (
           <div className="flex flex-col items-start animate-in fade-in">
             <div className="max-w-[85%] rounded-2xl p-5 bg-card border border-white/5 rounded-bl-sm flex items-center gap-1.5 h-[60px]">
