@@ -4,6 +4,23 @@
 
 pnpm workspace monorepo using TypeScript. Each package manages its own dependencies.
 
+## Winston — AI Companion App
+
+Winston is a personal AI companion app with a dark-themed chat interface. Users type messages, get Claude AI responses, and hear them spoken via ElevenLabs TTS.
+
+### Required Secrets
+- `ANTHROPIC_API_KEY` — Claude AI for conversation
+- `ELEVENLABS_API_KEY` — ElevenLabs text-to-speech
+- `ELEVENLABS_VOICE_ID` — ElevenLabs voice ID
+
+### Features
+- Chat with Claude Opus (personalized Winston system prompt)
+- Auto text-to-speech playback after each response
+- Typing indicator while waiting
+- Conversation history maintained in state
+- Replay button on each assistant message
+- Enter to send, Shift+Enter for newline
+
 ## Stack
 
 - **Monorepo tool**: pnpm workspaces

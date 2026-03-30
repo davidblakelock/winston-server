@@ -1,15 +1,16 @@
 openapi: 3.1.0
 info:
-  # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Winston AI Companion API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: chat
+    description: Winston AI companion chat
 paths:
   /healthz:
     get:
@@ -24,6 +25,56 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /chat:
+    post:
+      operationId: sendMessage
+      tags: [chat]
+      summary: Send a message to Winston
+      description: Sends a user message to Claude AI and returns Winston's text response
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatRequest"
+      responses:
+        "200":
+          description: Winston's response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatResponse"
+        "500":
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /speak:
+    post:
+      operationId: textToSpeech
+      tags: [chat]
+      summary: Convert text to speech
+      description: Converts a text string to audio using ElevenLabs TTS
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SpeakRequest"
+      responses:
+        "200":
+          description: Audio data as base64-encoded MP3
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SpeakResponse"
+        "500":
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 components:
   schemas:
     HealthStatus:
@@ -33,4 +84,62 @@ components:
           type: string
       required:
         - status
-
+    ChatRequest:
+      type: object
+      properties:
+        message:
+          type: string
+          description: The user's message to Winston
+        history:
+          type: array
+          description: Previous conversation messages
+          items:
+            $ref: "#/components/schemas/ConversationMessage"
+      required:
+        - message
+    ConversationMessage:
+      type: object
+      properties:
+        role:
+          type: string
+          enum: [user, assistant]
+        content:
+          type: string
+      required:
+        - role
+        - content
+    ChatResponse:
+      type: object
+      properties:
+        reply:
+          type: string
+          description: Winston's text response
+      required:
+        - reply
+    SpeakRequest:
+      type: object
+      properties:
+        text:
+          type: string
+          description: The text to convert to speech
+      required:
+        - text
+    SpeakResponse:
+      type: object
+      properties:
+        audioBase64:
+          type: string
+          description: Base64-encoded MP3 audio data
+        mimeType:
+          type: string
+          description: MIME type of the audio (audio/mpeg)
+      required:
+        - audioBase64
+        - mimeType
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
