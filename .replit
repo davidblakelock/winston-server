@@ -1,4 +1,4 @@
-modules = ["nodejs-24"]
+modules = ["nodejs-24", "postgresql-16"]
 
 [[artifacts]]
 id = "artifacts/api-server"
@@ -31,3 +31,6 @@ timeoutMs = 20000
 ELEVENLABS_VOICE_ID = "Ky9j3wxFbp3dSAdrkOEv"
 EL_API_KEY = "069f805acb411547f8d823645dd91b8e5876260fb24b8ff680c9f01ed7a758e7"
 EL_VOICE_ID = "aj0fZfXTBc7E3By4X8L2"
+
+[nix]
+channel = "stable-25_05"

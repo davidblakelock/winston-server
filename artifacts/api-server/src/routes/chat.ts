@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
 import Anthropic from "@anthropic-ai/sdk";
+import { query } from "../db.js";
 
 const router: IRouter = Router();
 
@@ -81,12 +82,69 @@ function formatWeatherBlock(w: WeatherResult): string {
 }
 
 const MORNING_PATTERN = /\b(good\s+morning|morning|mornin'?|wakin[g']?\s+up|just\s+woke)\b/i;
+const REMINDER_PATTERN = /\b(remind\s+me|set\s+a?\s*reminder|reminder|don'?t\s+let\s+me\s+forget|make\s+sure\s+i|peel\s+remind|ms\.?\s*peel\s+remind)\b/i;
+
+interface ExtractedReminder {
+  reminderText: string;
+  time: string;
+  isRecurring: boolean;
+  recurring: string | null;
+}
+
+async function extractReminder(message: string): Promise<ExtractedReminder | null> {
+  const now = new Date().toLocaleString("en-US", { timeZone: "America/Chicago" });
+
+  const extraction = await anthropic.messages.create({
+    model: "claude-opus-4-5",
+    max_tokens: 256,
+    system: `You extract reminder details from natural language. Current time in Dallas, TX (Central Time): ${now}.
+
+Return ONLY valid JSON with these fields:
+- reminderText: string — what to remind about (concise, e.g. "call Olivia")
+- time: string — 24-hour HH:MM format (e.g. "15:00" for 3pm, "07:00" for 7am)
+- isRecurring: boolean
+- recurring: string or null — one of: "daily", "weekdays", "weekends", "weekly", or null
+
+Examples:
+"remind me to call Olivia at 3pm" → {"reminderText":"call Olivia","time":"15:00","isRecurring":false,"recurring":null}
+"remind me to take my medication every morning at 7am" → {"reminderText":"take my medication","time":"07:00","isRecurring":true,"recurring":"daily"}
+"remind me to walk Winston every weekday at 8am" → {"reminderText":"walk Winston","time":"08:00","isRecurring":true,"recurring":"weekdays"}`,
+    messages: [{ role: "user", content: message }],
+  });
+
+  try {
+    const text = extraction.content[0].type === "text" ? extraction.content[0].text.trim() : "";
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+    return JSON.parse(jsonMatch[0]) as ExtractedReminder;
+  } catch {
+    return null;
+  }
+}
+
+function computeFireAt(timeStr: string, tz: string): Date {
+  const now = new Date();
+  const localNow = new Date(now.toLocaleString("en-US", { timeZone: tz }));
+  const [hours, minutes] = timeStr.split(":").map(Number);
+
+  const candidate = new Date(localNow);
+  candidate.setHours(hours, minutes, 0, 0);
+
+  if (candidate <= localNow) {
+    candidate.setDate(candidate.getDate() + 1);
+  }
+
+  const offsetMs = now.getTime() - localNow.getTime();
+  return new Date(candidate.getTime() + offsetMs);
+}
 
 const BASE_SYSTEM_PROMPT = `You are Emma Peel — David's sharp, warm, and deeply trusted personal AI companion. You know David's life well: his routines, his people, his places, and what matters to him. You speak to him like a close friend who happens to know everything — conversational, direct, never stiff or overly formal. You remember context from the conversation and build on it naturally.
 
 Keep responses concise: typically 2-4 sentences unless David clearly wants more. Never start a response with "I" as the first word. When David needs a reminder, help organizing his thoughts, or just wants to talk — you're here.
 
 When giving a morning briefing, naturally weave in the current weather for Dallas and Knoxville — mention what David should expect for his day (pickleball, run, workout) and give a quick note on how Olivia's weather is looking in Knoxville.
+
+When you confirm a reminder has been set, be warm and specific. For example: "Done — I'll remind you to call Olivia at 3:00 PM." For recurring reminders say something like: "Set. Every morning at 7:00 AM I'll remind you to take your medication."
 
 Here is everything you know about David:
 
@@ -107,14 +165,12 @@ Your Places:
 • Doctor's name and address David Bonnet 403 W. Campbell Road Richardson Texas
 • Gym name and address Moody YMCA 6000 Preston Road Dallas Texas 75205, Semones YMCA 4332 Northaven Road Dallas Texas 75229
 • Favorite restaurants Louies, Chelsa Corner, The Mercury, Hillstone, Sensei, Rex's Seafood, The Lounge Here, Kellers Drive In
-• Hairdresser, pharmacy, any regular spots
-• Any other places you go regularly
 
 Your Interests:
 • Shows you're watching right now – Shrinking, Friends & Neighbors, Lincoln Lawyer
 • Sports teams you follow – The Rangers, Cowboys
 • Music you like – classic rock from the 60's and 70's, classic Jazz
-• Hobbies — play pickleball at least 4 times a week, woodworking, tinkering on old cars, boats, running, cooking,
+• Hobbies — play pickleball at least 4 times a week, woodworking, tinkering on old cars, boats, running, cooking
 • News topics you actually care about – stock market, global politics, technology
 • Types of restaurants you love – sushi, steak, dive bars, pizza, Italian, Indian, seafood. Love all restaurants, but really like either a great dive bar with good food, or a classic dark place where the drinks are strong and the food is great
 
@@ -133,8 +189,12 @@ router.post("/chat", async (req, res) => {
   }
 
   let systemPrompt = BASE_SYSTEM_PROMPT;
+  let reminderConfirmation = "";
 
-  if (MORNING_PATTERN.test(message)) {
+  const isMorningGreeting = MORNING_PATTERN.test(message);
+  const isReminderRequest = REMINDER_PATTERN.test(message);
+
+  if (isMorningGreeting) {
     try {
       const [dallas, knoxville] = await Promise.all([
         fetchCityWeather("Dallas", 32.7767, -96.7970, "America/Chicago"),
@@ -149,6 +209,50 @@ router.post("/chat", async (req, res) => {
       systemPrompt = BASE_SYSTEM_PROMPT + weatherBlock;
     } catch (err) {
       req.log.warn({ err }, "Weather fetch failed, continuing without it");
+    }
+  }
+
+  if (isReminderRequest) {
+    try {
+      const extracted = await extractReminder(message);
+
+      if (extracted) {
+        const fireAt = computeFireAt(extracted.time, "America/Chicago");
+        const [hh, mm] = extracted.time.split(":").map(Number);
+        const displayTime = new Date(0);
+        displayTime.setHours(hh, mm);
+        const timeLabel = displayTime.toLocaleTimeString("en-US", {
+          hour: "numeric",
+          minute: "2-digit",
+          hour12: true,
+        });
+
+        await query(
+          `INSERT INTO reminders (user_name, reminder_text, fire_at, recurring, recurring_time, timezone)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [
+            "David",
+            extracted.reminderText,
+            fireAt,
+            extracted.recurring ?? null,
+            extracted.isRecurring ? extracted.time : null,
+            "America/Chicago",
+          ]
+        );
+
+        req.log.info({ extracted, fireAt }, "Reminder saved");
+
+        reminderConfirmation =
+          `\n\n[Reminder successfully saved to database]\n` +
+          `Text: "${extracted.reminderText}"\n` +
+          `Time: ${timeLabel}\n` +
+          `Recurring: ${extracted.isRecurring ? extracted.recurring ?? "daily" : "no"}\n` +
+          `Please confirm this reminder warmly and specifically in your response.`;
+
+        systemPrompt = systemPrompt + reminderConfirmation;
+      }
+    } catch (err) {
+      req.log.warn({ err }, "Reminder extraction failed, continuing normally");
     }
   }
 

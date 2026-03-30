@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, KeyboardEvent, ChangeEvent } from "react";
-import { Send, Play, Pause, Loader2, Disc3 } from "lucide-react";
+import { Send, Play, Loader2, Disc3 } from "lucide-react";
 import { useSendMessage, useTextToSpeech } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -11,6 +11,14 @@ interface Message {
   content: string;
   audioBase64?: string;
   mimeType?: string;
+  isReminder?: boolean;
+}
+
+interface ReminderEvent {
+  id: number;
+  userName: string;
+  reminderText: string;
+  speakText: string;
 }
 
 function useBrowserTTS() {
@@ -156,6 +164,44 @@ export default function Chat() {
     [playElevenLabsAudio, playBrowserTTS]
   );
 
+  const fireReminderAlert = useCallback(
+    (event: ReminderEvent) => {
+      const msgId = `reminder-${event.id}-${Date.now()}`;
+      const displayContent = `Hey David — your reminder: ${event.reminderText}`;
+
+      const reminderMsg: Message = {
+        id: msgId,
+        role: "assistant",
+        content: displayContent,
+        isReminder: true,
+      };
+
+      setMessages((prev) => [...prev, reminderMsg]);
+      speakReply(msgId, event.speakText);
+    },
+    [speakReply]
+  );
+
+  useEffect(() => {
+    const es = new EventSource("/api/reminders/stream");
+
+    es.addEventListener("reminder", (e) => {
+      try {
+        const data = JSON.parse(e.data) as ReminderEvent;
+        fireReminderAlert(data);
+      } catch {
+      }
+    });
+
+    es.onerror = () => {
+      setTimeout(() => {}, 3000);
+    };
+
+    return () => {
+      es.close();
+    };
+  }, [fireReminderAlert]);
+
   const submitMessage = () => {
     if (!input.trim() || sendMessageMutation.isPending) return;
 
@@ -234,9 +280,16 @@ export default function Chat() {
               className={`max-w-[85%] sm:max-w-[75%] rounded-2xl p-4 sm:p-5 shadow-sm text-[15px] leading-relaxed transition-all duration-300 animate-in fade-in slide-in-from-bottom-2 ${
                 msg.role === "user"
                   ? "bg-secondary text-secondary-foreground rounded-br-sm"
+                  : msg.isReminder
+                  ? "bg-primary/10 border border-primary/30 text-card-foreground rounded-bl-sm"
                   : "bg-card border border-white/5 text-card-foreground rounded-bl-sm"
               }`}
             >
+              {msg.isReminder && (
+                <p className="text-[11px] font-semibold tracking-widest uppercase text-primary/70 mb-2">
+                  Reminder
+                </p>
+              )}
               <div className="whitespace-pre-wrap font-sans">{msg.content}</div>
 
               {msg.role === "assistant" && (
@@ -253,11 +306,7 @@ export default function Chat() {
                     data-testid={`button-play-audio-${msg.id}`}
                   >
                     {playingId === msg.id ? (
-                      ttsMutation.isPending && !msg.audioBase64 ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <Disc3 className="h-4 w-4 animate-spin" />
-                      )
+                      <Disc3 className="h-4 w-4 animate-spin" />
                     ) : (
                       <Play className="h-4 w-4 fill-current ml-0.5" />
                     )}
