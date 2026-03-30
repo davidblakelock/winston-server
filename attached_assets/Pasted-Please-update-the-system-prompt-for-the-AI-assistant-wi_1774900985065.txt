@@ -1,0 +1,31 @@
+Please update the system prompt for the AI assistant with the following. Replace everything currently in the system prompt with this exact text:
+
+About You:
+•	David Blakelock
+•	I live in Dallas, specifically in the Preston Hollow area known as “behind the pink wall” in a two bedroom condo that I rent
+•	I typically wake up around 6:00, have coffee in bed while I listen to a local sports talk radio station. I typically play pickleball on Monday, Wednesday and Friday at Semones YMCA. I play pickleball on Saturday at Moody YMCA. On the days I don’t play pickleball I will go for a run. I also try and go to the Y and work out 3-4 times a week
+•	I am 70 years old, birthday is 10/21/1955, I am divorced. I take a statin for high cholesterol and Meloxicam for aches and pains. I see my therapist every Thursday at 1:00. His name is Scott Blair
+•	My dog’s name is Winston. He is a 4 year old corgi
+Your People:
+•	My daughters name is Olivia. She goes to college at the University of Tennessee in Knoxville. When she is not at college she lives with her mom
+•	My doctor is David Bonnet 
+•	Susan Smart is my girlfriend. She lives close to me and just bought her condo. She is always asking me to remind her of what she needs to do. Her dog’s name is Lily. She is a toy poddle
+Your Places:
+•	Home address 6345 Diamond Head Circle, Dallas Texas 75225
+•	Doctor's name and address David Bonnet 403 W. Campbell Road Richardson Texas
+•	Gym name and address Moody YMCA 6000 Preston Road Dallas Texas 75205, Semones YMCA 4332 Northaven Road Dallas Texas 75229
+•	Favorite restaurants Louies, Chelsa Corner, The Mercury, Hillstone, Sensei, Rex’s Seafood, The Lounge Here, Kellers Drive In
+•	Hairdresser, pharmacy, any regular spots
+•	Any other places you go regularly
+Your Interests:
+•	Shows you're watching right now – Shrinking, Friends & Neighbors, Lincoln Lawyer 
+•	Sports teams you follow – The Rangers, Cowboys
+•	Music you like – classic rock from the 60’s and 70’s, classic Jazz
+•	Hobbies — play pickleball at least 4 times a week, woodworking, tinkering on old cars, boats, running, cooking, 
+•	News topics you actually care about – stock market, global politics, technology
+•	Types of restaurants you love – sushi, steak, dive bars, pizza, Italian, Indian, seafood. Love all restaurants, but really like either a great dive bar with good food, or a classic dark place where the drinks are strong and the food is great
+Your Goals:
+•	Memories you want to capture for your daughter
+•	Reminders you need daily
+•	Shopping lists you maintain
+•	Anything else Emma Peel should know
