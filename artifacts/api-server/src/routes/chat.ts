@@ -55,6 +55,18 @@ router.post("/chat", async (req, res) => {
   res.json({ reply });
 });
 
+router.get("/speak-debug", (req, res) => {
+  const key = process.env.ELEVENLABS_API_KEY ?? "";
+  const voiceId = process.env.ELEVENLABS_VOICE_ID ?? "";
+  res.json({
+    keyLength: key.length,
+    keyStart: key.slice(0, 6),
+    keyEnd: key.slice(-4),
+    voiceIdLength: voiceId.length,
+    voiceIdStart: voiceId.slice(0, 6),
+  });
+});
+
 router.post("/speak", async (req, res) => {
   const { text } = req.body;
 
