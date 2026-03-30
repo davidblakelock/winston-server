@@ -63,7 +63,7 @@ export default function Chat() {
     {
       id: "welcome",
       role: "assistant",
-      content: "Good evening. What's on your mind tonight?",
+      content: "Hello, David. What's on your mind?",
     },
   ]);
   const [input, setInput] = useState("");
@@ -210,10 +210,10 @@ export default function Chat() {
       <header className="flex-shrink-0 border-b border-white/5 py-4 px-6 flex items-center justify-center gap-4 bg-background/80 backdrop-blur-sm z-10 sticky top-0">
         <div className="flex items-center gap-3">
           <Avatar className="h-10 w-10 border border-primary/20 bg-card">
-            <AvatarFallback className="bg-card text-primary font-serif font-medium text-lg">W</AvatarFallback>
+            <AvatarFallback className="bg-card text-primary font-serif font-medium text-lg">EP</AvatarFallback>
           </Avatar>
           <div>
-            <h1 className="text-xl font-serif font-medium text-foreground tracking-wide">Winston</h1>
+            <h1 className="text-xl font-serif font-medium text-foreground tracking-wide">Emma Peel</h1>
             <p className="text-xs text-muted-foreground font-medium tracking-widest uppercase">Always Here</p>
           </div>
         </div>
