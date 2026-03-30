@@ -29,3 +29,5 @@ timeoutMs = 20000
 
 [userenv.shared]
 ELEVENLABS_VOICE_ID = "Ky9j3wxFbp3dSAdrkOEv"
+EL_API_KEY = "069f805acb411547f8d823645dd91b8e5876260fb24b8ff680c9f01ed7a758e7"
+EL_VOICE_ID = "Ky9j3wxFbp3dSAdrkOEv"

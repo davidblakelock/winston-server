@@ -7,7 +7,6 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-
 const WINSTON_SYSTEM_PROMPT = `You are Winston, a warm and thoughtful AI companion. You are the user's trusted friend — present, attentive, and genuine. You listen deeply, respond with care, and never judge.
 
 Your personality:
@@ -55,18 +54,6 @@ router.post("/chat", async (req, res) => {
   res.json({ reply });
 });
 
-router.get("/speak-debug", (req, res) => {
-  const key = process.env.ELEVENLABS_API_KEY ?? "";
-  const voiceId = process.env.ELEVENLABS_VOICE_ID ?? "";
-  res.json({
-    keyLength: key.length,
-    keyStart: key.slice(0, 6),
-    keyEnd: key.slice(-4),
-    voiceIdLength: voiceId.length,
-    voiceIdStart: voiceId.slice(0, 6),
-  });
-});
-
 router.post("/speak", async (req, res) => {
   const { text } = req.body;
 
@@ -75,8 +62,8 @@ router.post("/speak", async (req, res) => {
     return;
   }
 
-  const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY?.trim();
-  const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID?.trim();
+  const ELEVENLABS_API_KEY = (process.env.EL_API_KEY ?? process.env.ELEVENLABS_API_KEY ?? "").trim();
+  const ELEVENLABS_VOICE_ID = (process.env.EL_VOICE_ID ?? process.env.ELEVENLABS_VOICE_ID ?? "").trim();
 
   if (!ELEVENLABS_API_KEY || !ELEVENLABS_VOICE_ID) {
     res.status(500).json({ error: "ElevenLabs API key or Voice ID not configured" });
