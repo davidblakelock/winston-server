@@ -4,6 +4,7 @@ import { startScheduler } from "./reminders/scheduler";
 import { startWinddownScheduler } from "./winddown/winddownScheduler";
 import { ensureWinddownTables } from "./winddown/winddownManager";
 import { ensureMemoryTable } from "./memory/memoryManager";
+import { ensureProfileTable } from "./profile/profileManager";
 
 const rawPort = process.env["PORT"];
 
@@ -30,6 +31,7 @@ app.listen(port, async (err) => {
   try {
     await ensureWinddownTables();
     await ensureMemoryTable();
+    await ensureProfileTable();
   } catch (e) {
     logger.warn({ e }, "Table initialization warning");
   }

@@ -29,6 +29,15 @@ import {
   fetchMorningNews,
   formatNewsForPrompt,
 } from "../news/newsManager.js";
+import {
+  extractProfileOperation,
+  addProfileItem,
+  removeProfileItem,
+  getProfileItems,
+  getProfilePlaces,
+  formatProfileForContext,
+  buildProfileResultContext,
+} from "../profile/profileManager.js";
 
 const router: IRouter = Router();
 
@@ -119,6 +128,7 @@ const NAVIGATION_PATTERN = /\b(take\s+me\s+to|directions?\s+to|navigate\s+to|get
 const STORY_READ_PATTERN = /\b(read\s+(me\s+)?(my\s+)?stor(y|ies)|show\s+(me\s+)?(my\s+)?stor(y|ies)|what\s+stor(y|ies)\s+have\s+i|tell\s+me\s+(my|the)\s+stor(y|ies)|ms\.?\s*peel\s+read\s+(me\s+)?(my\s+)?stor(y|ies)|olivia\s+stor(y|ies))\b/i;
 const STORY_COUNT_PATTERN = /\b(how\s+many\s+stor(y|ies)|stor(y|ies)\s+count|how\s+many\s+memories|number\s+of\s+stor(y|ies)|how\s+many\s+have\s+i\s+(captured|saved|told))\b/i;
 const WINDDOWN_NOTE_PATTERN = /\b(remember\s+(to|that)|note\s+(for\s+tomorrow|this\s+down)|write\s+(this|that)\s+down|add\s+(this\s+)?to\s+(my\s+)?morning\s+briefing|don'?t\s+let\s+me\s+forget\s+(to|that)|make\s+sure\s+i\s+(remember|know)|for\s+tomorrow\s+(i\s+need\s+to|remind\s+me))\b/i;
+const PROFILE_PATTERN = /\b(ms\.?\s*peel\s+)?(add\s+a?\s*(new\s+)?(place|show|restaurant|person|interest|favorite)|i\s+(am|'m|am\s+currently|'m\s+currently)\s+(watching|reading)|add\s+.{1,60}\s+as\s+(a|one\s+of\s+my)\s+(favorite\s+)?(place|show|restaurant|restaurant\s+to|person|interest)|remove\s+.{1,60}\s+from\s+my\s+(places|shows|restaurants|people|interests|favorites|list|profile)|what\s+(places|shows|restaurants|people|interests)\s+(do\s+i\s+(have|have\s+saved)|am\s+i)|show\s+me\s+my\s+(places|shows|restaurants|people|interests)|what('?s|\s+is)\s+(in|on)\s+my\s+(profile|saved\s+places|watch\s+list))\b/i;
 
 interface SavedLocation {
   name: string;
@@ -149,11 +159,20 @@ const SAVED_LOCATIONS: SavedLocation[] = [
   },
 ];
 
-function detectNavigation(message: string): SavedLocation | null {
+function detectNavigation(
+  message: string,
+  extraPlaces: Array<{ name: string; address: string }> = []
+): SavedLocation | null {
   if (!NAVIGATION_PATTERN.test(message)) return null;
   const lower = message.toLowerCase();
   for (const loc of SAVED_LOCATIONS) {
     if (loc.keywords.some((kw) => lower.includes(kw))) return loc;
+  }
+  // Also check dynamically-added profile places
+  for (const place of extraPlaces) {
+    if (lower.includes(place.name.toLowerCase())) {
+      return { name: place.name, address: place.address, keywords: [] };
+    }
   }
   return null;
 }
@@ -305,11 +324,16 @@ router.post("/chat", async (req, res) => {
     return;
   }
 
-  // Fetch recent memories and inject into system prompt
-  const recentMemories = await getRecentMemories(7).catch(() => []);
+  // Fetch recent memories and dynamic profile concurrently
+  const [recentMemories, allProfileItems, profilePlaces] = await Promise.all([
+    getRecentMemories(7).catch(() => []),
+    getProfileItems().catch(() => []),
+    getProfilePlaces().catch(() => []),
+  ]);
   const memoryBlock = formatMemoriesForContext(recentMemories);
+  const dynamicProfileBlock = formatProfileForContext(allProfileItems);
 
-  let systemPrompt = getCurrentDateTimeBlock() + "\n" + BASE_SYSTEM_PROMPT + memoryBlock;
+  let systemPrompt = getCurrentDateTimeBlock() + "\n" + BASE_SYSTEM_PROMPT + memoryBlock + dynamicProfileBlock;
   let reminderConfirmation = "";
 
   const isMorningGreeting = MORNING_PATTERN.test(message);
@@ -320,6 +344,7 @@ router.post("/chat", async (req, res) => {
   const isCalendarRequest = !isMorningGreeting && CALENDAR_PATTERN.test(message);
   const isStoryRead = STORY_READ_PATTERN.test(message);
   const isStoryCount = STORY_COUNT_PATTERN.test(message);
+  const isProfileRequest = PROFILE_PATTERN.test(message);
 
   if (isMorningGreeting) {
     try {
@@ -353,7 +378,7 @@ router.post("/chat", async (req, res) => {
         "Morning news fetched"
       );
 
-      systemPrompt = getCurrentDateTimeBlock() + "\n" + BASE_SYSTEM_PROMPT + memoryBlock + notesBlock + weatherBlock + gmailBlock + calendarBlock + newsBlock;
+      systemPrompt = getCurrentDateTimeBlock() + "\n" + BASE_SYSTEM_PROMPT + memoryBlock + dynamicProfileBlock + notesBlock + weatherBlock + gmailBlock + calendarBlock + newsBlock;
     } catch (err) {
       req.log.warn({ err }, "Morning data fetch failed, continuing without it");
     }
@@ -543,8 +568,38 @@ router.post("/chat", async (req, res) => {
     }
   }
 
+  // ── Profile management: add, remove, or read profile items ──
+  if (isProfileRequest) {
+    try {
+      const op = await extractProfileOperation(message);
+      if (op) {
+        let resultContext = "";
+
+        if (op.operation === "add" && op.name) {
+          const added = await addProfileItem(op.category, op.name, op.detail ?? null);
+          const updatedItems = await getProfileItems(op.category).catch(() => []);
+          resultContext = buildProfileResultContext(op, updatedItems, false, added);
+          req.log.info({ op, added }, "Profile item added");
+        } else if (op.operation === "remove" && op.name) {
+          const removed = await removeProfileItem(op.category, op.name);
+          const updatedItems = await getProfileItems(op.category).catch(() => []);
+          resultContext = buildProfileResultContext(op, updatedItems, removed);
+          req.log.info({ op, removed }, "Profile item removed");
+        } else if (op.operation === "read") {
+          const items = await getProfileItems(op.category).catch(() => []);
+          resultContext = buildProfileResultContext(op, items, false);
+          req.log.info({ op, count: items.length }, "Profile items read");
+        }
+
+        systemPrompt = systemPrompt + resultContext;
+      }
+    } catch (err) {
+      req.log.warn({ err }, "Profile operation failed, continuing normally");
+    }
+  }
+
   let navigationUrl: string | undefined;
-  const navLocation = detectNavigation(message);
+  const navLocation = detectNavigation(message, profilePlaces);
   if (navLocation) {
     navigationUrl = buildMapsUrl(navLocation.address);
     const displayName =
