@@ -259,6 +259,27 @@ export const VOICE_OPTIONS = [
 export const VOICE_PREVIEW_TEXT =
   "Hello — I've been looking forward to meeting you. I'm going to be here every morning when you wake up, and whenever you need me throughout your day.";
 
+function getCurrentDateTimeBlock(): string {
+  const now = new Date();
+  const tz = "America/Chicago";
+  const dayName = now.toLocaleDateString("en-US", { timeZone: tz, weekday: "long" });
+  const monthName = now.toLocaleDateString("en-US", { timeZone: tz, month: "long" });
+  const day = now.toLocaleDateString("en-US", { timeZone: tz, day: "numeric" });
+  const year = now.toLocaleDateString("en-US", { timeZone: tz, year: "numeric" });
+  const time = now.toLocaleTimeString("en-US", {
+    timeZone: tz,
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+  return (
+    `[Current date and time]\n` +
+    `Today is ${dayName}, ${monthName} ${day}, ${year}.\n` +
+    `Current time: ${time} Central Time.\n` +
+    `When asked what time or day it is, answer directly using exactly the values above.\n\n`
+  );
+}
+
 // Scene prompts for onboarding conversation
 export function buildOnboardingSystemPrompt(
   scene: number,
@@ -351,7 +372,7 @@ Then deliver a warm, personalized first briefing:
 Keep it natural and personal, not a list. This should feel like the first real conversation between old friends.`,
   };
 
-  return `${basePersona}
+  return `${getCurrentDateTimeBlock()}${basePersona}
 
 ${sceneInstructions[scene] ?? sceneInstructions[1]}`;
 }

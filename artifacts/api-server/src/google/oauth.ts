@@ -9,6 +9,10 @@ export const SCOPES = [
 ];
 
 export function getRedirectUri(): string {
+  // Allow an explicit override (needed for production deployments)
+  if (process.env.GOOGLE_REDIRECT_URI) {
+    return process.env.GOOGLE_REDIRECT_URI;
+  }
   const domains = process.env.REPLIT_DOMAINS;
   const devDomain = process.env.REPLIT_DEV_DOMAIN;
   const domain = (domains ? domains.split(",")[0] : devDomain) ?? "";
