@@ -4,6 +4,16 @@ import { query } from "../db.js";
 import { extractListOp, executeListOp, buildListContext } from "../lists/listManager.js";
 import { fetchRecentEmails, formatEmailsForPrompt } from "../google/gmail.js";
 import { fetchTodayEvents, formatCalendarForPrompt } from "../google/calendar.js";
+import {
+  getRandomPrompt,
+  getPendingPrompt,
+  setPendingPrompt,
+  clearPendingPrompt,
+  saveStory,
+  getStories,
+  getStoryCount,
+  formatStoriesForPrompt,
+} from "../stories/storyManager.js";
 
 const router: IRouter = Router();
 
@@ -85,11 +95,14 @@ function formatWeatherBlock(w: WeatherResult): string {
 }
 
 const MORNING_PATTERN = /\b(good\s+morning|morning|mornin'?|wakin[g']?\s+up|just\s+woke)\b/i;
+const EVENING_PATTERN = /\b(good\s+evening|winding\s+down|wind\s+down|heading\s+to\s+bed|going\s+to\s+bed|getting\s+ready\s+for\s+bed|calling\s+it\s+a\s+night|turning\s+in|good\s+night|goodnite|end\s+of\s+the\s+day|wrapping\s+up|relaxing\s+(tonight|this\s+evening)|settling\s+in)\b/i;
 const REMINDER_PATTERN = /\b(remind\s+me|set\s+a?\s*reminder|reminder|don'?t\s+let\s+me\s+forget|make\s+sure\s+i|peel\s+remind|ms\.?\s*peel\s+remind)\b/i;
 const EMAIL_PATTERN = /\b(email|emails|mail|inbox|check\s+my\s+(email|mail|inbox)|any\s+(new\s+)?(emails?|messages?|mail)|what('?s|\s+is)\s+(in\s+)?(my\s+)?(email|inbox|mail)|do\s+i\s+have\s+(any\s+)?(email|mail|messages?))\b/i;
 const CALENDAR_PATTERN = /\b(calendar|schedule|agenda|appointments?|what('?s|\s+is)\s+(on\s+)?(my\s+)?(calendar|schedule|agenda)|(today|tomorrow)'?s?\s+(schedule|events?|appointments?)|do\s+i\s+have\s+anything\s+(today|scheduled|on\s+my\s+calendar))\b/i;
 const LIST_PATTERN = /\b(add\s+.+\s+to\s+(my\s+)?\w.+list|remove\s+.+\s+from\s+(my\s+)?\w.+list|clear\s+(my\s+)?\w.+list|what('?s|\s+is)\s+(on\s+)?(my\s+)?\w.+list|show\s+(me\s+)?(my\s+)?\w.+list|read\s+(me\s+)?(my\s+)?\w.+list|(shopping|to\s*-?\s*do|grocery|errand|task)\s+list)\b/i;
 const NAVIGATION_PATTERN = /\b(take\s+me\s+to|directions?\s+to|navigate\s+to|get\s+me\s+to|how\s+do\s+i\s+get\s+to|maps?\s+to|open\s+maps?\s+(for|to))\b/i;
+const STORY_READ_PATTERN = /\b(read\s+(me\s+)?(my\s+)?stor(y|ies)|show\s+(me\s+)?(my\s+)?stor(y|ies)|what\s+stor(y|ies)\s+have\s+i|tell\s+me\s+(my|the)\s+stor(y|ies)|ms\.?\s*peel\s+read\s+(me\s+)?(my\s+)?stor(y|ies)|olivia\s+stor(y|ies))\b/i;
+const STORY_COUNT_PATTERN = /\b(how\s+many\s+stor(y|ies)|stor(y|ies)\s+count|how\s+many\s+memories|number\s+of\s+stor(y|ies)|how\s+many\s+have\s+i\s+(captured|saved|told))\b/i;
 
 interface SavedLocation {
   name: string;
@@ -224,10 +237,15 @@ Your Interests:
 • Types of restaurants you love – sushi, steak, dive bars, pizza, Italian, Indian, seafood. Love all restaurants, but really like either a great dive bar with good food, or a classic dark place where the drinks are strong and the food is great
 
 Your Goals:
-• Memories you want to capture for your daughter
+• Capturing memories and stories for Olivia — this is one of the most meaningful things David uses this app for. Each story is saved and will eventually be compiled into a memory book for her.
 • Reminders you need daily
 • Shopping lists you maintain
-• Anything else Emma Peel should know`;
+• Anything else Emma Peel should know
+
+Memory Book for Olivia:
+• Each evening during wind-down, you gently ask David one warm, open-ended question to capture a memory or story for Olivia. You never make it feel like homework — it's always a natural, warm invitation.
+• When David shares a story, you respond with genuine warmth and appreciation before confirming it's been saved. Never clinical, never transactional.
+• If David asks to hear his stories, read them back to him with care. If he asks how many he's captured, tell him with encouragement.`;
 
 function getCurrentDateTimeBlock(): string {
   const now = new Date();
@@ -275,10 +293,13 @@ router.post("/chat", async (req, res) => {
   let reminderConfirmation = "";
 
   const isMorningGreeting = MORNING_PATTERN.test(message);
+  const isEveningGreeting = !isMorningGreeting && EVENING_PATTERN.test(message);
   const isReminderRequest = REMINDER_PATTERN.test(message);
   const isListRequest = LIST_PATTERN.test(message);
   const isEmailRequest = !isMorningGreeting && EMAIL_PATTERN.test(message);
   const isCalendarRequest = !isMorningGreeting && CALENDAR_PATTERN.test(message);
+  const isStoryRead = STORY_READ_PATTERN.test(message);
+  const isStoryCount = STORY_COUNT_PATTERN.test(message);
 
   if (isMorningGreeting) {
     try {
@@ -330,6 +351,66 @@ router.post("/chat", async (req, res) => {
       systemPrompt = getCurrentDateTimeBlock() + "\n" + BASE_SYSTEM_PROMPT + gmailBlock + calendarBlock;
     } catch (err) {
       req.log.warn({ err }, "On-demand email/calendar fetch failed");
+    }
+  }
+
+  // ── Story capture: check if David is responding to a pending story prompt ──
+  const pendingPrompt = await getPendingPrompt().catch(() => null);
+  const wordCount = message.trim().split(/\s+/).length;
+  const isPotentialStoryResponse =
+    pendingPrompt !== null &&
+    !isEveningGreeting &&
+    !isReminderRequest &&
+    !isListRequest &&
+    !isEmailRequest &&
+    !isCalendarRequest &&
+    !isStoryRead &&
+    !isStoryCount &&
+    wordCount >= 15;
+
+  if (isPotentialStoryResponse && pendingPrompt) {
+    try {
+      await saveStory(pendingPrompt, message);
+      await clearPendingPrompt();
+      req.log.info({ prompt: pendingPrompt, words: wordCount }, "Story captured");
+      systemPrompt +=
+        `\n\n[Story Saved for Olivia]\nDavid just shared a memory in response to your question: "${pendingPrompt}"\nHis story (${wordCount} words) has been saved to his memory book for Olivia.\nRespond with genuine warmth — briefly reflect on what he shared, what it means, and let him know it's been saved for Olivia. Keep it heartfelt and natural, not formal or clinical.`;
+    } catch (err) {
+      req.log.warn({ err }, "Story save failed");
+    }
+  }
+
+  // ── Evening wind-down: offer a story prompt ──
+  if (isEveningGreeting) {
+    try {
+      const prompt = await getRandomPrompt();
+      await setPendingPrompt(prompt);
+      req.log.info({ prompt }, "Evening story prompt set");
+      systemPrompt +=
+        `\n\n[Evening Wind-Down — Story Prompt for Olivia]\nTonight's memory question: "${prompt}"\nAfter warmly responding to David's good evening, gently invite him to share this memory. Make it feel like a natural, warm invitation — never homework. Weave it in naturally at the end of your response.`;
+    } catch (err) {
+      req.log.warn({ err }, "Evening story prompt failed");
+    }
+  }
+
+  // ── Story retrieval ──
+  if (isStoryRead) {
+    try {
+      const stories = await getStories();
+      systemPrompt +=
+        `\n\n[Memory Book — All Stories for Olivia]\n${formatStoriesForPrompt(stories)}\nRead these back to David warmly. Each one is a gift for Olivia. If there are many, highlight the most recent few and let him know how many total are saved.`;
+    } catch (err) {
+      req.log.warn({ err }, "Story read failed");
+    }
+  }
+
+  if (isStoryCount) {
+    try {
+      const count = await getStoryCount();
+      systemPrompt +=
+        `\n\n[Memory Book — Story Count]\nDavid has captured ${count} ${count === 1 ? "story" : "stories"} for Olivia so far. Tell him warmly and with encouragement.`;
+    } catch (err) {
+      req.log.warn({ err }, "Story count failed");
     }
   }
 
