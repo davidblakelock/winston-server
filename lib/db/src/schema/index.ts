@@ -185,6 +185,21 @@ export const watchedShows = pgTable(
   (t) => [uniqueIndex("watched_shows_user_show").on(t.userName, t.showName)]
 );
 
+// ── Google Users (sign-in identity mapping) ──────────────────────────────────
+export const googleUsers = pgTable(
+  "google_users",
+  {
+    id: serial("id").primaryKey(),
+    googleId: text("google_id").notNull(),
+    email: text("email"),
+    name: text("name"),
+    userName: text("user_name").notNull().default("David"),
+    isNewUser: boolean("is_new_user").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true }).default(sql`now()`),
+  },
+  (t) => [uniqueIndex("google_users_google_id_idx").on(t.googleId)]
+);
+
 // ── Magic Link Tokens ────────────────────────────────────────────────────────
 export const magicLinkTokens = pgTable(
   "magic_link_tokens",
@@ -207,6 +222,7 @@ export const appSessions = pgTable(
     userName: text("user_name").notNull(),
     email: text("email").notNull(),
     token: text("token").notNull(),
+    googleId: text("google_id"),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).default(sql`now()`),
   },

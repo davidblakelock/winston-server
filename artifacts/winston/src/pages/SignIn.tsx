@@ -1,101 +1,19 @@
-import { useState } from "react";
-
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
-const SESSION_KEY = "winston_session_token";
 
 interface SignInProps {
   onAuthenticated: (token: string, userName: string) => void;
 }
 
-type Stage =
-  | { type: "email" }
-  | { type: "link_ready"; magicLinkUrl: string; emailSent: boolean }
-  | { type: "verifying" }
-  | { type: "error"; message: string };
-
-export default function SignIn({ onAuthenticated }: SignInProps) {
-  const [email, setEmail] = useState("");
-  const [stage, setStage] = useState<Stage>({ type: "email" });
-  const [loading, setLoading] = useState(false);
-
-  async function handleRequestLink(e: React.FormEvent) {
-    e.preventDefault();
-    if (!email.trim() || loading) return;
-    setLoading(true);
-
-    try {
-      const res = await fetch(`${BASE}/api/auth/magic-link`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.trim().toLowerCase() }),
-      });
-
-      const data = (await res.json()) as {
-        sent: boolean;
-        magicLinkUrl?: string;
-        emailSent?: boolean;
-      };
-
-      if (data.sent && data.magicLinkUrl) {
-        setStage({
-          type: "link_ready",
-          magicLinkUrl: data.magicLinkUrl,
-          emailSent: data.emailSent ?? false,
-        });
-      } else {
-        setStage({
-          type: "error",
-          message: "Something went wrong. Please try again.",
-        });
-      }
-    } catch {
-      setStage({
-        type: "error",
-        message: "Could not connect to Winston. Check your connection.",
-      });
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleVerifyLink(token: string) {
-    setStage({ type: "verifying" });
-
-    try {
-      const res = await fetch(`${BASE}/api/auth/magic-link/verify`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token }),
-      });
-
-      if (!res.ok) {
-        setStage({
-          type: "error",
-          message: "That link has expired or was already used. Request a new one.",
-        });
-        return;
-      }
-
-      const data = (await res.json()) as {
-        sessionToken: string;
-        userName: string;
-      };
-
-      localStorage.setItem(SESSION_KEY, data.sessionToken);
-      onAuthenticated(data.sessionToken, data.userName);
-    } catch {
-      setStage({
-        type: "error",
-        message: "Verification failed. Please try again.",
-      });
-    }
+export default function SignIn({ onAuthenticated: _onAuthenticated }: SignInProps) {
+  function handleGoogleSignIn() {
+    window.location.href = `${BASE}/api/auth/google?signin=1`;
   }
 
   return (
     <div
       style={{
         minHeight: "100vh",
-        background: "linear-gradient(135deg, #0d0d1a 0%, #0f0f1e 60%, #12122a 100%)",
+        background: "linear-gradient(160deg, #080812 0%, #0d0d1f 50%, #10102a 100%)",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
@@ -104,294 +22,120 @@ export default function SignIn({ onAuthenticated }: SignInProps) {
         padding: "24px",
       }}
     >
-      <div
-        style={{
-          width: "100%",
-          maxWidth: "420px",
-        }}
-      >
-        {/* Logo mark */}
-        <div style={{ textAlign: "center", marginBottom: "40px" }}>
-          <div
-            style={{
-              width: "56px",
-              height: "56px",
-              borderRadius: "50%",
-              background: "linear-gradient(135deg, #4f46e5, #7c3aed)",
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              marginBottom: "20px",
-              boxShadow: "0 0 30px rgba(79,70,229,0.4)",
-            }}
-          >
-            <span style={{ color: "white", fontWeight: "700", fontSize: "18px", letterSpacing: "0.05em" }}>
-              EP
-            </span>
-          </div>
-          <h1
-            style={{
-              color: "#e8e4ff",
-              fontSize: "1.6rem",
-              fontWeight: "600",
-              margin: "0 0 8px",
-              letterSpacing: "-0.02em",
-            }}
-          >
-            Welcome back, David.
-          </h1>
-          <p style={{ color: "#6b6b8a", fontSize: "0.9rem", margin: 0, lineHeight: "1.5" }}>
-            Sign in to continue your conversation with Emma Peel.
-          </p>
-        </div>
-
-        {/* Card */}
+      <div style={{ width: "100%", maxWidth: "380px", textAlign: "center" }}>
+        {/* Logo */}
         <div
           style={{
-            background: "rgba(255,255,255,0.04)",
-            border: "1px solid rgba(255,255,255,0.08)",
-            borderRadius: "16px",
-            padding: "32px",
-            backdropFilter: "blur(10px)",
+            width: "64px",
+            height: "64px",
+            borderRadius: "50%",
+            background: "linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)",
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            marginBottom: "28px",
+            boxShadow: "0 0 40px rgba(79,70,229,0.45), 0 0 80px rgba(79,70,229,0.15)",
           }}
         >
-          {stage.type === "email" && (
-            <form onSubmit={handleRequestLink}>
-              <label
-                htmlFor="email"
-                style={{
-                  display: "block",
-                  color: "#9d9db8",
-                  fontSize: "0.78rem",
-                  letterSpacing: "0.1em",
-                  textTransform: "uppercase",
-                  marginBottom: "8px",
-                }}
-              >
-                Email address
-              </label>
-              <input
-                id="email"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="your@email.com"
-                autoFocus
-                autoComplete="email"
-                required
-                style={{
-                  width: "100%",
-                  padding: "13px 16px",
-                  background: "rgba(255,255,255,0.06)",
-                  border: "1px solid rgba(255,255,255,0.12)",
-                  borderRadius: "8px",
-                  color: "#e8e4ff",
-                  fontSize: "1rem",
-                  outline: "none",
-                  boxSizing: "border-box",
-                  marginBottom: "20px",
-                  transition: "border-color 0.15s",
-                }}
-                onFocus={(e) => (e.target.style.borderColor = "rgba(79,70,229,0.6)")}
-                onBlur={(e) => (e.target.style.borderColor = "rgba(255,255,255,0.12)")}
-              />
-              <button
-                type="submit"
-                disabled={loading || !email.trim()}
-                style={{
-                  width: "100%",
-                  padding: "13px",
-                  background: loading || !email.trim()
-                    ? "rgba(79,70,229,0.4)"
-                    : "linear-gradient(135deg, #4f46e5, #7c3aed)",
-                  border: "none",
-                  borderRadius: "8px",
-                  color: "white",
-                  fontSize: "0.95rem",
-                  fontWeight: "500",
-                  cursor: loading || !email.trim() ? "default" : "pointer",
-                  transition: "opacity 0.15s",
-                  letterSpacing: "0.01em",
-                }}
-              >
-                {loading ? "Preparing your link…" : "Send sign-in link →"}
-              </button>
-              <p style={{ textAlign: "center", color: "#4a4a6a", fontSize: "0.78rem", marginTop: "16px", marginBottom: 0 }}>
-                No password needed. We'll send you a one-tap sign-in link.
-              </p>
-            </form>
-          )}
-
-          {stage.type === "link_ready" && (
-            <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: "2rem", marginBottom: "16px" }}>{stage.emailSent ? "✉️" : "🔗"}</div>
-              {stage.emailSent ? (
-                <>
-                  <p style={{ color: "#a8a8c8", fontSize: "0.95rem", lineHeight: "1.6", marginBottom: "8px" }}>
-                    A sign-in link has been sent to
-                  </p>
-                  <p style={{ color: "#e8e4ff", fontWeight: 600, fontSize: "0.95rem", marginBottom: "20px" }}>
-                    {email}
-                  </p>
-                  <p style={{ color: "#6b6b8a", fontSize: "0.85rem", lineHeight: "1.5", marginBottom: "24px" }}>
-                    Check your email and tap the link — or sign in on this device right now:
-                  </p>
-                </>
-              ) : (
-                <>
-                  <p style={{ color: "#a8a8c8", fontSize: "0.95rem", lineHeight: "1.6", marginBottom: "8px" }}>
-                    Your sign-in link is ready.
-                  </p>
-                  <p style={{ color: "#6b6b8a", fontSize: "0.85rem", lineHeight: "1.5", marginBottom: "24px" }}>
-                    Sign in on this device below, or copy the link to open Winston on another device.
-                  </p>
-                </>
-              )}
-
-              {/* One-tap sign in button */}
-              <button
-                onClick={() => {
-                  const url = new URL(stage.magicLinkUrl);
-                  const token = url.searchParams.get("token");
-                  if (token) handleVerifyLink(token);
-                }}
-                style={{
-                  width: "100%",
-                  padding: "14px",
-                  background: "linear-gradient(135deg, #4f46e5, #7c3aed)",
-                  border: "none",
-                  borderRadius: "8px",
-                  color: "white",
-                  fontSize: "1rem",
-                  fontWeight: "600",
-                  cursor: "pointer",
-                  marginBottom: "16px",
-                  boxShadow: "0 4px 20px rgba(79,70,229,0.4)",
-                }}
-              >
-                Sign in now →
-              </button>
-
-              {/* Copy link for other devices */}
-              <details style={{ textAlign: "left" }}>
-                <summary
-                  style={{
-                    color: "#4a4a6a",
-                    fontSize: "0.78rem",
-                    cursor: "pointer",
-                    textAlign: "center",
-                    listStyle: "none",
-                    marginBottom: "8px",
-                  }}
-                >
-                  Sign in on another device ↓
-                </summary>
-                <div
-                  style={{
-                    background: "rgba(0,0,0,0.3)",
-                    borderRadius: "6px",
-                    padding: "10px 12px",
-                    display: "flex",
-                    gap: "8px",
-                    alignItems: "center",
-                    marginTop: "8px",
-                  }}
-                >
-                  <code
-                    style={{
-                      flex: 1,
-                      color: "#6b6bf8",
-                      fontSize: "0.7rem",
-                      wordBreak: "break-all",
-                      fontFamily: "monospace",
-                    }}
-                  >
-                    {stage.magicLinkUrl}
-                  </code>
-                  <button
-                    onClick={() => {
-                      navigator.clipboard.writeText(stage.magicLinkUrl).catch(() => {});
-                    }}
-                    style={{
-                      flexShrink: 0,
-                      padding: "4px 10px",
-                      background: "rgba(79,70,229,0.3)",
-                      border: "1px solid rgba(79,70,229,0.5)",
-                      borderRadius: "4px",
-                      color: "#a8a8ff",
-                      fontSize: "0.72rem",
-                      cursor: "pointer",
-                    }}
-                  >
-                    Copy
-                  </button>
-                </div>
-              </details>
-
-              <button
-                onClick={() => setStage({ type: "email" })}
-                style={{
-                  background: "none",
-                  border: "none",
-                  color: "#4a4a6a",
-                  fontSize: "0.78rem",
-                  cursor: "pointer",
-                  marginTop: "16px",
-                  display: "block",
-                  width: "100%",
-                  textAlign: "center",
-                }}
-              >
-                ← Use a different email
-              </button>
-            </div>
-          )}
-
-          {stage.type === "verifying" && (
-            <div style={{ textAlign: "center", padding: "20px 0" }}>
-              <div
-                style={{
-                  width: "32px",
-                  height: "32px",
-                  border: "3px solid rgba(79,70,229,0.3)",
-                  borderTopColor: "#4f46e5",
-                  borderRadius: "50%",
-                  animation: "spin 0.8s linear infinite",
-                  margin: "0 auto 16px",
-                }}
-              />
-              <p style={{ color: "#9d9db8", fontSize: "0.9rem" }}>
-                Signing you in…
-              </p>
-              <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-            </div>
-          )}
-
-          {stage.type === "error" && (
-            <div style={{ textAlign: "center" }}>
-              <p style={{ color: "#f87171", fontSize: "0.9rem", marginBottom: "20px" }}>
-                {stage.message}
-              </p>
-              <button
-                onClick={() => setStage({ type: "email" })}
-                style={{
-                  padding: "10px 24px",
-                  background: "rgba(79,70,229,0.2)",
-                  border: "1px solid rgba(79,70,229,0.4)",
-                  borderRadius: "6px",
-                  color: "#a8a8ff",
-                  fontSize: "0.85rem",
-                  cursor: "pointer",
-                }}
-              >
-                Try again
-              </button>
-            </div>
-          )}
+          <span
+            style={{
+              color: "white",
+              fontWeight: "700",
+              fontSize: "20px",
+              letterSpacing: "0.05em",
+            }}
+          >
+            EP
+          </span>
         </div>
 
-        <p style={{ textAlign: "center", color: "#2a2a4a", fontSize: "0.72rem", marginTop: "24px" }}>
-          Winston is a private companion. Access is by invitation only.
+        {/* Wordmark */}
+        <h1
+          style={{
+            color: "#ece9ff",
+            fontSize: "2rem",
+            fontWeight: "600",
+            margin: "0 0 10px",
+            letterSpacing: "-0.03em",
+          }}
+        >
+          Winston
+        </h1>
+
+        {/* Tagline */}
+        <p
+          style={{
+            color: "#6b6b90",
+            fontSize: "1rem",
+            margin: "0 0 48px",
+            lineHeight: "1.5",
+          }}
+        >
+          Your personal companion is waiting.
+        </p>
+
+        {/* Google Sign-In Button */}
+        <button
+          onClick={handleGoogleSignIn}
+          style={{
+            width: "100%",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: "12px",
+            padding: "14px 20px",
+            background: "rgba(255,255,255,0.05)",
+            border: "1px solid rgba(255,255,255,0.12)",
+            borderRadius: "12px",
+            color: "#e8e4ff",
+            fontSize: "0.95rem",
+            fontWeight: "500",
+            cursor: "pointer",
+            transition: "background 0.15s, border-color 0.15s, box-shadow 0.15s",
+            letterSpacing: "0.01em",
+          }}
+          onMouseEnter={(e) => {
+            (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.09)";
+            (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(79,70,229,0.5)";
+            (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 0 20px rgba(79,70,229,0.15)";
+          }}
+          onMouseLeave={(e) => {
+            (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.05)";
+            (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(255,255,255,0.12)";
+            (e.currentTarget as HTMLButtonElement).style.boxShadow = "none";
+          }}
+        >
+          {/* Google G logo */}
+          <svg width="20" height="20" viewBox="0 0 48 48" fill="none">
+            <path
+              d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 12.955 4 4 12.955 4 24s8.955 20 20 20 20-8.955 20-20c0-1.341-.138-2.65-.389-3.917z"
+              fill="#FFC107"
+            />
+            <path
+              d="M6.306 14.691l6.571 4.819C14.655 15.108 18.961 12 24 12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 16.318 4 9.656 8.337 6.306 14.691z"
+              fill="#FF3D00"
+            />
+            <path
+              d="M24 44c5.166 0 9.86-1.977 13.409-5.192l-6.19-5.238C29.211 35.091 26.715 36 24 36c-5.202 0-9.619-3.317-11.283-7.946l-6.522 5.025C9.505 39.556 16.227 44 24 44z"
+              fill="#4CAF50"
+            />
+            <path
+              d="M43.611 20.083H42V20H24v8h11.303c-.792 2.237-2.231 4.166-4.087 5.571l6.19 5.238C36.971 39.205 44 34 44 24c0-1.341-.138-2.65-.389-3.917z"
+              fill="#1976D2"
+            />
+          </svg>
+          Continue with Google
+        </button>
+
+        <p
+          style={{
+            color: "#2e2e50",
+            fontSize: "0.72rem",
+            marginTop: "32px",
+            lineHeight: "1.5",
+          }}
+        >
+          Private &amp; invitation-only
         </p>
       </div>
     </div>

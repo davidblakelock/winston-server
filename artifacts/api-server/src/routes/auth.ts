@@ -9,80 +9,127 @@ import {
   validateSession,
   revokeSession,
   sendMagicLinkEmail,
+  lookupOrCreateGoogleUser,
   getAppUrl,
 } from "../auth/sessionAuth.js";
 
 const router = Router();
 
-const REQUIRED_EMAIL = "davidblakelock.winston@gmail.com";
+// ── Google Sign-In ─────────────────────────────────────────────────────────────
+// GET /api/auth/google?signin=1  — full-page redirect sign-in flow
+// GET /api/auth/google            — popup calendar/gmail connect (existing behaviour)
+router.get("/auth/google", (req: Request, res: Response) => {
+  const isSignIn = req.query.signin === "1";
+  const oauth2Client = createOAuthClient();
+  const url = oauth2Client.generateAuthUrl({
+    access_type: "offline",
+    scope: SCOPES,
+    prompt: "select_account consent",
+    // state carries whether this is a sign-in so the callback knows what to do
+    state: isSignIn ? "signin" : "connect",
+  });
+  res.redirect(url);
+});
 
-// ── Magic Link Auth ───────────────────────────────────────────────────────────
+// GET /api/auth/callback — Google OAuth callback (handles both sign-in and connect)
+router.get("/auth/callback", async (req: Request, res: Response) => {
+  const { code, error, state } = req.query;
+  const isSignIn = state === "signin";
+  const appUrl = getAppUrl(req.headers.host as string | undefined);
 
-// POST /api/auth/magic-link — request a sign-in link
-router.post("/auth/magic-link", async (req: Request, res: Response) => {
+  if (error || !code) {
+    if (isSignIn) {
+      res.redirect(`${appUrl}/?auth=error`);
+    } else {
+      res.send(`<!DOCTYPE html><html><body><script>
+        if(window.opener){window.opener.postMessage('google-auth-error','*');window.close();}
+        else{window.location.href='/?auth=error';}
+      </script></body></html>`);
+    }
+    return;
+  }
+
   try {
-    const { email } = req.body as { email?: string };
-    if (!email || typeof email !== "string") {
-      res.status(400).json({ error: "email_required" });
-      return;
+    const oauth2Client = createOAuthClient();
+    const { tokens } = await oauth2Client.getToken(code as string);
+    oauth2Client.setCredentials(tokens);
+
+    const oauth2 = google.oauth2({ version: "v2", auth: oauth2Client });
+    const userInfo = await oauth2.userinfo.get();
+    const email = userInfo.data.email ?? "";
+    const googleId = userInfo.data.id ?? "";
+    const fullName = userInfo.data.name ?? email.split("@")[0];
+
+    // ── Resolve user identity from Google sub ID ──────────────────────────────
+    let userName = "David";
+    let isNewUser = false;
+
+    if (googleId) {
+      const resolved = await lookupOrCreateGoogleUser(googleId, email, fullName);
+      userName = resolved.userName;
+      isNewUser = resolved.isNewUser;
     }
 
-    const result = await createMagicLink(email.trim().toLowerCase());
+    // ── Always upsert google_auth for calendar/gmail tokens ───────────────────
+    await query(
+      `INSERT INTO google_auth (user_name, email, access_token, refresh_token, token_expiry, scope)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (user_name) DO UPDATE SET
+         email         = EXCLUDED.email,
+         access_token  = EXCLUDED.access_token,
+         refresh_token = COALESCE(EXCLUDED.refresh_token, google_auth.refresh_token),
+         token_expiry  = EXCLUDED.token_expiry,
+         scope         = EXCLUDED.scope,
+         updated_at    = NOW()`,
+      [
+        userName,
+        email,
+        tokens.access_token ?? null,
+        tokens.refresh_token ?? null,
+        tokens.expiry_date ? new Date(tokens.expiry_date) : null,
+        SCOPES.join(" "),
+      ]
+    );
 
-    // Always respond the same way regardless of whether email is authorized
-    // (security: don't reveal which emails are allowed)
-    if (!result) {
-      // Not an authorized email — still say "sent" but don't include the link
-      res.json({ sent: true, emailSent: false });
-      return;
+    req.log.info({ email, googleId, userName, isSignIn }, "Google OAuth connected");
+
+    if (isSignIn) {
+      // ── Create app session and redirect frontend with token ─────────────────
+      const sessionToken = await createSession(userName, email, googleId);
+
+      req.log.info({ userName, isNewUser }, "Google sign-in session created");
+
+      // Redirect to frontend — token + name + isNewUser flag
+      const redirectUrl =
+        `${appUrl}/?token=${encodeURIComponent(sessionToken)}&name=${encodeURIComponent(userName)}&new=${isNewUser ? "1" : "0"}`;
+      res.redirect(redirectUrl);
+    } else {
+      // ── Popup calendar/gmail connect — existing behaviour ──────────────────
+      res.send(`<!DOCTYPE html><html><head><title>Connected</title></head><body>
+        <script>
+          if(window.opener){window.opener.postMessage('google-connected','*');window.close();}
+          else{window.location.href='/?connected=google';}
+        </script>
+        <p style="font-family:sans-serif;text-align:center;margin-top:40px;color:#4ade80">
+          Google connected! You can close this window.
+        </p>
+      </body></html>`);
     }
-
-    const appUrl = getAppUrl(req.headers.host as string | undefined);
-    const magicLinkUrl = `${appUrl}/auth/verify?token=${result.token}`;
-
-    let emailSent = false;
-    if (process.env.RESEND_API_KEY) {
-      emailSent = await sendMagicLinkEmail(result.email, magicLinkUrl);
-    }
-
-    req.log.info({ email: result.email, emailSent }, "Magic link requested");
-    res.json({ sent: true, magicLinkUrl, emailSent });
   } catch (err) {
-    req.log.error({ err }, "Magic link request error");
-    res.status(500).json({ error: "server_error" });
+    req.log.error({ err }, "Google OAuth callback error");
+    if (isSignIn) {
+      res.redirect(`${appUrl}/?auth=error`);
+    } else {
+      res.send(`<!DOCTYPE html><html><body><script>
+        if(window.opener){window.opener.postMessage('google-auth-error','*');window.close();}
+        else{window.location.href='/?auth=error';}
+      </script></body></html>`);
+    }
   }
 });
 
-// POST /api/auth/magic-link/verify — verify token and create session
-router.post("/auth/magic-link/verify", async (req: Request, res: Response) => {
-  try {
-    const { token } = req.body as { token?: string };
-    if (!token || typeof token !== "string") {
-      res.status(400).json({ error: "token_required" });
-      return;
-    }
+// ── Session validation ────────────────────────────────────────────────────────
 
-    const user = await verifyMagicLink(token.trim());
-    if (!user) {
-      res.status(401).json({ error: "invalid_or_expired" });
-      return;
-    }
-
-    const sessionToken = await createSession(user.userName, user.email);
-    req.log.info({ userName: user.userName }, "User authenticated via magic link");
-
-    res.json({
-      sessionToken,
-      userName: user.userName,
-      email: user.email,
-    });
-  } catch (err) {
-    req.log.error({ err }, "Magic link verify error");
-    res.status(500).json({ error: "server_error" });
-  }
-});
-
-// GET /api/auth/session — validate current session
 router.get("/auth/session", async (req: Request, res: Response) => {
   try {
     const authHeader = req.headers.authorization;
@@ -91,9 +138,7 @@ router.get("/auth/session", async (req: Request, res: Response) => {
       return;
     }
 
-    const token = authHeader.slice(7);
-    const session = await validateSession(token);
-
+    const session = await validateSession(authHeader.slice(7));
     if (!session) {
       res.json({ authenticated: false });
       return;
@@ -103,6 +148,7 @@ router.get("/auth/session", async (req: Request, res: Response) => {
       authenticated: true,
       userName: session.userName,
       email: session.email,
+      googleId: session.googleId,
     });
   } catch (err) {
     req.log.error({ err }, "Session validation error");
@@ -110,7 +156,8 @@ router.get("/auth/session", async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/auth/session/logout — revoke current session
+// ── Session logout ────────────────────────────────────────────────────────────
+
 router.post("/auth/session/logout", async (req: Request, res: Response) => {
   try {
     const authHeader = req.headers.authorization;
@@ -124,88 +171,7 @@ router.post("/auth/session/logout", async (req: Request, res: Response) => {
   }
 });
 
-router.get("/auth/google", (_req: Request, res: Response) => {
-  const oauth2Client = createOAuthClient();
-  const url = oauth2Client.generateAuthUrl({
-    access_type: "offline",
-    scope: SCOPES,
-    prompt: "select_account consent",
-    login_hint: REQUIRED_EMAIL,
-  });
-  res.redirect(url);
-});
-
-router.get("/auth/callback", async (req: Request, res: Response) => {
-  const { code, error } = req.query;
-
-  if (error || !code) {
-    res.redirect("/?auth=error");
-    return;
-  }
-
-  try {
-    const oauth2Client = createOAuthClient();
-    const { tokens } = await oauth2Client.getToken(code as string);
-    oauth2Client.setCredentials(tokens);
-
-    const oauth2 = google.oauth2({ version: "v2", auth: oauth2Client });
-    const userInfo = await oauth2.userinfo.get();
-    const email = userInfo.data.email ?? null;
-
-    // Reject if not the expected account
-    if (email?.toLowerCase() !== REQUIRED_EMAIL.toLowerCase()) {
-      req.log.warn({ email }, "Google OAuth rejected — wrong account");
-      res.send(`<!DOCTYPE html><html><head><title>Wrong Account</title></head><body>
-        <script>
-          if (window.opener) { window.opener.postMessage('google-auth-error', '*'); window.close(); }
-          else { window.location.href = '/?auth=wrong-account'; }
-        </script>
-        <p style="font-family:sans-serif;text-align:center;margin-top:40px;color:#f87171">
-          Please sign in with <strong>${REQUIRED_EMAIL}</strong>.<br><br>
-          <a href="/api/auth/google" style="color:#818cf8">Try again</a>
-        </p>
-      </body></html>`);
-      return;
-    }
-
-    await query(
-      `INSERT INTO google_auth (user_name, email, access_token, refresh_token, token_expiry, scope)
-       VALUES ('David', $1, $2, $3, $4, $5)
-       ON CONFLICT (user_name) DO UPDATE SET
-         email        = EXCLUDED.email,
-         access_token = EXCLUDED.access_token,
-         refresh_token = COALESCE(EXCLUDED.refresh_token, google_auth.refresh_token),
-         token_expiry = EXCLUDED.token_expiry,
-         scope        = EXCLUDED.scope,
-         updated_at   = NOW()`,
-      [
-        email,
-        tokens.access_token ?? null,
-        tokens.refresh_token ?? null,
-        tokens.expiry_date ? new Date(tokens.expiry_date) : null,
-        SCOPES.join(" "),
-      ]
-    );
-
-    req.log.info({ email }, "Google OAuth connected");
-    res.send(`<!DOCTYPE html><html><head><title>Connected</title></head><body>
-      <script>
-        if (window.opener) { window.opener.postMessage('google-connected', '*'); window.close(); }
-        else { window.location.href = '/?connected=google'; }
-      </script>
-      <p style="font-family:sans-serif;text-align:center;margin-top:40px;color:#4ade80">Google connected! You can close this window.</p>
-    </body></html>`);
-  } catch (err) {
-    req.log.error({ err }, "Google OAuth callback error");
-    res.send(`<!DOCTYPE html><html><head><title>Error</title></head><body>
-      <script>
-        if (window.opener) { window.opener.postMessage('google-auth-error', '*'); window.close(); }
-        else { window.location.href = '/?auth=error'; }
-      </script>
-      <p style="font-family:sans-serif;text-align:center;margin-top:40px;color:#f87171">Sign-in failed. You can close this window.</p>
-    </body></html>`);
-  }
-});
+// ── Google auth status (for calendar/gmail connect) ───────────────────────────
 
 router.get("/auth/status", async (_req: Request, res: Response) => {
   try {
@@ -230,6 +196,44 @@ router.post("/auth/logout", async (req: Request, res: Response) => {
   } catch (err) {
     req.log.error({ err }, "Logout error");
     res.status(500).json({ error: "Logout failed" });
+  }
+});
+
+// ── Legacy magic-link endpoints (kept for backwards compat) ───────────────────
+
+router.post("/auth/magic-link", async (req: Request, res: Response) => {
+  try {
+    const { email } = req.body as { email?: string };
+    if (!email) { res.status(400).json({ error: "email_required" }); return; }
+
+    const result = await createMagicLink(email.trim().toLowerCase());
+    if (!result) { res.json({ sent: true, emailSent: false }); return; }
+
+    const magicLinkUrl = `${getAppUrl(req.headers.host as string | undefined)}/auth/verify?token=${result.token}`;
+    let emailSent = false;
+    if (process.env.RESEND_API_KEY) {
+      emailSent = await sendMagicLinkEmail(result.email, magicLinkUrl);
+    }
+    res.json({ sent: true, magicLinkUrl, emailSent });
+  } catch (err) {
+    req.log.error({ err }, "Magic link error");
+    res.status(500).json({ error: "server_error" });
+  }
+});
+
+router.post("/auth/magic-link/verify", async (req: Request, res: Response) => {
+  try {
+    const { token } = req.body as { token?: string };
+    if (!token) { res.status(400).json({ error: "token_required" }); return; }
+
+    const user = await verifyMagicLink(token.trim());
+    if (!user) { res.status(401).json({ error: "invalid_or_expired" }); return; }
+
+    const sessionToken = await createSession(user.userName, user.email);
+    res.json({ sessionToken, userName: user.userName, email: user.email });
+  } catch (err) {
+    req.log.error({ err }, "Magic link verify error");
+    res.status(500).json({ error: "server_error" });
   }
 });
 

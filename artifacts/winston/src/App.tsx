@@ -69,27 +69,73 @@ function AppShell() {
   );
 }
 
+// ── Auth error banner ─────────────────────────────────────────────────────────
+
+function AuthErrorBanner({ onDismiss }: { onDismiss: () => void }) {
+  return (
+    <div
+      style={{
+        position: "fixed",
+        top: "20px",
+        left: "50%",
+        transform: "translateX(-50%)",
+        background: "rgba(248,113,113,0.15)",
+        border: "1px solid rgba(248,113,113,0.3)",
+        borderRadius: "10px",
+        padding: "12px 20px",
+        color: "#fca5a5",
+        fontSize: "0.875rem",
+        zIndex: 9999,
+        display: "flex",
+        gap: "12px",
+        alignItems: "center",
+      }}
+    >
+      <span>Sign-in was unsuccessful. Please try again.</span>
+      <button
+        onClick={onDismiss}
+        style={{ background: "none", border: "none", color: "#fca5a5", cursor: "pointer", fontSize: "1rem" }}
+      >
+        ✕
+      </button>
+    </div>
+  );
+}
+
 // ── Root with auth routing ────────────────────────────────────────────────────
 
 function AppWithAuth() {
   const { authState, setAuthenticated } = useAuth();
   const [location, navigate] = useLocation();
+  const [authError, setAuthError] = useState(false);
 
-  function handleAuthenticated(token: string, userName: string) {
-    setAuthenticated(token, userName);
-    navigate("/");
-  }
+  // ── Handle Google OAuth redirect: token arrives as URL query param ──────────
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const urlToken = params.get("token");
+    const urlName = params.get("name");
+    const urlAuthError = params.get("auth");
 
-  function handleAuthFailed() {
-    navigate("/");
-  }
+    if (urlAuthError === "error") {
+      setAuthError(true);
+      window.history.replaceState({}, "", window.location.pathname);
+      return;
+    }
 
-  // Olivia archive — always public, its own password protection
+    if (urlToken && urlName) {
+      // Consume token from URL, save to auth state
+      setAuthenticated(urlToken, decodeURIComponent(urlName));
+      // Clean the URL — strip query params
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, [setAuthenticated]);
+
+  // Olivia archive — always public
   if (location === "/olivia") {
     return <OliviaArchive />;
   }
 
-  // Magic link verification
+  // Legacy magic-link verification route
   if (location.startsWith("/auth/verify")) {
     const params = new URLSearchParams(
       typeof window !== "undefined" ? window.location.search : ""
@@ -98,8 +144,8 @@ function AppWithAuth() {
     return (
       <AuthVerify
         token={token}
-        onAuthenticated={handleAuthenticated}
-        onFailed={handleAuthFailed}
+        onAuthenticated={(t, name) => { setAuthenticated(t, name); navigate("/"); }}
+        onFailed={() => navigate("/")}
       />
     );
   }
@@ -109,7 +155,12 @@ function AppWithAuth() {
 
   // Not authenticated — show sign in
   if (!authState.authenticated) {
-    return <SignIn onAuthenticated={handleAuthenticated} />;
+    return (
+      <>
+        {authError && <AuthErrorBanner onDismiss={() => setAuthError(false)} />}
+        <SignIn onAuthenticated={(t, name) => { setAuthenticated(t, name); navigate("/"); }} />
+      </>
+    );
   }
 
   // Authenticated — main app

@@ -65,8 +65,9 @@ export function useAuth() {
       })
       .catch(() => {
         // Network error — keep authenticated if token exists (offline-friendly)
+        const storedName = localStorage.getItem("winston_user_name") ?? "David";
         setAuthTokenGetter(() => localStorage.getItem(SESSION_KEY));
-        setAuthState({ loading: false, authenticated: true, userName: "David", token });
+        setAuthState({ loading: false, authenticated: true, userName: storedName, token });
       });
   }, []);
 
