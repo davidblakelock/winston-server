@@ -185,6 +185,7 @@ Your Goals:
 function getCurrentDateTimeBlock(): string {
   const now = new Date();
   const tz = "America/Chicago";
+
   const dayName = now.toLocaleDateString("en-US", { timeZone: tz, weekday: "long" });
   const monthName = now.toLocaleDateString("en-US", { timeZone: tz, month: "long" });
   const day = now.toLocaleDateString("en-US", { timeZone: tz, day: "numeric" });
@@ -195,7 +196,24 @@ function getCurrentDateTimeBlock(): string {
     minute: "2-digit",
     hour12: true,
   });
-  return `[Current date and time]\nToday is ${dayName}, ${monthName} ${day}, ${year} and the current time is ${time} Central Time.\n`;
+
+  const localHour = parseInt(
+    now.toLocaleTimeString("en-US", { timeZone: tz, hour: "numeric", hour12: false }),
+    10
+  );
+  const partOfDay =
+    localHour < 12 ? "morning" : localHour < 17 ? "afternoon" : localHour < 21 ? "evening" : "night";
+
+  const localDow = new Date(now.toLocaleString("en-US", { timeZone: tz })).getDay();
+  const isWeekend = localDow === 0 || localDow === 6;
+
+  return (
+    `[Current date and time — injected fresh on every message]\n` +
+    `Today is ${dayName}, ${monthName} ${day}, ${year}.\n` +
+    `Current time: ${time} Central Time (${partOfDay}).\n` +
+    `Day type: ${isWeekend ? "weekend" : "weekday"}.\n` +
+    `When David asks what time or day it is, answer directly using exactly the values above.\n`
+  );
 }
 
 router.post("/chat", async (req, res) => {
