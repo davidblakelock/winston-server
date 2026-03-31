@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, KeyboardEvent, ChangeEvent } from "react";
-import { Send, Play, Loader2, Disc3, Mic, MicOff, MapPin, Mail, LogOut } from "lucide-react";
+import { Send, Play, Loader2, Disc3, Mic, MicOff, MapPin, Mail, LogOut, Settings, X, Moon } from "lucide-react";
 import { useSendMessage, useTextToSpeech } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -13,6 +13,7 @@ interface Message {
   mimeType?: string;
   isReminder?: boolean;
   navigationUrl?: string;
+  isWinddown?: boolean;
 }
 
 interface ReminderEvent {
@@ -215,12 +216,24 @@ function useGoogleAuth(): [GoogleAuthStatus, () => Promise<void>] {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
+interface WinddownSettings {
+  enabled: boolean;
+  scheduledTime: string;
+}
+
 export default function Chat() {
   const [messages, setMessages] = useState<Message[]>([
     { id: "welcome", role: "assistant", content: "Hello, David. What's on your mind?" },
   ]);
   const [input, setInput] = useState("");
   const [playingId, setPlayingId] = useState<string | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [winddownSettings, setWinddownSettings] = useState<WinddownSettings>({
+    enabled: true,
+    scheduledTime: "21:00",
+  });
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [localTime, setLocalTime] = useState("21:00");
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -374,13 +387,60 @@ export default function Chat() {
     [speakReply]
   );
 
+  // ── Fetch wind-down settings on mount ──
+  useEffect(() => {
+    fetch("/api/winddown/settings")
+      .then((r) => r.json())
+      .then((data: WinddownSettings) => {
+        setWinddownSettings(data);
+        setLocalTime(data.scheduledTime);
+      })
+      .catch(() => {});
+  }, []);
+
+  // ── Save wind-down settings ──
+  const saveWinddownSettings = useCallback(async () => {
+    setSettingsSaving(true);
+    try {
+      const res = await fetch("/api/winddown/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: winddownSettings.enabled, scheduledTime: localTime }),
+      });
+      const data = await res.json() as WinddownSettings;
+      setWinddownSettings(data);
+      setLocalTime(data.scheduledTime);
+      setShowSettings(false);
+    } catch {}
+    setSettingsSaving(false);
+  }, [winddownSettings.enabled, localTime]);
+
+  // ── SSE: reminders + wind-down start ──
+  const fireWinddownStart = useCallback(
+    (message: string) => {
+      const msgId = `winddown-${Date.now()}`;
+      setMessages((prev) => [
+        ...prev,
+        { id: msgId, role: "assistant", content: message, isWinddown: true },
+      ]);
+      speakReply(msgId, message);
+    },
+    [speakReply]
+  );
+
   useEffect(() => {
     const es = new EventSource("/api/reminders/stream");
     es.addEventListener("reminder", (e) => {
       try { fireReminderAlert(JSON.parse(e.data) as ReminderEvent); } catch {}
     });
+    es.addEventListener("winddown-start", (e) => {
+      try {
+        const data = JSON.parse(e.data) as { message: string };
+        fireWinddownStart(data.message);
+      } catch {}
+    });
     return () => es.close();
-  }, [fireReminderAlert]);
+  }, [fireReminderAlert, fireWinddownStart]);
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitText(input); }
@@ -408,6 +468,8 @@ export default function Chat() {
             <p className="text-xs text-muted-foreground font-medium tracking-widest uppercase">Always Here</p>
           </div>
         </div>
+
+        <div className="flex items-center gap-2">
 
         {/* Google auth badge */}
         {!googleAuth.loading && (
@@ -479,7 +541,87 @@ export default function Chat() {
             </button>
           )
         )}
+
+        {/* Settings gear */}
+        <button
+          onClick={() => setShowSettings(true)}
+          className="text-muted-foreground/50 hover:text-muted-foreground transition-colors p-1.5 rounded-full hover:bg-white/5"
+          title="Evening wind-down settings"
+        >
+          <Settings className="h-4 w-4" />
+        </button>
+        </div>
       </header>
+
+      {/* Wind-down settings modal */}
+      {showSettings && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
+          <div className="bg-card border border-white/10 rounded-2xl p-6 w-full max-w-sm shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between mb-5">
+              <div className="flex items-center gap-2">
+                <Moon className="h-4 w-4 text-primary/70" />
+                <h2 className="text-base font-medium text-foreground">Evening Wind-Down</h2>
+              </div>
+              <button
+                onClick={() => setShowSettings(false)}
+                className="text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <p className="text-sm text-muted-foreground mb-5 leading-relaxed">
+              Each evening at your chosen time, Emma will check in — asking about your day, capturing any notes for tomorrow, and inviting a memory for Olivia's book.
+            </p>
+
+            {/* Enable toggle */}
+            <div className="flex items-center justify-between mb-5">
+              <span className="text-sm text-foreground">Enable evening wind-down</span>
+              <button
+                onClick={() => setWinddownSettings((s) => ({ ...s, enabled: !s.enabled }))}
+                className={`relative w-11 h-6 rounded-full transition-colors duration-200 focus:outline-none ${
+                  winddownSettings.enabled ? "bg-primary" : "bg-white/10"
+                }`}
+              >
+                <span
+                  className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200 ${
+                    winddownSettings.enabled ? "translate-x-5" : "translate-x-0"
+                  }`}
+                />
+              </button>
+            </div>
+
+            {/* Time picker */}
+            <div className="mb-6">
+              <label className="text-sm text-foreground block mb-2">Start time (Central Time)</label>
+              <input
+                type="time"
+                value={localTime}
+                onChange={(e) => setLocalTime(e.target.value)}
+                disabled={!winddownSettings.enabled}
+                className="w-full bg-input border border-border rounded-xl px-4 py-3 text-foreground text-sm focus:outline-none focus:ring-1 focus:ring-primary/40 disabled:opacity-40 transition-opacity"
+              />
+            </div>
+
+            <div className="flex gap-3">
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={() => setShowSettings(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                className="flex-1"
+                onClick={() => void saveWinddownSettings()}
+                disabled={settingsSaving}
+              >
+                {settingsSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Chat Area */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 sm:p-6 pb-24 sm:pb-32 space-y-8">
@@ -495,6 +637,8 @@ export default function Chat() {
                   ? "bg-secondary text-secondary-foreground rounded-br-sm"
                   : msg.isReminder
                   ? "bg-primary/10 border border-primary/30 text-card-foreground rounded-bl-sm"
+                  : msg.isWinddown
+                  ? "bg-indigo-950/40 border border-indigo-500/20 text-card-foreground rounded-bl-sm"
                   : msg.navigationUrl
                   ? "bg-blue-950/40 border border-blue-500/20 text-card-foreground rounded-bl-sm"
                   : "bg-card border border-white/5 text-card-foreground rounded-bl-sm"
@@ -502,6 +646,12 @@ export default function Chat() {
             >
               {msg.isReminder && (
                 <p className="text-[11px] font-semibold tracking-widest uppercase text-primary/70 mb-2">Reminder</p>
+              )}
+              {msg.isWinddown && (
+                <p className="text-[11px] font-semibold tracking-widest uppercase text-indigo-400/70 mb-2 flex items-center gap-1.5">
+                  <Moon className="h-3 w-3" />
+                  Evening Wind-Down
+                </p>
               )}
               {msg.navigationUrl && (
                 <p className="text-[11px] font-semibold tracking-widest uppercase text-blue-400/80 mb-2 flex items-center gap-1.5">

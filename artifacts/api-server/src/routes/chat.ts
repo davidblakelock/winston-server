@@ -14,6 +14,13 @@ import {
   getStoryCount,
   formatStoriesForPrompt,
 } from "../stories/storyManager.js";
+import {
+  isWinddownActive,
+  saveWinddownNote,
+  getLastNightNotes,
+  formatNotesForMorningBriefing,
+  setWinddownActive,
+} from "../winddown/winddownManager.js";
 
 const router: IRouter = Router();
 
@@ -103,6 +110,7 @@ const LIST_PATTERN = /\b(add\s+.+\s+to\s+(my\s+)?\w.+list|remove\s+.+\s+from\s+(
 const NAVIGATION_PATTERN = /\b(take\s+me\s+to|directions?\s+to|navigate\s+to|get\s+me\s+to|how\s+do\s+i\s+get\s+to|maps?\s+to|open\s+maps?\s+(for|to))\b/i;
 const STORY_READ_PATTERN = /\b(read\s+(me\s+)?(my\s+)?stor(y|ies)|show\s+(me\s+)?(my\s+)?stor(y|ies)|what\s+stor(y|ies)\s+have\s+i|tell\s+me\s+(my|the)\s+stor(y|ies)|ms\.?\s*peel\s+read\s+(me\s+)?(my\s+)?stor(y|ies)|olivia\s+stor(y|ies))\b/i;
 const STORY_COUNT_PATTERN = /\b(how\s+many\s+stor(y|ies)|stor(y|ies)\s+count|how\s+many\s+memories|number\s+of\s+stor(y|ies)|how\s+many\s+have\s+i\s+(captured|saved|told))\b/i;
+const WINDDOWN_NOTE_PATTERN = /\b(remember\s+(to|that)|note\s+(for\s+tomorrow|this\s+down)|write\s+(this|that)\s+down|add\s+(this\s+)?to\s+(my\s+)?morning\s+briefing|don'?t\s+let\s+me\s+forget\s+(to|that)|make\s+sure\s+i\s+(remember|know)|for\s+tomorrow\s+(i\s+need\s+to|remind\s+me))\b/i;
 
 interface SavedLocation {
   name: string;
@@ -303,11 +311,12 @@ router.post("/chat", async (req, res) => {
 
   if (isMorningGreeting) {
     try {
-      const [dallas, knoxville, emails, events] = await Promise.all([
+      const [dallas, knoxville, emails, events, lastNightNotes] = await Promise.all([
         fetchCityWeather("Dallas", 32.7767, -96.7970, "America/Chicago"),
         fetchCityWeather("Knoxville", 35.9606, -83.9207, "America/New_York"),
         fetchRecentEmails(8).catch(() => null),
         fetchTodayEvents().catch(() => null),
+        getLastNightNotes().catch(() => []),
       ]);
 
       const weatherBlock =
@@ -323,7 +332,9 @@ router.post("/chat", async (req, res) => {
         ? `\n\n[Google Calendar — today's schedule]\n${formatCalendarForPrompt(events)}\nMention today's appointments and schedule naturally.`
         : "";
 
-      systemPrompt = getCurrentDateTimeBlock() + "\n" + BASE_SYSTEM_PROMPT + weatherBlock + gmailBlock + calendarBlock;
+      const notesBlock = formatNotesForMorningBriefing(lastNightNotes);
+
+      systemPrompt = getCurrentDateTimeBlock() + "\n" + BASE_SYSTEM_PROMPT + notesBlock + weatherBlock + gmailBlock + calendarBlock;
     } catch (err) {
       req.log.warn({ err }, "Morning data fetch failed, continuing without it");
     }
@@ -352,6 +363,47 @@ router.post("/chat", async (req, res) => {
     } catch (err) {
       req.log.warn({ err }, "On-demand email/calendar fetch failed");
     }
+  }
+
+  // ── Wind-down session: inject context and capture notes ──
+  const winddownActive = await isWinddownActive().catch(() => false);
+  const isWinddownNote = winddownActive && WINDDOWN_NOTE_PATTERN.test(message);
+  const isGoodnightMessage = /\b(goodnight|good\s+night|good\s+nite|sweet\s+dreams|see\s+you\s+tomorrow|talk\s+tomorrow)\b/i.test(message);
+
+  if (winddownActive) {
+    const tz = "America/Chicago";
+    const now = new Date();
+    const dayName = now.toLocaleDateString("en-US", { timeZone: tz, weekday: "long" });
+    const tomorrowPickleball = ["Sunday", "Tuesday", "Thursday", "Friday"].includes(dayName);
+    const tomorrowNote = tomorrowPickleball
+      ? `\nNote: Tomorrow is a pickleball day — mention it naturally if we reach goodnight.`
+      : "";
+
+    systemPrompt +=
+      `\n\n[Evening Wind-Down Session — ACTIVE]\nDavid is in his evening wind-down. Guide the conversation naturally through:` +
+      `\n1. Warm check-in about how his day went (if not yet covered in this conversation)` +
+      `\n2. Any loose ends — things he wants to remember for tomorrow (note: anything he mentions wanting to remember should be saved for his morning briefing)` +
+      `\n3. A gentle memory prompt for Olivia's book (a natural invitation, not homework)` +
+      `\n4. A warm, personal goodnight — mention Winston the corgi, wish him well for tomorrow's activities` +
+      tomorrowNote +
+      `\nLet the conversation breathe — don't rush through all stages at once. Follow his lead.`;
+  }
+
+  if (isWinddownNote) {
+    try {
+      await saveWinddownNote(message);
+      req.log.info({ note: message.substring(0, 60) }, "Wind-down note saved");
+      systemPrompt +=
+        `\n\n[Wind-Down Note Saved]\nDavid's note has been saved and will appear in tomorrow's morning briefing: "${message.substring(0, 120)}"\nAcknowledge warmly that you've got it noted for tomorrow morning.`;
+    } catch (err) {
+      req.log.warn({ err }, "Wind-down note save failed");
+    }
+  }
+
+  if (isGoodnightMessage && winddownActive) {
+    try {
+      await setWinddownActive(false);
+    } catch {}
   }
 
   // ── Story capture: check if David is responding to a pending story prompt ──
