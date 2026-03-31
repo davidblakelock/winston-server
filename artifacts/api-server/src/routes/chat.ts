@@ -1094,12 +1094,42 @@ router.post("/chat", async (req, res) => {
     { role: "user", content: message },
   ];
 
-  const response = await anthropic.messages.create({
-    model: "claude-opus-4-5",
-    max_tokens: isMorningGreeting ? 1800 : 1024,
-    system: systemPrompt,
-    messages,
-  });
+  let response: Anthropic.Message | null = null;
+  const maxAttempts = 4;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      response = await anthropic.messages.create({
+        model: "claude-opus-4-5",
+        max_tokens: isMorningGreeting ? 1800 : 1024,
+        system: systemPrompt,
+        messages,
+      });
+      break;
+    } catch (err: unknown) {
+      const isOverloaded =
+        err instanceof Anthropic.APIStatusError && err.status === 529;
+      if (isOverloaded && attempt < maxAttempts) {
+        const delay = attempt * 2000;
+        req.log.warn({ attempt, delay }, "Claude overloaded — retrying");
+        await new Promise((r) => setTimeout(r, delay));
+        continue;
+      }
+      req.log.error({ err }, "Claude API error after retries");
+      res.json({
+        reply:
+          "I'm sorry, David — I'm having trouble reaching my thinking right now. Claude's servers are a little busy. Give me a moment and try again.",
+      });
+      return;
+    }
+  }
+
+  if (!response) {
+    res.json({
+      reply:
+        "I'm sorry, David — I couldn't get a response just now. Please try again in a moment.",
+    });
+    return;
+  }
 
   const reply =
     response.content[0].type === "text" ? response.content[0].text : "";
