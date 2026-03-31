@@ -52,10 +52,22 @@ router.get("/auth/callback", async (req: Request, res: Response) => {
     );
 
     req.log.info({ email }, "Google OAuth connected");
-    res.redirect("/?connected=google");
+    res.send(`<!DOCTYPE html><html><head><title>Connected</title></head><body>
+      <script>
+        if (window.opener) { window.opener.postMessage('google-connected', '*'); window.close(); }
+        else { window.location.href = '/?connected=google'; }
+      </script>
+      <p style="font-family:sans-serif;text-align:center;margin-top:40px;color:#4ade80">Google connected! You can close this window.</p>
+    </body></html>`);
   } catch (err) {
     req.log.error({ err }, "Google OAuth callback error");
-    res.redirect("/?auth=error");
+    res.send(`<!DOCTYPE html><html><head><title>Error</title></head><body>
+      <script>
+        if (window.opener) { window.opener.postMessage('google-auth-error', '*'); window.close(); }
+        else { window.location.href = '/?auth=error'; }
+      </script>
+      <p style="font-family:sans-serif;text-align:center;margin-top:40px;color:#f87171">Sign-in failed. You can close this window.</p>
+    </body></html>`);
   }
 });
 
