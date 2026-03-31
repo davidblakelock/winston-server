@@ -6,11 +6,13 @@ import transcribeRouter from "./transcribe";
 import authRouter from "./auth";
 import winddownRouter from "./winddown";
 import memoryRouter from "./memory";
+import onboardingRouter from "./onboarding";
 
 const router: IRouter = Router();
 
 router.use(healthRouter);
 router.use(authRouter);
+router.use(onboardingRouter);
 router.use(chatRouter);
 router.use(remindersRouter);
 router.use(transcribeRouter);

@@ -30,6 +30,16 @@ Winston is a personal AI companion app with a dark-themed chat interface. Users 
   - Logic: sports score first if game last night → market moves → Dallas local → global → end with AI/tech
   - Tone: trusted friend, not news anchor — explains why each story matters to David personally
   - Zero API keys needed — uses public RSS feeds with 5-second timeout per feed
+- **Onboarding Experience**: Full 9-scene conversational onboarding for new users
+  - Emma Peel speaks first (unprompted), following an exact script to introduce herself and learn the user
+  - Scene 1: Welcome & introduction; Scene 2: Name, city, wake time; Scene 3: People (family/friends with location for weather); Scene 4: Health & wellbeing; Scene 5: Places; Scene 6: What You Love (shows, restaurants, sports, music, hobbies); Scene 7: Voice selection (4 ElevenLabs voices with live preview); Scene 8: Story archive introduction; Scene 9: Personalized first morning briefing
+  - Scene progress indicator (thin bar at top, labeled for each scene)
+  - Voice input/output throughout — fully conversational
+  - All data saved to `user_profiles` table + `profile_items` table for persistent cross-session access
+  - New vs. returning user detection: new → onboarding, returning → main Chat
+  - On completion, transitions to the main chat interface automatically
+  - Dynamic profile system: if user has completed onboarding, their profile drives Emma's system prompt (instead of hardcoded BASE_SYSTEM_PROMPT)
+  - DB tables: `user_profiles` (id, name, city, lat, lon, timezone, wake_time, voice_id, health_notes, raw_data, onboarding_completed)
 - **Profile Management**: David can add/remove/read personal profile items via natural language
   - Categories: Places (with address), Shows (watching), Restaurants (favorites), People, Interests, Other
   - Add: "Ms. Peel add a new place called Chelsea Corner at 6315 La Vista Drive Dallas TX"

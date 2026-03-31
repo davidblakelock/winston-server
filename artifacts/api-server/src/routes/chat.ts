@@ -38,6 +38,11 @@ import {
   formatProfileForContext,
   buildProfileResultContext,
 } from "../profile/profileManager.js";
+import {
+  getProfile,
+  buildSystemPromptFromProfile,
+  type CollectedData,
+} from "../onboarding/onboardingManager.js";
 
 const router: IRouter = Router();
 
@@ -324,16 +329,23 @@ router.post("/chat", async (req, res) => {
     return;
   }
 
-  // Fetch recent memories and dynamic profile concurrently
-  const [recentMemories, allProfileItems, profilePlaces] = await Promise.all([
+  // Fetch recent memories, dynamic profile, and user profile concurrently
+  const [recentMemories, allProfileItems, profilePlaces, userProfile] = await Promise.all([
     getRecentMemories(7).catch(() => []),
     getProfileItems().catch(() => []),
     getProfilePlaces().catch(() => []),
+    getProfile().catch(() => null),
   ]);
   const memoryBlock = formatMemoriesForContext(recentMemories);
   const dynamicProfileBlock = formatProfileForContext(allProfileItems);
 
-  let systemPrompt = getCurrentDateTimeBlock() + "\n" + BASE_SYSTEM_PROMPT + memoryBlock + dynamicProfileBlock;
+  // Use dynamic system prompt if onboarding was completed for a new user
+  const corePrompt =
+    userProfile?.onboardingCompleted && userProfile.name
+      ? buildSystemPromptFromProfile(userProfile, userProfile.rawData as CollectedData)
+      : BASE_SYSTEM_PROMPT;
+
+  let systemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + memoryBlock + dynamicProfileBlock;
   let reminderConfirmation = "";
 
   const isMorningGreeting = MORNING_PATTERN.test(message);
@@ -378,7 +390,7 @@ router.post("/chat", async (req, res) => {
         "Morning news fetched"
       );
 
-      systemPrompt = getCurrentDateTimeBlock() + "\n" + BASE_SYSTEM_PROMPT + memoryBlock + dynamicProfileBlock + notesBlock + weatherBlock + gmailBlock + calendarBlock + newsBlock;
+      systemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + memoryBlock + dynamicProfileBlock + notesBlock + weatherBlock + gmailBlock + calendarBlock + newsBlock;
     } catch (err) {
       req.log.warn({ err }, "Morning data fetch failed, continuing without it");
     }
@@ -403,7 +415,7 @@ router.post("/chat", async (req, res) => {
           ? "\n\n[Google Calendar — not connected. Let David know he can connect Google in the app header.]"
           : "";
 
-      systemPrompt = getCurrentDateTimeBlock() + "\n" + BASE_SYSTEM_PROMPT + memoryBlock + gmailBlock + calendarBlock;
+      systemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + memoryBlock + gmailBlock + calendarBlock;
     } catch (err) {
       req.log.warn({ err }, "On-demand email/calendar fetch failed");
     }
