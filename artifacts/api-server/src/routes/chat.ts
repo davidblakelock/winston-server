@@ -3,7 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { extractListOp, executeListOp, buildListContext } from "../lists/listManager.js";
 import { fetchRecentEmails, formatEmailsForPrompt } from "../google/gmail.js";
-import { fetchTodayEvents, formatCalendarForPrompt } from "../google/calendar.js";
+import { fetchTodayEvents, fetchWeekEvents, formatCalendarForPrompt } from "../google/calendar.js";
 import {
   getRandomPrompt,
   getPendingPrompt,
@@ -127,7 +127,7 @@ const MORNING_PATTERN = /\b(good\s+morning|morning|mornin'?|wakin[g']?\s+up|just
 const EVENING_PATTERN = /\b(good\s+evening|winding\s+down|wind\s+down|heading\s+to\s+bed|going\s+to\s+bed|getting\s+ready\s+for\s+bed|calling\s+it\s+a\s+night|turning\s+in|good\s+night|goodnite|end\s+of\s+the\s+day|wrapping\s+up|relaxing\s+(tonight|this\s+evening)|settling\s+in)\b/i;
 const REMINDER_PATTERN = /\b(remind\s+me|set\s+a?\s*reminder|reminder|don'?t\s+let\s+me\s+forget|make\s+sure\s+i|peel\s+remind|ms\.?\s*peel\s+remind)\b/i;
 const EMAIL_PATTERN = /\b(email|emails|mail|inbox|check\s+my\s+(email|mail|inbox)|any\s+(new\s+)?(emails?|messages?|mail)|what('?s|\s+is)\s+(in\s+)?(my\s+)?(email|inbox|mail)|do\s+i\s+have\s+(any\s+)?(email|mail|messages?))\b/i;
-const CALENDAR_PATTERN = /\b(calendar|schedule|agenda|appointments?|what('?s|\s+is)\s+(on\s+)?(my\s+)?(calendar|schedule|agenda)|(today|tomorrow)'?s?\s+(schedule|events?|appointments?)|do\s+i\s+have\s+anything\s+(today|scheduled|on\s+my\s+calendar))\b/i;
+const CALENDAR_PATTERN = /\b(calendar|schedule|agenda|appointments?|what('?s|\s+is)\s+(on\s+)?(my\s+)?(calendar|schedule|agenda|week)|(today|tomorrow|this\s+week|next\s+week)'?s?\s+(schedule|events?|appointments?|look\s+like)|do\s+i\s+have\s+anything\s+(today|tomorrow|this\s+week|scheduled|on\s+my\s+calendar)|what\s+does\s+my\s+week\s+look\s+like|what('?s|\s+is)\s+on\s+for\s+(today|tomorrow|this\s+week)|anything\s+(on\s+)?(today|tomorrow|this\s+week|my\s+calendar)|busy\s+(today|tomorrow|this\s+week))\b/i;
 const LIST_PATTERN = /\b(add\s+.+\s+to\s+(my\s+)?\w.+list|remove\s+.+\s+from\s+(my\s+)?\w.+list|clear\s+(my\s+)?\w.+list|what('?s|\s+is)\s+(on\s+)?(my\s+)?\w.+list|show\s+(me\s+)?(my\s+)?\w.+list|read\s+(me\s+)?(my\s+)?\w.+list|(shopping|to\s*-?\s*do|grocery|errand|task)\s+list)\b/i;
 const NAVIGATION_PATTERN = /\b(take\s+me\s+to|directions?\s+to|navigate\s+to|get\s+me\s+to|how\s+do\s+i\s+get\s+to|maps?\s+to|open\s+maps?\s+(for|to))\b/i;
 const STORY_READ_PATTERN = /\b(read\s+(me\s+)?(my\s+)?stor(y|ies)|show\s+(me\s+)?(my\s+)?stor(y|ies)|what\s+stor(y|ies)\s+have\s+i|tell\s+me\s+(my|the)\s+stor(y|ies)|ms\.?\s*peel\s+read\s+(me\s+)?(my\s+)?stor(y|ies)|olivia\s+stor(y|ies))\b/i;
@@ -379,7 +379,7 @@ router.post("/chat", async (req, res) => {
         : "";
 
       const calendarBlock = events !== null
-        ? `\n\n[Google Calendar — today's schedule]\n${formatCalendarForPrompt(events)}\nMention today's appointments and schedule naturally.`
+        ? `\n\n[Google Calendar — today's schedule]\n${formatCalendarForPrompt(events, "today")}\n\nIMPORTANT: Weave today's calendar into the briefing conversationally — do NOT list events as bullets. Say things like "You've got a therapy session with Scott at 1 this afternoon" or "Your morning looks clear which is perfect for a run." If the calendar is clear, say something warm like "Your schedule is wide open today" and suggest how he might enjoy the freedom.`
         : "";
 
       const notesBlock = formatNotesForMorningBriefing(lastNightNotes);
@@ -400,7 +400,7 @@ router.post("/chat", async (req, res) => {
     try {
       const [emails, events] = await Promise.all([
         isEmailRequest ? fetchRecentEmails(10).catch(() => null) : Promise.resolve(undefined),
-        isCalendarRequest ? fetchTodayEvents().catch(() => null) : Promise.resolve(undefined),
+        isCalendarRequest ? fetchWeekEvents().catch(() => null) : Promise.resolve(undefined),
       ]);
 
       const gmailBlock = emails !== undefined && emails !== null
@@ -410,7 +410,7 @@ router.post("/chat", async (req, res) => {
           : "";
 
       const calendarBlock = events !== undefined && events !== null
-        ? `\n\n[Google Calendar — today's schedule (fetched just now)]\n${formatCalendarForPrompt(events)}\nAnswer David's question about his schedule using exactly this data.`
+        ? `\n\n[Google Calendar — next 7 days (fetched just now)]\n${formatCalendarForPrompt(events, "this week")}\n\nIMPORTANT: Answer David's question about his schedule conversationally — do NOT read out a list of bullet points. Speak naturally, as you would in conversation. For example: "Tomorrow you've got a dentist appointment at 2, and then Thursday looks pretty open." If he asked about today specifically, focus on today. If he asked about the week, give him a flowing narrative overview day by day. If the calendar is clear, say so warmly.`
         : events === null
           ? "\n\n[Google Calendar — not connected. Let David know he can connect Google in the app header.]"
           : "";
