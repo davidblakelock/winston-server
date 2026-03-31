@@ -528,7 +528,11 @@ export default function Chat() {
                   "google-oauth",
                   "width=520,height=640,left=200,top=100,resizable=yes,scrollbars=yes"
                 );
-                if (!popup) return;
+                // On mobile browsers popups are blocked — fall back to redirect flow
+                if (!popup) {
+                  window.location.href = "/api/auth/google";
+                  return;
+                }
 
                 const onMessage = async (e: MessageEvent) => {
                   if (e.data === "google-connected") {
