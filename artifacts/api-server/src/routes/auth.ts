@@ -11,6 +11,7 @@ router.get("/auth/google", (_req: Request, res: Response) => {
     access_type: "offline",
     scope: SCOPES,
     prompt: "consent",
+    login_hint: "davidblakelock.winston@gmail.com",
   });
   res.redirect(url);
 });
