@@ -466,19 +466,25 @@ export default function Chat() {
     [speakReply]
   );
 
+  // Stable refs so the SSE effect never needs to re-run when callbacks change
+  const fireReminderAlertRef = useRef(fireReminderAlert);
+  const fireWinddownStartRef = useRef(fireWinddownStart);
+  useEffect(() => { fireReminderAlertRef.current = fireReminderAlert; }, [fireReminderAlert]);
+  useEffect(() => { fireWinddownStartRef.current = fireWinddownStart; }, [fireWinddownStart]);
+
   useEffect(() => {
     const es = new EventSource("/api/reminders/stream");
     es.addEventListener("reminder", (e) => {
-      try { fireReminderAlert(JSON.parse(e.data) as ReminderEvent); } catch {}
+      try { fireReminderAlertRef.current(JSON.parse(e.data) as ReminderEvent); } catch {}
     });
     es.addEventListener("winddown-start", (e) => {
       try {
         const data = JSON.parse(e.data) as { message: string };
-        fireWinddownStart(data.message);
+        fireWinddownStartRef.current(data.message);
       } catch {}
     });
     return () => es.close();
-  }, [fireReminderAlert, fireWinddownStart]);
+  }, []); // empty deps — created once, refs always stay current
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitText(input); }
