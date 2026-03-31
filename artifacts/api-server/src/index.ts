@@ -11,6 +11,9 @@ import { seedDefaultMedications } from "./medications/medicationManager";
 import { startMorningPushScheduler } from "./push/morningPushScheduler";
 import { startWeatherAlertScheduler } from "./push/weatherAlertScheduler";
 import { startBillScheduler } from "./bills/billScheduler";
+import { startDatesScheduler } from "./dates/datesScheduler";
+import { startDepartureScheduler } from "./departure/departureScheduler";
+import { startPickleballScheduler } from "./pickleball/pickleballScheduler";
 
 const rawPort = process.env["PORT"];
 
@@ -49,6 +52,9 @@ app.listen(port, async (err) => {
   startMorningPushScheduler();
   startWeatherAlertScheduler();
   startBillScheduler();
+  await startDatesScheduler();
+  startDepartureScheduler();
+  startPickleballScheduler();
 
   try {
     await seedDefaultMedications();

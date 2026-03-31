@@ -94,6 +94,39 @@ import {
   formatBillsForPrompt,
   confirmBillAdded,
 } from "../bills/billManager.js";
+import {
+  getDates,
+  getUpcomingDates,
+  addDate,
+  removeDate,
+  extractDateFromMessage,
+  formatDatesForPrompt,
+  confirmDateAdded,
+} from "../dates/datesManager.js";
+import {
+  isTodayPickleballDay,
+  getTodaySession,
+  logSession as logPickleballSession,
+  extractPickleballResult,
+  hasRecentKneeIssue,
+  getRecentSessions as getRecentPickleballSessions,
+} from "../pickleball/pickleballManager.js";
+import {
+  fetchMarkets,
+  buildMarketsBlock,
+} from "../markets/marketsManager.js";
+import {
+  getPendingFollowUps,
+  saveRecommendations,
+  markFollowedUp,
+  extractRecommendationsFromResponse,
+  buildRecommendationFollowUpBlock,
+  detectFollowUpAcknowledgment,
+} from "../recommendations/recommendationsManager.js";
+import {
+  collectSundayData,
+  buildSundaySummaryBlock,
+} from "../sundaySummary/sundaySummaryManager.js";
 
 const router: IRouter = Router();
 
@@ -264,6 +297,20 @@ const SPORTS_PATTERN = /\b(rangers|cowboys|score|scores|how\s+did\s+(they|the\s+
 const BILL_ADD_PATTERN = /\b(my\s+\w.{1,40}(bill|payment|insurance|premium|subscription|rent|mortgage|registration|fee|taxes?)\s+is\s+due|add\s+(a\s+)?(bill|payment|financial\s+obligation|reminder\s+for)|track\s+(my\s+)?(bill|payment|insurance|rent|subscription)|remind\s+me\s+(about|when|before)\s+(my\s+)?\w.{1,30}(bill|payment|due|insurance|premium|subscription|rent|mortgage|registration|fee|taxes?)|(is\s+due|renews?)\s+(on|every|each|the)\s+(the\s+)?\d{1,2}(st|nd|rd|th)?|quarterly\s+taxes?\s+are?\s+due)\b/i;
 const BILL_LIST_PATTERN = /\b(what\s+bills|bills?\s+(do\s+i\s+have|coming\s+up|upcoming|are\s+due)|show\s+(me\s+)?(my\s+)?bills?|(my\s+)?upcoming\s+(bills?|payments?|obligations?|financial)|what\s+(financial\s+)?(obligations?|payments?)\s+(do\s+i|am\s+i)|list\s+(my\s+)?(bills?|payments?|obligations?|financial\s+obligations?))\b/i;
 const BILL_REMOVE_PATTERN = /\b(remove\s+(my\s+)?\w.{1,40}(bill|payment|insurance|subscription|reminder|obligation)|stop\s+tracking\s+(my\s+)?\w.{1,40}|delete\s+(my\s+)?\w.{1,40}(bill|payment|reminder)|cancel\s+(my\s+)?\w.{1,40}(bill|reminder))\b/i;
+
+// Important dates
+const DATE_ADD_PATTERN = /\b(('s\s+birthday|birthday\s+is|my\s+anniversary\s+with|our\s+anniversary\s+is|anniversary\s+with|birthday\s+is|remember\s+(that\s+)?(\w+\s+)?birthday|add\s+(a\s+)?(birthday|anniversary)))\b/i;
+const DATE_LIST_PATTERN = /\b(what\s+birthdays?|any\s+(upcoming\s+)?(birthdays?|anniversaries?)|my\s+(upcoming\s+)?(birthdays?|anniversaries?|important\s+dates?)|show\s+(me\s+)?((my\s+)?(birthdays?|anniversaries?|important\s+dates?))|list\s+(my\s+)?(birthdays?|anniversaries?|important\s+dates?))\b/i;
+const DATE_REMOVE_PATTERN = /\b(remove\s+.{2,40}(birthday|anniversary)|forget\s+.{2,40}(birthday|anniversary)|delete\s+.{2,40}(birthday|anniversary))\b/i;
+
+// Emergency protocol
+const EMERGENCY_PATTERN = /\b(ms\.?\s*peel\s+(i\s+(need|am|have|fell|can.t|cannot)|call\s+911|help\s+me)|call\s+911|i.ve\s+fallen|i\s+fell\s+(down|and)|i.m\s+not\s+(feeling|ok)|i\s+think\s+i.m\s+(having|going)|chest\s+pain|can.t\s+breathe|emergency|i\s+need\s+(help|an?\s+ambulance)|heart\s+attack|stroke|i.ve\s+been\s+(hurt|injured))\b/i;
+
+// Pickleball
+const PICKLEBALL_LOG_PATTERN = /\b(pickleball\s+(was|went|this\s+morning|today|done|finished|over)|we\s+(won|lost)\s+(today|at\s+pickleball|this\s+morning|the\s+game)|how\s+(was|did)\s+(pickleball|the\s+game|this\s+morning)|just\s+got\s+(back\s+from|done\s+with)\s+pickleball|finished\s+pickleball|played\s+pickleball)\b/i;
+
+// Susan coordination — detecting Susan-related tasks
+const SUSAN_PATTERN = /\bsusan\b/i;
 const MED_TAKEN_PATTERN = /\b(taken|took\s+(my\s+)?(meds?|medications?|pills?|them)|meds?\s+(done|taken|all\s+done)|medications?\s+taken|took\s+them|all\s+done\s+with\s+(my\s+)?meds?|done\s+with\s+(my\s+)?meds?|yes\s+(i\s+)?(took|taken)|confirmed\s+(meds?|medications?))\b/i;
 const MED_ADD_PATTERN = /\b(add\s+(a\s+)?(?:new\s+)?medication\s+(?:called\s+)?|new\s+medication\s+(?:called\s+)?|start\s+taking\s+(?:a\s+)?(?:new\s+)?medication|add\s+.{2,40}\s+to\s+my\s+medications?)\b/i;
 const MED_LIST_PATTERN = /\b(what\s+medications?\s+(do\s+i\s+take|am\s+i\s+(on|taking)|are\s+mine)|my\s+medications?|medication\s+list|what\s+(meds?|pills?)\s+(do\s+i|am\s+i)|list\s+(my\s+)?meds?|what\s+do\s+i\s+take)\b/i;
@@ -524,6 +571,12 @@ router.post("/chat", async (req, res) => {
   const isBillAdd = !isMorningGreeting && BILL_ADD_PATTERN.test(message);
   const isBillList = !isMorningGreeting && BILL_LIST_PATTERN.test(message);
   const isBillRemove = !isMorningGreeting && BILL_REMOVE_PATTERN.test(message);
+  const isDateAdd = !isMorningGreeting && DATE_ADD_PATTERN.test(message);
+  const isDateList = !isMorningGreeting && DATE_LIST_PATTERN.test(message);
+  const isDateRemove = !isMorningGreeting && DATE_REMOVE_PATTERN.test(message);
+  const isEmergency = EMERGENCY_PATTERN.test(message);
+  const isPickleballLog = !isMorningGreeting && PICKLEBALL_LOG_PATTERN.test(message);
+  const isSusanRelated = !isMorningGreeting && SUSAN_PATTERN.test(message);
 
   if (isMorningGreeting) {
     try {
@@ -532,7 +585,10 @@ router.post("/chat", async (req, res) => {
       const now = new Date();
       const yesterday = new Date(now.getTime() - 86400000);
 
-      const [dallas, knoxville, emails, events, lastNightNotes, newsFeeds, yesterdayEps, todayEps, morningMeds, medsAlreadyTaken, sportsScores, upcomingBills] = await Promise.all([
+      const isSunday = now.toLocaleDateString("en-US", { timeZone: "America/Chicago", weekday: "long" }) === "Sunday";
+      const isPickleballMorning = isTodayPickleballDay();
+
+      const [dallas, knoxville, emails, events, lastNightNotes, newsFeeds, yesterdayEps, todayEps, morningMeds, medsAlreadyTaken, sportsScores, upcomingBills, marketsData, upcomingDates, sundayData, pendingFollowUps, kneeIssueRecent] = await Promise.all([
         fetchCityWeather("Dallas", 32.7767, -96.7970, "America/Chicago"),
         fetchCityWeather("Knoxville", 35.9606, -83.9207, "America/New_York"),
         fetchRecentEmails(8).catch(() => null),
@@ -545,6 +601,11 @@ router.post("/chat", async (req, res) => {
         hasTakenMedicationsToday().catch(() => false),
         fetchSportsScores().catch(() => null),
         getUpcomingBills(14).catch(() => []),
+        fetchMarkets().catch(() => null),
+        getUpcomingDates(21).catch(() => []),
+        isSunday ? collectSundayData().catch(() => null) : Promise.resolve(null),
+        getPendingFollowUps(2, 14).catch(() => []),
+        hasRecentKneeIssue(14).catch(() => false),
       ]);
 
       const weatherBlock = buildContextualWeatherBlock(dallas, knoxville, now);
@@ -585,12 +646,36 @@ router.post("/chat", async (req, res) => {
           ? `\n\n[Upcoming Financial Obligations — next 14 days]\n${formatBillsForPrompt(upcomingBills)}\n\nIf any of these are due within 7 days, weave a gentle heads-up into the briefing. Otherwise skip the bills section entirely.`
           : "";
 
+      const marketsBlock = marketsData ? buildMarketsBlock(marketsData) : "";
+
+      const datesBlock = upcomingDates.length > 0
+        ? `\n\n[Upcoming Birthdays & Anniversaries]\n${formatDatesForPrompt(upcomingDates)}\n\nMention any date that's within 7 days warmly and naturally. For anything more than 7 days out, mention only if it fits. Keep it to 1 sentence per date.`
+        : "";
+
+      const sundaySummaryBlock = isSunday && sundayData
+        ? buildSundaySummaryBlock(sundayData)
+        : "";
+
+      const pickleballMorningBlock = isPickleballMorning && !sundaySummaryBlock
+        ? `\n\n[Schedule Note]\nToday is a pickleball day for David (Mon/Wed/Fri/Sat schedule). Mention it naturally and enthusiastically — "Enjoy pickleball this morning!" Keep it brief.`
+        : "";
+
+      const motivationBlock = `\n\n[Morning Motivation]\nInclude one brief (2-3 sentence) personalized motivating thought at the end of the briefing. Make it genuinely relevant to David's life — if it's a pickleball day, acknowledge his athletic commitment; if he recently captured a story for Olivia, acknowledge what a gift that is for her; if he has therapy with Scott, acknowledge his commitment to wellbeing; if the week ahead looks busy, offer something grounding. NOT a generic quote. Make it feel personal and warm.`;
+
+      const recFollowUpBlock = pendingFollowUps.length > 0
+        ? buildRecommendationFollowUpBlock(pendingFollowUps)
+        : "";
+
+      const kneeCheckBlock = kneeIssueRecent
+        ? `\n\n[Health Note]\nDavid mentioned knee issues in a recent pickleball session. If it fits naturally, include a gentle check-in — "How's that knee holding up?" — somewhere in the briefing.`
+        : "";
+
       req.log.info(
         { feedCount: newsFeeds.filter((f) => f.items.length > 0).length },
         "Morning news fetched"
       );
 
-      systemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + memoryBlock + dynamicProfileBlock + notesBlock + weatherBlock + gmailBlock + calendarBlock + tvMorningBlock + medMorningBlock + sportsBlock + billsMorningBlock + newsBlock;
+      systemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + memoryBlock + dynamicProfileBlock + notesBlock + weatherBlock + gmailBlock + calendarBlock + tvMorningBlock + medMorningBlock + sportsBlock + billsMorningBlock + marketsBlock + datesBlock + sundaySummaryBlock + pickleballMorningBlock + kneeCheckBlock + recFollowUpBlock + motivationBlock + newsBlock;
     } catch (err) {
       req.log.warn({ err }, "Morning data fetch failed, continuing without it");
     }
@@ -680,6 +765,130 @@ router.post("/chat", async (req, res) => {
     } catch (err) {
       req.log.warn({ err }, "Bill remove failed");
     }
+  }
+
+  // ── Emergency protocol ──────────────────────────────────────────────────────
+  if (isEmergency) {
+    systemPrompt += `\n\n[EMERGENCY PROTOCOL ACTIVATED]\nDavid may be in distress or danger. Respond immediately with calm, clear, reassuring emergency guidance. Tell him to call 911. Give his home address: 6345 Diamond Head Circle, Dallas, Texas 75225. Ask if he needs you to stay on the line. Use short sentences. Be calm and clear. Do NOT be wordy — emergency responders need clarity. Start your response with "David, I'm here."`;
+  }
+
+  // ── Important dates ──────────────────────────────────────────────────────────
+  if (isDateAdd) {
+    try {
+      const extracted = await extractDateFromMessage(message);
+      if (!extracted) {
+        systemPrompt += `\n\n[Date Add — Parse Failed]\nTell David you had trouble understanding that. Ask him to say it more clearly — e.g. "Olivia's birthday is October 15th."`;
+      } else {
+        const result = await addDate(
+          extracted.personName,
+          extracted.eventType,
+          extracted.month,
+          extracted.day,
+          extracted.relationship ?? undefined,
+          extracted.year ?? undefined
+        );
+        if (result.alreadyExists) {
+          systemPrompt += `\n\n[Date Add — Already Exists]\nTell David you already have ${extracted.personName}'s ${extracted.eventType} saved.`;
+        } else if (result.date) {
+          const confirmation = confirmDateAdded(result.date);
+          systemPrompt += `\n\n[Date Added Successfully]\n${confirmation}\nTell David exactly this confirmation. Be warm.`;
+          req.log.info({ personName: result.date.personName, eventType: result.date.eventType }, "Date added");
+        }
+      }
+    } catch (err) {
+      req.log.warn({ err }, "Date add failed");
+    }
+  }
+
+  if (isDateList) {
+    try {
+      const allDates = await getDates();
+      if (!allDates.length) {
+        systemPrompt += `\n\n[Important Dates — None yet]\nTell David he doesn't have any birthdays or anniversaries saved yet. He can add them naturally — e.g. "Olivia's birthday is October 15th."`;
+      } else {
+        const upcoming = await getUpcomingDates(90);
+        const formattedList = upcoming.length
+          ? formatDatesForPrompt(upcoming)
+          : allDates.map((d) => `• ${d.personName}: ${d.eventType} on ${d.month}/${d.day}`).join("\n");
+        systemPrompt += `\n\n[Important Dates — All saved]\n${formattedList}\n\nRead these back to David warmly and conversationally. If something is coming up soon, highlight it.`;
+      }
+    } catch (err) {
+      req.log.warn({ err }, "Date list failed");
+    }
+  }
+
+  if (isDateRemove) {
+    try {
+      const nameMatch = message.match(/(?:remove|forget|delete)\s+(?:my\s+|[\w]+\s*'s\s+)?(.+?)\s*(?:birthday|anniversary)/i);
+      const nameQuery = nameMatch?.[1]?.trim() ?? message.replace(/remove|forget|delete|birthday|anniversary/gi, "").trim();
+      if (!nameQuery) {
+        systemPrompt += `\n\n[Date Remove — Unclear]\nAsk David which person's birthday or anniversary to remove.`;
+      } else {
+        const removed = await removeDate(nameQuery);
+        if (removed) {
+          systemPrompt += `\n\n[Date Removed]\nTell David you've removed "${nameQuery}" from the important dates list.`;
+          req.log.info({ nameQuery }, "Date removed");
+        } else {
+          systemPrompt += `\n\n[Date Remove — Not Found]\nTell David you couldn't find "${nameQuery}" in the important dates list. He can say "what birthdays do I have" to see the full list.`;
+        }
+      }
+    } catch (err) {
+      req.log.warn({ err }, "Date remove failed");
+    }
+  }
+
+  // ── Pickleball logging ────────────────────────────────────────────────────
+  if (isPickleballLog) {
+    try {
+      const pickResult = extractPickleballResult(message);
+      const { updated, session } = await logPickleballSession(
+        pickResult.won ?? null,
+        pickResult.location,
+        pickResult.notes ?? message,
+        pickResult.kneeOk ?? null
+      );
+
+      const wonStr = session.won === true ? "win" : session.won === false ? "loss" : "session";
+      const kneeStr = session.kneeOk === false ? " Keep an eye on that knee." : "";
+      const action = updated ? "updated" : "logged";
+
+      systemPrompt += `\n\n[Pickleball Session ${action}]\nDavid's pickleball session today has been recorded (${wonStr}).${kneeStr}\n\nAcknowledge warmly and follow up naturally — ask about the game, any highlights, or how he's feeling. If it was a win, celebrate it. If it was a loss, be encouraging. Keep it conversational and brief.`;
+      if (pickResult.kneeOk === false) {
+        systemPrompt += ` His knee was bothering him — express genuine concern and ask how it feels now.`;
+      }
+      req.log.info({ won: session.won, kneeOk: session.kneeOk }, "Pickleball session logged");
+    } catch (err) {
+      req.log.warn({ err }, "Pickleball log failed");
+    }
+  }
+
+  // ── Upcoming dates context (non-morning) ─────────────────────────────────
+  if (!isMorningGreeting && !isDateAdd && !isDateList && !isDateRemove) {
+    try {
+      const nearDates = await getUpcomingDates(7);
+      if (nearDates.length > 0) {
+        systemPrompt += `\n\n[Upcoming Important Dates — next 7 days]\n${formatDatesForPrompt(nearDates)}\nIf this is relevant to the conversation, mention it warmly. Otherwise don't bring it up.`;
+      }
+    } catch {}
+  }
+
+  // ── Recommendation follow-up context (non-morning) ───────────────────────
+  if (!isMorningGreeting) {
+    try {
+      const followUps = await getPendingFollowUps(3, 14);
+      if (followUps.length > 0 && !isPickleballLog && !isDateAdd && !isEmergency) {
+        systemPrompt += buildRecommendationFollowUpBlock(followUps);
+      }
+      // Detect if user is responding to a follow-up
+      if (detectFollowUpAcknowledgment(message) && followUps.length > 0) {
+        systemPrompt += `\n\nIf David is following up on a recommendation, mark it acknowledged by referencing recommendation ID ${followUps[0].id} in your context. Respond warmly to what he says — ask how it was, what he thought.`;
+      }
+    } catch {}
+  }
+
+  // ── Susan coordination context ─────────────────────────────────────────────
+  if (isSusanRelated) {
+    systemPrompt += `\n\n[Susan Context]\nSusan is David's wife. He's mentioned her in this message. Be warm and supportive. If he's asking to be reminded of something for Susan, create a reminder naturally. If he's sharing something about Susan, engage with genuine warmth.`;
   }
 
   if (isEmailRequest || isCalendarRequest) {
@@ -1263,6 +1472,28 @@ router.post("/chat", async (req, res) => {
     response.content[0].type === "text" ? response.content[0].text : "";
 
   res.json({ reply, ...(navigationUrl ? { navigationUrl } : {}) });
+
+  // ── Post-response: extract and save recommendations (fire-and-forget) ──────
+  extractRecommendationsFromResponse(reply)
+    .then(async (recs) => {
+      if (recs.length > 0) {
+        await saveRecommendations(recs);
+        req.log.info({ count: recs.length, names: recs.map((r) => r.name) }, "Recommendations extracted and saved");
+      }
+    })
+    .catch(() => {});
+
+  // ── Post-response: mark recommendation as followed up ─────────────────────
+  if (detectFollowUpAcknowledgment(message)) {
+    getPendingFollowUps(3, 14)
+      .then(async (followUps) => {
+        if (followUps.length > 0) {
+          await markFollowedUp(followUps[0].id);
+          req.log.info({ id: followUps[0].id, name: followUps[0].name }, "Recommendation marked followed up");
+        }
+      })
+      .catch(() => {});
+  }
 });
 
 router.post("/speak", async (req, res) => {

@@ -5,6 +5,9 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useNotifications, isNotificationsSupported } from "@/hooks/useNotifications";
+import { EmergencyOverlay } from "@/components/EmergencyOverlay";
+
+const EMERGENCY_REGEX = /\b(ms\.?\s*peel\s+(i\s+(need|am|have|fell|can.t|cannot)|call\s+911|help\s+me)|call\s+911|i.ve\s+fallen|i\s+fell\s+(down|and)|i.m\s+not\s+(feeling|ok)|i\s+think\s+i.m\s+(having|going)|chest\s+pain|can.t\s+breathe|emergency|i\s+need\s+(help|an?\s+ambulance)|heart\s+attack|stroke|i.ve\s+been\s+(hurt|injured))\b/i;
 
 interface Message {
   id: string;
@@ -243,6 +246,7 @@ export default function Chat() {
   });
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [localTime, setLocalTime] = useState("21:00");
+  const [showEmergency, setShowEmergency] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -375,6 +379,10 @@ export default function Chat() {
   const submitText = useCallback(
     (text: string) => {
       if (!text.trim() || sendMessageMutation.isPending) return;
+
+      if (EMERGENCY_REGEX.test(text.trim())) {
+        setShowEmergency(true);
+      }
 
       const userMsg: Message = { id: Date.now().toString(), role: "user", content: text.trim() };
       const historyForApi = messages.map((m) => ({ role: m.role, content: m.content }));
@@ -545,6 +553,7 @@ export default function Chat() {
   );
 
   return (
+    <>
     <div className="flex flex-col h-[100dvh] max-w-4xl mx-auto overflow-hidden bg-background">
       {/* Header */}
       <header className="flex-shrink-0 border-b border-white/5 py-3 px-4 sm:px-6 flex items-center justify-between bg-background/80 backdrop-blur-sm z-10 sticky top-0">
@@ -877,5 +886,8 @@ export default function Chat() {
         </div>
       </div>
     </div>
+
+    {showEmergency && <EmergencyOverlay onDismiss={() => setShowEmergency(false)} />}
+    </>
   );
 }

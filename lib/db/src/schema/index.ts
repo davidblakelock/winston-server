@@ -234,6 +234,71 @@ export const financialObligations = pgTable(
   (t) => [index("financial_obligations_user_active").on(t.userName, t.active)]
 );
 
+// ── Important Dates (birthdays, anniversaries) ──────────────────────────────
+export const importantDates = pgTable(
+  "important_dates",
+  {
+    id: serial("id").primaryKey(),
+    userName: text("user_name").notNull().default("David"),
+    personName: text("person_name").notNull(),
+    relationship: text("relationship"),
+    eventType: text("event_type").notNull().default("birthday"), // birthday | anniversary | other
+    month: integer("month").notNull(),
+    day: integer("day").notNull(),
+    year: integer("year"), // optional — anniversary start year
+    notes: text("notes"),
+    active: boolean("active").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true }).default(sql`now()`),
+  },
+  (t) => [index("important_dates_user_active").on(t.userName, t.active)]
+);
+
+// ── Recommendations (restaurants, shows, places, activities) ─────────────────
+export const recommendations = pgTable(
+  "recommendations",
+  {
+    id: serial("id").primaryKey(),
+    userName: text("user_name").notNull().default("David"),
+    type: text("type").notNull().default("other"), // restaurant|show|place|activity|book|other
+    name: text("name").notNull(),
+    context: text("context"), // what Emma said / why she recommended it
+    dateRecommended: date("date_recommended").notNull().default(sql`CURRENT_DATE`),
+    followedUp: boolean("followed_up").notNull().default(false),
+    followedUpDate: date("followed_up_date"),
+    dismissed: boolean("dismissed").notNull().default(false),
+    createdAt: timestamp("created_at", { withTimezone: true }).default(sql`now()`),
+  },
+  (t) => [index("recommendations_user_followed").on(t.userName, t.followedUp)]
+);
+
+// ── Pickleball Sessions ──────────────────────────────────────────────────────
+export const pickleballSessions = pgTable(
+  "pickleball_sessions",
+  {
+    id: serial("id").primaryKey(),
+    userName: text("user_name").notNull().default("David"),
+    sessionDate: date("session_date").notNull(),
+    location: text("location"),
+    won: boolean("won"),
+    kneeOk: boolean("knee_ok"),
+    notes: text("notes"),
+    createdAt: timestamp("created_at", { withTimezone: true }).default(sql`now()`),
+  },
+  (t) => [uniqueIndex("pickleball_sessions_user_date").on(t.userName, t.sessionDate)]
+);
+
+// ── Departure Alert Log (dedup — one alert per event per day) ────────────────
+export const departureAlertLog = pgTable(
+  "departure_alert_log",
+  {
+    id: serial("id").primaryKey(),
+    eventTitle: text("event_title").notNull(),
+    eventDate: date("event_date").notNull(),
+    alertSentAt: timestamp("alert_sent_at", { withTimezone: true }).notNull().default(sql`now()`),
+  },
+  (t) => [uniqueIndex("departure_alert_log_event_date").on(t.eventTitle, t.eventDate)]
+);
+
 // ── User Profiles (onboarding) ──────────────────────────────────────────────
 export const userProfiles = pgTable("user_profiles", {
   id: serial("id").primaryKey(),
