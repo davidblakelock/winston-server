@@ -2,10 +2,127 @@ import { Router, type Request, type Response } from "express";
 import { google } from "googleapis";
 import { createOAuthClient, getRedirectUri, SCOPES } from "../google/oauth.js";
 import { query } from "../db.js";
+import {
+  createMagicLink,
+  verifyMagicLink,
+  createSession,
+  validateSession,
+  revokeSession,
+  sendMagicLinkEmail,
+  getAppUrl,
+} from "../auth/sessionAuth.js";
 
 const router = Router();
 
 const REQUIRED_EMAIL = "davidblakelock.winston@gmail.com";
+
+// ── Magic Link Auth ───────────────────────────────────────────────────────────
+
+// POST /api/auth/magic-link — request a sign-in link
+router.post("/auth/magic-link", async (req: Request, res: Response) => {
+  try {
+    const { email } = req.body as { email?: string };
+    if (!email || typeof email !== "string") {
+      res.status(400).json({ error: "email_required" });
+      return;
+    }
+
+    const result = await createMagicLink(email.trim().toLowerCase());
+
+    // Always respond the same way regardless of whether email is authorized
+    // (security: don't reveal which emails are allowed)
+    if (!result) {
+      // Not an authorized email — still say "sent" but don't include the link
+      res.json({ sent: true, emailSent: false });
+      return;
+    }
+
+    const appUrl = getAppUrl(req.headers.host as string | undefined);
+    const magicLinkUrl = `${appUrl}/auth/verify?token=${result.token}`;
+
+    let emailSent = false;
+    if (process.env.RESEND_API_KEY) {
+      emailSent = await sendMagicLinkEmail(result.email, magicLinkUrl);
+    }
+
+    req.log.info({ email: result.email, emailSent }, "Magic link requested");
+    res.json({ sent: true, magicLinkUrl, emailSent });
+  } catch (err) {
+    req.log.error({ err }, "Magic link request error");
+    res.status(500).json({ error: "server_error" });
+  }
+});
+
+// POST /api/auth/magic-link/verify — verify token and create session
+router.post("/auth/magic-link/verify", async (req: Request, res: Response) => {
+  try {
+    const { token } = req.body as { token?: string };
+    if (!token || typeof token !== "string") {
+      res.status(400).json({ error: "token_required" });
+      return;
+    }
+
+    const user = await verifyMagicLink(token.trim());
+    if (!user) {
+      res.status(401).json({ error: "invalid_or_expired" });
+      return;
+    }
+
+    const sessionToken = await createSession(user.userName, user.email);
+    req.log.info({ userName: user.userName }, "User authenticated via magic link");
+
+    res.json({
+      sessionToken,
+      userName: user.userName,
+      email: user.email,
+    });
+  } catch (err) {
+    req.log.error({ err }, "Magic link verify error");
+    res.status(500).json({ error: "server_error" });
+  }
+});
+
+// GET /api/auth/session — validate current session
+router.get("/auth/session", async (req: Request, res: Response) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith("Bearer ")) {
+      res.json({ authenticated: false });
+      return;
+    }
+
+    const token = authHeader.slice(7);
+    const session = await validateSession(token);
+
+    if (!session) {
+      res.json({ authenticated: false });
+      return;
+    }
+
+    res.json({
+      authenticated: true,
+      userName: session.userName,
+      email: session.email,
+    });
+  } catch (err) {
+    req.log.error({ err }, "Session validation error");
+    res.json({ authenticated: false });
+  }
+});
+
+// POST /api/auth/session/logout — revoke current session
+router.post("/auth/session/logout", async (req: Request, res: Response) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (authHeader?.startsWith("Bearer ")) {
+      await revokeSession(authHeader.slice(7)).catch(() => {});
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error({ err }, "Session logout error");
+    res.json({ ok: true });
+  }
+});
 
 router.get("/auth/google", (_req: Request, res: Response) => {
   const oauth2Client = createOAuthClient();

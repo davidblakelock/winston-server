@@ -185,6 +185,34 @@ export const watchedShows = pgTable(
   (t) => [uniqueIndex("watched_shows_user_show").on(t.userName, t.showName)]
 );
 
+// ── Magic Link Tokens ────────────────────────────────────────────────────────
+export const magicLinkTokens = pgTable(
+  "magic_link_tokens",
+  {
+    id: serial("id").primaryKey(),
+    email: text("email").notNull(),
+    token: text("token").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).default(sql`now()`),
+  },
+  (t) => [uniqueIndex("magic_link_tokens_token_idx").on(t.token)]
+);
+
+// ── App Sessions ─────────────────────────────────────────────────────────────
+export const appSessions = pgTable(
+  "app_sessions",
+  {
+    id: serial("id").primaryKey(),
+    userName: text("user_name").notNull(),
+    email: text("email").notNull(),
+    token: text("token").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).default(sql`now()`),
+  },
+  (t) => [uniqueIndex("app_sessions_token_idx").on(t.token)]
+);
+
 // ── User Profiles (onboarding) ──────────────────────────────────────────────
 export const userProfiles = pgTable("user_profiles", {
   id: serial("id").primaryKey(),
