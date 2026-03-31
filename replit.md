@@ -20,6 +20,7 @@ Winston is a personal AI companion app with a dark-themed chat interface. Users 
 - Morning briefings: weather (Dallas + Knoxville), Gmail, Google Calendar
 - On-demand email and calendar queries
 - Reminder system with SSE push + recurring support
+- **Medication Reminders**: Daily meds (statin + Meloxicam) at 8am, 9am follow-up if not confirmed, DB logging; add/remove/list via conversation; morning briefing includes med reminder if not yet taken
 - List management (shopping, to-do, etc.)
 - Navigation to saved locations (home, gym, doctor)
 - Google OAuth (popup flow) for Gmail + Calendar

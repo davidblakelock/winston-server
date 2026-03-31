@@ -127,6 +127,33 @@ export const profileItems = pgTable(
   (t) => [index("profile_items_category_idx").on(t.category)]
 );
 
+// ── Medications ─────────────────────────────────────────────────────────────
+export const medications = pgTable(
+  "medications",
+  {
+    id: serial("id").primaryKey(),
+    userName: text("user_name").notNull().default("David"),
+    name: text("name").notNull(),
+    dosage: text("dosage"),
+    reminderTime: varchar("reminder_time", { length: 5 }).notNull().default("08:00"),
+    active: boolean("active").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true }).default(sql`now()`),
+  },
+  (t) => [uniqueIndex("medications_user_name").on(t.userName, t.name)]
+);
+
+export const medicationLogs = pgTable(
+  "medication_logs",
+  {
+    id: serial("id").primaryKey(),
+    userName: text("user_name").notNull().default("David"),
+    logDate: date("log_date").notNull().default(sql`CURRENT_DATE`),
+    confirmedAt: timestamp("confirmed_at", { withTimezone: true }).notNull().default(sql`now()`),
+    medicationNames: text("medication_names"),
+  },
+  (t) => [uniqueIndex("medication_logs_user_date").on(t.userName, t.logDate)]
+);
+
 // ── Watched TV Shows ────────────────────────────────────────────────────────
 export const watchedShows = pgTable(
   "watched_shows",

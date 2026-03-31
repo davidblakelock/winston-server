@@ -6,6 +6,8 @@ import { ensureWinddownTables } from "./winddown/winddownManager";
 import { ensureMemoryTable } from "./memory/memoryManager";
 import { ensureProfileTable } from "./profile/profileManager";
 import { ensureOnboardingTable } from "./onboarding/onboardingManager";
+import { startMedicationScheduler } from "./medications/medicationScheduler";
+import { seedDefaultMedications } from "./medications/medicationManager";
 
 const rawPort = process.env["PORT"];
 
@@ -40,4 +42,11 @@ app.listen(port, async (err) => {
 
   startScheduler();
   startWinddownScheduler();
+  startMedicationScheduler();
+
+  try {
+    await seedDefaultMedications();
+  } catch (e) {
+    logger.warn({ e }, "Medication seed warning");
+  }
 });

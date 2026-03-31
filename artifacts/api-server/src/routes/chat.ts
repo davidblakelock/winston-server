@@ -24,6 +24,14 @@ import {
 } from "../google/calendarWriter.js";
 import { hasCalendarWriteScope } from "../google/oauth.js";
 import {
+  getMedications,
+  hasTakenMedicationsToday,
+  logMedicationsTaken,
+  addMedication,
+  buildMedReminderText,
+  extractMedicationFromMessage,
+} from "../medications/medicationManager.js";
+import {
   getRandomPrompt,
   getPendingPrompt,
   setPendingPrompt,
@@ -239,6 +247,10 @@ const TV_TONIGHT_PATTERN = /\b(what'?s\s+on\s+tonight|anything\s+(good\s+)?on\s+
 const TV_RECOMMEND_PATTERN = /\b(recommend\s+(me\s+)?a?\s*show|what\s+should\s+i\s+watch|suggest\s+(me\s+)?a?\s*show|shows?\s+like\s+|anything\s+similar|similar\s+to\s+.+\s+show|what\s+else\s+should\s+i\s+watch|find\s+me\s+a\s+show)\b/i;
 const TV_LIST_PATTERN = /\b(what\s+shows?\s+(am\s+i|are\s+we|do\s+i)\s+(watching|following)|my\s+(shows?|watch\s+list)|list\s+(my\s+)?shows?|what('?s|\s+is)\s+on\s+my\s+watch\s+list)\b/i;
 const WINDDOWN_NOTE_PATTERN = /\b(remember\s+(to|that)|note\s+(for\s+tomorrow|this\s+down)|write\s+(this|that)\s+down|add\s+(this\s+)?to\s+(my\s+)?morning\s+briefing|don'?t\s+let\s+me\s+forget\s+(to|that)|make\s+sure\s+i\s+(remember|know)|for\s+tomorrow\s+(i\s+need\s+to|remind\s+me))\b/i;
+const MED_TAKEN_PATTERN = /\b(taken|took\s+(my\s+)?(meds?|medications?|pills?|them)|meds?\s+(done|taken|all\s+done)|medications?\s+taken|took\s+them|all\s+done\s+with\s+(my\s+)?meds?|done\s+with\s+(my\s+)?meds?|yes\s+(i\s+)?(took|taken)|confirmed\s+(meds?|medications?))\b/i;
+const MED_ADD_PATTERN = /\b(add\s+(a\s+)?(?:new\s+)?medication\s+(?:called\s+)?|new\s+medication\s+(?:called\s+)?|start\s+taking\s+(?:a\s+)?(?:new\s+)?medication|add\s+.{2,40}\s+to\s+my\s+medications?)\b/i;
+const MED_LIST_PATTERN = /\b(what\s+medications?\s+(do\s+i\s+take|am\s+i\s+(on|taking)|are\s+mine)|my\s+medications?|medication\s+list|what\s+(meds?|pills?)\s+(do\s+i|am\s+i)|list\s+(my\s+)?meds?|what\s+do\s+i\s+take)\b/i;
+const MED_REMOVE_PATTERN = /\b(stop\s+taking|remove\s+.+\s+from\s+my\s+medications?|no\s+longer\s+taking|discontinued?)\b/i;
 const PROFILE_PATTERN = /\b(ms\.?\s*peel\s+)?(add\s+a?\s*(new\s+)?(place|show|restaurant|person|interest|favorite)|i\s+(am|'m|am\s+currently|'m\s+currently)\s+(watching|reading)|add\s+.{1,60}\s+as\s+(a|one\s+of\s+my)\s+(favorite\s+)?(place|show|restaurant|restaurant\s+to|person|interest)|remove\s+.{1,60}\s+from\s+my\s+(places|shows|restaurants|people|interests|favorites|list|profile)|what\s+(places|shows|restaurants|people|interests)\s+(do\s+i\s+(have|have\s+saved)|am\s+i)|show\s+me\s+my\s+(places|shows|restaurants|people|interests)|what('?s|\s+is)\s+(in|on)\s+my\s+(profile|saved\s+places|watch\s+list))\b/i;
 
 interface SavedLocation {
@@ -477,6 +489,11 @@ router.post("/chat", async (req, res) => {
   const isTVRecommend = !isMorningGreeting && TV_RECOMMEND_PATTERN.test(message);
   const isTVList = !isMorningGreeting && TV_LIST_PATTERN.test(message);
   const isTVRequest = isTVTonight || isTVRecommend || isTVList;
+  const isMedTaken = MED_TAKEN_PATTERN.test(message) && message.trim().split(/\s+/).length <= 12;
+  const isMedAdd = MED_ADD_PATTERN.test(message);
+  const isMedList = MED_LIST_PATTERN.test(message);
+  const isMedRemove = MED_REMOVE_PATTERN.test(message);
+  const isMedRequest = isMedTaken || isMedAdd || isMedList || isMedRemove;
 
   if (isMorningGreeting) {
     try {
@@ -485,7 +502,7 @@ router.post("/chat", async (req, res) => {
       const now = new Date();
       const yesterday = new Date(now.getTime() - 86400000);
 
-      const [dallas, knoxville, emails, events, lastNightNotes, newsFeeds, yesterdayEps, todayEps] = await Promise.all([
+      const [dallas, knoxville, emails, events, lastNightNotes, newsFeeds, yesterdayEps, todayEps, morningMeds, medsAlreadyTaken] = await Promise.all([
         fetchCityWeather("Dallas", 32.7767, -96.7970, "America/Chicago"),
         fetchCityWeather("Knoxville", 35.9606, -83.9207, "America/New_York"),
         fetchRecentEmails(8).catch(() => null),
@@ -494,6 +511,8 @@ router.post("/chat", async (req, res) => {
         fetchMorningNews().catch(() => []),
         fetchEpisodesForDate(yesterday, watchedIdsMorning).catch(() => []),
         fetchEpisodesForDate(now, watchedIdsMorning).catch(() => []),
+        getMedications().catch(() => []),
+        hasTakenMedicationsToday().catch(() => false),
       ]);
 
       const weatherBlock = buildContextualWeatherBlock(dallas, knoxville, now);
@@ -519,12 +538,16 @@ router.post("/chat", async (req, res) => {
           `\n\nMention naturally — e.g. "By the way, a new episode of Shrinking dropped last night." Keep it light and conversational, one brief mention is enough.`
         : "";
 
+      const medMorningBlock = morningMeds.length > 0 && !medsAlreadyTaken
+        ? `\n\n[Medications — Morning Reminder]\nDavid's daily medications: ${buildMedReminderText(morningMeds)}. He hasn't confirmed them yet today. Weave a gentle reminder naturally near the end of the briefing — e.g. "And don't forget your statin and Meloxicam — take them with breakfast." Keep it brief and warm, not nagging.`
+        : "";
+
       req.log.info(
         { feedCount: newsFeeds.filter((f) => f.items.length > 0).length },
         "Morning news fetched"
       );
 
-      systemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + memoryBlock + dynamicProfileBlock + notesBlock + weatherBlock + gmailBlock + calendarBlock + tvMorningBlock + newsBlock;
+      systemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + memoryBlock + dynamicProfileBlock + notesBlock + weatherBlock + gmailBlock + calendarBlock + tvMorningBlock + medMorningBlock + newsBlock;
     } catch (err) {
       req.log.warn({ err }, "Morning data fetch failed, continuing without it");
     }
@@ -753,6 +776,7 @@ router.post("/chat", async (req, res) => {
     !isCalendarWriteOp &&
     !isDeleteConfirm &&
     !isDeleteCancel &&
+    !isMedRequest &&
     wordCount >= 15;
 
   if (isPotentialStoryResponse && pendingPrompt) {
@@ -959,6 +983,89 @@ router.post("/chat", async (req, res) => {
       }
     } catch (err) {
       req.log.warn({ err }, "TV on-demand query failed");
+    }
+  }
+
+  // ── Medications: confirm taken ──
+  if (isMedTaken) {
+    try {
+      const alreadyTaken = await hasTakenMedicationsToday();
+      if (alreadyTaken) {
+        systemPrompt += `\n\n[Medications — Already Confirmed Today]\nDavid already confirmed he took his medications today. Acknowledge warmly — maybe "Got it, already logged — you're all set."`;
+      } else {
+        const meds = await getMedications();
+        if (meds.length > 0) {
+          await logMedicationsTaken(meds);
+          const medText = buildMedReminderText(meds);
+          systemPrompt += `\n\n[Medications — Confirmed Taken]\nDavid has confirmed he took ${medText} today. It's been logged. Respond with brief warm acknowledgment — something like "Logged! ${meds.length === 1 ? "That's" : "Both are"} done for today." Keep it short and natural.`;
+          req.log.info({ meds: meds.map((m) => m.name) }, "Medications confirmed taken");
+        } else {
+          systemPrompt += `\n\n[Medications — None Set Up]\nDavid said his meds are taken but no medications are configured. Acknowledge warmly.`;
+        }
+      }
+    } catch (err) {
+      req.log.warn({ err }, "Med confirmation failed");
+    }
+  }
+
+  // ── Medications: add a new medication ──
+  if (isMedAdd && !isMedTaken) {
+    try {
+      const extracted = extractMedicationFromMessage(message);
+      if (extracted) {
+        const result = await addMedication(extracted.name, extracted.dosage, extracted.reminderTime);
+        if (result.alreadyExists) {
+          systemPrompt += `\n\n[Medications — Already Listed]\n"${extracted.name}" is already on David's medication list. Let him know gently.`;
+        } else if (result.medication) {
+          const timeDisplay = result.medication.reminderTime;
+          const dosageNote = result.medication.dosage ? ` (${result.medication.dosage})` : "";
+          systemPrompt += `\n\n[Medications — Added]\n"${result.medication.name}"${dosageNote} has been added to David's daily medication reminders at ${timeDisplay}. Confirm warmly and concisely.`;
+          req.log.info({ name: result.medication.name }, "Medication added");
+        }
+      } else {
+        systemPrompt += `\n\n[Medications — Add Failed]\nCouldn't parse the medication name from David's message. Ask him to clarify — e.g. "What's the name of the medication you'd like to add?"`;
+      }
+    } catch (err) {
+      req.log.warn({ err }, "Medication add failed");
+    }
+  }
+
+  // ── Medications: list current medications ──
+  if (isMedList && !isMedTaken) {
+    try {
+      const meds = await getMedications();
+      const taken = await hasTakenMedicationsToday();
+      if (meds.length === 0) {
+        systemPrompt += `\n\n[Medications — None Set Up]\nDavid has no medications configured yet. Let him know and offer to add one.`;
+      } else {
+        const medDetails = meds.map((m) => `• ${m.name}${m.dosage ? ` ${m.dosage}` : ""} — ${m.reminderTime}`).join("\n");
+        systemPrompt += `\n\n[Medications — David's List]\n${medDetails}\nStatus today: ${taken ? "✅ Confirmed taken" : "⏳ Not yet confirmed"}\nRead this back naturally. If not taken yet, gently remind him.`;
+      }
+    } catch (err) {
+      req.log.warn({ err }, "Medication list failed");
+    }
+  }
+
+  // ── Medications: remove/stop a medication ──
+  if (isMedRemove && !isMedTaken && !isMedAdd) {
+    try {
+      // Extract the medication name from the message
+      const removeMatch = message.match(/stop\s+taking\s+([\w\s\-]+?)(?:\s*[.,!]|$)/i) ??
+        message.match(/remove\s+([\w\s\-]+?)\s+from\s+my\s+medications?/i) ??
+        message.match(/no\s+longer\s+taking\s+([\w\s\-]+?)(?:\s*[.,!]|$)/i) ??
+        message.match(/discontinued?\s+([\w\s\-]+?)(?:\s*[.,!]|$)/i);
+      if (removeMatch) {
+        const { removeMedication } = await import("../medications/medicationManager.js");
+        const removed = await removeMedication(removeMatch[1].trim());
+        if (removed) {
+          systemPrompt += `\n\n[Medications — Removed]\n"${removeMatch[1].trim()}" has been removed from David's medication reminders. Confirm naturally.`;
+        } else {
+          systemPrompt += `\n\n[Medications — Not Found]\nCouldn't find "${removeMatch[1].trim()}" in David's medication list. Let him know gently.`;
+        }
+        req.log.info({ name: removeMatch[1].trim(), removed }, "Medication remove");
+      }
+    } catch (err) {
+      req.log.warn({ err }, "Medication remove failed");
     }
   }
 
