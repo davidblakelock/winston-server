@@ -127,6 +127,22 @@ export const profileItems = pgTable(
   (t) => [index("profile_items_category_idx").on(t.category)]
 );
 
+// ── Watched TV Shows ────────────────────────────────────────────────────────
+export const watchedShows = pgTable(
+  "watched_shows",
+  {
+    id: serial("id").primaryKey(),
+    userName: text("user_name").notNull().default("David"),
+    showName: text("show_name").notNull(),
+    tvmazeId: integer("tvmaze_id"),
+    network: text("network"),
+    genres: text("genres"),
+    status: text("status"),
+    addedAt: timestamp("added_at", { withTimezone: true }).default(sql`now()`),
+  },
+  (t) => [uniqueIndex("watched_shows_user_show").on(t.userName, t.showName)]
+);
+
 // ── User Profiles (onboarding) ──────────────────────────────────────────────
 export const userProfiles = pgTable("user_profiles", {
   id: serial("id").primaryKey(),

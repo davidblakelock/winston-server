@@ -43,6 +43,17 @@ import {
   buildSystemPromptFromProfile,
   type CollectedData,
 } from "../onboarding/onboardingManager.js";
+import {
+  getWatchedShows,
+  addWatchedShow,
+  removeWatchedShow,
+  extractShowName,
+  buildShowListBlock,
+} from "../tv/showManager.js";
+import {
+  fetchEpisodesForDate,
+  formatEpisodeForPrompt,
+} from "../tv/tvmaze.js";
 
 const router: IRouter = Router();
 
@@ -132,6 +143,11 @@ const LIST_PATTERN = /\b(add\s+.+\s+to\s+(my\s+)?\w.+list|remove\s+.+\s+from\s+(
 const NAVIGATION_PATTERN = /\b(take\s+me\s+to|directions?\s+to|navigate\s+to|get\s+me\s+to|how\s+do\s+i\s+get\s+to|maps?\s+to|open\s+maps?\s+(for|to))\b/i;
 const STORY_READ_PATTERN = /\b(read\s+(me\s+)?(my\s+)?stor(y|ies)|show\s+(me\s+)?(my\s+)?stor(y|ies)|what\s+stor(y|ies)\s+have\s+i|tell\s+me\s+(my|the)\s+stor(y|ies)|ms\.?\s*peel\s+read\s+(me\s+)?(my\s+)?stor(y|ies)|olivia\s+stor(y|ies))\b/i;
 const STORY_COUNT_PATTERN = /\b(how\s+many\s+stor(y|ies)|stor(y|ies)\s+count|how\s+many\s+memories|number\s+of\s+stor(y|ies)|how\s+many\s+have\s+i\s+(captured|saved|told))\b/i;
+const TV_ADD_PATTERN = /\b(i\s+started\s+watching|i'?m\s+(now\s+)?watching|i\s+am\s+watching|started\s+watching|i\s+picked\s+up|add\s+.+\s+to\s+my\s+(?:shows?|watch\s+list))\b/i;
+const TV_REMOVE_PATTERN = /\b(i\s+finished\s+watching|i\s+finished|i\s+stopped\s+watching|i'?m\s+done\s+(with|watching)|done\s+watching|finished\s+watching|remove\s+.+\s+from\s+my\s+(?:shows?|watch\s+list))\b/i;
+const TV_TONIGHT_PATTERN = /\b(what'?s\s+on\s+tonight|anything\s+(good\s+)?on\s+tonight|what\s+should\s+i\s+watch\s+tonight|what'?s\s+on\s+tv|any\s+shows?\s+tonight)\b/i;
+const TV_RECOMMEND_PATTERN = /\b(recommend\s+(me\s+)?a?\s*show|what\s+should\s+i\s+watch|suggest\s+(me\s+)?a?\s*show|shows?\s+like\s+|anything\s+similar|similar\s+to\s+.+\s+show|what\s+else\s+should\s+i\s+watch|find\s+me\s+a\s+show)\b/i;
+const TV_LIST_PATTERN = /\b(what\s+shows?\s+(am\s+i|are\s+we|do\s+i)\s+(watching|following)|my\s+(shows?|watch\s+list)|list\s+(my\s+)?shows?|what('?s|\s+is)\s+on\s+my\s+watch\s+list)\b/i;
 const WINDDOWN_NOTE_PATTERN = /\b(remember\s+(to|that)|note\s+(for\s+tomorrow|this\s+down)|write\s+(this|that)\s+down|add\s+(this\s+)?to\s+(my\s+)?morning\s+briefing|don'?t\s+let\s+me\s+forget\s+(to|that)|make\s+sure\s+i\s+(remember|know)|for\s+tomorrow\s+(i\s+need\s+to|remind\s+me))\b/i;
 const PROFILE_PATTERN = /\b(ms\.?\s*peel\s+)?(add\s+a?\s*(new\s+)?(place|show|restaurant|person|interest|favorite)|i\s+(am|'m|am\s+currently|'m\s+currently)\s+(watching|reading)|add\s+.{1,60}\s+as\s+(a|one\s+of\s+my)\s+(favorite\s+)?(place|show|restaurant|restaurant\s+to|person|interest)|remove\s+.{1,60}\s+from\s+my\s+(places|shows|restaurants|people|interests|favorites|list|profile)|what\s+(places|shows|restaurants|people|interests)\s+(do\s+i\s+(have|have\s+saved)|am\s+i)|show\s+me\s+my\s+(places|shows|restaurants|people|interests)|what('?s|\s+is)\s+(in|on)\s+my\s+(profile|saved\s+places|watch\s+list))\b/i;
 
@@ -357,16 +373,29 @@ router.post("/chat", async (req, res) => {
   const isStoryRead = STORY_READ_PATTERN.test(message);
   const isStoryCount = STORY_COUNT_PATTERN.test(message);
   const isProfileRequest = PROFILE_PATTERN.test(message);
+  const isTVAdd = !isMorningGreeting && TV_ADD_PATTERN.test(message);
+  const isTVRemove = !isMorningGreeting && TV_REMOVE_PATTERN.test(message);
+  const isTVTonight = !isMorningGreeting && TV_TONIGHT_PATTERN.test(message);
+  const isTVRecommend = !isMorningGreeting && TV_RECOMMEND_PATTERN.test(message);
+  const isTVList = !isMorningGreeting && TV_LIST_PATTERN.test(message);
+  const isTVRequest = isTVTonight || isTVRecommend || isTVList;
 
   if (isMorningGreeting) {
     try {
-      const [dallas, knoxville, emails, events, lastNightNotes, newsFeeds] = await Promise.all([
+      const watchedShowsMorning = await getWatchedShows().catch(() => []);
+      const watchedIdsMorning = watchedShowsMorning.filter((s) => s.tvmazeId).map((s) => s.tvmazeId!);
+      const now = new Date();
+      const yesterday = new Date(now.getTime() - 86400000);
+
+      const [dallas, knoxville, emails, events, lastNightNotes, newsFeeds, yesterdayEps, todayEps] = await Promise.all([
         fetchCityWeather("Dallas", 32.7767, -96.7970, "America/Chicago"),
         fetchCityWeather("Knoxville", 35.9606, -83.9207, "America/New_York"),
         fetchRecentEmails(8).catch(() => null),
         fetchTodayEvents().catch(() => null),
         getLastNightNotes().catch(() => []),
         fetchMorningNews().catch(() => []),
+        fetchEpisodesForDate(yesterday, watchedIdsMorning).catch(() => []),
+        fetchEpisodesForDate(now, watchedIdsMorning).catch(() => []),
       ]);
 
       const weatherBlock =
@@ -385,12 +414,22 @@ router.post("/chat", async (req, res) => {
       const notesBlock = formatNotesForMorningBriefing(lastNightNotes);
       const newsBlock = formatNewsForPrompt(newsFeeds);
 
+      const newEps = [
+        ...yesterdayEps.map((ep) => ({ ...ep, when: "last night" })),
+        ...todayEps.map((ep) => ({ ...ep, when: "today" })),
+      ];
+      const tvMorningBlock = newEps.length > 0
+        ? `\n\n[TV Shows — New Episodes]\n` +
+          newEps.map((ep) => `• ${formatEpisodeForPrompt(ep)} (${ep.when})`).join("\n") +
+          `\n\nMention naturally — e.g. "By the way, a new episode of Shrinking dropped last night." Keep it light and conversational, one brief mention is enough.`
+        : "";
+
       req.log.info(
         { feedCount: newsFeeds.filter((f) => f.items.length > 0).length },
         "Morning news fetched"
       );
 
-      systemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + memoryBlock + dynamicProfileBlock + notesBlock + weatherBlock + gmailBlock + calendarBlock + newsBlock;
+      systemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + memoryBlock + dynamicProfileBlock + notesBlock + weatherBlock + gmailBlock + calendarBlock + tvMorningBlock + newsBlock;
     } catch (err) {
       req.log.warn({ err }, "Morning data fetch failed, continuing without it");
     }
@@ -435,6 +474,20 @@ router.post("/chat", async (req, res) => {
       ? `\nNote: Tomorrow is a pickleball day — mention it naturally if we reach goodnight.`
       : "";
 
+    // Check what's on TV tonight for watched shows
+    let tvEveningNote = "";
+    try {
+      const watchedShowsEvening = await getWatchedShows();
+      const watchedIdsEvening = watchedShowsEvening.filter((s) => s.tvmazeId).map((s) => s.tvmazeId!);
+      const tonightEps = await fetchEpisodesForDate(now, watchedIdsEvening);
+      if (tonightEps.length > 0) {
+        tvEveningNote =
+          `\n\n[TV Tonight — On Now or Coming Up]\n` +
+          tonightEps.map((ep) => `• ${formatEpisodeForPrompt(ep)}`).join("\n") +
+          `\n\nIf the moment feels right, mention naturally that something good is on tonight — e.g. "New Shrinking tonight if you feel like winding down with something good."`;
+      }
+    } catch { /* non-fatal */ }
+
     systemPrompt +=
       `\n\n[Evening Wind-Down Session — ACTIVE]\nDavid is in his evening wind-down. Guide the conversation naturally through:` +
       `\n1. Warm check-in about how his day went (if not yet covered in this conversation)` +
@@ -442,6 +495,7 @@ router.post("/chat", async (req, res) => {
       `\n3. A gentle memory prompt for Olivia's book (a natural invitation, not homework)` +
       `\n4. A warm, personal goodnight — mention Winston the corgi, wish him well for tomorrow's activities` +
       tomorrowNote +
+      tvEveningNote +
       `\nLet the conversation breathe — don't rush through all stages at once. Follow his lead.`;
   }
 
@@ -474,6 +528,9 @@ router.post("/chat", async (req, res) => {
     !isCalendarRequest &&
     !isStoryRead &&
     !isStoryCount &&
+    !isTVAdd &&
+    !isTVRemove &&
+    !isTVRequest &&
     wordCount >= 15;
 
   if (isPotentialStoryResponse && pendingPrompt) {
@@ -607,6 +664,79 @@ router.post("/chat", async (req, res) => {
       }
     } catch (err) {
       req.log.warn({ err }, "Profile operation failed, continuing normally");
+    }
+  }
+
+  // ── TV show: add to watch list ──
+  if (isTVAdd && !isTVRemove) {
+    try {
+      const showName = extractShowName(message, "add");
+      if (showName) {
+        const result = await addWatchedShow(showName);
+        if (result.alreadyExists) {
+          systemPrompt += `\n\n[TV Watch List — Already Watching]\nDavid already has "${result.showName}" on his watch list. Confirm this warmly.`;
+        } else {
+          systemPrompt += `\n\n[TV Watch List — Show Added]\n"${result.showName}" has been added to David's watch list. Confirm warmly, maybe comment on it being a good choice.`;
+        }
+        req.log.info({ showName: result.showName, added: !result.alreadyExists }, "TV show add");
+      }
+    } catch (err) {
+      req.log.warn({ err }, "TV show add failed");
+    }
+  }
+
+  // ── TV show: remove from watch list ──
+  if (isTVRemove && !isTVAdd) {
+    try {
+      const showName = extractShowName(message, "remove");
+      if (showName) {
+        const removed = await removeWatchedShow(showName);
+        if (removed) {
+          systemPrompt += `\n\n[TV Watch List — Show Removed]\n"${removed}" has been removed from David's watch list. Acknowledge naturally — maybe ask if he finished it or just moved on.`;
+        } else {
+          systemPrompt += `\n\n[TV Watch List — Not Found]\nCouldn't find "${showName}" on David's watch list. Let him know gently.`;
+        }
+        req.log.info({ showName, removed }, "TV show remove");
+      }
+    } catch (err) {
+      req.log.warn({ err }, "TV show remove failed");
+    }
+  }
+
+  // ── TV: on-demand queries (tonight / list / recommend) ──
+  if (isTVRequest) {
+    try {
+      const watchedShowsNow = await getWatchedShows();
+      const watchedIdsNow = watchedShowsNow.filter((s) => s.tvmazeId).map((s) => s.tvmazeId!);
+
+      if (isTVList) {
+        const listBlock = buildShowListBlock(watchedShowsNow);
+        systemPrompt += `\n\n[TV Watch List — David's Shows]\n${listBlock}\nTell David what he's currently watching in a friendly way.`;
+      }
+
+      if (isTVTonight) {
+        const tonightEps = await fetchEpisodesForDate(new Date(), watchedIdsNow);
+        if (tonightEps.length > 0) {
+          systemPrompt +=
+            `\n\n[TV Tonight — New Episodes Airing]\n` +
+            tonightEps.map((ep) => `• ${formatEpisodeForPrompt(ep)}`).join("\n") +
+            `\n\nTell David what's on tonight from his watch list conversationally — e.g. "You've got a new Shrinking tonight at 9 on Apple TV."`;
+        } else {
+          systemPrompt += `\n\n[TV Tonight — Nothing New]\nNone of David's watched shows have new episodes tonight. Let him know warmly, maybe suggest it's a good night for an older episode or some reading.`;
+        }
+      }
+
+      if (isTVRecommend) {
+        const genresSummary = watchedShowsNow
+          .filter((s) => s.genres)
+          .map((s) => `${s.showName}: ${s.genres}`)
+          .join("; ");
+        const showNames = watchedShowsNow.map((s) => s.showName).join(", ");
+        systemPrompt +=
+          `\n\n[TV Recommendation Request]\nDavid watches: ${showNames || "no shows saved yet"}.\nGenres: ${genresSummary || "unknown"}.\nSuggest 2–3 shows he'd likely enjoy based on these patterns. Be specific — name shows, where to stream them, and why they'd suit his taste. Speak conversationally, not as a list.`;
+      }
+    } catch (err) {
+      req.log.warn({ err }, "TV on-demand query failed");
     }
   }
 
