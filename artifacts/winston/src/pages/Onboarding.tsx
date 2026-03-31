@@ -357,6 +357,19 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
     [collectedData, scene, sendMessage, voiceAudioRef]
   );
 
+  const handleSkip = useCallback(async () => {
+    try {
+      await fetch(`${API}/api/onboarding/complete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ collectedData }),
+      });
+      onComplete();
+    } catch {
+      onComplete();
+    }
+  }, [collectedData, onComplete]);
+
   const isRecording = recordingState === "recording";
   const isTranscribing = recordingState === "transcribing";
   const showVoiceCards = scene === 7 && voices.length > 0 && !selectedVoice;
@@ -370,7 +383,17 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
             <span className="text-xs font-medium text-indigo-400 tracking-wide uppercase">
               {SCENE_LABELS[scene - 1]}
             </span>
-            <span className="text-xs text-zinc-600">{scene} / 9</span>
+            <div className="flex items-center gap-3">
+              {messages.length > 0 && (
+                <button
+                  onClick={() => void handleSkip()}
+                  className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors underline underline-offset-2"
+                >
+                  Skip setup
+                </button>
+              )}
+              <span className="text-xs text-zinc-600">{scene} / 9</span>
+            </div>
           </div>
           <div className="flex gap-1">
             {SCENE_LABELS.map((_, i) => (
