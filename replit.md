@@ -26,7 +26,8 @@ Winston is a personal AI companion app with a dark-themed chat interface. Users 
 - Google OAuth (popup flow) for Gmail + Calendar
 - **Scam/Phishing Detection**: Every email is analyzed locally before being shown to Emma — brand/domain mismatch, free email impersonation, urgency language, gift card requests, sensitive info requests, typosquatting; high/medium risk emails trigger protective Emma warnings ("David, I want to flag something…"); legitimate emails summarized normally
 - **Web Push Notifications** (VAPID keys in env vars `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`/`VAPID_EMAIL`): Service worker at `/sw.js`; Bell icon in header; notification permission banner in chat with Emma's warm ask; push triggers: 6am morning briefing, 8am medication reminder, 9am medication follow-up, reminder fires, 9pm wind-down, every 15min weather alerts (NWS API for Dallas); subscription saved in `push_subscriptions` table; notification click opens/focuses Winston
-- Story capture: evening memory prompts for Olivia's memory book (40 prompts, saved to DB)
+- Story capture: evening memory prompts for Olivia's memory book (51 prompts, saved to DB); stories stored in `stories` table (id, prompt_question, response, captured_at)
+- **Olivia Archive** (`/olivia`): Password-protected warm memoir-style page displaying all captured stories in chronological order; password = `OLIVIA_PASSWORD` env var (default: `ForOlivia`); includes Print/Save as PDF; API at `GET /api/stories/archive?password=xxx`; completely separate visual identity (warm cream/parchment, Georgia serif)
 - **Personalized Morning News Briefing**: curated news woven into every morning greeting
   - Fetches 6 RSS feeds concurrently: WSJ Markets, BBC World, Google News (Rangers, Cowboys, Dallas local, AI/Tech)
   - Passed raw to Claude which selects 5-6 stories most relevant to David and writes them conversationally

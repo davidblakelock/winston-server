@@ -34,6 +34,7 @@ EL_VOICE_ID = "aj0fZfXTBc7E3By4X8L2"
 VAPID_PUBLIC_KEY = "BDSSBBEFaJYjf-vLU5gjeGXmle5oZWsw7KqWRkMLbfHNpKNzMTrkkesC1j14kwgMOQIyZmmxfotrdGHCzdTtYNU"
 VAPID_PRIVATE_KEY = "lVXb3-ty92jjFfw1UVZym2JTTUVKgMJcx1jiRcB0j9c"
 VAPID_EMAIL = "emma@winston.app"
+OLIVIA_PASSWORD = "ForOlivia"
 
 [userenv.production]
 GOOGLE_REDIRECT_URI = "https://winston-companion--davidblakelock.replit.app/api/auth/callback"

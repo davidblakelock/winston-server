@@ -6,6 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 import Chat from "@/pages/Chat";
 import Onboarding from "@/pages/Onboarding";
+import OliviaArchive from "@/pages/OliviaArchive";
 
 const queryClient = new QueryClient();
 
@@ -75,7 +76,10 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-          <AppShell />
+          <Switch>
+            <Route path="/olivia" component={OliviaArchive} />
+            <Route component={AppShell} />
+          </Switch>
         </WouterRouter>
         <Toaster />
       </TooltipProvider>

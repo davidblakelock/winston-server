@@ -8,6 +8,7 @@ import winddownRouter from "./winddown";
 import memoryRouter from "./memory";
 import onboardingRouter from "./onboarding";
 import pushRouter from "./push";
+import oliviaRouter from "./olivia";
 
 const router: IRouter = Router();
 
@@ -20,5 +21,6 @@ router.use(transcribeRouter);
 router.use(winddownRouter);
 router.use(memoryRouter);
 router.use(pushRouter);
+router.use(oliviaRouter);
 
 export default router;
