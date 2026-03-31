@@ -182,6 +182,22 @@ Your Goals:
 • Shopping lists you maintain
 • Anything else Emma Peel should know`;
 
+function getCurrentDateTimeBlock(): string {
+  const now = new Date();
+  const tz = "America/Chicago";
+  const dayName = now.toLocaleDateString("en-US", { timeZone: tz, weekday: "long" });
+  const monthName = now.toLocaleDateString("en-US", { timeZone: tz, month: "long" });
+  const day = now.toLocaleDateString("en-US", { timeZone: tz, day: "numeric" });
+  const year = now.toLocaleDateString("en-US", { timeZone: tz, year: "numeric" });
+  const time = now.toLocaleTimeString("en-US", {
+    timeZone: tz,
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+  return `[Current date and time]\nToday is ${dayName}, ${monthName} ${day}, ${year} and the current time is ${time} Central Time.\n`;
+}
+
 router.post("/chat", async (req, res) => {
   const { message, history = [] } = req.body;
 
@@ -190,7 +206,7 @@ router.post("/chat", async (req, res) => {
     return;
   }
 
-  let systemPrompt = BASE_SYSTEM_PROMPT;
+  let systemPrompt = getCurrentDateTimeBlock() + "\n" + BASE_SYSTEM_PROMPT;
   let reminderConfirmation = "";
 
   const isMorningGreeting = MORNING_PATTERN.test(message);
