@@ -1106,8 +1106,8 @@ router.post("/chat", async (req, res) => {
       });
       break;
     } catch (err: unknown) {
-      const isOverloaded =
-        err instanceof Anthropic.APIStatusError && err.status === 529;
+      const errStatus = (err as Record<string, unknown>)?.status as number | undefined;
+      const isOverloaded = errStatus === 529;
       if (isOverloaded && attempt < maxAttempts) {
         const delay = attempt * 2000;
         req.log.warn({ attempt, delay }, "Claude overloaded — retrying");
