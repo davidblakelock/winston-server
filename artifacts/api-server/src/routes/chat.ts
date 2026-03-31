@@ -3,7 +3,26 @@ import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { extractListOp, executeListOp, buildListContext } from "../lists/listManager.js";
 import { fetchRecentEmails, formatEmailsForPrompt } from "../google/gmail.js";
-import { fetchTodayEvents, fetchWeekEvents, formatCalendarForPrompt } from "../google/calendar.js";
+import {
+  fetchTodayEvents,
+  fetchWeekEvents,
+  formatCalendarForPrompt,
+  createCalendarEvent,
+  updateCalendarEvent,
+  deleteCalendarEvent,
+  findEventByKeywords,
+} from "../google/calendar.js";
+import {
+  parseCalendarOperation,
+  setPendingDelete,
+  getPendingDelete,
+  clearPendingDelete,
+  formatEventConfirmation,
+  type ParsedCreateEvent,
+  type ParsedModifyEvent,
+  type ParsedDeleteEvent,
+} from "../google/calendarWriter.js";
+import { hasCalendarWriteScope } from "../google/oauth.js";
 import {
   getRandomPrompt,
   getPendingPrompt,
@@ -139,6 +158,11 @@ const EVENING_PATTERN = /\b(good\s+evening|winding\s+down|wind\s+down|heading\s+
 const REMINDER_PATTERN = /\b(remind\s+me|set\s+a?\s*reminder|reminder|don'?t\s+let\s+me\s+forget|make\s+sure\s+i|peel\s+remind|ms\.?\s*peel\s+remind)\b/i;
 const EMAIL_PATTERN = /\b(email|emails|mail|inbox|check\s+my\s+(email|mail|inbox)|any\s+(new\s+)?(emails?|messages?|mail)|what('?s|\s+is)\s+(in\s+)?(my\s+)?(email|inbox|mail)|do\s+i\s+have\s+(any\s+)?(email|mail|messages?))\b/i;
 const CALENDAR_PATTERN = /\b(calendar|schedule|agenda|appointments?|what('?s|\s+is)\s+(on\s+)?(my\s+)?(calendar|schedule|agenda|week)|(today|tomorrow|this\s+week|next\s+week)'?s?\s+(schedule|events?|appointments?|look\s+like)|do\s+i\s+have\s+anything\s+(today|tomorrow|this\s+week|scheduled|on\s+my\s+calendar)|what\s+does\s+my\s+week\s+look\s+like|what('?s|\s+is)\s+on\s+for\s+(today|tomorrow|this\s+week)|anything\s+(on\s+)?(today|tomorrow|this\s+week|my\s+calendar)|busy\s+(today|tomorrow|this\s+week))\b/i;
+const CALENDAR_CREATE_PATTERN = /\b(add\s+(?!.+\s+to\s+my\s+(?:shopping|grocery|to.?do|errand|task|watch))|create\s+(a\s+)?(new\s+)?(event|appointment|meeting|calendar)|schedule\s+(a\s+)?(meeting|appointment|lunch|dinner|call|event)|put\s+.+\s+on\s+(my\s+)?calendar|book\s+(a\s+)?(meeting|appointment)|set\s+up\s+(a\s+)?(meeting|appointment)|remind\s+me\s+to\s+(?!.{0,5}at\s+\d)|block\s+(off\s+)?time)\b/i;
+const CALENDAR_MODIFY_PATTERN = /\b(move\s+(my\s+)?(?!\w+\s+list)|reschedule\s+(my\s+)?|change\s+(my\s+)?(appointment|meeting|event|calendar)|update\s+(my\s+)?(appointment|meeting|event)|push\s+(?:back|forward)\s+(my\s+)?(appointment|meeting)|postpone\s+(my\s+)?)\b/i;
+const CALENDAR_DELETE_PATTERN = /\b(cancel\s+(my\s+)?(appointment|meeting|event|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|delete\s+(my\s+)?(appointment|meeting|event|calendar\s+event)|remove\s+(my\s+)?(appointment|meeting|event)\s+from\s+(my\s+)?calendar|clear\s+(my\s+)?(appointment|meeting|event))\b/i;
+const CALENDAR_CONFIRM_PATTERN = /^(yes|yeah|yep|yup|sure|go\s+ahead|please\s+do|confirmed?|absolutely|do\s+it|ok(ay)?|correct|that'?s\s+right)[\s.!]*$/i;
+const CALENDAR_CANCEL_PATTERN = /^(no|nope|nah|never\s+mind|don'?t|keep\s+it|actually\s+no|cancel\s+that|forget\s+it|hold\s+on|wait)[\s.!]*$/i;
 const LIST_PATTERN = /\b(add\s+.+\s+to\s+(my\s+)?\w.+list|remove\s+.+\s+from\s+(my\s+)?\w.+list|clear\s+(my\s+)?\w.+list|what('?s|\s+is)\s+(on\s+)?(my\s+)?\w.+list|show\s+(me\s+)?(my\s+)?\w.+list|read\s+(me\s+)?(my\s+)?\w.+list|(shopping|to\s*-?\s*do|grocery|errand|task)\s+list)\b/i;
 const NAVIGATION_PATTERN = /\b(take\s+me\s+to|directions?\s+to|navigate\s+to|get\s+me\s+to|how\s+do\s+i\s+get\s+to|maps?\s+to|open\s+maps?\s+(for|to))\b/i;
 const STORY_READ_PATTERN = /\b(read\s+(me\s+)?(my\s+)?stor(y|ies)|show\s+(me\s+)?(my\s+)?stor(y|ies)|what\s+stor(y|ies)\s+have\s+i|tell\s+me\s+(my|the)\s+stor(y|ies)|ms\.?\s*peel\s+read\s+(me\s+)?(my\s+)?stor(y|ies)|olivia\s+stor(y|ies))\b/i;
@@ -373,6 +397,14 @@ router.post("/chat", async (req, res) => {
   const isStoryRead = STORY_READ_PATTERN.test(message);
   const isStoryCount = STORY_COUNT_PATTERN.test(message);
   const isProfileRequest = PROFILE_PATTERN.test(message);
+  const isCalendarCreate = !isMorningGreeting && CALENDAR_CREATE_PATTERN.test(message);
+  const isCalendarModify = !isMorningGreeting && CALENDAR_MODIFY_PATTERN.test(message);
+  const isCalendarDelete = !isMorningGreeting && CALENDAR_DELETE_PATTERN.test(message);
+  const isCalendarWriteOp = isCalendarCreate || isCalendarModify || isCalendarDelete;
+  const pendingDel = getPendingDelete();
+  const isDeleteConfirm = !!pendingDel && CALENDAR_CONFIRM_PATTERN.test(message.trim());
+  const isDeleteCancel = !!pendingDel && CALENDAR_CANCEL_PATTERN.test(message.trim());
+
   const isTVAdd = !isMorningGreeting && TV_ADD_PATTERN.test(message);
   const isTVRemove = !isMorningGreeting && TV_REMOVE_PATTERN.test(message);
   const isTVTonight = !isMorningGreeting && TV_TONIGHT_PATTERN.test(message);
@@ -460,6 +492,130 @@ router.post("/chat", async (req, res) => {
     }
   }
 
+  // ── Calendar write operations (create / modify / delete) ────────────────────
+  if (isDeleteConfirm || isDeleteCancel) {
+    const pd = getPendingDelete()!;
+    if (isDeleteConfirm) {
+      try {
+        await deleteCalendarEvent(pd.eventId);
+        clearPendingDelete();
+        systemPrompt +=
+          `\n\n[Calendar Event Deleted]\n"${pd.summary}" on ${pd.dateLabel} has been permanently removed from David's Google Calendar.\nConfirm warmly and briefly — e.g. "Done — I've cancelled your ${pd.summary} on ${pd.dateLabel}."`;
+        req.log.info({ eventId: pd.eventId, summary: pd.summary }, "Calendar event deleted");
+      } catch (err) {
+        clearPendingDelete();
+        req.log.warn({ err }, "Calendar delete failed");
+        systemPrompt += `\n\n[Calendar Delete Failed]\nTell David the delete failed and he can try again or do it manually in Google Calendar.`;
+      }
+    } else {
+      clearPendingDelete();
+      systemPrompt += `\n\n[Calendar Delete Cancelled]\nDavid chose NOT to delete "${pd.summary}". Acknowledge warmly — e.g. "Got it, keeping your ${pd.summary} on the calendar."`;
+    }
+  } else if (isCalendarWriteOp) {
+    const hasWriteScope = await hasCalendarWriteScope().catch(() => false);
+    if (!hasWriteScope) {
+      systemPrompt +=
+        `\n\n[Calendar Write — Insufficient Permission]\nDavid's current Google connection only has read-only calendar access. To create, edit, or delete events, he needs to reconnect Google to grant the updated permission. Tell him this warmly — e.g. "I'd love to add that for you, but I need a quick update to my Google permissions first. Just tap the Google button in the header to reconnect — it only takes a second."`;
+    } else if (isCalendarCreate) {
+      try {
+        const parsed = await parseCalendarOperation(message, "create") as ParsedCreateEvent | null;
+        if (!parsed) throw new Error("parse failed");
+
+        if (parsed.ambiguous && parsed.clarificationNeeded) {
+          systemPrompt += `\n\n[Calendar Create — Clarification Needed]\nAsk David: "${parsed.clarificationNeeded}" — before creating the event.`;
+        } else {
+          const created = await createCalendarEvent({
+            title: parsed.title,
+            date: parsed.date,
+            startTime: parsed.startTime,
+            endTime: parsed.endTime,
+            location: parsed.location,
+            description: parsed.description,
+            allDay: parsed.allDay,
+          });
+          if (created) {
+            const confirmation = formatEventConfirmation({
+              title: parsed.title,
+              date: parsed.date,
+              startTime: parsed.startTime,
+              endTime: parsed.endTime,
+              location: parsed.location,
+              allDay: parsed.allDay,
+            });
+            systemPrompt +=
+              `\n\n[Calendar Event Created]\n"${confirmation}" has been added to David's Google Calendar.\nConfirm warmly and specifically — read it back exactly: "I've added ${confirmation}." Then ask if he'd also like a reminder for it.`;
+            req.log.info({ title: parsed.title, date: parsed.date }, "Calendar event created");
+          } else {
+            systemPrompt += `\n\n[Calendar Create Failed]\nTell David the event couldn't be created and suggest he check Google Calendar or try again.`;
+          }
+        }
+      } catch (err) {
+        req.log.warn({ err }, "Calendar create failed");
+        systemPrompt += `\n\n[Calendar Create — Parse Error]\nTell David you had trouble understanding the event details and ask him to repeat with the date and time.`;
+      }
+    } else if (isCalendarModify) {
+      try {
+        const parsed = await parseCalendarOperation(message, "modify") as ParsedModifyEvent | null;
+        if (!parsed) throw new Error("parse failed");
+
+        const event = await findEventByKeywords(parsed.searchKeywords, parsed.searchDate);
+        if (!event) {
+          systemPrompt += `\n\n[Calendar Modify — Event Not Found]\nTell David you couldn't find "${parsed.searchKeywords}" in his calendar for the next 7 days. Ask him to double-check the name or date.`;
+        } else {
+          const updated = await updateCalendarEvent(event.id, {
+            title: parsed.newTitle,
+            date: parsed.newDate,
+            startTime: parsed.newStartTime,
+            endTime: parsed.newEndTime,
+            location: parsed.newLocation,
+          });
+          if (updated) {
+            const newDate = parsed.newDate ?? event.isoDate;
+            const confirmation = formatEventConfirmation({
+              title: parsed.newTitle ?? event.summary,
+              date: newDate,
+              startTime: parsed.newStartTime,
+              location: parsed.newLocation ?? event.location,
+            });
+            systemPrompt +=
+              `\n\n[Calendar Event Updated]\n"${event.summary}" has been moved/updated.\nConfirm specifically: "Done — ${confirmation} is all set." Read the new details back to David.`;
+            req.log.info({ eventId: event.id, summary: event.summary }, "Calendar event updated");
+          } else {
+            systemPrompt += `\n\n[Calendar Update Failed]\nTell David the update failed and suggest he try again or edit in Google Calendar directly.`;
+          }
+        }
+      } catch (err) {
+        req.log.warn({ err }, "Calendar modify failed");
+        systemPrompt += `\n\n[Calendar Modify — Parse Error]\nTell David you had trouble identifying which event to change, and ask him to describe it with more detail (name and current date).`;
+      }
+    } else if (isCalendarDelete) {
+      try {
+        const parsed = await parseCalendarOperation(message, "delete") as ParsedDeleteEvent | null;
+        if (!parsed) throw new Error("parse failed");
+
+        const event = await findEventByKeywords(parsed.searchKeywords, parsed.searchDate);
+        if (!event) {
+          systemPrompt += `\n\n[Calendar Delete — Event Not Found]\nTell David you couldn't find "${parsed.searchKeywords}" in his calendar for the next 7 days.`;
+        } else {
+          setPendingDelete({
+            eventId: event.id,
+            summary: event.summary,
+            dateLabel: event.dateLabel,
+            startTime: event.start,
+            location: event.location,
+            expiresAt: Date.now() + 5 * 60 * 1000,
+          });
+          systemPrompt +=
+            `\n\n[Calendar Delete — Awaiting Confirmation]\nDavid wants to cancel: "${event.summary}" on ${event.dateLabel}${event.start ? ` at ${event.start}` : ""}${event.location ? ` at ${event.location}` : ""}.\nAsk for confirmation: "I found your ${event.summary} on ${event.dateLabel}${event.start ? ` at ${event.start}` : ""}. Shall I go ahead and cancel it?" — wait for his yes or no before deleting.`;
+          req.log.info({ eventId: event.id, summary: event.summary }, "Calendar delete pending confirmation");
+        }
+      } catch (err) {
+        req.log.warn({ err }, "Calendar delete parse failed");
+        systemPrompt += `\n\n[Calendar Delete — Parse Error]\nTell David you had trouble identifying which event to cancel, and ask him to be more specific.`;
+      }
+    }
+  }
+
   // ── Wind-down session: inject context and capture notes ──
   const winddownActive = await isWinddownActive().catch(() => false);
   const isWinddownNote = winddownActive && WINDDOWN_NOTE_PATTERN.test(message);
@@ -531,6 +687,9 @@ router.post("/chat", async (req, res) => {
     !isTVAdd &&
     !isTVRemove &&
     !isTVRequest &&
+    !isCalendarWriteOp &&
+    !isDeleteConfirm &&
+    !isDeleteCancel &&
     wordCount >= 15;
 
   if (isPotentialStoryResponse && pendingPrompt) {

@@ -5,8 +5,18 @@ export const SCOPES = [
   "https://www.googleapis.com/auth/userinfo.email",
   "https://www.googleapis.com/auth/userinfo.profile",
   "https://www.googleapis.com/auth/gmail.readonly",
-  "https://www.googleapis.com/auth/calendar.readonly",
+  "https://www.googleapis.com/auth/calendar",
 ];
+
+export async function hasCalendarWriteScope(): Promise<boolean> {
+  const { rows } = await query<{ scope: string | null }>(
+    "SELECT scope FROM google_auth WHERE user_name = 'David' LIMIT 1"
+  );
+  if (!rows.length || !rows[0].scope) return false;
+  return rows[0].scope
+    .split(" ")
+    .some((s) => s === "https://www.googleapis.com/auth/calendar");
+}
 
 export function getRedirectUri(): string {
   // Allow an explicit override (needed for production deployments)
