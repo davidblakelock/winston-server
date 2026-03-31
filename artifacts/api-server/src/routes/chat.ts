@@ -85,6 +85,15 @@ import {
   fetchSportsScores,
   formatSportsForPrompt,
 } from "../sports/sportsManager.js";
+import {
+  getBills,
+  getUpcomingBills,
+  addBill,
+  removeBill,
+  extractBillFromMessage,
+  formatBillsForPrompt,
+  confirmBillAdded,
+} from "../bills/billManager.js";
 
 const router: IRouter = Router();
 
@@ -252,6 +261,9 @@ const TV_RECOMMEND_PATTERN = /\b(recommend\s+(me\s+)?a?\s*show|what\s+should\s+i
 const TV_LIST_PATTERN = /\b(what\s+shows?\s+(am\s+i|are\s+we|do\s+i)\s+(watching|following)|my\s+(shows?|watch\s+list)|list\s+(my\s+)?shows?|what('?s|\s+is)\s+on\s+my\s+watch\s+list)\b/i;
 const WINDDOWN_NOTE_PATTERN = /\b(remember\s+(to|that)|note\s+(for\s+tomorrow|this\s+down)|write\s+(this|that)\s+down|add\s+(this\s+)?to\s+(my\s+)?morning\s+briefing|don'?t\s+let\s+me\s+forget\s+(to|that)|make\s+sure\s+i\s+(remember|know)|for\s+tomorrow\s+(i\s+need\s+to|remind\s+me))\b/i;
 const SPORTS_PATTERN = /\b(rangers|cowboys|score|scores|how\s+did\s+(they|the\s+(rangers|cowboys))\s+do|did\s+(they|the\s+(rangers|cowboys))\s+(win|lose|play)|last\s+night'?s?\s+(game|score)|(rangers|cowboys)\s+(score|win|lose|lost|beat|game|result|update)|check\s+(the\s+)?(rangers|cowboys)|what('?s|\s+is)\s+the\s+(rangers|cowboys|score|game)|any\s+(rangers|cowboys)\s+(news|game|score))\b/i;
+const BILL_ADD_PATTERN = /\b(my\s+\w.{1,40}(bill|payment|insurance|premium|subscription|rent|mortgage|registration|fee|taxes?)\s+is\s+due|add\s+(a\s+)?(bill|payment|financial\s+obligation|reminder\s+for)|track\s+(my\s+)?(bill|payment|insurance|rent|subscription)|remind\s+me\s+(about|when|before)\s+(my\s+)?\w.{1,30}(bill|payment|due|insurance|premium|subscription|rent|mortgage|registration|fee|taxes?)|(is\s+due|renews?)\s+(on|every|each|the)\s+(the\s+)?\d{1,2}(st|nd|rd|th)?|quarterly\s+taxes?\s+are?\s+due)\b/i;
+const BILL_LIST_PATTERN = /\b(what\s+bills|bills?\s+(do\s+i\s+have|coming\s+up|upcoming|are\s+due)|show\s+(me\s+)?(my\s+)?bills?|(my\s+)?upcoming\s+(bills?|payments?|obligations?|financial)|what\s+(financial\s+)?(obligations?|payments?)\s+(do\s+i|am\s+i)|list\s+(my\s+)?(bills?|payments?|obligations?|financial\s+obligations?))\b/i;
+const BILL_REMOVE_PATTERN = /\b(remove\s+(my\s+)?\w.{1,40}(bill|payment|insurance|subscription|reminder|obligation)|stop\s+tracking\s+(my\s+)?\w.{1,40}|delete\s+(my\s+)?\w.{1,40}(bill|payment|reminder)|cancel\s+(my\s+)?\w.{1,40}(bill|reminder))\b/i;
 const MED_TAKEN_PATTERN = /\b(taken|took\s+(my\s+)?(meds?|medications?|pills?|them)|meds?\s+(done|taken|all\s+done)|medications?\s+taken|took\s+them|all\s+done\s+with\s+(my\s+)?meds?|done\s+with\s+(my\s+)?meds?|yes\s+(i\s+)?(took|taken)|confirmed\s+(meds?|medications?))\b/i;
 const MED_ADD_PATTERN = /\b(add\s+(a\s+)?(?:new\s+)?medication\s+(?:called\s+)?|new\s+medication\s+(?:called\s+)?|start\s+taking\s+(?:a\s+)?(?:new\s+)?medication|add\s+.{2,40}\s+to\s+my\s+medications?)\b/i;
 const MED_LIST_PATTERN = /\b(what\s+medications?\s+(do\s+i\s+take|am\s+i\s+(on|taking)|are\s+mine)|my\s+medications?|medication\s+list|what\s+(meds?|pills?)\s+(do\s+i|am\s+i)|list\s+(my\s+)?meds?|what\s+do\s+i\s+take)\b/i;
@@ -509,6 +521,9 @@ router.post("/chat", async (req, res) => {
   const isMedRemove = MED_REMOVE_PATTERN.test(message);
   const isMedRequest = isMedTaken || isMedAdd || isMedList || isMedRemove;
   const isSportsRequest = !isMorningGreeting && SPORTS_PATTERN.test(message);
+  const isBillAdd = !isMorningGreeting && BILL_ADD_PATTERN.test(message);
+  const isBillList = !isMorningGreeting && BILL_LIST_PATTERN.test(message);
+  const isBillRemove = !isMorningGreeting && BILL_REMOVE_PATTERN.test(message);
 
   if (isMorningGreeting) {
     try {
@@ -517,7 +532,7 @@ router.post("/chat", async (req, res) => {
       const now = new Date();
       const yesterday = new Date(now.getTime() - 86400000);
 
-      const [dallas, knoxville, emails, events, lastNightNotes, newsFeeds, yesterdayEps, todayEps, morningMeds, medsAlreadyTaken, sportsScores] = await Promise.all([
+      const [dallas, knoxville, emails, events, lastNightNotes, newsFeeds, yesterdayEps, todayEps, morningMeds, medsAlreadyTaken, sportsScores, upcomingBills] = await Promise.all([
         fetchCityWeather("Dallas", 32.7767, -96.7970, "America/Chicago"),
         fetchCityWeather("Knoxville", 35.9606, -83.9207, "America/New_York"),
         fetchRecentEmails(8).catch(() => null),
@@ -529,6 +544,7 @@ router.post("/chat", async (req, res) => {
         getMedications().catch(() => []),
         hasTakenMedicationsToday().catch(() => false),
         fetchSportsScores().catch(() => null),
+        getUpcomingBills(14).catch(() => []),
       ]);
 
       const weatherBlock = buildContextualWeatherBlock(dallas, knoxville, now);
@@ -564,12 +580,17 @@ router.post("/chat", async (req, res) => {
           `\n\nFor the morning briefing, mention sports scores naturally if there's something noteworthy — a win last night, a game tonight, or the Cowboys being in off-season. Keep it to 1-2 sentences woven in, not a separate sports segment.`
         : "";
 
+      const billsMorningBlock =
+        upcomingBills.length > 0
+          ? `\n\n[Upcoming Financial Obligations — next 14 days]\n${formatBillsForPrompt(upcomingBills)}\n\nIf any of these are due within 7 days, weave a gentle heads-up into the briefing. Otherwise skip the bills section entirely.`
+          : "";
+
       req.log.info(
         { feedCount: newsFeeds.filter((f) => f.items.length > 0).length },
         "Morning news fetched"
       );
 
-      systemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + memoryBlock + dynamicProfileBlock + notesBlock + weatherBlock + gmailBlock + calendarBlock + tvMorningBlock + medMorningBlock + sportsBlock + newsBlock;
+      systemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + memoryBlock + dynamicProfileBlock + notesBlock + weatherBlock + gmailBlock + calendarBlock + tvMorningBlock + medMorningBlock + sportsBlock + billsMorningBlock + newsBlock;
     } catch (err) {
       req.log.warn({ err }, "Morning data fetch failed, continuing without it");
     }
@@ -583,6 +604,81 @@ router.post("/chat", async (req, res) => {
     } catch (err) {
       req.log.warn({ err }, "On-demand sports fetch failed");
       systemPrompt += `\n\n[Sports Scores — Unavailable]\nTell David you weren't able to pull the scores right now and suggest he check back shortly.`;
+    }
+  }
+
+  // ── Bill tracking ────────────────────────────────────────────────────────────
+  if (isBillAdd) {
+    try {
+      const extracted = await extractBillFromMessage(message);
+      if (!extracted) {
+        systemPrompt += `\n\n[Bill Add — Parse Failed]\nTell David you had trouble understanding that obligation. Ask him to repeat it clearly — e.g. "My Amex bill is due on the 15th of every month."`;
+      } else {
+        const result = await addBill(
+          extracted.name,
+          extracted.category,
+          extracted.frequency,
+          extracted.dueDay,
+          extracted.dueMonths ?? null,
+          extracted.amount ?? undefined,
+          extracted.notes ?? undefined
+        );
+        if (result.alreadyExists) {
+          systemPrompt += `\n\n[Bill Add — Already Exists]\nTell David you already have "${extracted.name}" tracked. If he wants to update it, he can remove it first and re-add it.`;
+        } else if (result.bill) {
+          const confirmation = confirmBillAdded(result.bill);
+          systemPrompt += `\n\n[Bill Added Successfully]\n${confirmation}\nTell David exactly this confirmation. Be warm and brief.`;
+          req.log.info({ name: result.bill.name, frequency: result.bill.frequency }, "Bill added");
+        }
+      }
+    } catch (err) {
+      req.log.warn({ err }, "Bill add failed");
+      systemPrompt += `\n\n[Bill Add — Error]\nTell David you had trouble adding that obligation and ask him to try again.`;
+    }
+  }
+
+  if (isBillList) {
+    try {
+      const upcoming = await getUpcomingBills(60);
+      const allBills = await getBills();
+      if (!allBills.length) {
+        systemPrompt += `\n\n[Financial Obligations — None tracked yet]\nTell David he doesn't have any bills tracked yet. Let him know he can add them naturally — e.g. "My Amex bill is due on the 15th of every month."`;
+      } else {
+        const upcomingText = formatBillsForPrompt(upcoming);
+        const furtherOut = allBills.filter((b) => !upcoming.find((u) => u.id === b.id));
+        const furtherOutText = furtherOut.length
+          ? `\n\nTracked but more than 60 days away: ${furtherOut.map((b) => b.name).join(", ")}`
+          : "";
+        systemPrompt += `\n\n[Financial Obligations — David's tracked bills]\n${upcomingText}${furtherOutText}\n\nRead these back to David in a warm, conversational way — chronological order, mentioning how many days until each one. Highlight anything due soon (within 7 days) first.`;
+      }
+    } catch (err) {
+      req.log.warn({ err }, "Bill list failed");
+    }
+  }
+
+  if (isBillRemove) {
+    try {
+      // Extract the bill name from the message using a simple pattern
+      const nameMatch = message.match(
+        /remove\s+(?:my\s+)?(.+?)(?:\s+(?:bill|payment|reminder|insurance|subscription|obligation))?[\s.!?]*$/i
+      ) ??
+      message.match(/stop\s+tracking\s+(?:my\s+)?(.+?)[\s.!?]*$/i) ??
+      message.match(/delete\s+(?:my\s+)?(.+?)(?:\s+(?:bill|payment|reminder))?[\s.!?]*$/i);
+
+      const nameQuery = nameMatch?.[1]?.trim();
+      if (!nameQuery) {
+        systemPrompt += `\n\n[Bill Remove — Unclear]\nAsk David which bill he'd like to remove. He can say "Remove my Amex reminder."`;
+      } else {
+        const removed = await removeBill(nameQuery);
+        if (removed) {
+          systemPrompt += `\n\n[Bill Removed]\nTell David that "${nameQuery}" has been removed from his bill tracking. Keep it brief and warm.`;
+          req.log.info({ nameQuery }, "Bill removed");
+        } else {
+          systemPrompt += `\n\n[Bill Remove — Not Found]\nTell David you couldn't find a bill matching "${nameQuery}". Suggest he say "what bills do I have" to see the full list.`;
+        }
+      }
+    } catch (err) {
+      req.log.warn({ err }, "Bill remove failed");
     }
   }
 

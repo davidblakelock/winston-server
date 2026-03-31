@@ -213,6 +213,27 @@ export const appSessions = pgTable(
   (t) => [uniqueIndex("app_sessions_token_idx").on(t.token)]
 );
 
+// ── Financial Obligations ────────────────────────────────────────────────────
+export const financialObligations = pgTable(
+  "financial_obligations",
+  {
+    id: serial("id").primaryKey(),
+    userName: text("user_name").notNull().default("David"),
+    name: text("name").notNull(),
+    category: text("category").notNull().default("other"),
+    amount: text("amount"),
+    frequency: text("frequency").notNull(),
+    dueDay: integer("due_day").notNull(),
+    dueMonths: text("due_months"),
+    reminderLeadDays: integer("reminder_lead_days").notNull().default(3),
+    notes: text("notes"),
+    active: boolean("active").notNull().default(true),
+    lastRemindedDate: date("last_reminded_date"),
+    createdAt: timestamp("created_at", { withTimezone: true }).default(sql`now()`),
+  },
+  (t) => [index("financial_obligations_user_active").on(t.userName, t.active)]
+);
+
 // ── User Profiles (onboarding) ──────────────────────────────────────────────
 export const userProfiles = pgTable("user_profiles", {
   id: serial("id").primaryKey(),
