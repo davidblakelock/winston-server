@@ -25,6 +25,10 @@ import {
   getRecentMemories,
   formatMemoriesForContext,
 } from "../memory/memoryManager.js";
+import {
+  fetchMorningNews,
+  formatNewsForPrompt,
+} from "../news/newsManager.js";
 
 const router: IRouter = Router();
 
@@ -319,12 +323,13 @@ router.post("/chat", async (req, res) => {
 
   if (isMorningGreeting) {
     try {
-      const [dallas, knoxville, emails, events, lastNightNotes] = await Promise.all([
+      const [dallas, knoxville, emails, events, lastNightNotes, newsFeeds] = await Promise.all([
         fetchCityWeather("Dallas", 32.7767, -96.7970, "America/Chicago"),
         fetchCityWeather("Knoxville", 35.9606, -83.9207, "America/New_York"),
         fetchRecentEmails(8).catch(() => null),
         fetchTodayEvents().catch(() => null),
         getLastNightNotes().catch(() => []),
+        fetchMorningNews().catch(() => []),
       ]);
 
       const weatherBlock =
@@ -341,8 +346,14 @@ router.post("/chat", async (req, res) => {
         : "";
 
       const notesBlock = formatNotesForMorningBriefing(lastNightNotes);
+      const newsBlock = formatNewsForPrompt(newsFeeds);
 
-      systemPrompt = getCurrentDateTimeBlock() + "\n" + BASE_SYSTEM_PROMPT + memoryBlock + notesBlock + weatherBlock + gmailBlock + calendarBlock;
+      req.log.info(
+        { feedCount: newsFeeds.filter((f) => f.items.length > 0).length },
+        "Morning news fetched"
+      );
+
+      systemPrompt = getCurrentDateTimeBlock() + "\n" + BASE_SYSTEM_PROMPT + memoryBlock + notesBlock + weatherBlock + gmailBlock + calendarBlock + newsBlock;
     } catch (err) {
       req.log.warn({ err }, "Morning data fetch failed, continuing without it");
     }
@@ -557,7 +568,7 @@ router.post("/chat", async (req, res) => {
 
   const response = await anthropic.messages.create({
     model: "claude-opus-4-5",
-    max_tokens: 1024,
+    max_tokens: isMorningGreeting ? 1800 : 1024,
     system: systemPrompt,
     messages,
   });
