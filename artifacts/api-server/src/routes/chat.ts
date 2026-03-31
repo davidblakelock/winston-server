@@ -2,6 +2,8 @@ import { Router, type IRouter } from "express";
 import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { extractListOp, executeListOp, buildListContext } from "../lists/listManager.js";
+import { fetchRecentEmails, formatEmailsForPrompt } from "../google/gmail.js";
+import { fetchTodayEvents, formatCalendarForPrompt } from "../google/calendar.js";
 
 const router: IRouter = Router();
 
@@ -276,9 +278,11 @@ router.post("/chat", async (req, res) => {
 
   if (isMorningGreeting) {
     try {
-      const [dallas, knoxville] = await Promise.all([
+      const [dallas, knoxville, emails, events] = await Promise.all([
         fetchCityWeather("Dallas", 32.7767, -96.7970, "America/Chicago"),
         fetchCityWeather("Knoxville", 35.9606, -83.9207, "America/New_York"),
+        fetchRecentEmails(8).catch(() => null),
+        fetchTodayEvents().catch(() => null),
       ]);
 
       const weatherBlock =
@@ -286,9 +290,17 @@ router.post("/chat", async (req, res) => {
         `${formatWeatherBlock(dallas)}\n` +
         `${formatWeatherBlock(knoxville)}`;
 
-      systemPrompt = BASE_SYSTEM_PROMPT + weatherBlock;
+      const gmailBlock = emails !== null
+        ? `\n\n[Gmail — unread inbox (fetched just now)]\n${formatEmailsForPrompt(emails)}\nMention the most notable emails naturally in the morning briefing.`
+        : "";
+
+      const calendarBlock = events !== null
+        ? `\n\n[Google Calendar — today's schedule]\n${formatCalendarForPrompt(events)}\nMention today's appointments and schedule naturally.`
+        : "";
+
+      systemPrompt = getCurrentDateTimeBlock() + "\n" + BASE_SYSTEM_PROMPT + weatherBlock + gmailBlock + calendarBlock;
     } catch (err) {
-      req.log.warn({ err }, "Weather fetch failed, continuing without it");
+      req.log.warn({ err }, "Morning data fetch failed, continuing without it");
     }
   }
 
