@@ -501,8 +501,7 @@ export default function Chat() {
         <div className="flex items-center gap-2">
 
         {/* Google auth badge */}
-        {!googleAuth.loading && (
-          googleAuth.connected ? (
+        {googleAuth.connected ? (
             <div className="flex items-center gap-2">
               <div className="flex items-center gap-1.5 text-xs text-green-400/80 bg-green-950/30 border border-green-500/20 rounded-full px-3 py-1.5">
                 <Mail className="h-3 w-3" />
@@ -522,6 +521,7 @@ export default function Chat() {
             </div>
           ) : (
             <button
+              disabled={googleAuth.loading}
               onClick={() => {
                 const popup = window.open(
                   "/api/auth/google",
@@ -569,7 +569,7 @@ export default function Chat() {
               Connect Google
             </button>
           )
-        )}
+        }
 
         {/* Settings gear */}
         <button
