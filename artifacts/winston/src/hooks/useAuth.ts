@@ -24,12 +24,14 @@ export function useAuth() {
       }).catch(() => {});
     }
     localStorage.removeItem(SESSION_KEY);
+    localStorage.removeItem("winston_user_name");
     setAuthTokenGetter(null);
     setAuthState({ loading: false, authenticated: false });
   }, []);
 
   const setAuthenticated = useCallback((token: string, userName: string, email?: string) => {
     localStorage.setItem(SESSION_KEY, token);
+    localStorage.setItem("winston_user_name", userName);
     setAuthTokenGetter(() => localStorage.getItem(SESSION_KEY));
     setAuthState({ loading: false, authenticated: true, userName, email, token });
   }, []);

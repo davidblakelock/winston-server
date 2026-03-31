@@ -127,6 +127,7 @@ import {
   collectSundayData,
   buildSundaySummaryBlock,
 } from "../sundaySummary/sundaySummaryManager.js";
+import { validateSession } from "../auth/sessionAuth.js";
 
 const router: IRouter = Router();
 
@@ -513,7 +514,39 @@ function getCurrentDateTimeBlock(): string {
 }
 
 router.post("/chat", async (req, res) => {
-  const { message, history = [] } = req.body;
+  // ── Session auth ──────────────────────────────────────────────────────────
+  const authHeader = req.headers.authorization;
+  let sessionUserName = "David";
+  if (authHeader?.startsWith("Bearer ")) {
+    const session = await validateSession(authHeader.slice(7));
+    if (!session) {
+      res.status(401).json({ error: "unauthorized" });
+      return;
+    }
+    sessionUserName = session.userName;
+  } else {
+    res.status(401).json({ error: "unauthorized" });
+    return;
+  }
+
+  // ── Auto-greeting: derive time-appropriate message ────────────────────────
+  const { message: rawMessage, history = [], isAutoGreeting = false } = req.body;
+
+  let message: string;
+  if (isAutoGreeting) {
+    // Use Dallas local time (UTC-5/UTC-6)
+    const nowUtc = new Date();
+    const dallasHour = (nowUtc.getUTCHours() - 6 + 24) % 24; // CDT offset
+    if (dallasHour >= 5 && dallasHour < 12) {
+      message = "good morning";
+    } else if (dallasHour >= 12 && dallasHour < 18) {
+      message = "good afternoon";
+    } else {
+      message = "good evening";
+    }
+  } else {
+    message = rawMessage;
+  }
 
   if (!message || typeof message !== "string") {
     res.status(400).json({ error: "message is required" });

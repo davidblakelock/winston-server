@@ -224,18 +224,26 @@ export default function SignIn({ onAuthenticated }: SignInProps) {
 
           {stage.type === "link_ready" && (
             <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: "2rem", marginBottom: "16px" }}>✉️</div>
+              <div style={{ fontSize: "2rem", marginBottom: "16px" }}>{stage.emailSent ? "✉️" : "🔗"}</div>
               {stage.emailSent ? (
                 <>
-                  <p style={{ color: "#a8a8c8", fontSize: "0.95rem", lineHeight: "1.6", marginBottom: "24px" }}>
-                    A sign-in link has been sent to <strong style={{ color: "#e8e4ff" }}>{email}</strong>.<br />
-                    Check your email and tap the link, or sign in right here:
+                  <p style={{ color: "#a8a8c8", fontSize: "0.95rem", lineHeight: "1.6", marginBottom: "8px" }}>
+                    A sign-in link has been sent to
+                  </p>
+                  <p style={{ color: "#e8e4ff", fontWeight: 600, fontSize: "0.95rem", marginBottom: "20px" }}>
+                    {email}
+                  </p>
+                  <p style={{ color: "#6b6b8a", fontSize: "0.85rem", lineHeight: "1.5", marginBottom: "24px" }}>
+                    Check your email and tap the link — or sign in on this device right now:
                   </p>
                 </>
               ) : (
                 <>
-                  <p style={{ color: "#a8a8c8", fontSize: "0.95rem", lineHeight: "1.6", marginBottom: "24px" }}>
-                    Your sign-in link is ready. Tap the button below to open Winston on this device, or copy the link to sign in on another device.
+                  <p style={{ color: "#a8a8c8", fontSize: "0.95rem", lineHeight: "1.6", marginBottom: "8px" }}>
+                    Your sign-in link is ready.
+                  </p>
+                  <p style={{ color: "#6b6b8a", fontSize: "0.85rem", lineHeight: "1.5", marginBottom: "24px" }}>
+                    Sign in on this device below, or copy the link to open Winston on another device.
                   </p>
                 </>
               )}

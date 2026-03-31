@@ -251,6 +251,7 @@ export default function Chat() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const greetedRef = useRef(false);
 
   const sendMessageMutation = useSendMessage();
   const ttsMutation = useTextToSpeech();
@@ -375,6 +376,40 @@ export default function Chat() {
     },
     [playElevenLabsAudio, playBrowserTTS]
   );
+
+  // ── Auto-greeting: Emma speaks first when chat loads ─────────────────────
+  useEffect(() => {
+    if (greetedRef.current) return;
+    greetedRef.current = true;
+
+    const token = localStorage.getItem("winston_session_token");
+    if (!token) return;
+
+    const baseUrl = (import.meta.env.BASE_URL as string).replace(/\/$/, "");
+    const greetingId = `greeting-${Date.now()}`;
+
+    setMessages([{ id: greetingId, role: "assistant", content: "…" }]);
+
+    fetch(`${baseUrl}/api/chat`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ message: "hello", history: [], isAutoGreeting: true }),
+    })
+      .then((r) => {
+        if (!r.ok) { setMessages([]); return null; }
+        return r.json() as Promise<{ reply: string }>;
+      })
+      .then((data) => {
+        if (!data) return;
+        const reply = data.reply;
+        setMessages([{ id: greetingId, role: "assistant", content: reply }]);
+        setTimeout(() => speakReply(greetingId, reply), 400);
+      })
+      .catch(() => setMessages([]));
+  }, [speakReply]);
 
   const submitText = useCallback(
     (text: string) => {
