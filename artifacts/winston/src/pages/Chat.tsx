@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, KeyboardEvent, ChangeEvent } from "react";
-import { Send, Play, Loader2, Disc3, Mic, MicOff } from "lucide-react";
+import { Send, Play, Loader2, Disc3, Mic, MicOff, MapPin } from "lucide-react";
 import { useSendMessage, useTextToSpeech } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -12,6 +12,7 @@ interface Message {
   audioBase64?: string;
   mimeType?: string;
   isReminder?: boolean;
+  navigationUrl?: string;
 }
 
 interface ReminderEvent {
@@ -288,9 +289,17 @@ export default function Chat() {
             const assistantMsgId = (Date.now() + 1).toString();
             setMessages((prev) => [
               ...prev,
-              { id: assistantMsgId, role: "assistant", content: data.reply },
+              {
+                id: assistantMsgId,
+                role: "assistant",
+                content: data.reply,
+                navigationUrl: data.navigationUrl,
+              },
             ]);
             speakReply(assistantMsgId, data.reply);
+            if (data.navigationUrl) {
+              window.open(data.navigationUrl, "_blank", "noopener,noreferrer");
+            }
           },
         }
       );
@@ -365,16 +374,24 @@ export default function Chat() {
                   ? "bg-secondary text-secondary-foreground rounded-br-sm"
                   : msg.isReminder
                   ? "bg-primary/10 border border-primary/30 text-card-foreground rounded-bl-sm"
+                  : msg.navigationUrl
+                  ? "bg-blue-950/40 border border-blue-500/20 text-card-foreground rounded-bl-sm"
                   : "bg-card border border-white/5 text-card-foreground rounded-bl-sm"
               }`}
             >
               {msg.isReminder && (
                 <p className="text-[11px] font-semibold tracking-widest uppercase text-primary/70 mb-2">Reminder</p>
               )}
+              {msg.navigationUrl && (
+                <p className="text-[11px] font-semibold tracking-widest uppercase text-blue-400/80 mb-2 flex items-center gap-1.5">
+                  <MapPin className="h-3 w-3" />
+                  Navigation
+                </p>
+              )}
               <div className="whitespace-pre-wrap font-sans">{msg.content}</div>
 
               {msg.role === "assistant" && (
-                <div className="mt-4 pt-3 border-t border-white/5 flex items-center gap-2">
+                <div className="mt-4 pt-3 border-t border-white/5 flex items-center gap-2 flex-wrap">
                   <Button
                     variant="ghost"
                     size="icon"
@@ -395,6 +412,17 @@ export default function Chat() {
                   <span className="text-xs text-muted-foreground/70 font-medium">
                     {playingId === msg.id ? "Playing..." : "Listen"}
                   </span>
+                  {msg.navigationUrl && (
+                    <a
+                      href={msg.navigationUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="ml-2 flex items-center gap-1.5 text-xs font-medium text-blue-400 hover:text-blue-300 transition-colors"
+                    >
+                      <MapPin className="h-3.5 w-3.5" />
+                      Open in Maps
+                    </a>
+                  )}
                 </div>
               )}
             </div>

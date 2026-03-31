@@ -114,6 +114,9 @@ components:
         reply:
           type: string
           description: Winston's text response
+        navigationUrl:
+          type: string
+          description: Google Maps URL to open if the response includes navigation directions
       required:
         - reply
     SpeakRequest:

@@ -32,6 +32,8 @@ export interface ChatRequest {
 export interface ChatResponse {
   /** Winston's text response */
   reply: string;
+  /** Google Maps URL to open if the response includes navigation directions */
+  navigationUrl?: string;
 }
 
 export interface SpeakRequest {

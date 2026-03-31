@@ -85,6 +85,49 @@ function formatWeatherBlock(w: WeatherResult): string {
 const MORNING_PATTERN = /\b(good\s+morning|morning|mornin'?|wakin[g']?\s+up|just\s+woke)\b/i;
 const REMINDER_PATTERN = /\b(remind\s+me|set\s+a?\s*reminder|reminder|don'?t\s+let\s+me\s+forget|make\s+sure\s+i|peel\s+remind|ms\.?\s*peel\s+remind)\b/i;
 const LIST_PATTERN = /\b(add\s+.+\s+to\s+(my\s+)?\w.+list|remove\s+.+\s+from\s+(my\s+)?\w.+list|clear\s+(my\s+)?\w.+list|what('?s|\s+is)\s+(on\s+)?(my\s+)?\w.+list|show\s+(me\s+)?(my\s+)?\w.+list|read\s+(me\s+)?(my\s+)?\w.+list|(shopping|to\s*-?\s*do|grocery|errand|task)\s+list)\b/i;
+const NAVIGATION_PATTERN = /\b(take\s+me\s+to|directions?\s+to|navigate\s+to|get\s+me\s+to|how\s+do\s+i\s+get\s+to|maps?\s+to|open\s+maps?\s+(for|to))\b/i;
+
+interface SavedLocation {
+  name: string;
+  address: string;
+  keywords: string[];
+}
+
+const SAVED_LOCATIONS: SavedLocation[] = [
+  {
+    name: "home",
+    address: "6345 Diamond Head Circle Dallas Texas 75225",
+    keywords: ["home", "my place", "my condo", "my house"],
+  },
+  {
+    name: "Doctor Bonnet",
+    address: "403 West Campbell Road Richardson Texas",
+    keywords: ["doctor", "doc", "doctor bonnet", "bonnet", "physician", "my doctor", "the doctor"],
+  },
+  {
+    name: "Moody YMCA",
+    address: "6000 Preston Road Dallas Texas 75205",
+    keywords: ["moody", "moody ymca", "moody y"],
+  },
+  {
+    name: "Semones YMCA",
+    address: "4332 Northaven Road Dallas Texas 75229",
+    keywords: ["semones", "semones ymca", "semones y", "the gym", "gym", "the y", "ymca"],
+  },
+];
+
+function detectNavigation(message: string): SavedLocation | null {
+  if (!NAVIGATION_PATTERN.test(message)) return null;
+  const lower = message.toLowerCase();
+  for (const loc of SAVED_LOCATIONS) {
+    if (loc.keywords.some((kw) => lower.includes(kw))) return loc;
+  }
+  return null;
+}
+
+function buildMapsUrl(address: string): string {
+  return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(address)}`;
+}
 
 interface ExtractedReminder {
   reminderText: string;
@@ -307,6 +350,21 @@ router.post("/chat", async (req, res) => {
     }
   }
 
+  let navigationUrl: string | undefined;
+  const navLocation = detectNavigation(message);
+  if (navLocation) {
+    navigationUrl = buildMapsUrl(navLocation.address);
+    const displayName =
+      navLocation.name === "home" ? "home" : navLocation.name;
+    systemPrompt =
+      systemPrompt +
+      `\n\n[Navigation request detected]\n` +
+      `David is asking for directions to: ${displayName}\n` +
+      `Address: ${navLocation.address}\n` +
+      `Google Maps is opening automatically. Your response should be a single short sentence confirming this, e.g. "Opening directions to ${displayName} now." Do not add anything else.`;
+    req.log.info({ location: navLocation.name, url: navigationUrl }, "Navigation triggered");
+  }
+
   const messages: Anthropic.MessageParam[] = [
     ...history.map((msg: { role: string; content: string }) => ({
       role: msg.role as "user" | "assistant",
@@ -325,7 +383,7 @@ router.post("/chat", async (req, res) => {
   const reply =
     response.content[0].type === "text" ? response.content[0].text : "";
 
-  res.json({ reply });
+  res.json({ reply, ...(navigationUrl ? { navigationUrl } : {}) });
 });
 
 router.post("/speak", async (req, res) => {
