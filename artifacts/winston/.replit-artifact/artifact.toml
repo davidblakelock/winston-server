@@ -17,14 +17,21 @@ localPort = 20925
 [services.development]
 run = "pnpm --filter @workspace/winston run dev"
 
-[services.production]
-build = [ "pnpm", "--filter", "@workspace/winston", "run", "build" ]
-publicDir = "artifacts/winston/dist/public"
-serve = "static"
+[services.production.build]
+args = ["pnpm", "--filter", "@workspace/winston", "run", "build"]
 
-[[services.production.rewrites]]
-from = "/*"
-to = "/index.html"
+[services.production.build.env]
+NODE_ENV = "production"
+PORT = "8080"
+BASE_PATH = "/"
+
+[services.production.run]
+args = ["pnpm", "--filter", "@workspace/winston", "run", "serve"]
+
+[services.production.run.env]
+PORT = "8080"
+BASE_PATH = "/"
+NODE_ENV = "production"
 
 [services.env]
 PORT = "20925"
