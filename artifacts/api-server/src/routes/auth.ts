@@ -7,8 +7,14 @@ const router = Router();
 
 const REQUIRED_EMAIL = "davidblakelock.winston@gmail.com";
 
-router.get("/auth/google", (_req: Request, res: Response) => {
+router.get("/auth/redirect-uri", (_req: Request, res: Response) => {
+  res.json({ redirectUri: getRedirectUri() });
+});
+
+router.get("/auth/google", (req: Request, res: Response) => {
   const oauth2Client = createOAuthClient();
+  const redirectUri = getRedirectUri();
+  req.log.info({ redirectUri }, "Google OAuth redirect URI");
   const url = oauth2Client.generateAuthUrl({
     access_type: "offline",
     scope: SCOPES,
