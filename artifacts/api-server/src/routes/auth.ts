@@ -5,13 +5,15 @@ import { query } from "../db.js";
 
 const router = Router();
 
+const REQUIRED_EMAIL = "davidblakelock.winston@gmail.com";
+
 router.get("/auth/google", (_req: Request, res: Response) => {
   const oauth2Client = createOAuthClient();
   const url = oauth2Client.generateAuthUrl({
     access_type: "offline",
     scope: SCOPES,
-    prompt: "consent",
-    login_hint: "davidblakelock.winston@gmail.com",
+    prompt: "select_account consent",
+    login_hint: REQUIRED_EMAIL,
   });
   res.redirect(url);
 });
@@ -32,6 +34,22 @@ router.get("/auth/callback", async (req: Request, res: Response) => {
     const oauth2 = google.oauth2({ version: "v2", auth: oauth2Client });
     const userInfo = await oauth2.userinfo.get();
     const email = userInfo.data.email ?? null;
+
+    // Reject if not the expected account
+    if (email?.toLowerCase() !== REQUIRED_EMAIL.toLowerCase()) {
+      req.log.warn({ email }, "Google OAuth rejected — wrong account");
+      res.send(`<!DOCTYPE html><html><head><title>Wrong Account</title></head><body>
+        <script>
+          if (window.opener) { window.opener.postMessage('google-auth-error', '*'); window.close(); }
+          else { window.location.href = '/?auth=wrong-account'; }
+        </script>
+        <p style="font-family:sans-serif;text-align:center;margin-top:40px;color:#f87171">
+          Please sign in with <strong>${REQUIRED_EMAIL}</strong>.<br><br>
+          <a href="/api/auth/google" style="color:#818cf8">Try again</a>
+        </p>
+      </body></html>`);
+      return;
+    }
 
     await query(
       `INSERT INTO google_auth (user_name, email, access_token, refresh_token, token_expiry, scope)
