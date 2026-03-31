@@ -1,6 +1,7 @@
 import cron from "node-cron";
 import { query } from "../db.js";
 import { broadcast } from "./sseStore.js";
+import { sendPushToAll } from "../push/pushManager.js";
 import { logger } from "../lib/logger.js";
 
 interface ReminderRow {
@@ -50,6 +51,15 @@ export function startScheduler(): void {
           reminderText: reminder.reminder_text,
           speakText,
         });
+
+        // Also send a push notification so David is notified even if the app is closed
+        sendPushToAll({
+          title: "⏰ Reminder — Emma Peel",
+          body: reminder.reminder_text,
+          tag: `reminder-${reminder.id}`,
+          url: "/",
+          requireInteraction: true,
+        }).catch(() => {});
 
         logger.info({ id: reminder.id, text: reminder.reminder_text }, "Reminder fired");
 

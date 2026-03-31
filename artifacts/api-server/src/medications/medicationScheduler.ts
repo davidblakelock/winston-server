@@ -1,5 +1,6 @@
 import cron from "node-cron";
 import { broadcast } from "../reminders/sseStore.js";
+import { sendPushToAll } from "../push/pushManager.js";
 import {
   getMedications,
   hasTakenMedicationsToday,
@@ -81,6 +82,13 @@ export function startMedicationScheduler(): void {
               speakText: buildInitialMessage(medText),
               isMedication: true,
             });
+            sendPushToAll({
+              title: "💊 Medication Reminder — Emma Peel",
+              body: `Don't forget your ${medText} this morning. Take with food if you can.`,
+              tag: "medication-morning",
+              url: "/",
+              requireInteraction: true,
+            }).catch(() => {});
             logger.info({ time: rt }, "Medication initial reminder fired");
           }
           _initialFiredDate = today;
@@ -104,6 +112,13 @@ export function startMedicationScheduler(): void {
             speakText: buildFollowUpMessage(medText),
             isMedication: true,
           });
+          sendPushToAll({
+            title: "💊 Gentle Nudge — Emma Peel",
+            body: `Have you taken your ${medText} yet? Tap to confirm.`,
+            tag: "medication-followup",
+            url: "/",
+            requireInteraction: false,
+          }).catch(() => {});
           logger.info({ time: followUpTime }, "Medication follow-up reminder fired");
         }
         _followUpFiredDate = today;

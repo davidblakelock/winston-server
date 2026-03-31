@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect, useCallback, KeyboardEvent, ChangeEvent } from "react";
-import { Send, Play, Loader2, Disc3, Mic, MicOff, MapPin, Mail, LogOut, Settings, X, Moon } from "lucide-react";
+import { Send, Play, Loader2, Disc3, Mic, MicOff, MapPin, Mail, LogOut, Settings, X, Moon, Bell, BellOff } from "lucide-react";
 import { useSendMessage, useTextToSpeech } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { useNotifications, isNotificationsSupported } from "@/hooks/useNotifications";
 
 interface Message {
   id: string;
@@ -228,6 +229,14 @@ export default function Chat() {
   const [input, setInput] = useState("");
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const notif = useNotifications();
+  const [notifBannerDismissed, setNotifBannerDismissed] = useState(
+    () => localStorage.getItem("notif-banner-dismissed") === "1"
+  );
+  const showNotifBanner =
+    isNotificationsSupported() &&
+    notif.permission === "default" &&
+    !notifBannerDismissed;
   const [winddownSettings, setWinddownSettings] = useState<WinddownSettings>({
     enabled: true,
     scheduledTime: "21:00",
@@ -567,6 +576,24 @@ export default function Chat() {
           ) : connectGoogleBtn
         }
 
+        {/* Notification bell */}
+        {isNotificationsSupported() && (
+          <button
+            onClick={() => {
+              if (notif.permission === "granted" && notif.isSubscribed) {
+                void notif.unsubscribe();
+              } else if (notif.permission !== "denied") {
+                void notif.requestPermission();
+              }
+            }}
+            className={`text-muted-foreground hover:text-foreground transition-colors p-1.5 rounded-full hover:bg-white/10 border border-white/10 hover:border-white/20 ${notif.isSubscribed ? "text-primary/70" : ""}`}
+            title={notif.isSubscribed ? "Notifications on — click to disable" : "Enable push notifications"}
+            disabled={notif.isLoading}
+          >
+            {notif.isSubscribed ? <Bell className="h-4 w-4" /> : <BellOff className="h-4 w-4 opacity-50" />}
+          </button>
+        )}
+
         {/* Settings gear */}
         <button
           onClick={() => setShowSettings(true)}
@@ -577,6 +604,41 @@ export default function Chat() {
         </button>
         </div>
       </header>
+
+      {/* Notification permission banner */}
+      {showNotifBanner && (
+        <div className="flex-shrink-0 bg-primary/10 border-b border-primary/20 px-4 py-3 flex items-start gap-3 animate-in slide-in-from-top duration-300">
+          <Bell className="h-4 w-4 text-primary/70 mt-0.5 flex-shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm text-foreground/90 leading-snug">
+              <span className="font-medium text-primary/90">Emma Peel:</span>{" "}
+              May I send you reminders and updates throughout the day? I promise to only reach out when it matters — medications, reminders you've set, evening check-ins.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <button
+              onClick={() => void notif.requestPermission().then(() => {
+                setNotifBannerDismissed(true);
+                localStorage.setItem("notif-banner-dismissed", "1");
+              })}
+              disabled={notif.isLoading}
+              className="text-xs font-medium text-primary hover:text-primary/80 transition-colors bg-primary/15 hover:bg-primary/25 px-3 py-1.5 rounded-full border border-primary/30 whitespace-nowrap"
+            >
+              {notif.isLoading ? "…" : "Yes, please"}
+            </button>
+            <button
+              onClick={() => {
+                setNotifBannerDismissed(true);
+                localStorage.setItem("notif-banner-dismissed", "1");
+              }}
+              className="text-muted-foreground/50 hover:text-muted-foreground transition-colors p-1"
+              title="Dismiss"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Wind-down settings modal */}
       {showSettings && (

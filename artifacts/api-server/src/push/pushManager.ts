@@ -1,0 +1,118 @@
+import webpush from "web-push";
+import { query } from "../db.js";
+import { logger } from "../lib/logger.js";
+
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY ?? "";
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY ?? "";
+const VAPID_EMAIL = process.env.VAPID_EMAIL ?? "emma@winston.app";
+
+if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
+  webpush.setVapidDetails(
+    `mailto:${VAPID_EMAIL}`,
+    VAPID_PUBLIC_KEY,
+    VAPID_PRIVATE_KEY
+  );
+}
+
+export interface PushPayload {
+  title: string;
+  body: string;
+  tag?: string;
+  icon?: string;
+  badge?: string;
+  url?: string;
+  requireInteraction?: boolean;
+  silent?: boolean;
+}
+
+export interface PushSubscriptionData {
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+}
+
+export async function saveSubscription(
+  userName: string,
+  sub: PushSubscriptionData,
+  userAgent?: string
+): Promise<void> {
+  await query(
+    `INSERT INTO push_subscriptions (user_name, endpoint, p256dh, auth, user_agent)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (endpoint) DO UPDATE SET
+       user_name = EXCLUDED.user_name,
+       p256dh = EXCLUDED.p256dh,
+       auth = EXCLUDED.auth,
+       user_agent = EXCLUDED.user_agent`,
+    [userName, sub.endpoint, sub.p256dh, sub.auth, userAgent ?? null]
+  );
+}
+
+export async function removeSubscription(endpoint: string): Promise<void> {
+  await query(`DELETE FROM push_subscriptions WHERE endpoint = $1`, [endpoint]);
+}
+
+export async function getSubscriptions(userName = "David"): Promise<PushSubscriptionData[]> {
+  const { rows } = await query<{ endpoint: string; p256dh: string; auth: string }>(
+    `SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_name = $1`,
+    [userName]
+  );
+  return rows;
+}
+
+export async function sendPushToAll(
+  payload: PushPayload,
+  userName = "David"
+): Promise<{ sent: number; failed: number }> {
+  if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
+    logger.warn("VAPID keys not configured — push notifications disabled");
+    return { sent: 0, failed: 0 };
+  }
+
+  const subs = await getSubscriptions(userName);
+  if (!subs.length) return { sent: 0, failed: 0 };
+
+  let sent = 0;
+  let failed = 0;
+
+  const body = JSON.stringify({
+    title: payload.title,
+    body: payload.body,
+    tag: payload.tag ?? "winston",
+    icon: payload.icon ?? "/icon-192.png",
+    badge: payload.badge ?? "/badge-72.png",
+    url: payload.url ?? "/",
+    requireInteraction: payload.requireInteraction ?? false,
+    silent: payload.silent ?? false,
+  });
+
+  await Promise.all(
+    subs.map(async (sub) => {
+      try {
+        await webpush.sendNotification(
+          { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+          body,
+          { TTL: 60 * 60 * 4 } // 4 hour TTL
+        );
+        sent++;
+      } catch (err: unknown) {
+        const status = (err as { statusCode?: number }).statusCode;
+        if (status === 410 || status === 404) {
+          // Subscription expired — clean up
+          await removeSubscription(sub.endpoint).catch(() => {});
+          logger.info({ endpoint: sub.endpoint.slice(-20) }, "Removed expired push subscription");
+        } else {
+          logger.warn({ err, endpoint: sub.endpoint.slice(-20) }, "Push notification failed");
+        }
+        failed++;
+      }
+    })
+  );
+
+  logger.info({ sent, failed, tag: payload.tag }, "Push notifications sent");
+  return { sent, failed };
+}
+
+export function getVapidPublicKey(): string {
+  return VAPID_PUBLIC_KEY;
+}

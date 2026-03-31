@@ -1,6 +1,7 @@
 import cron from "node-cron";
 import Anthropic from "@anthropic-ai/sdk";
 import { broadcast } from "../reminders/sseStore.js";
+import { sendPushToAll } from "../push/pushManager.js";
 import {
   getSettings,
   hasFiredToday,
@@ -98,6 +99,15 @@ export function startWinddownScheduler(): void {
 
       const message = await generateOpeningMessage();
       broadcast("winddown-start", { message });
+
+      // Push notification for wind-down (app may be closed)
+      sendPushToAll({
+        title: "🌙 Evening Wind-Down — Emma Peel",
+        body: "Emma Peel is ready for your evening check-in. Tap to chat.",
+        tag: "winddown",
+        url: "/",
+        requireInteraction: false,
+      }).catch(() => {});
     } catch (err) {
       logger.error({ err }, "Wind-down scheduler error");
     }

@@ -8,6 +8,8 @@ import { ensureProfileTable } from "./profile/profileManager";
 import { ensureOnboardingTable } from "./onboarding/onboardingManager";
 import { startMedicationScheduler } from "./medications/medicationScheduler";
 import { seedDefaultMedications } from "./medications/medicationManager";
+import { startMorningPushScheduler } from "./push/morningPushScheduler";
+import { startWeatherAlertScheduler } from "./push/weatherAlertScheduler";
 
 const rawPort = process.env["PORT"];
 
@@ -43,6 +45,8 @@ app.listen(port, async (err) => {
   startScheduler();
   startWinddownScheduler();
   startMedicationScheduler();
+  startMorningPushScheduler();
+  startWeatherAlertScheduler();
 
   try {
     await seedDefaultMedications();

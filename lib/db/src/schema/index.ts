@@ -127,6 +127,21 @@ export const profileItems = pgTable(
   (t) => [index("profile_items_category_idx").on(t.category)]
 );
 
+// ── Push Subscriptions ───────────────────────────────────────────────────────
+export const pushSubscriptions = pgTable(
+  "push_subscriptions",
+  {
+    id: serial("id").primaryKey(),
+    userName: text("user_name").notNull().default("David"),
+    endpoint: text("endpoint").notNull(),
+    p256dh: text("p256dh").notNull(),
+    auth: text("auth").notNull(),
+    userAgent: text("user_agent"),
+    createdAt: timestamp("created_at", { withTimezone: true }).default(sql`now()`),
+  },
+  (t) => [uniqueIndex("push_subscriptions_endpoint_idx").on(t.endpoint)]
+);
+
 // ── Medications ─────────────────────────────────────────────────────────────
 export const medications = pgTable(
   "medications",

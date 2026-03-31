@@ -7,6 +7,7 @@ import authRouter from "./auth";
 import winddownRouter from "./winddown";
 import memoryRouter from "./memory";
 import onboardingRouter from "./onboarding";
+import pushRouter from "./push";
 
 const router: IRouter = Router();
 
@@ -18,5 +19,6 @@ router.use(remindersRouter);
 router.use(transcribeRouter);
 router.use(winddownRouter);
 router.use(memoryRouter);
+router.use(pushRouter);
 
 export default router;

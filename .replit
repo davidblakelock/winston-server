@@ -31,6 +31,9 @@ timeoutMs = 20000
 ELEVENLABS_VOICE_ID = "Ky9j3wxFbp3dSAdrkOEv"
 EL_API_KEY = "069f805acb411547f8d823645dd91b8e5876260fb24b8ff680c9f01ed7a758e7"
 EL_VOICE_ID = "aj0fZfXTBc7E3By4X8L2"
+VAPID_PUBLIC_KEY = "BDSSBBEFaJYjf-vLU5gjeGXmle5oZWsw7KqWRkMLbfHNpKNzMTrkkesC1j14kwgMOQIyZmmxfotrdGHCzdTtYNU"
+VAPID_PRIVATE_KEY = "lVXb3-ty92jjFfw1UVZym2JTTUVKgMJcx1jiRcB0j9c"
+VAPID_EMAIL = "emma@winston.app"
 
 [userenv.production]
 GOOGLE_REDIRECT_URI = "https://winston-companion--davidblakelock.replit.app/api/auth/callback"
