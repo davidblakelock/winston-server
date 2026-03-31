@@ -432,6 +432,7 @@ export default function Chat() {
           ) : (
             <a
               href="/api/auth/google"
+              target="_top"
               className="flex items-center gap-2 text-xs font-medium text-muted-foreground hover:text-foreground bg-card border border-border hover:border-primary/30 rounded-full px-3 py-1.5 transition-all duration-200"
             >
               <svg className="h-3.5 w-3.5" viewBox="0 0 24 24">
