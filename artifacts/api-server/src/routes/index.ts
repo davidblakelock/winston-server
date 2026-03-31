@@ -5,6 +5,7 @@ import remindersRouter from "./reminders";
 import transcribeRouter from "./transcribe";
 import authRouter from "./auth";
 import winddownRouter from "./winddown";
+import memoryRouter from "./memory";
 
 const router: IRouter = Router();
 
@@ -14,5 +15,6 @@ router.use(chatRouter);
 router.use(remindersRouter);
 router.use(transcribeRouter);
 router.use(winddownRouter);
+router.use(memoryRouter);
 
 export default router;

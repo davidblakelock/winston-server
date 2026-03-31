@@ -3,6 +3,7 @@ import { logger } from "./lib/logger";
 import { startScheduler } from "./reminders/scheduler";
 import { startWinddownScheduler } from "./winddown/winddownScheduler";
 import { ensureWinddownTables } from "./winddown/winddownManager";
+import { ensureMemoryTable } from "./memory/memoryManager";
 
 const rawPort = process.env["PORT"];
 
@@ -28,6 +29,7 @@ app.listen(port, async (err) => {
 
   try {
     await ensureWinddownTables();
+    await ensureMemoryTable();
   } catch (e) {
     logger.warn({ e }, "Table initialization warning");
   }

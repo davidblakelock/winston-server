@@ -21,6 +21,10 @@ import {
   formatNotesForMorningBriefing,
   setWinddownActive,
 } from "../winddown/winddownManager.js";
+import {
+  getRecentMemories,
+  formatMemoriesForContext,
+} from "../memory/memoryManager.js";
 
 const router: IRouter = Router();
 
@@ -297,7 +301,11 @@ router.post("/chat", async (req, res) => {
     return;
   }
 
-  let systemPrompt = getCurrentDateTimeBlock() + "\n" + BASE_SYSTEM_PROMPT;
+  // Fetch recent memories and inject into system prompt
+  const recentMemories = await getRecentMemories(7).catch(() => []);
+  const memoryBlock = formatMemoriesForContext(recentMemories);
+
+  let systemPrompt = getCurrentDateTimeBlock() + "\n" + BASE_SYSTEM_PROMPT + memoryBlock;
   let reminderConfirmation = "";
 
   const isMorningGreeting = MORNING_PATTERN.test(message);
@@ -334,7 +342,7 @@ router.post("/chat", async (req, res) => {
 
       const notesBlock = formatNotesForMorningBriefing(lastNightNotes);
 
-      systemPrompt = getCurrentDateTimeBlock() + "\n" + BASE_SYSTEM_PROMPT + notesBlock + weatherBlock + gmailBlock + calendarBlock;
+      systemPrompt = getCurrentDateTimeBlock() + "\n" + BASE_SYSTEM_PROMPT + memoryBlock + notesBlock + weatherBlock + gmailBlock + calendarBlock;
     } catch (err) {
       req.log.warn({ err }, "Morning data fetch failed, continuing without it");
     }
@@ -359,7 +367,7 @@ router.post("/chat", async (req, res) => {
           ? "\n\n[Google Calendar — not connected. Let David know he can connect Google in the app header.]"
           : "";
 
-      systemPrompt = getCurrentDateTimeBlock() + "\n" + BASE_SYSTEM_PROMPT + gmailBlock + calendarBlock;
+      systemPrompt = getCurrentDateTimeBlock() + "\n" + BASE_SYSTEM_PROMPT + memoryBlock + gmailBlock + calendarBlock;
     } catch (err) {
       req.log.warn({ err }, "On-demand email/calendar fetch failed");
     }

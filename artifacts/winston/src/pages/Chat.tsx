@@ -257,6 +257,35 @@ export default function Chat() {
     };
   }, []);
 
+  // ── Memory auto-save: save on page close and every 6 user turns ──
+  const lastSavedCountRef = useRef(0);
+
+  const saveMemory = useCallback((msgs: Message[]) => {
+    const history = msgs
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .filter((m) => m.id !== "welcome")
+      .map((m) => ({ role: m.role, content: m.content }));
+    if (history.length < 4) return;
+    const blob = new Blob([JSON.stringify({ history })], { type: "application/json" });
+    navigator.sendBeacon("/api/memory/save", blob);
+  }, []);
+
+  // Save on page unload
+  useEffect(() => {
+    const handleUnload = () => saveMemory(messages);
+    window.addEventListener("beforeunload", handleUnload);
+    return () => window.removeEventListener("beforeunload", handleUnload);
+  }, [messages, saveMemory]);
+
+  // Auto-save checkpoint every 6 user messages
+  useEffect(() => {
+    const userCount = messages.filter((m) => m.role === "user").length;
+    if (userCount > 0 && userCount % 6 === 0 && userCount !== lastSavedCountRef.current) {
+      lastSavedCountRef.current = userCount;
+      saveMemory(messages);
+    }
+  }, [messages, saveMemory]);
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get("connected") === "google") {
