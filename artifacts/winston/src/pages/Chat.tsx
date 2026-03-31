@@ -574,7 +574,7 @@ export default function Chat() {
         {/* Settings gear */}
         <button
           onClick={() => setShowSettings(true)}
-          className="text-muted-foreground/50 hover:text-muted-foreground transition-colors p-1.5 rounded-full hover:bg-white/5"
+          className="text-muted-foreground hover:text-foreground transition-colors p-1.5 rounded-full hover:bg-white/10 border border-white/10 hover:border-white/20"
           title="Evening wind-down settings"
         >
           <Settings className="h-4 w-4" />
