@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
+import { extractListOp, executeListOp, buildListContext } from "../lists/listManager.js";
 
 const router: IRouter = Router();
 
@@ -83,6 +84,7 @@ function formatWeatherBlock(w: WeatherResult): string {
 
 const MORNING_PATTERN = /\b(good\s+morning|morning|mornin'?|wakin[g']?\s+up|just\s+woke)\b/i;
 const REMINDER_PATTERN = /\b(remind\s+me|set\s+a?\s*reminder|reminder|don'?t\s+let\s+me\s+forget|make\s+sure\s+i|peel\s+remind|ms\.?\s*peel\s+remind)\b/i;
+const LIST_PATTERN = /\b(add\s+.+\s+to\s+(my\s+)?\w.+list|remove\s+.+\s+from\s+(my\s+)?\w.+list|clear\s+(my\s+)?\w.+list|what('?s|\s+is)\s+(on\s+)?(my\s+)?\w.+list|show\s+(me\s+)?(my\s+)?\w.+list|read\s+(me\s+)?(my\s+)?\w.+list|(shopping|to\s*-?\s*do|grocery|errand|task)\s+list)\b/i;
 
 interface ExtractedReminder {
   reminderText: string;
@@ -193,6 +195,7 @@ router.post("/chat", async (req, res) => {
 
   const isMorningGreeting = MORNING_PATTERN.test(message);
   const isReminderRequest = REMINDER_PATTERN.test(message);
+  const isListRequest = LIST_PATTERN.test(message);
 
   if (isMorningGreeting) {
     try {
@@ -253,6 +256,20 @@ router.post("/chat", async (req, res) => {
       }
     } catch (err) {
       req.log.warn({ err }, "Reminder extraction failed, continuing normally");
+    }
+  }
+
+  if (isListRequest) {
+    try {
+      const op = await extractListOp(message);
+      if (op) {
+        const result = await executeListOp(op);
+        const listContext = buildListContext(result);
+        systemPrompt = systemPrompt + listContext;
+        req.log.info({ op, itemCount: result.currentItems.length }, "List operation executed");
+      }
+    } catch (err) {
+      req.log.warn({ err }, "List operation failed, continuing normally");
     }
   }
 
