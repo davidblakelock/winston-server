@@ -24,6 +24,7 @@ Winston is a personal AI companion app with a dark-themed chat interface. Users 
 - List management (shopping, to-do, etc.)
 - Navigation to saved locations (home, gym, doctor)
 - Google OAuth (popup flow) for Gmail + Calendar
+- **Scam/Phishing Detection**: Every email is analyzed locally before being shown to Emma — brand/domain mismatch, free email impersonation, urgency language, gift card requests, sensitive info requests, typosquatting; high/medium risk emails trigger protective Emma warnings ("David, I want to flag something…"); legitimate emails summarized normally
 - Story capture: evening memory prompts for Olivia's memory book (40 prompts, saved to DB)
 - **Personalized Morning News Briefing**: curated news woven into every morning greeting
   - Fetches 6 RSS feeds concurrently: WSJ Markets, BBC World, Google News (Rangers, Cowboys, Dallas local, AI/Tech)

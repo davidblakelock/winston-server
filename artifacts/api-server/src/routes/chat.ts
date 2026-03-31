@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { extractListOp, executeListOp, buildListContext } from "../lists/listManager.js";
-import { fetchRecentEmails, formatEmailsForPrompt } from "../google/gmail.js";
+import { fetchRecentEmails, formatEmailsForPrompt, buildScamWarningInstruction } from "../google/gmail.js";
 import {
   fetchTodayEvents,
   fetchWeekEvents,
@@ -518,7 +518,8 @@ router.post("/chat", async (req, res) => {
       const weatherBlock = buildContextualWeatherBlock(dallas, knoxville, now);
 
       const gmailBlock = emails !== null
-        ? `\n\n[Gmail — unread inbox (fetched just now)]\n${formatEmailsForPrompt(emails)}\nMention the most notable emails naturally in the morning briefing.`
+        ? `\n\n[Gmail — unread inbox (fetched just now)]\n${formatEmailsForPrompt(emails)}\nMention the most notable emails naturally in the morning briefing.` +
+          buildScamWarningInstruction(emails)
         : "";
 
       const calendarBlock = events !== null
@@ -561,7 +562,8 @@ router.post("/chat", async (req, res) => {
       ]);
 
       const gmailBlock = emails !== undefined && emails !== null
-        ? `\n\n[Gmail — unread inbox (fetched just now)]\n${formatEmailsForPrompt(emails)}\nAnswer David's question about his emails using exactly this data.`
+        ? `\n\n[Gmail — unread inbox (fetched just now)]\n${formatEmailsForPrompt(emails)}\nAnswer David's question about his emails using exactly this data.` +
+          buildScamWarningInstruction(emails)
         : emails === null
           ? "\n\n[Gmail — not connected. Let David know he can connect Google in the app header.]"
           : "";

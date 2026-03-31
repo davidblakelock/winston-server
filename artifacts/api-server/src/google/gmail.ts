@@ -3,15 +3,215 @@ import { getAuthClient } from "./oauth.js";
 
 export interface EmailSummary {
   from: string;
+  fromEmail: string;
   subject: string;
   snippet: string;
   date: string;
+  suspicion: ScamAnalysis | null;
+}
+
+export interface ScamAnalysis {
+  isSuspicious: boolean;
+  riskLevel: "high" | "medium" | "low";
+  flags: string[];
+  summary: string;
 }
 
 function decodeHeader(encoded: string): string {
   return encoded.replace(/=\?UTF-8\?[BQ]\?([^?]+)\?=/gi, (_, b64) => {
     try { return Buffer.from(b64, "base64").toString("utf-8"); } catch { return b64; }
   });
+}
+
+// ── Scam / Phishing Detection ─────────────────────────────────────────────────
+
+const TRUSTED_BRAND_DOMAINS: Record<string, string[]> = {
+  "chase":        ["chase.com"],
+  "bank of america": ["bankofamerica.com"],
+  "wells fargo":  ["wellsfargo.com"],
+  "citibank":     ["citi.com", "citibank.com"],
+  "paypal":       ["paypal.com"],
+  "amazon":       ["amazon.com"],
+  "apple":        ["apple.com", "icloud.com"],
+  "microsoft":    ["microsoft.com", "live.com", "outlook.com"],
+  "google":       ["google.com", "googlemail.com", "gmail.com"],
+  "irs":          ["irs.gov"],
+  "social security": ["ssa.gov"],
+  "medicare":     ["medicare.gov", "cms.hhs.gov"],
+  "fedex":        ["fedex.com"],
+  "ups":          ["ups.com"],
+  "usps":         ["usps.com"],
+  "netflix":      ["netflix.com"],
+  "facebook":     ["facebook.com", "meta.com"],
+  "instagram":    ["instagram.com"],
+  "venmo":        ["venmo.com"],
+  "zelle":        ["zellepay.com"],
+  "docusign":     ["docusign.com", "docusign.net"],
+  "coinbase":     ["coinbase.com"],
+};
+
+const URGENCY_SUBJECT_WORDS = [
+  "urgent", "action required", "immediately", "account suspended", "account closed",
+  "verify your account", "confirm your account", "update your information",
+  "you have won", "winner", "prize", "claim your", "selected", "congratulations",
+  "final notice", "last chance", "your account has been", "suspicious activity",
+  "unusual sign-in", "security alert", "unauthorized access",
+  "invoice attached", "payment failed", "past due", "overdue",
+];
+
+const URGENCY_BODY_WORDS = [
+  "click here to verify", "click the link below", "confirm your password",
+  "enter your credentials", "provide your social security",
+  "gift card", "itunes card", "google play card", "wire transfer",
+  "western union", "moneygram", "cryptocurrency", "bitcoin",
+  "call immediately", "do not share this code", "one-time password",
+  "your account will be closed", "your account will be suspended",
+  "limited time", "expires in 24 hours", "act now",
+];
+
+const FREE_EMAIL_DOMAINS = [
+  "gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "aol.com",
+  "icloud.com", "live.com", "protonmail.com", "mail.com", "ymail.com",
+];
+
+// Known legitimate senders that commonly trigger false positives
+const WHITELIST_DOMAINS = [
+  "google.com", "gmail.com", "apple.com", "icloud.com", "microsoft.com",
+  "outlook.com", "live.com", "amazon.com", "netflix.com", "facebook.com",
+  "instagram.com", "twitter.com", "x.com", "linkedin.com",
+];
+
+function extractEmailAddress(raw: string): string {
+  const match = raw.match(/<([^>]+)>/);
+  return match ? match[1].trim().toLowerCase() : raw.trim().toLowerCase();
+}
+
+function extractDomain(email: string): string {
+  const atIdx = email.lastIndexOf("@");
+  return atIdx >= 0 ? email.slice(atIdx + 1).toLowerCase() : "";
+}
+
+function hasTyposquatting(domain: string): { suspected: string } | null {
+  const knownBrands = ["paypal", "amazon", "apple", "microsoft", "google",
+    "chase", "netflix", "facebook", "instagram", "ebay"];
+  for (const brand of knownBrands) {
+    if (domain.includes(brand)) continue; // exact match is fine
+    // Levenshtein distance check for close misspellings
+    for (const variant of generateTypos(brand)) {
+      if (domain.includes(variant)) {
+        return { suspected: brand };
+      }
+    }
+  }
+  return null;
+}
+
+function generateTypos(word: string): string[] {
+  const typos: string[] = [];
+  // Common substitutions
+  typos.push(word.replace(/a/g, "4").replace(/e/g, "3").replace(/i/g, "1").replace(/o/g, "0"));
+  // Remove one char
+  for (let i = 0; i < word.length; i++) {
+    typos.push(word.slice(0, i) + word.slice(i + 1));
+  }
+  return typos.filter((t) => t !== word && t.length >= 3);
+}
+
+export function analyzeEmailForScam(email: {
+  from: string;
+  fromEmail: string;
+  subject: string;
+  snippet: string;
+}): ScamAnalysis {
+  const flags: string[] = [];
+  const domain = extractDomain(email.fromEmail);
+  const fromLower = email.from.toLowerCase();
+  const subjectLower = email.subject.toLowerCase();
+  const snippetLower = email.snippet.toLowerCase();
+  const combined = `${subjectLower} ${snippetLower}`;
+
+  // Skip whitelisted domains entirely for brand mismatch checks
+  const isWhitelisted = WHITELIST_DOMAINS.some((d) => domain === d || domain.endsWith(`.${d}`));
+
+  // 1. Brand/display name vs domain mismatch
+  if (!isWhitelisted) {
+    for (const [brand, trustedDomains] of Object.entries(TRUSTED_BRAND_DOMAINS)) {
+      const claimsBrand = fromLower.includes(brand) || subjectLower.includes(brand);
+      if (claimsBrand) {
+        const domainMatch = trustedDomains.some((d) => domain === d || domain.endsWith(`.${d}`));
+        if (!domainMatch && domain !== "") {
+          flags.push(`Claims to be from "${brand}" but sent from ${domain}`);
+        }
+      }
+    }
+
+    // 2. Free email domain sending as institution
+    if (FREE_EMAIL_DOMAINS.includes(domain)) {
+      const claimsInstitution =
+        fromLower.match(/bank|paypal|amazon|apple|microsoft|irs|medicare|government|fedex|ups|usps/i);
+      if (claimsInstitution) {
+        flags.push(`Institution impersonation: display name "${email.from}" using free email domain (${domain})`);
+      }
+    }
+
+    // 3. Typosquatting on domain
+    const typo = hasTyposquatting(domain);
+    if (typo) {
+      flags.push(`Sender domain "${domain}" may be impersonating ${typo.suspected}`);
+    }
+  }
+
+  // 4. Urgency language in subject
+  for (const word of URGENCY_SUBJECT_WORDS) {
+    if (subjectLower.includes(word)) {
+      flags.push(`Urgent/suspicious subject language: "${word}"`);
+      break; // one flag per category is enough
+    }
+  }
+
+  // 5. Phishing/scam body language
+  for (const phrase of URGENCY_BODY_WORDS) {
+    if (combined.includes(phrase)) {
+      flags.push(`Suspicious body content: "${phrase}"`);
+      break;
+    }
+  }
+
+  // 6. Requests for personal info / credentials
+  if (combined.match(/\b(password|ssn|social security number|credit card|cvv|pin\b|account number)\b/i)) {
+    flags.push("Requests sensitive personal information (password, SSN, credit card, etc.)");
+  }
+
+  // 7. Prize / lottery scam
+  if (combined.match(/\b(you('?ve| have) (won|been selected)|claim (your |a )?(prize|reward|gift)|lottery|sweepstakes)\b/i)) {
+    flags.push("Prize or lottery scam language detected");
+  }
+
+  // 8. Gift card requests
+  if (combined.match(/\b(gift card|itunes|google play|amazon gift|steam card|prepaid card)\b/i) &&
+      combined.match(/\b(send|buy|purchase|pay|get)\b/i)) {
+    flags.push("Requests payment via gift cards");
+  }
+
+  // 9. Suspicious no-reply or random domains
+  if (!isWhitelisted && domain && domain.match(/^\d{1,3}-\d{1,3}|random|temp|noreply\d+|\.xyz$|\.top$|\.click$|\.loan$|\.work$|\.buzz$/)) {
+    flags.push(`Sender uses suspicious domain pattern: ${domain}`);
+  }
+
+  const isSuspicious = flags.length > 0;
+  let riskLevel: "high" | "medium" | "low" = "low";
+
+  if (flags.length >= 3 || (flags.length >= 2 && flags.some((f) => f.includes("impersonation") || f.includes("Claims to be")))) {
+    riskLevel = "high";
+  } else if (flags.length >= 1) {
+    riskLevel = "medium";
+  }
+
+  const summary = isSuspicious
+    ? `${riskLevel === "high" ? "High-risk" : "Potentially suspicious"} email: ${flags.slice(0, 2).join("; ")}`
+    : "Appears legitimate";
+
+  return { isSuspicious, riskLevel, flags, summary };
 }
 
 export async function fetchRecentEmails(maxResults = 8): Promise<EmailSummary[] | null> {
@@ -46,14 +246,21 @@ export async function fetchRecentEmails(maxResults = 8): Promise<EmailSummary[] 
       decodeHeader(headers.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value ?? "");
 
     const rawFrom = get("From");
+    const fromEmail = extractEmailAddress(rawFrom);
     const fromMatch = rawFrom.match(/^(.*?)\s*<[^>]+>/) ?? null;
     const from = fromMatch ? fromMatch[1].trim().replace(/^"(.*)"$/, "$1") : rawFrom;
+    const subject = get("Subject") || "(no subject)";
+    const snippet = detail.data.snippet ?? "";
+
+    const suspicion = analyzeEmailForScam({ from, fromEmail, subject, snippet });
 
     emails.push({
       from,
-      subject: get("Subject") || "(no subject)",
-      snippet: detail.data.snippet ?? "",
+      fromEmail,
+      subject,
+      snippet,
       date: get("Date"),
+      suspicion: suspicion.isSuspicious ? suspicion : null,
     });
   }
 
@@ -62,7 +269,68 @@ export async function fetchRecentEmails(maxResults = 8): Promise<EmailSummary[] 
 
 export function formatEmailsForPrompt(emails: EmailSummary[]): string {
   if (emails.length === 0) return "Inbox is clear — no unread messages.";
-  return emails
-    .map((e, i) => `${i + 1}. From: ${e.from} | Subject: ${e.subject} | ${e.snippet.slice(0, 120)}`)
-    .join("\n");
+
+  const lines: string[] = [];
+  const suspicious = emails.filter((e) => e.suspicion?.isSuspicious);
+  const clean = emails.filter((e) => !e.suspicion?.isSuspicious);
+
+  if (suspicious.length > 0) {
+    lines.push(`⚠️ SUSPICIOUS EMAILS DETECTED (${suspicious.length}):`);
+    for (const e of suspicious) {
+      const risk = e.suspicion!.riskLevel.toUpperCase();
+      const flagList = e.suspicion!.flags.join("; ");
+      lines.push(`  [${risk} RISK] From: ${e.from} <${e.fromEmail}> | Subject: ${e.subject}`);
+      lines.push(`  Red flags: ${flagList}`);
+      lines.push(`  Preview: ${e.snippet.slice(0, 100)}`);
+    }
+    lines.push("");
+  }
+
+  if (clean.length > 0) {
+    lines.push("LEGITIMATE EMAILS:");
+    for (let i = 0; i < clean.length; i++) {
+      const e = clean[i];
+      lines.push(`${i + 1}. From: ${e.from} | Subject: ${e.subject} | ${e.snippet.slice(0, 120)}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+export function buildScamWarningInstruction(emails: EmailSummary[]): string {
+  const suspicious = emails.filter((e) => e.suspicion?.isSuspicious);
+  if (suspicious.length === 0) return "";
+
+  const highRisk = suspicious.filter((e) => e.suspicion?.riskLevel === "high");
+  const mediumRisk = suspicious.filter((e) => e.suspicion?.riskLevel === "medium");
+
+  let instruction = `\n\n[⚠️ SCAM / PHISHING ALERT — CRITICAL INSTRUCTIONS]\n`;
+  instruction += `${suspicious.length} suspicious email${suspicious.length > 1 ? "s" : ""} detected in David's inbox.\n\n`;
+
+  if (highRisk.length > 0) {
+    instruction += `HIGH-RISK emails (do NOT let David click links or reply):\n`;
+    for (const e of highRisk) {
+      instruction += `• "${e.subject}" from ${e.from} (${e.fromEmail}) — ${e.suspicion!.flags.slice(0, 2).join("; ")}\n`;
+    }
+    instruction += "\n";
+  }
+
+  if (mediumRisk.length > 0) {
+    instruction += `POTENTIALLY SUSPICIOUS emails (flag with caution):\n`;
+    for (const e of mediumRisk) {
+      instruction += `• "${e.subject}" from ${e.from} — ${e.suspicion!.flags[0]}\n`;
+    }
+    instruction += "\n";
+  }
+
+  instruction +=
+    `HOW TO HANDLE — speak as Emma Peel, David's protective companion:\n` +
+    `1. Flag suspicious emails FIRST, before summarizing the rest — start with "David, I want to flag something."\n` +
+    `2. Be warm and protective, NOT alarmist. You're a caring friend alerting him, not a security system.\n` +
+    `3. For HIGH RISK: tell him clearly — don't click any links, don't reply, don't call any phone numbers in the email. He can verify by going directly to the bank/company's website.\n` +
+    `4. For MEDIUM RISK: flag it with "this one looks a bit off" and suggest he treat it with caution.\n` +
+    `5. After flagging suspicious ones, summarize the legitimate emails normally and warmly.\n` +
+    `6. Keep the tone protective and reassuring — "I've got your back on this one."`;
+
+  return instruction;
 }
