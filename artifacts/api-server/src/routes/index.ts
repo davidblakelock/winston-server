@@ -6,6 +6,7 @@ import transcribeRouter from "./transcribe";
 import authRouter from "./auth";
 import winddownRouter from "./winddown";
 import memoryRouter from "./memory";
+import messagesRouter from "./messages";
 import onboardingRouter from "./onboarding";
 import pushRouter from "./push";
 import oliviaRouter from "./olivia";
@@ -20,6 +21,7 @@ router.use(remindersRouter);
 router.use(transcribeRouter);
 router.use(winddownRouter);
 router.use(memoryRouter);
+router.use(messagesRouter);
 router.use(pushRouter);
 router.use(oliviaRouter);
 

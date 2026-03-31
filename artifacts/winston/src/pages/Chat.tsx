@@ -226,9 +226,8 @@ interface WinddownSettings {
 }
 
 export default function Chat() {
-  const [messages, setMessages] = useState<Message[]>([
-    { id: "welcome", role: "assistant", content: "Hello, David. What's on your mind?" },
-  ]);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [messagesLoaded, setMessagesLoaded] = useState(false);
   const [input, setInput] = useState("");
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -377,38 +376,58 @@ export default function Chat() {
     [playElevenLabsAudio, playBrowserTTS]
   );
 
-  // ── Auto-greeting: Emma speaks first when chat loads ─────────────────────
+  // ── Load message history from DB, then greet if no history ─────────────
   useEffect(() => {
     if (greetedRef.current) return;
     greetedRef.current = true;
 
     const token = localStorage.getItem("winston_session_token");
-    if (!token) return;
+    if (!token) { setMessagesLoaded(true); return; }
 
     const baseUrl = (import.meta.env.BASE_URL as string).replace(/\/$/, "");
-    const greetingId = `greeting-${Date.now()}`;
 
-    setMessages([{ id: greetingId, role: "assistant", content: "…" }]);
-
-    fetch(`${baseUrl}/api/chat`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ message: "hello", history: [], isAutoGreeting: true }),
+    fetch(`${baseUrl}/api/messages?limit=100`, {
+      headers: { Authorization: `Bearer ${token}` },
     })
-      .then((r) => {
-        if (!r.ok) { setMessages([]); return null; }
-        return r.json() as Promise<{ reply: string }>;
-      })
+      .then((r) => (r.ok ? (r.json() as Promise<{ messages: Message[] }>) : { messages: [] }))
       .then((data) => {
-        if (!data) return;
-        const reply = data.reply;
-        setMessages([{ id: greetingId, role: "assistant", content: reply }]);
-        setTimeout(() => speakReply(greetingId, reply), 400);
+        const existing = data.messages ?? [];
+        setMessagesLoaded(true);
+
+        if (existing.length > 0) {
+          // Restore previous conversation — no greeting needed
+          setMessages(existing);
+          return;
+        }
+
+        // Fresh session — ask Emma to greet
+        const greetingId = `greeting-${Date.now()}`;
+        setMessages([{ id: greetingId, role: "assistant", content: "…" }]);
+
+        fetch(`${baseUrl}/api/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ message: "hello", history: [], isAutoGreeting: true }),
+        })
+          .then((r) => (r.ok ? (r.json() as Promise<{ reply: string }>) : null))
+          .then((chatData) => {
+            if (!chatData) { setMessages([]); return; }
+            const reply = chatData.reply;
+            setMessages([{ id: greetingId, role: "assistant", content: reply }]);
+            // Persist greeting to DB
+            fetch(`${baseUrl}/api/messages`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+              body: JSON.stringify({ messages: [{ role: "assistant", content: reply }] }),
+            }).catch(() => {});
+            setTimeout(() => speakReply(greetingId, reply), 400);
+          })
+          .catch(() => setMessages([]));
       })
-      .catch(() => setMessages([]));
+      .catch(() => {
+        setMessagesLoaded(true);
+        setMessages([]);
+      });
   }, [speakReply]);
 
   const submitText = useCallback(
@@ -420,7 +439,8 @@ export default function Chat() {
       }
 
       const userMsg: Message = { id: Date.now().toString(), role: "user", content: text.trim() };
-      const historyForApi = messages.map((m) => ({ role: m.role, content: m.content }));
+      // Send only the last 30 messages as context to keep API calls fast
+      const historyForApi = messages.slice(-30).map((m) => ({ role: m.role, content: m.content }));
 
       setMessages((prev) => [...prev, userMsg]);
       setInput("");
@@ -441,6 +461,21 @@ export default function Chat() {
               },
             ]);
             speakReply(assistantMsgId, data.reply);
+            // Persist this exchange to DB for cross-device sync
+            const token = localStorage.getItem("winston_session_token");
+            if (token) {
+              const baseUrl = (import.meta.env.BASE_URL as string).replace(/\/$/, "");
+              fetch(`${baseUrl}/api/messages`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                body: JSON.stringify({
+                  messages: [
+                    { role: "user", content: userMsg.content },
+                    { role: "assistant", content: data.reply },
+                  ],
+                }),
+              }).catch(() => {});
+            }
             if (data.navigationUrl) {
               window.open(data.navigationUrl, "_blank", "noopener,noreferrer");
             }
