@@ -86,6 +86,8 @@ function formatWeatherBlock(w: WeatherResult): string {
 
 const MORNING_PATTERN = /\b(good\s+morning|morning|mornin'?|wakin[g']?\s+up|just\s+woke)\b/i;
 const REMINDER_PATTERN = /\b(remind\s+me|set\s+a?\s*reminder|reminder|don'?t\s+let\s+me\s+forget|make\s+sure\s+i|peel\s+remind|ms\.?\s*peel\s+remind)\b/i;
+const EMAIL_PATTERN = /\b(email|emails|mail|inbox|check\s+my\s+(email|mail|inbox)|any\s+(new\s+)?(emails?|messages?|mail)|what('?s|\s+is)\s+(in\s+)?(my\s+)?(email|inbox|mail)|do\s+i\s+have\s+(any\s+)?(email|mail|messages?))\b/i;
+const CALENDAR_PATTERN = /\b(calendar|schedule|agenda|appointments?|what('?s|\s+is)\s+(on\s+)?(my\s+)?(calendar|schedule|agenda)|(today|tomorrow)'?s?\s+(schedule|events?|appointments?)|do\s+i\s+have\s+anything\s+(today|scheduled|on\s+my\s+calendar))\b/i;
 const LIST_PATTERN = /\b(add\s+.+\s+to\s+(my\s+)?\w.+list|remove\s+.+\s+from\s+(my\s+)?\w.+list|clear\s+(my\s+)?\w.+list|what('?s|\s+is)\s+(on\s+)?(my\s+)?\w.+list|show\s+(me\s+)?(my\s+)?\w.+list|read\s+(me\s+)?(my\s+)?\w.+list|(shopping|to\s*-?\s*do|grocery|errand|task)\s+list)\b/i;
 const NAVIGATION_PATTERN = /\b(take\s+me\s+to|directions?\s+to|navigate\s+to|get\s+me\s+to|how\s+do\s+i\s+get\s+to|maps?\s+to|open\s+maps?\s+(for|to))\b/i;
 
@@ -275,6 +277,8 @@ router.post("/chat", async (req, res) => {
   const isMorningGreeting = MORNING_PATTERN.test(message);
   const isReminderRequest = REMINDER_PATTERN.test(message);
   const isListRequest = LIST_PATTERN.test(message);
+  const isEmailRequest = !isMorningGreeting && EMAIL_PATTERN.test(message);
+  const isCalendarRequest = !isMorningGreeting && CALENDAR_PATTERN.test(message);
 
   if (isMorningGreeting) {
     try {
@@ -301,6 +305,31 @@ router.post("/chat", async (req, res) => {
       systemPrompt = getCurrentDateTimeBlock() + "\n" + BASE_SYSTEM_PROMPT + weatherBlock + gmailBlock + calendarBlock;
     } catch (err) {
       req.log.warn({ err }, "Morning data fetch failed, continuing without it");
+    }
+  }
+
+  if (isEmailRequest || isCalendarRequest) {
+    try {
+      const [emails, events] = await Promise.all([
+        isEmailRequest ? fetchRecentEmails(10).catch(() => null) : Promise.resolve(undefined),
+        isCalendarRequest ? fetchTodayEvents().catch(() => null) : Promise.resolve(undefined),
+      ]);
+
+      const gmailBlock = emails !== undefined && emails !== null
+        ? `\n\n[Gmail — unread inbox (fetched just now)]\n${formatEmailsForPrompt(emails)}\nAnswer David's question about his emails using exactly this data.`
+        : emails === null
+          ? "\n\n[Gmail — not connected. Let David know he can connect Google in the app header.]"
+          : "";
+
+      const calendarBlock = events !== undefined && events !== null
+        ? `\n\n[Google Calendar — today's schedule (fetched just now)]\n${formatCalendarForPrompt(events)}\nAnswer David's question about his schedule using exactly this data.`
+        : events === null
+          ? "\n\n[Google Calendar — not connected. Let David know he can connect Google in the app header.]"
+          : "";
+
+      systemPrompt = getCurrentDateTimeBlock() + "\n" + BASE_SYSTEM_PROMPT + gmailBlock + calendarBlock;
+    } catch (err) {
+      req.log.warn({ err }, "On-demand email/calendar fetch failed");
     }
   }
 
