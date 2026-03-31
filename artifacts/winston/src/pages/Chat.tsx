@@ -523,12 +523,19 @@ export default function Chat() {
             <button
               disabled={googleAuth.loading}
               onClick={() => {
+                // On mobile, skip popup entirely — always use redirect flow
+                const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+                if (isMobile) {
+                  window.location.href = "/api/auth/google";
+                  return;
+                }
+
                 const popup = window.open(
                   "/api/auth/google",
                   "google-oauth",
                   "width=520,height=640,left=200,top=100,resizable=yes,scrollbars=yes"
                 );
-                // On mobile browsers popups are blocked — fall back to redirect flow
+                // Popup blocked on desktop too — fall back to redirect
                 if (!popup) {
                   window.location.href = "/api/auth/google";
                   return;
