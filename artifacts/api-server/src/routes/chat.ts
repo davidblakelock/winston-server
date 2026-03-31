@@ -153,6 +153,72 @@ function formatWeatherBlock(w: WeatherResult): string {
   return `${w.city}: ${w.temp}°F (feels like ${w.feelsLike}°F), ${w.condition} — high ${w.high}°F / low ${w.low}°F`;
 }
 
+function buildContextualWeatherBlock(dallas: WeatherResult, knoxville: WeatherResult, now: Date): string {
+  const tz = "America/Chicago";
+  const dayName = now.toLocaleDateString("en-US", { timeZone: tz, weekday: "long" });
+
+  const pickleballDays = ["Monday", "Wednesday", "Friday", "Saturday"];
+  const isPickleballDay = pickleballDays.includes(dayName);
+  const activityLabel = isPickleballDay ? "pickleball" : "a run";
+
+  const isRainy = /rain|drizzle|shower|thunderstorm/.test(dallas.condition);
+  const isFoggy = /fog/.test(dallas.condition);
+  const isStormy = /thunderstorm/.test(dallas.condition);
+  const isVeryHot = dallas.high >= 98;
+  const isHot = dallas.high >= 93;
+  const isWarm = dallas.high >= 85;
+  const isCold = dallas.temp <= 40;
+  const isCool = dallas.temp <= 55;
+  const isPerfect = !isRainy && dallas.temp >= 62 && dallas.high <= 85;
+
+  const hints: string[] = [];
+
+  if (isStormy) {
+    hints.push(`There are thunderstorms — this is a stay-indoors situation. Be direct about it.`);
+  } else if (isRainy) {
+    hints.push(`It's raining — suggest the treadmill or indoor court as an alternative to ${activityLabel} outside. Keep it light, not a lecture.`);
+  } else if (isFoggy) {
+    hints.push(`Morning fog — mention it briefly, especially relevant if he's running outside.`);
+  }
+
+  if (isVeryHot) {
+    hints.push(`Extreme heat today (high ${dallas.high}°F) — this is genuinely dangerous for outdoor activity. Strongly but warmly suggest going early morning, staying hydrated, and possibly taking it indoors. Be a caring friend, not a warning label.`);
+  } else if (isHot) {
+    hints.push(`Hot day (high ${dallas.high}°F) — remind him to drink extra water${isPickleballDay ? " at pickleball" : " on his run"}, and mention it'll be warm out there.`);
+  } else if (isWarm && isPickleballDay) {
+    hints.push(`Warm morning — brief mention that it'll heat up during play, so hydrate well.`);
+  }
+
+  if (isCold) {
+    hints.push(`Cold morning (${dallas.temp}°F) — mention bundling up, especially for outdoor activity. A layer or two makes all the difference.`);
+  } else if (isCool) {
+    hints.push(`Cool morning — might want a light jacket, especially early. Good weather for ${activityLabel} once you get moving.`);
+  }
+
+  if (isPerfect) {
+    hints.push(`This is genuinely great weather for ${activityLabel} — lead with that enthusiasm. Something like "Perfect morning for pickleball" or "Beautiful day for a run."`);
+  }
+
+  const hintLines = hints.length > 0
+    ? `\nWeather coaching for today:\n${hints.map((h) => `• ${h}`).join("\n")}`
+    : `\n• Nothing extreme today — just weave the conditions in naturally as part of the morning hello.`;
+
+  return (
+    `\n\n[Live Weather — Dallas, fetched just now]\n` +
+    `Current: ${dallas.temp}°F (feels like ${dallas.feelsLike}°F), ${dallas.condition}\n` +
+    `Today's range: low ${dallas.low}°F → high ${dallas.high}°F\n` +
+    `\n[Live Weather — Knoxville]\n${formatWeatherBlock(knoxville)}\n` +
+    `\nToday is ${dayName}. David's morning activity: ${activityLabel}.\n` +
+    hintLines +
+    `\n\nIMPORTANT WEATHER INSTRUCTION: Do NOT recite the weather like a forecast. Lead with what it means for David's day — his specific activity, his comfort, his safety. Put the advice first, the numbers second. Examples of the tone to aim for:\n` +
+    `  • "Perfect morning for pickleball, David — 68 and sunny out there."\n` +
+    `  • "Might want to hit the treadmill today — rainy morning out there."\n` +
+    `  • "Drink extra water at pickleball this morning — going to be 97 by noon."\n` +
+    `  • "It's a cool 52 out — great once you get moving, but maybe a light jacket to start."\n` +
+    `Be a friend who knows his routine, not a weather app.`
+  );
+}
+
 const MORNING_PATTERN = /\b(good\s+morning|morning|mornin'?|wakin[g']?\s+up|just\s+woke)\b/i;
 const EVENING_PATTERN = /\b(good\s+evening|winding\s+down|wind\s+down|heading\s+to\s+bed|going\s+to\s+bed|getting\s+ready\s+for\s+bed|calling\s+it\s+a\s+night|turning\s+in|good\s+night|goodnite|end\s+of\s+the\s+day|wrapping\s+up|relaxing\s+(tonight|this\s+evening)|settling\s+in)\b/i;
 const REMINDER_PATTERN = /\b(remind\s+me|set\s+a?\s*reminder|reminder|don'?t\s+let\s+me\s+forget|make\s+sure\s+i|peel\s+remind|ms\.?\s*peel\s+remind)\b/i;
@@ -430,10 +496,7 @@ router.post("/chat", async (req, res) => {
         fetchEpisodesForDate(now, watchedIdsMorning).catch(() => []),
       ]);
 
-      const weatherBlock =
-        `\n\n[Live Weather — fetched just now]\n` +
-        `${formatWeatherBlock(dallas)}\n` +
-        `${formatWeatherBlock(knoxville)}`;
+      const weatherBlock = buildContextualWeatherBlock(dallas, knoxville, now);
 
       const gmailBlock = emails !== null
         ? `\n\n[Gmail — unread inbox (fetched just now)]\n${formatEmailsForPrompt(emails)}\nMention the most notable emails naturally in the morning briefing.`
