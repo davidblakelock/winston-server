@@ -81,6 +81,10 @@ import {
   fetchEpisodesForDate,
   formatEpisodeForPrompt,
 } from "../tv/tvmaze.js";
+import {
+  fetchSportsScores,
+  formatSportsForPrompt,
+} from "../sports/sportsManager.js";
 
 const router: IRouter = Router();
 
@@ -247,6 +251,7 @@ const TV_TONIGHT_PATTERN = /\b(what'?s\s+on\s+tonight|anything\s+(good\s+)?on\s+
 const TV_RECOMMEND_PATTERN = /\b(recommend\s+(me\s+)?a?\s*show|what\s+should\s+i\s+watch|suggest\s+(me\s+)?a?\s*show|shows?\s+like\s+|anything\s+similar|similar\s+to\s+.+\s+show|what\s+else\s+should\s+i\s+watch|find\s+me\s+a\s+show)\b/i;
 const TV_LIST_PATTERN = /\b(what\s+shows?\s+(am\s+i|are\s+we|do\s+i)\s+(watching|following)|my\s+(shows?|watch\s+list)|list\s+(my\s+)?shows?|what('?s|\s+is)\s+on\s+my\s+watch\s+list)\b/i;
 const WINDDOWN_NOTE_PATTERN = /\b(remember\s+(to|that)|note\s+(for\s+tomorrow|this\s+down)|write\s+(this|that)\s+down|add\s+(this\s+)?to\s+(my\s+)?morning\s+briefing|don'?t\s+let\s+me\s+forget\s+(to|that)|make\s+sure\s+i\s+(remember|know)|for\s+tomorrow\s+(i\s+need\s+to|remind\s+me))\b/i;
+const SPORTS_PATTERN = /\b(rangers|cowboys|score|scores|how\s+did\s+(they|the\s+(rangers|cowboys))\s+do|did\s+(they|the\s+(rangers|cowboys))\s+(win|lose|play)|last\s+night'?s?\s+(game|score)|(rangers|cowboys)\s+(score|win|lose|lost|beat|game|result|update)|check\s+(the\s+)?(rangers|cowboys)|what('?s|\s+is)\s+the\s+(rangers|cowboys|score|game)|any\s+(rangers|cowboys)\s+(news|game|score))\b/i;
 const MED_TAKEN_PATTERN = /\b(taken|took\s+(my\s+)?(meds?|medications?|pills?|them)|meds?\s+(done|taken|all\s+done)|medications?\s+taken|took\s+them|all\s+done\s+with\s+(my\s+)?meds?|done\s+with\s+(my\s+)?meds?|yes\s+(i\s+)?(took|taken)|confirmed\s+(meds?|medications?))\b/i;
 const MED_ADD_PATTERN = /\b(add\s+(a\s+)?(?:new\s+)?medication\s+(?:called\s+)?|new\s+medication\s+(?:called\s+)?|start\s+taking\s+(?:a\s+)?(?:new\s+)?medication|add\s+.{2,40}\s+to\s+my\s+medications?)\b/i;
 const MED_LIST_PATTERN = /\b(what\s+medications?\s+(do\s+i\s+take|am\s+i\s+(on|taking)|are\s+mine)|my\s+medications?|medication\s+list|what\s+(meds?|pills?)\s+(do\s+i|am\s+i)|list\s+(my\s+)?meds?|what\s+do\s+i\s+take)\b/i;
@@ -365,6 +370,15 @@ Keep responses concise: typically 2-4 sentences unless David clearly wants more.
 When giving a morning briefing, naturally weave in the current weather for Dallas and Knoxville — mention what David should expect for his day (pickleball, run, workout) and give a quick note on how Olivia's weather is looking in Knoxville.
 
 When you confirm a reminder has been set, be warm and specific. For example: "Done — I'll remind you to call Olivia at 3:00 PM." For recurring reminders say something like: "Set. Every morning at 7:00 AM I'll remind you to take your medication."
+
+CRITICAL — HONESTY ABOUT WHAT YOU KNOW:
+You only know what has been explicitly given to you in this conversation's context blocks (marked with [brackets]). You do NOT have access to the internet, live news, real-time data, or any information beyond what is injected below.
+
+• Sports scores: ONLY report scores that appear in a [Live Sports Scores] block in your context. If no sports block is present and David asks for a score, say: "I don't have that score in front of me right now — I can pull it up if you say 'check the Rangers score' or ask for your morning briefing."
+• News: ONLY reference articles that appear in a [Morning News] block. Never invent headlines, outcomes, or facts.
+• Stock prices, weather, calendar events: same rule — only report what is explicitly provided in a context block.
+• If you are uncertain about any fact, say so. "I'm not sure about that one" is always better than a confident guess that turns out to be wrong.
+• NEVER fabricate scores, statistics, game outcomes, news stories, or any factual information. If David catches you making something up, it destroys trust — and that matters more than sounding confident.
 
 Here is everything you know about David:
 
@@ -494,6 +508,7 @@ router.post("/chat", async (req, res) => {
   const isMedList = MED_LIST_PATTERN.test(message);
   const isMedRemove = MED_REMOVE_PATTERN.test(message);
   const isMedRequest = isMedTaken || isMedAdd || isMedList || isMedRemove;
+  const isSportsRequest = !isMorningGreeting && SPORTS_PATTERN.test(message);
 
   if (isMorningGreeting) {
     try {
@@ -502,7 +517,7 @@ router.post("/chat", async (req, res) => {
       const now = new Date();
       const yesterday = new Date(now.getTime() - 86400000);
 
-      const [dallas, knoxville, emails, events, lastNightNotes, newsFeeds, yesterdayEps, todayEps, morningMeds, medsAlreadyTaken] = await Promise.all([
+      const [dallas, knoxville, emails, events, lastNightNotes, newsFeeds, yesterdayEps, todayEps, morningMeds, medsAlreadyTaken, sportsScores] = await Promise.all([
         fetchCityWeather("Dallas", 32.7767, -96.7970, "America/Chicago"),
         fetchCityWeather("Knoxville", 35.9606, -83.9207, "America/New_York"),
         fetchRecentEmails(8).catch(() => null),
@@ -513,6 +528,7 @@ router.post("/chat", async (req, res) => {
         fetchEpisodesForDate(now, watchedIdsMorning).catch(() => []),
         getMedications().catch(() => []),
         hasTakenMedicationsToday().catch(() => false),
+        fetchSportsScores().catch(() => null),
       ]);
 
       const weatherBlock = buildContextualWeatherBlock(dallas, knoxville, now);
@@ -543,14 +559,30 @@ router.post("/chat", async (req, res) => {
         ? `\n\n[Medications — Morning Reminder]\nDavid's daily medications: ${buildMedReminderText(morningMeds)}. He hasn't confirmed them yet today. Weave a gentle reminder naturally near the end of the briefing — e.g. "And don't forget your statin and Meloxicam — take them with breakfast." Keep it brief and warm, not nagging.`
         : "";
 
+      const sportsBlock = sportsScores
+        ? formatSportsForPrompt(sportsScores) +
+          `\n\nFor the morning briefing, mention sports scores naturally if there's something noteworthy — a win last night, a game tonight, or the Cowboys being in off-season. Keep it to 1-2 sentences woven in, not a separate sports segment.`
+        : "";
+
       req.log.info(
         { feedCount: newsFeeds.filter((f) => f.items.length > 0).length },
         "Morning news fetched"
       );
 
-      systemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + memoryBlock + dynamicProfileBlock + notesBlock + weatherBlock + gmailBlock + calendarBlock + tvMorningBlock + medMorningBlock + newsBlock;
+      systemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + memoryBlock + dynamicProfileBlock + notesBlock + weatherBlock + gmailBlock + calendarBlock + tvMorningBlock + medMorningBlock + sportsBlock + newsBlock;
     } catch (err) {
       req.log.warn({ err }, "Morning data fetch failed, continuing without it");
+    }
+  }
+
+  if (isSportsRequest) {
+    try {
+      const scores = await fetchSportsScores();
+      systemPrompt += formatSportsForPrompt(scores) +
+        `\n\nDavid is asking about sports. Answer directly using only the data above — give him the score, whether they won or lost, and if there's a game tonight. Be brief and conversational, like a friend giving a quick update. Do NOT invent any other games, records, or stats.`;
+    } catch (err) {
+      req.log.warn({ err }, "On-demand sports fetch failed");
+      systemPrompt += `\n\n[Sports Scores — Unavailable]\nTell David you weren't able to pull the scores right now and suggest he check back shortly.`;
     }
   }
 
