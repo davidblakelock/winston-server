@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, KeyboardEvent, ChangeEvent } from "react";
-import { Send, Play, Loader2, Disc3 } from "lucide-react";
+import { Send, Play, Loader2, Disc3, Mic, MicOff } from "lucide-react";
 import { useSendMessage, useTextToSpeech } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -21,8 +21,9 @@ interface ReminderEvent {
   speakText: string;
 }
 
+// ─── Browser TTS fallback ────────────────────────────────────────────────────
+
 function useBrowserTTS() {
-  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   const [speaking, setSpeaking] = useState(false);
 
   const speak = useCallback((text: string, onEnd?: () => void) => {
@@ -31,7 +32,6 @@ function useBrowserTTS() {
     utterance.rate = 0.92;
     utterance.pitch = 1.0;
     utterance.volume = 1.0;
-
     const voices = window.speechSynthesis.getVoices();
     const preferred = voices.find(
       (v) =>
@@ -39,22 +39,12 @@ function useBrowserTTS() {
         (v.name.includes("Daniel") ||
           v.name.includes("Samantha") ||
           v.name.includes("Google UK") ||
-          v.name.includes("Alex") ||
-          v.name.includes("Male"))
+          v.name.includes("Alex"))
     );
     if (preferred) utterance.voice = preferred;
-
     utterance.onstart = () => setSpeaking(true);
-    utterance.onend = () => {
-      setSpeaking(false);
-      onEnd?.();
-    };
-    utterance.onerror = () => {
-      setSpeaking(false);
-      onEnd?.();
-    };
-
-    utteranceRef.current = utterance;
+    utterance.onend = () => { setSpeaking(false); onEnd?.(); };
+    utterance.onerror = () => { setSpeaking(false); onEnd?.(); };
     window.speechSynthesis.speak(utterance);
   }, []);
 
@@ -66,13 +56,141 @@ function useBrowserTTS() {
   return { speak, stop, speaking };
 }
 
+// ─── Voice recorder with silence detection ───────────────────────────────────
+
+type RecordingState = "idle" | "recording" | "transcribing";
+
+function useVoiceRecorder(onTranscript: (text: string) => void) {
+  const [recordingState, setRecordingState] = useState<RecordingState>("idle");
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const animFrameRef = useRef<number | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  const stopMonitoring = useCallback(() => {
+    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+    animFrameRef.current = null;
+    silenceTimerRef.current = null;
+  }, []);
+
+  const stopRecording = useCallback(() => {
+    stopMonitoring();
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+    }
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+  }, [stopMonitoring]);
+
+  const monitorSilence = useCallback(
+    (analyser: AnalyserNode) => {
+      const data = new Uint8Array(analyser.fftSize);
+      const SILENCE_THRESHOLD = 10;
+      const SILENCE_DURATION_MS = 2000;
+
+      const check = () => {
+        analyser.getByteTimeDomainData(data);
+        const amplitude = Math.max(...data.map((v) => Math.abs(v - 128)));
+
+        if (amplitude < SILENCE_THRESHOLD) {
+          if (!silenceTimerRef.current) {
+            silenceTimerRef.current = setTimeout(() => {
+              stopRecording();
+            }, SILENCE_DURATION_MS);
+          }
+        } else {
+          if (silenceTimerRef.current) {
+            clearTimeout(silenceTimerRef.current);
+            silenceTimerRef.current = null;
+          }
+        }
+
+        animFrameRef.current = requestAnimationFrame(check);
+      };
+
+      animFrameRef.current = requestAnimationFrame(check);
+    },
+    [stopRecording]
+  );
+
+  const startRecording = useCallback(async () => {
+    if (recordingState !== "idle") {
+      stopRecording();
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+
+      const audioCtx = new AudioContext();
+      const source = audioCtx.createMediaStreamSource(stream);
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      analyserRef.current = analyser;
+
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : MediaRecorder.isTypeSupported("audio/webm")
+        ? "audio/webm"
+        : "audio/ogg";
+
+      const recorder = new MediaRecorder(stream, { mimeType });
+      mediaRecorderRef.current = recorder;
+      chunksRef.current = [];
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+
+      recorder.onstop = async () => {
+        stopMonitoring();
+        setRecordingState("transcribing");
+
+        try {
+          const blob = new Blob(chunksRef.current, { type: mimeType });
+          const form = new FormData();
+          form.append("audio", blob, "recording.webm");
+
+          const resp = await fetch("/api/transcribe", { method: "POST", body: form });
+          if (!resp.ok) throw new Error("Transcription failed");
+
+          const { text } = await resp.json() as { text: string };
+          if (text?.trim()) onTranscript(text.trim());
+        } catch (err) {
+          console.error("Transcription error:", err);
+        } finally {
+          setRecordingState("idle");
+        }
+      };
+
+      recorder.start(100);
+      setRecordingState("recording");
+      monitorSilence(analyser);
+    } catch (err) {
+      console.error("Microphone error:", err);
+      setRecordingState("idle");
+    }
+  }, [recordingState, stopRecording, stopMonitoring, monitorSilence, onTranscript]);
+
+  useEffect(() => {
+    return () => {
+      stopMonitoring();
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+    };
+  }, [stopMonitoring]);
+
+  return { recordingState, startRecording, stopRecording };
+}
+
+// ─── Main component ───────────────────────────────────────────────────────────
+
 export default function Chat() {
   const [messages, setMessages] = useState<Message[]>([
-    {
-      id: "welcome",
-      role: "assistant",
-      content: "Hello, David. What's on your mind?",
-    },
+    { id: "welcome", role: "assistant", content: "Hello, David. What's on your mind?" },
   ]);
   const [input, setInput] = useState("");
   const [playingId, setPlayingId] = useState<string | null>(null);
@@ -101,10 +219,7 @@ export default function Chat() {
   const playElevenLabsAudio = useCallback(
     (messageId: string, base64: string, mimeType = "audio/mpeg") => {
       audioRef.current?.pause();
-      if (playingId === messageId) {
-        setPlayingId(null);
-        return;
-      }
+      if (playingId === messageId) { setPlayingId(null); return; }
       const audio = new Audio(`data:${mimeType};base64,${base64}`);
       audio.onended = () => setPlayingId(null);
       audio.onerror = () => setPlayingId(null);
@@ -117,11 +232,7 @@ export default function Chat() {
 
   const playBrowserTTS = useCallback(
     (messageId: string, text: string) => {
-      if (playingId === messageId && browserTTS.speaking) {
-        browserTTS.stop();
-        setPlayingId(null);
-        return;
-      }
+      if (playingId === messageId && browserTTS.speaking) { browserTTS.stop(); setPlayingId(null); return; }
       audioRef.current?.pause();
       setPlayingId(messageId);
       browserTTS.speak(text, () => setPlayingId(null));
@@ -144,9 +255,7 @@ export default function Chat() {
             );
             playElevenLabsAudio(messageId, ttsData.audioBase64, ttsData.mimeType);
           },
-          onError: () => {
-            playBrowserTTS(messageId, text);
-          },
+          onError: () => playBrowserTTS(messageId, text),
         }
       );
     },
@@ -155,28 +264,52 @@ export default function Chat() {
 
   const handlePlay = useCallback(
     (msg: Message) => {
-      if (msg.audioBase64) {
-        playElevenLabsAudio(msg.id, msg.audioBase64, msg.mimeType);
-      } else {
-        playBrowserTTS(msg.id, msg.content);
-      }
+      if (msg.audioBase64) playElevenLabsAudio(msg.id, msg.audioBase64, msg.mimeType);
+      else playBrowserTTS(msg.id, msg.content);
     },
     [playElevenLabsAudio, playBrowserTTS]
   );
+
+  const submitText = useCallback(
+    (text: string) => {
+      if (!text.trim() || sendMessageMutation.isPending) return;
+
+      const userMsg: Message = { id: Date.now().toString(), role: "user", content: text.trim() };
+      const historyForApi = messages.map((m) => ({ role: m.role, content: m.content }));
+
+      setMessages((prev) => [...prev, userMsg]);
+      setInput("");
+      if (textareaRef.current) textareaRef.current.style.height = "auto";
+
+      sendMessageMutation.mutate(
+        { data: { message: userMsg.content, history: historyForApi } },
+        {
+          onSuccess: (data) => {
+            const assistantMsgId = (Date.now() + 1).toString();
+            setMessages((prev) => [
+              ...prev,
+              { id: assistantMsgId, role: "assistant", content: data.reply },
+            ]);
+            speakReply(assistantMsgId, data.reply);
+          },
+        }
+      );
+    },
+    [messages, sendMessageMutation, speakReply]
+  );
+
+  const { recordingState, startRecording } = useVoiceRecorder((transcript) => {
+    submitText(transcript);
+  });
 
   const fireReminderAlert = useCallback(
     (event: ReminderEvent) => {
       const msgId = `reminder-${event.id}-${Date.now()}`;
       const displayContent = `Hey David — your reminder: ${event.reminderText}`;
-
-      const reminderMsg: Message = {
-        id: msgId,
-        role: "assistant",
-        content: displayContent,
-        isReminder: true,
-      };
-
-      setMessages((prev) => [...prev, reminderMsg]);
+      setMessages((prev) => [
+        ...prev,
+        { id: msgId, role: "assistant", content: displayContent, isReminder: true },
+      ]);
       speakReply(msgId, event.speakText);
     },
     [speakReply]
@@ -184,64 +317,14 @@ export default function Chat() {
 
   useEffect(() => {
     const es = new EventSource("/api/reminders/stream");
-
     es.addEventListener("reminder", (e) => {
-      try {
-        const data = JSON.parse(e.data) as ReminderEvent;
-        fireReminderAlert(data);
-      } catch {
-      }
+      try { fireReminderAlert(JSON.parse(e.data) as ReminderEvent); } catch {}
     });
-
-    es.onerror = () => {
-      setTimeout(() => {}, 3000);
-    };
-
-    return () => {
-      es.close();
-    };
+    return () => es.close();
   }, [fireReminderAlert]);
 
-  const submitMessage = () => {
-    if (!input.trim() || sendMessageMutation.isPending) return;
-
-    const userMsg: Message = {
-      id: Date.now().toString(),
-      role: "user",
-      content: input.trim(),
-    };
-
-    const historyForApi = messages.map((m) => ({ role: m.role, content: m.content }));
-
-    setMessages((prev) => [...prev, userMsg]);
-    setInput("");
-
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
-    }
-
-    sendMessageMutation.mutate(
-      { data: { message: userMsg.content, history: historyForApi } },
-      {
-        onSuccess: (data) => {
-          const assistantMsgId = (Date.now() + 1).toString();
-          const assistantMsg: Message = {
-            id: assistantMsgId,
-            role: "assistant",
-            content: data.reply,
-          };
-          setMessages((prev) => [...prev, assistantMsg]);
-          speakReply(assistantMsgId, data.reply);
-        },
-      }
-    );
-  };
-
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      submitMessage();
-    }
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitText(input); }
   };
 
   const handleInput = (e: ChangeEvent<HTMLTextAreaElement>) => {
@@ -249,6 +332,9 @@ export default function Chat() {
     e.target.style.height = "auto";
     e.target.style.height = `${Math.min(e.target.scrollHeight, 200)}px`;
   };
+
+  const isRecording = recordingState === "recording";
+  const isTranscribing = recordingState === "transcribing";
 
   return (
     <div className="flex flex-col h-[100dvh] max-w-4xl mx-auto overflow-hidden bg-background">
@@ -266,10 +352,7 @@ export default function Chat() {
       </header>
 
       {/* Chat Area */}
-      <div
-        ref={scrollRef}
-        className="flex-1 overflow-y-auto p-4 sm:p-6 pb-24 sm:pb-32 space-y-8"
-      >
+      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 sm:p-6 pb-24 sm:pb-32 space-y-8">
         {messages.map((msg) => (
           <div
             key={msg.id}
@@ -286,9 +369,7 @@ export default function Chat() {
               }`}
             >
               {msg.isReminder && (
-                <p className="text-[11px] font-semibold tracking-widest uppercase text-primary/70 mb-2">
-                  Reminder
-                </p>
+                <p className="text-[11px] font-semibold tracking-widest uppercase text-primary/70 mb-2">Reminder</p>
               )}
               <div className="whitespace-pre-wrap font-sans">{msg.content}</div>
 
@@ -299,7 +380,7 @@ export default function Chat() {
                     size="icon"
                     className={`h-8 w-8 rounded-full transition-colors ${
                       playingId === msg.id
-                        ? "bg-primary/20 text-primary hover:bg-primary/30 hover:text-primary"
+                        ? "bg-primary/20 text-primary hover:bg-primary/30"
                         : "text-muted-foreground hover:text-primary hover:bg-primary/10"
                     }`}
                     onClick={() => handlePlay(msg)}
@@ -323,9 +404,9 @@ export default function Chat() {
         {sendMessageMutation.isPending && (
           <div className="flex flex-col items-start animate-in fade-in">
             <div className="max-w-[85%] rounded-2xl p-5 bg-card border border-white/5 rounded-bl-sm flex items-center gap-1.5 h-[60px]">
-              <div className="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce [animation-delay:-0.3s]"></div>
-              <div className="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce [animation-delay:-0.15s]"></div>
-              <div className="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce"></div>
+              <div className="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce [animation-delay:-0.3s]" />
+              <div className="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce [animation-delay:-0.15s]" />
+              <div className="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce" />
             </div>
           </div>
         )}
@@ -333,21 +414,62 @@ export default function Chat() {
 
       {/* Input Area */}
       <div className="flex-shrink-0 p-4 sm:p-6 bg-gradient-to-t from-background via-background to-transparent pt-12 absolute bottom-0 w-full max-w-4xl">
+        {/* Recording indicator banner */}
+        {(isRecording || isTranscribing) && (
+          <div className="mb-3 flex items-center justify-center gap-2 animate-in fade-in">
+            <span
+              className={`inline-block h-2 w-2 rounded-full ${
+                isRecording ? "bg-red-500 animate-pulse" : "bg-amber-400"
+              }`}
+            />
+            <span className="text-xs font-medium text-muted-foreground tracking-wide">
+              {isRecording ? "Listening…" : "Transcribing…"}
+            </span>
+          </div>
+        )}
+
         <div className="relative group">
-          <div className="absolute -inset-1 rounded-2xl bg-gradient-to-r from-primary/10 via-primary/5 to-transparent blur opacity-50 group-focus-within:opacity-100 transition-opacity duration-500"></div>
-          <div className="relative flex items-end gap-3 bg-input border border-border rounded-2xl p-2 sm:p-3 shadow-lg focus-within:ring-1 focus-within:ring-primary/30 transition-all duration-300">
+          <div className="absolute -inset-1 rounded-2xl bg-gradient-to-r from-primary/10 via-primary/5 to-transparent blur opacity-50 group-focus-within:opacity-100 transition-opacity duration-500" />
+          <div className="relative flex items-end gap-2 bg-input border border-border rounded-2xl p-2 sm:p-3 shadow-lg focus-within:ring-1 focus-within:ring-primary/30 transition-all duration-300">
             <Textarea
               ref={textareaRef}
               value={input}
               onChange={handleInput}
               onKeyDown={handleKeyDown}
-              placeholder="Share your thoughts..."
+              placeholder={isRecording ? "Listening…" : "Share your thoughts..."}
               className="min-h-[44px] max-h-[200px] border-0 focus-visible:ring-0 resize-none bg-transparent py-3 px-3 text-[15px] placeholder:text-muted-foreground/60 scrollbar-none font-sans"
               rows={1}
               data-testid="input-message"
             />
+
+            {/* Microphone button */}
             <Button
-              onClick={submitMessage}
+              type="button"
+              onClick={startRecording}
+              disabled={isTranscribing || sendMessageMutation.isPending}
+              size="icon"
+              className={`h-11 w-11 rounded-xl shrink-0 mb-0.5 transition-all duration-300 ${
+                isRecording
+                  ? "bg-red-500 text-white hover:bg-red-600 shadow-lg shadow-red-500/40 animate-pulse"
+                  : isTranscribing
+                  ? "bg-amber-500/20 text-amber-400"
+                  : "bg-card border border-border text-muted-foreground hover:text-foreground hover:bg-card/80"
+              }`}
+              aria-label={isRecording ? "Stop recording" : "Start voice input"}
+              data-testid="button-mic"
+            >
+              {isTranscribing ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
+              ) : isRecording ? (
+                <MicOff className="h-5 w-5" />
+              ) : (
+                <Mic className="h-5 w-5" />
+              )}
+            </Button>
+
+            {/* Send button */}
+            <Button
+              onClick={() => submitText(input)}
               disabled={!input.trim() || sendMessageMutation.isPending}
               size="icon"
               className="h-11 w-11 rounded-xl shrink-0 bg-primary text-primary-foreground hover:bg-primary/90 transition-all duration-300 shadow-md shadow-primary/20 mb-0.5 mr-0.5"
