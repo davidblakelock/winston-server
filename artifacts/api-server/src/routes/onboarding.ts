@@ -294,7 +294,8 @@ Current scene: ${scene}. Already collected: ${JSON.stringify(current)}.
 Return ONLY valid JSON:
 {
   "data": {
-    "name": string or null,
+    "companionName": string or null (the name the user gives to their AI companion),
+    "name": string or null (the user's own name),
     "city": string or null,
     "wakeTime": "HH:MM" format or null (e.g. "07:00" for 7am, "06:30" for 6:30am),
     "healthNotes": string or null (brief summary of any health info shared),
@@ -313,13 +314,16 @@ Return ONLY valid JSON:
 
 Rules:
 - Only include fields that are NEW in this message (don't re-extract already collected data)
+- companionName: extract ONLY from scene 1 when the user is naming their AI companion (e.g. "Call me Emma" or "Let's go with Alex" → "Emma" or "Alex"). Never confuse with the user's own name.
 - Merge arrays: if user says "I also like..." add to existing, don't replace
 - For wakeTime: "I wake up at 6" → "06:00", "around 7:30" → "07:30"
 - For people: "My daughter Olivia lives in Knoxville" → {name:"Olivia",relationship:"daughter",city:"Knoxville"}
-- For voiceId: if user says "I'll take option 1" or "Rachel" or "the first one" → extract the voiceId
-  Voice options: 1=21m00Tcm4TlvDq8ikWAM(Rachel), 2=XB0fDUnXU5powFXDhCwa(Charlotte), 3=nPczCjzI2devNBz1zQrb(Brian), 4=onwK4e9ZLuTAKqWW03F9(Daniel)
+- For voiceId: if user says "I'll take option 1" or "Charlotte" or "number 3" → extract the voiceId
+  Voice options: 1=XB0fDUnXU5powFXDhCwa(Charlotte/British Female), 2=21m00Tcm4TlvDq8ikWAM(Rachel/American Female), 3=nPczCjzI2devNBz1zQrb(Brian/American Male), 4=onwK4e9ZLuTAKqWW03F9(Daniel/British Male), 5=XrExE9yKIg1WjnnlVkGX(Matilda/Australian Female), 6=9BWtsMINqrJLrRacOk9x(Aria/American Female)
 - readyForNextScene: true if user has finished sharing for this scene topic
-  (e.g. "that's everyone", "that's all", "I think that covers it", "ok let's move on", natural completion signals)`,
+  (e.g. "that's everyone", "that's all", "I think that covers it", "ok let's move on", natural completion signals)
+  For scene 1: true once companionName is captured and user is ready to proceed
+  For scene 2: true once voiceId is selected`,
     messages: [
       {
         role: "user",
@@ -369,25 +373,26 @@ function computeNextScene(
 ): number {
   switch (current) {
     case 1:
-      // Stay at 1 until user affirms — Claude will ask for name
-      return readyForNextScene ? 2 : 1;
+      // Companion naming — advance once companion name is captured
+      if (data.companionName || readyForNextScene) return 2;
+      return 1;
 
     case 2:
-      // Must have name + city + wakeTime before advancing
-      if (data.name && data.city && data.wakeTime) return 3;
+      // Voice selection — auto-advance once voice is selected
+      if (data.voiceId) return 3;
       return 2;
 
-    case 7:
-      // Auto-advance once voice is selected
-      if (data.voiceId) return 8;
-      return 7;
+    case 3:
+      // Must have user name + city + wakeTime before advancing
+      if (data.name && data.city && data.wakeTime) return 4;
+      return 3;
 
     case 9:
       // Scene 9 stays at 9; isComplete logic handles completion
       return 9;
 
     default:
-      // Scenes 3-6, 8: advance on explicit readyForNextScene signal
+      // Scenes 4-8: advance on explicit readyForNextScene signal
       return readyForNextScene && current < 9 ? current + 1 : current;
   }
 }

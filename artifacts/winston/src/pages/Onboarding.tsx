@@ -157,13 +157,13 @@ function useVoiceRecorder(onTranscript: (text: string) => void) {
 
 // ─── Scene labels ────────────────────────────────────────────────────────────
 const SCENE_LABELS = [
-  "Welcome",
+  "Your Companion",
+  "Your Voice",
   "About You",
   "Your People",
   "Wellbeing",
   "Your Places",
   "What You Love",
-  "Your Voice",
   "Evening Memories",
   "First Briefing",
 ];
@@ -380,7 +380,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
 
   const isRecording = recordingState === "recording";
   const isTranscribing = recordingState === "transcribing";
-  const showVoiceCards = scene === 7 && voices.length > 0 && !selectedVoice;
+  const showVoiceCards = scene === 2 && voices.length > 0 && !selectedVoice;
 
   return (
     <div className="flex flex-col h-screen bg-zinc-950 text-zinc-100">

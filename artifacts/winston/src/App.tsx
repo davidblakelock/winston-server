@@ -143,6 +143,8 @@ function AppWithAuth() {
 
   // ── Sign out handler — must be at top level (Rules of Hooks) ──
   const handleSignOut = useCallback(async () => {
+    // Clear React Query cache so next user gets a fresh slate
+    queryClient.clear();
     setFreshIsNewUser(undefined);
     await signOut();
   }, [signOut]);
@@ -162,6 +164,9 @@ function AppWithAuth() {
     }
 
     if (urlToken && urlName) {
+      // Clear React Query cache so previous user's profile data is never shown to a new user
+      queryClient.clear();
+
       // Capture the isNewUser flag BEFORE clearing the URL
       // new=1 → new user needs onboarding; new=0 → returning user goes straight to chat
       if (urlNew !== null) {
@@ -190,6 +195,7 @@ function AppWithAuth() {
       <AuthVerify
         token={token}
         onAuthenticated={(t, name, isNewUser) => {
+          queryClient.clear();
           if (isNewUser !== undefined) setFreshIsNewUser(isNewUser);
           setAuthenticated(t, name);
           navigate("/");
