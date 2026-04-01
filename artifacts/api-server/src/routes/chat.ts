@@ -299,6 +299,9 @@ const BILL_ADD_PATTERN = /\b(my\s+\w.{1,40}(bill|payment|insurance|premium|subsc
 const BILL_LIST_PATTERN = /\b(what\s+bills|bills?\s+(do\s+i\s+have|coming\s+up|upcoming|are\s+due)|show\s+(me\s+)?(my\s+)?bills?|(my\s+)?upcoming\s+(bills?|payments?|obligations?|financial)|what\s+(financial\s+)?(obligations?|payments?)\s+(do\s+i|am\s+i)|list\s+(my\s+)?(bills?|payments?|obligations?|financial\s+obligations?))\b/i;
 const BILL_REMOVE_PATTERN = /\b(remove\s+(my\s+)?\w.{1,40}(bill|payment|insurance|subscription|reminder|obligation)|stop\s+tracking\s+(my\s+)?\w.{1,40}|delete\s+(my\s+)?\w.{1,40}(bill|payment|reminder)|cancel\s+(my\s+)?\w.{1,40}(bill|reminder))\b/i;
 
+// Markets / stocks
+const MARKETS_PATTERN = /\b(market(s)?|s&p|s&p\s*500|dow|nasdaq|stock(s)?|spy|dia|qqq|uso|oil\s+price|crude|financial\s+update|market\s+update|how('?s|\s+are)\s+(the\s+)?market(s)?|what('?s|\s+are)\s+(the\s+)?(market(s)?|stock(s)?|index|indices)|market\s+check|check\s+(the\s+)?market(s)?|market\s+open|wall\s+street)\b/i;
+
 // Important dates
 const DATE_ADD_PATTERN = /\b(('s\s+birthday|birthday\s+is|my\s+anniversary\s+with|our\s+anniversary\s+is|anniversary\s+with|birthday\s+is|remember\s+(that\s+)?(\w+\s+)?birthday|add\s+(a\s+)?(birthday|anniversary)))\b/i;
 const DATE_LIST_PATTERN = /\b(what\s+birthdays?|any\s+(upcoming\s+)?(birthdays?|anniversaries?)|my\s+(upcoming\s+)?(birthdays?|anniversaries?|important\s+dates?)|show\s+(me\s+)?((my\s+)?(birthdays?|anniversaries?|important\s+dates?))|list\s+(my\s+)?(birthdays?|anniversaries?|important\s+dates?))\b/i;
@@ -601,6 +604,7 @@ router.post("/chat", async (req, res) => {
   const isMedRemove = MED_REMOVE_PATTERN.test(message);
   const isMedRequest = isMedTaken || isMedAdd || isMedList || isMedRemove;
   const isSportsRequest = !isMorningGreeting && SPORTS_PATTERN.test(message);
+  const isMarketsRequest = !isMorningGreeting && MARKETS_PATTERN.test(message);
   const isBillAdd = !isMorningGreeting && BILL_ADD_PATTERN.test(message);
   const isBillList = !isMorningGreeting && BILL_LIST_PATTERN.test(message);
   const isBillRemove = !isMorningGreeting && BILL_REMOVE_PATTERN.test(message);
@@ -722,6 +726,17 @@ router.post("/chat", async (req, res) => {
     } catch (err) {
       req.log.warn({ err }, "On-demand sports fetch failed");
       systemPrompt += `\n\n[Sports Scores — Unavailable]\nTell David you weren't able to pull the scores right now and suggest he check back shortly.`;
+    }
+  }
+
+  // ── Markets (on-demand) ───────────────────────────────────────────────────
+  if (isMarketsRequest) {
+    try {
+      const markets = await fetchMarkets();
+      systemPrompt += buildMarketsBlock(markets);
+    } catch (err) {
+      req.log.warn({ err }, "On-demand markets fetch failed");
+      systemPrompt += `\n\n[Markets — Unavailable]\nTell David you weren't able to pull market data right now and suggest he check back in a moment.`;
     }
   }
 

@@ -6,7 +6,7 @@ export interface MarketQuote {
   price: number;
   change: number;
   changePercent: number;
-  isYesterdayClose: boolean; // true when reporting last completed trading day
+  isYesterdayClose: boolean;
 }
 
 export interface MarketSnapshot {
@@ -18,116 +18,110 @@ export interface MarketSnapshot {
   marketStatus: string;
 }
 
-const SYMBOL_NAMES: Record<string, string> = {
-  "^GSPC": "S&P 500",
-  "^DJI": "Dow Jones",
-  "^IXIC": "Nasdaq",
-  "CL=F": "Crude Oil",
+// ETF proxies — tradeable symbols Alpha Vantage supports well
+const SYMBOLS: Record<"sp500" | "dow" | "nasdaq" | "oil", { symbol: string; name: string }> = {
+  sp500:  { symbol: "SPY", name: "S&P 500 (SPY)" },
+  dow:    { symbol: "DIA", name: "Dow Jones (DIA)" },
+  nasdaq: { symbol: "QQQ", name: "Nasdaq (QQQ)" },
+  oil:    { symbol: "USO", name: "Oil (USO)" },
 };
 
-// Use Yahoo Finance v8 chart API — returns 5-day OHLCV data
-// Unlike v7 quote, this endpoint is not rate-limited the same way
-async function fetchChartQuote(symbol: string): Promise<MarketQuote | null> {
-  const encoded = encodeURIComponent(symbol);
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?interval=1d&range=5d`;
+// Alpha Vantage GLOBAL_QUOTE endpoint
+async function fetchAlphaVantageQuote(
+  symbol: string,
+  name: string
+): Promise<MarketQuote | null> {
+  const apiKey = process.env.ALPHA_VANTAGE_API_KEY;
+  if (!apiKey) {
+    logger.warn("ALPHA_VANTAGE_API_KEY not set");
+    return null;
+  }
+
+  const url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${encodeURIComponent(symbol)}&apikey=${apiKey}`;
 
   try {
-    const res = await fetch(url, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        Accept: "*/*",
-        Referer: "https://finance.yahoo.com/",
-      },
-      signal: AbortSignal.timeout(8000),
-    });
+    const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
 
     if (!res.ok) {
-      logger.warn({ symbol, status: res.status }, "Market chart API non-OK");
+      logger.warn({ symbol, status: res.status }, "Alpha Vantage API non-OK");
       return null;
     }
 
     const data = (await res.json()) as {
-      chart?: {
-        result?: Array<{
-          meta: {
-            regularMarketPrice: number;
-            currentTradingPeriod: {
-              regular: { start: number; end: number };
-            };
-          };
-          timestamp: number[];
-          indicators: {
-            quote: Array<{
-              close: (number | null)[];
-            }>;
-          };
-        }>;
-        error?: unknown;
+      "Global Quote"?: {
+        "01. symbol": string;
+        "05. price": string;
+        "09. change": string;
+        "10. change percent": string;
+        "08. previous close": string;
       };
+      Note?: string;
+      Information?: string;
     };
 
-    const result = data?.chart?.result?.[0];
-    if (!result) return null;
+    // Rate limit or info message
+    if (data.Note || data.Information) {
+      logger.warn({ symbol, note: data.Note ?? data.Information }, "Alpha Vantage rate limit / info");
+      return null;
+    }
 
-    const meta = result.meta;
-    const closes = result.indicators.quote[0].close;
-    if (!closes || closes.length < 2) return null;
+    const q = data["Global Quote"];
+    if (!q || !q["05. price"]) {
+      logger.warn({ symbol, data }, "Alpha Vantage empty quote");
+      return null;
+    }
 
-    // Determine if the regular trading session is currently active
-    const nowSec = Date.now() / 1000;
-    const regularStart = meta.currentTradingPeriod?.regular?.start ?? 0;
-    const regularEnd = meta.currentTradingPeriod?.regular?.end ?? 0;
-    const isMarketOpen = nowSec > regularStart && nowSec < regularEnd;
+    const price = parseFloat(q["05. price"]);
+    const change = parseFloat(q["09. change"]);
+    const changePercentStr = q["10. change percent"].replace("%", "");
+    const changePercent = parseFloat(changePercentStr);
 
-    // Select the last COMPLETED trading day:
-    // • If market is open: last bar is today (partial) → use second-to-last close
-    // • If market is closed / pre-market: last bar is yesterday's final close → use it
-    const completedIdx = isMarketOpen ? closes.length - 2 : closes.length - 1;
-    const prevIdx = completedIdx - 1;
+    if (isNaN(price) || isNaN(change) || isNaN(changePercent)) {
+      logger.warn({ symbol, q }, "Alpha Vantage parse error");
+      return null;
+    }
 
-    // Filter nulls — Yahoo sometimes sends null for the current partial bar
-    const completedClose = closes[completedIdx];
-    const prevClose = closes[prevIdx];
-
-    if (completedClose == null || prevClose == null) return null;
-
-    const change = completedClose - prevClose;
-    const changePercent = (change / prevClose) * 100;
-
-    logger.debug(
-      { symbol, completedClose, prevClose, change, changePercent, isMarketOpen },
-      "Market quote computed"
-    );
+    logger.debug({ symbol, price, change, changePercent }, "Alpha Vantage quote fetched");
 
     return {
       symbol,
-      name: SYMBOL_NAMES[symbol] ?? symbol,
-      price: completedClose,
+      name,
+      price,
       change,
       changePercent,
+      // Alpha Vantage GLOBAL_QUOTE always returns the last trading day close
+      // (it shows the most recent completed session, not intraday)
       isYesterdayClose: true,
     };
   } catch (err) {
-    logger.warn({ symbol, err }, "Market chart fetch failed");
+    logger.warn({ symbol, err }, "Alpha Vantage fetch failed");
     return null;
   }
 }
 
-// In-memory cache — 15 minutes during market hours, 6 hours overnight
+// In-memory cache — 4 hours to stay well within the 25 calls/day limit
+// (4 fetches × 4 symbols = 16 calls/day max, leaving headroom)
 let _cache: MarketSnapshot | null = null;
 let _cacheExpiry = 0;
 
+const CACHE_TTL_MS = 4 * 60 * 60 * 1000; // 4 hours
+
 export async function fetchMarkets(): Promise<MarketSnapshot> {
   const now = Date.now();
-  if (_cache && now < _cacheExpiry) return _cache;
+  if (_cache && now < _cacheExpiry) {
+    logger.debug("Markets: returning cached data");
+    return _cache;
+  }
 
-  const symbols = ["^GSPC", "^DJI", "^IXIC", "CL=F"];
-
-  // Fetch all symbols in parallel
-  const [sp500, dow, nasdaq, oil] = await Promise.all(
-    symbols.map((s) => fetchChartQuote(s))
-  );
+  // Alpha Vantage free tier: 1 request/second — fetch sequentially with a 1.2s gap
+  const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const sp500  = await fetchAlphaVantageQuote(SYMBOLS.sp500.symbol,  SYMBOLS.sp500.name);
+  await delay(1200);
+  const dow    = await fetchAlphaVantageQuote(SYMBOLS.dow.symbol,    SYMBOLS.dow.name);
+  await delay(1200);
+  const nasdaq = await fetchAlphaVantageQuote(SYMBOLS.nasdaq.symbol, SYMBOLS.nasdaq.name);
+  await delay(1200);
+  const oil    = await fetchAlphaVantageQuote(SYMBOLS.oil.symbol,    SYMBOLS.oil.name);
 
   const snapshot: MarketSnapshot = {
     sp500,
@@ -139,79 +133,97 @@ export async function fetchMarkets(): Promise<MarketSnapshot> {
   };
 
   _cache = snapshot;
-  // Cache for 15 minutes so repeated morning questions don't hammer Yahoo
-  _cacheExpiry = now + 15 * 60 * 1000;
+  _cacheExpiry = now + CACHE_TTL_MS;
 
   logger.info(
     {
-      sp500: sp500 ? `${sp500.changePercent.toFixed(2)}%` : "null",
-      dow: dow ? `${dow.changePercent.toFixed(2)}%` : "null",
-      nasdaq: nasdaq ? `${nasdaq.changePercent.toFixed(2)}%` : "null",
+      sp500: sp500 ? `${sp500.price} (${sp500.changePercent.toFixed(2)}%)` : "null",
+      dow:   dow   ? `${dow.price} (${dow.changePercent.toFixed(2)}%)`   : "null",
+      nasdaq: nasdaq ? `${nasdaq.price} (${nasdaq.changePercent.toFixed(2)}%)` : "null",
+      oil:   oil   ? `${oil.price} (${oil.changePercent.toFixed(2)}%)`   : "null",
+      cacheExpiresAt: new Date(_cacheExpiry).toISOString(),
     },
-    "Markets fetched"
+    "Markets fetched via Alpha Vantage"
   );
 
   return snapshot;
 }
 
-// Force-clear cache so the next fetch gets fresh data (used at server startup / morning push)
 export function clearMarketsCache(): void {
   _cache = null;
   _cacheExpiry = 0;
 }
 
+// ── Prompt formatting ─────────────────────────────────────────────────────────
+
 function formatSingle(q: MarketQuote): string {
-  const arrow = q.changePercent >= 0 ? "▲" : "▼";
+  const dir = q.changePercent >= 0 ? "▲" : "▼";
   const sign = q.changePercent >= 0 ? "+" : "";
-  return `${q.name}: ${formatPrice(q.symbol, q.price)} (${arrow}${sign}${q.changePercent.toFixed(2)}%)`;
+  const priceStr = formatPrice(q.symbol, q.price);
+  const changeStr = formatPointChange(q.symbol, q.change);
+  return `${q.name}: ${priceStr}  ${dir} ${sign}${changeStr} (${sign}${q.changePercent.toFixed(2)}%)`;
 }
 
 function formatPrice(symbol: string, price: number): string {
-  if (symbol === "CL=F") return `$${price.toFixed(2)}/bbl`;
-  return price >= 1000
-    ? price.toLocaleString("en-US", { maximumFractionDigits: 0 })
-    : price.toFixed(2);
+  if (symbol === "USO") return `$${price.toFixed(2)}/share`;
+  return `$${price.toFixed(2)}`;
+}
+
+function formatPointChange(symbol: string, change: number): string {
+  const abs = Math.abs(change);
+  if (symbol === "USO") return `$${abs.toFixed(2)}`;
+  return `$${abs.toFixed(2)}`;
+}
+
+function formatFetchTime(date: Date): string {
+  return date.toLocaleTimeString("en-US", {
+    timeZone: "America/Chicago",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
 }
 
 export function formatMarketsForPrompt(snapshot: MarketSnapshot): string {
   const lines: string[] = [];
   if (snapshot.sp500) lines.push(formatSingle(snapshot.sp500));
-  if (snapshot.dow) lines.push(formatSingle(snapshot.dow));
+  if (snapshot.dow)   lines.push(formatSingle(snapshot.dow));
   if (snapshot.nasdaq) lines.push(formatSingle(snapshot.nasdaq));
-  if (snapshot.oil) lines.push(formatSingle(snapshot.oil));
+  if (snapshot.oil)   lines.push(formatSingle(snapshot.oil));
 
   if (!lines.length) return "";
 
-  const upCount = [snapshot.sp500, snapshot.dow, snapshot.nasdaq].filter(
-    (q) => q && q.changePercent > 0
-  ).length;
-  const downCount = [snapshot.sp500, snapshot.dow, snapshot.nasdaq].filter(
-    (q) => q && q.changePercent < 0
-  ).length;
+  const equities = [snapshot.sp500, snapshot.dow, snapshot.nasdaq].filter(Boolean) as MarketQuote[];
+  const upCount   = equities.filter((q) => q.changePercent > 0).length;
+  const downCount = equities.filter((q) => q.changePercent < 0).length;
 
   const trend =
-    upCount === 3
-      ? "Markets were broadly higher"
-      : downCount === 3
-        ? "Markets were broadly lower"
-        : upCount > downCount
-          ? "Markets finished mostly higher"
-          : downCount > upCount
-            ? "Markets finished mostly lower"
-            : "Markets were mixed";
+    upCount === 3   ? "Markets broadly higher"
+    : downCount === 3 ? "Markets broadly lower"
+    : upCount > downCount ? "Markets mostly higher"
+    : downCount > upCount ? "Markets mostly lower"
+    : "Markets mixed";
 
-  return `[Financial Markets — Yesterday's Close]\n${trend}.\n${lines.join("\n")}`;
+  const fetchedStr = formatFetchTime(snapshot.fetchedAt);
+
+  return `[Financial Markets — Last trading day close, as of ${fetchedStr} CT]\n${trend}.\n${lines.join("\n")}`;
 }
 
 export function buildMarketsBlock(snapshot: MarketSnapshot): string {
   const formatted = formatMarketsForPrompt(snapshot);
   if (!formatted) return "";
+
+  const fetchedStr = formatFetchTime(snapshot.fetchedAt);
+
   return (
     `\n\n${formatted}\n\n` +
-    `IMPORTANT: The market figures above are LIVE DATA fetched right now from Yahoo Finance — they are the authoritative source. ` +
-    `Report the direction and percentage EXACTLY as shown (up or down, correct sign). ` +
-    `Do NOT contradict these numbers using news headlines or your training knowledge — those may be weeks or months out of date. ` +
-    `Give David a brief 2-3 sentence market summary in the tone of a knowledgeable friend. ` +
-    `Note the oil price if it moved more than 1%. Keep it tight and conversational.`
+    `IMPORTANT: The market figures above are fetched from Alpha Vantage and reflect the most recent completed trading session (last close). ` +
+    `They were last updated at ${fetchedStr} CT. ` +
+    `Always tell David when the data was last fetched — never present it as live real-time data. ` +
+    `If the data is from earlier today or yesterday, say so naturally: "As of this morning's close..." or "When I last checked at [time]..." ` +
+    `Report direction and percentages EXACTLY as shown. ` +
+    `Give a brief 2-3 sentence conversational market summary in Emma Peel's warm, direct style — like a knowledgeable friend giving David the quick picture. ` +
+    `Example: "Markets are looking strong this morning, David. S&P up half a percent, Dow up about 200 points. Oil's holding steady." ` +
+    `Note oil only if it moved more than 1%.`
   );
 }
