@@ -94,7 +94,6 @@ function AppShell({ onSignOut }: AppShellProps) {
         });
         if (data.profile?.companionName) {
           setProfile({ companionName: data.profile.companionName });
-          localStorage.setItem("winston_companion_name", data.profile.companionName);
         }
         const routing = data.isNewUser ? "new" : "returning";
         console.log("[AUTH] AppShell — routing decision:", routing);
@@ -111,10 +110,7 @@ function AppShell({ onSignOut }: AppShellProps) {
 
   if (onboardingStatus === "new") {
     return <Onboarding onComplete={(companionName?: string) => {
-      if (companionName) {
-        setProfile({ companionName });
-        localStorage.setItem("winston_companion_name", companionName);
-      }
+      if (companionName) setProfile({ companionName });
       setOnboardingStatus("returning");
     }} />;
   }

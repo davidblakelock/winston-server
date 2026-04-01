@@ -17,12 +17,6 @@ export default function SignIn({ onAuthenticated: _onAuthenticated }: SignInProp
   const [email, setEmail] = useState("");
   const [emailState, setEmailState] = useState<EmailState>({ kind: "idle" });
 
-  const storedCompanionName = localStorage.getItem("winston_companion_name") ?? null;
-  const companionInitials = storedCompanionName
-    ? storedCompanionName.trim().split(/\s+/).map((w) => w[0].toUpperCase()).join("").slice(0, 2)
-    : null;
-  const isReturning = !!storedCompanionName;
-
   function handleGoogleSignIn() {
     window.location.href = `${BASE}/api/auth/google?signin=1`;
   }
@@ -127,19 +121,19 @@ export default function SignIn({ onAuthenticated: _onAuthenticated }: SignInProp
             boxShadow: "0 0 40px rgba(79,70,229,0.45), 0 0 80px rgba(79,70,229,0.15)",
           }}
         >
-          <span style={{ color: "white", fontWeight: "700", fontSize: companionInitials ? "18px" : "20px", letterSpacing: companionInitials ? "0.02em" : "0.05em", fontFamily: companionInitials ? "'Playfair Display', Georgia, serif" : "inherit" }}>
-            {companionInitials ?? "W"}
+          <span style={{ color: "white", fontWeight: "700", fontSize: "20px", letterSpacing: "0.05em" }}>
+            W
           </span>
         </div>
 
         {/* Wordmark */}
         <h1 style={{ color: "#ece9ff", fontSize: "2rem", fontWeight: "600", margin: "0 0 10px", letterSpacing: "-0.03em" }}>
-          {isReturning ? storedCompanionName : "Winston"}
+          Winston
         </h1>
 
         {/* Tagline */}
         <p style={{ color: "#6b6b90", fontSize: "1rem", margin: "0 0 40px", lineHeight: "1.5" }}>
-          {isReturning ? "Welcome back — sign in to continue." : "Your personal companion is waiting."}
+          Your personal companion is waiting.
         </p>
 
         {/* Email sign-in form */}
