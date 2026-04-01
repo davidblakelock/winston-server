@@ -755,20 +755,29 @@ export default function Chat({ onSignOut, companionName: companionNameProp, user
 
         {/* User identity chip — Google profile picture + companion name */}
         <div className="flex items-center gap-2 ml-1 pl-2 border-l border-white/10">
-          {/* Avatar: Google photo or warm initials fallback */}
+          {/* Avatar: Google photo or warm-amber initials fallback */}
           {userPicture ? (
             <img
               src={userPicture}
               alt="Profile"
-              className="h-9 w-9 rounded-full object-cover ring-1 ring-white/15 flex-shrink-0"
+              style={{ width: 36, height: 36, borderRadius: "50%", objectFit: "cover", flexShrink: 0, boxShadow: "0 0 0 1.5px rgba(255,255,255,0.12)" }}
               referrerPolicy="no-referrer"
             />
           ) : (
             <div
-              className="h-9 w-9 rounded-full flex items-center justify-center flex-shrink-0 ring-1 ring-indigo-500/30"
-              style={{ background: "linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)" }}
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: "50%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                flexShrink: 0,
+                background: "linear-gradient(135deg, #d97706 0%, #b45309 100%)",
+                boxShadow: "0 0 0 1.5px rgba(217,119,6,0.35)",
+              }}
             >
-              <span className="text-white text-xs font-semibold leading-none">
+              <span style={{ color: "white", fontSize: "12px", fontWeight: 600, lineHeight: 1 }}>
                 {(() => {
                   const name = userFullName || userName || "";
                   const parts = name.trim().split(/\s+/).filter(Boolean);

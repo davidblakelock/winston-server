@@ -14,6 +14,27 @@ export interface AuthState {
   fullName?: string;
 }
 
+type FullProfile = {
+  authenticated: boolean;
+  userName?: string;
+  email?: string;
+  picture?: string | null;
+  fullName?: string | null;
+};
+
+/** Fetch /api/auth/session and return the full profile, or null on failure. */
+async function fetchSessionProfile(token: string): Promise<FullProfile | null> {
+  try {
+    const r = await fetch(`${BASE}/api/auth/session`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!r.ok) return null;
+    return (await r.json()) as FullProfile;
+  } catch {
+    return null;
+  }
+}
+
 export function useAuth() {
   const [authState, setAuthState] = useState<AuthState>({ loading: true, authenticated: false });
 
@@ -34,19 +55,43 @@ export function useAuth() {
     console.log("[AUTH] useAuth.signOut — complete, auth state cleared");
   }, []);
 
-  const setAuthenticated = useCallback((token: string, userName: string, email?: string) => {
+  /**
+   * Call this immediately after a successful sign-in (Google OAuth redirect or
+   * magic-link verification). Sets auth state right away with what we know,
+   * then fetches /api/auth/session in the background to hydrate picture +
+   * fullName so the avatar appears without a page reload.
+   */
+  const setAuthenticated = useCallback((token: string, userName: string) => {
     console.log("[AUTH] useAuth.setAuthenticated — persisting session:", {
       userName,
-      email: email ?? "(not provided)",
       tokenPrefix: token.slice(0, 8) + "…",
     });
     localStorage.setItem(SESSION_KEY, token);
     localStorage.setItem("winston_user_name", userName);
     setAuthTokenGetter(() => localStorage.getItem(SESSION_KEY));
-    setAuthState({ loading: false, authenticated: true, userName, email, token });
-    console.log("[AUTH] useAuth.setAuthenticated — auth state set, userName:", userName);
+
+    // Immediately mark as authenticated so the UI unblocks
+    setAuthState({ loading: false, authenticated: true, userName, token });
+    console.log("[AUTH] useAuth.setAuthenticated — initial auth state set, userName:", userName);
+
+    // Background fetch: hydrate picture + fullName from the session endpoint
+    // so the Google profile photo appears without requiring a page reload.
+    fetchSessionProfile(token).then((data) => {
+      if (!data || !data.authenticated) return;
+      setAuthState({
+        loading: false,
+        authenticated: true,
+        userName: data.userName ?? userName,
+        email: data.email ?? undefined,
+        token,
+        picture: data.picture ?? undefined,
+        fullName: data.fullName ?? undefined,
+      });
+      console.log("[AUTH] useAuth.setAuthenticated — picture/fullName hydrated from session endpoint");
+    });
   }, []);
 
+  // ── Initial session validation on mount ──────────────────────────────────
   useEffect(() => {
     const token = localStorage.getItem(SESSION_KEY);
     const storedName = localStorage.getItem("winston_user_name");
@@ -64,47 +109,40 @@ export function useAuth() {
     }
 
     console.log("[AUTH] useAuth — validating token against /api/auth/session");
-    fetch(`${BASE}/api/auth/session`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((r) => {
-        console.log("[AUTH] useAuth — /api/auth/session HTTP status:", r.status);
-        return r.json() as Promise<{ authenticated: boolean; userName?: string; email?: string; picture?: string | null; fullName?: string | null }>;
-      })
-      .then((data) => {
-        console.log("[AUTH] useAuth — /api/auth/session response:", {
-          authenticated: data.authenticated,
-          userName: data.userName ?? null,
-          email: data.email ?? null,
-        });
-
-        if (data.authenticated && data.userName) {
-          setAuthTokenGetter(() => localStorage.getItem(SESSION_KEY));
-          setAuthState({
-            loading: false,
-            authenticated: true,
-            userName: data.userName,
-            email: data.email,
-            token,
-            picture: data.picture ?? undefined,
-            fullName: data.fullName ?? undefined,
-          });
-          console.log("[AUTH] useAuth — session valid, authenticated as:", data.userName);
-        } else {
-          console.warn("[AUTH] useAuth — session invalid or userName missing, clearing auth state");
-          localStorage.removeItem(SESSION_KEY);
-          setAuthTokenGetter(null);
-          setAuthState({ loading: false, authenticated: false });
-        }
-      })
-      .catch((err) => {
-        // Network error — keep authenticated if token exists (offline-friendly)
-        const fallbackName = storedName ?? "(unknown — no stored name)";
-        console.error("[AUTH] useAuth — /api/auth/session fetch error:", err);
-        console.warn("[AUTH] useAuth — network error fallback, using stored name:", fallbackName);
-        setAuthTokenGetter(() => localStorage.getItem(SESSION_KEY));
-        setAuthState({ loading: false, authenticated: true, userName: storedName ?? undefined, token });
+    fetchSessionProfile(token).then((data) => {
+      console.log("[AUTH] useAuth — /api/auth/session response:", {
+        authenticated: data?.authenticated ?? false,
+        userName: data?.userName ?? null,
+        email: data?.email ?? null,
+        hasPicture: !!(data?.picture),
       });
+
+      if (data && data.authenticated && data.userName) {
+        setAuthTokenGetter(() => localStorage.getItem(SESSION_KEY));
+        setAuthState({
+          loading: false,
+          authenticated: true,
+          userName: data.userName,
+          email: data.email ?? undefined,
+          token,
+          picture: data.picture ?? undefined,
+          fullName: data.fullName ?? undefined,
+        });
+        console.log("[AUTH] useAuth — session valid, authenticated as:", data.userName);
+      } else {
+        console.warn("[AUTH] useAuth — session invalid or userName missing, clearing auth state");
+        localStorage.removeItem(SESSION_KEY);
+        setAuthTokenGetter(null);
+        setAuthState({ loading: false, authenticated: false });
+      }
+    }).catch((err) => {
+      // Network error — keep authenticated if token exists (offline-friendly)
+      const fallbackName = storedName ?? "(unknown — no stored name)";
+      console.error("[AUTH] useAuth — /api/auth/session fetch error:", err);
+      console.warn("[AUTH] useAuth — network error fallback, using stored name:", fallbackName);
+      setAuthTokenGetter(() => localStorage.getItem(SESSION_KEY));
+      setAuthState({ loading: false, authenticated: true, userName: storedName ?? undefined, token });
+    });
   }, []);
 
   return { authState, signOut, setAuthenticated };
