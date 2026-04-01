@@ -197,28 +197,27 @@ function AppWithAuth() {
       return;
     }
 
-    if (urlToken && urlName) {
-      const decodedName = decodeURIComponent(urlName);
+    if (urlToken) {
+      // We have a session token from Google OAuth redirect — process it
+      const decodedName = urlName ? decodeURIComponent(urlName) : (localStorage.getItem("winston_user_name") ?? "");
       const isNewUser = urlIsNew === "1";
-      const urlPicture = params.get("picture") ? decodeURIComponent(params.get("picture")!) : undefined;
+      const rawPicture = params.get("picture");
+      const urlPicture = rawPicture ? decodeURIComponent(rawPicture) : undefined;
 
       console.log("[AUTH] App.tsx — Google sign-in token received:", {
         userName: decodedName,
+        hasUrlName: !!urlName,
         isNewUser,
         hasPicture: !!urlPicture,
+        pictureLength: urlPicture?.length ?? 0,
         tokenPrefix: urlToken.slice(0, 8) + "…",
       });
 
       if (isNewUser) {
         // ── NEW USER: wipe ALL local + session storage before loading any profile ──
         console.log("[AUTH] App.tsx — NEW USER detected — clearing ALL localStorage and sessionStorage");
-        const keysBeforeClear = Object.keys(localStorage);
-        console.log("[AUTH] App.tsx — localStorage keys before clear:", keysBeforeClear);
-
         localStorage.clear();
         sessionStorage.clear();
-
-        console.log("[AUTH] App.tsx — storage cleared. localStorage keys after clear:", Object.keys(localStorage));
       } else {
         console.log("[AUTH] App.tsx — RETURNING user — preserving storage, only clearing React Query cache");
       }

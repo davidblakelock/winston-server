@@ -223,6 +223,47 @@ function useGoogleAuth(): [GoogleAuthStatus, () => Promise<void>] {
   return [status, refresh];
 }
 
+// ─── User avatar (Google photo with initials fallback) ────────────────────────
+
+function UserAvatar({ picture, fullName, userName }: { picture?: string; fullName?: string; userName?: string }) {
+  const [imgFailed, setImgFailed] = useState(false);
+  const initials = (() => {
+    const name = fullName || userName || "";
+    const parts = name.trim().split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+    if (parts.length === 1) return parts[0][0].toUpperCase();
+    return "?";
+  })();
+
+  const showImage = !!picture && !imgFailed;
+
+  return showImage ? (
+    <img
+      src={picture}
+      alt="Profile"
+      referrerPolicy="no-referrer"
+      crossOrigin="anonymous"
+      onError={() => {
+        console.warn("[AVATAR] Google profile picture failed to load, falling back to initials. src:", picture);
+        setImgFailed(true);
+      }}
+      onLoad={() => console.log("[AVATAR] Google profile picture loaded successfully")}
+      style={{ width: 36, height: 36, borderRadius: "50%", objectFit: "cover", flexShrink: 0, boxShadow: "0 0 0 1.5px rgba(255,255,255,0.12)" }}
+    />
+  ) : (
+    <div
+      style={{
+        width: 36, height: 36, borderRadius: "50%",
+        display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+        background: "linear-gradient(135deg, #d97706 0%, #b45309 100%)",
+        boxShadow: "0 0 0 1.5px rgba(217,119,6,0.35)",
+      }}
+    >
+      <span style={{ color: "white", fontSize: "12px", fontWeight: 600, lineHeight: 1 }}>{initials}</span>
+    </div>
+  );
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 interface WinddownSettings {
@@ -756,38 +797,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, user
         {/* User identity chip — Google profile picture + companion name */}
         <div className="flex items-center gap-2 ml-1 pl-2 border-l border-white/10">
           {/* Avatar: Google photo or warm-amber initials fallback */}
-          {userPicture ? (
-            <img
-              src={userPicture}
-              alt="Profile"
-              style={{ width: 36, height: 36, borderRadius: "50%", objectFit: "cover", flexShrink: 0, boxShadow: "0 0 0 1.5px rgba(255,255,255,0.12)" }}
-              referrerPolicy="no-referrer"
-            />
-          ) : (
-            <div
-              style={{
-                width: 36,
-                height: 36,
-                borderRadius: "50%",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                flexShrink: 0,
-                background: "linear-gradient(135deg, #d97706 0%, #b45309 100%)",
-                boxShadow: "0 0 0 1.5px rgba(217,119,6,0.35)",
-              }}
-            >
-              <span style={{ color: "white", fontSize: "12px", fontWeight: 600, lineHeight: 1 }}>
-                {(() => {
-                  const name = userFullName || userName || "";
-                  const parts = name.trim().split(/\s+/).filter(Boolean);
-                  if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-                  if (parts.length === 1) return parts[0][0].toUpperCase();
-                  return "?";
-                })()}
-              </span>
-            </div>
-          )}
+          <UserAvatar picture={userPicture} fullName={userFullName} userName={userName} />
           {/* Companion name label */}
           {companionNameFinal && (
             <span className="text-sm font-medium text-foreground/80 whitespace-nowrap">

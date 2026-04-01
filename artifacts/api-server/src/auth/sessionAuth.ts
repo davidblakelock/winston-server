@@ -226,30 +226,24 @@ export async function lookupOrCreateGoogleUser(
 export async function createSession(
   userName: string,
   email: string,
-  googleId?: string
+  googleId?: string,
+  picture?: string
 ): Promise<string> {
   const token = generateToken();
   const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
 
   logger.info(
-    { userName, email, googleId: googleId ?? null, tokenPrefix: token.slice(0, 8) + "…", expiresAt },
+    { userName, email, googleId: googleId ?? null, hasPicture: !!picture, tokenPrefix: token.slice(0, 8) + "…", expiresAt },
     "[AUTH] createSession — inserting new session into app_sessions"
   );
 
-  if (googleId) {
-    await query(
-      `INSERT INTO app_sessions (user_name, email, token, expires_at, google_id)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [userName, email, token, expiresAt, googleId]
-    );
-  } else {
-    await query(
-      "INSERT INTO app_sessions (user_name, email, token, expires_at) VALUES ($1, $2, $3, $4)",
-      [userName, email, token, expiresAt]
-    );
-  }
+  await query(
+    `INSERT INTO app_sessions (user_name, email, token, expires_at, google_id, picture)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [userName, email, token, expiresAt, googleId ?? null, picture ?? null]
+  );
 
-  logger.info({ userName, email, tokenPrefix: token.slice(0, 8) + "…" }, "[AUTH] createSession — session created successfully");
+  logger.info({ userName, email, hasPicture: !!picture, tokenPrefix: token.slice(0, 8) + "…" }, "[AUTH] createSession — session created successfully");
   return token;
 }
 
@@ -259,8 +253,18 @@ export async function validateSession(
   const tokenPrefix = token.slice(0, 8) + "…";
   logger.info({ tokenPrefix }, "[AUTH] validateSession — querying app_sessions");
 
-  const { rows } = await query<{ user_name: string; email: string; google_id: string | null; picture: string | null; full_name: string | null }>(
-    `SELECT s.user_name, s.email, s.google_id, gu.picture, gu.name AS full_name
+  const { rows } = await query<{
+    user_name: string;
+    email: string;
+    google_id: string | null;
+    session_picture: string | null;
+    gu_picture: string | null;
+    full_name: string | null;
+  }>(
+    `SELECT s.user_name, s.email, s.google_id,
+            s.picture AS session_picture,
+            gu.picture AS gu_picture,
+            gu.name AS full_name
      FROM app_sessions s
      LEFT JOIN google_users gu ON (
        (s.google_id IS NOT NULL AND gu.google_id = s.google_id)
@@ -275,16 +279,19 @@ export async function validateSession(
     return null;
   }
 
+  // Prefer picture stored directly on the session, fall back to google_users JOIN
+  const picture = rows[0].session_picture ?? rows[0].gu_picture ?? undefined;
+
   const result = {
     userName: rows[0].user_name,
     email: rows[0].email,
     googleId: rows[0].google_id ?? undefined,
-    picture: rows[0].picture ?? undefined,
+    picture: picture || undefined,
     fullName: rows[0].full_name ?? undefined,
   };
 
   logger.info(
-    { tokenPrefix, userName: result.userName, email: result.email },
+    { tokenPrefix, userName: result.userName, email: result.email, hasPicture: !!result.picture },
     "[AUTH] validateSession — session valid, resolved user"
   );
 

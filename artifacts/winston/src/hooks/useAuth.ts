@@ -66,6 +66,8 @@ export function useAuth() {
       userName,
       tokenPrefix: token.slice(0, 8) + "…",
       hasPicture: !!picture,
+      pictureLength: picture?.length ?? 0,
+      picturePreview: picture ? picture.slice(0, 60) + "…" : null,
     });
     localStorage.setItem(SESSION_KEY, token);
     localStorage.setItem("winston_user_name", userName);
@@ -118,6 +120,8 @@ export function useAuth() {
         userName: data?.userName ?? null,
         email: data?.email ?? null,
         hasPicture: !!(data?.picture),
+        pictureLength: data?.picture?.length ?? 0,
+        picturePreview: data?.picture ? data.picture.slice(0, 60) + "…" : null,
       });
 
       if (data && data.authenticated && data.userName) {

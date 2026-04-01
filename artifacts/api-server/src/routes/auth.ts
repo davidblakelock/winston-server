@@ -137,15 +137,15 @@ router.get("/auth/callback", async (req: Request, res: Response) => {
 
     if (isSignIn) {
       // ── Create app session and redirect frontend with token ─────────────────
-      req.log.info({ userName, isNewUser }, "[AUTH] /auth/callback — creating app session for sign-in");
-      const sessionToken = await createSession(userName, email, googleId);
+      req.log.info({ userName, isNewUser, hasPicture: !!picture }, "[AUTH] /auth/callback — creating app session for sign-in");
+      const sessionToken = await createSession(userName, email, googleId, picture);
 
-      // Pass isNewUser flag to frontend so it can clear stale storage before loading profile
+      // Pass all params to frontend — picture gets stored in session AND in URL param
       const pictureParam = picture ? `&picture=${encodeURIComponent(picture)}` : "";
       const redirectUrl = `${appUrl}/?token=${encodeURIComponent(sessionToken)}&name=${encodeURIComponent(userName)}&new=${isNewUser ? "1" : "0"}${pictureParam}`;
       req.log.info(
-        { userName, isNewUser, hasPicture: !!picture, redirectPath: `/?token=…&name=${encodeURIComponent(userName)}&new=${isNewUser ? "1" : "0"}` },
-        "[AUTH] /auth/callback — redirecting frontend with session token"
+        { userName, isNewUser, hasPicture: !!picture, pictureLength: picture?.length ?? 0, redirectUrlLength: redirectUrl.length },
+        "[AUTH] /auth/callback — redirecting frontend with session token + picture"
       );
       res.redirect(redirectUrl);
     } else {
@@ -195,6 +195,7 @@ router.get("/auth/session", async (req: Request, res: Response) => {
       email: session.email,
       googleId: session.googleId,
       picture: session.picture ?? null,
+      hasPicture: !!session.picture,
       fullName: session.fullName ?? null,
     });
   } catch (err) {
