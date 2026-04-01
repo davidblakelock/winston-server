@@ -1,0 +1,135 @@
+Please add a comprehensive story capture question library to Winston's evening wind down feature. Here are the complete requirements.
+Timing: Emma Peel should ask one story capture question at the end of every evening wind down conversation — after the daily check in and loose ends are handled. She should read David's energy — if he seems tired or has given very brief responses skip story capture for that evening and try again tomorrow. Always frame the question warmly around capturing something for Olivia — making it feel like a gift not a data collection exercise.
+Randomization: Questions should be selected randomly from the library. Never repeat a question until every single question in the library has been asked. Track which questions have been asked in Supabase against David's profile. Once all questions have been asked reset and start again — but randomize the order differently the second time through.
+Response handling: After David shares his story Emma Peel should respond with genuine warmth and appreciation before saving it. Never just confirm it was saved clinically. Something like That is a beautiful memory David. Olivia is going to treasure hearing that someday. Then save the complete story to Supabase with the date, the question asked, and David's full response.
+Here is the complete question library organized by category. Please store all of these in Supabase and use them randomly as described above.
+CHILDHOOD MEMORIES:
+What was your neighborhood like growing up?
+What did your childhood home look like — describe it in detail?
+What was your favorite hiding spot as a kid?
+What was the first music you remember loving?
+What was your best subject in school and why?
+Tell me about your best friend growing up — what were they like?
+What was the first movie you remember seeing?
+What did you want to be when you grew up?
+What was a typical Sunday like in your house growing up?
+What was the most mischievous thing you ever did as a kid?
+What did your parents do for work and what did you think of their jobs as a child?
+What was your favorite meal your mother or father cooked?
+What was the best gift you ever received as a child?
+What was your elementary school like — describe your favorite teacher?
+What games did you play outside as a kid before video games existed?
+What was the first record or album you ever owned?
+What was your childhood bedroom like?
+What cartoons or TV shows did you watch growing up?
+What was the scariest thing that happened to you as a child?
+What is your earliest memory — the very first thing you can remember?
+TEENAGE YEARS:
+What was high school like for you?
+Who was your best friend in high school and what happened to them?
+What was the first concert you ever attended?
+Tell me about your first crush?
+What was the most rebellious thing you did as a teenager?
+What music defined your teenage years?
+What was your part time job as a teenager?
+What did you and your friends do for fun on weekends?
+What was the biggest lesson you learned in high school?
+Tell me about your high school graduation day?
+YOUNG ADULT AND EARLY CAREER:
+What was your first real job like?
+Where was your first apartment and what was it like?
+What was the best road trip you ever took?
+Tell me about the moment you knew what you wanted to do with your life?
+What was the best concert you attended in your 20s?
+Tell me about your first car — what was it and how did you get it?
+What was the biggest risk you ever took in your 20s?
+Who was the most influential person in your early adult life?
+What city did you love living in most and why?
+What was the wildest night you ever had in your 20s?
+What did you dream about becoming before life took a different direction?
+Tell me about the best vacation you ever took?
+What was the hardest you ever laughed?
+Tell me about a time you were completely lost — literally or figuratively — and how you found your way?
+What was your first experience of real independence?
+FAMILY AND RELATIONSHIPS:
+What is your favorite memory of Olivia when she was little?
+What did you learn about life from your parents?
+What family tradition meant the most to you growing up?
+Tell me about the day Olivia was born?
+What is something your parents used to say that has stayed with you your whole life?
+What was your family's favorite meal together?
+Tell me about your relationship with your siblings growing up?
+What is the best piece of advice your father ever gave you?
+What is the best piece of advice your mother ever gave you?
+What family vacation do you remember most vividly?
+Tell me about a moment when you realized your parents were just human beings doing their best?
+What is something you wish you had said to someone you loved before they were gone?
+Tell me about the proudest moment you ever had as a father?
+What quality do you hope Olivia inherited from you?
+What do you want Olivia to know about your own childhood that she might not know?
+CAREER AND PROFESSIONAL LIFE:
+What was the proudest moment of your career?
+Tell me about the best deal you ever closed?
+Who was the best boss you ever had and what made them great?
+What was the biggest professional mistake you made and what did you learn from it?
+Tell me about a time you took a chance at work that completely paid off?
+What was the most interesting company you ever worked for and why?
+Tell me about a colleague who changed how you thought about work?
+What was the most difficult negotiation you ever navigated?
+What does forty years in technology sales teach you about people?
+What was the moment in your career you felt most alive and engaged?
+Tell me about a deal you lost that taught you more than any deal you won?
+What advice would you give a 25 year old starting in enterprise sales today?
+What was the most memorable customer you ever worked with?
+Tell me about the moment you knew you were really good at what you did?
+What did your career teach you about human nature?
+LIFE WISDOM AND REFLECTION:
+What is the best advice you ever received and who gave it to you?
+What do you know now that you wish you had known at 30?
+What was the hardest period of your life and how did you get through it?
+What are you most proud of in your entire life?
+What does a life well lived mean to you?
+What is the most important thing you have learned about relationships?
+What would you do differently if you could live your life over?
+What has surprised you most about getting older?
+What is something most people misunderstand about you?
+What belief have you changed your mind about completely over your lifetime?
+What is the most courageous thing you have ever done?
+What does friendship mean to you and who has been your truest friend?
+What is the kindest thing anyone has ever done for you?
+What is the kindest thing you have ever done for someone else?
+What has love taught you?
+DALLAS AND PLACES:
+What do you love most about living in Dallas?
+What is your favorite hidden gem in Dallas that most people don't know about?
+Tell me about the best meal you have ever had in Dallas?
+What city outside of Dallas has felt most like home to you?
+What is the most beautiful place you have ever been in the world?
+Tell me about a place that changed you — somewhere you visited that shifted how you saw the world?
+What is your favorite drive — a road that makes you feel alive?
+If you could live anywhere in the world for one year where would it be and why?
+FUN AND LIGHT:
+What was the best meal you ever had anywhere in the world?
+What song takes you immediately back to a specific moment in your life?
+If you could relive one perfect day what would it be?
+What is the funniest thing that has ever happened to you?
+What movie have you seen more times than you can count?
+What is something you are secretly really good at that most people don't know?
+What is the most spontaneous thing you have ever done?
+Tell me about a time everything went wrong but turned out perfectly?
+What is something that always makes you laugh no matter what?
+What hobby or interest have you had that would surprise people who know you?
+Tell me about Winston the corgi — how did you get him and what makes him special?
+What is the best sporting event you ever attended in person?
+What is your most prized possession and why?
+If you could have dinner with anyone living or dead who would it be and what would you ask them?
+What is something on your bucket list you haven't done yet?
+TECHNOLOGY AND THE FUTURE:
+What is the most dramatic technological change you have witnessed in your lifetime?
+What did you think the future would look like when you were young and how did reality surprise you?
+What technology that exists today would have seemed like pure magic to your childhood self?
+What do you hope the world looks like for Olivia's children?
+What part of the old world do you miss most that technology has replaced?
+Tell me about the first computer you ever used?
+What has technology given us that you are most grateful for?
+What has technology taken away that you miss?

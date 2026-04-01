@@ -1,81 +1,161 @@
 import { query } from "../db.js";
+import { logger } from "../lib/logger.js";
 
 export interface Story {
   id: number;
+  question_id?: number;
+  category?: string;
   prompt_question: string;
   response: string;
   captured_at: Date;
 }
 
-const STORY_PROMPTS: string[] = [
-  "Tell me about where you grew up — the neighborhood, the sounds, what it felt like to be a kid there.",
-  "What was your very first job like? What do you remember most about it?",
-  "What's one of your favorite memories of Olivia when she was very young?",
-  "What was your wedding day like — the moments that stood out, how you felt?",
-  "What music were you listening to in your twenties, and what does it remind you of now?",
-  "What was the world like when you were Olivia's age?",
-  "Tell me about a teacher or mentor who shaped who you are.",
-  "What's the bravest thing you've ever done?",
-  "What was your childhood home like? What do you miss most about it?",
-  "Tell me about the moment you knew you were in love.",
-  "What did your parents teach you that you've never forgotten?",
-  "What was the hardest thing you've ever had to get through, and what got you through it?",
-  "If you could go back and give your twenty-year-old self one piece of advice, what would it be?",
-  "What's a place you've traveled that changed the way you see the world?",
-  "Tell me about a time you were completely lost — literally or figuratively — and how you found your way.",
-  "What are you most proud of in your life so far?",
-  "What did a typical summer look like when you were a kid?",
-  "Tell me about a friendship that meant the world to you.",
-  "What was the first car you ever owned, and what adventures did you have in it?",
-  "What traditions from your childhood do you hope Olivia remembers?",
-  "What did your family do for holidays when you were growing up?",
-  "Tell me about a moment when someone's kindness changed everything for you.",
-  "What's a skill or hobby you've had that Olivia might not know about?",
-  "Tell me about a book, movie, or song that meant something important to you.",
-  "What do you want Olivia to know about you that she might never think to ask?",
-  "What was your relationship with your father like?",
-  "What was your relationship with your mother like?",
-  "Tell me about the day Olivia was born — every detail you can remember.",
-  "What was the neighborhood you raised Olivia in like?",
-  "What did a perfect Saturday look like when Olivia was little?",
-  "What values do you hope you've passed on to Olivia?",
-  "Tell me about a time you failed at something and what you learned.",
-  "What's the funniest thing Olivia ever said or did when she was small?",
-  "What did you dream of becoming when you were a child?",
-  "Tell me about a meal — a specific one — that you'll never forget.",
-  "What does friendship mean to you, and who has been your truest friend?",
-  "Tell me about a moment when you felt completely at peace.",
-  "What do you wish you had said to someone you've lost?",
-  "If you could relive one day of your life exactly as it was, which would it be?",
-  "What's something you believe deeply that the world doesn't always agree with?",
-];
+export interface StoryQuestion {
+  id: number;
+  question: string;
+  category: string;
+}
+
+// ── Ensure story_state row exists ─────────────────────────────────────────────
+
+export async function ensureStoryState(): Promise<void> {
+  await query(`
+    INSERT INTO story_state (id, current_cycle)
+    VALUES (1, 1)
+    ON CONFLICT (id) DO NOTHING
+  `);
+}
+
+// ── Get total question count ──────────────────────────────────────────────────
+
+async function getTotalQuestionCount(): Promise<number> {
+  const { rows } = await query<{ count: string }>(
+    "SELECT COUNT(*) AS count FROM story_questions"
+  );
+  return parseInt(rows[0].count, 10);
+}
+
+// ── Get current cycle number ──────────────────────────────────────────────────
+
+async function getCurrentCycle(): Promise<number> {
+  const { rows } = await query<{ current_cycle: number }>(
+    "SELECT current_cycle FROM story_state WHERE id = 1"
+  );
+  return rows[0]?.current_cycle ?? 1;
+}
+
+// ── Generate a new randomized cycle in story_queue ────────────────────────────
+// Called when the current cycle is exhausted (all questions asked).
+
+async function generateNewCycle(cycleNum: number): Promise<void> {
+  const { rows: questions } = await query<{ id: number }>(
+    "SELECT id FROM story_questions ORDER BY RANDOM()"
+  );
+
+  if (questions.length === 0) return;
+
+  const values = questions
+    .map((q, i) => `(${q.id}, ${cycleNum}, ${i + 1})`)
+    .join(", ");
+
+  await query(
+    `INSERT INTO story_queue (question_id, cycle_num, position) VALUES ${values}`
+  );
+
+  logger.info({ cycleNum, count: questions.length }, "[STORY] New question cycle generated");
+}
+
+// ── Get next unasked question for the current cycle ───────────────────────────
+
+export async function getNextStoryQuestion(): Promise<StoryQuestion | null> {
+  await ensureStoryState();
+
+  const totalCount = await getTotalQuestionCount();
+  if (totalCount === 0) return null;
+
+  const currentCycle = await getCurrentCycle();
+
+  // Find next unasked question in current cycle
+  const { rows } = await query<{ queue_id: number; question_id: number; question: string; category: string }>(
+    `SELECT sq.id AS queue_id, sq.question_id, sqq.question, sqq.category
+     FROM story_queue sq
+     JOIN story_questions sqq ON sqq.id = sq.question_id
+     WHERE sq.cycle_num = $1 AND sq.asked_at IS NULL
+     ORDER BY sq.position ASC
+     LIMIT 1`,
+    [currentCycle]
+  );
+
+  if (rows.length > 0) {
+    return {
+      id: rows[0].question_id,
+      question: rows[0].question,
+      category: rows[0].category,
+    };
+  }
+
+  // Current cycle exhausted — start a new one
+  const nextCycle = currentCycle + 1;
+  logger.info({ currentCycle, nextCycle }, "[STORY] Cycle exhausted, generating new cycle");
+
+  await query(
+    "UPDATE story_state SET current_cycle = $1 WHERE id = 1",
+    [nextCycle]
+  );
+  await generateNewCycle(nextCycle);
+
+  // Return first question from the new cycle
+  const { rows: newRows } = await query<{ question_id: number; question: string; category: string }>(
+    `SELECT sq.question_id, sqq.question, sqq.category
+     FROM story_queue sq
+     JOIN story_questions sqq ON sqq.id = sq.question_id
+     WHERE sq.cycle_num = $1 AND sq.asked_at IS NULL
+     ORDER BY sq.position ASC
+     LIMIT 1`,
+    [nextCycle]
+  );
+
+  if (newRows.length === 0) return null;
+
+  return {
+    id: newRows[0].question_id,
+    question: newRows[0].question,
+    category: newRows[0].category,
+  };
+}
+
+// ── Mark a question as asked in the current cycle ────────────────────────────
+
+export async function markQuestionAsked(questionId: number): Promise<void> {
+  const currentCycle = await getCurrentCycle();
+  await query(
+    `UPDATE story_queue
+     SET asked_at = NOW()
+     WHERE question_id = $1 AND cycle_num = $2 AND asked_at IS NULL`,
+    [questionId, currentCycle]
+  );
+  logger.info({ questionId, currentCycle }, "[STORY] Question marked as asked");
+}
+
+// ── story_state: pending prompt ───────────────────────────────────────────────
 
 interface StoryStateRow {
   pending_prompt: string | null;
   prompt_sent_at: Date | null;
-}
-
-export async function getRandomPrompt(): Promise<string> {
-  const { rows: usedRows } = await query<{ prompt_question: string }>(
-    "SELECT prompt_question FROM stories ORDER BY captured_at DESC LIMIT 20"
-  );
-  const recentlyUsed = new Set(usedRows.map((r) => r.prompt_question));
-
-  const available = STORY_PROMPTS.filter((p) => !recentlyUsed.has(p));
-  const pool = available.length > 0 ? available : STORY_PROMPTS;
-  return pool[Math.floor(Math.random() * pool.length)];
+  pending_question_id: number | null;
 }
 
 export async function getPendingPrompt(): Promise<string | null> {
+  await ensureStoryState();
   const { rows } = await query<StoryStateRow>(
-    "SELECT pending_prompt, prompt_sent_at FROM story_state WHERE id = 1"
+    "SELECT pending_prompt, prompt_sent_at, pending_question_id FROM story_state WHERE id = 1"
   );
   if (rows.length === 0 || !rows[0].pending_prompt) return null;
 
   const sentAt = rows[0].prompt_sent_at;
   if (sentAt) {
     const ageMinutes = (Date.now() - new Date(sentAt).getTime()) / 60000;
-    if (ageMinutes > 45) {
+    if (ageMinutes > 90) {
       await clearPendingPrompt();
       return null;
     }
@@ -83,26 +163,69 @@ export async function getPendingPrompt(): Promise<string | null> {
   return rows[0].pending_prompt;
 }
 
+export async function getPendingQuestionId(): Promise<number | null> {
+  await ensureStoryState();
+  const { rows } = await query<{ pending_question_id: number | null }>(
+    "SELECT pending_question_id FROM story_state WHERE id = 1"
+  );
+  return rows[0]?.pending_question_id ?? null;
+}
+
+export async function setPendingQuestion(questionId: number, questionText: string): Promise<void> {
+  await ensureStoryState();
+  await query(
+    "UPDATE story_state SET pending_prompt = $1, prompt_sent_at = NOW(), pending_question_id = $2 WHERE id = 1",
+    [questionText, questionId]
+  );
+}
+
+export async function clearPendingPrompt(): Promise<void> {
+  await ensureStoryState();
+  await query(
+    "UPDATE story_state SET pending_prompt = NULL, prompt_sent_at = NULL, pending_question_id = NULL WHERE id = 1"
+  );
+}
+
+// ── Legacy alias for existing callers ────────────────────────────────────────
+
+export async function getRandomPrompt(): Promise<string> {
+  const q = await getNextStoryQuestion();
+  return q?.question ?? "Tell me about a memory that means a lot to you — something you'd want Olivia to know.";
+}
+
 export async function setPendingPrompt(prompt: string): Promise<void> {
+  await ensureStoryState();
   await query(
     "UPDATE story_state SET pending_prompt = $1, prompt_sent_at = NOW() WHERE id = 1",
     [prompt]
   );
 }
 
-export async function clearPendingPrompt(): Promise<void> {
-  await query(
-    "UPDATE story_state SET pending_prompt = NULL, prompt_sent_at = NULL WHERE id = 1"
-  );
-}
+// ── Save a story ──────────────────────────────────────────────────────────────
 
-export async function saveStory(promptQuestion: string, response: string): Promise<Story> {
+export async function saveStory(
+  promptQuestion: string,
+  response: string,
+  questionId?: number | null,
+  category?: string | null
+): Promise<Story> {
   const { rows } = await query<Story>(
-    "INSERT INTO stories (prompt_question, response) VALUES ($1, $2) RETURNING *",
-    [promptQuestion, response]
+    `INSERT INTO stories (prompt_question, response, question_id, category)
+     VALUES ($1, $2, $3, $4)
+     RETURNING *`,
+    [promptQuestion, response, questionId ?? null, category ?? null]
   );
+
+  if (questionId) {
+    await markQuestionAsked(questionId).catch((err) =>
+      logger.warn({ err, questionId }, "[STORY] Failed to mark question as asked")
+    );
+  }
+
   return rows[0];
 }
+
+// ── Story retrieval ───────────────────────────────────────────────────────────
 
 export async function getStories(): Promise<Story[]> {
   const { rows } = await query<Story>(
@@ -113,14 +236,14 @@ export async function getStories(): Promise<Story[]> {
 
 export async function getStoryCount(): Promise<number> {
   const { rows } = await query<{ count: string }>(
-    "SELECT COUNT(*) as count FROM stories"
+    "SELECT COUNT(*) AS count FROM stories"
   );
   return parseInt(rows[0].count, 10);
 }
 
 export async function getRecentStoryCount(days: number): Promise<number> {
   const { rows } = await query<{ count: string }>(
-    `SELECT COUNT(*) as count FROM stories
+    `SELECT COUNT(*) AS count FROM stories
      WHERE captured_at >= NOW() - INTERVAL '${days} days'`
   );
   return parseInt(rows[0].count, 10);
@@ -135,7 +258,21 @@ export function formatStoriesForPrompt(stories: Story[]): string {
         day: "numeric",
         year: "numeric",
       });
-      return `Story ${i + 1} — ${date}\nPrompt: ${s.prompt_question}\n${s.response}`;
+      const cat = s.category ? ` [${s.category}]` : "";
+      return `Story ${i + 1} — ${date}${cat}\nPrompt: ${s.prompt_question}\n${s.response}`;
     })
     .join("\n\n---\n\n");
+}
+
+// ── Progress stats ────────────────────────────────────────────────────────────
+
+export async function getQueueProgress(): Promise<{ cycleNum: number; askedThisCycle: number; totalQuestions: number }> {
+  const cycleNum = await getCurrentCycle();
+  const total = await getTotalQuestionCount();
+  const { rows } = await query<{ count: string }>(
+    "SELECT COUNT(*) AS count FROM story_queue WHERE cycle_num = $1 AND asked_at IS NOT NULL",
+    [cycleNum]
+  );
+  const askedThisCycle = parseInt(rows[0]?.count ?? "0", 10);
+  return { cycleNum, askedThisCycle, totalQuestions: total };
 }

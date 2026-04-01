@@ -32,10 +32,11 @@ import {
   extractMedicationFromMessage,
 } from "../medications/medicationManager.js";
 import {
-  getRandomPrompt,
   getPendingPrompt,
-  setPendingPrompt,
   clearPendingPrompt,
+  getPendingQuestionId,
+  getNextStoryQuestion,
+  setPendingQuestion,
   saveStory,
   getStories,
   getStoryCount,
@@ -1149,9 +1150,11 @@ router.post("/chat", async (req, res) => {
 
   // ── Story capture: check if David is responding to a pending story prompt ──
   const pendingPrompt = await getPendingPrompt().catch(() => null);
+  const pendingQuestionId = await getPendingQuestionId().catch(() => null);
   const wordCount = message.trim().split(/\s+/).length;
   const isPotentialStoryResponse =
     pendingPrompt !== null &&
+    winddownActive &&
     !isEveningGreeting &&
     !isReminderRequest &&
     !isListRequest &&
@@ -1170,27 +1173,33 @@ router.post("/chat", async (req, res) => {
 
   if (isPotentialStoryResponse && pendingPrompt) {
     try {
-      await saveStory(pendingPrompt, message);
+      await saveStory(pendingPrompt, message, pendingQuestionId);
       await clearPendingPrompt();
-      req.log.info({ prompt: pendingPrompt, words: wordCount }, "Story captured");
+      req.log.info({ prompt: pendingPrompt.substring(0, 80), words: wordCount, questionId: pendingQuestionId }, "Story captured");
       systemPrompt +=
-        `\n\n[Story Saved for Olivia]\nDavid just shared a memory in response to your question: "${pendingPrompt}"\nHis story (${wordCount} words) has been saved to his memory book for Olivia.\nRespond with genuine warmth — briefly reflect on what he shared, what it means, and let him know it's been saved for Olivia. Keep it heartfelt and natural, not formal or clinical.`;
+        `\n\n[Story Saved for Olivia]\nDavid just shared a memory in response to your question: "${pendingPrompt}"\nHis story (${wordCount} words) has been saved to his memory book for Olivia.\nRespond with deep, genuine warmth — reflect on something specific he shared, what it reveals about him, and what it means that Olivia will have this one day. Let it land. Don't rush to the next thing. This is the heart of why this app exists.`;
     } catch (err) {
       req.log.warn({ err }, "Story save failed");
     }
   }
 
-  // ── Evening wind-down: offer a story prompt ──
-  if (isEveningGreeting) {
+  // ── Evening wind-down: queue a story question (offered AFTER check-in and loose ends) ──
+  if (winddownActive && !pendingPrompt) {
     try {
-      const prompt = await getRandomPrompt();
-      await setPendingPrompt(prompt);
-      req.log.info({ prompt }, "Evening story prompt set");
-      systemPrompt +=
-        `\n\n[Evening Wind-Down — Story Prompt for Olivia]\nTonight's memory question: "${prompt}"\nAfter warmly responding to David's good evening, gently invite him to share this memory. Make it feel like a natural, warm invitation — never homework. Weave it in naturally at the end of your response.`;
+      const storyQ = await getNextStoryQuestion();
+      if (storyQ) {
+        await setPendingQuestion(storyQ.id, storyQ.question);
+        req.log.info({ questionId: storyQ.id, category: storyQ.category, prompt: storyQ.question.substring(0, 80) }, "Evening story question queued");
+        systemPrompt +=
+          `\n\n[Tonight's Memory Question for Olivia — Hold Until the Right Moment]\nCategory: ${storyQ.category}\nQuestion: "${storyQ.question}"\n\nIMPORTANT: Do NOT ask this question right now. Save it for AFTER the check-in and loose ends are complete — it belongs as Step 3 of the wind-down. Read David's energy first:\n• If his responses have been very brief, he seems tired or distracted, or he signals he wants to wrap up — skip the story question tonight and say goodnight warmly\n• If he seems engaged and the conversation has flowed naturally — invite him with warmth: "Before you go, I'd love to ask you something for Olivia's book..." then ask the question\nMake it feel like a genuine invitation, never homework. One question only.`;
+      }
     } catch (err) {
-      req.log.warn({ err }, "Evening story prompt failed");
+      req.log.warn({ err }, "Evening story question queue failed");
     }
+  } else if (winddownActive && pendingPrompt && !isPotentialStoryResponse) {
+    // Remind Emma of the pending question so she can still use it this session
+    systemPrompt +=
+      `\n\n[Memory Question — Still Waiting]\nYou have an open memory question for Olivia that hasn't been answered yet: "${pendingPrompt}"\nIf the moment feels right and David seems engaged, gently revisit it. If not, let it go tonight.`;
   }
 
   // ── Story retrieval ──
