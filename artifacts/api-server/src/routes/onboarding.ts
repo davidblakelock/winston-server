@@ -351,8 +351,8 @@ Rules:
 - Merge arrays: if user says "I also like..." add to existing, don't replace
 - For wakeTime: "I wake up at 6" → "06:00", "around 7:30" → "07:30"
 - For people: "My daughter Olivia lives in Knoxville" → {name:"Olivia",relationship:"daughter",city:"Knoxville"}
-- For voiceId: if user says "I'll take option 1" or "Charlotte" or "number 3" → extract the voiceId
-  Voice options: 1=XB0fDUnXU5powFXDhCwa(Charlotte/British Female), 2=21m00Tcm4TlvDq8ikWAM(Rachel/American Female), 3=nPczCjzI2devNBz1zQrb(Brian/American Male), 4=onwK4e9ZLuTAKqWW03F9(Daniel/British Male), 5=XrExE9yKIg1WjnnlVkGX(Matilda/Australian Female), 6=9BWtsMINqrJLrRacOk9x(Aria/American Female)
+- For voiceId: if user says "I'll take option 1" or "Tom" or "number 3" → extract the voiceId
+  Voice options: 1=DYkrAHD8iwork3YSUBbs(Tom/American Male), 2=56bWURjYFHyYyVf490Dp(Emma/British Female), 3=hGQkZQUA5RiOXIw7P9iO(Kiora/New Zealand Female), 4=sB7vwSCyX0tQmU24cW2C(Jon/American Male), 5=Fahco4VZzobUeiPqni1S(Archer/American Male), 6=aj0fZfXTBc7E3By4X8L2(Best Female Friend/American Female), 7=UizRZo250FhTtKlJa6mo(Diana/American Female), 8=Ky9j3wxFbp3dSAdrkOEv(Bex/British Female)
 - readyForNextScene: true if user has finished sharing for this scene topic
   (e.g. "that's everyone", "that's all", "I think that covers it", "ok let's move on", natural completion signals)
   For scene 1: true once companionName is captured and user is ready to proceed

@@ -236,48 +236,62 @@ function formatWakeTime(t: string): string {
   return `${hour}:${String(m).padStart(2, "0")} ${ampm}`;
 }
 
-// ── 6 voice options for selection in Scene 2 ─────────────────────────────────
+// ── 8 voice options for selection in Scene 2 ─────────────────────────────────
 export const VOICE_OPTIONS = [
   {
-    id: "XB0fDUnXU5powFXDhCwa",
-    name: "Charlotte",
-    description: "Warm British Female",
+    id: "DYkrAHD8iwork3YSUBbs",
+    name: "Tom",
+    description: "Warm American Male",
+    accent: "American",
+    gender: "Male",
+  },
+  {
+    id: "56bWURjYFHyYyVf490Dp",
+    name: "Emma",
+    description: "Friendly British Female",
     accent: "British",
     gender: "Female",
   },
   {
-    id: "21m00Tcm4TlvDq8ikWAM",
-    name: "Rachel",
-    description: "Warm American Female",
-    accent: "American",
+    id: "hGQkZQUA5RiOXIw7P9iO",
+    name: "Kiora",
+    description: "Warm New Zealand Female",
+    accent: "New Zealand",
     gender: "Female",
   },
   {
-    id: "nPczCjzI2devNBz1zQrb",
-    name: "Brian",
+    id: "sB7vwSCyX0tQmU24cW2C",
+    name: "Jon",
     description: "Calm American Male",
     accent: "American",
     gender: "Male",
   },
   {
-    id: "onwK4e9ZLuTAKqWW03F9",
-    name: "Daniel",
-    description: "Friendly British Male",
-    accent: "British",
+    id: "Fahco4VZzobUeiPqni1S",
+    name: "Archer",
+    description: "Confident American Male",
+    accent: "American",
     gender: "Male",
   },
   {
-    id: "XrExE9yKIg1WjnnlVkGX",
-    name: "Matilda",
-    description: "Warm Australian Female",
-    accent: "Australian",
+    id: "aj0fZfXTBc7E3By4X8L2",
+    name: "Best Female Friend",
+    description: "Warm Casual American Female",
+    accent: "American",
     gender: "Female",
   },
   {
-    id: "9BWtsMINqrJLrRacOk9x",
-    name: "Aria",
-    description: "Conversational American Female",
+    id: "UizRZo250FhTtKlJa6mo",
+    name: "Diana",
+    description: "Elegant American Female",
     accent: "American",
+    gender: "Female",
+  },
+  {
+    id: "Ky9j3wxFbp3dSAdrkOEv",
+    name: "Bex",
+    description: "Energetic British Female",
+    accent: "British",
     gender: "Female",
   },
 ];
