@@ -239,14 +239,49 @@ interface ChatProps {
 }
 
 export default function Chat({ onSignOut, companionName: companionNameProp, userPicture, userFullName, userName }: ChatProps) {
-  // Use prop first; fall back to "your companion" until name is known
-  const companionName = companionNameProp || "your companion";
+  const baseUrl = (import.meta.env.BASE_URL as string).replace(/\/$/, "");
+
+  // Resolved name: prop → localStorage cache → null (fetched below)
+  const [resolvedCompanionName, setResolvedCompanionName] = useState<string | null>(
+    () => companionNameProp ?? localStorage.getItem("winston_companion_name")
+  );
+
+  // Sync prop changes into resolved state
+  useEffect(() => {
+    if (companionNameProp) {
+      setResolvedCompanionName(companionNameProp);
+      localStorage.setItem("winston_companion_name", companionNameProp);
+    }
+  }, [companionNameProp]);
+
+  // Self-fetch fallback: if neither prop nor cache provided the name, go get it
+  useEffect(() => {
+    if (resolvedCompanionName) return;
+    const token = localStorage.getItem("winston_session_token") ?? "";
+    fetch(`${baseUrl}/api/onboarding/status`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    })
+      .then((r) => r.json())
+      .then((data: { profile?: { companionName?: string | null } | null }) => {
+        const name = data.profile?.companionName;
+        if (name) {
+          setResolvedCompanionName(name);
+          localStorage.setItem("winston_companion_name", name);
+        }
+      })
+      .catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const companionNameFinal = resolvedCompanionName ?? null;
+  const companionName = companionNameFinal || "your companion";
 
   // Keep browser tab title in sync with the companion's name
   useEffect(() => {
-    document.title = companionNameProp || "Winston";
+    document.title = companionNameFinal || "Winston";
     return () => { document.title = "Winston"; };
-  }, [companionNameProp]);
+  }, [companionNameFinal]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [messagesLoaded, setMessagesLoaded] = useState(false);
   const [input, setInput] = useState("");
@@ -651,8 +686,8 @@ export default function Chat({ onSignOut, companionName: companionNameProp, user
         <div className="flex items-center gap-3">
           <Avatar className="h-10 w-10 border border-primary/20 bg-card">
             <AvatarFallback className="bg-card text-primary font-serif font-medium text-lg">
-              {companionNameProp
-                ? companionNameProp.trim().split(/\s+/).map((w) => w[0].toUpperCase()).join("").slice(0, 2)
+              {companionNameFinal
+                ? companionNameFinal.trim().split(/\s+/).map((w) => w[0].toUpperCase()).join("").slice(0, 2)
                 : "W"}
             </AvatarFallback>
           </Avatar>
@@ -745,9 +780,9 @@ export default function Chat({ onSignOut, companionName: companionNameProp, user
             </div>
           )}
           {/* Companion name label */}
-          {companionNameProp && (
+          {companionNameFinal && (
             <span className="text-sm font-medium text-foreground/80 hidden sm:block whitespace-nowrap">
-              {companionNameProp}
+              {companionNameFinal}
             </span>
           )}
           {/* Sign out */}

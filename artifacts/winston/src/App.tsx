@@ -98,6 +98,7 @@ function AppShell({ onSignOut, userPicture, userName, userFullName }: AppShellPr
         });
         if (data.profile?.companionName) {
           setProfile({ companionName: data.profile.companionName });
+          localStorage.setItem("winston_companion_name", data.profile.companionName);
         }
         const routing = data.isNewUser ? "new" : "returning";
         console.log("[AUTH] AppShell — routing decision:", routing);

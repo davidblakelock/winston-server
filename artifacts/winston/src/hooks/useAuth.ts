@@ -28,6 +28,7 @@ export function useAuth() {
     }
     localStorage.removeItem(SESSION_KEY);
     localStorage.removeItem("winston_user_name");
+    localStorage.removeItem("winston_companion_name");
     setAuthTokenGetter(null);
     setAuthState({ loading: false, authenticated: false });
     console.log("[AUTH] useAuth.signOut — complete, auth state cleared");
