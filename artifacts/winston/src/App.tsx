@@ -8,6 +8,7 @@ import Chat from "@/pages/Chat";
 import Onboarding from "@/pages/Onboarding";
 import OliviaArchive from "@/pages/OliviaArchive";
 import SignIn from "@/pages/SignIn";
+import AuthVerify from "@/pages/AuthVerify";
 import Demo from "@/pages/Demo";
 import { useAuth } from "@/hooks/useAuth";
 
@@ -245,15 +246,34 @@ function AppWithAuth() {
     return <Demo />;
   }
 
+  // Magic-link verification route
+  if (location.startsWith("/auth/verify")) {
+    const params = new URLSearchParams(
+      typeof window !== "undefined" ? window.location.search : ""
+    );
+    const token = params.get("token") ?? "";
+    return (
+      <AuthVerify
+        token={token}
+        onAuthenticated={(t, name) => {
+          queryClient.clear();
+          setAuthenticated(t, name);
+          navigate("/");
+        }}
+        onFailed={() => navigate("/")}
+      />
+    );
+  }
+
   // Loading auth state (validating existing session token)
   if (authState.loading) return <LoadingScreen />;
 
-  // Not authenticated — show sign in (Google OAuth only)
+  // Not authenticated — show sign in
   if (!authState.authenticated) {
     return (
       <>
         {authError && <AuthErrorBanner onDismiss={() => setAuthError(false)} />}
-        <SignIn />
+        <SignIn onAuthenticated={(t, name) => { setAuthenticated(t, name); navigate("/"); }} />
       </>
     );
   }

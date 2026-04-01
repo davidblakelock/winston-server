@@ -1,12 +1,60 @@
+import { useState, FormEvent } from "react";
+import { useLocation } from "wouter";
+
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
-export default function SignIn() {
+interface SignInProps {
+  onAuthenticated?: (token: string, userName: string) => void;
+}
+
+type EmailState =
+  | { kind: "idle" }
+  | { kind: "loading" }
+  | { kind: "sent"; emailSent: boolean }
+  | { kind: "link"; url: string }
+  | { kind: "error"; message: string };
+
+export default function SignIn({ onAuthenticated: _onAuthenticated }: SignInProps) {
+  const [email, setEmail] = useState("");
+  const [emailState, setEmailState] = useState<EmailState>({ kind: "idle" });
+  const [showEmail, setShowEmail] = useState(false);
+  const [, navigate] = useLocation();
+
   function handleGoogleSignIn() {
     window.location.href = `${BASE}/api/auth/google?signin=1`;
   }
 
   function handleDemoClick() {
-    window.location.href = `${BASE}/demo`;
+    navigate("/demo");
+  }
+
+  async function handleEmailSubmit(e: FormEvent) {
+    e.preventDefault();
+    const trimmed = email.trim().toLowerCase();
+    if (!trimmed) return;
+    setEmailState({ kind: "loading" });
+    try {
+      const res = await fetch(`${BASE}/api/auth/magic-link`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: trimmed }),
+      });
+      if (!res.ok) {
+        setEmailState({ kind: "error", message: "Something went wrong. Please try again." });
+        return;
+      }
+      const data = (await res.json()) as { sent: boolean; emailSent?: boolean; magicLinkUrl?: string };
+
+      if (data.emailSent) {
+        setEmailState({ kind: "sent", emailSent: true });
+      } else if (data.magicLinkUrl) {
+        setEmailState({ kind: "link", url: data.magicLinkUrl });
+      } else {
+        setEmailState({ kind: "error", message: "Could not generate a sign-in link." });
+      }
+    } catch {
+      setEmailState({ kind: "error", message: "Network error. Please try again." });
+    }
   }
 
   return (
@@ -53,13 +101,13 @@ export default function SignIn() {
           Your personal companion is waiting.
         </p>
 
-        {/* ── Two CTA buttons ── */}
+        {/* ── Two main CTA buttons ── */}
         <div
           style={{
             display: "grid",
             gridTemplateColumns: "1fr 1fr",
             gap: "14px",
-            marginBottom: "28px",
+            marginBottom: "24px",
           }}
         >
           {/* Sign In with Google */}
@@ -144,7 +192,130 @@ export default function SignIn() {
           </button>
         </div>
 
-        <p style={{ color: "#22223a", fontSize: "0.70rem", marginTop: "12px", lineHeight: "1.5" }}>
+        {/* ── Email sign-in ── */}
+        {emailState.kind === "sent" ? (
+          <div
+            style={{
+              background: "rgba(79,70,229,0.08)",
+              border: "1px solid rgba(79,70,229,0.3)",
+              borderRadius: "14px",
+              padding: "22px 20px",
+              textAlign: "center",
+              marginBottom: "16px",
+            }}
+          >
+            <p style={{ color: "#a5b4fc", fontWeight: "600", margin: "0 0 8px", fontSize: "1rem" }}>
+              Check your inbox
+            </p>
+            <p style={{ color: "#6b6b90", fontSize: "0.88rem", margin: 0, lineHeight: 1.5 }}>
+              We sent a sign-in link to <strong style={{ color: "#c4c0ff" }}>{email}</strong>.
+              Click it to continue.
+            </p>
+          </div>
+        ) : emailState.kind === "link" ? (
+          <div
+            style={{
+              background: "rgba(79,70,229,0.08)",
+              border: "1px solid rgba(79,70,229,0.3)",
+              borderRadius: "14px",
+              padding: "22px 20px",
+              textAlign: "center",
+              marginBottom: "16px",
+            }}
+          >
+            <p style={{ color: "#a5b4fc", fontWeight: "600", margin: "0 0 12px", fontSize: "1rem" }}>
+              Your sign-in link is ready
+            </p>
+            <a
+              href={emailState.url}
+              style={{
+                display: "inline-block",
+                padding: "11px 24px",
+                background: "linear-gradient(135deg, #4f46e5, #7c3aed)",
+                borderRadius: "10px",
+                color: "white",
+                fontWeight: "600",
+                fontSize: "0.9rem",
+                textDecoration: "none",
+              }}
+            >
+              Sign in to Winston →
+            </a>
+          </div>
+        ) : showEmail ? (
+          <form onSubmit={handleEmailSubmit} style={{ marginBottom: "16px" }}>
+            <input
+              type="email"
+              placeholder="your@email.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+              autoFocus
+              style={{
+                width: "100%",
+                padding: "13px 16px",
+                background: "rgba(255,255,255,0.04)",
+                border: "1px solid rgba(255,255,255,0.12)",
+                borderRadius: "12px",
+                color: "#e8e4ff",
+                fontSize: "0.95rem",
+                outline: "none",
+                boxSizing: "border-box",
+                fontFamily: "inherit",
+              }}
+              onFocus={(e) => { e.currentTarget.style.borderColor = "rgba(79,70,229,0.6)"; e.currentTarget.style.background = "rgba(79,70,229,0.06)"; }}
+              onBlur={(e) => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.12)"; e.currentTarget.style.background = "rgba(255,255,255,0.04)"; }}
+            />
+            {emailState.kind === "error" && (
+              <p style={{ color: "#f87171", fontSize: "0.83rem", margin: "8px 0 0", textAlign: "left" }}>
+                {emailState.message}
+              </p>
+            )}
+            <button
+              type="submit"
+              disabled={emailState.kind === "loading"}
+              style={{
+                width: "100%",
+                padding: "13px 20px",
+                background: "linear-gradient(135deg, #4f46e5, #7c3aed)",
+                border: "none",
+                borderRadius: "12px",
+                color: "white",
+                fontSize: "0.95rem",
+                fontWeight: "600",
+                cursor: "pointer",
+                marginTop: "12px",
+                opacity: emailState.kind === "loading" ? 0.7 : 1,
+                fontFamily: "inherit",
+              }}
+            >
+              {emailState.kind === "loading" ? "Sending…" : "Send sign-in link"}
+            </button>
+          </form>
+        ) : null}
+
+        {/* Toggle email form */}
+        {(emailState.kind === "idle" || emailState.kind === "error") && (
+          <button
+            onClick={() => setShowEmail((v) => !v)}
+            style={{
+              background: "none",
+              border: "none",
+              color: "#3e3e6a",
+              fontSize: "0.78rem",
+              cursor: "pointer",
+              padding: "4px 8px",
+              fontFamily: "inherit",
+              transition: "color 0.15s",
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "#6b6b90"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "#3e3e6a"; }}
+          >
+            {showEmail ? "Hide email sign-in" : "Sign in with email instead"}
+          </button>
+        )}
+
+        <p style={{ color: "#22223a", fontSize: "0.70rem", marginTop: "24px", lineHeight: "1.5" }}>
           Private &amp; invitation-only
         </p>
       </div>
