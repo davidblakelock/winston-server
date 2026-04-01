@@ -3,12 +3,9 @@ import { google } from "googleapis";
 import { createOAuthClient, getRedirectUri, SCOPES } from "../google/oauth.js";
 import { query } from "../db.js";
 import {
-  createMagicLink,
-  verifyMagicLink,
   createSession,
   validateSession,
   revokeSession,
-  sendMagicLinkEmail,
   lookupOrCreateGoogleUser,
   getAppUrl,
 } from "../auth/sessionAuth.js";
@@ -265,44 +262,6 @@ router.post("/auth/logout", async (req: Request, res: Response) => {
   } catch (err) {
     req.log.error({ err }, "Logout error");
     res.status(500).json({ error: "Logout failed" });
-  }
-});
-
-// ── Magic-link endpoints ──────────────────────────────────────────────────────
-
-router.post("/auth/magic-link", async (req: Request, res: Response) => {
-  try {
-    const { email } = req.body as { email?: string };
-    if (!email) { res.status(400).json({ error: "email_required" }); return; }
-
-    const result = await createMagicLink(email.trim().toLowerCase());
-    if (!result) { res.json({ sent: true, emailSent: false }); return; }
-
-    const magicLinkUrl = `${getAppUrl(req.headers.host as string | undefined)}/auth/verify?token=${result.token}`;
-    let emailSent = false;
-    if (process.env.RESEND_API_KEY) {
-      emailSent = await sendMagicLinkEmail(result.email, magicLinkUrl);
-    }
-    res.json({ sent: true, magicLinkUrl, emailSent });
-  } catch (err) {
-    req.log.error({ err }, "Magic link error");
-    res.status(500).json({ error: "server_error" });
-  }
-});
-
-router.post("/auth/magic-link/verify", async (req: Request, res: Response) => {
-  try {
-    const { token } = req.body as { token?: string };
-    if (!token) { res.status(400).json({ error: "token_required" }); return; }
-
-    const user = await verifyMagicLink(token.trim());
-    if (!user) { res.status(401).json({ error: "invalid_or_expired" }); return; }
-
-    const sessionToken = await createSession(user.userName, user.email);
-    res.json({ sessionToken, userName: user.userName, email: user.email, isNewUser: user.isNewUser ?? false });
-  } catch (err) {
-    req.log.error({ err }, "Magic link verify error");
-    res.status(500).json({ error: "server_error" });
   }
 });
 
