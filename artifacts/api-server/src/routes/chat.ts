@@ -677,7 +677,7 @@ router.post("/chat", async (req, res) => {
 
       const sportsBlock = sportsScores
         ? formatSportsForPrompt(sportsScores) +
-          `\n\nFor the morning briefing, mention sports scores naturally if there's something noteworthy — a win last night, a game tonight, or the Cowboys being in off-season. Keep it to 1-2 sentences woven in, not a separate sports segment.`
+          `\n\nFor the morning briefing, mention sports scores naturally if there's something noteworthy — a win or loss last night, an upcoming game with its exact start time today, or the Cowboys being in off-season. Keep it to 1-2 sentences woven in, not a separate sports segment. Use the exact start time from the data (e.g. "game starts at 2:05 PM" not "tonight") if a game is scheduled.`
         : "";
 
       const billsMorningBlock =
@@ -724,7 +724,7 @@ router.post("/chat", async (req, res) => {
     try {
       const scores = await fetchSportsScores();
       systemPrompt += formatSportsForPrompt(scores) +
-        `\n\nDavid is asking about sports. Answer directly using only the data above — give him the score, whether they won or lost, and if there's a game tonight. Be brief and conversational, like a friend giving a quick update. Do NOT invent any other games, records, or stats.`;
+        `\n\nDavid is asking about sports. Answer directly using only the data above. Give him the final score and result if the game is done, the live score if in progress, or the exact start time (morning/afternoon/evening) if it hasn't started yet. Be brief and conversational, like a friend giving a quick update. Do NOT say "tonight" if the game start time shows it's a morning or afternoon game. Do NOT invent any other games, records, or stats.`;
     } catch (err) {
       req.log.warn({ err }, "On-demand sports fetch failed");
       systemPrompt += `\n\n[Sports Scores — Unavailable]\nTell David you weren't able to pull the scores right now and suggest he check back shortly.`;
