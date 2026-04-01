@@ -8,8 +8,6 @@ export function generateToken(): string {
 
 export function getAppUrl(_reqHost?: string): string {
   if (process.env.APP_URL) return process.env.APP_URL.replace(/\/$/, "");
-  // REPLIT_DOMAINS takes priority — it's set to the production domain in deployed apps
-  // and to the dev domain in development. REPLIT_DEV_DOMAIN is only the fallback.
   const domains = process.env.REPLIT_DOMAINS;
   if (domains) return `https://${domains.split(",")[0].trim()}`;
   const devDomain = process.env.REPLIT_DEV_DOMAIN;
@@ -24,6 +22,50 @@ export interface SessionUser {
   isNewUser?: boolean;
 }
 
+// ── Username generation ────────────────────────────────────────────────────────
+// Finds a username not already claimed in user_profiles
+
+async function generateUniqueUsername(base: string): Promise<string> {
+  const clean = base.replace(/[^a-zA-Z0-9]/g, "").slice(0, 20) || "User";
+  const { rows } = await query<{ user_name: string }>(
+    "SELECT user_name FROM user_profiles WHERE user_name = $1 LIMIT 1",
+    [clean]
+  );
+  if (rows.length === 0) return clean;
+
+  for (let i = 2; i <= 99; i++) {
+    const candidate = `${clean}${i}`;
+    const { rows: r } = await query<{ user_name: string }>(
+      "SELECT user_name FROM user_profiles WHERE user_name = $1 LIMIT 1",
+      [candidate]
+    );
+    if (r.length === 0) return candidate;
+  }
+  return `${clean}_${Date.now()}`;
+}
+
+// ── Email → existing session lookup ───────────────────────────────────────────
+// Returns the userName from the most-recent session for this email, or null
+
+async function findExistingUserByEmail(
+  email: string
+): Promise<{ userName: string; isNewUser: boolean } | null> {
+  const { rows } = await query<{ user_name: string }>(
+    "SELECT user_name FROM app_sessions WHERE LOWER(email) = LOWER($1) ORDER BY created_at DESC LIMIT 1",
+    [email]
+  );
+  if (rows.length === 0) return null;
+
+  const userName = rows[0].user_name;
+  const { rows: profileRows } = await query<{ onboarding_completed: boolean }>(
+    "SELECT onboarding_completed FROM user_profiles WHERE user_name = $1 LIMIT 1",
+    [userName]
+  );
+  const hasCompletedProfile =
+    profileRows.length > 0 && profileRows[0].onboarding_completed === true;
+  return { userName, isNewUser: !hasCompletedProfile };
+}
+
 // ── Google user lookup / creation ─────────────────────────────────────────────
 
 export async function lookupOrCreateGoogleUser(
@@ -31,47 +73,55 @@ export async function lookupOrCreateGoogleUser(
   email: string,
   name: string
 ): Promise<{ userName: string; isNewUser: boolean }> {
-  // 1. Look up google_users by google_id
+  // 1. Known Google ID → returning user, look up their stored username
   const { rows: existing } = await query<{ user_name: string; is_new_user: boolean }>(
     "SELECT user_name, is_new_user FROM google_users WHERE google_id = $1",
     [googleId]
   );
 
-  let userName: string;
-
   if (existing.length > 0) {
-    userName = existing[0].user_name;
-    // Clear the first-sign-in flag
+    const userName = existing[0].user_name;
     if (existing[0].is_new_user) {
       await query("UPDATE google_users SET is_new_user = false WHERE google_id = $1", [googleId]);
     }
-  } else {
-    // Brand-new Google user — derive userName from first name
-    const firstName = name.split(" ")[0] || "Friend";
-    userName = firstName;
-
-    await query(
-      `INSERT INTO google_users (google_id, email, name, user_name, is_new_user)
-       VALUES ($1, $2, $3, $4, true)
-       ON CONFLICT (google_id) DO NOTHING`,
-      [googleId, email, name, firstName]
+    const { rows: profileRows } = await query<{ onboarding_completed: boolean }>(
+      "SELECT onboarding_completed FROM user_profiles WHERE user_name = $1 LIMIT 1",
+      [userName]
     );
+    const hasCompletedProfile =
+      profileRows.length > 0 && profileRows[0].onboarding_completed === true;
+    logger.info({ googleId, userName, hasCompletedProfile }, "Google user resolved");
+    return { userName, isNewUser: !hasCompletedProfile };
+  }
 
+  // 2. New Google ID — use email to find an existing account (e.g. prior magic-link sign-in)
+  const prior = await findExistingUserByEmail(email);
+
+  let userName: string;
+  let isNewUser: boolean;
+
+  if (prior) {
+    // Email recognised — link this Google account to the same user
+    userName = prior.userName;
+    isNewUser = prior.isNewUser;
+    logger.info({ googleId, email, userName }, "Google account linked to existing user");
+  } else {
+    // Truly new email — never seen before → always go to onboarding
+    const firstName = name.split(" ")[0] || "Friend";
+    userName = await generateUniqueUsername(firstName);
+    isNewUser = true;
     logger.info({ googleId, email, userName }, "New Google user created");
   }
 
-  // 2. Source of truth for "new vs returning" is whether a COMPLETED profile exists.
-  //    A user might have a magic-link profile already — they should go straight to chat.
-  const { rows: profileRows } = await query<{ onboarding_completed: boolean }>(
-    "SELECT onboarding_completed FROM user_profiles WHERE user_name = $1 LIMIT 1",
-    [userName]
+  await query(
+    `INSERT INTO google_users (google_id, email, name, user_name, is_new_user)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (google_id) DO NOTHING`,
+    [googleId, email, name, userName, isNewUser]
   );
 
-  const hasCompletedProfile =
-    profileRows.length > 0 && profileRows[0].onboarding_completed === true;
-
-  logger.info({ googleId, userName, hasCompletedProfile }, "Google user resolved");
-  return { userName, isNewUser: !hasCompletedProfile };
+  logger.info({ googleId, userName, isNewUser }, "Google user resolved");
+  return { userName, isNewUser };
 }
 
 // ── App sessions ──────────────────────────────────────────────────────────────
@@ -121,38 +171,65 @@ export async function revokeSession(token: string): Promise<void> {
   await query("DELETE FROM app_sessions WHERE token = $1", [token]);
 }
 
-// ── Legacy magic-link support (kept for backwards compat) ─────────────────────
+// ── Magic-link support ────────────────────────────────────────────────────────
+// Any email address can request a magic link (no allowlist).
+// New email → isNewUser=true → onboarding after clicking link.
+// Returning email → isNewUser=false → straight to chat.
 
-export async function createMagicLink(email: string): Promise<{ token: string; email: string } | null> {
-  const ALLOWED = ["davidblakelock.winston@gmail.com"];
+export async function createMagicLink(
+  email: string
+): Promise<{ token: string; email: string; isNewUser: boolean } | null> {
   const normalized = email.trim().toLowerCase();
-  if (!ALLOWED.includes(normalized)) return null;
+  if (!normalized.includes("@")) return null;
 
+  // Determine new vs returning by checking prior sessions for this email
+  const prior = await findExistingUserByEmail(normalized);
+  const isNewUser = prior === null || prior.isNewUser;
+
+  // Invalidate any unused previous tokens for this email
   await query(
     "UPDATE magic_link_tokens SET used_at = NOW() WHERE email = $1 AND used_at IS NULL",
     [normalized]
   );
 
   const token = generateToken();
-  const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+  const expiresAt = new Date(Date.now() + 30 * 60 * 1000); // 30 min
 
   await query(
     "INSERT INTO magic_link_tokens (email, token, expires_at) VALUES ($1, $2, $3)",
     [normalized, token, expiresAt]
   );
 
-  return { token, email: normalized };
+  return { token, email: normalized, isNewUser };
 }
 
-export async function verifyMagicLink(token: string): Promise<SessionUser | null> {
+export async function verifyMagicLink(
+  token: string
+): Promise<(SessionUser & { isNewUser: boolean }) | null> {
   const { rows } = await query<{ id: number; email: string }>(
     "SELECT id, email FROM magic_link_tokens WHERE token = $1 AND used_at IS NULL AND expires_at > NOW()",
     [token]
   );
 
   if (rows.length === 0) return null;
+  const email = rows[0].email;
   await query("UPDATE magic_link_tokens SET used_at = NOW() WHERE id = $1", [rows[0].id]);
-  return { userName: "David", email: rows[0].email };
+
+  // Find existing user by email or create a new unique username
+  const prior = await findExistingUserByEmail(email);
+  let userName: string;
+  let isNewUser: boolean;
+
+  if (prior) {
+    userName = prior.userName;
+    isNewUser = prior.isNewUser;
+  } else {
+    const emailPrefix = email.split("@")[0].replace(/[^a-zA-Z0-9]/g, "") || "User";
+    userName = await generateUniqueUsername(emailPrefix);
+    isNewUser = true;
+  }
+
+  return { userName, email, isNewUser };
 }
 
 export async function sendMagicLinkEmail(email: string, magicLinkUrl: string): Promise<boolean> {
@@ -167,7 +244,9 @@ export async function sendMagicLinkEmail(email: string, magicLinkUrl: string): P
         from: "Winston <noreply@winston.app>",
         to: [email],
         subject: "Your Winston sign-in link",
-        html: `<a href="${magicLinkUrl}">Sign in to Winston</a>`,
+        html: `<p>Click the link below to sign in to Winston:</p>
+               <p><a href="${magicLinkUrl}" style="color:#4f46e5">Sign in to Winston</a></p>
+               <p style="color:#999;font-size:12px">This link expires in 30 minutes.</p>`,
       }),
     });
     return res.ok;

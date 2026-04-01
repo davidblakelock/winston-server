@@ -11,6 +11,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 
 const API = import.meta.env.BASE_URL.replace(/\/$/, "");
+const SESSION_KEY = "winston_session_token";
+
+function getAuthHeaders(): Record<string, string> {
+  const token = localStorage.getItem(SESSION_KEY);
+  const base: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) base["Authorization"] = `Bearer ${token}`;
+  return base;
+}
 
 interface Message {
   id: string;
@@ -206,7 +214,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
       try {
         const resp = await fetch(`${API}/api/onboarding/chat`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: getAuthHeaders(),
           body: JSON.stringify({
             message: text,
             history: currentHistory.map((m) => ({ role: m.role, content: m.content })),
@@ -361,7 +369,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
     try {
       await fetch(`${API}/api/onboarding/complete`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ collectedData }),
       });
       onComplete();

@@ -5,7 +5,7 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 interface AuthVerifyProps {
   token: string;
-  onAuthenticated: (token: string, userName: string) => void;
+  onAuthenticated: (token: string, userName: string, isNewUser?: boolean) => void;
   onFailed: () => void;
 }
 
@@ -25,11 +25,11 @@ export default function AuthVerify({ token, onAuthenticated, onFailed }: AuthVer
     })
       .then((r) => {
         if (!r.ok) throw new Error("expired");
-        return r.json() as Promise<{ sessionToken: string; userName: string }>;
+        return r.json() as Promise<{ sessionToken: string; userName: string; isNewUser?: boolean }>;
       })
       .then((data) => {
         localStorage.setItem(SESSION_KEY, data.sessionToken);
-        onAuthenticated(data.sessionToken, data.userName);
+        onAuthenticated(data.sessionToken, data.userName, data.isNewUser);
       })
       .catch(() => {
         setError("This sign-in link has expired or was already used.");

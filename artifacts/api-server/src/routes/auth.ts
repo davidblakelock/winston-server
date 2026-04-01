@@ -230,7 +230,7 @@ router.post("/auth/magic-link/verify", async (req: Request, res: Response) => {
     if (!user) { res.status(401).json({ error: "invalid_or_expired" }); return; }
 
     const sessionToken = await createSession(user.userName, user.email);
-    res.json({ sessionToken, userName: user.userName, email: user.email });
+    res.json({ sessionToken, userName: user.userName, email: user.email, isNewUser: user.isNewUser ?? false });
   } catch (err) {
     req.log.error({ err }, "Magic link verify error");
     res.status(500).json({ error: "server_error" });

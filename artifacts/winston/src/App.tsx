@@ -189,7 +189,11 @@ function AppWithAuth() {
     return (
       <AuthVerify
         token={token}
-        onAuthenticated={(t, name) => { setAuthenticated(t, name); navigate("/"); }}
+        onAuthenticated={(t, name, isNewUser) => {
+          if (isNewUser !== undefined) setFreshIsNewUser(isNewUser);
+          setAuthenticated(t, name);
+          navigate("/");
+        }}
         onFailed={() => navigate("/")}
       />
     );
