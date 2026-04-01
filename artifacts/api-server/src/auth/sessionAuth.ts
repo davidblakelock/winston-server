@@ -262,7 +262,10 @@ export async function validateSession(
   const { rows } = await query<{ user_name: string; email: string; google_id: string | null; picture: string | null; full_name: string | null }>(
     `SELECT s.user_name, s.email, s.google_id, gu.picture, gu.name AS full_name
      FROM app_sessions s
-     LEFT JOIN google_users gu ON gu.google_id = s.google_id
+     LEFT JOIN google_users gu ON (
+       (s.google_id IS NOT NULL AND gu.google_id = s.google_id)
+       OR (s.google_id IS NULL AND LOWER(gu.email) = LOWER(s.email))
+     )
      WHERE s.token = $1 AND s.expires_at > NOW()`,
     [token]
   );

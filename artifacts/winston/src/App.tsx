@@ -201,10 +201,12 @@ function AppWithAuth() {
     if (urlToken && urlName) {
       const decodedName = decodeURIComponent(urlName);
       const isNewUser = urlIsNew === "1";
+      const urlPicture = params.get("picture") ? decodeURIComponent(params.get("picture")!) : undefined;
 
       console.log("[AUTH] App.tsx — Google sign-in token received:", {
         userName: decodedName,
         isNewUser,
+        hasPicture: !!urlPicture,
         tokenPrefix: urlToken.slice(0, 8) + "…",
       });
 
@@ -226,7 +228,7 @@ function AppWithAuth() {
       queryClient.clear();
 
       console.log("[AUTH] App.tsx — calling setAuthenticated with new token");
-      setAuthenticated(urlToken, decodedName);
+      setAuthenticated(urlToken, decodedName, urlPicture);
 
       // Clean URL — remove query params so the token isn't visible or bookmarked
       window.history.replaceState({}, "", window.location.pathname);

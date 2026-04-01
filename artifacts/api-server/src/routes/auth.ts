@@ -144,9 +144,10 @@ router.get("/auth/callback", async (req: Request, res: Response) => {
       const sessionToken = await createSession(userName, email, googleId);
 
       // Pass isNewUser flag to frontend so it can clear stale storage before loading profile
-      const redirectUrl = `${appUrl}/?token=${encodeURIComponent(sessionToken)}&name=${encodeURIComponent(userName)}&new=${isNewUser ? "1" : "0"}`;
+      const pictureParam = picture ? `&picture=${encodeURIComponent(picture)}` : "";
+      const redirectUrl = `${appUrl}/?token=${encodeURIComponent(sessionToken)}&name=${encodeURIComponent(userName)}&new=${isNewUser ? "1" : "0"}${pictureParam}`;
       req.log.info(
-        { userName, isNewUser, redirectPath: `/?token=…&name=${encodeURIComponent(userName)}&new=${isNewUser ? "1" : "0"}` },
+        { userName, isNewUser, hasPicture: !!picture, redirectPath: `/?token=…&name=${encodeURIComponent(userName)}&new=${isNewUser ? "1" : "0"}` },
         "[AUTH] /auth/callback — redirecting frontend with session token"
       );
       res.redirect(redirectUrl);

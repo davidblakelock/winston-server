@@ -790,7 +790,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, user
           )}
           {/* Companion name label */}
           {companionNameFinal && (
-            <span className="text-sm font-medium text-foreground/80 hidden sm:block whitespace-nowrap">
+            <span className="text-sm font-medium text-foreground/80 whitespace-nowrap">
               {companionNameFinal}
             </span>
           )}

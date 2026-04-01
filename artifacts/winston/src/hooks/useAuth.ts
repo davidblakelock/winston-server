@@ -61,33 +61,36 @@ export function useAuth() {
    * then fetches /api/auth/session in the background to hydrate picture +
    * fullName so the avatar appears without a page reload.
    */
-  const setAuthenticated = useCallback((token: string, userName: string) => {
+  const setAuthenticated = useCallback((token: string, userName: string, picture?: string) => {
     console.log("[AUTH] useAuth.setAuthenticated — persisting session:", {
       userName,
       tokenPrefix: token.slice(0, 8) + "…",
+      hasPicture: !!picture,
     });
     localStorage.setItem(SESSION_KEY, token);
     localStorage.setItem("winston_user_name", userName);
     setAuthTokenGetter(() => localStorage.getItem(SESSION_KEY));
 
-    // Immediately mark as authenticated so the UI unblocks
-    setAuthState({ loading: false, authenticated: true, userName, token });
-    console.log("[AUTH] useAuth.setAuthenticated — initial auth state set, userName:", userName);
+    // Immediately mark as authenticated — include picture if we already have it
+    // (e.g. from the Google OAuth redirect URL param)
+    setAuthState({ loading: false, authenticated: true, userName, token, picture });
+    console.log("[AUTH] useAuth.setAuthenticated — initial auth state set, userName:", userName, "hasPicture:", !!picture);
 
-    // Background fetch: hydrate picture + fullName from the session endpoint
-    // so the Google profile photo appears without requiring a page reload.
+    // Background fetch: hydrate picture + fullName from the session endpoint.
+    // Runs even when picture is already known, to also capture fullName.
     fetchSessionProfile(token).then((data) => {
       if (!data || !data.authenticated) return;
-      setAuthState({
+      setAuthState((prev) => ({
+        ...prev,
         loading: false,
         authenticated: true,
         userName: data.userName ?? userName,
         email: data.email ?? undefined,
         token,
-        picture: data.picture ?? undefined,
+        picture: data.picture ?? prev.picture ?? undefined,
         fullName: data.fullName ?? undefined,
-      });
-      console.log("[AUTH] useAuth.setAuthenticated — picture/fullName hydrated from session endpoint");
+      }));
+      console.log("[AUTH] useAuth.setAuthenticated — picture/fullName hydrated from session endpoint, hasPicture:", !!(data.picture));
     });
   }, []);
 
