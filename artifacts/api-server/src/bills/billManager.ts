@@ -241,33 +241,56 @@ export async function extractBillFromMessage(
   const result = await anthropic.messages.create({
     model: "claude-opus-4-5",
     max_tokens: 384,
+    temperature: 0,
     system: `You extract financial obligation details from natural language. Current date/time: ${now}.
 
-Return ONLY valid JSON with these fields:
-- name: string — short name (e.g. "Amex", "Car Insurance", "Quarterly Taxes", "Netflix")
-- category: one of: "credit_card", "rent_mortgage", "insurance", "subscription", "quarterly_tax", "registration", "annual_fee", "other"
-- frequency: one of: "monthly", "quarterly", "annual"
-- dueDay: integer 1-31 — day of month due
-- dueMonths: string or null — for annual: single month number as string e.g. "3" for March; for quarterly: comma-separated months e.g. "4,6,9,1" for April/June/September/January; for monthly: null
-- amount: string or null — amount if mentioned e.g. "$250" or null
-- notes: string or null — any other relevant notes
+Return ONLY valid JSON with these exact fields (no extra text, no markdown):
+{
+  "name": string,
+  "category": string,
+  "frequency": string,
+  "dueDay": number,
+  "dueMonths": string | null,
+  "amount": string | null,
+  "notes": string | null
+}
+
+Field rules:
+- name: short descriptive name (e.g. "Amex", "Rent", "Car Insurance", "Netflix", "USAA Credit Card", "Quarterly Taxes")
+- category: exactly one of: "credit_card", "rent_mortgage", "insurance", "subscription", "quarterly_tax", "registration", "annual_fee", "other"
+- frequency: exactly one of: "monthly", "quarterly", "annual"
+- dueDay: integer 1-31 (day of month). If unclear, use 1.
+- dueMonths: null for monthly; "3" for March annual; "4,6,9,1" for quarterly; etc.
+- amount: dollar amount string if stated (e.g. "$2950") or null
+- notes: any extra context or null
 
 Category guidance:
-- credit card bills → "credit_card"
+- Amex, Visa, Mastercard, credit card payments → "credit_card"
 - rent, mortgage, HOA → "rent_mortgage"
-- car insurance, home insurance, health insurance, renters insurance → "insurance"
-- Netflix, Spotify, Amazon Prime, any subscription → "subscription"
-- quarterly estimated taxes, IRS estimated taxes → "quarterly_tax"
-- car registration, DMV renewal → "registration"
-- annual fees (credit card annual fee, club memberships) → "annual_fee"
+- car/home/health/renters insurance → "insurance"
+- Netflix, Spotify, Amazon Prime, Hulu, subscriptions → "subscription"
+- quarterly estimated taxes, IRS → "quarterly_tax"
+- car registration, DMV → "registration"
+- annual membership fees → "annual_fee"
+- anything else → "other"
 
 Quarterly tax standard dates: April 15, June 15, September 15, January 15 → dueDay:15, dueMonths:"4,6,9,1"
 
 Examples:
-"Amex bill is due on the 15th of every month" → {"name":"Amex","category":"credit_card","frequency":"monthly","dueDay":15,"dueMonths":null,"amount":null,"notes":null}
-"car insurance is due on March 1st every year" → {"name":"Car Insurance","category":"insurance","frequency":"annual","dueDay":1,"dueMonths":"3","amount":null,"notes":null}
-"quarterly taxes are due April 15th" → {"name":"Quarterly Taxes","category":"quarterly_tax","frequency":"quarterly","dueDay":15,"dueMonths":"4,6,9,1","amount":null,"notes":null}
-"Netflix subscription renews on the 8th every month for $22.99" → {"name":"Netflix","category":"subscription","frequency":"monthly","dueDay":8,"dueMonths":null,"amount":"$22.99","notes":null}`,
+Input: "Ms. Peel my Amex is due on the 15th every month"
+Output: {"name":"Amex","category":"credit_card","frequency":"monthly","dueDay":15,"dueMonths":null,"amount":null,"notes":null}
+
+Input: "my rent is $2950 due on the 1st"
+Output: {"name":"Rent","category":"rent_mortgage","frequency":"monthly","dueDay":1,"dueMonths":null,"amount":"$2950","notes":null}
+
+Input: "USAA credit card bill is due on the 25th"
+Output: {"name":"USAA Credit Card","category":"credit_card","frequency":"monthly","dueDay":25,"dueMonths":null,"amount":null,"notes":null}
+
+Input: "car insurance is due on March 1st every year"
+Output: {"name":"Car Insurance","category":"insurance","frequency":"annual","dueDay":1,"dueMonths":"3","amount":null,"notes":null}
+
+Input: "quarterly taxes are due April 15th"
+Output: {"name":"Quarterly Taxes","category":"quarterly_tax","frequency":"quarterly","dueDay":15,"dueMonths":"4,6,9,1","amount":null,"notes":null}`,
     messages: [{ role: "user", content: message }],
   });
 
@@ -275,7 +298,12 @@ Examples:
     const text = result.content[0].type === "text" ? result.content[0].text.trim() : "";
     const match = text.match(/\{[\s\S]*\}/);
     if (!match) return null;
-    return JSON.parse(match[0]) as ExtractedBill;
+    const parsed = JSON.parse(match[0]) as ExtractedBill;
+    // Validate required fields
+    if (!parsed.name || !parsed.category || !parsed.frequency || !parsed.dueDay) return null;
+    if (!["monthly", "quarterly", "annual"].includes(parsed.frequency)) return null;
+    if (!["credit_card", "rent_mortgage", "insurance", "subscription", "quarterly_tax", "registration", "annual_fee", "other"].includes(parsed.category)) return null;
+    return parsed;
   } catch {
     return null;
   }

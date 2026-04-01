@@ -11,6 +11,7 @@ import {
   type CollectedData,
 } from "../onboarding/onboardingManager.js";
 import { addProfileItem } from "../profile/profileManager.js";
+import { validateSession } from "../auth/sessionAuth.js";
 
 const router: IRouter = Router();
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -21,12 +22,19 @@ const EL_KEY = () =>
 // ── GET /api/onboarding/status ────────────────────────────────────────────────
 router.get("/onboarding/status", async (req, res) => {
   try {
-    const profile = await getProfile();
+    // Resolve the requesting user from their session token
+    let userName = "David";
+    const authHeader = req.headers.authorization;
+    if (authHeader?.startsWith("Bearer ")) {
+      const session = await validateSession(authHeader.slice(7));
+      if (session) userName = session.userName;
+    }
+
+    const profile = await getProfile(userName);
     const complete = profile?.onboardingCompleted ?? false;
     res.json({ isNewUser: !complete, profile: complete ? profile : null });
   } catch (err) {
     req.log.error({ err }, "Onboarding status error");
-    // Fail safe: if DB error, treat as new user
     res.json({ isNewUser: true, profile: null });
   }
 });
@@ -86,6 +94,14 @@ router.post("/onboarding/voice-preview", async (req, res) => {
 
 // ── POST /api/onboarding/chat ─────────────────────────────────────────────────
 router.post("/onboarding/chat", async (req, res) => {
+  // Resolve user from session token (new users may not have a complete session yet; default to creating "new" profile)
+  let userName = "David";
+  const authHeader = req.headers.authorization;
+  if (authHeader?.startsWith("Bearer ")) {
+    const session = await validateSession(authHeader.slice(7));
+    if (session) userName = session.userName;
+  }
+
   const {
     message = "",
     history = [],
@@ -151,7 +167,7 @@ router.post("/onboarding/chat", async (req, res) => {
 
         // Save to DB incrementally
         if (Object.keys(extraction.data).length > 0) {
-          await upsertProfile(updatedData).catch(() => {});
+          await upsertProfile(updatedData, userName).catch(() => {});
         }
       } catch (err) {
         req.log.warn({ err }, "Extraction failed, continuing");
@@ -202,7 +218,7 @@ router.post("/onboarding/chat", async (req, res) => {
 
     if (isComplete) {
       try {
-        await completeOnboarding();
+        await completeOnboarding(userName);
         await saveProfileItemsFromOnboarding(updatedData);
       } catch (err) {
         req.log.error({ err }, "Failed to complete onboarding");
@@ -225,10 +241,17 @@ router.post("/onboarding/chat", async (req, res) => {
 
 // ── POST /api/onboarding/complete ─────────────────────────────────────────────
 router.post("/onboarding/complete", async (req, res) => {
+  let userName = "David";
+  const authHeader = req.headers.authorization;
+  if (authHeader?.startsWith("Bearer ")) {
+    const session = await validateSession(authHeader.slice(7));
+    if (session) userName = session.userName;
+  }
+
   const { collectedData } = req.body as { collectedData: CollectedData };
   try {
-    if (collectedData) await upsertProfile(collectedData);
-    await completeOnboarding();
+    if (collectedData) await upsertProfile(collectedData, userName);
+    await completeOnboarding(userName);
     await saveProfileItemsFromOnboarding(collectedData ?? {});
     res.json({ success: true });
   } catch (err) {

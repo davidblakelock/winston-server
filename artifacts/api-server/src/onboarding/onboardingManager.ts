@@ -39,6 +39,7 @@ export async function ensureOnboardingTable(): Promise<void> {
   await query(`
     CREATE TABLE IF NOT EXISTS user_profiles (
       id serial PRIMARY KEY,
+      user_name text NOT NULL DEFAULT 'David',
       name text,
       city text,
       latitude float,
@@ -54,7 +55,7 @@ export async function ensureOnboardingTable(): Promise<void> {
   `);
 }
 
-export async function getProfile(): Promise<UserProfile | null> {
+export async function getProfile(userName = "David"): Promise<UserProfile | null> {
   const { rows } = await query<{
     id: number;
     name: string | null;
@@ -68,7 +69,7 @@ export async function getProfile(): Promise<UserProfile | null> {
     raw_data: Record<string, unknown>;
     onboarding_completed: boolean;
     created_at: Date;
-  }>(`SELECT * FROM user_profiles LIMIT 1`);
+  }>(`SELECT * FROM user_profiles WHERE user_name = $1 LIMIT 1`, [userName]);
 
   if (rows.length === 0) return null;
   const r = rows[0];
@@ -88,14 +89,15 @@ export async function getProfile(): Promise<UserProfile | null> {
   };
 }
 
-export async function upsertProfile(data: Partial<CollectedData>): Promise<void> {
-  const existing = await getProfile();
+export async function upsertProfile(data: Partial<CollectedData>, userName = "David"): Promise<void> {
+  const existing = await getProfile(userName);
 
   if (!existing) {
     await query(
-      `INSERT INTO user_profiles (name, city, latitude, longitude, timezone, wake_time, voice_id, health_notes, raw_data, onboarding_completed)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,false)`,
+      `INSERT INTO user_profiles (user_name, name, city, latitude, longitude, timezone, wake_time, voice_id, health_notes, raw_data, onboarding_completed)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,false)`,
       [
+        userName,
         data.name ?? null,
         data.city ?? null,
         data.latitude ?? null,
@@ -120,7 +122,7 @@ export async function upsertProfile(data: Partial<CollectedData>): Promise<void>
         voice_id = COALESCE($7, voice_id),
         health_notes = COALESCE($8, health_notes),
         raw_data = $9
-       WHERE id = $10`,
+       WHERE user_name = $10`,
       [
         data.name ?? null,
         data.city ?? null,
@@ -131,18 +133,18 @@ export async function upsertProfile(data: Partial<CollectedData>): Promise<void>
         data.voiceId ?? null,
         data.healthNotes ?? null,
         JSON.stringify(merged),
-        existing.id,
+        userName,
       ]
     );
   }
 }
 
-export async function completeOnboarding(): Promise<void> {
-  await query(`UPDATE user_profiles SET onboarding_completed = true WHERE id = (SELECT id FROM user_profiles LIMIT 1)`);
+export async function completeOnboarding(userName = "David"): Promise<void> {
+  await query(`UPDATE user_profiles SET onboarding_completed = true WHERE user_name = $1`, [userName]);
 }
 
-export async function isOnboardingComplete(): Promise<boolean> {
-  const profile = await getProfile();
+export async function isOnboardingComplete(userName = "David"): Promise<boolean> {
+  const profile = await getProfile(userName);
   return profile?.onboardingCompleted ?? false;
 }
 

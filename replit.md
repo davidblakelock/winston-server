@@ -44,7 +44,7 @@ Winston is a personal AI companion app with a dark-themed chat interface. Users 
   - New vs. returning user detection: new → onboarding, returning → main Chat
   - On completion, transitions to the main chat interface automatically
   - Dynamic profile system: if user has completed onboarding, their profile drives Emma's system prompt (instead of hardcoded BASE_SYSTEM_PROMPT)
-  - DB tables: `user_profiles` (id, name, city, lat, lon, timezone, wake_time, voice_id, health_notes, raw_data, onboarding_completed)
+  - DB tables: `user_profiles` (id, user_name, name, city, lat, lon, timezone, wake_time, voice_id, health_notes, raw_data, onboarding_completed) — `user_name` added April 2026 for multi-user isolation; `getProfile(userName)` filters by user_name; `onboarding/status` endpoint validates session to determine userName before checking profile
 - **Profile Management**: David can add/remove/read personal profile items via natural language
   - Categories: Places (with address), Shows (watching), Restaurants (favorites), People, Interests, Other
   - Add: "Ms. Peel add a new place called Chelsea Corner at 6315 La Vista Drive Dallas TX"

@@ -45,7 +45,10 @@ function AppShell() {
   >("loading");
 
   useEffect(() => {
-    fetch(`${API}/api/onboarding/status`)
+    const token = localStorage.getItem("winston_session_token");
+    fetch(`${API}/api/onboarding/status`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
       .then((r) => r.json() as Promise<{ isNewUser: boolean }>)
       .then((data) => {
         setOnboardingStatus(data.isNewUser ? "new" : "returning");
