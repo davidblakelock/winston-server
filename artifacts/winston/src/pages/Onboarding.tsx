@@ -170,7 +170,7 @@ const SCENE_LABELS = [
 
 // ─── Main component ──────────────────────────────────────────────────────────
 interface OnboardingProps {
-  onComplete: () => void;
+  onComplete: (companionName?: string) => void;
 }
 
 export default function Onboarding({ onComplete }: OnboardingProps) {
@@ -249,7 +249,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
         }
 
         if (data.isComplete) {
-          setTimeout(onComplete, 3500);
+          setTimeout(() => onComplete(data.collectedData?.companionName ?? undefined), 3500);
         }
       } catch (err) {
         console.error("Onboarding chat error:", err);
@@ -372,9 +372,9 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
         headers: getAuthHeaders(),
         body: JSON.stringify({ collectedData }),
       });
-      onComplete();
+      onComplete(collectedData.companionName ?? undefined);
     } catch {
-      onComplete();
+      onComplete(collectedData.companionName ?? undefined);
     }
   }, [collectedData, onComplete]);
 

@@ -107,13 +107,18 @@ router.post("/onboarding/voice-preview", async (req, res) => {
 
 // ── POST /api/onboarding/chat ─────────────────────────────────────────────────
 router.post("/onboarding/chat", async (req, res) => {
-  // Resolve user from session token (new users may not have a complete session yet; default to creating "new" profile)
-  let userName = "David";
+  // Session token is required — reject unauthenticated requests
   const authHeader = req.headers.authorization;
-  if (authHeader?.startsWith("Bearer ")) {
-    const session = await validateSession(authHeader.slice(7));
-    if (session) userName = session.userName;
+  if (!authHeader?.startsWith("Bearer ")) {
+    res.status(401).json({ error: "authentication_required" });
+    return;
   }
+  const session = await validateSession(authHeader.slice(7));
+  if (!session) {
+    res.status(401).json({ error: "session_expired" });
+    return;
+  }
+  const userName = session.userName;
 
   const {
     message = "",
@@ -254,12 +259,17 @@ router.post("/onboarding/chat", async (req, res) => {
 
 // ── POST /api/onboarding/complete ─────────────────────────────────────────────
 router.post("/onboarding/complete", async (req, res) => {
-  let userName = "David";
   const authHeader = req.headers.authorization;
-  if (authHeader?.startsWith("Bearer ")) {
-    const session = await validateSession(authHeader.slice(7));
-    if (session) userName = session.userName;
+  if (!authHeader?.startsWith("Bearer ")) {
+    res.status(401).json({ error: "authentication_required" });
+    return;
   }
+  const session = await validateSession(authHeader.slice(7));
+  if (!session) {
+    res.status(401).json({ error: "session_expired" });
+    return;
+  }
+  const userName = session.userName;
 
   const { collectedData } = req.body as { collectedData: CollectedData };
   try {

@@ -21,7 +21,7 @@ function LoadingScreen() {
     <div className="flex items-center justify-center h-screen bg-zinc-950">
       <div className="flex flex-col items-center gap-4">
         <div className="w-10 h-10 rounded-full bg-indigo-900 border border-indigo-700 flex items-center justify-center">
-          <span className="text-sm font-semibold text-indigo-300">EP</span>
+          <span className="text-sm font-semibold text-indigo-300">W</span>
         </div>
         <div className="flex gap-1">
           {[0, 150, 300].map((delay) => (
@@ -45,15 +45,19 @@ interface AppShellProps {
   onSignOut: () => void;
 }
 
+interface ProfileInfo {
+  companionName: string | null;
+}
+
 function AppShell({ onSignOut }: AppShellProps) {
   const [onboardingStatus, setOnboardingStatus] = useState<
     "loading" | "new" | "returning"
   >("loading");
+  const [profile, setProfile] = useState<ProfileInfo | null>(null);
 
   useEffect(() => {
     // ALWAYS fetch /api/onboarding/status — it is the authoritative source of truth.
-    // Never trust the isNewUser hint from the OAuth/magic-link response for routing;
-    // it can be stale or wrong. Only user_profiles.onboarding_completed matters.
+    // Never trust the isNewUser hint from the OAuth/magic-link response for routing.
     const token = localStorage.getItem("winston_session_token");
     if (!token) {
       setOnboardingStatus("new");
@@ -65,14 +69,16 @@ function AppShell({ onSignOut }: AppShellProps) {
       cache: "no-store",
     })
       .then((r) => {
-        if (r.status === 401) return { isNewUser: true } as { isNewUser: boolean };
-        return r.json() as Promise<{ isNewUser: boolean }>;
+        if (r.status === 401) return { isNewUser: true, profile: null } as { isNewUser: boolean; profile: { companionName: string | null } | null };
+        return r.json() as Promise<{ isNewUser: boolean; profile: { companionName: string | null } | null }>;
       })
       .then((data) => {
+        if (data.profile?.companionName) {
+          setProfile({ companionName: data.profile.companionName });
+        }
         setOnboardingStatus(data.isNewUser ? "new" : "returning");
       })
       .catch(() => {
-        // Network error — fail open to returning so user doesn't get stuck
         setOnboardingStatus("returning");
       });
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -81,12 +87,15 @@ function AppShell({ onSignOut }: AppShellProps) {
   if (onboardingStatus === "loading") return <LoadingScreen />;
 
   if (onboardingStatus === "new") {
-    return <Onboarding onComplete={() => setOnboardingStatus("returning")} />;
+    return <Onboarding onComplete={(companionName?: string) => {
+      if (companionName) setProfile({ companionName });
+      setOnboardingStatus("returning");
+    }} />;
   }
 
   return (
     <Switch>
-      <Route path="/">{() => <Chat onSignOut={onSignOut} />}</Route>
+      <Route path="/">{() => <Chat onSignOut={onSignOut} companionName={profile?.companionName ?? null} />}</Route>
       <Route component={NotFound} />
     </Switch>
   );

@@ -56,21 +56,32 @@ router.get("/auth/callback", async (req: Request, res: Response) => {
 
     const oauth2 = google.oauth2({ version: "v2", auth: oauth2Client });
     const userInfo = await oauth2.userinfo.get();
-    const email = userInfo.data.email ?? "";
-    const googleId = userInfo.data.id ?? "";
-    const fullName = userInfo.data.name ?? email.split("@")[0];
+    const email = (userInfo.data.email ?? "").trim().toLowerCase();
+    // Prefer `sub` (OpenID Connect) then fall back to `id` (v2 field)
+    const googleId = (userInfo.data.sub ?? userInfo.data.id ?? "").trim();
+    const fullName = (userInfo.data.name ?? email.split("@")[0]).trim();
 
-    // ── Resolve user identity from Google sub ID ──────────────────────────────
-    let userName = "David";
-    let isNewUser = false;
+    req.log.info({ email, googleId: googleId ? `${googleId.slice(0,8)}…` : "MISSING", fullName }, "Google userinfo received");
 
-    if (googleId) {
-      const resolved = await lookupOrCreateGoogleUser(googleId, email, fullName);
-      userName = resolved.userName;
-      isNewUser = resolved.isNewUser;
+    if (!googleId || !email) {
+      req.log.error({ email, googleIdPresent: !!googleId }, "Google OAuth returned no user ID or email");
+      if (isSignIn) {
+        res.redirect(`${appUrl}/?auth=error`);
+      } else {
+        res.send(`<!DOCTYPE html><html><body><script>
+          if(window.opener){window.opener.postMessage('google-auth-error','*');window.close();}
+          else{window.location.href='/?auth=error';}
+        </script></body></html>`);
+      }
+      return;
     }
 
-    // ── Always upsert google_auth for calendar/gmail tokens ───────────────────
+    // ── Resolve user identity from Google ID — no hardcoded fallback ─────────
+    const resolved = await lookupOrCreateGoogleUser(googleId, email, fullName);
+    const { userName, isNewUser } = resolved;
+
+    // ── Upsert google_auth (OAuth tokens for calendar/gmail access) ───────────
+    // Key on (user_name) so each user has exactly one token row
     await query(
       `INSERT INTO google_auth (user_name, email, access_token, refresh_token, token_expiry, scope)
        VALUES ($1, $2, $3, $4, $5, $6)
@@ -91,20 +102,18 @@ router.get("/auth/callback", async (req: Request, res: Response) => {
       ]
     );
 
-    req.log.info({ email, googleId, userName, isSignIn }, "Google OAuth connected");
+    req.log.info({ email, userName, isSignIn, isNewUser }, "Google OAuth connected");
 
     if (isSignIn) {
       // ── Create app session and redirect frontend with token ─────────────────
       const sessionToken = await createSession(userName, email, googleId);
-
       req.log.info({ userName, isNewUser }, "Google sign-in session created");
 
-      // Redirect to frontend — token + name + isNewUser flag
-      const redirectUrl =
-        `${appUrl}/?token=${encodeURIComponent(sessionToken)}&name=${encodeURIComponent(userName)}&new=${isNewUser ? "1" : "0"}`;
+      // Redirect to frontend — clean URL with session token and display name
+      const redirectUrl = `${appUrl}/?token=${encodeURIComponent(sessionToken)}&name=${encodeURIComponent(userName)}`;
       res.redirect(redirectUrl);
     } else {
-      // ── Popup calendar/gmail connect — existing behaviour ──────────────────
+      // ── Popup calendar/gmail connect ────────────────────────────────────────
       res.send(`<!DOCTYPE html><html><head><title>Connected</title></head><body>
         <script>
           if(window.opener){window.opener.postMessage('google-connected','*');window.close();}
@@ -171,12 +180,23 @@ router.post("/auth/session/logout", async (req: Request, res: Response) => {
   }
 });
 
-// ── Google auth status (for calendar/gmail connect) ───────────────────────────
+// ── Google auth status (calendar/gmail connect — requires session) ────────────
 
-router.get("/auth/status", async (_req: Request, res: Response) => {
+router.get("/auth/status", async (req: Request, res: Response) => {
   try {
+    const authHeader = req.headers.authorization;
+    let userName: string | null = null;
+    if (authHeader?.startsWith("Bearer ")) {
+      const session = await validateSession(authHeader.slice(7));
+      if (session) userName = session.userName;
+    }
+    if (!userName) {
+      res.json({ connected: false });
+      return;
+    }
     const { rows } = await query<{ email: string | null; token_expiry: Date | null }>(
-      "SELECT email, token_expiry FROM google_auth WHERE user_name = 'David' LIMIT 1"
+      "SELECT email, token_expiry FROM google_auth WHERE user_name = $1 LIMIT 1",
+      [userName]
     );
     if (rows.length === 0 || !rows[0].email) {
       res.json({ connected: false });
@@ -190,8 +210,16 @@ router.get("/auth/status", async (_req: Request, res: Response) => {
 
 router.post("/auth/logout", async (req: Request, res: Response) => {
   try {
-    await query("DELETE FROM google_auth WHERE user_name = 'David'");
-    req.log.info("Google OAuth disconnected");
+    const authHeader = req.headers.authorization;
+    let userName: string | null = null;
+    if (authHeader?.startsWith("Bearer ")) {
+      const session = await validateSession(authHeader.slice(7));
+      if (session) userName = session.userName;
+    }
+    if (userName) {
+      await query("DELETE FROM google_auth WHERE user_name = $1", [userName]);
+      req.log.info({ userName }, "Google OAuth disconnected");
+    }
     res.json({ ok: true });
   } catch (err) {
     req.log.error({ err }, "Logout error");

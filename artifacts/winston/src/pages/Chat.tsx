@@ -200,12 +200,17 @@ interface GoogleAuthStatus {
   loading: boolean;
 }
 
+const CHAT_BASE = (import.meta.env.BASE_URL as string).replace(/\/$/, "");
+
 function useGoogleAuth(): [GoogleAuthStatus, () => Promise<void>] {
   const [status, setStatus] = useState<GoogleAuthStatus>({ connected: false, email: null, loading: true });
 
   const refresh = useCallback(async () => {
     try {
-      const res = await fetch("/api/auth/status");
+      const token = localStorage.getItem("winston_session_token") ?? "";
+      const res = await fetch(`${CHAT_BASE}/api/auth/status`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       const data = await res.json() as { connected: boolean; email?: string };
       setStatus({ connected: data.connected, email: data.email ?? null, loading: false });
     } catch {
@@ -227,9 +232,12 @@ interface WinddownSettings {
 
 interface ChatProps {
   onSignOut?: () => void;
+  companionName?: string | null;
 }
 
-export default function Chat({ onSignOut }: ChatProps) {
+export default function Chat({ onSignOut, companionName: companionNameProp }: ChatProps) {
+  // Use prop first; fall back to "your companion" until name is known
+  const companionName = companionNameProp || "your companion";
   const [messages, setMessages] = useState<Message[]>([]);
   const [messagesLoaded, setMessagesLoaded] = useState(false);
   const [input, setInput] = useState("");
@@ -633,10 +641,12 @@ export default function Chat({ onSignOut }: ChatProps) {
       <header className="flex-shrink-0 border-b border-white/5 py-3 px-4 sm:px-6 flex items-center justify-between bg-background/80 backdrop-blur-sm z-10 sticky top-0">
         <div className="flex items-center gap-3">
           <Avatar className="h-10 w-10 border border-primary/20 bg-card">
-            <AvatarFallback className="bg-card text-primary font-serif font-medium text-lg">EP</AvatarFallback>
+            <AvatarFallback className="bg-card text-primary font-serif font-medium text-lg">
+              {companionNameProp ? companionNameProp[0].toUpperCase() : "W"}
+            </AvatarFallback>
           </Avatar>
           <div>
-            <h1 className="text-xl font-serif font-medium text-foreground tracking-wide">Emma Peel</h1>
+            <h1 className="text-xl font-serif font-medium text-foreground tracking-wide">{companionName}</h1>
             <p className="text-xs text-muted-foreground font-medium tracking-widest uppercase">Always Here</p>
           </div>
         </div>
@@ -653,7 +663,12 @@ export default function Chat({ onSignOut }: ChatProps) {
               </div>
               <button
                 onClick={async () => {
-                  await fetch("/api/auth/logout", { method: "POST" });
+                  const baseUrl = (import.meta.env.BASE_URL as string).replace(/\/$/, "");
+                  const token = localStorage.getItem("winston_session_token") ?? "";
+                  await fetch(`${baseUrl}/api/auth/logout`, {
+                    method: "POST",
+                    headers: { Authorization: `Bearer ${token}` },
+                  });
                   void refreshGoogleAuth();
                 }}
                 className="text-muted-foreground/50 hover:text-muted-foreground transition-colors p-1"
@@ -711,7 +726,7 @@ export default function Chat({ onSignOut }: ChatProps) {
           <Bell className="h-4 w-4 text-primary/70 mt-0.5 flex-shrink-0" />
           <div className="flex-1 min-w-0">
             <p className="text-sm text-foreground/90 leading-snug">
-              <span className="font-medium text-primary/90">Emma Peel:</span>{" "}
+              <span className="font-medium text-primary/90">{companionName}:</span>{" "}
               May I send you reminders and updates throughout the day? I promise to only reach out when it matters — medications, reminders you've set, evening check-ins.
             </p>
           </div>
@@ -758,7 +773,7 @@ export default function Chat({ onSignOut }: ChatProps) {
             </div>
 
             <p className="text-sm text-muted-foreground mb-5 leading-relaxed">
-              Each evening at your chosen time, Emma will check in — asking about your day, capturing any notes for tomorrow, and inviting a memory for Olivia's book.
+              Each evening at your chosen time, {companionName} will check in — asking about your day, capturing any notes for tomorrow, and inviting a memory for Olivia's book.
             </p>
 
             {/* Enable toggle */}

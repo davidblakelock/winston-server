@@ -163,7 +163,7 @@ export function buildSystemPromptFromProfile(
   rawData: CollectedData
 ): string {
   const userName = profile.name ?? "friend";
-  const companionName = profile.companionName ?? "Emma Peel";
+  const companionName = profile.companionName ?? "your companion";
   const wakeTime = profile.wakeTime
     ? formatWakeTime(profile.wakeTime)
     : "morning";
