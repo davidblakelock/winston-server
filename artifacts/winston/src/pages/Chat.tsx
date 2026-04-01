@@ -242,13 +242,12 @@ function UserAvatar({ picture, fullName, userName }: { picture?: string; fullNam
       src={picture}
       alt="Profile"
       referrerPolicy="no-referrer"
-      crossOrigin="anonymous"
       onError={() => {
-        console.warn("[AVATAR] Google profile picture failed to load, falling back to initials. src:", picture);
+        console.warn("[AVATAR] Google profile picture failed to load, falling back to initials. src:", picture?.slice(0, 60));
         setImgFailed(true);
       }}
       onLoad={() => console.log("[AVATAR] Google profile picture loaded successfully")}
-      style={{ width: 36, height: 36, borderRadius: "50%", objectFit: "cover", flexShrink: 0, boxShadow: "0 0 0 1.5px rgba(255,255,255,0.12)" }}
+      style={{ width: 36, height: 36, borderRadius: "50%", objectFit: "cover", flexShrink: 0, border: "2px solid rgba(255,255,255,0.15)" }}
     />
   ) : (
     <div
@@ -256,10 +255,11 @@ function UserAvatar({ picture, fullName, userName }: { picture?: string; fullNam
         width: 36, height: 36, borderRadius: "50%",
         display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
         background: "linear-gradient(135deg, #d97706 0%, #b45309 100%)",
-        boxShadow: "0 0 0 1.5px rgba(217,119,6,0.35)",
+        border: "2px solid rgba(217,119,6,0.4)",
+        flexDirection: "column",
       }}
     >
-      <span style={{ color: "white", fontSize: "12px", fontWeight: 600, lineHeight: 1 }}>{initials}</span>
+      <span style={{ color: "white", fontSize: "13px", fontWeight: 700, lineHeight: 1, letterSpacing: "-0.02em" }}>{initials}</span>
     </div>
   );
 }
@@ -283,11 +283,12 @@ export default function Chat({ onSignOut, companionName: companionNameProp, user
   const baseUrl = (import.meta.env.BASE_URL as string).replace(/\/$/, "");
 
   // Resolved name: prop → localStorage cache → null (fetched below)
+  // Use || not ?? so empty string from DB falls through to localStorage cache
   const [resolvedCompanionName, setResolvedCompanionName] = useState<string | null>(
-    () => companionNameProp ?? localStorage.getItem("winston_companion_name")
+    () => companionNameProp || localStorage.getItem("winston_companion_name")
   );
 
-  // Sync prop changes into resolved state
+  // Sync prop changes into resolved state — only when prop is non-empty
   useEffect(() => {
     if (companionNameProp) {
       setResolvedCompanionName(companionNameProp);

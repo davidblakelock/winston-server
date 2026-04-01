@@ -1,5 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
+import { query } from "./db";
 import { startScheduler } from "./reminders/scheduler";
 import { startWinddownScheduler } from "./winddown/winddownScheduler";
 import { ensureWinddownTables } from "./winddown/winddownManager";
@@ -60,5 +61,23 @@ app.listen(port, async (err) => {
     await seedDefaultMedications();
   } catch (e) {
     logger.warn({ e }, "Medication seed warning");
+  }
+
+  // One-time data migration: set companion_name for David if it was never saved during onboarding.
+  // Safe to run every startup — WHERE condition makes it a no-op once the name is set.
+  try {
+    await query(
+      `UPDATE user_profiles up
+       SET companion_name = 'Emma Peel'
+       FROM app_sessions s
+       WHERE up.user_name = s.user_name
+         AND s.google_id = '105826305820216987064'
+         AND (up.companion_name IS NULL OR up.companion_name = '')
+         AND up.onboarding_completed = true`,
+      []
+    );
+    logger.info("Startup migration: companion_name check complete");
+  } catch (e) {
+    logger.warn({ e }, "Startup migration warning: companion_name");
   }
 });

@@ -3,6 +3,7 @@ import { setAuthTokenGetter } from "@workspace/api-client-react";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 export const SESSION_KEY = "winston_session_token";
+const PICTURE_KEY = "winston_user_picture";
 
 export interface AuthState {
   loading: boolean;
@@ -50,6 +51,7 @@ export function useAuth() {
     localStorage.removeItem(SESSION_KEY);
     localStorage.removeItem("winston_user_name");
     localStorage.removeItem("winston_companion_name");
+    localStorage.removeItem(PICTURE_KEY);
     setAuthTokenGetter(null);
     setAuthState({ loading: false, authenticated: false });
     console.log("[AUTH] useAuth.signOut — complete, auth state cleared");
@@ -71,6 +73,7 @@ export function useAuth() {
     });
     localStorage.setItem(SESSION_KEY, token);
     localStorage.setItem("winston_user_name", userName);
+    if (picture) localStorage.setItem(PICTURE_KEY, picture);
     setAuthTokenGetter(() => localStorage.getItem(SESSION_KEY));
 
     // Immediately mark as authenticated — include picture if we already have it
@@ -82,6 +85,8 @@ export function useAuth() {
     // Runs even when picture is already known, to also capture fullName.
     fetchSessionProfile(token).then((data) => {
       if (!data || !data.authenticated) return;
+      const resolvedPicture = data.picture ?? picture ?? undefined;
+      if (resolvedPicture) localStorage.setItem(PICTURE_KEY, resolvedPicture);
       setAuthState((prev) => ({
         ...prev,
         loading: false,
@@ -89,7 +94,7 @@ export function useAuth() {
         userName: data.userName ?? userName,
         email: data.email ?? undefined,
         token,
-        picture: data.picture ?? prev.picture ?? undefined,
+        picture: resolvedPicture,
         fullName: data.fullName ?? undefined,
       }));
       console.log("[AUTH] useAuth.setAuthenticated — picture/fullName hydrated from session endpoint, hasPicture:", !!(data.picture));
@@ -100,11 +105,13 @@ export function useAuth() {
   useEffect(() => {
     const token = localStorage.getItem(SESSION_KEY);
     const storedName = localStorage.getItem("winston_user_name");
+    const storedPicture = localStorage.getItem(PICTURE_KEY) ?? undefined;
 
     console.log("[AUTH] useAuth — initial session check:", {
       hasStoredToken: !!token,
       tokenPrefix: token ? token.slice(0, 8) + "…" : null,
       storedUserName: storedName,
+      hasStoredPicture: !!storedPicture,
     });
 
     if (!token) {
@@ -125,6 +132,9 @@ export function useAuth() {
       });
 
       if (data && data.authenticated && data.userName) {
+        // Persist picture to localStorage so it's available instantly next time
+        const resolvedPicture = data.picture ?? storedPicture ?? undefined;
+        if (resolvedPicture) localStorage.setItem(PICTURE_KEY, resolvedPicture);
         setAuthTokenGetter(() => localStorage.getItem(SESSION_KEY));
         setAuthState({
           loading: false,
@@ -132,13 +142,14 @@ export function useAuth() {
           userName: data.userName,
           email: data.email ?? undefined,
           token,
-          picture: data.picture ?? undefined,
+          picture: resolvedPicture,
           fullName: data.fullName ?? undefined,
         });
-        console.log("[AUTH] useAuth — session valid, authenticated as:", data.userName);
+        console.log("[AUTH] useAuth — session valid, authenticated as:", data.userName, "hasPicture:", !!resolvedPicture);
       } else {
         console.warn("[AUTH] useAuth — session invalid or userName missing, clearing auth state");
         localStorage.removeItem(SESSION_KEY);
+        localStorage.removeItem(PICTURE_KEY);
         setAuthTokenGetter(null);
         setAuthState({ loading: false, authenticated: false });
       }
@@ -148,7 +159,8 @@ export function useAuth() {
       console.error("[AUTH] useAuth — /api/auth/session fetch error:", err);
       console.warn("[AUTH] useAuth — network error fallback, using stored name:", fallbackName);
       setAuthTokenGetter(() => localStorage.getItem(SESSION_KEY));
-      setAuthState({ loading: false, authenticated: true, userName: storedName ?? undefined, token });
+      // Use stored picture as fallback during network errors
+      setAuthState({ loading: false, authenticated: true, userName: storedName ?? undefined, token, picture: storedPicture });
     });
   }, []);
 

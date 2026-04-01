@@ -87,7 +87,7 @@ export async function getProfile(userName = "David"): Promise<UserProfile | null
     wakeTime: r.wake_time,
     voiceId: r.voice_id,
     healthNotes: r.health_notes,
-    companionName: r.companion_name,
+    companionName: r.companion_name || null,
     rawData: r.raw_data ?? {},
     onboardingCompleted: r.onboarding_completed,
     createdAt: r.created_at,
