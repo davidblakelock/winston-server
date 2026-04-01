@@ -73,6 +73,7 @@ router.get("/auth/callback", async (req: Request, res: Response) => {
     // Prefer `sub` (OpenID Connect) then fall back to `id` (v2 field)
     const googleId = (userInfo.data.sub ?? userInfo.data.id ?? "").trim();
     const fullName = (userInfo.data.name ?? email.split("@")[0]).trim();
+    const picture = (userInfo.data.picture ?? "").trim() || undefined;
 
     req.log.info(
       {
@@ -105,7 +106,7 @@ router.get("/auth/callback", async (req: Request, res: Response) => {
 
     // ── Resolve user identity from Google ID — no hardcoded fallback ─────────
     req.log.info({ googleId, email }, "[AUTH] /auth/callback — calling lookupOrCreateGoogleUser");
-    const resolved = await lookupOrCreateGoogleUser(googleId, email, fullName);
+    const resolved = await lookupOrCreateGoogleUser(googleId, email, fullName, picture);
     const { userName, isNewUser } = resolved;
 
     req.log.info(
@@ -195,6 +196,8 @@ router.get("/auth/session", async (req: Request, res: Response) => {
       userName: session.userName,
       email: session.email,
       googleId: session.googleId,
+      picture: session.picture ?? null,
+      fullName: session.fullName ?? null,
     });
   } catch (err) {
     req.log.error({ err }, "Session validation error");

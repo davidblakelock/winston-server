@@ -10,6 +10,8 @@ export interface AuthState {
   userName?: string;
   email?: string;
   token?: string;
+  picture?: string;
+  fullName?: string;
 }
 
 export function useAuth() {
@@ -66,7 +68,7 @@ export function useAuth() {
     })
       .then((r) => {
         console.log("[AUTH] useAuth — /api/auth/session HTTP status:", r.status);
-        return r.json() as Promise<{ authenticated: boolean; userName?: string; email?: string }>;
+        return r.json() as Promise<{ authenticated: boolean; userName?: string; email?: string; picture?: string | null; fullName?: string | null }>;
       })
       .then((data) => {
         console.log("[AUTH] useAuth — /api/auth/session response:", {
@@ -83,6 +85,8 @@ export function useAuth() {
             userName: data.userName,
             email: data.email,
             token,
+            picture: data.picture ?? undefined,
+            fullName: data.fullName ?? undefined,
           });
           console.log("[AUTH] useAuth — session valid, authenticated as:", data.userName);
         } else {

@@ -20,6 +20,8 @@ export interface SessionUser {
   email: string;
   googleId?: string;
   isNewUser?: boolean;
+  picture?: string;
+  fullName?: string;
 }
 
 // ── Username generation ────────────────────────────────────────────────────────
@@ -117,7 +119,8 @@ async function findExistingUserByEmail(
 export async function lookupOrCreateGoogleUser(
   googleId: string,
   email: string,
-  name: string
+  name: string,
+  picture?: string
 ): Promise<{ userName: string; isNewUser: boolean }> {
   logger.info(
     { googleId, email, name },
@@ -140,6 +143,10 @@ export async function lookupOrCreateGoogleUser(
   if (existing.length > 0) {
     const userName = existing[0].user_name;
     logger.info({ googleId, userName }, "[AUTH] lookupOrCreateGoogleUser — KNOWN Google ID, using stored userName");
+
+    if (picture) {
+      await query("UPDATE google_users SET picture = $2 WHERE google_id = $1", [googleId, picture]);
+    }
 
     if (existing[0].is_new_user) {
       await query("UPDATE google_users SET is_new_user = false WHERE google_id = $1", [googleId]);
@@ -201,10 +208,10 @@ export async function lookupOrCreateGoogleUser(
 
   logger.info({ googleId, email, userName, isNewUser }, "[AUTH] lookupOrCreateGoogleUser — inserting into google_users");
   await query(
-    `INSERT INTO google_users (google_id, email, name, user_name, is_new_user)
-     VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT (google_id) DO NOTHING`,
-    [googleId, email, name, userName, isNewUser]
+    `INSERT INTO google_users (google_id, email, name, user_name, is_new_user, picture)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (google_id) DO UPDATE SET picture = EXCLUDED.picture`,
+    [googleId, email, name, userName, isNewUser, picture ?? null]
   );
 
   logger.info(
@@ -252,8 +259,11 @@ export async function validateSession(
   const tokenPrefix = token.slice(0, 8) + "…";
   logger.info({ tokenPrefix }, "[AUTH] validateSession — querying app_sessions");
 
-  const { rows } = await query<{ user_name: string; email: string; google_id: string | null }>(
-    "SELECT user_name, email, google_id FROM app_sessions WHERE token = $1 AND expires_at > NOW()",
+  const { rows } = await query<{ user_name: string; email: string; google_id: string | null; picture: string | null; full_name: string | null }>(
+    `SELECT s.user_name, s.email, s.google_id, gu.picture, gu.name AS full_name
+     FROM app_sessions s
+     LEFT JOIN google_users gu ON gu.google_id = s.google_id
+     WHERE s.token = $1 AND s.expires_at > NOW()`,
     [token]
   );
 
@@ -266,6 +276,8 @@ export async function validateSession(
     userName: rows[0].user_name,
     email: rows[0].email,
     googleId: rows[0].google_id ?? undefined,
+    picture: rows[0].picture ?? undefined,
+    fullName: rows[0].full_name ?? undefined,
   };
 
   logger.info(

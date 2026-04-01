@@ -43,13 +43,16 @@ function LoadingScreen() {
 
 interface AppShellProps {
   onSignOut: () => void;
+  userPicture?: string;
+  userName?: string;
+  userFullName?: string;
 }
 
 interface ProfileInfo {
   companionName: string | null;
 }
 
-function AppShell({ onSignOut }: AppShellProps) {
+function AppShell({ onSignOut, userPicture, userName, userFullName }: AppShellProps) {
   const [onboardingStatus, setOnboardingStatus] = useState<
     "loading" | "new" | "returning"
   >("loading");
@@ -117,7 +120,7 @@ function AppShell({ onSignOut }: AppShellProps) {
 
   return (
     <Switch>
-      <Route path="/">{() => <Chat onSignOut={onSignOut} companionName={profile?.companionName ?? null} />}</Route>
+      <Route path="/">{() => <Chat onSignOut={onSignOut} companionName={profile?.companionName ?? null} userPicture={userPicture} userName={userName} userFullName={userFullName} />}</Route>
       <Route component={NotFound} />
     </Switch>
   );
@@ -267,7 +270,7 @@ function AppWithAuth() {
   }
 
   // Authenticated — AppShell always fetches /api/onboarding/status as ground truth
-  return <AppShell onSignOut={handleSignOut} />;
+  return <AppShell onSignOut={handleSignOut} userPicture={authState.picture} userName={authState.userName} userFullName={authState.fullName} />;
 }
 
 // ── App ───────────────────────────────────────────────────────────────────────

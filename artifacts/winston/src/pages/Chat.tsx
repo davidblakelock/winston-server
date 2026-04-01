@@ -233,9 +233,12 @@ interface WinddownSettings {
 interface ChatProps {
   onSignOut?: () => void;
   companionName?: string | null;
+  userPicture?: string;
+  userFullName?: string;
+  userName?: string;
 }
 
-export default function Chat({ onSignOut, companionName: companionNameProp }: ChatProps) {
+export default function Chat({ onSignOut, companionName: companionNameProp, userPicture, userFullName, userName }: ChatProps) {
   // Use prop first; fall back to "your companion" until name is known
   const companionName = companionNameProp || "your companion";
 
@@ -715,16 +718,49 @@ export default function Chat({ onSignOut, companionName: companionNameProp }: Ch
           <Settings className="h-4 w-4" />
         </button>
 
-        {/* Sign out */}
-        {onSignOut && (
-          <button
-            onClick={onSignOut}
-            className="text-muted-foreground/40 hover:text-red-400/70 transition-colors p-1.5 rounded-full hover:bg-red-950/20 border border-white/5 hover:border-red-500/20"
-            title="Sign out"
-          >
-            <LogOut className="h-4 w-4" />
-          </button>
-        )}
+        {/* User identity chip — Google profile picture + companion name */}
+        <div className="flex items-center gap-2 ml-1 pl-2 border-l border-white/10">
+          {/* Avatar: Google photo or warm initials fallback */}
+          {userPicture ? (
+            <img
+              src={userPicture}
+              alt="Profile"
+              className="h-9 w-9 rounded-full object-cover ring-1 ring-white/15 flex-shrink-0"
+              referrerPolicy="no-referrer"
+            />
+          ) : (
+            <div
+              className="h-9 w-9 rounded-full flex items-center justify-center flex-shrink-0 ring-1 ring-indigo-500/30"
+              style={{ background: "linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)" }}
+            >
+              <span className="text-white text-xs font-semibold leading-none">
+                {(() => {
+                  const name = userFullName || userName || "";
+                  const parts = name.trim().split(/\s+/).filter(Boolean);
+                  if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+                  if (parts.length === 1) return parts[0][0].toUpperCase();
+                  return "?";
+                })()}
+              </span>
+            </div>
+          )}
+          {/* Companion name label */}
+          {companionNameProp && (
+            <span className="text-sm font-medium text-foreground/80 hidden sm:block whitespace-nowrap">
+              {companionNameProp}
+            </span>
+          )}
+          {/* Sign out */}
+          {onSignOut && (
+            <button
+              onClick={onSignOut}
+              className="text-muted-foreground/40 hover:text-red-400/70 transition-colors p-1 rounded-full hover:bg-red-950/20"
+              title="Sign out"
+            >
+              <LogOut className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
         </div>
       </header>
 
