@@ -50,21 +50,48 @@ router.get("/auth/callback", async (req: Request, res: Response) => {
   }
 
   try {
+    req.log.info({ state, isSignIn }, "[AUTH] /auth/callback — Google OAuth callback received");
+
     const oauth2Client = createOAuthClient();
     const { tokens } = await oauth2Client.getToken(code as string);
     oauth2Client.setCredentials(tokens);
 
+    req.log.info(
+      {
+        hasAccessToken: !!tokens.access_token,
+        hasRefreshToken: !!tokens.refresh_token,
+        hasIdToken: !!tokens.id_token,
+        scopes: tokens.scope,
+      },
+      "[AUTH] /auth/callback — Google tokens received"
+    );
+
     const oauth2 = google.oauth2({ version: "v2", auth: oauth2Client });
     const userInfo = await oauth2.userinfo.get();
+
     const email = (userInfo.data.email ?? "").trim().toLowerCase();
     // Prefer `sub` (OpenID Connect) then fall back to `id` (v2 field)
     const googleId = (userInfo.data.sub ?? userInfo.data.id ?? "").trim();
     const fullName = (userInfo.data.name ?? email.split("@")[0]).trim();
 
-    req.log.info({ email, googleId: googleId ? `${googleId.slice(0,8)}…` : "MISSING", fullName }, "Google userinfo received");
+    req.log.info(
+      {
+        email,
+        googleId: googleId || "MISSING",
+        googleIdLength: googleId.length,
+        fullName,
+        subPresent: !!userInfo.data.sub,
+        idPresent: !!userInfo.data.id,
+        emailVerified: userInfo.data.verified_email,
+      },
+      "[AUTH] /auth/callback — Google userinfo received (FULL GOOGLE ID LOGGED)"
+    );
 
     if (!googleId || !email) {
-      req.log.error({ email, googleIdPresent: !!googleId }, "Google OAuth returned no user ID or email");
+      req.log.error(
+        { email, googleIdPresent: !!googleId, allDataKeys: Object.keys(userInfo.data) },
+        "[AUTH] /auth/callback — FATAL: Google OAuth returned no user ID or email"
+      );
       if (isSignIn) {
         res.redirect(`${appUrl}/?auth=error`);
       } else {
@@ -77,11 +104,17 @@ router.get("/auth/callback", async (req: Request, res: Response) => {
     }
 
     // ── Resolve user identity from Google ID — no hardcoded fallback ─────────
+    req.log.info({ googleId, email }, "[AUTH] /auth/callback — calling lookupOrCreateGoogleUser");
     const resolved = await lookupOrCreateGoogleUser(googleId, email, fullName);
     const { userName, isNewUser } = resolved;
 
+    req.log.info(
+      { googleId, email, userName, isNewUser },
+      "[AUTH] /auth/callback — lookupOrCreateGoogleUser returned"
+    );
+
     // ── Upsert google_auth (OAuth tokens for calendar/gmail access) ───────────
-    // Key on (user_name) so each user has exactly one token row
+    req.log.info({ userName, email }, "[AUTH] /auth/callback — upserting google_auth row");
     await query(
       `INSERT INTO google_auth (user_name, email, access_token, refresh_token, token_expiry, scope)
        VALUES ($1, $2, $3, $4, $5, $6)
@@ -102,15 +135,19 @@ router.get("/auth/callback", async (req: Request, res: Response) => {
       ]
     );
 
-    req.log.info({ email, userName, isSignIn, isNewUser }, "Google OAuth connected");
+    req.log.info({ email, userName, isSignIn, isNewUser }, "[AUTH] /auth/callback — google_auth upserted");
 
     if (isSignIn) {
       // ── Create app session and redirect frontend with token ─────────────────
+      req.log.info({ userName, isNewUser }, "[AUTH] /auth/callback — creating app session for sign-in");
       const sessionToken = await createSession(userName, email, googleId);
-      req.log.info({ userName, isNewUser }, "Google sign-in session created");
 
-      // Redirect to frontend — clean URL with session token and display name
-      const redirectUrl = `${appUrl}/?token=${encodeURIComponent(sessionToken)}&name=${encodeURIComponent(userName)}`;
+      // Pass isNewUser flag to frontend so it can clear stale storage before loading profile
+      const redirectUrl = `${appUrl}/?token=${encodeURIComponent(sessionToken)}&name=${encodeURIComponent(userName)}&new=${isNewUser ? "1" : "0"}`;
+      req.log.info(
+        { userName, isNewUser, redirectPath: `/?token=…&name=${encodeURIComponent(userName)}&new=${isNewUser ? "1" : "0"}` },
+        "[AUTH] /auth/callback — redirecting frontend with session token"
+      );
       res.redirect(redirectUrl);
     } else {
       // ── Popup calendar/gmail connect ────────────────────────────────────────

@@ -59,26 +59,48 @@ function AppShell({ onSignOut }: AppShellProps) {
     // ALWAYS fetch /api/onboarding/status — it is the authoritative source of truth.
     // Never trust the isNewUser hint from the OAuth/magic-link response for routing.
     const token = localStorage.getItem("winston_session_token");
+    const storedName = localStorage.getItem("winston_user_name");
+
+    console.log("[AUTH] AppShell — checking stored session:", {
+      hasToken: !!token,
+      tokenPrefix: token ? token.slice(0, 8) + "…" : null,
+      storedUserName: storedName,
+    });
+
     if (!token) {
+      console.log("[AUTH] AppShell — no session token in localStorage, routing to onboarding/new user");
       setOnboardingStatus("new");
       return;
     }
 
+    console.log("[AUTH] AppShell — fetching /api/onboarding/status to determine routing");
     fetch(`${API}/api/onboarding/status`, {
       headers: { Authorization: `Bearer ${token}` },
       cache: "no-store",
     })
       .then((r) => {
-        if (r.status === 401) return { isNewUser: true, profile: null } as { isNewUser: boolean; profile: { companionName: string | null } | null };
+        console.log("[AUTH] AppShell — /api/onboarding/status HTTP status:", r.status);
+        if (r.status === 401) {
+          console.warn("[AUTH] AppShell — 401 from /api/onboarding/status, treating as new user");
+          return { isNewUser: true, profile: null } as { isNewUser: boolean; profile: { companionName: string | null } | null };
+        }
         return r.json() as Promise<{ isNewUser: boolean; profile: { companionName: string | null } | null }>;
       })
       .then((data) => {
+        console.log("[AUTH] AppShell — /api/onboarding/status response:", {
+          isNewUser: data.isNewUser,
+          hasProfile: !!data.profile,
+          companionName: data.profile?.companionName ?? null,
+        });
         if (data.profile?.companionName) {
           setProfile({ companionName: data.profile.companionName });
         }
-        setOnboardingStatus(data.isNewUser ? "new" : "returning");
+        const routing = data.isNewUser ? "new" : "returning";
+        console.log("[AUTH] AppShell — routing decision:", routing);
+        setOnboardingStatus(routing);
       })
-      .catch(() => {
+      .catch((err) => {
+        console.error("[AUTH] AppShell — /api/onboarding/status fetch failed:", err);
         setOnboardingStatus("returning");
       });
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -154,19 +176,56 @@ function AppWithAuth() {
     const urlToken = params.get("token");
     const urlName  = params.get("name");
     const urlAuthError = params.get("auth");
+    const urlIsNew = params.get("new"); // "1" = new user, "0" = returning
+
+    console.log("[AUTH] App.tsx — URL params on load:", {
+      hasToken: !!urlToken,
+      hasName: !!urlName,
+      isNew: urlIsNew,
+      authError: urlAuthError,
+      tokenPrefix: urlToken ? urlToken.slice(0, 8) + "…" : null,
+    });
 
     if (urlAuthError === "error") {
+      console.warn("[AUTH] App.tsx — Google OAuth returned auth=error");
       setAuthError(true);
       window.history.replaceState({}, "", window.location.pathname);
       return;
     }
 
     if (urlToken && urlName) {
-      // Clear any cached data from the previous session
+      const decodedName = decodeURIComponent(urlName);
+      const isNewUser = urlIsNew === "1";
+
+      console.log("[AUTH] App.tsx — Google sign-in token received:", {
+        userName: decodedName,
+        isNewUser,
+        tokenPrefix: urlToken.slice(0, 8) + "…",
+      });
+
+      if (isNewUser) {
+        // ── NEW USER: wipe ALL local + session storage before loading any profile ──
+        console.log("[AUTH] App.tsx — NEW USER detected — clearing ALL localStorage and sessionStorage");
+        const keysBeforeClear = Object.keys(localStorage);
+        console.log("[AUTH] App.tsx — localStorage keys before clear:", keysBeforeClear);
+
+        localStorage.clear();
+        sessionStorage.clear();
+
+        console.log("[AUTH] App.tsx — storage cleared. localStorage keys after clear:", Object.keys(localStorage));
+      } else {
+        console.log("[AUTH] App.tsx — RETURNING user — preserving storage, only clearing React Query cache");
+      }
+
+      // Always clear React Query cache on any Google sign-in
       queryClient.clear();
-      setAuthenticated(urlToken, decodeURIComponent(urlName));
+
+      console.log("[AUTH] App.tsx — calling setAuthenticated with new token");
+      setAuthenticated(urlToken, decodedName);
+
       // Clean URL — remove query params so the token isn't visible or bookmarked
       window.history.replaceState({}, "", window.location.pathname);
+      console.log("[AUTH] App.tsx — URL cleaned, auth flow complete");
     }
   }, [setAuthenticated]);
 

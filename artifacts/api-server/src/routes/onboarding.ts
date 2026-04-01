@@ -27,27 +27,50 @@ router.get("/onboarding/status", async (req, res) => {
 
   try {
     const authHeader = req.headers.authorization;
+    const tokenPrefix = authHeader?.startsWith("Bearer ") ? authHeader.slice(7, 15) + "…" : null;
+
+    req.log.info({ hasAuthHeader: !!authHeader, tokenPrefix }, "[AUTH] /onboarding/status — request received");
+
     if (!authHeader?.startsWith("Bearer ")) {
-      // No session token → treat as new user (must sign in first)
+      req.log.warn("[AUTH] /onboarding/status — no Bearer token, returning isNewUser=true");
       res.json({ isNewUser: true, profile: null });
       return;
     }
 
+    req.log.info({ tokenPrefix }, "[AUTH] /onboarding/status — validating session");
     const session = await validateSession(authHeader.slice(7));
+
     if (!session) {
-      // Invalid / expired session → must sign in again
+      req.log.warn({ tokenPrefix }, "[AUTH] /onboarding/status — session invalid/expired, returning 401");
       res.status(401).json({ isNewUser: true, profile: null, error: "session_expired" });
       return;
     }
 
+    req.log.info(
+      { tokenPrefix, userName: session.userName, email: session.email },
+      "[AUTH] /onboarding/status — session valid, resolved user"
+    );
+
     const { userName } = session;
+    req.log.info({ userName }, "[AUTH] /onboarding/status — loading profile from DB");
     const profile = await getProfile(userName);
     const complete = profile?.onboardingCompleted ?? false;
 
-    req.log.info({ userName, complete }, "Onboarding status resolved");
+    req.log.info(
+      {
+        userName,
+        onboardingCompleted: complete,
+        hasProfile: !!profile,
+        companionName: profile?.companionName ?? null,
+        voiceId: profile?.voiceId ?? null,
+        isNewUser: !complete,
+      },
+      "[AUTH] /onboarding/status — profile loaded, sending response"
+    );
+
     res.json({ isNewUser: !complete, profile: complete ? profile : null });
   } catch (err) {
-    req.log.error({ err }, "Onboarding status error");
+    req.log.error({ err }, "[AUTH] /onboarding/status — unexpected error");
     res.json({ isNewUser: true, profile: null });
   }
 });
