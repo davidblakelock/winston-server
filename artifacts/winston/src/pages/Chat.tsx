@@ -238,6 +238,12 @@ interface ChatProps {
 export default function Chat({ onSignOut, companionName: companionNameProp }: ChatProps) {
   // Use prop first; fall back to "your companion" until name is known
   const companionName = companionNameProp || "your companion";
+
+  // Keep browser tab title in sync with the companion's name
+  useEffect(() => {
+    document.title = companionNameProp || "Winston";
+    return () => { document.title = "Winston"; };
+  }, [companionNameProp]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [messagesLoaded, setMessagesLoaded] = useState(false);
   const [input, setInput] = useState("");
