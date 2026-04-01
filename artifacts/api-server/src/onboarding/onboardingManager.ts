@@ -241,15 +241,15 @@ export const VOICE_OPTIONS = [
   {
     id: "DYkrAHD8iwork3YSUBbs",
     name: "Tom",
-    description: "Warm American Male",
-    accent: "American",
+    description: "British-American Male",
+    accent: "British-American",
     gender: "Male",
   },
   {
     id: "56bWURjYFHyYyVf490Dp",
     name: "Emma",
-    description: "Friendly British Female",
-    accent: "British",
+    description: "Friendly American Female",
+    accent: "American",
     gender: "Female",
   },
   {
@@ -262,15 +262,15 @@ export const VOICE_OPTIONS = [
   {
     id: "sB7vwSCyX0tQmU24cW2C",
     name: "Jon",
-    description: "Calm American Male",
+    description: "Deep Authoritative American Male",
     accent: "American",
     gender: "Male",
   },
   {
     id: "Fahco4VZzobUeiPqni1S",
     name: "Archer",
-    description: "Confident American Male",
-    accent: "American",
+    description: "Charming Young British Male",
+    accent: "British",
     gender: "Male",
   },
   {
@@ -290,7 +290,7 @@ export const VOICE_OPTIONS = [
   {
     id: "Ky9j3wxFbp3dSAdrkOEv",
     name: "Bex",
-    description: "Energetic British Female",
+    description: "Expressive British Female",
     accent: "British",
     gender: "Female",
   },
@@ -365,15 +365,17 @@ IMPORTANT: "readyForNextScene" should be true once you have the companion name a
 
     2: `SCENE 2 — VOICE SELECTION:
 ${companionName ? `The user has named you "${companionName}".` : ""}
-Tell them: "Here are six voices to try. Click the play button on each to hear a sample, then just tell me which one feels right — you can say a number or a name."
+Tell them: "Here are eight voices to try. Click the play button on each to hear a sample, then just tell me which one feels right — you can say a number or a name."
 
-The six options are:
-1. Charlotte — Warm British Female
-2. Rachel — Warm American Female
-3. Brian — Calm American Male
-4. Daniel — Friendly British Male
-5. Matilda — Warm Australian Female
-6. Aria — Conversational American Female
+The eight options are:
+1. Tom — British-American Male
+2. Emma — Friendly American Female
+3. Kiora — Warm New Zealand Female
+4. Jon — Deep Authoritative American Male
+5. Archer — Charming Young British Male
+6. Best Female Friend — Warm Casual American Female
+7. Diana — Elegant American Female
+8. Bex — Expressive British Female
 
 If the user has already selected a voice (voiceId is set in collected data): confirm their choice warmly by name and transition: "Perfect. Now — let's get to know you a little. What's your name?"
 
