@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Switch, Route, Router as WouterRouter, useLocation } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -44,9 +44,10 @@ function LoadingScreen() {
 
 interface AppShellProps {
   initialIsNewUser?: boolean;
+  onSignOut: () => void;
 }
 
-function AppShell({ initialIsNewUser }: AppShellProps) {
+function AppShell({ initialIsNewUser, onSignOut }: AppShellProps) {
   const [onboardingStatus, setOnboardingStatus] = useState<
     "loading" | "new" | "returning"
   >(() => {
@@ -91,7 +92,7 @@ function AppShell({ initialIsNewUser }: AppShellProps) {
 
   return (
     <Switch>
-      <Route path="/" component={Chat} />
+      <Route path="/">{() => <Chat onSignOut={onSignOut} />}</Route>
       <Route component={NotFound} />
     </Switch>
   );
@@ -133,12 +134,18 @@ function AuthErrorBanner({ onDismiss }: { onDismiss: () => void }) {
 // ── Root with auth routing ────────────────────────────────────────────────────
 
 function AppWithAuth() {
-  const { authState, setAuthenticated } = useAuth();
+  const { authState, setAuthenticated, signOut } = useAuth();
   const [location, navigate] = useLocation();
   const [authError, setAuthError] = useState(false);
   // freshIsNewUser: set when we receive a Google OAuth redirect with ?new=0/1
   // Remains undefined for returning users who open the app with an existing session
   const [freshIsNewUser, setFreshIsNewUser] = useState<boolean | undefined>(undefined);
+
+  // ── Sign out handler — must be at top level (Rules of Hooks) ──
+  const handleSignOut = useCallback(async () => {
+    setFreshIsNewUser(undefined);
+    await signOut();
+  }, [signOut]);
 
   // ── Handle Google OAuth redirect: token + isNewUser flag arrive as URL params ──
   useEffect(() => {
@@ -203,7 +210,7 @@ function AppWithAuth() {
 
   // Authenticated — pass isNewUser flag (if known from OAuth redirect) to AppShell
   // AppShell will fetch /api/onboarding/status itself if freshIsNewUser is undefined
-  return <AppShell initialIsNewUser={freshIsNewUser} />;
+  return <AppShell initialIsNewUser={freshIsNewUser} onSignOut={handleSignOut} />;
 }
 
 // ── App ───────────────────────────────────────────────────────────────────────

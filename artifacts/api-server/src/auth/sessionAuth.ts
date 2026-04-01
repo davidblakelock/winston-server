@@ -8,10 +8,12 @@ export function generateToken(): string {
 
 export function getAppUrl(_reqHost?: string): string {
   if (process.env.APP_URL) return process.env.APP_URL.replace(/\/$/, "");
-  const devDomain = process.env.REPLIT_DEV_DOMAIN;
-  if (devDomain) return `https://${devDomain}`;
+  // REPLIT_DOMAINS takes priority — it's set to the production domain in deployed apps
+  // and to the dev domain in development. REPLIT_DEV_DOMAIN is only the fallback.
   const domains = process.env.REPLIT_DOMAINS;
   if (domains) return `https://${domains.split(",")[0].trim()}`;
+  const devDomain = process.env.REPLIT_DEV_DOMAIN;
+  if (devDomain) return `https://${devDomain}`;
   return "https://winston-companion--davidblakelock.replit.app";
 }
 

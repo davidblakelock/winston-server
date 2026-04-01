@@ -225,7 +225,11 @@ interface WinddownSettings {
   scheduledTime: string;
 }
 
-export default function Chat() {
+interface ChatProps {
+  onSignOut?: () => void;
+}
+
+export default function Chat({ onSignOut }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [messagesLoaded, setMessagesLoaded] = useState(false);
   const [input, setInput] = useState("");
@@ -687,6 +691,17 @@ export default function Chat() {
         >
           <Settings className="h-4 w-4" />
         </button>
+
+        {/* Sign out */}
+        {onSignOut && (
+          <button
+            onClick={onSignOut}
+            className="text-muted-foreground/40 hover:text-red-400/70 transition-colors p-1.5 rounded-full hover:bg-red-950/20 border border-white/5 hover:border-red-500/20"
+            title="Sign out"
+          >
+            <LogOut className="h-4 w-4" />
+          </button>
+        )}
         </div>
       </header>
 
