@@ -239,6 +239,11 @@ function AppWithAuth() {
     return <OliviaArchive />;
   }
 
+  // Demo — always public, no sign-in required
+  if (location === "/demo") {
+    return <Demo />;
+  }
+
   // Magic-link verification route
   if (location.startsWith("/auth/verify")) {
     const params = new URLSearchParams(
