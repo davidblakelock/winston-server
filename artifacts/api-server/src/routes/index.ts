@@ -10,10 +10,12 @@ import messagesRouter from "./messages";
 import onboardingRouter from "./onboarding";
 import pushRouter from "./push";
 import oliviaRouter from "./olivia";
+import demoRouter from "./demo";
 
 const router: IRouter = Router();
 
 router.use(healthRouter);
+router.use(demoRouter);
 router.use(authRouter);
 router.use(onboardingRouter);
 router.use(chatRouter);

@@ -249,6 +249,13 @@ export async function getRecentStoryCount(days: number): Promise<number> {
   return parseInt(rows[0].count, 10);
 }
 
+export async function hasStoryCapturedTonight(): Promise<boolean> {
+  const { rows } = await query<{ count: string }>(
+    "SELECT COUNT(*) AS count FROM stories WHERE captured_at >= NOW() - INTERVAL '3 hours'"
+  );
+  return parseInt(rows[0].count, 10) > 0;
+}
+
 export function formatStoriesForPrompt(stories: Story[]): string {
   if (stories.length === 0) return "No stories captured yet.";
   return stories

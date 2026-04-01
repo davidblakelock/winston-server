@@ -9,6 +9,7 @@ import Onboarding from "@/pages/Onboarding";
 import OliviaArchive from "@/pages/OliviaArchive";
 import SignIn from "@/pages/SignIn";
 import AuthVerify from "@/pages/AuthVerify";
+import Demo from "@/pages/Demo";
 import { useAuth } from "@/hooks/useAuth";
 
 const queryClient = new QueryClient();
@@ -280,7 +281,10 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-          <AppWithAuth />
+          <Switch>
+            <Route path="/demo">{() => <Demo />}</Route>
+            <Route>{() => <AppWithAuth />}</Route>
+          </Switch>
         </WouterRouter>
         <Toaster />
       </TooltipProvider>

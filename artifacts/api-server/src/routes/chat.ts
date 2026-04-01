@@ -37,6 +37,7 @@ import {
   getPendingQuestionId,
   getNextStoryQuestion,
   setPendingQuestion,
+  hasStoryCapturedTonight,
   saveStory,
   getStories,
   getStoryCount,
@@ -1184,14 +1185,17 @@ router.post("/chat", async (req, res) => {
   }
 
   // ── Evening wind-down: queue a story question (offered AFTER check-in and loose ends) ──
-  if (winddownActive && !pendingPrompt) {
+  if (winddownActive && !pendingPrompt && !isPotentialStoryResponse) {
     try {
-      const storyQ = await getNextStoryQuestion();
-      if (storyQ) {
-        await setPendingQuestion(storyQ.id, storyQ.question);
-        req.log.info({ questionId: storyQ.id, category: storyQ.category, prompt: storyQ.question.substring(0, 80) }, "Evening story question queued");
-        systemPrompt +=
-          `\n\n[Tonight's Memory Question for Olivia — Hold Until the Right Moment]\nCategory: ${storyQ.category}\nQuestion: "${storyQ.question}"\n\nIMPORTANT: Do NOT ask this question right now. Save it for AFTER the check-in and loose ends are complete — it belongs as Step 3 of the wind-down. Read David's energy first:\n• If his responses have been very brief, he seems tired or distracted, or he signals he wants to wrap up — skip the story question tonight and say goodnight warmly\n• If he seems engaged and the conversation has flowed naturally — invite him with warmth: "Before you go, I'd love to ask you something for Olivia's book..." then ask the question\nMake it feel like a genuine invitation, never homework. One question only.`;
+      const capturedTonight = await hasStoryCapturedTonight();
+      if (!capturedTonight) {
+        const storyQ = await getNextStoryQuestion();
+        if (storyQ) {
+          await setPendingQuestion(storyQ.id, storyQ.question);
+          req.log.info({ questionId: storyQ.id, category: storyQ.category, prompt: storyQ.question.substring(0, 80) }, "Evening story question queued");
+          systemPrompt +=
+            `\n\n[Tonight's Memory Question for Olivia — Hold Until the Right Moment]\nCategory: ${storyQ.category}\nQuestion: "${storyQ.question}"\n\nIMPORTANT: Do NOT ask this question right now. Save it for AFTER the check-in and loose ends are complete — it belongs as Step 3 of the wind-down. Read David's energy first:\n• If his responses have been very brief, he seems tired or distracted, or he signals he wants to wrap up — skip the story question tonight and say goodnight warmly\n• If he seems engaged and the conversation has flowed naturally — invite him with warmth: "Before you go, I'd love to ask you something for Olivia's book..." then ask the question\nMake it feel like a genuine invitation, never homework. One question only.`;
+        }
       }
     } catch (err) {
       req.log.warn({ err }, "Evening story question queue failed");
