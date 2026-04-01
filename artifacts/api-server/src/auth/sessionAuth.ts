@@ -44,19 +44,38 @@ async function generateUniqueUsername(base: string): Promise<string> {
   return `${clean}_${Date.now()}`;
 }
 
-// ── Email → existing session lookup ───────────────────────────────────────────
-// Returns the userName from the most-recent session for this email, or null
+// ── Email → existing user lookup ──────────────────────────────────────────────
+// Checks app_sessions first, then google_auth as fallback.
+// Returns the userName and whether onboarding is complete, or null if not found.
 
 async function findExistingUserByEmail(
   email: string
 ): Promise<{ userName: string; isNewUser: boolean } | null> {
-  const { rows } = await query<{ user_name: string }>(
-    "SELECT user_name FROM app_sessions WHERE LOWER(email) = LOWER($1) ORDER BY created_at DESC LIMIT 1",
-    [email]
-  );
-  if (rows.length === 0) return null;
+  const normalized = email.trim().toLowerCase();
 
-  const userName = rows[0].user_name;
+  // 1. Try app_sessions (most reliable — every sign-in writes here)
+  const { rows: sessionRows } = await query<{ user_name: string }>(
+    "SELECT user_name FROM app_sessions WHERE LOWER(email) = LOWER($1) ORDER BY created_at DESC LIMIT 1",
+    [normalized]
+  );
+
+  // 2. Fall back to google_auth (has email for every Google OAuth user)
+  let userName: string | null = null;
+  if (sessionRows.length > 0) {
+    userName = sessionRows[0].user_name;
+  } else {
+    const { rows: gaRows } = await query<{ user_name: string }>(
+      "SELECT user_name FROM google_auth WHERE LOWER(email) = LOWER($1) LIMIT 1",
+      [normalized]
+    );
+    if (gaRows.length > 0) {
+      userName = gaRows[0].user_name;
+      logger.info({ email: normalized, userName }, "Email resolved via google_auth fallback");
+    }
+  }
+
+  if (!userName) return null;
+
   const { rows: profileRows } = await query<{ onboarding_completed: boolean }>(
     "SELECT onboarding_completed FROM user_profiles WHERE user_name = $1 LIMIT 1",
     [userName]

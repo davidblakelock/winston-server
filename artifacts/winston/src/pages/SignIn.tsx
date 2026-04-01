@@ -122,7 +122,7 @@ export default function SignIn({ onAuthenticated: _onAuthenticated }: SignInProp
           }}
         >
           <span style={{ color: "white", fontWeight: "700", fontSize: "20px", letterSpacing: "0.05em" }}>
-            EP
+            W
           </span>
         </div>
 

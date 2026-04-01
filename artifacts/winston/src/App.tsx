@@ -38,31 +38,24 @@ function LoadingScreen() {
 }
 
 // ── Onboarding + Chat shell ───────────────────────────────────────────────────
-// initialIsNewUser: passed directly from the Google OAuth redirect URL (?new=0/1)
-// when set, skip the API round-trip. For returning sessions (no URL token),
-// fetch /api/onboarding/status to determine routing.
+// AppShell always fetches /api/onboarding/status as the authoritative routing
+// decision — never trusts the isNewUser hint from the sign-in response.
 
 interface AppShellProps {
-  initialIsNewUser?: boolean;
   onSignOut: () => void;
 }
 
-function AppShell({ initialIsNewUser, onSignOut }: AppShellProps) {
+function AppShell({ onSignOut }: AppShellProps) {
   const [onboardingStatus, setOnboardingStatus] = useState<
     "loading" | "new" | "returning"
-  >(() => {
-    if (initialIsNewUser === true) return "new";
-    if (initialIsNewUser === false) return "returning";
-    return "loading";
-  });
+  >("loading");
 
   useEffect(() => {
-    // If the OAuth redirect already told us the answer, don't make another API call
-    if (initialIsNewUser !== undefined) return;
-
+    // ALWAYS fetch /api/onboarding/status — it is the authoritative source of truth.
+    // Never trust the isNewUser hint from the OAuth/magic-link response for routing;
+    // it can be stale or wrong. Only user_profiles.onboarding_completed matters.
     const token = localStorage.getItem("winston_session_token");
     if (!token) {
-      // No token at all — shouldn't reach here, but fail safe
       setOnboardingStatus("new");
       return;
     }
@@ -79,10 +72,11 @@ function AppShell({ initialIsNewUser, onSignOut }: AppShellProps) {
         setOnboardingStatus(data.isNewUser ? "new" : "returning");
       })
       .catch(() => {
-        // Network error — default to returning so David doesn't get stuck in onboarding
+        // Network error — fail open to returning so user doesn't get stuck
         setOnboardingStatus("returning");
       });
-  }, [initialIsNewUser]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (onboardingStatus === "loading") return <LoadingScreen />;
 
@@ -137,24 +131,19 @@ function AppWithAuth() {
   const { authState, setAuthenticated, signOut } = useAuth();
   const [location, navigate] = useLocation();
   const [authError, setAuthError] = useState(false);
-  // freshIsNewUser: set when we receive a Google OAuth redirect with ?new=0/1
-  // Remains undefined for returning users who open the app with an existing session
-  const [freshIsNewUser, setFreshIsNewUser] = useState<boolean | undefined>(undefined);
 
-  // ── Sign out handler — must be at top level (Rules of Hooks) ──
+  // ── Sign out handler ──────────────────────────────────────────────────────
   const handleSignOut = useCallback(async () => {
-    // Clear React Query cache so next user gets a fresh slate
+    // Clear React Query cache so the next user always starts fresh
     queryClient.clear();
-    setFreshIsNewUser(undefined);
     await signOut();
   }, [signOut]);
 
-  // ── Handle Google OAuth redirect: token + isNewUser flag arrive as URL params ──
+  // ── Handle Google OAuth redirect: token + name arrive as URL params ───────
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const urlToken = params.get("token");
-    const urlName = params.get("name");
-    const urlNew = params.get("new");
+    const urlName  = params.get("name");
     const urlAuthError = params.get("auth");
 
     if (urlAuthError === "error") {
@@ -164,17 +153,9 @@ function AppWithAuth() {
     }
 
     if (urlToken && urlName) {
-      // Clear React Query cache so previous user's profile data is never shown to a new user
+      // Clear any cached data from the previous session
       queryClient.clear();
-
-      // Capture the isNewUser flag BEFORE clearing the URL
-      // new=1 → new user needs onboarding; new=0 → returning user goes straight to chat
-      if (urlNew !== null) {
-        setFreshIsNewUser(urlNew === "1");
-      }
-
       setAuthenticated(urlToken, decodeURIComponent(urlName));
-
       // Clean URL — remove query params so the token isn't visible or bookmarked
       window.history.replaceState({}, "", window.location.pathname);
     }
@@ -185,7 +166,7 @@ function AppWithAuth() {
     return <OliviaArchive />;
   }
 
-  // Legacy magic-link verification route
+  // Magic-link verification route
   if (location.startsWith("/auth/verify")) {
     const params = new URLSearchParams(
       typeof window !== "undefined" ? window.location.search : ""
@@ -194,9 +175,8 @@ function AppWithAuth() {
     return (
       <AuthVerify
         token={token}
-        onAuthenticated={(t, name, isNewUser) => {
+        onAuthenticated={(t, name) => {
           queryClient.clear();
-          if (isNewUser !== undefined) setFreshIsNewUser(isNewUser);
           setAuthenticated(t, name);
           navigate("/");
         }}
@@ -218,9 +198,8 @@ function AppWithAuth() {
     );
   }
 
-  // Authenticated — pass isNewUser flag (if known from OAuth redirect) to AppShell
-  // AppShell will fetch /api/onboarding/status itself if freshIsNewUser is undefined
-  return <AppShell initialIsNewUser={freshIsNewUser} onSignOut={handleSignOut} />;
+  // Authenticated — AppShell always fetches /api/onboarding/status as ground truth
+  return <AppShell onSignOut={handleSignOut} />;
 }
 
 // ── App ───────────────────────────────────────────────────────────────────────

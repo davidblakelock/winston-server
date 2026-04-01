@@ -5,7 +5,7 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 interface AuthVerifyProps {
   token: string;
-  onAuthenticated: (token: string, userName: string, isNewUser?: boolean) => void;
+  onAuthenticated: (token: string, userName: string) => void;
   onFailed: () => void;
 }
 
@@ -29,7 +29,7 @@ export default function AuthVerify({ token, onAuthenticated, onFailed }: AuthVer
       })
       .then((data) => {
         localStorage.setItem(SESSION_KEY, data.sessionToken);
-        onAuthenticated(data.sessionToken, data.userName, data.isNewUser);
+        onAuthenticated(data.sessionToken, data.userName);
       })
       .catch(() => {
         setError("This sign-in link has expired or was already used.");
@@ -72,7 +72,7 @@ export default function AuthVerify({ token, onAuthenticated, onFailed }: AuthVer
               boxShadow: "0 0 30px rgba(79,70,229,0.5)",
             }}
           >
-            <span style={{ color: "white", fontWeight: "700", fontSize: "16px" }}>EP</span>
+            <span style={{ color: "white", fontWeight: "700", fontSize: "16px" }}>W</span>
           </div>
           <p style={{ color: "#9d9db8", fontSize: "0.95rem" }}>
             Signing you in…
