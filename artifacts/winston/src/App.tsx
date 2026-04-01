@@ -38,25 +38,50 @@ function LoadingScreen() {
 }
 
 // ── Onboarding + Chat shell ───────────────────────────────────────────────────
+// initialIsNewUser: passed directly from the Google OAuth redirect URL (?new=0/1)
+// when set, skip the API round-trip. For returning sessions (no URL token),
+// fetch /api/onboarding/status to determine routing.
 
-function AppShell() {
+interface AppShellProps {
+  initialIsNewUser?: boolean;
+}
+
+function AppShell({ initialIsNewUser }: AppShellProps) {
   const [onboardingStatus, setOnboardingStatus] = useState<
     "loading" | "new" | "returning"
-  >("loading");
+  >(() => {
+    if (initialIsNewUser === true) return "new";
+    if (initialIsNewUser === false) return "returning";
+    return "loading";
+  });
 
   useEffect(() => {
+    // If the OAuth redirect already told us the answer, don't make another API call
+    if (initialIsNewUser !== undefined) return;
+
     const token = localStorage.getItem("winston_session_token");
+    if (!token) {
+      // No token at all — shouldn't reach here, but fail safe
+      setOnboardingStatus("new");
+      return;
+    }
+
     fetch(`${API}/api/onboarding/status`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
     })
-      .then((r) => r.json() as Promise<{ isNewUser: boolean }>)
+      .then((r) => {
+        if (r.status === 401) return { isNewUser: true } as { isNewUser: boolean };
+        return r.json() as Promise<{ isNewUser: boolean }>;
+      })
       .then((data) => {
         setOnboardingStatus(data.isNewUser ? "new" : "returning");
       })
       .catch(() => {
+        // Network error — default to returning so David doesn't get stuck in onboarding
         setOnboardingStatus("returning");
       });
-  }, []);
+  }, [initialIsNewUser]);
 
   if (onboardingStatus === "loading") return <LoadingScreen />;
 
@@ -111,12 +136,16 @@ function AppWithAuth() {
   const { authState, setAuthenticated } = useAuth();
   const [location, navigate] = useLocation();
   const [authError, setAuthError] = useState(false);
+  // freshIsNewUser: set when we receive a Google OAuth redirect with ?new=0/1
+  // Remains undefined for returning users who open the app with an existing session
+  const [freshIsNewUser, setFreshIsNewUser] = useState<boolean | undefined>(undefined);
 
-  // ── Handle Google OAuth redirect: token arrives as URL query param ──────────
+  // ── Handle Google OAuth redirect: token + isNewUser flag arrive as URL params ──
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const urlToken = params.get("token");
     const urlName = params.get("name");
+    const urlNew = params.get("new");
     const urlAuthError = params.get("auth");
 
     if (urlAuthError === "error") {
@@ -126,9 +155,15 @@ function AppWithAuth() {
     }
 
     if (urlToken && urlName) {
-      // Consume token from URL, save to auth state
+      // Capture the isNewUser flag BEFORE clearing the URL
+      // new=1 → new user needs onboarding; new=0 → returning user goes straight to chat
+      if (urlNew !== null) {
+        setFreshIsNewUser(urlNew === "1");
+      }
+
       setAuthenticated(urlToken, decodeURIComponent(urlName));
-      // Clean the URL — strip query params
+
+      // Clean URL — remove query params so the token isn't visible or bookmarked
       window.history.replaceState({}, "", window.location.pathname);
     }
   }, [setAuthenticated]);
@@ -153,7 +188,7 @@ function AppWithAuth() {
     );
   }
 
-  // Loading auth state
+  // Loading auth state (validating existing session token)
   if (authState.loading) return <LoadingScreen />;
 
   // Not authenticated — show sign in
@@ -166,8 +201,9 @@ function AppWithAuth() {
     );
   }
 
-  // Authenticated — main app
-  return <AppShell />;
+  // Authenticated — pass isNewUser flag (if known from OAuth redirect) to AppShell
+  // AppShell will fetch /api/onboarding/status itself if freshIsNewUser is undefined
+  return <AppShell initialIsNewUser={freshIsNewUser} />;
 }
 
 // ── App ───────────────────────────────────────────────────────────────────────

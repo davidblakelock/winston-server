@@ -21,17 +21,30 @@ const EL_KEY = () =>
 
 // ── GET /api/onboarding/status ────────────────────────────────────────────────
 router.get("/onboarding/status", async (req, res) => {
+  // Never cache — response is user-specific and must always reflect current DB state
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
+
   try {
-    // Resolve the requesting user from their session token
-    let userName = "David";
     const authHeader = req.headers.authorization;
-    if (authHeader?.startsWith("Bearer ")) {
-      const session = await validateSession(authHeader.slice(7));
-      if (session) userName = session.userName;
+    if (!authHeader?.startsWith("Bearer ")) {
+      // No session token → treat as new user (must sign in first)
+      res.json({ isNewUser: true, profile: null });
+      return;
     }
 
+    const session = await validateSession(authHeader.slice(7));
+    if (!session) {
+      // Invalid / expired session → must sign in again
+      res.status(401).json({ isNewUser: true, profile: null, error: "session_expired" });
+      return;
+    }
+
+    const { userName } = session;
     const profile = await getProfile(userName);
     const complete = profile?.onboardingCompleted ?? false;
+
+    req.log.info({ userName, complete }, "Onboarding status resolved");
     res.json({ isNewUser: !complete, profile: complete ? profile : null });
   } catch (err) {
     req.log.error({ err }, "Onboarding status error");

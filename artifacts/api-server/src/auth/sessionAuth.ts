@@ -29,31 +29,47 @@ export async function lookupOrCreateGoogleUser(
   email: string,
   name: string
 ): Promise<{ userName: string; isNewUser: boolean }> {
+  // 1. Look up google_users by google_id
   const { rows: existing } = await query<{ user_name: string; is_new_user: boolean }>(
     "SELECT user_name, is_new_user FROM google_users WHERE google_id = $1",
     [googleId]
   );
 
+  let userName: string;
+
   if (existing.length > 0) {
-    // Mark no longer new after first sign-in
+    userName = existing[0].user_name;
+    // Clear the first-sign-in flag
     if (existing[0].is_new_user) {
       await query("UPDATE google_users SET is_new_user = false WHERE google_id = $1", [googleId]);
     }
-    return { userName: existing[0].user_name, isNewUser: existing[0].is_new_user };
+  } else {
+    // Brand-new Google user — derive userName from first name
+    const firstName = name.split(" ")[0] || "Friend";
+    userName = firstName;
+
+    await query(
+      `INSERT INTO google_users (google_id, email, name, user_name, is_new_user)
+       VALUES ($1, $2, $3, $4, true)
+       ON CONFLICT (google_id) DO NOTHING`,
+      [googleId, email, name, firstName]
+    );
+
+    logger.info({ googleId, email, userName }, "New Google user created");
   }
 
-  // New Google user — derive userName from first name
-  const firstName = name.split(" ")[0] || "Friend";
-
-  await query(
-    `INSERT INTO google_users (google_id, email, name, user_name, is_new_user)
-     VALUES ($1, $2, $3, $4, true)
-     ON CONFLICT (google_id) DO NOTHING`,
-    [googleId, email, name, firstName]
+  // 2. Source of truth for "new vs returning" is whether a COMPLETED profile exists.
+  //    A user might have a magic-link profile already — they should go straight to chat.
+  const { rows: profileRows } = await query<{ onboarding_completed: boolean }>(
+    "SELECT onboarding_completed FROM user_profiles WHERE user_name = $1 LIMIT 1",
+    [userName]
   );
 
-  logger.info({ googleId, email, firstName }, "New Google user created");
-  return { userName: firstName, isNewUser: true };
+  const hasCompletedProfile =
+    profileRows.length > 0 && profileRows[0].onboarding_completed === true;
+
+  logger.info({ googleId, userName, hasCompletedProfile }, "Google user resolved");
+  return { userName, isNewUser: !hasCompletedProfile };
 }
 
 // ── App sessions ──────────────────────────────────────────────────────────────
