@@ -1555,10 +1555,30 @@ router.post("/speak", async (req, res) => {
   }
 
   const ELEVENLABS_API_KEY = (process.env.EL_API_KEY ?? process.env.ELEVENLABS_API_KEY ?? "").trim();
-  const ELEVENLABS_VOICE_ID = (process.env.EL_VOICE_ID ?? process.env.ELEVENLABS_VOICE_ID ?? "").trim();
+  const DEFAULT_VOICE_ID = (process.env.EL_VOICE_ID ?? process.env.ELEVENLABS_VOICE_ID ?? "").trim();
 
-  if (!ELEVENLABS_API_KEY || !ELEVENLABS_VOICE_ID) {
-    res.status(500).json({ error: "ElevenLabs API key or Voice ID not configured" });
+  if (!ELEVENLABS_API_KEY) {
+    res.status(500).json({ error: "ElevenLabs API key not configured" });
+    return;
+  }
+
+  // Resolve the user's chosen voice from their profile (falls back to env default)
+  let ELEVENLABS_VOICE_ID = DEFAULT_VOICE_ID;
+  const authHeader = req.headers.authorization;
+  if (authHeader?.startsWith("Bearer ")) {
+    try {
+      const session = await validateSession(authHeader.slice(7));
+      if (session) {
+        const profile = await getProfile(session.userName).catch(() => null);
+        if (profile?.voiceId) ELEVENLABS_VOICE_ID = profile.voiceId;
+      }
+    } catch {
+      // Non-fatal — continue with default voice
+    }
+  }
+
+  if (!ELEVENLABS_VOICE_ID) {
+    res.status(500).json({ error: "No voice ID configured" });
     return;
   }
 

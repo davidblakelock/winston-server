@@ -642,7 +642,9 @@ export default function Chat({ onSignOut, companionName: companionNameProp }: Ch
         <div className="flex items-center gap-3">
           <Avatar className="h-10 w-10 border border-primary/20 bg-card">
             <AvatarFallback className="bg-card text-primary font-serif font-medium text-lg">
-              {companionNameProp ? companionNameProp[0].toUpperCase() : "W"}
+              {companionNameProp
+                ? companionNameProp.trim().split(/\s+/).map((w) => w[0].toUpperCase()).join("").slice(0, 2)
+                : "W"}
             </AvatarFallback>
           </Avatar>
           <div>

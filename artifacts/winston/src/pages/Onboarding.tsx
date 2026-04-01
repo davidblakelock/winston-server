@@ -454,7 +454,9 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
               {msg.role === "assistant" && (
                 <Avatar className="h-8 w-8 flex-shrink-0 mt-0.5 bg-indigo-900 border border-indigo-700/50">
                   <AvatarFallback className="text-xs font-semibold text-indigo-300 bg-transparent">
-                    EP
+                    {collectedData.companionName
+                      ? collectedData.companionName.trim().split(/\s+/).map((w) => w[0].toUpperCase()).join("").slice(0, 2)
+                      : "W"}
                   </AvatarFallback>
                 </Avatar>
               )}
@@ -473,7 +475,11 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
           {loading && (
             <div className="flex gap-3">
               <Avatar className="h-8 w-8 flex-shrink-0 mt-0.5 bg-indigo-900 border border-indigo-700/50">
-                <AvatarFallback className="text-xs font-semibold text-indigo-300 bg-transparent">EP</AvatarFallback>
+                <AvatarFallback className="text-xs font-semibold text-indigo-300 bg-transparent">
+                  {collectedData.companionName
+                    ? collectedData.companionName.trim().split(/\s+/).map((w) => w[0].toUpperCase()).join("").slice(0, 2)
+                    : "W"}
+                </AvatarFallback>
               </Avatar>
               <div className="bg-zinc-800 border border-zinc-700/50 rounded-2xl rounded-tl-sm px-4 py-3">
                 <div className="flex gap-1 items-center h-4">
