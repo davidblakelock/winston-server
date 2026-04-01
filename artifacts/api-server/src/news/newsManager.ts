@@ -78,12 +78,9 @@ async function fetchFeed(
 }
 
 // All news feeds for David's interests
+// NOTE: No market/finance RSS feed here — market data comes from live Yahoo Finance API
+// in marketsManager.ts which is far more accurate and timely than RSS headlines.
 const FEEDS = [
-  {
-    category: "Markets & Finance",
-    url: "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
-    max: 4,
-  },
   {
     category: "Texas Rangers",
     url: "https://news.google.com/rss/search?q=Texas+Rangers+baseball&hl=en-US&gl=US&ceid=US:en",

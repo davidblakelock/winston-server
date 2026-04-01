@@ -6,6 +6,7 @@ export interface MarketQuote {
   price: number;
   change: number;
   changePercent: number;
+  isYesterdayClose: boolean; // true when reporting last completed trading day
 }
 
 export interface MarketSnapshot {
@@ -14,63 +15,106 @@ export interface MarketSnapshot {
   nasdaq: MarketQuote | null;
   oil: MarketQuote | null;
   fetchedAt: Date;
-  marketStatus: string; // "open" | "pre-market" | "after-hours" | "closed"
+  marketStatus: string;
 }
 
-const SYMBOLS: Record<string, string> = {
+const SYMBOL_NAMES: Record<string, string> = {
   "^GSPC": "S&P 500",
   "^DJI": "Dow Jones",
   "^IXIC": "Nasdaq",
   "CL=F": "Crude Oil",
 };
 
-async function fetchQuotes(symbols: string[]): Promise<Map<string, MarketQuote>> {
-  const encoded = symbols.map((s) => encodeURIComponent(s)).join(",");
-  const url = `https://query2.finance.yahoo.com/v7/finance/quote?symbols=${encoded}&fields=shortName,regularMarketPrice,regularMarketChange,regularMarketChangePercent,regularMarketPreviousClose,marketState`;
+// Use Yahoo Finance v8 chart API — returns 5-day OHLCV data
+// Unlike v7 quote, this endpoint is not rate-limited the same way
+async function fetchChartQuote(symbol: string): Promise<MarketQuote | null> {
+  const encoded = encodeURIComponent(symbol);
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?interval=1d&range=5d`;
 
-  const res = await fetch(url, {
-    headers: {
-      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      "Accept": "application/json",
-      "Accept-Language": "en-US,en;q=0.9",
-    },
-    signal: AbortSignal.timeout(8000),
-  });
-
-  if (!res.ok) {
-    throw new Error(`Yahoo Finance API returned ${res.status}`);
-  }
-
-  const data = await res.json() as {
-    quoteResponse?: {
-      result?: Array<{
-        symbol: string;
-        shortName?: string;
-        regularMarketPrice?: number;
-        regularMarketChange?: number;
-        regularMarketChangePercent?: number;
-        marketState?: string;
-      }>;
-    };
-  };
-
-  const quotes = data?.quoteResponse?.result ?? [];
-  const map = new Map<string, MarketQuote>();
-
-  for (const q of quotes) {
-    if (q.regularMarketPrice === undefined) continue;
-    map.set(q.symbol, {
-      symbol: q.symbol,
-      name: SYMBOLS[q.symbol] ?? q.shortName ?? q.symbol,
-      price: q.regularMarketPrice,
-      change: q.regularMarketChange ?? 0,
-      changePercent: q.regularMarketChangePercent ?? 0,
+  try {
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        Accept: "*/*",
+        Referer: "https://finance.yahoo.com/",
+      },
+      signal: AbortSignal.timeout(8000),
     });
-  }
 
-  return map;
+    if (!res.ok) {
+      logger.warn({ symbol, status: res.status }, "Market chart API non-OK");
+      return null;
+    }
+
+    const data = (await res.json()) as {
+      chart?: {
+        result?: Array<{
+          meta: {
+            regularMarketPrice: number;
+            currentTradingPeriod: {
+              regular: { start: number; end: number };
+            };
+          };
+          timestamp: number[];
+          indicators: {
+            quote: Array<{
+              close: (number | null)[];
+            }>;
+          };
+        }>;
+        error?: unknown;
+      };
+    };
+
+    const result = data?.chart?.result?.[0];
+    if (!result) return null;
+
+    const meta = result.meta;
+    const closes = result.indicators.quote[0].close;
+    if (!closes || closes.length < 2) return null;
+
+    // Determine if the regular trading session is currently active
+    const nowSec = Date.now() / 1000;
+    const regularStart = meta.currentTradingPeriod?.regular?.start ?? 0;
+    const regularEnd = meta.currentTradingPeriod?.regular?.end ?? 0;
+    const isMarketOpen = nowSec > regularStart && nowSec < regularEnd;
+
+    // Select the last COMPLETED trading day:
+    // • If market is open: last bar is today (partial) → use second-to-last close
+    // • If market is closed / pre-market: last bar is yesterday's final close → use it
+    const completedIdx = isMarketOpen ? closes.length - 2 : closes.length - 1;
+    const prevIdx = completedIdx - 1;
+
+    // Filter nulls — Yahoo sometimes sends null for the current partial bar
+    const completedClose = closes[completedIdx];
+    const prevClose = closes[prevIdx];
+
+    if (completedClose == null || prevClose == null) return null;
+
+    const change = completedClose - prevClose;
+    const changePercent = (change / prevClose) * 100;
+
+    logger.debug(
+      { symbol, completedClose, prevClose, change, changePercent, isMarketOpen },
+      "Market quote computed"
+    );
+
+    return {
+      symbol,
+      name: SYMBOL_NAMES[symbol] ?? symbol,
+      price: completedClose,
+      change,
+      changePercent,
+      isYesterdayClose: true,
+    };
+  } catch (err) {
+    logger.warn({ symbol, err }, "Market chart fetch failed");
+    return null;
+  }
 }
 
+// In-memory cache — 15 minutes during market hours, 6 hours overnight
 let _cache: MarketSnapshot | null = null;
 let _cacheExpiry = 0;
 
@@ -79,21 +123,41 @@ export async function fetchMarkets(): Promise<MarketSnapshot> {
   if (_cache && now < _cacheExpiry) return _cache;
 
   const symbols = ["^GSPC", "^DJI", "^IXIC", "CL=F"];
-  const quotes = await fetchQuotes(symbols);
+
+  // Fetch all symbols in parallel
+  const [sp500, dow, nasdaq, oil] = await Promise.all(
+    symbols.map((s) => fetchChartQuote(s))
+  );
 
   const snapshot: MarketSnapshot = {
-    sp500: quotes.get("^GSPC") ?? null,
-    dow: quotes.get("^DJI") ?? null,
-    nasdaq: quotes.get("^IXIC") ?? null,
-    oil: quotes.get("CL=F") ?? null,
+    sp500,
+    dow,
+    nasdaq,
+    oil,
     fetchedAt: new Date(),
     marketStatus: "closed",
   };
 
   _cache = snapshot;
-  _cacheExpiry = now + 10 * 60 * 1000; // 10-min cache
+  // Cache for 15 minutes so repeated morning questions don't hammer Yahoo
+  _cacheExpiry = now + 15 * 60 * 1000;
+
+  logger.info(
+    {
+      sp500: sp500 ? `${sp500.changePercent.toFixed(2)}%` : "null",
+      dow: dow ? `${dow.changePercent.toFixed(2)}%` : "null",
+      nasdaq: nasdaq ? `${nasdaq.changePercent.toFixed(2)}%` : "null",
+    },
+    "Markets fetched"
+  );
 
   return snapshot;
+}
+
+// Force-clear cache so the next fetch gets fresh data (used at server startup / morning push)
+export function clearMarketsCache(): void {
+  _cache = null;
+  _cacheExpiry = 0;
 }
 
 function formatSingle(q: MarketQuote): string {
@@ -118,17 +182,23 @@ export function formatMarketsForPrompt(snapshot: MarketSnapshot): string {
 
   if (!lines.length) return "";
 
-  const upCount = [snapshot.sp500, snapshot.dow, snapshot.nasdaq]
-    .filter((q) => q && q.changePercent > 0).length;
-  const downCount = [snapshot.sp500, snapshot.dow, snapshot.nasdaq]
-    .filter((q) => q && q.changePercent < 0).length;
+  const upCount = [snapshot.sp500, snapshot.dow, snapshot.nasdaq].filter(
+    (q) => q && q.changePercent > 0
+  ).length;
+  const downCount = [snapshot.sp500, snapshot.dow, snapshot.nasdaq].filter(
+    (q) => q && q.changePercent < 0
+  ).length;
 
   const trend =
-    upCount === 3 ? "Markets were broadly higher" :
-    downCount === 3 ? "Markets were broadly lower" :
-    upCount > downCount ? "Markets finished mostly higher" :
-    downCount > upCount ? "Markets finished mostly lower" :
-    "Markets were mixed";
+    upCount === 3
+      ? "Markets were broadly higher"
+      : downCount === 3
+        ? "Markets were broadly lower"
+        : upCount > downCount
+          ? "Markets finished mostly higher"
+          : downCount > upCount
+            ? "Markets finished mostly lower"
+            : "Markets were mixed";
 
   return `[Financial Markets — Yesterday's Close]\n${trend}.\n${lines.join("\n")}`;
 }
@@ -136,5 +206,12 @@ export function formatMarketsForPrompt(snapshot: MarketSnapshot): string {
 export function buildMarketsBlock(snapshot: MarketSnapshot): string {
   const formatted = formatMarketsForPrompt(snapshot);
   if (!formatted) return "";
-  return `\n\n${formatted}\n\nFor the morning briefing, give David a brief 2-3 sentence market summary in the tone of a knowledgeable friend — mention any significant moves and what's driving them. Note the oil price if notable. Keep it tight and conversational, NOT like a financial advisor disclosure.`;
+  return (
+    `\n\n${formatted}\n\n` +
+    `IMPORTANT: The market figures above are LIVE DATA fetched right now from Yahoo Finance — they are the authoritative source. ` +
+    `Report the direction and percentage EXACTLY as shown (up or down, correct sign). ` +
+    `Do NOT contradict these numbers using news headlines or your training knowledge — those may be weeks or months out of date. ` +
+    `Give David a brief 2-3 sentence market summary in the tone of a knowledgeable friend. ` +
+    `Note the oil price if it moved more than 1%. Keep it tight and conversational.`
+  );
 }
