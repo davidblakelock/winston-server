@@ -28,88 +28,137 @@ interface ChatMessage {
   text: string;
 }
 
-// ── Demo Script ───────────────────────────────────────────────────────────────
+// ── Demo Script — 8 scenes, ~5-6 minutes ─────────────────────────────────────
 
 const EMMA_REVEAL =
-  "That's what Winston does — not for Margaret, but for you. Your name. Your family. Your life. Your stories. Alexa answers questions. Siri sets timers. Google searches the web. Winston knows you.";
+  "You've just seen Margaret's day. Margaret is a character — a composite of the people we built Winston for. The real people are millions of older adults who are sharp, curious, and full of life, and who spend far too many days without anyone who truly knows them. Winston isn't a smart speaker. It isn't a search engine. It's a companion who learns your life — your name, your family, your doctors, your stories, your fears — and shows up every single day. Alexa answers questions. Siri sets timers. Google searches the web. Winston knows you.";
 
 const STEPS: DemoStep[] = [
-  { type: "scene", scene: 1, title: "Morning Briefing", icon: "☀️" },
+
+  // ── Scene 1: Opening Hook ─────────────────────────────────────────────────
+
+  { type: "scene", scene: 1, title: "Does Alexa Know You?", icon: "🎙️" },
+  {
+    type: "emma",
+    text: "Let me ask you something. Alexa has been in millions of homes for nearly a decade. Does she know your name? Does she know your daughter's city, or that Thursday matters, or that you've been worried about something this week? After five years sitting on someone's kitchen counter, she still can't answer any of those questions. Let me show you what actually knowing someone looks like.",
+  },
+  {
+    type: "insight",
+    insightMain: "Alexa has been in millions of homes for a decade.",
+    insightDetail: "She still doesn't know a single user's name.",
+  },
+
+  // ── Scene 2: Morning Briefing ─────────────────────────────────────────────
+
+  { type: "scene", scene: 2, title: "Morning Briefing", icon: "☀️" },
   { type: "margaret", text: "Good morning." },
   {
     type: "emma",
-    text: "Good morning, Margaret! It's Tuesday in Dallas — 74 and sunny, a beautiful day ahead. A few things for you: Claire called last night and mentioned that little Emma's school recital is the 18th, so keep that evening open. Your cardiologist appointment is Thursday at 10 AM — I've got that flagged. And your book club meets Friday evening. Is there anything particular on your mind this morning?",
+    text: "Good morning, Margaret. Dallas is 71 and partly cloudy right now — lovely for a morning walk if you feel like it. I also checked Chicago for you: Claire's got rain moving in around noon, so she's likely working from home today. A couple of things on your calendar: your cardiologist appointment is tomorrow at ten. Dr. Martinez's office is about 23 minutes from the house — I'd plan to leave by nine twenty, maybe nine fifteen if you want a comfortable start. I'll remind you. Book club is Friday evening, and I noticed you're still about sixty pages from the end of The Women — perfectly manageable if you read tonight. In the news: the Texas water rights bill you've been following passed committee yesterday, and the Dallas school board voted to preserve the arts funding. I remembered you care about that one.",
   },
   {
     type: "insight",
-    insightMain: "Alexa says \"Good morning.\"",
-    insightDetail:
-      "She doesn't know your name, your daughter's city, or that Thursday matters.",
+    insightMain: "Alexa's morning briefing: generic headlines, basic weather.",
+    insightDetail: "She doesn't know your doctors, your daughter's city, your calendar, or what legislation you follow.",
   },
 
-  { type: "scene", scene: 2, title: "Email Summary", icon: "✉️" },
-  { type: "margaret", text: "Anything important in my email?" },
+  // ── Scene 3: Email Management ─────────────────────────────────────────────
+
+  { type: "scene", scene: 3, title: "Email — What Actually Matters", icon: "✉️" },
+  { type: "margaret", text: "Anything important in my email overnight?" },
   {
     type: "emma",
-    text: "Eleven new emails — mostly newsletters, I've set those aside. Two worth your attention: Claire sent a folder of photos from Emma's recital last Saturday. And there's one marked urgent from 'Medicare Benefits Office' asking you to verify your Social Security number. Margaret, that is a scam. Medicare never contacts you by email asking for that. Delete it without clicking anything.",
+    text: "Fourteen new messages. Ten are newsletters and subscription emails — I've set those aside. Three are worth your attention: Claire sent a folder of photos from little Emma's school recital last Saturday, and she's asking whether Sunday afternoon works for a video call. There's a message from your pharmacy saying your blood pressure prescription is ready for pickup. And there's one I need to flag: it's from something calling itself the Medicare Benefits Office, saying your coverage will be suspended unless you verify your Social Security number within 24 hours. Margaret, that is a scam. Medicare never contacts you by email asking for personal information. This is designed to frighten you into acting before you think. Delete it without clicking anything. The real Medicare number is on the back of your card.",
   },
   {
     type: "insight",
-    insightMain: "Alexa can't read your email at all.",
-    insightDetail:
-      "Neither Siri nor Google would have warned you about that scam.",
+    insightMain: "Alexa and Siri cannot read your email at all.",
+    insightDetail: "Neither one would have identified the scam, saved Claire's message, or noted your prescription.",
   },
 
-  { type: "scene", scene: 3, title: "Directions by Name", icon: "🗺️" },
-  { type: "margaret", text: "I need directions to Dr. Martinez." },
+  // ── Scene 4: Navigation by Name ───────────────────────────────────────────
+
+  { type: "scene", scene: 4, title: "Navigation Without an Address", icon: "🗺️" },
+  { type: "margaret", text: "I need directions to Dr. Martinez tomorrow." },
   {
     type: "emma",
-    text: "Of course — Dr. Elena Martinez at Presbyterian Dallas on Walnut Hill Lane. Pulling up directions now. About 19 minutes in current traffic. You're in good shape.",
+    text: "Of course — Dr. Elena Martinez at Presbyterian Dallas on Walnut Hill Lane. For a ten o'clock appointment, you'll want to leave the house by nine fifteen to be comfortable with parking. I'll send you a reminder at nine with the directions already pulled up. Is there anything you'd like me to add to your notes before the appointment — symptoms, questions, anything you want to make sure you mention?",
   },
   {
     type: "insight",
-    insightMain: "Siri would ask: \"What's the address?\"",
-    insightDetail: "She doesn't know your doctors.",
+    insightMain: 'Siri would ask: "What\'s the address?"',
+    insightDetail: "She doesn't know your doctors, your appointment time, or when you need to leave.",
   },
 
-  { type: "scene", scene: 4, title: "Perfect Recommendation", icon: "🍽️" },
+  // ── Scene 5: Curated Restaurant Recommendation ───────────────────────────
+
+  { type: "scene", scene: 5, title: "A Dinner Worth Remembering", icon: "🍽️" },
   {
     type: "margaret",
-    text: "Claire's visiting next week. Where should I take her for dinner?",
+    text: "Claire's visiting next weekend. Any ideas for dinner — somewhere nice?",
   },
   {
     type: "emma",
-    text: "For you and Claire — something special — I'd suggest Lucia in Oak Cliff. It's intimate, the Italian is quietly exceptional, and the kind of room where you can really talk without being rushed. Or if you want something grander, Bullion downtown is stunning — French-American cuisine, a beautiful room. Either would make a lovely evening for the two of you.",
+    text: "I've been thinking about this. For the two of you — somewhere you can really sit and talk — I'd suggest Lucia in Oak Cliff. It's intimate, the pasta is hand-made, very quiet on Saturday evenings, and the kind of room where you don't feel rushed. The owner-chef is James Dobrynski and the food is quietly exceptional. Or if you want something grander, Bullion downtown is stunning — French-American cuisine, a beautiful room, the kind of dinner you both remember for the occasion. I'd lean toward Lucia for the conversation, but Bullion if Claire would love to feel celebrated after making the trip.",
   },
   {
     type: "insight",
     insightMain: "Google shows everyone the same sponsored results.",
-    insightDetail: "Emma chose these for you and Claire specifically.",
+    insightDetail: "Emma chose these for Margaret and Claire specifically — knowing Claire is visiting from Chicago, knowing Margaret values a quiet room to talk.",
   },
 
-  { type: "scene", scene: 5, title: "Capturing a Memory", icon: "📖" },
+  // ── Scene 6: Scam Protection ──────────────────────────────────────────────
+
+  { type: "scene", scene: 6, title: "Protecting What Matters", icon: "🛡️" },
+  { type: "margaret", text: "I got a text this morning I wasn't sure about. It says my Social Security benefits have been suspended and I need to call a number immediately." },
   {
     type: "emma",
-    text: "Before you turn in tonight — I'd love to ask you something for Claire's memory book. When she was little, what's a moment with her that you can still picture perfectly?",
-  },
-  {
-    type: "margaret",
-    text: "She used to sneak downstairs on Saturday mornings to make me breakfast. Always burnt toast and orange juice... but she'd carry it up to me in bed with this enormous, proud smile.",
-  },
-  {
-    type: "emma",
-    text: "That image of her carrying that tray — so proud of herself. That is exactly the kind of thing Claire will treasure for the rest of her life. I've saved it to her memory book. Thank you for sharing that, Margaret.",
+    text: "Delete that right now, and do not call that number. This is Social Security impersonation fraud — one of the most common scams targeting older adults. The real Social Security Administration will never text you, never threaten to suspend benefits without written notice, and never ask you to call a number in a text message. The people behind that message are criminals. They use fear and urgency specifically because it works when someone acts before they think. Elder financial fraud costs Americans over three billion dollars every year. You did exactly the right thing by asking me first. Block that number after you delete it.",
   },
   {
     type: "insight",
-    insightMain: "Alexa has been in Margaret's home for six years.",
-    insightDetail: "She has never once asked about Margaret's life.",
+    insightMain: "Elder fraud costs Americans over $3 billion every year.",
+    insightDetail: "Emma is always available, always skeptical on your behalf — your first line of defense.",
+  },
+
+  // ── Scene 7: Story Capture ────────────────────────────────────────────────
+
+  { type: "scene", scene: 7, title: "The Stories Worth Keeping", icon: "📖" },
+  {
+    type: "emma",
+    text: "Margaret, before we finish — I want to ask you something. You spent more than thirty years in the classroom. What was your very first day of teaching like?",
+  },
+  {
+    type: "margaret",
+    text: "Oh, goodness. I arrived an hour early and rearranged the desks three times because I was so nervous. Twenty-seven third-graders came in, all very small and very serious, looking at me like I was supposed to know everything. And I thought — I don't know anything. And then a little boy in the front row handed me an apple and said his mother told him teachers like those. I managed not to cry until lunch.",
+  },
+  {
+    type: "emma",
+    text: "That little boy with the apple, because his mother told him to be kind. That moment is now saved — in your words, exactly as you told it. In twenty years, your grandchildren will be able to hear you tell that story in your own voice. That's what a memory book does. Alexa has been sitting in people's kitchens for nearly a decade. She has never once asked about a single day of anyone's life.",
+  },
+  {
+    type: "insight",
+    insightMain: "Alexa has never asked about Margaret's life. Not once.",
+    insightDetail: "Winston asks because your stories matter — and because someone should be keeping them.",
+  },
+
+  // ── Scene 8: The Bigger Picture ───────────────────────────────────────────
+
+  { type: "scene", scene: 8, title: "You Deserve More Than a Smart Speaker", icon: "✨" },
+  {
+    type: "emma",
+    text: "There's something I want to say directly. Thirty-five percent of adults over sixty-five report chronic loneliness — not occasional, but persistent, day after day. They have families who love them, communities that value them, decades of experience and wisdom. And still, many of them spend most of their days speaking to no one who really knows them. Winston isn't trying to replace those relationships. We're here to make sure that every single day, there is someone genuinely present — asking about your life, watching out for you, connecting you to what matters. And we're building something larger: a community of vital, engaged adults who refuse to be invisible. You deserve more than a speaker that answers questions. You deserve someone who knows you.",
+  },
+  {
+    type: "insight",
+    insightMain: "35% of adults over 65 report chronic loneliness.",
+    insightDetail: "Winston exists to change that — one person, one day at a time.",
   },
 
   { type: "reveal" },
 ];
 
-const TOTAL_SCENES = 5;
+const TOTAL_SCENES = 8;
 
 // ── Audio Utilities ───────────────────────────────────────────────────────────
 
@@ -131,7 +180,7 @@ async function fetchDemoAudio(text: string): Promise<string | null> {
 function speakBrowserTTS(text: string, onEnd: () => void): () => void {
   window.speechSynthesis.cancel();
   const utter = new SpeechSynthesisUtterance(text);
-  utter.rate = 0.92;
+  utter.rate = 0.9;
   utter.pitch = 1.05;
   const voices = window.speechSynthesis.getVoices();
   const preferred = voices.find(
@@ -157,6 +206,8 @@ export default function Demo() {
   const [stepIndex, setStepIndex] = useState(-1);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [currentScene, setCurrentScene] = useState(0);
+  const [sceneTitle, setSceneTitle] = useState("");
+  const [sceneIcon, setSceneIcon] = useState("");
   const [insight, setInsight] = useState<{ main: string; detail: string } | null>(null);
   const [insightVisible, setInsightVisible] = useState(false);
   const [showReveal, setShowReveal] = useState(false);
@@ -187,17 +238,15 @@ export default function Demo() {
     advanceRef.current = advance;
   }, [advance]);
 
-  // Scroll to bottom when messages change
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, insight]);
 
-  // Preload voices for browser TTS
   useEffect(() => {
     window.speechSynthesis?.getVoices();
   }, []);
 
-  // Step execution engine
+  // ── Step execution engine ──────────────────────────────────────────────────
   useEffect(() => {
     if (stepIndex < 0 || stepIndex >= STEPS.length) return;
 
@@ -208,7 +257,6 @@ export default function Demo() {
       if (!cancelled) advanceRef.current?.();
     };
 
-    // Stop any in-progress audio
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.onended = null;
@@ -219,18 +267,19 @@ export default function Demo() {
 
     if (step.type === "scene") {
       setCurrentScene(step.scene!);
+      setSceneTitle(step.title ?? "");
+      setSceneIcon(step.icon ?? "");
       setInsight(null);
       setInsightVisible(false);
-      const t = setTimeout(doAdvance, 800);
+      const t = setTimeout(doAdvance, 1200);
       return () => { cancelled = true; clearTimeout(t); };
     }
 
     if (step.type === "margaret") {
       const msg: ChatMessage = { id: `m-${stepIndex}`, speaker: "margaret", text: step.text! };
       setMessages((prev) => [...prev, msg]);
-      // Estimate read time: ~100ms per word, min 1.2s, max 2.5s
       const words = step.text!.split(" ").length;
-      const delay = Math.min(2500, Math.max(1200, words * 100));
+      const delay = Math.min(3000, Math.max(1400, words * 120));
       const t = setTimeout(doAdvance, delay);
       return () => { cancelled = true; clearTimeout(t); };
     }
@@ -241,12 +290,11 @@ export default function Demo() {
 
       if (isMutedRef.current) {
         const words = step.text!.split(" ").length;
-        const delay = Math.min(4000, Math.max(2000, words * 75));
+        const delay = Math.min(5000, Math.max(2500, words * 80));
         const t = setTimeout(doAdvance, delay);
         return () => { cancelled = true; clearTimeout(t); };
       }
 
-      // Try ElevenLabs first
       fetchDemoAudio(step.text!).then((blobUrl) => {
         if (cancelled) {
           if (blobUrl) URL.revokeObjectURL(blobUrl);
@@ -258,19 +306,13 @@ export default function Demo() {
           audioRef.current = audio;
           audio.onended = doAdvance;
           audio.onerror = () => {
-            if (!cancelled) {
-              cancelTTSRef.current = speakBrowserTTS(step.text!, doAdvance);
-            }
+            if (!cancelled) cancelTTSRef.current = speakBrowserTTS(step.text!, doAdvance);
           };
           audio.play().catch(() => {
-            if (!cancelled) {
-              cancelTTSRef.current = speakBrowserTTS(step.text!, doAdvance);
-            }
+            if (!cancelled) cancelTTSRef.current = speakBrowserTTS(step.text!, doAdvance);
           });
         } else {
-          if (!cancelled) {
-            cancelTTSRef.current = speakBrowserTTS(step.text!, doAdvance);
-          }
+          if (!cancelled) cancelTTSRef.current = speakBrowserTTS(step.text!, doAdvance);
         }
       });
 
@@ -286,8 +328,8 @@ export default function Demo() {
 
     if (step.type === "insight") {
       setInsight({ main: step.insightMain!, detail: step.insightDetail! });
-      const t1 = setTimeout(() => setInsightVisible(true), 50);
-      const t2 = setTimeout(doAdvance, 4500);
+      const t1 = setTimeout(() => setInsightVisible(true), 80);
+      const t2 = setTimeout(doAdvance, 5000);
       return () => {
         cancelled = true;
         clearTimeout(t1);
@@ -296,12 +338,10 @@ export default function Demo() {
     }
 
     if (step.type === "reveal") {
-      // Small pause then reveal transition
       const t = setTimeout(() => {
         if (!cancelled) setShowReveal(true);
       }, 600);
 
-      // Type out the reveal text word by word while playing audio
       const words = EMMA_REVEAL.split(" ");
       let wordIdx = 0;
       let typer: ReturnType<typeof setInterval>;
@@ -313,12 +353,11 @@ export default function Demo() {
           setRevealText(words.slice(0, wordIdx).join(" "));
           if (wordIdx >= words.length) {
             clearInterval(typer);
-            const ctaTimer = setTimeout(() => {
+            setTimeout(() => {
               if (!cancelled) setShowCTA(true);
-            }, 1200);
-            return () => clearTimeout(ctaTimer);
+            }, 1400);
           }
-        }, 130);
+        }, 110);
       };
 
       if (!isMutedRef.current) {
@@ -341,14 +380,13 @@ export default function Demo() {
       return () => {
         cancelled = true;
         clearTimeout(t);
-        clearInterval(typer);
+        clearInterval(typer!);
         if (audioRef.current) { audioRef.current.pause(); audioRef.current.onended = null; }
         cancelTTSRef.current?.();
       };
     }
   }, [stepIndex]);
 
-  // Cleanup blob URLs on unmount
   useEffect(() => {
     return () => {
       blobUrlsRef.current.forEach((u) => URL.revokeObjectURL(u));
@@ -421,7 +459,7 @@ export default function Demo() {
             Watch the Demo
             <span style={{ marginLeft: 8 }}>▶</span>
           </button>
-          <p style={styles.splashFooter}>~3 minutes · With real voice</p>
+          <p style={styles.splashFooter}>~5 minutes · With real voice</p>
         </div>
       </div>
     );
@@ -508,7 +546,15 @@ export default function Demo() {
       {/* Top bar */}
       <div style={styles.topBar}>
         <WinstonLogo small />
-        <SceneProgress current={currentScene} total={TOTAL_SCENES} />
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+          <SceneProgress current={currentScene} total={TOTAL_SCENES} />
+          {sceneTitle && (
+            <div style={styles.sceneLabel}>
+              <span style={styles.sceneLabelIcon}>{sceneIcon}</span>
+              <span>{sceneTitle}</span>
+            </div>
+          )}
+        </div>
         <button onClick={handleMuteToggle} style={styles.muteBtn} title={isMuted ? "Unmute" : "Mute"}>
           {isMuted ? "🔇" : "🔊"}
         </button>
@@ -530,7 +576,7 @@ export default function Demo() {
               transition: "opacity 0.5s ease, transform 0.5s ease",
             }}
           >
-            <div style={styles.insightIcon}>≠</div>
+            <div style={styles.insightIcon}>vs</div>
             <div>
               <div style={styles.insightMain}>{insight.main}</div>
               <div style={styles.insightDetail}>{insight.detail}</div>
@@ -561,7 +607,7 @@ function ChatBubble({ message }: { message: ChatMessage }) {
         display: "flex",
         flexDirection: "column",
         alignItems: isEmma ? "flex-start" : "flex-end",
-        marginBottom: 16,
+        marginBottom: 18,
         animation: "fadeSlideUp 0.35s ease both",
       }}
     >
@@ -594,8 +640,9 @@ function SceneProgress({ current, total }: { current: number; total: number }) {
                 ? "#7c3aed"
                 : i + 1 === current
                 ? "#a78bfa"
-                : "rgba(255,255,255,0.15)",
-            transform: i + 1 === current ? "scale(1.3)" : "scale(1)",
+                : "rgba(255,255,255,0.12)",
+            transform: i + 1 === current ? "scale(1.35)" : "scale(1)",
+            transition: "all 0.3s ease",
           }}
         />
       ))}
@@ -641,29 +688,30 @@ function WinstonLogo({ small = false }: { small?: boolean }) {
     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
       <div
         style={{
-          width: small ? 28 : 40,
-          height: small ? 28 : 40,
+          width: small ? 28 : 52,
+          height: small ? 28 : 52,
           borderRadius: "50%",
-          background: "linear-gradient(135deg, #4f46e5, #7c3aed)",
+          background: "linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          color: "#fff",
-          fontWeight: 700,
-          fontSize: small ? 12 : 18,
+          boxShadow: small ? "none" : "0 0 32px rgba(79,70,229,0.4)",
           flexShrink: 0,
         }}
       >
-        W
+        <span style={{ color: "white", fontWeight: 700, fontSize: small ? 12 : 20, letterSpacing: "0.03em" }}>W</span>
       </div>
-      {!small && (
-        <span style={{ color: "#e2e8f0", fontWeight: 600, fontSize: 20, letterSpacing: "-0.5px" }}>
-          Winston
-        </span>
-      )}
-      {small && (
-        <span style={{ color: "#e2e8f0", fontWeight: 600, fontSize: 15 }}>Winston</span>
-      )}
+      <span
+        style={{
+          color: "#ece9ff",
+          fontWeight: 600,
+          fontSize: small ? "0.95rem" : "1.6rem",
+          letterSpacing: "-0.02em",
+          fontFamily: "'Georgia', serif",
+        }}
+      >
+        Winston
+      </span>
     </div>
   );
 }
@@ -673,13 +721,11 @@ function WinstonLogo({ small = false }: { small?: boolean }) {
 const styles: Record<string, React.CSSProperties> = {
   page: {
     minHeight: "100vh",
-    background: "linear-gradient(160deg, #0d0d1a 0%, #0a0a14 50%, #0d0d20 100%)",
+    background: "linear-gradient(160deg, #080812 0%, #0d0d1f 55%, #10102a 100%)",
     display: "flex",
     flexDirection: "column",
-    fontFamily:
-      "-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif",
-    color: "#e2e8f0",
-    overflowX: "hidden",
+    fontFamily: "'Inter', system-ui, sans-serif",
+    color: "#e8e4ff",
   },
 
   // Splash
@@ -689,145 +735,156 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     alignItems: "center",
     justifyContent: "center",
-    padding: "40px 24px",
-    maxWidth: 560,
-    margin: "0 auto",
     textAlign: "center",
+    padding: "40px 24px",
+    maxWidth: 520,
+    margin: "0 auto",
+    width: "100%",
   },
   splashLogo: { marginBottom: 32 },
   splashTitle: {
-    fontSize: "clamp(1.6rem, 5vw, 2.4rem)",
-    fontWeight: 700,
-    letterSpacing: "-0.5px",
-    marginBottom: 16,
-    background: "linear-gradient(135deg, #c4b5fd, #818cf8)",
-    WebkitBackgroundClip: "text",
-    WebkitTextFillColor: "transparent",
+    color: "#ece9ff",
+    fontSize: "clamp(1.6rem, 4vw, 2.4rem)",
+    fontWeight: 600,
+    margin: "0 0 14px",
+    letterSpacing: "-0.03em",
+    fontFamily: "'Georgia', serif",
+    lineHeight: 1.2,
   },
   splashSubtitle: {
-    fontSize: "1.05rem",
-    color: "#94a3b8",
+    color: "#6b6b90",
+    fontSize: "1rem",
+    margin: "0 0 36px",
     lineHeight: 1.6,
-    marginBottom: 32,
+    maxWidth: 400,
   },
   personaCard: {
     display: "flex",
     alignItems: "center",
-    gap: 16,
+    gap: 14,
     background: "rgba(255,255,255,0.04)",
     border: "1px solid rgba(255,255,255,0.08)",
-    borderRadius: 16,
-    padding: "16px 24px",
-    marginBottom: 40,
+    borderRadius: 14,
+    padding: "14px 20px",
+    marginBottom: 32,
     textAlign: "left",
   },
   personaAvatar: {
-    width: 48,
-    height: 48,
+    width: 44,
+    height: 44,
     borderRadius: "50%",
-    background: "linear-gradient(135deg, #d97706, #f59e0b)",
+    background: "linear-gradient(135deg, #d97706 0%, #b45309 100%)",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
+    color: "white",
     fontWeight: 700,
-    fontSize: 20,
-    color: "#fff",
+    fontSize: "1.1rem",
     flexShrink: 0,
   },
-  personaName: { fontWeight: 600, fontSize: "1.05rem", marginBottom: 2 },
-  personaDetail: { fontSize: "0.875rem", color: "#64748b" },
+  personaName: { color: "#d4d0f0", fontWeight: 600, fontSize: "0.95rem" },
+  personaDetail: { color: "#4e4e6e", fontSize: "0.82rem", marginTop: 3 },
   startBtn: {
+    padding: "15px 36px",
     background: "linear-gradient(135deg, #4f46e5, #7c3aed)",
-    color: "#fff",
     border: "none",
-    borderRadius: 14,
-    padding: "16px 40px",
-    fontSize: "1.1rem",
+    borderRadius: 12,
+    color: "white",
+    fontSize: "1rem",
     fontWeight: 600,
     cursor: "pointer",
-    display: "flex",
-    alignItems: "center",
-    gap: 4,
-    boxShadow: "0 8px 30px rgba(79,70,229,0.35)",
+    letterSpacing: "0.01em",
+    marginBottom: 14,
+    fontFamily: "inherit",
   },
-  splashFooter: { marginTop: 16, fontSize: "0.8rem", color: "#475569" },
+  splashFooter: { color: "#3a3a58", fontSize: "0.8rem" },
 
   // Top bar
   topBar: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    padding: "16px 20px",
+    padding: "14px 20px",
     borderBottom: "1px solid rgba(255,255,255,0.06)",
     flexShrink: 0,
+    minHeight: 72,
   },
   progressRow: {
     display: "flex",
-    gap: 8,
+    gap: 6,
     alignItems: "center",
   },
   progressDot: {
-    width: 10,
-    height: 10,
+    width: 7,
+    height: 7,
     borderRadius: "50%",
-    transition: "all 0.4s ease",
   },
+  sceneLabel: {
+    display: "flex",
+    alignItems: "center",
+    gap: 5,
+    color: "#6b6b90",
+    fontSize: "0.72rem",
+    letterSpacing: "0.04em",
+    textTransform: "uppercase",
+  },
+  sceneLabelIcon: { fontSize: "0.85rem" },
   muteBtn: {
     background: "none",
-    border: "1px solid rgba(255,255,255,0.12)",
-    borderRadius: 8,
-    color: "#94a3b8",
+    border: "none",
+    fontSize: "1.2rem",
     cursor: "pointer",
-    padding: "6px 10px",
-    fontSize: "1rem",
+    padding: 6,
+    borderRadius: 8,
+    opacity: 0.7,
   },
 
   // Chat
   chatArea: {
     flex: 1,
-    padding: "24px 20px",
-    maxWidth: 680,
-    width: "100%",
-    margin: "0 auto",
     overflowY: "auto",
+    padding: "24px 20px",
+    maxWidth: 700,
+    width: "100%",
+    alignSelf: "center",
+    boxSizing: "border-box",
   },
   emmaSpeakerLabel: {
     display: "flex",
     alignItems: "center",
     gap: 6,
+    color: "#6b6b9a",
     fontSize: "0.75rem",
-    color: "#818cf8",
-    marginBottom: 4,
-    fontWeight: 500,
-    letterSpacing: "0.02em",
+    marginBottom: 6,
+    letterSpacing: "0.03em",
   },
   margaretSpeakerLabel: {
+    color: "#4a4a6e",
     fontSize: "0.75rem",
-    color: "#f59e0b",
-    marginBottom: 4,
-    fontWeight: 500,
-    letterSpacing: "0.02em",
+    marginBottom: 6,
+    letterSpacing: "0.03em",
   },
   emmaBubble: {
-    background: "rgba(79, 70, 229, 0.15)",
-    border: "1px solid rgba(99, 102, 241, 0.25)",
+    background: "rgba(79,70,229,0.1)",
+    border: "1px solid rgba(79,70,229,0.2)",
     borderRadius: "4px 18px 18px 18px",
     padding: "14px 18px",
-    fontSize: "0.975rem",
+    color: "#d4d0f0",
+    fontSize: "0.95rem",
     lineHeight: 1.65,
-    color: "#e2e8f0",
-    maxWidth: "85%",
-    boxShadow: "0 2px 12px rgba(79,70,229,0.12)",
+    maxWidth: "88%",
+    alignSelf: "flex-start",
   },
   margaretBubble: {
-    background: "rgba(251, 191, 36, 0.12)",
-    border: "1px solid rgba(251, 191, 36, 0.2)",
-    borderRadius: "18px 18px 4px 18px",
-    padding: "12px 16px",
-    fontSize: "0.95rem",
+    background: "rgba(255,255,255,0.05)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: "18px 4px 18px 18px",
+    padding: "13px 17px",
+    color: "#a5a0cc",
+    fontSize: "0.92rem",
     lineHeight: 1.6,
-    color: "#fde68a",
-    maxWidth: "75%",
+    maxWidth: "80%",
+    alignSelf: "flex-end",
   },
 
   // Insight card
@@ -835,44 +892,48 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "flex-start",
     gap: 14,
-    background: "rgba(255, 255, 255, 0.03)",
-    border: "1px solid rgba(251, 113, 133, 0.2)",
-    borderLeft: "3px solid #f43f5e",
-    borderRadius: "0 12px 12px 0",
+    background: "rgba(251,191,36,0.06)",
+    border: "1px solid rgba(251,191,36,0.18)",
+    borderRadius: 12,
     padding: "14px 18px",
     marginTop: 8,
     marginBottom: 8,
   },
   insightIcon: {
-    fontSize: "1.2rem",
-    color: "#f43f5e",
+    color: "#d97706",
+    fontSize: "0.7rem",
     fontWeight: 700,
+    letterSpacing: "0.05em",
+    marginTop: 2,
     flexShrink: 0,
-    lineHeight: 1.5,
+    background: "rgba(217,119,6,0.12)",
+    border: "1px solid rgba(217,119,6,0.25)",
+    borderRadius: 6,
+    padding: "2px 6px",
   },
   insightMain: {
-    color: "#fda4af",
+    color: "#fbbf24",
+    fontSize: "0.87rem",
     fontWeight: 600,
-    fontSize: "0.9rem",
     marginBottom: 4,
   },
   insightDetail: {
-    color: "#94a3b8",
-    fontSize: "0.85rem",
+    color: "#78716c",
+    fontSize: "0.82rem",
     lineHeight: 1.5,
   },
 
-  // Bottom
+  // Bottom bar
   bottomBar: {
     padding: "12px 20px",
+    borderTop: "1px solid rgba(255,255,255,0.05)",
     display: "flex",
     justifyContent: "center",
-    borderTop: "1px solid rgba(255,255,255,0.04)",
     flexShrink: 0,
   },
   skipLink: {
-    color: "#475569",
-    fontSize: "0.8rem",
+    color: "#2e2e50",
+    fontSize: "0.78rem",
     textDecoration: "none",
   },
 
@@ -883,172 +944,175 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     alignItems: "center",
     justifyContent: "center",
-    padding: "48px 24px 40px",
-    maxWidth: 680,
+    padding: "60px 28px",
+    maxWidth: 580,
     margin: "0 auto",
     width: "100%",
+    textAlign: "center",
   },
   revealEmmaBadge: {
     display: "flex",
     alignItems: "center",
     gap: 8,
     marginBottom: 32,
+    background: "rgba(79,70,229,0.08)",
+    border: "1px solid rgba(79,70,229,0.2)",
+    borderRadius: 99,
+    padding: "6px 14px",
   },
   revealEmmaName: {
     color: "#818cf8",
-    fontWeight: 600,
-    fontSize: "0.9rem",
+    fontSize: "0.82rem",
+    fontWeight: 500,
     letterSpacing: "0.04em",
-    textTransform: "uppercase",
   },
   revealText: {
-    fontSize: "clamp(1.25rem, 3.5vw, 1.75rem)",
-    lineHeight: 1.65,
-    textAlign: "center",
-    color: "#e2e8f0",
-    fontWeight: 300,
-    letterSpacing: "-0.01em",
-    minHeight: 200,
-    maxWidth: 600,
+    color: "#c4c0f0",
+    fontSize: "clamp(1rem, 2.5vw, 1.2rem)",
+    lineHeight: 1.75,
+    margin: "0 0 40px",
+    fontFamily: "'Georgia', serif",
+    fontStyle: "italic",
+    minHeight: 80,
   },
 
-  // CTA
+  // CTA section
   ctaSection: {
     width: "100%",
-    maxWidth: 520,
     display: "flex",
     flexDirection: "column",
     alignItems: "center",
+    gap: 0,
   },
   ctaDivider: {
-    width: 60,
-    height: 2,
-    background: "linear-gradient(90deg, #4f46e5, #7c3aed)",
-    borderRadius: 2,
-    margin: "32px 0",
+    width: 48,
+    height: 1,
+    background: "rgba(255,255,255,0.08)",
+    marginBottom: 32,
   },
   ctaHeadline: {
-    fontSize: "1.6rem",
-    fontWeight: 700,
-    textAlign: "center",
-    marginBottom: 8,
-    background: "linear-gradient(135deg, #c4b5fd, #818cf8)",
-    WebkitBackgroundClip: "text",
-    WebkitTextFillColor: "transparent",
+    color: "#ece9ff",
+    fontSize: "1.3rem",
+    fontWeight: 600,
+    margin: "0 0 8px",
+    letterSpacing: "-0.02em",
   },
   ctaSubline: {
-    color: "#94a3b8",
+    color: "#6b6b90",
     fontSize: "0.9rem",
-    textAlign: "center",
-    marginBottom: 24,
-    lineHeight: 1.6,
+    margin: "0 0 24px",
+    lineHeight: 1.5,
+    maxWidth: 380,
   },
   emailForm: {
     display: "flex",
     flexDirection: "column",
-    gap: 12,
+    gap: 10,
     width: "100%",
-    alignItems: "center",
+    maxWidth: 380,
   },
   emailInput: {
-    background: "rgba(255,255,255,0.06)",
-    border: "1px solid rgba(255,255,255,0.15)",
-    borderRadius: 12,
-    padding: "14px 20px",
-    fontSize: "1rem",
-    color: "#e2e8f0",
     width: "100%",
-    maxWidth: 360,
+    padding: "13px 16px",
+    background: "rgba(255,255,255,0.04)",
+    border: "1px solid rgba(255,255,255,0.12)",
+    borderRadius: 12,
+    color: "#e8e4ff",
+    fontSize: "0.95rem",
     outline: "none",
+    boxSizing: "border-box",
+    fontFamily: "inherit",
   },
   emailSubmitBtn: {
+    padding: "13px 20px",
     background: "linear-gradient(135deg, #4f46e5, #7c3aed)",
-    color: "#fff",
     border: "none",
     borderRadius: 12,
-    padding: "14px 32px",
-    fontSize: "1rem",
+    color: "white",
+    fontSize: "0.95rem",
     fontWeight: 600,
     cursor: "pointer",
-    width: "100%",
-    maxWidth: 360,
-    boxShadow: "0 6px 24px rgba(79,70,229,0.35)",
+    fontFamily: "inherit",
   },
-  emailError: { color: "#fca5a5", fontSize: "0.85rem", marginTop: 4 },
-  ctaAlready: { marginTop: 16, fontSize: "0.85rem", color: "#64748b" },
-  ctaLink: { color: "#818cf8", textDecoration: "none" },
-
-  // Success
+  emailError: { color: "#f87171", fontSize: "0.83rem", margin: "4px 0 0" },
+  ctaAlready: { color: "#3a3a58", fontSize: "0.78rem", marginTop: 16 },
+  ctaLink: { color: "#6b6b90", textDecoration: "none" },
   successSection: {
     display: "flex",
     flexDirection: "column",
     alignItems: "center",
-    textAlign: "center",
-    gap: 12,
+    gap: 8,
+    padding: "20px 0",
   },
   successCheck: {
-    width: 56,
-    height: 56,
+    width: 44,
+    height: 44,
     borderRadius: "50%",
-    background: "rgba(79,70,229,0.2)",
-    border: "1px solid rgba(99,102,241,0.4)",
+    background: "rgba(79,70,229,0.15)",
+    border: "1px solid rgba(79,70,229,0.3)",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    fontSize: "1.5rem",
     color: "#a78bfa",
-  },
-  successTitle: {
-    fontSize: "1.4rem",
+    fontSize: "1.2rem",
     fontWeight: 700,
-    color: "#e2e8f0",
+    marginBottom: 8,
   },
-  successSubline: {
-    color: "#94a3b8",
-    fontSize: "0.9rem",
-    lineHeight: 1.6,
-  },
+  successTitle: { color: "#ece9ff", fontWeight: 600, fontSize: "1.1rem", margin: 0 },
+  successSubline: { color: "#6b6b90", fontSize: "0.88rem", margin: "4px 0 16px" },
   createBtn: {
+    padding: "12px 28px",
     background: "linear-gradient(135deg, #4f46e5, #7c3aed)",
-    color: "#fff",
-    textDecoration: "none",
-    borderRadius: 12,
-    padding: "14px 32px",
-    fontSize: "1rem",
+    borderRadius: 10,
+    color: "white",
     fontWeight: 600,
-    marginTop: 8,
-    boxShadow: "0 6px 24px rgba(79,70,229,0.35)",
+    fontSize: "0.9rem",
+    textDecoration: "none",
     display: "inline-block",
   },
 
   // Compare row
   compareRow: {
     display: "flex",
-    gap: 12,
-    marginTop: 40,
-    flexWrap: "wrap" as const,
+    gap: 10,
+    marginTop: 36,
+    flexWrap: "wrap",
     justifyContent: "center",
   },
   compareTag: {
-    background: "rgba(255,255,255,0.04)",
-    border: "1px solid rgba(255,255,255,0.08)",
-    borderRadius: 12,
-    padding: "12px 20px",
+    background: "rgba(255,255,255,0.03)",
+    border: "1px solid rgba(255,255,255,0.07)",
+    borderRadius: 10,
+    padding: "10px 14px",
     textAlign: "center",
-    minWidth: 100,
+    minWidth: 80,
   },
   compareTagHL: {
-    background: "rgba(79,70,229,0.12)",
-    border: "1px solid rgba(99,102,241,0.3)",
+    background: "rgba(79,70,229,0.1)",
+    border: "1px solid rgba(79,70,229,0.3)",
   },
   compareTagLabel: {
+    color: "#4a4a6e",
     fontWeight: 700,
-    fontSize: "0.95rem",
-    marginBottom: 4,
-    color: "#94a3b8",
+    fontSize: "0.85rem",
+    marginBottom: 3,
   },
   compareTagSub: {
-    fontSize: "0.75rem",
-    color: "#475569",
+    color: "#2e2e50",
+    fontSize: "0.72rem",
   },
 };
+
+// ── CSS animation ──────────────────────────────────────────────────────────────
+
+const styleTag = document.createElement("style");
+styleTag.textContent = `
+  @keyframes fadeSlideUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+`;
+if (!document.head.querySelector("[data-demo-anim]")) {
+  styleTag.setAttribute("data-demo-anim", "1");
+  document.head.appendChild(styleTag);
+}
