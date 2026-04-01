@@ -182,6 +182,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
   const [voices, setVoices] = useState<VoiceOption[]>([]);
   const [previewingVoice, setPreviewingVoice] = useState<string | null>(null);
   const [selectedVoice, setSelectedVoice] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const [voiceAudioRef] = useState<{ current: HTMLAudioElement | null }>({ current: null });
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -317,28 +318,44 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
     [handleSend]
   );
 
-  // Voice preview
-  const previewVoice = useCallback(async (voiceId: string) => {
+  // Voice preview — tries ElevenLabs first, falls back to browser TTS
+  const previewVoice = useCallback(async (voiceId: string, voiceName?: string) => {
     if (previewingVoice === voiceId) {
       voiceAudioRef.current?.pause();
+      window.speechSynthesis?.cancel();
       setPreviewingVoice(null);
       return;
     }
+    setPreviewError(null);
     setPreviewingVoice(voiceId);
+    const PREVIEW_TEXT = "Hello — I've been looking forward to meeting you.";
     try {
       const resp = await fetch(`${API}/api/onboarding/voice-preview`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ voiceId }),
       });
-      if (!resp.ok) throw new Error("Preview failed");
+      if (!resp.ok) throw new Error("ElevenLabs preview unavailable");
       const { audioBase64, mimeType } = await resp.json() as { audioBase64: string; mimeType: string };
       const audio = new Audio(`data:${mimeType};base64,${audioBase64}`);
       voiceAudioRef.current = audio;
       audio.onended = () => setPreviewingVoice(null);
       audio.play().catch(() => setPreviewingVoice(null));
     } catch {
-      setPreviewingVoice(null);
+      // Fall back to browser speech synthesis so the user hears something
+      if (typeof window !== "undefined" && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+        const utter = new SpeechSynthesisUtterance(PREVIEW_TEXT);
+        utter.onend = () => setPreviewingVoice(null);
+        utter.onerror = () => {
+          setPreviewingVoice(null);
+          setPreviewError(`Preview unavailable for ${voiceName ?? "this voice"}`);
+        };
+        window.speechSynthesis.speak(utter);
+      } else {
+        setPreviewingVoice(null);
+        setPreviewError("Voice preview is currently unavailable");
+      }
     }
   }, [previewingVoice, voiceAudioRef]);
 
@@ -346,7 +363,9 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
     (voice: VoiceOption) => {
       setSelectedVoice(voice.id);
       voiceAudioRef.current?.pause();
+      window.speechSynthesis?.cancel();
       setPreviewingVoice(null);
+      setPreviewError(null);
 
       const updatedData = { ...collectedData, voiceId: voice.id, voiceName: voice.name };
       setCollectedData(updatedData);
@@ -490,7 +509,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
                     size="sm"
                     variant="ghost"
                     className="flex-1 h-7 text-xs text-zinc-300 hover:text-white hover:bg-zinc-700 border border-zinc-600"
-                    onClick={() => void previewVoice(voice.id)}
+                    onClick={() => void previewVoice(voice.id, voice.name)}
                     disabled={previewingVoice !== null && previewingVoice !== voice.id}
                   >
                     {previewingVoice === voice.id ? (
@@ -512,6 +531,9 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
               </div>
             ))}
           </div>
+          {previewError && (
+            <p className="text-xs text-amber-400/80 text-center mt-1 px-2">{previewError}</p>
+          )}
         </div>
       )}
 
