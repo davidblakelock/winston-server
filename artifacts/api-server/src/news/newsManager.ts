@@ -45,34 +45,38 @@ async function fetchNewsFromClaude(): Promise<string> {
   // Concise prompt — fewer search directives means fewer web_search calls = faster
   const prompt = `Today is ${todayStr}. Yesterday was ${yesterdayStr}.
 
-You are curating the morning news for David Blakelock in Dallas, Texas. Use web search to find real current news from the past 24-48 hours.
+You are curating the morning news for David Blakelock in Dallas, Texas. Use web search to find real current news from the past 24-48 hours. Aim for 6-8 total stories. USA Today brevity, Wall Street Journal relevance.
+
+STORY FORMAT — strictly 3 sentences max per story:
+• Sentence 1: What happened. Plain, crisp, specific (scores, percentages, names).
+• Sentence 2: Why it matters to David — his portfolio (heavy in tech/AI/energy), his teams (Rangers, Cowboys, Mavericks), the AI space he works in, or Dallas/Texas impact.
+• Sentence 3 (optional): What to watch next, or one additional fact that adds real context.
 
 Search for and organize into three tiers:
 
-TIER 1 — HARD RELEVANT NEWS (3-4 stories, the most significant):
-Search for: Texas Rangers game score ${yesterdayStr} (did they play? final score, key moments), stock market performance ${yesterdayStr} (S&P Dow what moved and why), major global political news today, top AI or tech news past 48 hours (OpenAI Anthropic Google Apple major announcements), significant Dallas Texas news (only if major).
+TIER 1 — HARD NEWS (3-4 stories):
+Search for: Texas Rangers game score ${yesterdayStr} (did they play? final score), stock market performance ${yesterdayStr} (S&P, what moved and why), major US or global political news past 24 hours, top AI or tech news past 48 hours (OpenAI, Anthropic, Google, Apple), significant Dallas/Texas news only if major.
 
-TIER 2 — CULTURAL MOMENTS (1-2 stories):
-Search for: notable celebrity or public figure death ${todayStr}, major entertainment or sports news today.
+TIER 2 — CULTURAL (1-2 stories):
+Search for: notable celebrity or public figure death ${todayStr}, major entertainment or sports moment today. Skip if nothing genuinely notable.
 
-TIER 3 — WATERCOOLER (1 story only):
-Search for: one interesting surprising funny news story today that David would share at pickleball.
+TIER 3 — WATERCOOLER (1-2 stories):
+Search for: one surprising, funny, or fascinating story David would bring up at pickleball today.
 
-Output in EXACTLY this format:
+Output in EXACTLY this format (bullet points, no extra commentary):
 
 TIER1:
-• [2-3 sentence story with specific numbers, names, context for why it matters to David]
-• [2-3 sentence story]
-• [2-3 sentence story]
+• [story — max 3 sentences]
+• [story — max 3 sentences]
+• [story — max 3 sentences]
 
 TIER2:
-• [1-2 sentence story. If notable death: name, why known.]
-• [1-2 sentence story — only if genuinely notable]
+• [story — max 3 sentences]
 
 TIER3:
-• [1-2 sentences. Be specific and concrete.]
+• [story — max 3 sentences]
 
-Only report real stories you found. Include specific scores, percentages, names.`;
+Only report real stories you found. Never invent or embellish.`;
 
   const response = await anthropic.messages.create({
     model: "claude-opus-4-5",
@@ -162,6 +166,6 @@ function formatNewsBlock(rawText: string): string {
     `\n\n[Morning News — web-searched this morning, real stories from past 24-48 hours]\n` +
     body +
     `\n\n[News delivery guidance for Emma]\n` +
-    `Deliver the news as one flowing conversation — no section headers, no "in other news," no tier labels ever. Lead with the story most relevant to David today — Rangers game if they played, big market move, or major breaking story. Each story: 2-3 sentences including why it matters to David (his portfolio, his teams, the AI space he watches). Introduce lighter stories naturally — "oh, and worth knowing —" or similar. End with the share-at-pickleball story — "And here's one you'll want to bring up today —" or similar. Entire news section: max 2 minutes spoken aloud.`
+    `Deliver all stories as one fast-moving conversational sweep — no section headers, no tier labels, no "in other news" ever. Aim for USA Today brevity with WSJ relevance. Move briskly: one story flows directly into the next with a short natural transition (2-4 words max: "also —", "meanwhile —", "oh, and —"). Never linger on a single story. Each story gets exactly what's written: Sentence 1 as stated, Sentence 2 as stated, Sentence 3 only if it appears. Do not elaborate beyond what's written. Do not add commentary or analysis. Lead with the most important hard news story. End with the watercooler story — frame it naturally as something worth bringing up. Goal: David feels comprehensively informed in under 2 minutes, not deeply briefed on two stories.`
   );
 }
