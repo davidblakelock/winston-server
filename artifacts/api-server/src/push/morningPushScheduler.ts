@@ -4,10 +4,12 @@ import { getAppUrl } from "../auth/sessionAuth.js";
 import { logger } from "../lib/logger.js";
 import { getWatchedShows } from "../tv/showManager.js";
 import { fetchEpisodesForDate } from "../tv/tvmaze.js";
+import { preFetchMorningNews } from "../news/newsManager.js";
 
 const TZ = "America/Chicago";
 
 let _morningFiredDate: string | null = null;
+let _newsPrefetchDate: string | null = null;
 
 function getCurrentLocalTime(): string {
   return new Date().toLocaleTimeString("en-US", {
@@ -46,9 +48,18 @@ export function startMorningPushScheduler(): void {
   cron.schedule("* * * * *", async () => {
     try {
       const localTime = getCurrentLocalTime();
-      if (localTime !== "06:00") return;
-
       const today = getLocalDateString();
+
+      // 5:50 AM — pre-fetch morning news so it's cached and instant at briefing time
+      if (localTime === "05:50" && _newsPrefetchDate !== today) {
+        _newsPrefetchDate = today;
+        preFetchMorningNews().catch((err) =>
+          logger.warn({ err }, "Background news pre-fetch error")
+        );
+      }
+
+      // 6:00 AM — send morning push notification
+      if (localTime !== "06:00") return;
       if (_morningFiredDate === today) return;
       _morningFiredDate = today;
 
