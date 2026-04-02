@@ -120,10 +120,10 @@ export async function fetchMorningNews(): Promise<string> {
     return _cache.content;
   }
 
-  // Slow path: fetch now, but bail if it takes more than 45 seconds
-  const TIMEOUT_MS = 45_000;
+  // Slow path: fetch now, but bail if it takes more than 90 seconds
+  const TIMEOUT_MS = 90_000;
   const timeout = new Promise<string>((_, reject) =>
-    setTimeout(() => reject(new Error("News fetch timed out after 45s")), TIMEOUT_MS)
+    setTimeout(() => reject(new Error("News fetch timed out after 90s")), TIMEOUT_MS)
   );
 
   try {

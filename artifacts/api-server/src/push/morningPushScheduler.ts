@@ -47,16 +47,13 @@ async function buildMorningBody(): Promise<string> {
 }
 
 export function startMorningPushScheduler(): void {
-  // On startup: if it's already morning (6 AM–2 PM Central), pre-generate the briefing immediately
-  const startupHour = parseInt(
-    new Date().toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", hour12: false }),
-    10
-  );
-  if (startupHour >= 6 && startupHour < 14) {
+  // On startup: always pre-generate so the briefing is ready after ~2 minutes regardless of time of day.
+  // This ensures a fresh deployment is always ready for "good morning" within 2 minutes.
+  {
     const todayStr = getLocalDateString();
     _briefingPrefetchDate = todayStr;
     _newsPrefetchDate = todayStr;
-    logger.info("Server startup in morning window — pre-generating briefing");
+    logger.info("Server startup — pre-generating morning briefing in background");
     preFetchMorningBriefing("David").catch((err) =>
       logger.warn({ err }, "Startup briefing pre-generate error")
     );
