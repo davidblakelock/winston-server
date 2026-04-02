@@ -45,23 +45,23 @@ async function fetchNewsFromClaude(): Promise<string> {
   // Concise prompt — fewer search directives means fewer web_search calls = faster
   const prompt = `Today is ${todayStr}. Yesterday was ${yesterdayStr}.
 
-You are curating the morning news for David Blakelock in Dallas, Texas. Use web search to find real current news from the past 24-48 hours. Aim for 6-8 total stories. USA Today brevity, Wall Street Journal relevance.
+You are curating the morning news for David Blakelock in Dallas, Texas. Use web search to find real current news from the past 24-48 hours. Target 8 total stories. USA Today brevity, Wall Street Journal relevance.
 
 STORY FORMAT — strictly 3 sentences max per story:
 • Sentence 1: What happened. Plain, crisp, specific (scores, percentages, names).
 • Sentence 2: Why it matters to David — his portfolio (heavy in tech/AI/energy), his teams (Rangers, Cowboys, Mavericks), the AI space he works in, or Dallas/Texas impact.
-• Sentence 3 (optional): What to watch next, or one additional fact that adds real context.
+• Sentence 3 (optional): What to watch next, or one concrete detail that adds real context.
 
 Search for and organize into three tiers:
 
-TIER 1 — HARD NEWS (3-4 stories):
-Search for: Texas Rangers game score ${yesterdayStr} (did they play? final score), stock market performance ${yesterdayStr} (S&P, what moved and why), major US or global political news past 24 hours, top AI or tech news past 48 hours (OpenAI, Anthropic, Google, Apple), significant Dallas/Texas news only if major.
+TIER 1 — HARD NEWS (4 stories, required):
+Search for: Texas Rangers game score ${yesterdayStr} (did they play? final score), stock market performance ${yesterdayStr} (S&P, what moved and why), major US or global political news past 24 hours, top AI or tech news past 48 hours (OpenAI, Anthropic, Google, Apple, major product launches or funding rounds). Pick the 4 most significant. Always include a Rangers or markets story if there's real news.
 
-TIER 2 — CULTURAL (1-2 stories):
-Search for: notable celebrity or public figure death ${todayStr}, major entertainment or sports moment today. Skip if nothing genuinely notable.
+TIER 2 — CULTURAL (2 stories, required):
+Search for: notable celebrity or public figure death ${todayStr}, major entertainment news, big sports moment outside David's core teams. Find 2 genuinely notable stories — dig if you have to.
 
-TIER 3 — WATERCOOLER (1-2 stories):
-Search for: one surprising, funny, or fascinating story David would bring up at pickleball today.
+TIER 3 — WATERCOOLER (2 stories, required):
+Search for: surprising, funny, or fascinating stories David would bring up at pickleball — weird science, bizarre record, unexpected animal story, odd human achievement. Must include at least 2. These are not optional.
 
 Output in EXACTLY this format (bullet points, no extra commentary):
 
@@ -69,11 +69,14 @@ TIER1:
 • [story — max 3 sentences]
 • [story — max 3 sentences]
 • [story — max 3 sentences]
+• [story — max 3 sentences]
 
 TIER2:
 • [story — max 3 sentences]
+• [story — max 3 sentences]
 
 TIER3:
+• [story — max 3 sentences]
 • [story — max 3 sentences]
 
 Only report real stories you found. Never invent or embellish.`;
