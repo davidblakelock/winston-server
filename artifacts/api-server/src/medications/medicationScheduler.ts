@@ -86,7 +86,7 @@ export function startMedicationScheduler(): void {
               title: "💊 Medication Reminder — Emma Peel",
               body: `Don't forget your ${medText} this morning. Take with food if you can.`,
               tag: "medication-morning",
-              url: "/",
+
               requireInteraction: true,
             }).catch(() => {});
             logger.info({ time: rt }, "Medication initial reminder fired");

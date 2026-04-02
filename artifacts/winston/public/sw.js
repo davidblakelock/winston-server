@@ -1,5 +1,4 @@
 // Emma Peel — Winston AI Companion Service Worker
-const CACHE_NAME = "winston-sw-v1";
 
 self.addEventListener("install", (event) => {
   self.skipWaiting();
@@ -18,13 +17,15 @@ self.addEventListener("push", (event) => {
     data = { title: "Emma Peel", body: event.data ? event.data.text() : "New message from Emma Peel" };
   }
 
+  const scope = self.registration.scope.replace(/\/$/, "");
+
   const title = data.title || "Emma Peel";
   const options = {
     body: data.body || "Tap to open Winston.",
-    icon: data.icon || "/favicon.svg",
-    badge: data.badge || "/favicon.svg",
+    icon: data.icon || `${scope}/icon-192.png`,
+    badge: data.badge || `${scope}/badge-72.png`,
     tag: data.tag || "winston",
-    data: { url: data.url || "/" },
+    data: { url: data.url || scope + "/" },
     requireInteraction: data.requireInteraction || false,
     silent: data.silent || false,
     vibrate: [200, 100, 200],
@@ -43,23 +44,45 @@ self.addEventListener("notificationclick", (event) => {
 
   if (event.action === "dismiss") return;
 
-  const targetUrl = event.notification.data?.url || "/";
+  const scope = self.registration.scope.replace(/\/$/, "");
+  const targetUrl = event.notification.data?.url || scope + "/";
 
   event.waitUntil(
     self.clients
       .matchAll({ type: "window", includeUncontrolled: true })
       .then((clientList) => {
-        // Try to focus an existing Winston window
-        for (const client of clientList) {
-          if ("focus" in client) {
-            client.focus();
-            if ("navigate" in client) {
-              client.navigate(targetUrl);
-            }
-            return;
-          }
+        // IMPORTANT: Only consider windows that belong to THIS app's origin.
+        // Without this filter, the browser may focus a Gmail or other tab
+        // and navigate it to the Winston URL instead of opening Winston.
+        let appOrigin;
+        try {
+          appOrigin = new URL(scope).origin;
+        } catch {
+          appOrigin = null;
         }
-        // No existing window — open a new one
+
+        const winstonClients = appOrigin
+          ? clientList.filter((client) => {
+              try {
+                return new URL(client.url).origin === appOrigin;
+              } catch {
+                return false;
+              }
+            })
+          : [];
+
+        if (winstonClients.length > 0) {
+          const client = winstonClients[0];
+          // Navigate to the target URL (deep link for reminders/morning)
+          if ("navigate" in client) {
+            return client.navigate(targetUrl).then((c) => c && c.focus());
+          }
+          // Fallback: post a message so the app can handle navigation itself
+          client.postMessage({ type: "NOTIFICATION_CLICK", url: targetUrl });
+          return client.focus();
+        }
+
+        // No existing Winston window — open a new one
         return self.clients.openWindow(targetUrl);
       })
   );
@@ -67,13 +90,21 @@ self.addEventListener("notificationclick", (event) => {
 
 // Handle push subscription change (re-subscribe if expired)
 self.addEventListener("pushsubscriptionchange", (event) => {
+  const scope = self.registration.scope.replace(/\/$/, "");
   event.waitUntil(
     self.registration.pushManager
-      .subscribe({ userVisibleOnly: true, applicationServerKey: event.oldSubscription?.options?.applicationServerKey })
+      .subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: event.oldSubscription?.options?.applicationServerKey,
+      })
       .then((newSub) => {
-        return fetch("/api/push/subscribe", {
+        const token = self._winstonToken || null;
+        return fetch(`${scope}/api/push/subscribe`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
           body: JSON.stringify({
             endpoint: newSub.endpoint,
             keys: {
@@ -85,4 +116,12 @@ self.addEventListener("pushsubscriptionchange", (event) => {
       })
       .catch(() => {})
   );
+});
+
+// Allow the app to store the session token in the service worker
+// so pushsubscriptionchange can re-subscribe with auth
+self.addEventListener("message", (event) => {
+  if (event.data?.type === "SET_TOKEN") {
+    self._winstonToken = event.data.token;
+  }
 });

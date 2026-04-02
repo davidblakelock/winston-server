@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { query } from "../db.js";
 import { broadcast } from "./sseStore.js";
 import { sendPushToAll } from "../push/pushManager.js";
+import { getAppUrl } from "../auth/sessionAuth.js";
 import { logger } from "../lib/logger.js";
 
 interface ReminderRow {
@@ -53,11 +54,13 @@ export function startScheduler(): void {
         });
 
         // Also send a push notification so David is notified even if the app is closed
+        const appUrl = getAppUrl();
+        const reminderUrl = `${appUrl}/?notification=reminder&text=${encodeURIComponent(reminder.reminder_text)}`;
         sendPushToAll({
           title: "⏰ Reminder — Emma Peel",
           body: reminder.reminder_text,
           tag: `reminder-${reminder.id}`,
-          url: "/",
+          url: reminderUrl,
           requireInteraction: true,
         }).catch(() => {});
 

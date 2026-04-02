@@ -126,7 +126,7 @@ async function checkDepartureAlerts(): Promise<void> {
       title: "🚗 Time to Leave — Emma Peel",
       body: message,
       tag: `departure-${event.summary}`,
-      url: "/",
+
       requireInteraction: true,
     }).catch(() => {});
 

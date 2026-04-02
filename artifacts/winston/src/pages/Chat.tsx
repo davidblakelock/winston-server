@@ -326,6 +326,13 @@ export default function Chat({ onSignOut, companionName: companionNameProp, user
   }, [companionNameFinal]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [messagesLoaded, setMessagesLoaded] = useState(false);
+  const [pendingNotification, setPendingNotification] = useState<{ type: "morning" | "reminder"; text?: string } | null>(() => {
+    const params = new URLSearchParams(window.location.search);
+    const type = params.get("notification");
+    if (type === "morning") return { type: "morning" };
+    if (type === "reminder") { const text = params.get("text"); return text ? { type: "reminder", text } : null; }
+    return null;
+  });
   const [input, setInput] = useState("");
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -587,6 +594,54 @@ export default function Chat({ onSignOut, companionName: companionNameProp, user
   const { recordingState, startRecording } = useVoiceRecorder((transcript) => {
     submitText(transcript);
   });
+
+  // Handle deep-link navigation from tapped push notifications
+  useEffect(() => {
+    if (!messagesLoaded || !pendingNotification) return;
+    const notif = pendingNotification;
+    setPendingNotification(null);
+    // Clean up the URL so it doesn't re-trigger on refresh
+    window.history.replaceState({}, "", window.location.pathname);
+
+    if (notif.type === "morning") {
+      // Auto-trigger "good morning" so Emma delivers the full briefing
+      setTimeout(() => submitText("good morning"), 600);
+    } else if (notif.type === "reminder" && notif.text) {
+      // Show the reminder as an assistant message so David sees it immediately
+      const msgId = `notif-reminder-${Date.now()}`;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: msgId,
+          role: "assistant",
+          content: `Hey David — your reminder: ${notif.text}`,
+          isReminder: true,
+        },
+      ]);
+      speakReply(msgId, `Hey David, your reminder: ${notif.text}`);
+    }
+  }, [messagesLoaded, pendingNotification, submitText, speakReply]);
+
+  // Listen for NOTIFICATION_CLICK messages from the service worker
+  // (fallback for browsers where client.navigate isn't available)
+  useEffect(() => {
+    const handler = (event: MessageEvent) => {
+      if (event.data?.type !== "NOTIFICATION_CLICK") return;
+      const url = event.data.url as string;
+      try {
+        const params = new URLSearchParams(new URL(url).search);
+        const type = params.get("notification");
+        if (type === "morning") {
+          setPendingNotification({ type: "morning" });
+        } else if (type === "reminder") {
+          const text = params.get("text");
+          if (text) setPendingNotification({ type: "reminder", text });
+        }
+      } catch { /* ignore malformed URLs */ }
+    };
+    navigator.serviceWorker?.addEventListener("message", handler);
+    return () => navigator.serviceWorker?.removeEventListener("message", handler);
+  }, []);
 
   const fireReminderAlert = useCallback(
     (event: ReminderEvent) => {

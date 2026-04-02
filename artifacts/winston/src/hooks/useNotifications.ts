@@ -52,14 +52,27 @@ async function getVapidPublicKey(): Promise<string | null> {
   }
 }
 
+function getSessionToken(): string | null {
+  return localStorage.getItem("winston_session_token");
+}
+
+function sendTokenToServiceWorker(token: string | null): void {
+  if (!token) return;
+  navigator.serviceWorker?.controller?.postMessage({ type: "SET_TOKEN", token });
+}
+
 async function sendSubscriptionToServer(sub: PushSubscription): Promise<void> {
   const p256dh = sub.getKey("p256dh");
   const auth = sub.getKey("auth");
   if (!p256dh || !auth) throw new Error("Missing subscription keys");
 
+  const token = getSessionToken();
   await fetch(`${BASE}api/push/subscribe`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
     body: JSON.stringify({
       endpoint: sub.endpoint,
       keys: {
@@ -87,7 +100,7 @@ export function useNotifications(): UseNotificationsResult {
   const [isSubscribed, setIsSubscribed] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
-  // Check existing subscription on mount
+  // Check existing subscription on mount and relay session token to SW
   useEffect(() => {
     if (!supported) return;
 
@@ -95,6 +108,8 @@ export function useNotifications(): UseNotificationsResult {
       reg.pushManager.getSubscription().then((sub) => {
         setIsSubscribed(!!sub);
       });
+      // Relay the session token so the SW can re-subscribe on token rotation
+      sendTokenToServiceWorker(getSessionToken());
     });
   }, [supported]);
 

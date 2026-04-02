@@ -1,6 +1,7 @@
 import webpush from "web-push";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
+import { getAppUrl } from "../auth/sessionAuth.js";
 
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY ?? "";
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY ?? "";
@@ -75,13 +76,14 @@ export async function sendPushToAll(
   let sent = 0;
   let failed = 0;
 
+  const appUrl = getAppUrl();
   const body = JSON.stringify({
     title: payload.title,
     body: payload.body,
     tag: payload.tag ?? "winston",
-    icon: payload.icon ?? "/icon-192.png",
-    badge: payload.badge ?? "/badge-72.png",
-    url: payload.url ?? "/",
+    icon: payload.icon ?? `${appUrl}/icon-192.png`,
+    badge: payload.badge ?? `${appUrl}/badge-72.png`,
+    url: payload.url ?? `${appUrl}/`,
     requireInteraction: payload.requireInteraction ?? false,
     silent: payload.silent ?? false,
   });

@@ -1,5 +1,6 @@
 import cron from "node-cron";
 import { sendPushToAll } from "./pushManager.js";
+import { getAppUrl } from "../auth/sessionAuth.js";
 import { logger } from "../lib/logger.js";
 import { getWatchedShows } from "../tv/showManager.js";
 import { fetchEpisodesForDate } from "../tv/tvmaze.js";
@@ -53,11 +54,12 @@ export function startMorningPushScheduler(): void {
 
       const body = await buildMorningBody();
 
+      const appUrl = getAppUrl();
       await sendPushToAll({
         title: "Good morning, David ☀️",
         body,
         tag: "morning-briefing",
-        url: "/",
+        url: `${appUrl}/?notification=morning`,
         requireInteraction: true,
       });
 

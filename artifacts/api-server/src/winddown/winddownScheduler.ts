@@ -105,7 +105,7 @@ export function startWinddownScheduler(): void {
         title: "🌙 Evening Wind-Down — Emma Peel",
         body: "Emma Peel is ready for your evening check-in. Tap to chat.",
         tag: "winddown",
-        url: "/",
+
         requireInteraction: false,
       }).catch(() => {});
     } catch (err) {

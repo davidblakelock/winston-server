@@ -74,7 +74,7 @@ export function startWeatherAlertScheduler(): void {
           title: `⚠️ Weather Alert: ${event}`,
           body,
           tag: `weather-${event.replace(/\s+/g, "-").toLowerCase()}`,
-          url: "/",
+
           requireInteraction: true,
         });
 
