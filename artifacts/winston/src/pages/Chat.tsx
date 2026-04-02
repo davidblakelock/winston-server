@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback, KeyboardEvent, ChangeEvent } from "react";
 import { Send, Play, Loader2, Disc3, Mic, MicOff, MapPin, Mail, LogOut, Settings, X, Moon, Bell, BellOff } from "lucide-react";
-import { useSendMessage, useTextToSpeech } from "@workspace/api-client-react";
+import { useTextToSpeech } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -357,16 +357,93 @@ export default function Chat({ onSignOut, companionName: companionNameProp, user
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const greetedRef = useRef(false);
 
-  const sendMessageMutation = useSendMessage();
   const ttsMutation = useTextToSpeech();
   const browserTTS = useBrowserTTS();
   const [googleAuth, refreshGoogleAuth] = useGoogleAuth();
+  const [isStreaming, setIsStreaming] = useState(false);
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
     }
-  }, [messages, sendMessageMutation.isPending]);
+  }, [messages, isStreaming]);
+
+  // ── Streaming chat — reads SSE from /api/chat and streams text into a message bubble ──
+  const streamChat = useCallback(async (
+    message: string,
+    history: { role: string; content: string }[],
+    targetMsgId: string,
+    onComplete: (fullText: string, navigationUrl?: string) => void,
+    onError: (errReply?: string) => void,
+  ) => {
+    const token = localStorage.getItem("winston_session_token");
+    const baseUrl = (import.meta.env.BASE_URL as string).replace(/\/$/, "");
+    setIsStreaming(true);
+    try {
+      const response = await fetch(`${baseUrl}/api/chat`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ message, history }),
+      });
+
+      if (!response.ok || !response.body) {
+        onError();
+        return;
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let fullText = "";
+      let navUrl: string | undefined;
+      let finished = false;
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const trimmed = line.slice(6).trim();
+          if (!trimmed) continue;
+          let data: Record<string, unknown>;
+          try { data = JSON.parse(trimmed); } catch { continue; }
+
+          if (data.text) {
+            fullText += data.text as string;
+            setMessages((prev) =>
+              prev.map((m) => m.id === targetMsgId ? { ...m, content: fullText } : m)
+            );
+          }
+          if (data.done) {
+            navUrl = data.navigationUrl as string | undefined;
+            finished = true;
+          }
+          if (data.error) {
+            const errReply = (data.reply as string) || "Something went wrong. Please try again.";
+            onError(errReply);
+            return;
+          }
+        }
+      }
+
+      if (finished || fullText) {
+        onComplete(fullText, navUrl);
+      } else {
+        onError();
+      }
+    } catch {
+      onError();
+    } finally {
+      setIsStreaming(false);
+    }
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -505,90 +582,82 @@ export default function Chat({ onSignOut, companionName: companionNameProp, user
           return;
         }
 
-        // Fresh session — ask Emma to greet
+        // Fresh session — ask Emma to greet (streamed)
         const greetingId = `greeting-${Date.now()}`;
         setMessages([{ id: greetingId, role: "assistant", content: "…" }]);
 
-        fetch(`${baseUrl}/api/chat`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ message: "hello", history: [], isAutoGreeting: true }),
-        })
-          .then((r) => (r.ok ? (r.json() as Promise<{ reply: string }>) : null))
-          .then((chatData) => {
-            if (!chatData) { setMessages([]); return; }
-            const reply = chatData.reply;
-            setMessages([{ id: greetingId, role: "assistant", content: reply }]);
-            // Persist greeting to DB
+        streamChat(
+          "hello",
+          [],
+          greetingId,
+          (reply) => {
             fetch(`${baseUrl}/api/messages`, {
               method: "POST",
               headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
               body: JSON.stringify({ messages: [{ role: "assistant", content: reply }] }),
             }).catch(() => {});
             setTimeout(() => speakReply(greetingId, reply), 400);
-          })
-          .catch(() => setMessages([]));
+          },
+          () => setMessages([]),
+        );
       })
       .catch(() => {
         setMessagesLoaded(true);
         setMessages([]);
       });
-  }, [speakReply]);
+  }, [speakReply, streamChat]);
 
   const submitText = useCallback(
     (text: string) => {
-      if (!text.trim() || sendMessageMutation.isPending) return;
+      if (!text.trim() || isStreaming) return;
 
       if (EMERGENCY_REGEX.test(text.trim())) {
         setShowEmergency(true);
       }
 
       const userMsg: Message = { id: Date.now().toString(), role: "user", content: text.trim() };
-      // Send only the last 30 messages as context to keep API calls fast
       const historyForApi = messages.slice(-30).map((m) => ({ role: m.role, content: m.content }));
+      const assistantMsgId = (Date.now() + 1).toString();
 
-      setMessages((prev) => [...prev, userMsg]);
+      setMessages((prev) => [
+        ...prev,
+        userMsg,
+        { id: assistantMsgId, role: "assistant", content: "…" },
+      ]);
       setInput("");
       if (textareaRef.current) textareaRef.current.style.height = "auto";
 
-      sendMessageMutation.mutate(
-        { data: { message: userMsg.content, history: historyForApi } },
-        {
-          onSuccess: (data) => {
-            const assistantMsgId = (Date.now() + 1).toString();
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: assistantMsgId,
-                role: "assistant",
-                content: data.reply,
-                navigationUrl: data.navigationUrl,
-              },
-            ]);
-            speakReply(assistantMsgId, data.reply);
-            // Persist this exchange to DB for cross-device sync
-            const token = localStorage.getItem("winston_session_token");
-            if (token) {
-              const baseUrl = (import.meta.env.BASE_URL as string).replace(/\/$/, "");
-              fetch(`${baseUrl}/api/messages`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-                body: JSON.stringify({
-                  messages: [
-                    { role: "user", content: userMsg.content },
-                    { role: "assistant", content: data.reply },
-                  ],
-                }),
-              }).catch(() => {});
-            }
-            if (data.navigationUrl) {
-              window.open(data.navigationUrl, "_blank", "noopener,noreferrer");
-            }
-          },
-        }
+      streamChat(
+        userMsg.content,
+        historyForApi,
+        assistantMsgId,
+        (reply, navUrl) => {
+          speakReply(assistantMsgId, reply);
+          const token = localStorage.getItem("winston_session_token");
+          if (token) {
+            const baseUrl = (import.meta.env.BASE_URL as string).replace(/\/$/, "");
+            fetch(`${baseUrl}/api/messages`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+              body: JSON.stringify({
+                messages: [
+                  { role: "user", content: userMsg.content },
+                  { role: "assistant", content: reply },
+                ],
+              }),
+            }).catch(() => {});
+          }
+          if (navUrl) window.open(navUrl, "_blank", "noopener,noreferrer");
+        },
+        (errReply) => {
+          const fallback = errReply ?? "I'm having trouble right now. Please try again.";
+          setMessages((prev) =>
+            prev.map((m) => m.id === assistantMsgId ? { ...m, content: fallback } : m)
+          );
+        },
       );
     },
-    [messages, sendMessageMutation, speakReply]
+    [messages, isStreaming, streamChat, speakReply]
   );
 
   const { recordingState, startRecording } = useVoiceRecorder((transcript) => {
@@ -1056,15 +1125,6 @@ export default function Chat({ onSignOut, companionName: companionNameProp, user
           </div>
         ))}
 
-        {sendMessageMutation.isPending && (
-          <div className="flex flex-col items-start animate-in fade-in">
-            <div className="max-w-[85%] rounded-2xl p-5 bg-card border border-white/5 rounded-bl-sm flex items-center gap-1.5 h-[60px]">
-              <div className="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce [animation-delay:-0.3s]" />
-              <div className="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce [animation-delay:-0.15s]" />
-              <div className="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce" />
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Input Area */}
@@ -1101,7 +1161,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, user
             <Button
               type="button"
               onClick={startRecording}
-              disabled={isTranscribing || sendMessageMutation.isPending}
+              disabled={isTranscribing || isStreaming}
               size="icon"
               className={`h-11 w-11 rounded-xl shrink-0 mb-0.5 transition-all duration-300 ${
                 isRecording
@@ -1125,12 +1185,12 @@ export default function Chat({ onSignOut, companionName: companionNameProp, user
             {/* Send button */}
             <Button
               onClick={() => submitText(input)}
-              disabled={!input.trim() || sendMessageMutation.isPending}
+              disabled={!input.trim() || isStreaming}
               size="icon"
               className="h-11 w-11 rounded-xl shrink-0 bg-primary text-primary-foreground hover:bg-primary/90 transition-all duration-300 shadow-md shadow-primary/20 mb-0.5 mr-0.5"
               data-testid="button-send"
             >
-              {sendMessageMutation.isPending ? (
+              {isStreaming ? (
                 <Loader2 className="h-5 w-5 animate-spin" />
               ) : (
                 <Send className="h-5 w-5 ml-0.5" />

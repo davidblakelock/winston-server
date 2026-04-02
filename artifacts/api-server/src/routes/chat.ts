@@ -1533,68 +1533,69 @@ router.post("/chat", async (req, res) => {
     { role: "user", content: message },
   ];
 
-  let response: Anthropic.Message | null = null;
-  const maxAttempts = 4;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      response = await anthropic.messages.create({
-        model: "claude-opus-4-5",
-        max_tokens: isMorningGreeting ? 1800 : 1024,
-        system: systemPrompt,
-        messages,
-      });
-      break;
-    } catch (err: unknown) {
-      const errStatus = (err as Record<string, unknown>)?.status as number | undefined;
-      const isOverloaded = errStatus === 529;
-      if (isOverloaded && attempt < maxAttempts) {
-        const delay = attempt * 2000;
-        req.log.warn({ attempt, delay }, "Claude overloaded — retrying");
-        await new Promise((r) => setTimeout(r, delay));
-        continue;
-      }
-      req.log.error({ err }, "Claude API error after retries");
-      res.json({
-        reply:
-          "I'm sorry, David — I'm having trouble reaching my thinking right now. Claude's servers are a little busy. Give me a moment and try again.",
-      });
-      return;
-    }
-  }
+  // ── Stream Claude's response via SSE ────────────────────────────────────
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
 
-  if (!response) {
-    res.json({
-      reply:
-        "I'm sorry, David — I couldn't get a response just now. Please try again in a moment.",
+  const sendSSE = (data: Record<string, unknown>) =>
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+
+  let reply = "";
+  let streamError = false;
+
+  try {
+    const stream = anthropic.messages.stream({
+      model: "claude-opus-4-5",
+      max_tokens: isMorningGreeting ? 1800 : 1024,
+      system: systemPrompt,
+      messages,
     });
-    return;
+
+    for await (const text of stream.textStream) {
+      reply += text;
+      sendSSE({ text });
+    }
+
+    sendSSE({ done: true, ...(navigationUrl ? { navigationUrl } : {}) });
+  } catch (err: unknown) {
+    streamError = true;
+    const errStatus = (err as Record<string, unknown>)?.status as number | undefined;
+    req.log.error({ err, errStatus }, "Claude streaming error");
+    sendSSE({
+      error: true,
+      reply:
+        errStatus === 529
+          ? "I'm sorry, David — Claude's servers are a little busy right now. Give me a moment and try again."
+          : "I'm sorry, David — I had trouble thinking through that. Please try again.",
+    });
   }
 
-  const reply =
-    response.content[0].type === "text" ? response.content[0].text : "";
+  res.end();
 
-  res.json({ reply, ...(navigationUrl ? { navigationUrl } : {}) });
-
-  // ── Post-response: extract and save recommendations (fire-and-forget) ──────
-  extractRecommendationsFromResponse(reply)
-    .then(async (recs) => {
-      if (recs.length > 0) {
-        await saveRecommendations(recs);
-        req.log.info({ count: recs.length, names: recs.map((r) => r.name) }, "Recommendations extracted and saved");
-      }
-    })
-    .catch(() => {});
-
-  // ── Post-response: mark recommendation as followed up ─────────────────────
-  if (detectFollowUpAcknowledgment(message)) {
-    getPendingFollowUps(3, 14)
-      .then(async (followUps) => {
-        if (followUps.length > 0) {
-          await markFollowedUp(followUps[0].id);
-          req.log.info({ id: followUps[0].id, name: followUps[0].name }, "Recommendation marked followed up");
+  if (reply && !streamError) {
+    // ── Post-response: extract and save recommendations (fire-and-forget) ──
+    extractRecommendationsFromResponse(reply)
+      .then(async (recs) => {
+        if (recs.length > 0) {
+          await saveRecommendations(recs);
+          req.log.info({ count: recs.length, names: recs.map((r) => r.name) }, "Recommendations extracted and saved");
         }
       })
       .catch(() => {});
+
+    // ── Post-response: mark recommendation as followed up ─────────────────
+    if (detectFollowUpAcknowledgment(message)) {
+      getPendingFollowUps(3, 14)
+        .then(async (followUps) => {
+          if (followUps.length > 0) {
+            await markFollowedUp(followUps[0].id);
+            req.log.info({ id: followUps[0].id, name: followUps[0].name }, "Recommendation marked followed up");
+          }
+        })
+        .catch(() => {});
+    }
   }
 });
 

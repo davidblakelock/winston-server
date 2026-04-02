@@ -75,7 +75,7 @@ TIER3:
 Only report real stories you found. Include specific scores, percentages, names.`;
 
   const response = await anthropic.messages.create({
-    model: "claude-3-5-haiku-20241022",
+    model: "claude-opus-4-5",
     max_tokens: 2000,
     tools: [{ type: "web_search_20250305", name: "web_search" }],
     messages: [{ role: "user", content: prompt }],
