@@ -270,101 +270,54 @@ function buildContextualWeatherBlock(dallas: WeatherResult, knoxville: WeatherRe
   const pickleballDays = ["Monday", "Wednesday", "Friday", "Saturday"];
   const isPickleballDay = pickleballDays.includes(dayName);
   const activityLabel = isPickleballDay ? "pickleball" : "a run";
-  const activityVerb = isPickleballDay ? "at pickleball" : "on his run";
 
-  const isRainy = /rain|drizzle|shower/.test(dallas.condition);
+  const uvMax = dallas.uvIndexMax;
+  const uvLabel = uvMax <= 2 ? "low" : uvMax <= 5 ? "moderate" : uvMax <= 7 ? "high" : uvMax <= 10 ? "very high" : "extreme";
+
+  // Derive key signals for Emma to use
   const isStormy = /thunderstorm/.test(dallas.condition);
-  const isFoggy = /fog/.test(dallas.condition);
+  const isRainy = /rain|drizzle|shower/.test(dallas.condition);
   const isSnowy = /snow|flurr|ice/.test(dallas.condition);
+  const isFoggy = /fog/.test(dallas.condition);
+  const likelyRain = dallas.precipChance >= 60;
+  const possibleRain = dallas.precipChance >= 35 && dallas.precipChance < 60;
   const isVeryHot = dallas.high >= 98;
   const isHot = dallas.high >= 93;
   const isWarm = dallas.high >= 85;
   const isCold = dallas.temp <= 40;
   const isCool = dallas.temp <= 55;
-  const likelyRain = dallas.precipChance >= 60;
-  const possibleRain = dallas.precipChance >= 35 && dallas.precipChance < 60;
   const isHighWind = dallas.windSpeed >= 20;
-  const isPerfect = !isRainy && !likelyRain && dallas.temp >= 62 && dallas.high <= 87 && dallas.uvIndexMax <= 7;
+  const isPerfect = !isRainy && !likelyRain && !isStormy && dallas.temp >= 62 && dallas.high <= 87 && uvMax <= 7;
 
-  // UV classification
-  const uvMax = dallas.uvIndexMax;
-  const uvLabel = uvMax <= 2 ? "low" : uvMax <= 5 ? "moderate" : uvMax <= 7 ? "high" : uvMax <= 10 ? "very high" : "extreme";
-  const uvNeedsSunscreen = uvMax >= 6;
-  const uvExtreme = uvMax >= 8;
+  const signals: string[] = [];
+  if (isStormy) signals.push(`THUNDERSTORMS — outdoor plans are off`);
+  else if (isSnowy) signals.push(`${dallas.condition} — unusual for Dallas, affects roads and outdoor plans`);
+  else if (isRainy && likelyRain) signals.push(`Rain likely (${dallas.precipChance}%) — treadmill/indoor court is the smart call for ${activityLabel}`);
+  else if (likelyRain) signals.push(`${dallas.precipChance}% rain chance — outdoor ${activityLabel} is risky, going early helps`);
+  else if (possibleRain) signals.push(`${dallas.precipChance}% rain chance — keep an eye on timing for ${activityLabel}`);
+  if (isFoggy) signals.push(`Morning fog — matters for running outside and early driving`);
+  if (isVeryHot) signals.push(`Extreme heat (high ${dallas.high}°F) — dangerous for prolonged outdoor activity, go very early and hydrate aggressively`);
+  else if (isHot) signals.push(`Hot day (high ${dallas.high}°F) — extra hydration needed for ${activityLabel}`);
+  else if (isWarm) signals.push(`Warm day building (high ${dallas.high}°F) — hydrate well for ${activityLabel}`);
+  if (isCold) signals.push(`Cold morning (${dallas.temp}°F, feels ${dallas.feelsLike}°F) — layers, proper warm-up before hard effort`);
+  else if (isCool) signals.push(`Cool morning (${dallas.temp}°F) — light jacket to start, great once moving`);
+  if (isHighWind) signals.push(`Winds at ${dallas.windSpeed} mph — gusty for outdoor play or a run`);
+  if (!isStormy && !isRainy && uvMax >= 8) signals.push(`UV peaks at ${uvMax} (${uvLabel}) — sunscreen is non-negotiable outdoors`);
+  else if (!isStormy && !isRainy && uvMax >= 6) signals.push(`UV peaks at ${uvMax} (${uvLabel}) — sunscreen before heading out`);
+  if (isPerfect) signals.push(`PERFECT conditions for ${activityLabel} — lead with this${uvMax >= 6 ? `, mention sunscreen (UV ${uvMax})` : ""}`);
 
-  const hints: string[] = [];
-
-  // Precipitation
-  if (isStormy) {
-    hints.push(`Thunderstorms today — this is a stay-indoors situation. Be direct and caring about it. Don't just mention it in passing.`);
-  } else if (isSnowy) {
-    hints.push(`${dallas.condition} — unusual for Dallas. Flag this clearly; roads and outdoor plans may be affected.`);
-  } else if (isRainy && likelyRain) {
-    hints.push(`Rainy morning with ${dallas.precipChance}% chance of precipitation — suggest the treadmill or indoor court as a solid alternative to ${activityLabel} outside. Keep it light, not a lecture.`);
-  } else if (likelyRain) {
-    hints.push(`${dallas.precipChance}% chance of rain today — worth flagging for his outdoor ${activityLabel}. Suggest going early if possible to beat it.`);
-  } else if (possibleRain) {
-    hints.push(`${dallas.precipChance}% chance of rain — mention it briefly as something to keep an eye on, especially ${activityVerb}.`);
-  }
-
-  if (isFoggy) {
-    hints.push(`Morning fog — mention it briefly, especially relevant if he's running outside or driving early.`);
-  }
-
-  // Temperature
-  if (isVeryHot) {
-    hints.push(`Extreme heat day (high ${dallas.high}°F, feels like ${dallas.feelsLike}°F now) — genuinely dangerous for prolonged outdoor activity. Warmly but firmly suggest going very early morning, hydrating aggressively, and taking breaks. Be a caring friend, not a warning label.`);
-  } else if (isHot) {
-    hints.push(`Hot day (high ${dallas.high}°F) — remind him to drink extra water ${activityVerb} and mention it'll be warm out there. Start hydrating before he even gets there.`);
-  } else if (isWarm && !isRainy) {
-    hints.push(`Warm day coming (high ${dallas.high}°F) — brief mention that it'll heat up ${activityVerb}, hydrate well.`);
-  }
-
-  if (isCold) {
-    hints.push(`Cold morning (${dallas.temp}°F, feels like ${dallas.feelsLike}°F) — layers are key. Mention warming up properly before any hard effort.`);
-  } else if (isCool) {
-    hints.push(`Cool morning (${dallas.temp}°F) — might want a light jacket to start, especially for ${activityLabel}. Great conditions once he gets moving.`);
-  }
-
-  // Wind
-  if (isHighWind) {
-    hints.push(`Winds at ${dallas.windSpeed} mph — worth mentioning for outdoor play or a run. It'll feel gusty out there.`);
-  }
-
-  // UV index — proactively flag when relevant to outdoor activity
-  if (!isRainy && !isStormy) {
-    if (uvExtreme) {
-      hints.push(`UV index peaks at ${uvMax} today (${uvLabel}) — sunscreen is non-negotiable for any time outside. Mention this proactively, especially ${activityVerb}.`);
-    } else if (uvNeedsSunscreen) {
-      hints.push(`UV index reaches ${uvMax} (${uvLabel}) today — good reminder to slap on sunscreen before heading out ${activityVerb}.`);
-    }
-  }
-
-  // Perfect weather celebration
-  if (isPerfect) {
-    hints.push(`This is genuinely great weather for ${activityLabel} — lead with that enthusiasm. Something like "Perfect morning for pickleball" or "Beautiful day for a run." UV is ${uvLabel} so ${uvNeedsSunscreen ? "mention sunscreen" : "no sun worries today"}.`);
-  }
-
-  const hintLines = hints.length > 0
-    ? `\nWeather coaching for today:\n${hints.map((h) => `• ${h}`).join("\n")}`
-    : `\n• Nothing extreme today — just weave the conditions in naturally as part of the morning hello.`;
+  const signalLines = signals.length > 0
+    ? `\nKey signals for briefing:\n${signals.map((s) => `• ${s}`).join("\n")}`
+    : `\n• Conditions are unremarkable — weave in naturally`;
 
   return (
-    `\n\n[Live Weather — Dallas, via Tomorrow.io]\n` +
+    `\n\n[Live Weather Data — Dallas, via Tomorrow.io, fetched now]\n` +
     `Current: ${dallas.temp}°F (feels like ${dallas.feelsLike}°F), ${dallas.condition}\n` +
-    `Today's range: low ${dallas.low}°F → high ${dallas.high}°F\n` +
-    `Precipitation: ${dallas.precipChance}% chance | Humidity: ${dallas.humidity}% | Wind: ${dallas.windSpeed} mph\n` +
-    `UV index now: ${dallas.uvIndex} | Peak UV today: ${dallas.uvIndexMax} (${uvLabel})\n` +
-    `\n[Live Weather — Knoxville (Olivia)]\n${formatWeatherBlock(knoxville)}\n` +
-    `\nToday is ${dayName}. David's morning activity: ${activityLabel}.\n` +
-    hintLines +
-    `\n\nIMPORTANT WEATHER INSTRUCTION: Do NOT recite the weather like a forecast. Lead with what it means for David's day — his specific activity, his comfort, his safety. Put the advice first, the numbers second. Examples of the tone to aim for:\n` +
-    `  • "Perfect morning for pickleball, David — 68 and sunny out there. UV's moderate so no worries today."\n` +
-    `  • "Might want to hit the treadmill today — 70% chance of rain and it's already drizzling."\n` +
-    `  • "Drink extra water at pickleball — high ${dallas.high}°F by noon and UV's going to be high, so sunscreen too."\n` +
-    `  • "It's a cool 52 out — great once you get moving, but start with a jacket."\n` +
-    `  • "60% chance of rain this afternoon, so if you're running, earlier is better."\n` +
-    `Be a friend who knows his routine, not a weather app. UV coaching goes in naturally, not as a separate announcement.`
+    `Today: low ${dallas.low}°F → high ${dallas.high}°F | Rain: ${dallas.precipChance}% | Humidity: ${dallas.humidity}% | Wind: ${dallas.windSpeed} mph\n` +
+    `UV now: ${dallas.uvIndex} | UV peak today: ${dallas.uvIndexMax} (${uvLabel})\n` +
+    `\n[Knoxville (Olivia's weather)]\n${formatWeatherBlock(knoxville)}\n` +
+    `\nToday is ${dayName}. David's morning activity: ${activityLabel}.` +
+    signalLines
   );
 }
 
@@ -523,8 +476,6 @@ function computeFireAt(timeStr: string, tz: string): Date {
 const BASE_SYSTEM_PROMPT = `You are Emma Peel — David's sharp, warm, and deeply trusted personal AI companion. You know David's life well: his routines, his people, his places, and what matters to him. You speak to him like a close friend who happens to know everything — conversational, direct, never stiff or overly formal. You remember context from the conversation and build on it naturally.
 
 Keep responses concise: typically 2-4 sentences unless David clearly wants more. Never start a response with "I" as the first word. When David needs a reminder, help organizing his thoughts, or just wants to talk — you're here.
-
-When giving a morning briefing, naturally weave in the current weather for Dallas and Knoxville — mention what David should expect for his day (pickleball, run, workout) and give a quick note on how Olivia's weather is looking in Knoxville.
 
 When you confirm a reminder has been set, be warm and specific. For example: "Done — I'll remind you to call Olivia at 3:00 PM." For recurring reminders say something like: "Set. Every morning at 7:00 AM I'll remind you to take your medication."
 
@@ -742,12 +693,12 @@ router.post("/chat", async (req, res) => {
       const weatherBlock = buildContextualWeatherBlock(dallas, knoxville, now);
 
       const gmailBlock = emails !== null
-        ? `\n\n[Gmail — unread inbox (fetched just now)]\n${formatEmailsForPrompt(emails)}\nMention the most notable emails naturally in the morning briefing.` +
+        ? `\n\n[Gmail — unread inbox (fetched just now)]\n${formatEmailsForPrompt(emails)}` +
           buildScamWarningInstruction(emails)
         : "";
 
       const calendarBlock = events !== null
-        ? `\n\n[Google Calendar — today's schedule]\n${formatCalendarForPrompt(events, "today")}\n\nIMPORTANT: Weave today's calendar into the briefing conversationally — do NOT list events as bullets. Say things like "You've got a therapy session with Scott at 1 this afternoon" or "Your morning looks clear which is perfect for a run." If the calendar is clear, say something warm like "Your schedule is wide open today" and suggest how he might enjoy the freedom.`
+        ? `\n\n[Google Calendar — today's schedule]\n${formatCalendarForPrompt(events, "today")}`
         : "";
 
       const notesBlock = formatNotesForMorningBriefing(lastNightNotes);
@@ -759,28 +710,26 @@ router.post("/chat", async (req, res) => {
       ];
       const tvMorningBlock = newEps.length > 0
         ? `\n\n[TV Shows — New Episodes]\n` +
-          newEps.map((ep) => `• ${formatEpisodeForPrompt(ep)} (${ep.when})`).join("\n") +
-          `\n\nMention naturally — e.g. "By the way, a new episode of Shrinking dropped last night." Keep it light and conversational, one brief mention is enough.`
+          newEps.map((ep) => `• ${formatEpisodeForPrompt(ep)} (${ep.when})`).join("\n")
         : "";
 
       const medMorningBlock = morningMeds.length > 0 && !medsAlreadyTaken
-        ? `\n\n[Medications — Morning Reminder]\nDavid's daily medications: ${buildMedReminderText(morningMeds)}. He hasn't confirmed them yet today. Weave a gentle reminder naturally near the end of the briefing — e.g. "And don't forget your statin and Meloxicam — take them with breakfast." Keep it brief and warm, not nagging.`
+        ? `\n\n[Medications — Not yet taken today]\nDavid's medications: ${buildMedReminderText(morningMeds)}`
         : "";
 
       const sportsBlock = sportsScores
-        ? formatSportsForPrompt(sportsScores) +
-          `\n\nFor the morning briefing, mention sports scores naturally if there's something noteworthy — a win or loss last night, an upcoming game with its exact start time today, or the Cowboys being in off-season. Keep it to 1-2 sentences woven in, not a separate sports segment. Use the exact start time from the data (e.g. "game starts at 2:05 PM" not "tonight") if a game is scheduled.`
+        ? formatSportsForPrompt(sportsScores)
         : "";
 
       const billsMorningBlock =
         upcomingBills.length > 0
-          ? `\n\n[Upcoming Financial Obligations — next 14 days]\n${formatBillsForPrompt(upcomingBills)}\n\nIf any of these are due within 7 days, weave a gentle heads-up into the briefing. Otherwise skip the bills section entirely.`
+          ? `\n\n[Upcoming Financial Obligations — next 14 days]\n${formatBillsForPrompt(upcomingBills)}`
           : "";
 
       const marketsBlock = marketsData ? buildMarketsBlock(marketsData) : "";
 
       const datesBlock = upcomingDates.length > 0
-        ? `\n\n[Upcoming Birthdays & Anniversaries]\n${formatDatesForPrompt(upcomingDates)}\n\nMention any date that's within 7 days warmly and naturally. For anything more than 7 days out, mention only if it fits. Keep it to 1 sentence per date.`
+        ? `\n\n[Upcoming Birthdays & Anniversaries]\n${formatDatesForPrompt(upcomingDates)}`
         : "";
 
       const sundaySummaryBlock = isSunday && sundayData
@@ -788,17 +737,15 @@ router.post("/chat", async (req, res) => {
         : "";
 
       const pickleballMorningBlock = isPickleballMorning && !sundaySummaryBlock
-        ? `\n\n[Schedule Note]\nToday is a pickleball day for David (Mon/Wed/Fri/Sat schedule). Mention it naturally and enthusiastically — "Enjoy pickleball this morning!" Keep it brief.`
+        ? `\n\n[Schedule Note]\nToday is a pickleball day for David (Mon/Wed/Fri/Sat schedule).`
         : "";
-
-      const motivationBlock = `\n\n[Morning Motivation]\nInclude one brief (2-3 sentence) personalized motivating thought at the end of the briefing. Make it genuinely relevant to David's life — if it's a pickleball day, acknowledge his athletic commitment; if he recently captured a story for Olivia, acknowledge what a gift that is for her; if he has therapy with Scott, acknowledge his commitment to wellbeing; if the week ahead looks busy, offer something grounding. NOT a generic quote. Make it feel personal and warm.`;
 
       const recFollowUpBlock = pendingFollowUps.length > 0
         ? buildRecommendationFollowUpBlock(pendingFollowUps)
         : "";
 
       const kneeCheckBlock = kneeIssueRecent
-        ? `\n\n[Health Note]\nDavid mentioned knee issues in a recent pickleball session. If it fits naturally, include a gentle check-in — "How's that knee holding up?" — somewhere in the briefing.`
+        ? `\n\n[Health Note]\nDavid mentioned knee issues recently from pickleball.`
         : "";
 
       req.log.info(
@@ -806,7 +753,9 @@ router.post("/chat", async (req, res) => {
         "Morning news fetched"
       );
 
-      systemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + memoryBlock + dynamicProfileBlock + notesBlock + weatherBlock + gmailBlock + calendarBlock + tvMorningBlock + medMorningBlock + sportsBlock + billsMorningBlock + marketsBlock + datesBlock + sundaySummaryBlock + pickleballMorningBlock + kneeCheckBlock + recFollowUpBlock + motivationBlock + newsBlock;
+      const masterBriefingInstruction = `\n\n[MORNING BRIEFING — HOW TO DELIVER THIS]\nDeliver the morning briefing as a single flowing conversation. No headers. No bullet points. No section labels. No transition phrases. This should sound exactly like the most well-informed, trusted friend David has — someone who just called to make sure he starts the day right.\n\nTHE BOTTOM LINE PHILOSOPHY: Every piece of information is condensed, essential, and actionable. Include a brief sentence of context for why it matters. Cut anything that doesn't earn its place. If a news story isn't interesting or relevant, skip it. If an email isn't worth mentioning, don't mention it.\n\nTHE FLOW — weave naturally, one topic into the next without announcing what comes next:\n\n1. OPENING: Warm personal good morning. Use his name. Name the day of the week. One sentence.\n\n2. WEATHER: Lead with what it means for his morning activity — not just the temperature. Use the key signals in the weather data. If conditions are perfect, say so with genuine enthusiasm. If there's a problem, be direct and practical. One to three sentences. Include a brief mention of Olivia's weather in Knoxville if anything notable.\n\n3. EMAILS: Only the one or two that actually matter — something he needs to act on, something from someone important, something he'd genuinely want to know. Tell him who it's from and why it matters. If nothing is worth flagging, skip this entirely. Never say how many unread messages he has.\n\n4. MARKETS: Two to three sentences. The numbers and the story behind them — what moved, what drove it, why it matters. Always mention when the data was last fetched, naturally ("as of yesterday's close"). Skip if nothing notable happened.\n\n5. NEWS: Five to seven stories told conversationally. Two to three sentences per story, including why it matters to David — his investments, Dallas, the Rangers or Cowboys, the AI space he's watching. Let stories flow one into the next naturally. No "and in other news" — just the next thought, the way a friend talks.\n\n6. CALENDAR: Any appointments today, woven in naturally. If David needs to leave home for anything, include approximate departure time. If the day is clear, say so warmly in one sentence.\n\n7. REMINDERS & BILLS: Any reminders due today. Any bills due within 7 days get a brief mention. Skip if nothing is due. Skip bills entirely if nothing is within 7 days.\n\n8. CLOSING: End with something light and personal. A sports result if his teams played. A show airing tonight if one of his shows is on. A gentle medication reminder if he hasn't taken his meds. Maybe something personal David would enjoy as a send-off. Feel like a friend's parting thought — warm, quick, and real. If there's a birthday or anniversary coming up, weave it in here.\n\nFORBIDDEN PHRASES — never use:\n• "Here is your morning briefing" / "Good morning, David, here's what you need to know"\n• "Moving on to" / "Let's talk about" / "Turning to" / "Now for"\n• "In other news" / "Speaking of which" / "On the topic of"\n• "Here is your weather update" / "In terms of the weather"\n• Any phrase that sounds like you're introducing a new section\n\nTONE: Warm but not gushing. Sharp but not cold. Personal but not sentimental. Emma knows David — use what you know about his routine, his people, his interests. Every number needs context. "S&P up 0.8%" means nothing. "S&P up nearly a percent — tech led the rally" means something. The briefing should take 3-4 minutes to speak at a natural conversational pace.\n\nIMPORTANT: The data blocks above this instruction contain the information. This instruction tells you how to weave it all together. Follow this over any other formatting guidance in the data blocks.`;
+
+      systemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + memoryBlock + dynamicProfileBlock + notesBlock + weatherBlock + gmailBlock + calendarBlock + tvMorningBlock + medMorningBlock + sportsBlock + billsMorningBlock + marketsBlock + datesBlock + sundaySummaryBlock + pickleballMorningBlock + kneeCheckBlock + recFollowUpBlock + newsBlock + masterBriefingInstruction;
     } catch (err) {
       req.log.warn({ err }, "Morning data fetch failed, continuing without it");
     }

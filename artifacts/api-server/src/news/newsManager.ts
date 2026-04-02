@@ -136,16 +136,6 @@ export function formatNewsForPrompt(feeds: NewsFeed[]): string {
   return (
     `\n\n[Morning News — current headlines fetched just now for David's interests]\n` +
     sections +
-    `\n\n[News briefing instructions for Emma]\n` +
-    `Include a conversational news briefing in your morning response using the headlines above. Guidelines:\n` +
-    `• Select the 5-6 most interesting and relevant stories\n` +
-    `• If Rangers or Cowboys had a game last night, lead with the score and result\n` +
-    `• If there is significant stock market movement, mention it near the top\n` +
-    `• Include Dallas local news only if something genuinely significant happened\n` +
-    `• Summarize each story in 2-3 sentences — explain why it matters to David specifically (he lives in Dallas, follows the Rangers and Cowboys, invests in markets, and is building his own AI product)\n` +
-    `• Tone: warm and conversational, like a trusted well-informed friend — not a news anchor reading a teleprompter\n` +
-    `• Format: flowing prose, NOT a numbered list or bullet points\n` +
-    `• End with the AI/technology story since David is actively building in that space\n` +
-    `• Keep the entire news section under 280 words`
+    `\n\nNews data notes: Select 5-7 of the most relevant stories. For each one, include why it matters to David — his investments, Dallas, the Rangers/Cowboys, the AI space he's watching. Save AI/tech for last since that's his world. Only include Dallas local news if something genuinely significant happened. Skip anything that's filler.`
   );
 }

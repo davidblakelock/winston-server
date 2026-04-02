@@ -216,14 +216,7 @@ export function buildMarketsBlock(snapshot: MarketSnapshot): string {
   const fetchedStr = formatFetchTime(snapshot.fetchedAt);
 
   return (
-    `\n\n${formatted}\n\n` +
-    `IMPORTANT: The market figures above are fetched from Alpha Vantage and reflect the most recent completed trading session (last close). ` +
-    `They were last updated at ${fetchedStr} CT. ` +
-    `Always tell David when the data was last fetched — never present it as live real-time data. ` +
-    `If the data is from earlier today or yesterday, say so naturally: "As of this morning's close..." or "When I last checked at [time]..." ` +
-    `Report direction and percentages EXACTLY as shown. ` +
-    `Give a brief 2-3 sentence conversational market summary in Emma Peel's warm, direct style — like a knowledgeable friend giving David the quick picture. ` +
-    `Example: "Markets are looking strong this morning, David. S&P up half a percent, Dow up about 200 points. Oil's holding steady." ` +
-    `Note oil only if it moved more than 1%.`
+    `\n\n${formatted}\n` +
+    `Data last fetched: ${fetchedStr} CT — always mention the data freshness naturally when referencing markets. Report direction and percentages exactly as shown. Note oil only if it moved more than 1%.`
   );
 }
