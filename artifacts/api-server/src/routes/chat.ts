@@ -137,31 +137,31 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-const WMO_CONDITIONS: Record<number, string> = {
-  0: "clear skies",
-  1: "mainly clear",
-  2: "partly cloudy",
-  3: "overcast",
-  45: "foggy",
-  48: "freezing fog",
-  51: "light drizzle",
-  53: "drizzle",
-  55: "heavy drizzle",
-  61: "light rain",
-  63: "rain",
-  65: "heavy rain",
-  71: "light snow",
-  73: "snow",
-  75: "heavy snow",
-  77: "snow grains",
-  80: "light rain showers",
-  81: "rain showers",
-  82: "heavy rain showers",
-  85: "light snow showers",
-  86: "snow showers",
-  95: "thunderstorms",
-  96: "thunderstorms with hail",
-  99: "thunderstorms with heavy hail",
+// ─── Tomorrow.io weather codes → human-readable conditions ──────────────────
+const TOMORROW_CONDITIONS: Record<number, string> = {
+  1000: "clear skies",
+  1001: "cloudy",
+  1100: "mostly clear",
+  1101: "partly cloudy",
+  1102: "mostly cloudy",
+  2000: "foggy",
+  2100: "light fog",
+  4000: "drizzle",
+  4001: "rain",
+  4200: "light rain",
+  4201: "heavy rain",
+  5000: "snow",
+  5001: "flurries",
+  5100: "light snow",
+  5101: "heavy snow",
+  6000: "freezing drizzle",
+  6001: "freezing rain",
+  6200: "light freezing rain",
+  6201: "heavy freezing rain",
+  7000: "ice pellets",
+  7101: "heavy ice pellets",
+  7102: "light ice pellets",
+  8000: "thunderstorms",
 };
 
 interface WeatherResult {
@@ -171,43 +171,96 @@ interface WeatherResult {
   high: number;
   low: number;
   condition: string;
+  precipChance: number;
+  humidity: number;
+  windSpeed: number;
+  uvIndex: number;
+  uvIndexMax: number;
+}
+
+interface TomorrowRealtimeResponse {
+  data: {
+    values: {
+      temperature: number;
+      temperatureApparent: number;
+      humidity: number;
+      windSpeed: number;
+      precipitationProbability: number;
+      uvIndex: number;
+      weatherCode: number;
+    };
+  };
+}
+
+interface TomorrowForecastResponse {
+  timelines: {
+    daily: Array<{
+      values: {
+        temperatureMax: number;
+        temperatureMin: number;
+        precipitationProbabilityMax: number;
+        uvIndexMax: number;
+        weatherCodeMax: number;
+      };
+    }>;
+  };
 }
 
 async function fetchCityWeather(
   city: string,
   lat: number,
   lon: number,
-  timezone: string
+  _timezone: string
 ): Promise<WeatherResult> {
-  const url =
-    `https://api.open-meteo.com/v1/forecast` +
-    `?latitude=${lat}&longitude=${lon}` +
-    `&current=temperature_2m,apparent_temperature,weather_code` +
-    `&daily=temperature_2m_max,temperature_2m_min` +
-    `&temperature_unit=fahrenheit` +
-    `&timezone=${encodeURIComponent(timezone)}` +
-    `&forecast_days=1`;
+  const apiKey = process.env.TOMORROW_IO_API_KEY;
+  if (!apiKey) throw new Error("TOMORROW_IO_API_KEY not configured");
 
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`Open-Meteo error for ${city}: ${resp.status}`);
+  const location = `${lat},${lon}`;
+  const units = "imperial";
 
-  const data = await resp.json() as {
-    current: { temperature_2m: number; apparent_temperature: number; weather_code: number };
-    daily: { temperature_2m_max: number[]; temperature_2m_min: number[] };
-  };
+  const [realtimeResp, forecastResp] = await Promise.all([
+    fetch(
+      `https://api.tomorrow.io/v4/weather/realtime?location=${location}&units=${units}&apikey=${apiKey}`,
+      { signal: AbortSignal.timeout(8000) }
+    ),
+    fetch(
+      `https://api.tomorrow.io/v4/weather/forecast?location=${location}&units=${units}&timesteps=1d&apikey=${apiKey}`,
+      { signal: AbortSignal.timeout(8000) }
+    ),
+  ]);
+
+  if (!realtimeResp.ok) throw new Error(`Tomorrow.io realtime error for ${city}: ${realtimeResp.status}`);
+  if (!forecastResp.ok) throw new Error(`Tomorrow.io forecast error for ${city}: ${forecastResp.status}`);
+
+  const [realtime, forecast] = await Promise.all([
+    realtimeResp.json() as Promise<TomorrowRealtimeResponse>,
+    forecastResp.json() as Promise<TomorrowForecastResponse>,
+  ]);
+
+  const current = realtime.data.values;
+  const today = forecast.timelines.daily[0]?.values;
 
   return {
     city,
-    temp: Math.round(data.current.temperature_2m),
-    feelsLike: Math.round(data.current.apparent_temperature),
-    high: Math.round(data.daily.temperature_2m_max[0]),
-    low: Math.round(data.daily.temperature_2m_min[0]),
-    condition: WMO_CONDITIONS[data.current.weather_code] ?? "conditions unknown",
+    temp: Math.round(current.temperature),
+    feelsLike: Math.round(current.temperatureApparent),
+    high: Math.round(today?.temperatureMax ?? current.temperature),
+    low: Math.round(today?.temperatureMin ?? current.temperature),
+    condition: TOMORROW_CONDITIONS[current.weatherCode] ?? "conditions unknown",
+    precipChance: Math.round(today?.precipitationProbabilityMax ?? current.precipitationProbability),
+    humidity: Math.round(current.humidity),
+    windSpeed: Math.round(current.windSpeed),
+    uvIndex: Math.round(current.uvIndex),
+    uvIndexMax: Math.round(today?.uvIndexMax ?? current.uvIndex),
   };
 }
 
 function formatWeatherBlock(w: WeatherResult): string {
-  return `${w.city}: ${w.temp}°F (feels like ${w.feelsLike}°F), ${w.condition} — high ${w.high}°F / low ${w.low}°F`;
+  return (
+    `${w.city}: ${w.temp}°F (feels like ${w.feelsLike}°F), ${w.condition}` +
+    ` — high ${w.high}°F / low ${w.low}°F` +
+    ` | ${w.precipChance}% precip | humidity ${w.humidity}%`
+  );
 }
 
 function buildContextualWeatherBlock(dallas: WeatherResult, knoxville: WeatherResult, now: Date): string {
@@ -217,43 +270,79 @@ function buildContextualWeatherBlock(dallas: WeatherResult, knoxville: WeatherRe
   const pickleballDays = ["Monday", "Wednesday", "Friday", "Saturday"];
   const isPickleballDay = pickleballDays.includes(dayName);
   const activityLabel = isPickleballDay ? "pickleball" : "a run";
+  const activityVerb = isPickleballDay ? "at pickleball" : "on his run";
 
-  const isRainy = /rain|drizzle|shower|thunderstorm/.test(dallas.condition);
-  const isFoggy = /fog/.test(dallas.condition);
+  const isRainy = /rain|drizzle|shower/.test(dallas.condition);
   const isStormy = /thunderstorm/.test(dallas.condition);
+  const isFoggy = /fog/.test(dallas.condition);
+  const isSnowy = /snow|flurr|ice/.test(dallas.condition);
   const isVeryHot = dallas.high >= 98;
   const isHot = dallas.high >= 93;
   const isWarm = dallas.high >= 85;
   const isCold = dallas.temp <= 40;
   const isCool = dallas.temp <= 55;
-  const isPerfect = !isRainy && dallas.temp >= 62 && dallas.high <= 85;
+  const likelyRain = dallas.precipChance >= 60;
+  const possibleRain = dallas.precipChance >= 35 && dallas.precipChance < 60;
+  const isHighWind = dallas.windSpeed >= 20;
+  const isPerfect = !isRainy && !likelyRain && dallas.temp >= 62 && dallas.high <= 87 && dallas.uvIndexMax <= 7;
+
+  // UV classification
+  const uvMax = dallas.uvIndexMax;
+  const uvLabel = uvMax <= 2 ? "low" : uvMax <= 5 ? "moderate" : uvMax <= 7 ? "high" : uvMax <= 10 ? "very high" : "extreme";
+  const uvNeedsSunscreen = uvMax >= 6;
+  const uvExtreme = uvMax >= 8;
 
   const hints: string[] = [];
 
+  // Precipitation
   if (isStormy) {
-    hints.push(`There are thunderstorms — this is a stay-indoors situation. Be direct about it.`);
-  } else if (isRainy) {
-    hints.push(`It's raining — suggest the treadmill or indoor court as an alternative to ${activityLabel} outside. Keep it light, not a lecture.`);
-  } else if (isFoggy) {
-    hints.push(`Morning fog — mention it briefly, especially relevant if he's running outside.`);
+    hints.push(`Thunderstorms today — this is a stay-indoors situation. Be direct and caring about it. Don't just mention it in passing.`);
+  } else if (isSnowy) {
+    hints.push(`${dallas.condition} — unusual for Dallas. Flag this clearly; roads and outdoor plans may be affected.`);
+  } else if (isRainy && likelyRain) {
+    hints.push(`Rainy morning with ${dallas.precipChance}% chance of precipitation — suggest the treadmill or indoor court as a solid alternative to ${activityLabel} outside. Keep it light, not a lecture.`);
+  } else if (likelyRain) {
+    hints.push(`${dallas.precipChance}% chance of rain today — worth flagging for his outdoor ${activityLabel}. Suggest going early if possible to beat it.`);
+  } else if (possibleRain) {
+    hints.push(`${dallas.precipChance}% chance of rain — mention it briefly as something to keep an eye on, especially ${activityVerb}.`);
   }
 
+  if (isFoggy) {
+    hints.push(`Morning fog — mention it briefly, especially relevant if he's running outside or driving early.`);
+  }
+
+  // Temperature
   if (isVeryHot) {
-    hints.push(`Extreme heat today (high ${dallas.high}°F) — this is genuinely dangerous for outdoor activity. Strongly but warmly suggest going early morning, staying hydrated, and possibly taking it indoors. Be a caring friend, not a warning label.`);
+    hints.push(`Extreme heat day (high ${dallas.high}°F, feels like ${dallas.feelsLike}°F now) — genuinely dangerous for prolonged outdoor activity. Warmly but firmly suggest going very early morning, hydrating aggressively, and taking breaks. Be a caring friend, not a warning label.`);
   } else if (isHot) {
-    hints.push(`Hot day (high ${dallas.high}°F) — remind him to drink extra water${isPickleballDay ? " at pickleball" : " on his run"}, and mention it'll be warm out there.`);
-  } else if (isWarm && isPickleballDay) {
-    hints.push(`Warm morning — brief mention that it'll heat up during play, so hydrate well.`);
+    hints.push(`Hot day (high ${dallas.high}°F) — remind him to drink extra water ${activityVerb} and mention it'll be warm out there. Start hydrating before he even gets there.`);
+  } else if (isWarm && !isRainy) {
+    hints.push(`Warm day coming (high ${dallas.high}°F) — brief mention that it'll heat up ${activityVerb}, hydrate well.`);
   }
 
   if (isCold) {
-    hints.push(`Cold morning (${dallas.temp}°F) — mention bundling up, especially for outdoor activity. A layer or two makes all the difference.`);
+    hints.push(`Cold morning (${dallas.temp}°F, feels like ${dallas.feelsLike}°F) — layers are key. Mention warming up properly before any hard effort.`);
   } else if (isCool) {
-    hints.push(`Cool morning — might want a light jacket, especially early. Good weather for ${activityLabel} once you get moving.`);
+    hints.push(`Cool morning (${dallas.temp}°F) — might want a light jacket to start, especially for ${activityLabel}. Great conditions once he gets moving.`);
   }
 
+  // Wind
+  if (isHighWind) {
+    hints.push(`Winds at ${dallas.windSpeed} mph — worth mentioning for outdoor play or a run. It'll feel gusty out there.`);
+  }
+
+  // UV index — proactively flag when relevant to outdoor activity
+  if (!isRainy && !isStormy) {
+    if (uvExtreme) {
+      hints.push(`UV index peaks at ${uvMax} today (${uvLabel}) — sunscreen is non-negotiable for any time outside. Mention this proactively, especially ${activityVerb}.`);
+    } else if (uvNeedsSunscreen) {
+      hints.push(`UV index reaches ${uvMax} (${uvLabel}) today — good reminder to slap on sunscreen before heading out ${activityVerb}.`);
+    }
+  }
+
+  // Perfect weather celebration
   if (isPerfect) {
-    hints.push(`This is genuinely great weather for ${activityLabel} — lead with that enthusiasm. Something like "Perfect morning for pickleball" or "Beautiful day for a run."`);
+    hints.push(`This is genuinely great weather for ${activityLabel} — lead with that enthusiasm. Something like "Perfect morning for pickleball" or "Beautiful day for a run." UV is ${uvLabel} so ${uvNeedsSunscreen ? "mention sunscreen" : "no sun worries today"}.`);
   }
 
   const hintLines = hints.length > 0
@@ -261,18 +350,21 @@ function buildContextualWeatherBlock(dallas: WeatherResult, knoxville: WeatherRe
     : `\n• Nothing extreme today — just weave the conditions in naturally as part of the morning hello.`;
 
   return (
-    `\n\n[Live Weather — Dallas, fetched just now]\n` +
+    `\n\n[Live Weather — Dallas, via Tomorrow.io]\n` +
     `Current: ${dallas.temp}°F (feels like ${dallas.feelsLike}°F), ${dallas.condition}\n` +
     `Today's range: low ${dallas.low}°F → high ${dallas.high}°F\n` +
-    `\n[Live Weather — Knoxville]\n${formatWeatherBlock(knoxville)}\n` +
+    `Precipitation: ${dallas.precipChance}% chance | Humidity: ${dallas.humidity}% | Wind: ${dallas.windSpeed} mph\n` +
+    `UV index now: ${dallas.uvIndex} | Peak UV today: ${dallas.uvIndexMax} (${uvLabel})\n` +
+    `\n[Live Weather — Knoxville (Olivia)]\n${formatWeatherBlock(knoxville)}\n` +
     `\nToday is ${dayName}. David's morning activity: ${activityLabel}.\n` +
     hintLines +
     `\n\nIMPORTANT WEATHER INSTRUCTION: Do NOT recite the weather like a forecast. Lead with what it means for David's day — his specific activity, his comfort, his safety. Put the advice first, the numbers second. Examples of the tone to aim for:\n` +
-    `  • "Perfect morning for pickleball, David — 68 and sunny out there."\n` +
-    `  • "Might want to hit the treadmill today — rainy morning out there."\n` +
-    `  • "Drink extra water at pickleball this morning — going to be 97 by noon."\n` +
-    `  • "It's a cool 52 out — great once you get moving, but maybe a light jacket to start."\n` +
-    `Be a friend who knows his routine, not a weather app.`
+    `  • "Perfect morning for pickleball, David — 68 and sunny out there. UV's moderate so no worries today."\n` +
+    `  • "Might want to hit the treadmill today — 70% chance of rain and it's already drizzling."\n` +
+    `  • "Drink extra water at pickleball — high ${dallas.high}°F by noon and UV's going to be high, so sunscreen too."\n` +
+    `  • "It's a cool 52 out — great once you get moving, but start with a jacket."\n` +
+    `  • "60% chance of rain this afternoon, so if you're running, earlier is better."\n` +
+    `Be a friend who knows his routine, not a weather app. UV coaching goes in naturally, not as a separate announcement.`
   );
 }
 
