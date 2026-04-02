@@ -1,141 +1,128 @@
+import Anthropic from "@anthropic-ai/sdk";
 import { logger } from "../lib/logger.js";
 
-export interface RssItem {
-  title: string;
-  description: string;
-  pubDate: string;
-}
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-export interface NewsFeed {
-  category: string;
-  items: RssItem[];
-  error?: boolean;
-}
+export async function fetchMorningNews(): Promise<string> {
+  const tz = "America/Chicago";
+  const now = new Date();
 
-// Simple RSS/XML parser — no external dependencies
-function stripHtml(html: string): string {
-  return html
-    .replace(/<[^>]*>/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
+  const todayStr = now.toLocaleDateString("en-US", {
+    timeZone: tz,
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
 
-function parseRssItems(xml: string, maxItems = 5): RssItem[] {
-  const items: RssItem[] = [];
-  const itemRegex = /<item[^>]*>([\s\S]*?)<\/item>/g;
-  const titleRegex = /<title>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/;
-  const descRegex = /<description>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/description>/;
-  const pubDateRegex = /<pubDate>(.*?)<\/pubDate>/;
+  const yesterday = new Date(now.getTime() - 86400000);
+  const yesterdayStr = yesterday.toLocaleDateString("en-US", {
+    timeZone: tz,
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  });
 
-  let match: RegExpExecArray | null;
-  while ((match = itemRegex.exec(xml)) !== null && items.length < maxItems) {
-    const itemXml = match[1];
-    const title = stripHtml(titleRegex.exec(itemXml)?.[1] ?? "").trim();
-    const rawDesc = descRegex.exec(itemXml)?.[1] ?? "";
-    const description = stripHtml(rawDesc).substring(0, 300).trim();
-    const pubDate = pubDateRegex.exec(itemXml)?.[1]?.trim() ?? "";
+  const prompt = `Today is ${todayStr}. Yesterday was ${yesterdayStr}.
 
-    if (title && title.toLowerCase() !== "title") {
-      items.push({ title, description, pubDate });
-    }
-  }
-  return items;
-}
+You are curating the morning news for David Blakelock in Dallas, Texas. Search the web for real current news from the past 24-48 hours. Be specific, factual, and include concrete details — dates, scores, names, percentages.
 
-async function fetchFeed(
-  category: string,
-  url: string,
-  maxItems = 4
-): Promise<NewsFeed> {
+Search for and organize into three tiers:
+
+TIER 1 — HARD RELEVANT NEWS (find exactly 3-4 of the most significant stories from this list):
+- Texas Rangers: Did they play yesterday? Search "${yesterdayStr} Texas Rangers game score" to find the final score, who pitched, and any key moments. Include specific details.
+- Dallas Cowboys: Any significant news? Off-season signings, trades, injuries, contract news, coaching developments.
+- US Stock Market: What happened yesterday? Search "S&P 500 Dow Jones market ${yesterdayStr}" for index performance, percentage moves, and what drove the action.
+- Global Politics: Any major world news from past 24 hours — significant government actions, international conflicts, elections, US policy, major international events?
+- AI & Technology: Any major announcements or developments from OpenAI, Anthropic, Google DeepMind, Apple, Meta, or other tech companies in the past 48 hours?
+- Dallas local: Any genuinely significant Dallas or Texas news? (Skip minor or routine local stories.)
+
+TIER 2 — CULTURAL MOMENTS (find 1-2 stories):
+- Any notable deaths of celebrities, public figures, athletes, musicians, politicians, or historical figures in the past 48 hours? Search "${todayStr} death obituary notable celebrity" to find any.
+- Any major cultural event, big entertainment news, significant sports milestone, or remarkable human achievement the whole world is talking about?
+
+TIER 3 — WATERCOOLER (find exactly 1 story):
+- One genuinely interesting, surprising, funny, or remarkable story from the past week. The kind you'd share at a dinner party saying "did you hear about this?" Search "interesting surprising news today" or "weird news today" or "amazing discovery this week." Could be science, animals, human interest, a remarkable coincidence, an unexpected world record, something bizarre.
+
+After searching, provide your summary in EXACTLY this format (use these exact tier labels so I can parse it):
+
+TIER1:
+• [Story 1: 2-3 sentence factual summary with specific details — include names, numbers, context for why it matters to someone in Dallas who follows the Rangers and Cowboys, invests in markets, and works in AI]
+• [Story 2: 2-3 sentence factual summary]
+• [Story 3: 2-3 sentence factual summary]
+• [Story 4: 2-3 sentence factual summary — only if genuinely significant, otherwise omit this bullet]
+
+TIER2:
+• [Story 1: 1-2 sentence summary. For deaths: name, age if known, why notable.]
+• [Story 2: 1-2 sentence summary — only if genuinely notable, otherwise omit]
+
+TIER3:
+• [One interesting/surprising/funny story in 1-2 sentences. Be specific.]
+
+RULES:
+- Only report stories you actually found via search. Never fabricate headlines or outcomes.
+- If the Rangers played, ALWAYS include it in Tier 1 and lead with it.
+- If no notable deaths were found, say "No notable deaths in past 48 hours" for Tier 2.
+- For Tier 3, always find something even if you need to broaden the time window to past week.
+- Include specific numbers, names, scores wherever possible.`;
+
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
-
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; NewsBot/1.0)" },
+    const response = await anthropic.messages.create({
+      model: "claude-opus-4-5",
+      max_tokens: 3000,
+      tools: [{ type: "web_search_20250305", name: "web_search" }],
+      messages: [{ role: "user", content: prompt }],
     });
-    clearTimeout(timeout);
 
-    if (!res.ok) {
-      logger.warn({ category, status: res.status }, "RSS feed non-OK");
-      return { category, items: [], error: true };
+    const text = response.content
+      .filter((block) => block.type === "text")
+      .map((block) => (block as { type: "text"; text: string }).text)
+      .join("\n")
+      .trim();
+
+    if (!text) {
+      logger.warn("Morning news web search returned no text");
+      return "";
     }
 
-    const xml = await res.text();
-    const items = parseRssItems(xml, maxItems);
-    return { category, items };
+    logger.info({ chars: text.length }, "Morning news fetched via web search");
+    return formatNewsBlock(text);
   } catch (err) {
-    logger.warn({ category, err }, "RSS feed fetch failed");
-    return { category, items: [], error: true };
+    logger.warn({ err }, "Morning news web search failed");
+    return "";
   }
 }
 
-// All news feeds for David's interests
-// NOTE: No market/finance RSS feed here — market data comes from live Yahoo Finance API
-// in marketsManager.ts which is far more accurate and timely than RSS headlines.
-const FEEDS = [
-  {
-    category: "Texas Rangers",
-    url: "https://news.google.com/rss/search?q=Texas+Rangers+baseball&hl=en-US&gl=US&ceid=US:en",
-    max: 3,
-  },
-  {
-    category: "Dallas Cowboys",
-    url: "https://news.google.com/rss/search?q=Dallas+Cowboys+NFL&hl=en-US&gl=US&ceid=US:en",
-    max: 3,
-  },
-  {
-    category: "Dallas Local News",
-    url: "https://news.google.com/rss/search?q=Dallas+Texas+local+news&hl=en-US&gl=US&ceid=US:en",
-    max: 4,
-  },
-  {
-    category: "Global Politics",
-    url: "https://feeds.bbci.co.uk/news/world/rss.xml",
-    max: 4,
-  },
-  {
-    category: "Technology & AI",
-    url: "https://news.google.com/rss/search?q=artificial+intelligence+AI+technology+news&hl=en-US&gl=US&ceid=US:en",
-    max: 4,
-  },
-];
+function formatNewsBlock(rawText: string): string {
+  // Parse out each tier from Claude's structured response
+  const tier1Match = rawText.match(/TIER1:([\s\S]*?)(?=TIER2:|$)/i);
+  const tier2Match = rawText.match(/TIER2:([\s\S]*?)(?=TIER3:|$)/i);
+  const tier3Match = rawText.match(/TIER3:([\s\S]*?)$/i);
 
-export async function fetchMorningNews(): Promise<NewsFeed[]> {
-  const results = await Promise.allSettled(
-    FEEDS.map((f) => fetchFeed(f.category, f.url, f.max))
-  );
+  const tier1 = tier1Match?.[1]?.trim() ?? "";
+  const tier2 = tier2Match?.[1]?.trim() ?? "";
+  const tier3 = tier3Match?.[1]?.trim() ?? "";
 
-  return results.map((r, i) =>
-    r.status === "fulfilled"
-      ? r.value
-      : { category: FEEDS[i].category, items: [], error: true }
-  );
-}
+  const sections: string[] = [];
+  if (tier1) sections.push(`[TIER 1 — Hard Relevant News]\n${tier1}`);
+  if (tier2 && !tier2.toLowerCase().includes("no notable deaths")) {
+    sections.push(`[TIER 2 — Cultural Moments]\n${tier2}`);
+  }
+  if (tier3) sections.push(`[TIER 3 — Watercooler]\n${tier3}`);
 
-export function formatNewsForPrompt(feeds: NewsFeed[]): string {
-  const sections = feeds
-    .filter((f) => f.items.length > 0)
-    .map((f) => {
-      const headlines = f.items
-        .map((item, i) => `${i + 1}. ${item.title}${item.description ? ` — ${item.description}` : ""}`)
-        .join("\n");
-      return `[${f.category}]\n${headlines}`;
-    })
-    .join("\n\n");
-
-  if (!sections) return "";
+  if (!sections.length) return "";
 
   return (
-    `\n\n[Morning News — current headlines fetched just now for David's interests]\n` +
-    sections +
-    `\n\nNews data notes: Select 5-7 of the most relevant stories. For each one, include why it matters to David — his investments, Dallas, the Rangers/Cowboys, the AI space he's watching. Save AI/tech for last since that's his world. Only include Dallas local news if something genuinely significant happened. Skip anything that's filler.`
+    `\n\n[Morning News — web-searched this morning, real stories from past 24-48 hours]\n` +
+    sections.join("\n\n") +
+    `\n\n[News delivery guidance for Emma]\n` +
+    `Deliver the news as one flowing conversation — no tier labels, no section headers. Guidelines:\n` +
+    `• LEAD with the Tier 1 story most relevant to David today. If the Rangers played last night, lead with the score. If there was a major market move, lead with that. Use your judgment on what he'd most want to hear first.\n` +
+    `• TIER 1 stories: 2-3 sentences each with context for why it matters to David — his portfolio, Dallas, his teams, the AI space he's watching.\n` +
+    `• TIER 2 stories: introduce naturally — "Also worth knowing —" or just flow from a Tier 1 story. 1-2 sentences each. Frame as "worth knowing."\n` +
+    `• TIER 3 story: end with this one. Introduce with something like "And here's one you'll want to share at pickleball today —" or "Oh, and this one's interesting." Keep it brief and light.\n` +
+    `• The entire news section should take no more than 2 minutes spoken aloud at a conversational pace.\n` +
+    `• Never say "Tier 1", "Tier 2", "Tier 3", "Hard News", "Watercooler", "Cultural Moments", or any section label.\n` +
+    `• Never say "In other news", "Moving on to", "Speaking of which" — just flow naturally.`
   );
 }

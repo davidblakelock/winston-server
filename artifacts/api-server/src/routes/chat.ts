@@ -56,7 +56,6 @@ import {
 } from "../memory/memoryManager.js";
 import {
   fetchMorningNews,
-  formatNewsForPrompt,
 } from "../news/newsManager.js";
 import {
   extractProfileOperation,
@@ -670,13 +669,13 @@ router.post("/chat", async (req, res) => {
       const isSunday = now.toLocaleDateString("en-US", { timeZone: "America/Chicago", weekday: "long" }) === "Sunday";
       const isPickleballMorning = isTodayPickleballDay();
 
-      const [dallas, knoxville, emails, events, lastNightNotes, newsFeeds, yesterdayEps, todayEps, morningMeds, medsAlreadyTaken, sportsScores, upcomingBills, marketsData, upcomingDates, sundayData, pendingFollowUps, kneeIssueRecent] = await Promise.all([
+      const [dallas, knoxville, emails, events, lastNightNotes, newsBlock, yesterdayEps, todayEps, morningMeds, medsAlreadyTaken, sportsScores, upcomingBills, marketsData, upcomingDates, sundayData, pendingFollowUps, kneeIssueRecent] = await Promise.all([
         fetchCityWeather("Dallas", 32.7767, -96.7970, "America/Chicago"),
         fetchCityWeather("Knoxville", 35.9606, -83.9207, "America/New_York"),
         fetchRecentEmails(8).catch(() => null),
         fetchTodayEvents().catch(() => null),
         getLastNightNotes().catch(() => []),
-        fetchMorningNews().catch(() => []),
+        fetchMorningNews().catch(() => ""),
         fetchEpisodesForDate(yesterday, watchedIdsMorning).catch(() => []),
         fetchEpisodesForDate(now, watchedIdsMorning).catch(() => []),
         getMedications().catch(() => []),
@@ -702,7 +701,6 @@ router.post("/chat", async (req, res) => {
         : "";
 
       const notesBlock = formatNotesForMorningBriefing(lastNightNotes);
-      const newsBlock = formatNewsForPrompt(newsFeeds);
 
       const newEps = [
         ...yesterdayEps.map((ep) => ({ ...ep, when: "last night" })),
@@ -749,7 +747,7 @@ router.post("/chat", async (req, res) => {
         : "";
 
       req.log.info(
-        { feedCount: newsFeeds.filter((f) => f.items.length > 0).length },
+        { newsChars: newsBlock.length },
         "Morning news fetched"
       );
 
