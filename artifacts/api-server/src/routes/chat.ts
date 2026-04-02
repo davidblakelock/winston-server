@@ -1546,16 +1546,23 @@ router.post("/chat", async (req, res) => {
   let streamError = false;
 
   try {
-    const stream = anthropic.messages.stream({
+    const stream = await anthropic.messages.create({
       model: "claude-opus-4-5",
       max_tokens: isMorningGreeting ? 1800 : 1024,
       system: systemPrompt,
       messages,
+      stream: true,
     });
 
-    for await (const text of stream.textStream) {
-      reply += text;
-      sendSSE({ text });
+    for await (const event of stream) {
+      if (
+        event.type === "content_block_delta" &&
+        event.delta.type === "text_delta"
+      ) {
+        const text = (event.delta as { type: "text_delta"; text: string }).text;
+        reply += text;
+        sendSSE({ text });
+      }
     }
 
     sendSSE({ done: true, ...(navigationUrl ? { navigationUrl } : {}) });
