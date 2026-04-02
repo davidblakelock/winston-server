@@ -45,23 +45,28 @@ async function fetchNewsFromClaude(): Promise<string> {
   // Concise prompt — fewer search directives means fewer web_search calls = faster
   const prompt = `Today is ${todayStr}. Yesterday was ${yesterdayStr}.
 
-You are curating the morning news for David Blakelock in Dallas, Texas. Use web search to find real current news from the past 24-48 hours. Target 8 total stories. USA Today brevity, Wall Street Journal relevance.
+You are curating the morning news for David Blakelock in Dallas, Texas. Use web search to find real, current news. RECENCY IS CRITICAL — every story must be from ${todayStr} or ${yesterdayStr} only. Do not use stories older than 48 hours. If a search returns old results, search again with "today" or "this week" added to the query. Target 10 total stories. USA Today brevity, Wall Street Journal relevance.
 
 STORY FORMAT — strictly 3 sentences max per story:
-• Sentence 1: What happened. Plain, crisp, specific (scores, percentages, names).
+• Sentence 1: What happened. Plain, crisp, specific (scores, percentages, names, dates).
 • Sentence 2: Why it matters to David — his portfolio (heavy in tech/AI/energy), his teams (Rangers, Cowboys, Mavericks), the AI space he works in, or Dallas/Texas impact.
 • Sentence 3 (optional): What to watch next, or one concrete detail that adds real context.
 
 Search for and organize into three tiers:
 
 TIER 1 — HARD NEWS (4 stories, required):
-Search for: Texas Rangers game score ${yesterdayStr} (did they play? final score), stock market performance ${yesterdayStr} (S&P, what moved and why), major US or global political news past 24 hours, top AI or tech news past 48 hours (OpenAI, Anthropic, Google, Apple, major product launches or funding rounds). Pick the 4 most significant. Always include a Rangers or markets story if there's real news.
+Search specifically for news from ${todayStr} and ${yesterdayStr}:
+- Texas Rangers game result ${yesterdayStr} (score, key moments — skip if no game)
+- US stock market performance ${yesterdayStr} — S&P 500, Nasdaq, what sectors moved and why
+- Major US or global political developments in the past 24 hours
+- Top AI or tech news from the past 48 hours (OpenAI, Anthropic, Google, Apple, major launches or funding)
+Pick the 4 most significant and current. If Rangers didn't play, replace with another strong story.
 
 TIER 2 — CULTURAL (2 stories, required):
-Search for: notable celebrity or public figure death ${todayStr}, major entertainment news, big sports moment outside David's core teams. Find 2 genuinely notable stories — dig if you have to.
+Search for news from ${todayStr} and ${yesterdayStr}: notable celebrity or public figure death, major entertainment or sports moment. Find 2 genuinely notable current stories.
 
-TIER 3 — WATERCOOLER (2 stories, required):
-Search for: surprising, funny, or fascinating stories David would bring up at pickleball — weird science, bizarre record, unexpected animal story, odd human achievement. Must include at least 2. These are not optional.
+TIER 3 — LIGHT & SURPRISING (4 stories, required):
+Search for stories from the past 48 hours that are surprising, funny, fascinating, or just make you say "huh, really?" — weird science findings, bizarre world records, unexpected animal behavior, odd human achievements, quirky studies. Must be 4 stories. These are not optional.
 
 Output in EXACTLY this format (bullet points, no extra commentary):
 
@@ -78,12 +83,14 @@ TIER2:
 TIER3:
 • [story — max 3 sentences]
 • [story — max 3 sentences]
+• [story — max 3 sentences]
+• [story — max 3 sentences]
 
-Only report real stories you found. Never invent or embellish.`;
+Only report real stories you found and verified are current. Never invent or embellish. If you cannot find 4 Tier 3 stories from the past 48 hours, search more broadly — they are out there.`;
 
   const response = await anthropic.messages.create({
     model: "claude-opus-4-5",
-    max_tokens: 2000,
+    max_tokens: 3000,
     tools: [{ type: "web_search_20250305", name: "web_search" }],
     messages: [{ role: "user", content: prompt }],
   });
@@ -160,7 +167,7 @@ function formatNewsBlock(rawText: string): string {
   if (tier2 && !/no notable|none found/i.test(tier2)) {
     sections.push(`[Also Worth Knowing]\n${tier2}`);
   }
-  if (tier3) sections.push(`[Share at Pickleball]\n${tier3}`);
+  if (tier3) sections.push(`[Light & Surprising Stories]\n${tier3}`);
 
   // If regex still finds nothing, fall back to including the raw text as-is
   const body = sections.length > 0 ? sections.join("\n\n") : rawText;
@@ -169,6 +176,6 @@ function formatNewsBlock(rawText: string): string {
     `\n\n[Morning News — web-searched this morning, real stories from past 24-48 hours]\n` +
     body +
     `\n\n[News delivery guidance for Emma]\n` +
-    `Deliver all stories as one fast-moving conversational sweep — no section headers, no tier labels, no "in other news" ever. Aim for USA Today brevity with WSJ relevance. Move briskly: one story flows directly into the next with a short natural transition (2-4 words max: "also —", "meanwhile —", "oh, and —"). Never linger on a single story. Each story gets exactly what's written: Sentence 1 as stated, Sentence 2 as stated, Sentence 3 only if it appears. Do not elaborate beyond what's written. Do not add commentary or analysis. Lead with the most important hard news story. End with the watercooler story — frame it naturally as something worth bringing up. Goal: David feels comprehensively informed in under 2 minutes, not deeply briefed on two stories.`
+    `Deliver all stories as one fast-moving conversational sweep — no section headers, no tier labels, no "in other news" ever. USA Today brevity, WSJ relevance. Move briskly with short natural transitions ("also —", "meanwhile —", "oh, and —"). Never linger. Lead with the most important hard news. For the light and surprising stories, introduce them naturally with something like "and here are a couple of things that'll make you smile" or "oh, and a few good ones to share later" — then deliver all of them just as briskly, one after another. Do not say "pickleball." Do not elaborate beyond what is written. Goal: David feels comprehensively informed, not deeply briefed on two stories.`
   );
 }
