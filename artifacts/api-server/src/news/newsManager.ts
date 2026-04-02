@@ -139,27 +139,29 @@ export async function fetchMorningNews(): Promise<string> {
 // ── Formatting ────────────────────────────────────────────────────────────────
 
 function formatNewsBlock(rawText: string): string {
-  const tier1Match = rawText.match(/TIER1:([\s\S]*?)(?=TIER2:|$)/i);
-  const tier2Match = rawText.match(/TIER2:([\s\S]*?)(?=TIER3:|$)/i);
-  const tier3Match = rawText.match(/TIER3:([\s\S]*?)$/i);
+  // Flexible regex — matches "TIER1:", "TIER 1:", "TIER 1 —", etc.
+  const tier1Match = rawText.match(/TIER\s*1[\s:—]*([\s\S]*?)(?=TIER\s*2[\s:—]|$)/i);
+  const tier2Match = rawText.match(/TIER\s*2[\s:—]*([\s\S]*?)(?=TIER\s*3[\s:—]|$)/i);
+  const tier3Match = rawText.match(/TIER\s*3[\s:—]*([\s\S]*?)$/i);
 
   const tier1 = tier1Match?.[1]?.trim() ?? "";
   const tier2 = tier2Match?.[1]?.trim() ?? "";
   const tier3 = tier3Match?.[1]?.trim() ?? "";
 
   const sections: string[] = [];
-  if (tier1) sections.push(`[TIER 1 — Hard Relevant News]\n${tier1}`);
+  if (tier1) sections.push(`[Main Stories]\n${tier1}`);
   if (tier2 && !/no notable|none found/i.test(tier2)) {
-    sections.push(`[TIER 2 — Cultural Moments]\n${tier2}`);
+    sections.push(`[Also Worth Knowing]\n${tier2}`);
   }
-  if (tier3) sections.push(`[TIER 3 — Watercooler]\n${tier3}`);
+  if (tier3) sections.push(`[Share at Pickleball]\n${tier3}`);
 
-  if (!sections.length) return "";
+  // If regex still finds nothing, fall back to including the raw text as-is
+  const body = sections.length > 0 ? sections.join("\n\n") : rawText;
 
   return (
     `\n\n[Morning News — web-searched this morning, real stories from past 24-48 hours]\n` +
-    sections.join("\n\n") +
+    body +
     `\n\n[News delivery guidance for Emma]\n` +
-    `Deliver the news as one flowing conversation — no tier labels, no section headers, no "in other news." Lead with the Tier 1 story most relevant to David today — Rangers game if they played, big market move, major breaking story. Each story: 2-3 sentences including why it matters to David (his portfolio, his teams, the AI space he watches). Tier 2: introduce naturally, 1-2 sentences, frame as "worth knowing." Tier 3: end the news with it — "And here's one you'll want to share at pickleball today —" or similar. Entire news section: max 2 minutes spoken aloud.`
+    `Deliver the news as one flowing conversation — no section headers, no "in other news," no tier labels ever. Lead with the story most relevant to David today — Rangers game if they played, big market move, or major breaking story. Each story: 2-3 sentences including why it matters to David (his portfolio, his teams, the AI space he watches). Introduce lighter stories naturally — "oh, and worth knowing —" or similar. End with the share-at-pickleball story — "And here's one you'll want to bring up today —" or similar. Entire news section: max 2 minutes spoken aloud.`
   );
 }
