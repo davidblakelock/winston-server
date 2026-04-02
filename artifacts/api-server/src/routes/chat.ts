@@ -661,19 +661,32 @@ router.post("/chat", async (req, res) => {
   const isSusanRelated = !isMorningGreeting && SUSAN_PATTERN.test(message);
 
   if (isMorningGreeting) {
-    // ── Fast path: serve from pre-generated cache (instant, no Claude call) ──
+    // ── SSE headers sent IMMEDIATELY — prevents proxy first-byte timeout ──
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    const sendMorningSSE = (data: Record<string, unknown>) => {
+      if (!res.writableEnded) res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    // ── Fast path: serve from pre-generated cache (instant) ──
     const cachedBriefing = getCachedBriefing(sessionUserName);
     if (cachedBriefing) {
       req.log.info({ chars: cachedBriefing.length }, "Serving morning briefing from cache — instant");
-      res.setHeader("Content-Type", "text/event-stream");
-      res.setHeader("Cache-Control", "no-cache");
-      res.setHeader("Connection", "keep-alive");
-      res.setHeader("X-Accel-Buffering", "no");
-      res.write(`data: ${JSON.stringify({ text: cachedBriefing })}\n\n`);
-      res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+      sendMorningSSE({ text: cachedBriefing });
+      sendMorningSSE({ done: true });
       res.end();
       return;
     }
+
+    // ── Slow path: generate live — heartbeats keep proxy alive during data fetch ──
+    req.log.info("Morning briefing cache miss — generating live");
+    sendMorningSSE({ heartbeat: true });
+    const heartbeatTimer = setInterval(() => sendMorningSSE({ heartbeat: true }), 8000);
+
+    let morningReply = "";
+    let morningError = false;
 
     try {
       const watchedShowsMorning = await getWatchedShows().catch(() => []);
@@ -763,17 +776,62 @@ router.post("/chat", async (req, res) => {
         ? `\n\n[Health Note]\nDavid mentioned knee issues recently from pickleball.`
         : "";
 
-      req.log.info(
-        { newsChars: newsBlock.length },
-        "Morning news fetched"
-      );
+      req.log.info({ newsChars: newsBlock.length }, "Morning data collected — calling Claude");
 
       const masterBriefingInstruction = `\n\n[MORNING BRIEFING — HOW TO DELIVER THIS]\nDeliver the morning briefing as a single flowing conversation. No headers. No bullet points. No section labels. No transition phrases. This should sound exactly like the most well-informed, trusted friend David has — someone who just called to make sure he starts the day right.\n\nTHE BOTTOM LINE PHILOSOPHY: Every piece of information is condensed, essential, and actionable. Include a brief sentence of context for why it matters. Cut anything that doesn't earn its place. If a news story isn't interesting or relevant, skip it. If an email isn't worth mentioning, don't mention it.\n\nTHE FLOW — weave naturally, one topic into the next without announcing what comes next:\n\n1. OPENING: Warm personal good morning. Use his name. Name the day of the week. One sentence.\n\n2. WEATHER: Lead with what it means for his morning activity — not just the temperature. Use the key signals in the weather data. If conditions are perfect, say so with genuine enthusiasm. If there's a problem, be direct and practical. One to three sentences. Include a brief mention of Olivia's weather in Knoxville if anything notable.\n\n3. EMAILS: Only the one or two that actually matter — something he needs to act on, something from someone important, something he'd genuinely want to know. Tell him who it's from and why it matters. If nothing is worth flagging, skip this entirely. Never say how many unread messages he has.\n\n4. MARKETS: Two to three sentences. The numbers and the story behind them — what moved, what drove it, why it matters. Always mention when the data was last fetched, naturally ("as of yesterday's close"). Skip if nothing notable happened.\n\n5. NEWS: Five to seven stories told conversationally. Two to three sentences per story, including why it matters to David — his investments, Dallas, the Rangers or Cowboys, the AI space he's watching. Let stories flow one into the next naturally. No "and in other news" — just the next thought, the way a friend talks.\n\n6. CALENDAR: Any appointments today, woven in naturally. If David needs to leave home for anything, include approximate departure time. If the day is clear, say so warmly in one sentence.\n\n7. REMINDERS & BILLS: Any reminders due today. Any bills due within 7 days get a brief mention. Skip if nothing is due. Skip bills entirely if nothing is within 7 days.\n\n8. CLOSING: End with something light and personal. A sports result if his teams played. A show airing tonight if one of his shows is on. A gentle medication reminder if he hasn't taken his meds. Maybe something personal David would enjoy as a send-off. Feel like a friend's parting thought — warm, quick, and real. If there's a birthday or anniversary coming up, weave it in here.\n\nFORBIDDEN PHRASES — never use:\n• "Here is your morning briefing" / "Good morning, David, here's what you need to know"\n• "Moving on to" / "Let's talk about" / "Turning to" / "Now for"\n• "In other news" / "Speaking of which" / "On the topic of"\n• "Here is your weather update" / "In terms of the weather"\n• Any phrase that sounds like you're introducing a new section\n\nTONE: Warm but not gushing. Sharp but not cold. Personal but not sentimental. Emma knows David — use what you know about his routine, his people, his interests. Every number needs context. "S&P up 0.8%" means nothing. "S&P up nearly a percent — tech led the rally" means something. The briefing should take 3-4 minutes to speak at a natural conversational pace.\n\nIMPORTANT: The data blocks above this instruction contain the information. This instruction tells you how to weave it all together. Follow this over any other formatting guidance in the data blocks.`;
 
-      systemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + memoryBlock + dynamicProfileBlock + notesBlock + weatherBlock + gmailBlock + calendarBlock + tvMorningBlock + medMorningBlock + sportsBlock + billsMorningBlock + marketsBlock + datesBlock + sundaySummaryBlock + pickleballMorningBlock + kneeCheckBlock + recFollowUpBlock + newsBlock + masterBriefingInstruction;
+      const morningSystemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + memoryBlock + dynamicProfileBlock + notesBlock + weatherBlock + gmailBlock + calendarBlock + tvMorningBlock + medMorningBlock + sportsBlock + billsMorningBlock + marketsBlock + datesBlock + sundaySummaryBlock + pickleballMorningBlock + kneeCheckBlock + recFollowUpBlock + newsBlock + masterBriefingInstruction;
+
+      const morningMessages: Anthropic.MessageParam[] = [
+        ...history.map((msg: { role: string; content: string }) => ({
+          role: msg.role as "user" | "assistant",
+          content: msg.content,
+        })),
+        { role: "user", content: message },
+      ];
+
+      const stream = await anthropic.messages.create({
+        model: "claude-opus-4-5",
+        max_tokens: 1800,
+        system: morningSystemPrompt,
+        messages: morningMessages,
+        stream: true,
+      });
+
+      for await (const event of stream) {
+        if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+          const text = (event.delta as { type: "text_delta"; text: string }).text;
+          morningReply += text;
+          sendMorningSSE({ text });
+        }
+      }
+
+      sendMorningSSE({ done: true });
+      req.log.info({ chars: morningReply.length }, "Morning briefing streamed successfully");
     } catch (err) {
-      req.log.warn({ err }, "Morning data fetch failed, continuing without it");
+      morningError = true;
+      req.log.error({ err }, "Morning briefing generation error");
+      sendMorningSSE({ error: true, reply: "I'm sorry, David — something went wrong with your morning briefing. Please try again in a moment." });
+    } finally {
+      clearInterval(heartbeatTimer);
     }
+
+    res.end();
+
+    if (morningReply && !morningError) {
+      setCachedBriefing(sessionUserName, morningReply);
+      req.log.info({ chars: morningReply.length }, "Morning briefing cached for next request");
+
+      extractRecommendationsFromResponse(morningReply)
+        .then(async (recs) => {
+          if (recs.length > 0) {
+            await saveRecommendations(recs);
+          }
+        })
+        .catch(() => {});
+    }
+
+    return; // Morning greeting fully handled — skip generic handler below
   }
 
   if (isSportsRequest) {
