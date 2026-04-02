@@ -129,6 +129,7 @@ import {
   buildSundaySummaryBlock,
 } from "../sundaySummary/sundaySummaryManager.js";
 import { validateSession } from "../auth/sessionAuth.js";
+import { getCachedBriefing, setCachedBriefing } from "../morning/briefingCache.js";
 
 const router: IRouter = Router();
 
@@ -660,6 +661,20 @@ router.post("/chat", async (req, res) => {
   const isSusanRelated = !isMorningGreeting && SUSAN_PATTERN.test(message);
 
   if (isMorningGreeting) {
+    // ── Fast path: serve from pre-generated cache (instant, no Claude call) ──
+    const cachedBriefing = getCachedBriefing(sessionUserName);
+    if (cachedBriefing) {
+      req.log.info({ chars: cachedBriefing.length }, "Serving morning briefing from cache — instant");
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      res.setHeader("X-Accel-Buffering", "no");
+      res.write(`data: ${JSON.stringify({ text: cachedBriefing })}\n\n`);
+      res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+      res.end();
+      return;
+    }
+
     try {
       const watchedShowsMorning = await getWatchedShows().catch(() => []);
       const watchedIdsMorning = watchedShowsMorning.filter((s) => s.tvmazeId).map((s) => s.tvmazeId!);
@@ -670,8 +685,8 @@ router.post("/chat", async (req, res) => {
       const isPickleballMorning = isTodayPickleballDay();
 
       const [dallas, knoxville, emails, events, lastNightNotes, newsBlock, yesterdayEps, todayEps, morningMeds, medsAlreadyTaken, sportsScores, upcomingBills, marketsData, upcomingDates, sundayData, pendingFollowUps, kneeIssueRecent] = await Promise.all([
-        fetchCityWeather("Dallas", 32.7767, -96.7970, "America/Chicago"),
-        fetchCityWeather("Knoxville", 35.9606, -83.9207, "America/New_York"),
+        fetchCityWeather("Dallas", 32.7767, -96.7970, "America/Chicago").catch(() => null),
+        fetchCityWeather("Knoxville", 35.9606, -83.9207, "America/New_York").catch(() => null),
         fetchRecentEmails(8).catch(() => null),
         fetchTodayEvents().catch(() => null),
         getLastNightNotes().catch(() => []),
@@ -689,7 +704,9 @@ router.post("/chat", async (req, res) => {
         hasRecentKneeIssue(14).catch(() => false),
       ]);
 
-      const weatherBlock = buildContextualWeatherBlock(dallas, knoxville, now);
+      const weatherBlock = dallas && knoxville
+        ? buildContextualWeatherBlock(dallas, knoxville, now)
+        : (dallas ? `\n\n[Dallas Weather]\n${formatWeatherBlock(dallas)}` : "");
 
       const gmailBlock = emails !== null
         ? `\n\n[Gmail — unread inbox (fetched just now)]\n${formatEmailsForPrompt(emails)}` +
@@ -1582,6 +1599,12 @@ router.post("/chat", async (req, res) => {
   res.end();
 
   if (reply && !streamError) {
+    // ── Post-response: cache the morning briefing so next call is instant ──
+    if (isMorningGreeting) {
+      setCachedBriefing(sessionUserName, reply);
+      req.log.info({ chars: reply.length }, "Morning briefing generated and cached for next request");
+    }
+
     // ── Post-response: extract and save recommendations (fire-and-forget) ──
     extractRecommendationsFromResponse(reply)
       .then(async (recs) => {
