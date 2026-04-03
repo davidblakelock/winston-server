@@ -1,7 +1,6 @@
 import webpush from "web-push";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
-import { getAppUrl } from "../auth/sessionAuth.js";
 
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY ?? "";
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY ?? "";
@@ -76,17 +75,20 @@ export async function sendPushToAll(
   let sent = 0;
   let failed = 0;
 
-  const appUrl = getAppUrl();
-  const body = JSON.stringify({
+  // Do NOT include url/icon/badge from the API server domain — those would point
+  // to the wrong origin. The service worker uses self.registration.scope (the
+  // Winston frontend URL) as its fallback for all of these, which is always correct.
+  const notificationData: Record<string, unknown> = {
     title: payload.title,
     body: payload.body,
     tag: payload.tag ?? "winston",
-    icon: payload.icon ?? `${appUrl}/icon-192.png`,
-    badge: payload.badge ?? `${appUrl}/badge-72.png`,
-    url: payload.url ?? `${appUrl}/`,
     requireInteraction: payload.requireInteraction ?? false,
     silent: payload.silent ?? false,
-  });
+  };
+  if (payload.url) notificationData.url = payload.url;
+  if (payload.icon) notificationData.icon = payload.icon;
+  if (payload.badge) notificationData.badge = payload.badge;
+  const body = JSON.stringify(notificationData);
 
   await Promise.all(
     subs.map(async (sub) => {
