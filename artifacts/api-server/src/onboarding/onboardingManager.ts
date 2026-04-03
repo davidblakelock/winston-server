@@ -27,8 +27,18 @@ export interface CollectedData {
   voiceId?: string;
   voiceName?: string;
   healthNotes?: string;
-  people?: Array<{ name: string; relationship: string; city?: string }>;
-  places?: Array<{ name: string; address?: string }>;
+  // Extended profile fields
+  birthday?: string;
+  age?: number;
+  maritalStatus?: string;
+  homeAddress?: string;
+  neighborhood?: string;
+  dailyRoutine?: string;
+  dog?: { name: string; breed?: string; age?: number };
+  foodPreferences?: string[];
+  therapist?: { name: string; schedule: string; note?: string };
+  people?: Array<{ name: string; relationship: string; city?: string; details?: string; address?: string }>;
+  places?: Array<{ name: string; address?: string; notes?: string }>;
   shows?: string[];
   restaurants?: string[];
   interests?: string[];
@@ -176,38 +186,69 @@ export function buildSystemPromptFromProfile(
   const interests = rawData.interests ?? [];
   const sportsTeams = rawData.sportsTeams ?? [];
   const music = rawData.music ?? [];
+  const foodPreferences = rawData.foodPreferences ?? [];
   const healthNotes = profile.healthNotes ?? "";
+
+  // Personal details
+  const birthday = rawData.birthday ?? null;
+  const age = rawData.age ?? null;
+  const maritalStatus = rawData.maritalStatus ?? null;
+  const homeAddress = rawData.homeAddress ?? null;
+  const neighborhood = rawData.neighborhood ?? null;
+  const dailyRoutine = rawData.dailyRoutine ?? null;
+  const dog = rawData.dog ?? null;
+  const therapist = rawData.therapist ?? null;
 
   const peopleBlock = people.length
     ? people
-        .map(
-          (p) =>
-            `• ${p.name} — ${p.relationship}${p.city ? `, lives in ${p.city}` : ""}`
-        )
+        .map((p) => {
+          let line = `• ${p.name} — ${p.relationship}`;
+          if (p.city) line += `, lives in ${p.city}`;
+          if (p.address) line += ` — ${p.address}`;
+          if (p.details) line += `. ${p.details}`;
+          return line;
+        })
         .join("\n")
     : "• None specified";
 
   const placesBlock = places.length
     ? places
-        .map((p) => `• ${p.name}${p.address ? ` — ${p.address}` : ""}`)
+        .map((p) => {
+          let line = `• ${p.name}${p.address ? ` — ${p.address}` : ""}`;
+          if (p.notes) line += ` (${p.notes})`;
+          return line;
+        })
         .join("\n")
     : "• None specified";
 
   const interestsList = [
     ...(shows.length ? [`Shows: ${shows.join(", ")}`] : []),
-    ...(restaurants.length ? [`Restaurants: ${restaurants.join(", ")}`] : []),
+    ...(restaurants.length ? [`Favourite restaurants: ${restaurants.join(", ")}`] : []),
+    ...(foodPreferences.length ? [`Food preferences: ${foodPreferences.join(", ")}`] : []),
     ...(sportsTeams.length ? [`Sports teams: ${sportsTeams.join(", ")}`] : []),
     ...(music.length ? [`Music: ${music.join(", ")}`] : []),
     ...(interests.length ? [`Other interests: ${interests.join(", ")}`] : []),
   ].join("\n• ");
 
-  return `You are ${companionName} — ${userName}'s warm, sharp, and deeply trusted personal AI companion. You know ${userName}'s life well: their routines, their people, their places, and what matters to them. You speak to them like a close friend who happens to know everything — conversational, direct, never stiff or overly formal. You remember context from the conversation and build on it naturally.
+  const personalDetails = [
+    age ? `• Age: ${age}${birthday ? ` (born ${birthday})` : ""}` : "",
+    maritalStatus ? `• Marital status: ${maritalStatus}` : "",
+    homeAddress ? `• Home: ${homeAddress}${neighborhood ? ` (${neighborhood})` : ""}` : "",
+    dailyRoutine ? `• Daily routine: ${dailyRoutine}` : "",
+    dog ? `• Dog: ${dog.name}, a ${dog.age ?? "?"}-year-old ${dog.breed ?? "dog"}` : "",
+    therapist ? `• Therapist: ${therapist.name} — ${therapist.schedule}${therapist.note ? `. IMPORTANT: ${therapist.note}` : ""}` : "",
+    healthNotes ? `• Health notes: ${healthNotes}` : "",
+  ].filter(Boolean).join("\n");
 
-Keep responses concise: typically 2-4 sentences unless ${userName} clearly wants more. Never start a response with "I" as the first word. When ${userName} needs a reminder, help organizing their thoughts, or just wants to talk — you're here.
+  return `You are ${companionName} — ${userName}'s warm, sharp, and deeply trusted personal AI companion. You know ${userName}'s life inside and out: his routines, his people, his places, and what matters most to him. You speak to him like a close friend who happens to know everything — conversational, direct, never stiff or overly formal. You remember context from the conversation and build on it naturally.
+
+Keep responses concise: typically 2-4 sentences unless ${userName} clearly wants more. Never start a response with "I" as the first word. When ${userName} needs a reminder, help organising thoughts, or just wants to talk — you're here.
 
 When giving a morning briefing, naturally weave in the current weather for ${city}. Mention what ${userName} should expect for their day and give a warm personal opening.
 
 When you confirm a reminder has been set, be warm and specific: "Done — I'll remind you to [task] at [time]."
+
+IMPORTANT SCHEDULING RULE: Never suggest scheduling anything on Thursdays at 1pm — that is ${userName}'s standing therapy appointment with Scott Blair.
 
 Here is everything you know about ${userName}:
 
@@ -215,7 +256,7 @@ About ${userName}:
 • Name: ${userName}
 • Lives in: ${city}
 • Typically wakes up: ${wakeTime}
-${healthNotes ? `• Health notes: ${healthNotes}` : ""}
+${personalDetails}
 
 Your People:
 ${peopleBlock}
