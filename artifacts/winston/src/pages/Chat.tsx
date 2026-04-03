@@ -691,8 +691,10 @@ export default function Chat({ onSignOut, companionName: companionNameProp, user
     }
   }, [messagesLoaded, pendingNotification, submitText, speakReply]);
 
-  // Listen for NOTIFICATION_CLICK messages from the service worker
-  // (fallback for browsers where client.navigate isn't available)
+  // Listen for NOTIFICATION_CLICK messages from the service worker.
+  // Fired when David taps "Open Winston" and the app is already open in the background.
+  // The SW posts this message after calling client.focus() so Emma speaks the reminder
+  // without requiring any navigation — the app is already mounted and ready.
   useEffect(() => {
     const handler = (event: MessageEvent) => {
       if (event.data?.type !== "NOTIFICATION_CLICK") return;
@@ -710,6 +712,31 @@ export default function Chat({ onSignOut, companionName: companionNameProp, user
     };
     navigator.serviceWorker?.addEventListener("message", handler);
     return () => navigator.serviceWorker?.removeEventListener("message", handler);
+  }, []);
+
+  // IndexedDB fallback — reads any reminder the service worker stored before calling
+  // clients.openWindow().  Runs once on mount; only sets pendingNotification if the
+  // URL-param initialiser didn't already provide one (functional update pattern).
+  useEffect(() => {
+    try {
+      const req = indexedDB.open("winston-sw", 1);
+      req.onsuccess = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains("pending")) return;
+        const tx = db.transaction("pending", "readwrite");
+        const store = tx.objectStore("pending");
+        const getReq = store.get("reminder");
+        getReq.onsuccess = () => {
+          const pending = getReq.result as { reminderText?: string } | undefined;
+          if (pending?.reminderText) {
+            store.delete("reminder"); // consume immediately so it never fires twice
+            const text = pending.reminderText;
+            // Only set if URL params didn't already give us a pendingNotification
+            setPendingNotification((prev) => prev ?? { type: "reminder", text });
+          }
+        };
+      };
+    } catch { /* IDB unavailable in this browser — ignore */ }
   }, []);
 
   const fireReminderAlert = useCallback(
