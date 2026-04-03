@@ -1,7 +1,7 @@
 -- ============================================================
--- WINSTON — SUPABASE SCHEMA MIGRATION
--- Generated: 2026-04-03T17:38:44.762Z
--- STEP 1: Run this in Supabase Dashboard → SQL Editor → New Query
+-- WINSTON — SUPABASE MIGRATION
+-- Run this entire script in: Supabase → SQL Editor → New Query
+-- Generated: 2026-04-03T18:42:53.466Z
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS public.app_sessions (
@@ -336,78 +336,187 @@ CREATE UNIQUE INDEX push_subscriptions_endpoint_idx ON public.push_subscriptions
 CREATE INDEX recommendations_user_followed ON public.recommendations USING btree (user_name, followed_up);
 CREATE UNIQUE INDEX watched_shows_user_show ON public.watched_shows USING btree (user_name, show_name);
 
--- Row-Level Security (service role has full access)
+-- Row-Level Security
 ALTER TABLE public.app_sessions ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN CREATE POLICY "service_role_all" ON public.app_sessions TO service_role USING (true) WITH CHECK (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "service_role_all" ON public.app_sessions TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE public.chat_messages ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN CREATE POLICY "service_role_all" ON public.chat_messages TO service_role USING (true) WITH CHECK (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "service_role_all" ON public.chat_messages TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE public.conversation_memories ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN CREATE POLICY "service_role_all" ON public.conversation_memories TO service_role USING (true) WITH CHECK (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "service_role_all" ON public.conversation_memories TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE public.conversation_starter_log ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN CREATE POLICY "service_role_all" ON public.conversation_starter_log TO service_role USING (true) WITH CHECK (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "service_role_all" ON public.conversation_starter_log TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE public.date_reminder_log ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN CREATE POLICY "service_role_all" ON public.date_reminder_log TO service_role USING (true) WITH CHECK (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "service_role_all" ON public.date_reminder_log TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE public.demo_waitlist ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN CREATE POLICY "service_role_all" ON public.demo_waitlist TO service_role USING (true) WITH CHECK (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "service_role_all" ON public.demo_waitlist TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE public.departure_alert_log ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN CREATE POLICY "service_role_all" ON public.departure_alert_log TO service_role USING (true) WITH CHECK (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "service_role_all" ON public.departure_alert_log TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE public.financial_obligations ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN CREATE POLICY "service_role_all" ON public.financial_obligations TO service_role USING (true) WITH CHECK (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "service_role_all" ON public.financial_obligations TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE public.google_auth ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN CREATE POLICY "service_role_all" ON public.google_auth TO service_role USING (true) WITH CHECK (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "service_role_all" ON public.google_auth TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE public.google_users ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN CREATE POLICY "service_role_all" ON public.google_users TO service_role USING (true) WITH CHECK (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "service_role_all" ON public.google_users TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE public.important_dates ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN CREATE POLICY "service_role_all" ON public.important_dates TO service_role USING (true) WITH CHECK (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "service_role_all" ON public.important_dates TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE public.journal_entries ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN CREATE POLICY "service_role_all" ON public.journal_entries TO service_role USING (true) WITH CHECK (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "service_role_all" ON public.journal_entries TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE public.list_items ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN CREATE POLICY "service_role_all" ON public.list_items TO service_role USING (true) WITH CHECK (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "service_role_all" ON public.list_items TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE public.magic_link_tokens ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN CREATE POLICY "service_role_all" ON public.magic_link_tokens TO service_role USING (true) WITH CHECK (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "service_role_all" ON public.magic_link_tokens TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE public.medication_logs ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN CREATE POLICY "service_role_all" ON public.medication_logs TO service_role USING (true) WITH CHECK (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "service_role_all" ON public.medication_logs TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE public.medications ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN CREATE POLICY "service_role_all" ON public.medications TO service_role USING (true) WITH CHECK (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "service_role_all" ON public.medications TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE public.olivia_contacts ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN CREATE POLICY "service_role_all" ON public.olivia_contacts TO service_role USING (true) WITH CHECK (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "service_role_all" ON public.olivia_contacts TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE public.pickleball_sessions ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN CREATE POLICY "service_role_all" ON public.pickleball_sessions TO service_role USING (true) WITH CHECK (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "service_role_all" ON public.pickleball_sessions TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE public.profile_items ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN CREATE POLICY "service_role_all" ON public.profile_items TO service_role USING (true) WITH CHECK (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "service_role_all" ON public.profile_items TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE public.push_subscriptions ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN CREATE POLICY "service_role_all" ON public.push_subscriptions TO service_role USING (true) WITH CHECK (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "service_role_all" ON public.push_subscriptions TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE public.recommendations ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN CREATE POLICY "service_role_all" ON public.recommendations TO service_role USING (true) WITH CHECK (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "service_role_all" ON public.recommendations TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE public.reminders ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN CREATE POLICY "service_role_all" ON public.reminders TO service_role USING (true) WITH CHECK (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "service_role_all" ON public.reminders TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE public.sleep_reminder_log ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN CREATE POLICY "service_role_all" ON public.sleep_reminder_log TO service_role USING (true) WITH CHECK (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "service_role_all" ON public.sleep_reminder_log TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE public.stories ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN CREATE POLICY "service_role_all" ON public.stories TO service_role USING (true) WITH CHECK (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "service_role_all" ON public.stories TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE public.story_questions ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN CREATE POLICY "service_role_all" ON public.story_questions TO service_role USING (true) WITH CHECK (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "service_role_all" ON public.story_questions TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE public.story_queue ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN CREATE POLICY "service_role_all" ON public.story_queue TO service_role USING (true) WITH CHECK (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "service_role_all" ON public.story_queue TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE public.story_state ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN CREATE POLICY "service_role_all" ON public.story_state TO service_role USING (true) WITH CHECK (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "service_role_all" ON public.story_state TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE public.user_profiles ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN CREATE POLICY "service_role_all" ON public.user_profiles TO service_role USING (true) WITH CHECK (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "service_role_all" ON public.user_profiles TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE public.watched_shows ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN CREATE POLICY "service_role_all" ON public.watched_shows TO service_role USING (true) WITH CHECK (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "service_role_all" ON public.watched_shows TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE public.winddown_notes ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN CREATE POLICY "service_role_all" ON public.winddown_notes TO service_role USING (true) WITH CHECK (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "service_role_all" ON public.winddown_notes TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE public.winddown_settings ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN CREATE POLICY "service_role_all" ON public.winddown_settings TO service_role USING (true) WITH CHECK (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "service_role_all" ON public.winddown_settings TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE public.winddown_state ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN CREATE POLICY "service_role_all" ON public.winddown_state TO service_role USING (true) WITH CHECK (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "service_role_all" ON public.winddown_state TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- ============================================================
--- DATA MIGRATION: existing data from Replit DB
+-- exec_sql: Enables Winston's REST adapter to run raw SQL
+-- via the Supabase service key without a direct TCP connection
+-- ============================================================
+CREATE OR REPLACE FUNCTION public.exec_sql(sql_text text)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  result jsonb;
+  affected integer;
+BEGIN
+  -- SELECT / WITH / any query with RETURNING → return rows as JSON array
+  IF lower(trim(sql_text)) ~ '^(select|with|explain)'
+     OR sql_text ~* '\mreturning\M' THEN
+    BEGIN
+      EXECUTE format(
+        'SELECT COALESCE(json_agg(r), ''[]''::json) FROM (%s) r',
+        sql_text
+      ) INTO result;
+      RETURN jsonb_build_object(
+        'rows', COALESCE(result, '[]'::jsonb),
+        'rowCount', jsonb_array_length(COALESCE(result, '[]'::jsonb))
+      );
+    EXCEPTION WHEN OTHERS THEN
+      RAISE EXCEPTION 'exec_sql SELECT error: % — SQL: %', SQLERRM, sql_text;
+    END;
+  ELSE
+    -- INSERT / UPDATE / DELETE without RETURNING → return rowCount
+    BEGIN
+      EXECUTE sql_text;
+      GET DIAGNOSTICS affected = ROW_COUNT;
+      RETURN jsonb_build_object('rows', '[]'::jsonb, 'rowCount', to_jsonb(affected));
+    EXCEPTION WHEN OTHERS THEN
+      RAISE EXCEPTION 'exec_sql DML error: % — SQL: %', SQLERRM, sql_text;
+    END;
+  END IF;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.exec_sql(text) TO service_role;
+GRANT EXECUTE ON FUNCTION public.exec_sql(text) TO authenticated;
+
+-- ============================================================
+-- DATA: existing records migrated from Replit PostgreSQL
 -- ============================================================
 
--- app_sessions: 15 rows
-ALTER TABLE public.app_sessions DISABLE TRIGGER ALL;
+-- app_sessions (15 rows)
+ALTER TABLE public.app_sessions OVERRIDING SYSTEM VALUE;
 INSERT INTO public.app_sessions (user_name, email, token, expires_at, created_at, google_id, picture) VALUES ('David', 'davidblakelock.winston@gmail.com', 'e9f64e7126a5a200a70ec5c6097f5638f0e1423309b0759fb76080d0dc838132', '2026-04-30T20:44:47.495Z', '2026-03-31T20:44:47.495Z', NULL, NULL) ON CONFLICT DO NOTHING;
 INSERT INTO public.app_sessions (user_name, email, token, expires_at, created_at, google_id, picture) VALUES ('David', 'davidblakelock@gmail.com', 'cc273f43db80e000fdf6876a72a6ee30f03d511ba653d0b36e3b0b120240a292', '2026-05-01T15:26:18.958Z', '2026-04-01T15:26:23.198Z', NULL, NULL) ON CONFLICT DO NOTHING;
 INSERT INTO public.app_sessions (user_name, email, token, expires_at, created_at, google_id, picture) VALUES ('testuser', 'testuser@example.com', '2bc4b79cec8b08c20ca37bbc94ae0ed83e9293a18693462f00f30eada170046f', '2026-05-01T15:58:19.527Z', '2026-04-01T15:58:19.528Z', NULL, NULL) ON CONFLICT DO NOTHING;
@@ -423,10 +532,9 @@ INSERT INTO public.app_sessions (user_name, email, token, expires_at, created_at
 INSERT INTO public.app_sessions (user_name, email, token, expires_at, created_at, google_id, picture) VALUES ('David', 'davidblakelock.winston@gmail.com', '040fa4346abe0baf791d407de576eb091f33ba9c1234bc7216fe5e9ee15ccf0f', '2026-05-01T18:38:46.420Z', '2026-04-01T18:38:46.420Z', NULL, NULL) ON CONFLICT DO NOTHING;
 INSERT INTO public.app_sessions (user_name, email, token, expires_at, created_at, google_id, picture) VALUES ('David', 'davidblakelock.winston@gmail.com', 'b1918b88729c6b096074e59c433343b4465c68aeb91a777c69588cd387abe090', '2026-05-01T18:51:16.023Z', '2026-04-01T18:51:16.023Z', NULL, NULL) ON CONFLICT DO NOTHING;
 INSERT INTO public.app_sessions (user_name, email, token, expires_at, created_at, google_id, picture) VALUES ('David', 'davidblakelock.winston@gmail.com', '5e1d042b0bfe4ba9d4999f7f2e10c46a3159def8ca41c32e077400e9091ef381', '2026-05-01T21:34:08.514Z', '2026-04-01T21:34:08.514Z', NULL, NULL) ON CONFLICT DO NOTHING;
-ALTER TABLE public.app_sessions ENABLE TRIGGER ALL;
 
--- chat_messages: 24 rows
-ALTER TABLE public.chat_messages DISABLE TRIGGER ALL;
+-- chat_messages (24 rows)
+ALTER TABLE public.chat_messages OVERRIDING SYSTEM VALUE;
 INSERT INTO public.chat_messages (user_name, role, content, audio_base64, mime_type, created_at) VALUES ('David', 'assistant', 'Good morning, David! It''s a beautiful Wednesday — 73 and overcast right now, but it''s going to warm up to 87 later, so make sure you''re hydrating well at pickleball this morning.
 
 Your schedule is wide open today, which gives you plenty of breathing room. The Rangers had a nice win last night, beating Baltimore 8-5 — Gore looked sharp in his debut, holding the Phillies hitless until the sixth. They''re back at it tonight in Baltimore.
@@ -519,45 +627,38 @@ INSERT INTO public.chat_messages (user_name, role, content, audio_base64, mime_t
 • **Rent ($2,950)** — due April 30th
 
 Any other bills you''d like me to track for you?', NULL, NULL, '2026-04-01T21:39:11.970Z') ON CONFLICT DO NOTHING;
-ALTER TABLE public.chat_messages ENABLE TRIGGER ALL;
 
--- conversation_memories: 2 rows
-ALTER TABLE public.conversation_memories DISABLE TRIGGER ALL;
+-- conversation_memories (2 rows)
+ALTER TABLE public.conversation_memories OVERRIDING SYSTEM VALUE;
 INSERT INTO public.conversation_memories (conversation_date, summary, message_count, created_at, updated_at) VALUES ('2026-03-31T00:00:00.000Z', '**Memory Note:**
 
 David''s knee felt better after resting — had been sore from pickleball the day before. No pickleball or running this morning; spent time working on Emma''s features instead (email integration, stories for Olivia, shopping list, adding places). Mentioned possibly trying a new Italian place on Knox with Susan the previous evening — worth following up on how dinner went. Added Lavendou Bistro (19009 Preston Road) to favorite restaurants — described it as "an old favorite." Also added his home address (6345 Diamond Head Circle, Dallas 75225). Asked to be notified when the new Portillo''s in Trinity Groves announces its opening date.', 23, '2026-03-31T16:20:40.419Z', '2026-03-31T16:39:45.489Z') ON CONFLICT DO NOTHING;
 INSERT INTO public.conversation_memories (conversation_date, summary, message_count, created_at, updated_at) VALUES ('2026-04-01T00:00:00.000Z', 'David is having dinner with Olivia at Casa Brasa tomorrow (Thursday) at 5:45 PM. Olivia is in town visiting — worth asking how the dinner went and what they did together during her visit. Two suspicious emails flagged: a fake Google/PayPal security alert and one from Impact Activities asking for credit card info — David was advised not to click links. Knee status unclear — he rested it the day before but didn''t say how it''s feeling today or whether he played pickleball. Follow up on knee and whether he got out to play.', 11, '2026-04-01T19:23:03.147Z', '2026-04-01T19:23:06.344Z') ON CONFLICT DO NOTHING;
-ALTER TABLE public.conversation_memories ENABLE TRIGGER ALL;
 
--- conversation_starter_log: 1 rows
-ALTER TABLE public.conversation_starter_log DISABLE TRIGGER ALL;
+-- conversation_starter_log (1 rows)
+ALTER TABLE public.conversation_starter_log OVERRIDING SYSTEM VALUE;
 INSERT INTO public.conversation_starter_log (user_name, starter_date, count, last_sent_at) VALUES ('David', '2026-04-03T00:00:00.000Z', 1, '2026-04-03T16:00:02.274Z') ON CONFLICT DO NOTHING;
-ALTER TABLE public.conversation_starter_log ENABLE TRIGGER ALL;
 
--- demo_waitlist: 1 rows
-ALTER TABLE public.demo_waitlist DISABLE TRIGGER ALL;
+-- demo_waitlist (1 rows)
+ALTER TABLE public.demo_waitlist OVERRIDING SYSTEM VALUE;
 INSERT INTO public.demo_waitlist (email, source, submitted_at) VALUES ('test@example.com', 'demo', '2026-04-01T20:55:16.532Z') ON CONFLICT DO NOTHING;
-ALTER TABLE public.demo_waitlist ENABLE TRIGGER ALL;
 
--- financial_obligations: 2 rows
-ALTER TABLE public.financial_obligations DISABLE TRIGGER ALL;
+-- financial_obligations (2 rows)
+ALTER TABLE public.financial_obligations OVERRIDING SYSTEM VALUE;
 INSERT INTO public.financial_obligations (user_name, name, category, amount, frequency, due_day, due_months, reminder_lead_days, notes, active, last_reminded_date, created_at) VALUES ('David', 'Amex', 'credit_card', NULL, 'monthly', 15, NULL, 3, NULL, TRUE, NULL, '2026-04-01T14:36:35.800Z') ON CONFLICT DO NOTHING;
 INSERT INTO public.financial_obligations (user_name, name, category, amount, frequency, due_day, due_months, reminder_lead_days, notes, active, last_reminded_date, created_at) VALUES ('David', 'Rent', 'rent_mortgage', '$2950', 'monthly', 1, NULL, 3, NULL, TRUE, NULL, '2026-04-01T14:42:00.430Z') ON CONFLICT DO NOTHING;
-ALTER TABLE public.financial_obligations ENABLE TRIGGER ALL;
 
--- google_auth: 1 rows
-ALTER TABLE public.google_auth DISABLE TRIGGER ALL;
-INSERT INTO public.google_auth (user_name, email, access_token, refresh_token, token_expiry, scope, created_at, updated_at) VALUES ('David', 'davidblakelock.winston@gmail.com', 'ya29.a0Aa7MYipM6bSHGNdqkR4ikfTFw3pE7Mlit4M8QkbBx6mHZIoYvdhieIoLJPCza31ncgoSdEr9awPsvac6GevzVFzsdQbrZxSIgPBBmFYqj7UPFJRzGvrQPwQOLqcB5LG9dp9tY1jMSewmH-1PogkfKKjUnP9LlbeN5h5hUpFS0_bm3wTg9dYInl2Jh8P4iSxnN2V1Ml-xaCgYKAecSARcSFQHGX2MillXySB3EKmvoOlIgw6ZnUw0207', '1//06_ONrA0JR7GQCgYIARAAGAYSNwF-L9Irfq8SztBFGYWrG8SOYY2RNqfYUAlLzE-4aTkQbSISNDDZomDArtfLfZCM-zXeGVsL3EA', '2026-04-03T18:25:59.088Z', 'https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar', '2026-03-31T19:33:33.487Z', '2026-04-03T17:26:00.090Z') ON CONFLICT DO NOTHING;
-ALTER TABLE public.google_auth ENABLE TRIGGER ALL;
+-- google_auth (1 rows)
+ALTER TABLE public.google_auth OVERRIDING SYSTEM VALUE;
+INSERT INTO public.google_auth (user_name, email, access_token, refresh_token, token_expiry, scope, created_at, updated_at) VALUES ('David', 'davidblakelock.winston@gmail.com', 'ya29.a0Aa7MYirdWJ43e97phdpzOnBBDfXqCaeABpxPRxdv96ywhoMDCZKWFvToE_XPKPtwNO5BTwnuJ2sEaXTF_A7QQZUFHIu_rlyO8B7h7Ky5c2A7c2NAS2diXZbHbTY4KapSSCXUhk28x4on_f-TuKsNWBEHdrh8qq-rHALKhx1lhXjarSsYFQvjWWafXtG55rr2FouOha-0aCgYKAc0SARcSFQHGX2Mi_J9iXmpJwVGfqZSyyr0C8w0207', '1//06_ONrA0JR7GQCgYIARAAGAYSNwF-L9Irfq8SztBFGYWrG8SOYY2RNqfYUAlLzE-4aTkQbSISNDDZomDArtfLfZCM-zXeGVsL3EA', '2026-04-03T19:37:17.964Z', 'https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar', '2026-03-31T19:33:33.487Z', '2026-04-03T18:37:18.965Z') ON CONFLICT DO NOTHING;
 
--- list_items: 2 rows
-ALTER TABLE public.list_items DISABLE TRIGGER ALL;
+-- list_items (2 rows)
+ALTER TABLE public.list_items OVERRIDING SYSTEM VALUE;
 INSERT INTO public.list_items (user_name, list_name, item_text, created_at) VALUES ('David', 'to do', 'call the plumber', '2026-03-31T12:39:32.836Z') ON CONFLICT DO NOTHING;
 INSERT INTO public.list_items (user_name, list_name, item_text, created_at) VALUES ('David', 'to do', 'call Erik Blackstone', '2026-03-31T12:42:29.379Z') ON CONFLICT DO NOTHING;
-ALTER TABLE public.list_items ENABLE TRIGGER ALL;
 
--- magic_link_tokens: 26 rows
-ALTER TABLE public.magic_link_tokens DISABLE TRIGGER ALL;
+-- magic_link_tokens (26 rows)
+ALTER TABLE public.magic_link_tokens OVERRIDING SYSTEM VALUE;
 INSERT INTO public.magic_link_tokens (email, token, expires_at, used_at, created_at) VALUES ('davidblakelock.winston@gmail.com', '7d3bac0c2d0f83e447403638bd5002ca3d867881ab877f4ac6ff9e2dedc2eafc', '2026-03-31T21:14:47.310Z', '2026-03-31T20:44:47.492Z', '2026-03-31T20:44:47.310Z') ON CONFLICT DO NOTHING;
 INSERT INTO public.magic_link_tokens (email, token, expires_at, used_at, created_at) VALUES ('davidblakelock.winston@gmail.com', '1f5a51909aa7e30bda704c828e6912fddf1524f914aa92a30774d1f79586ecde', '2026-03-31T21:15:44.839Z', '2026-03-31T20:46:44.805Z', '2026-03-31T20:45:44.839Z') ON CONFLICT DO NOTHING;
 INSERT INTO public.magic_link_tokens (email, token, expires_at, used_at, created_at) VALUES ('davidblakelock.winston@gmail.com', '584606520461affb4a85b004846be812f6b5141342b68a4f87fcd02a0f0b2a7a', '2026-03-31T21:16:44.810Z', '2026-03-31T20:46:53.806Z', '2026-03-31T20:46:44.810Z') ON CONFLICT DO NOTHING;
@@ -584,34 +685,29 @@ INSERT INTO public.magic_link_tokens (email, token, expires_at, used_at, created
 INSERT INTO public.magic_link_tokens (email, token, expires_at, used_at, created_at) VALUES ('davidblakelock.winston@gmail.com', '67f4fdfd5e88554a23f362ef6cb2a22c739c65221594777d43da331dbf041cf9', '2026-04-01T21:07:25.526Z', '2026-04-01T20:37:27.367Z', '2026-04-01T20:37:25.527Z') ON CONFLICT DO NOTHING;
 INSERT INTO public.magic_link_tokens (email, token, expires_at, used_at, created_at) VALUES ('davidblakelock.winston@gmail.com', 'a179dbda55d2d04c720ec0a2e9694b6abd0f333141594b6d6b9eb9babea5ddbe', '2026-04-01T22:04:06.546Z', '2026-04-01T21:34:08.506Z', '2026-04-01T21:34:06.546Z') ON CONFLICT DO NOTHING;
 INSERT INTO public.magic_link_tokens (email, token, expires_at, used_at, created_at) VALUES ('davidblakelock.winston@gmail.com', '10372703386fd936c830df1dd770064922aee91d2d22bebc77b14c47ac44e869', '2026-04-01T22:48:56.199Z', '2026-04-01T22:19:06.144Z', '2026-04-01T22:18:56.199Z') ON CONFLICT DO NOTHING;
-ALTER TABLE public.magic_link_tokens ENABLE TRIGGER ALL;
 
--- medications: 3 rows
-ALTER TABLE public.medications DISABLE TRIGGER ALL;
+-- medications (3 rows)
+ALTER TABLE public.medications OVERRIDING SYSTEM VALUE;
 INSERT INTO public.medications (user_name, name, dosage, reminder_time, active, created_at) VALUES ('David', 'statin', NULL, '08:00', TRUE, '2026-03-31T19:40:34.696Z') ON CONFLICT DO NOTHING;
 INSERT INTO public.medications (user_name, name, dosage, reminder_time, active, created_at) VALUES ('David', 'Meloxicam', NULL, '08:00', TRUE, '2026-03-31T19:40:34.705Z') ON CONFLICT DO NOTHING;
 INSERT INTO public.medications (user_name, name, dosage, reminder_time, active, created_at) VALUES ('David', 'Vitamin D', '2000iu', '08:00', FALSE, '2026-03-31T19:43:27.035Z') ON CONFLICT DO NOTHING;
-ALTER TABLE public.medications ENABLE TRIGGER ALL;
 
--- recommendations: 1 rows
-ALTER TABLE public.recommendations DISABLE TRIGGER ALL;
+-- recommendations (1 rows)
+ALTER TABLE public.recommendations OVERRIDING SYSTEM VALUE;
 INSERT INTO public.recommendations (user_name, type, name, context, date_recommended, followed_up, followed_up_date, dismissed, created_at) VALUES ('David', 'show', 'Shrinking - The Bodyguard of Sadness', 'New episode dropped, suggested for unwinding tonight', '2026-04-01T00:00:00.000Z', FALSE, NULL, FALSE, '2026-04-01T15:00:59.928Z') ON CONFLICT DO NOTHING;
-ALTER TABLE public.recommendations ENABLE TRIGGER ALL;
 
--- reminders: 2 rows
-ALTER TABLE public.reminders DISABLE TRIGGER ALL;
+-- reminders (2 rows)
+ALTER TABLE public.reminders OVERRIDING SYSTEM VALUE;
 INSERT INTO public.reminders (user_name, reminder_text, fire_at, recurring, recurring_time, timezone, created_at, last_fired_at, status) VALUES ('David', 'take my medication', '2026-04-04T12:00:00.050Z', 'daily', '07:00', 'America/Chicago', '2026-03-30T22:27:21.468Z', '2026-04-03T12:01:00.058Z', 'pending') ON CONFLICT DO NOTHING;
 INSERT INTO public.reminders (user_name, reminder_text, fire_at, recurring, recurring_time, timezone, created_at, last_fired_at, status) VALUES ('David', 'call Olivia', '2026-03-31T01:00:00.016Z', NULL, NULL, 'America/Chicago', '2026-03-30T22:26:55.030Z', '2026-03-31T01:00:00.026Z', 'fired') ON CONFLICT DO NOTHING;
-ALTER TABLE public.reminders ENABLE TRIGGER ALL;
 
--- stories: 2 rows
-ALTER TABLE public.stories DISABLE TRIGGER ALL;
+-- stories (2 rows)
+ALTER TABLE public.stories OVERRIDING SYSTEM VALUE;
 INSERT INTO public.stories (prompt_question, response, captured_at, question_id, category) VALUES ('What do you want Olivia to know about you that she might never think to ask?', 'Olivia, when I was younger, my brother and I used to build things. We built a go-kart out of wood and...', '2026-03-31T16:05:46.366Z', NULL, NULL) ON CONFLICT DO NOTHING;
 INSERT INTO public.stories (prompt_question, response, captured_at, question_id, category) VALUES ('What do you wish you had said to someone you''ve lost?', 'My knee is still a bit sore from pickleball this morning. Thinking about trying that new Italian place on Knox tonight with Susan', '2026-03-31T16:21:49.798Z', NULL, NULL) ON CONFLICT DO NOTHING;
-ALTER TABLE public.stories ENABLE TRIGGER ALL;
 
--- story_questions: 121 rows
-ALTER TABLE public.story_questions DISABLE TRIGGER ALL;
+-- story_questions (121 rows)
+ALTER TABLE public.story_questions OVERRIDING SYSTEM VALUE;
 INSERT INTO public.story_questions (question, category, created_at) VALUES ('What was your neighborhood like growing up?', 'Childhood Memories', '2026-04-01T20:43:37.227Z') ON CONFLICT DO NOTHING;
 INSERT INTO public.story_questions (question, category, created_at) VALUES ('What did your childhood home look like — describe it in detail?', 'Childhood Memories', '2026-04-01T20:43:37.227Z') ON CONFLICT DO NOTHING;
 INSERT INTO public.story_questions (question, category, created_at) VALUES ('What was your favorite hiding spot as a kid?', 'Childhood Memories', '2026-04-01T20:43:37.227Z') ON CONFLICT DO NOTHING;
@@ -733,10 +829,9 @@ INSERT INTO public.story_questions (question, category, created_at) VALUES ('Wha
 INSERT INTO public.story_questions (question, category, created_at) VALUES ('Tell me about the first computer you ever used?', 'Technology and the Future', '2026-04-01T20:43:37.227Z') ON CONFLICT DO NOTHING;
 INSERT INTO public.story_questions (question, category, created_at) VALUES ('What has technology given us that you are most grateful for?', 'Technology and the Future', '2026-04-01T20:43:37.227Z') ON CONFLICT DO NOTHING;
 INSERT INTO public.story_questions (question, category, created_at) VALUES ('What has technology taken away that you miss?', 'Technology and the Future', '2026-04-01T20:43:37.227Z') ON CONFLICT DO NOTHING;
-ALTER TABLE public.story_questions ENABLE TRIGGER ALL;
 
--- story_queue: 121 rows
-ALTER TABLE public.story_queue DISABLE TRIGGER ALL;
+-- story_queue (121 rows)
+ALTER TABLE public.story_queue OVERRIDING SYSTEM VALUE;
 INSERT INTO public.story_queue (question_id, cycle_num, position, asked_at) VALUES (54, 1, 1, NULL) ON CONFLICT DO NOTHING;
 INSERT INTO public.story_queue (question_id, cycle_num, position, asked_at) VALUES (53, 1, 2, NULL) ON CONFLICT DO NOTHING;
 INSERT INTO public.story_queue (question_id, cycle_num, position, asked_at) VALUES (64, 1, 3, NULL) ON CONFLICT DO NOTHING;
@@ -858,13 +953,12 @@ INSERT INTO public.story_queue (question_id, cycle_num, position, asked_at) VALU
 INSERT INTO public.story_queue (question_id, cycle_num, position, asked_at) VALUES (85, 1, 119, NULL) ON CONFLICT DO NOTHING;
 INSERT INTO public.story_queue (question_id, cycle_num, position, asked_at) VALUES (23, 1, 120, NULL) ON CONFLICT DO NOTHING;
 INSERT INTO public.story_queue (question_id, cycle_num, position, asked_at) VALUES (65, 1, 121, NULL) ON CONFLICT DO NOTHING;
-ALTER TABLE public.story_queue ENABLE TRIGGER ALL;
 
--- story_state: 1 rows
+-- story_state (1 rows)
 INSERT INTO public.story_state (id, pending_prompt, prompt_sent_at, pending_question_id, current_cycle) VALUES (1, NULL, NULL, NULL, 1) ON CONFLICT DO NOTHING;
 
--- user_profiles: 7 rows
-ALTER TABLE public.user_profiles DISABLE TRIGGER ALL;
+-- user_profiles (7 rows)
+ALTER TABLE public.user_profiles OVERRIDING SYSTEM VALUE;
 INSERT INTO public.user_profiles (name, city, latitude, longitude, timezone, wake_time, voice_id, health_notes, raw_data, onboarding_completed, created_at, user_name, companion_name) VALUES (NULL, NULL, NULL, NULL, NULL, NULL, '9BWtsMINqrJLrRacOk9x', NULL, '{"voiceId":"9BWtsMINqrJLrRacOk9x","voiceName":"Aria","companionName":"Scarlett"}', TRUE, '2026-04-01T18:52:12.278Z', 'davidblakelock2', 'Scarlett') ON CONFLICT DO NOTHING;
 INSERT INTO public.user_profiles (name, city, latitude, longitude, timezone, wake_time, voice_id, health_notes, raw_data, onboarding_completed, created_at, user_name, companion_name) VALUES (NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '{}', TRUE, '2026-04-01T18:58:42.586Z', 'davidblakelock01', NULL) ON CONFLICT DO NOTHING;
 INSERT INTO public.user_profiles (name, city, latitude, longitude, timezone, wake_time, voice_id, health_notes, raw_data, onboarding_completed, created_at, user_name, companion_name) VALUES ('David', 'Dallas', NULL, NULL, NULL, '06:00', NULL, NULL, '{"city":"Dallas","name":"David","wakeTime":"06:00"}', TRUE, '2026-04-01T16:15:04.084Z', 'davidblakelock', NULL) ON CONFLICT DO NOTHING;
@@ -872,23 +966,36 @@ INSERT INTO public.user_profiles (name, city, latitude, longitude, timezone, wak
 INSERT INTO public.user_profiles (name, city, latitude, longitude, timezone, wake_time, voice_id, health_notes, raw_data, onboarding_completed, created_at, user_name, companion_name) VALUES ('David', 'Dallas', NULL, NULL, NULL, '06:00', 'XB0fDUnXU5powFXDhCwa', 'Daughter Olivia studies international business at UT Knoxville, loves running, yoga, cooking, and her sorority', '{"city":"Dallas","name":"David","music":["classic rock from the 60s and 70s","classic jazz"],"shows":["Shrinking","Friends & Neighbors","Lincoln Lawyer"],"people":[{"city":"Knoxville","name":"Olivia","relationship":"daughter"},{"city":null,"name":"David Bonnet","relationship":"doctor"},{"city":null,"name":"Susan Smart","relationship":"girlfriend"}],"places":[{"name":"Home","address":"6345 Diamond Head Circle, Dallas Texas 75225"},{"name":"Dr. David Bonnet","address":"403 W. Campbell Road, Richardson Texas"},{"name":"Moody YMCA","address":"6000 Preston Road, Dallas Texas 75205"},{"name":"Semones YMCA","address":"4332 Northaven Road, Dallas Texas 75229"}],"wakeTime":"06:00","interests":["pickleball","woodworking","tinkering on old cars","boats","running","cooking","stock market","global politics","technology"],"healthNotes":"Daughter Olivia studies international business at UT Knoxville, loves running, yoga, cooking, and her sorority","restaurants":["Louies","Chelsea Corner","The Mercury","Hillstone","Sensei","Rex''s Seafood","The Lounge Here","Kellers Drive In"],"sportsTeams":["Rangers","Cowboys"]}', TRUE, '2026-03-31T17:14:25.041Z', 'David', 'Emma Peel') ON CONFLICT DO NOTHING;
 INSERT INTO public.user_profiles (name, city, latitude, longitude, timezone, wake_time, voice_id, health_notes, raw_data, onboarding_completed, created_at, user_name, companion_name) VALUES (NULL, NULL, NULL, NULL, NULL, NULL, 'XB0fDUnXU5powFXDhCwa', NULL, '{"voiceId":"XB0fDUnXU5powFXDhCwa","voiceName":"Charlotte","companionName":"Emma"}', FALSE, '2026-04-01T18:29:29.230Z', 'testvoiceuser', 'Emma') ON CONFLICT DO NOTHING;
 INSERT INTO public.user_profiles (name, city, latitude, longitude, timezone, wake_time, voice_id, health_notes, raw_data, onboarding_completed, created_at, user_name, companion_name) VALUES (NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '{"companionName":"David"}', TRUE, '2026-04-01T21:05:50.058Z', 'asylumii', 'David') ON CONFLICT DO NOTHING;
-ALTER TABLE public.user_profiles ENABLE TRIGGER ALL;
 
--- watched_shows: 4 rows
-ALTER TABLE public.watched_shows DISABLE TRIGGER ALL;
+-- watched_shows (4 rows)
+ALTER TABLE public.watched_shows OVERRIDING SYSTEM VALUE;
 INSERT INTO public.watched_shows (user_name, show_name, tvmaze_id, network, genres, status, added_at) VALUES ('David', 'Shrinking', 58323, 'Apple TV', 'Comedy', 'Running', '2026-03-31T19:23:22.671Z') ON CONFLICT DO NOTHING;
 INSERT INTO public.watched_shows (user_name, show_name, tvmaze_id, network, genres, status, added_at) VALUES ('David', 'Your Friends & Neighbors', 73484, 'Apple TV', 'Drama', 'Running', '2026-03-31T19:23:22.847Z') ON CONFLICT DO NOTHING;
 INSERT INTO public.watched_shows (user_name, show_name, tvmaze_id, network, genres, status, added_at) VALUES ('David', 'The Lincoln Lawyer', 52910, 'Netflix', 'Drama, Crime, Legal', 'Running', '2026-03-31T19:23:23.020Z') ON CONFLICT DO NOTHING;
 INSERT INTO public.watched_shows (user_name, show_name, tvmaze_id, network, genres, status, added_at) VALUES ('David', 'give me some recommendations for new shows', NULL, NULL, NULL, NULL, '2026-03-31T19:27:30.495Z') ON CONFLICT DO NOTHING;
-ALTER TABLE public.watched_shows ENABLE TRIGGER ALL;
 
--- winddown_settings: 1 rows
-ALTER TABLE public.winddown_settings DISABLE TRIGGER ALL;
+-- winddown_settings (1 rows)
+ALTER TABLE public.winddown_settings OVERRIDING SYSTEM VALUE;
 INSERT INTO public.winddown_settings (enabled, scheduled_time, updated_at) VALUES (TRUE, '21:00', '2026-04-01T15:19:11.603Z') ON CONFLICT DO NOTHING;
-ALTER TABLE public.winddown_settings ENABLE TRIGGER ALL;
 
--- winddown_state: 2 rows
-ALTER TABLE public.winddown_state DISABLE TRIGGER ALL;
+-- winddown_state (2 rows)
+ALTER TABLE public.winddown_state OVERRIDING SYSTEM VALUE;
 INSERT INTO public.winddown_state (trigger_date, triggered_at, active, journal_offer_pending, journal_captured) VALUES ('2026-03-31T00:00:00.000Z', '2026-04-01T02:00:00.050Z', TRUE, FALSE, FALSE) ON CONFLICT DO NOTHING;
 INSERT INTO public.winddown_state (trigger_date, triggered_at, active, journal_offer_pending, journal_captured) VALUES ('2026-04-02T00:00:00.000Z', '2026-04-03T02:00:00.134Z', TRUE, FALSE, FALSE) ON CONFLICT DO NOTHING;
-ALTER TABLE public.winddown_state ENABLE TRIGGER ALL;
+
+-- Reset identity sequences after data migration
+DO $$
+DECLARE
+  r RECORD;
+BEGIN
+  FOR r IN
+    SELECT s.relname AS seq_name, t.relname AS tbl_name, a.attname AS col_name
+    FROM pg_class s
+    JOIN pg_depend d ON d.objid = s.oid
+    JOIN pg_class t ON t.oid = d.refobjid
+    JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = d.refobjsubid
+    WHERE s.relkind = 'S' AND d.deptype = 'i'
+  LOOP
+    EXECUTE format('SELECT setval(''%I'', COALESCE((SELECT MAX(%I) FROM %I), 1))', r.seq_name, r.col_name, r.tbl_name);
+  END LOOP;
+END $$;

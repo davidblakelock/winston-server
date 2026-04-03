@@ -1,34 +1,147 @@
-import pg from "pg";
+import type pg from "pg";
 
-const { Pool } = pg;
+/**
+ * Adaptive query adapter.
+ *
+ * Priority:
+ *  1. Supabase REST (via exec_sql RPC) — when SUPABASE_URL + SUPABASE_SERVICE_KEY
+ *     are set AND the exec_sql function exists in the project.
+ *  2. Replit built-in PostgreSQL (DATABASE_URL) — fallback.
+ *
+ * This lets the server keep running on the Replit DB until the migration SQL
+ * has been applied in Supabase, then switch automatically on next restart.
+ */
 
-// When SUPABASE_DB_URL is set and valid, use Supabase.
-// Otherwise fall back to Replit's built-in PostgreSQL (DATABASE_URL).
-function buildPool(): pg.Pool {
-  const supabaseUrl = process.env.SUPABASE_DB_URL;
+const SUPABASE_URL = process.env.SUPABASE_URL ?? "";
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY ?? "";
 
-  if (supabaseUrl && supabaseUrl.startsWith("postgresql://")) {
-    return new pg.Pool({
-      connectionString: supabaseUrl,
-      ssl: { rejectUnauthorized: false },
-      max: 10,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 10000,
+// Resolved once at startup by probeSupabase()
+let _useSupabase: boolean | null = null;
+
+async function probeSupabase(): Promise<boolean> {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) return false;
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/exec_sql`, {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ sql_text: "SELECT 1 AS ok" }),
+      signal: AbortSignal.timeout(8000),
     });
+    if (res.ok) {
+      const body = (await res.json()) as { rows?: unknown[] };
+      const ok = Array.isArray(body?.rows) && body.rows.length > 0;
+      if (ok) console.log("[db] Using Supabase REST via exec_sql");
+      return ok;
+    }
+    const errText = await res.text().catch(() => "");
+    if (res.status === 404 && errText.includes("exec_sql")) {
+      console.log("[db] exec_sql not found — Supabase migration not yet run. Using Replit DB.");
+    } else {
+      console.warn(`[db] Supabase probe failed (${res.status}): ${errText.slice(0, 120)}`);
+    }
+    return false;
+  } catch (e) {
+    console.warn("[db] Supabase probe error:", (e as Error).message);
+    return false;
   }
-
-  // Fallback: Replit built-in DB
-  return new pg.Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
-  });
 }
 
-export const pool = buildPool();
+// Probe once, then cache
+async function useSupabase(): Promise<boolean> {
+  if (_useSupabase === null) {
+    _useSupabase = await probeSupabase();
+  }
+  return _useSupabase;
+}
 
+// ---------- Replit DB fallback pool ----------
+let _pgPool: import("pg").Pool | null = null;
+async function getLocalPool(): Promise<import("pg").Pool> {
+  if (!_pgPool) {
+    const { default: pg } = await import("pg");
+    _pgPool = new pg.Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl:
+        process.env.NODE_ENV === "production"
+          ? { rejectUnauthorized: false }
+          : false,
+    });
+  }
+  return _pgPool;
+}
+
+// ---------- SQL param interpolation ----------
+function sqlLiteral(val: unknown): string {
+  if (val === null || val === undefined) return "NULL";
+  if (typeof val === "boolean") return val ? "TRUE" : "FALSE";
+  if (typeof val === "number") return String(val);
+  if (val instanceof Date) return `'${val.toISOString()}'`;
+  if (Array.isArray(val)) return `ARRAY[${val.map(sqlLiteral).join(",")}]`;
+  if (typeof val === "object")
+    return `'${JSON.stringify(val).replace(/'/g, "''")}'`;
+  return `'${String(val).replace(/\\/g, "\\\\").replace(/'/g, "''")}'`;
+}
+
+function interpolate(sql: string, params: unknown[]): string {
+  return sql.replace(/\$(\d+)/g, (_m, idx: string) =>
+    sqlLiteral(params[parseInt(idx, 10) - 1])
+  );
+}
+
+// ---------- REST exec_sql call ----------
+async function execViaRest<T extends pg.QueryResultRow>(
+  sql: string
+): Promise<pg.QueryResult<T>> {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/exec_sql`, {
+    method: "POST",
+    headers: {
+      apikey: SUPABASE_SERVICE_KEY,
+      Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ sql_text: sql }),
+  });
+
+  if (!res.ok) {
+    let errMsg = `HTTP ${res.status}`;
+    try {
+      const b = (await res.json()) as { message?: string };
+      errMsg = b.message ?? JSON.stringify(b);
+    } catch {
+      errMsg = await res.text().catch(() => errMsg);
+    }
+    throw new Error(
+      `Supabase exec_sql error: ${errMsg}\nSQL: ${sql.slice(0, 300)}`
+    );
+  }
+
+  const result = (await res.json()) as { rows?: T[]; rowCount?: number };
+  return {
+    rows: result.rows ?? [],
+    rowCount: result.rowCount ?? 0,
+    command: "",
+    oid: 0,
+    fields: [],
+  } as unknown as pg.QueryResult<T>;
+}
+
+// ---------- Public API ----------
 export async function query<T extends pg.QueryResultRow = pg.QueryResultRow>(
   text: string,
   params?: unknown[]
 ): Promise<pg.QueryResult<T>> {
+  if (await useSupabase()) {
+    const sql = params?.length ? interpolate(text, params) : text;
+    return execViaRest<T>(sql);
+  }
+  const pool = await getLocalPool();
   return pool.query<T>(text, params);
 }
+
+export const pool = {
+  query: query as unknown as import("pg").Pool["query"],
+};

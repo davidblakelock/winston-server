@@ -1,0 +1,15 @@
+I just checked our Supabase dashboard and there are no tables at all. This means Winston is not actually using Supabase for data storage. Everything is being stored in memory or locally which means data is lost when the server restarts and nothing syncs between devices. Please fix this completely by setting up the proper Supabase database schema and migrating all data storage to Supabase.
+Please create these tables in Supabase immediately.
+Table 1 — users: columns for id as primary key, google_id as unique, email, name, companion_name, voice_id, created_at, updated_at
+Table 2 — profiles: columns for id, user_id as foreign key, home_address, wake_time, timezone, preferences as JSON, places as JSON, interests as JSON, health as JSON, created_at, updated_at
+Table 3 — reminders: columns for id, user_id as foreign key, reminder_text, scheduled_time as timestamp with timezone, status as text defaulting to pending, is_recurring as boolean, recurrence_pattern, created_at, updated_at
+Table 4 — push_subscriptions: columns for id, user_id as foreign key, subscription_json as text, device_name, created_at
+Table 5 — stories: columns for id, user_id as foreign key, prompt_question, story_text, created_at
+Table 6 — journal_entries: columns for id, user_id as foreign key, entry_text, mood_score as integer, created_at
+Table 7 — lists: columns for id, user_id as foreign key, list_name, items as JSON, created_at, updated_at
+Table 8 — conversation_memory: columns for id, user_id as foreign key, memory_summary as text, conversation_date as date, created_at
+Table 9 — important_dates: columns for id, user_id as foreign key, person_name, date_type as text, date as text, created_at
+Table 10 — bills: columns for id, user_id as foreign key, bill_name, due_day as integer, frequency as text, amount, reminder_days_before as integer, created_at
+Table 11 — recommendations: columns for id, user_id as foreign key, recommendation_type, recommendation_text, recommended_at as timestamp, followed_up as boolean, follow_up_response, created_at
+Table 12 — shows: columns for id, user_id as foreign key, show_name, status as text, created_at
+After creating all tables please update all Winston code to read from and write to Supabase for every single piece of data. No data should ever be stored in memory, local variables, or local storage on the server. Supabase is the single source of truth for everything. Please also verify the Supabase connection is working by testing a simple insert and select operation and logging the result
