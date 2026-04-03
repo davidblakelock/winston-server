@@ -51,38 +51,29 @@ self.addEventListener("notificationclick", (event) => {
     self.clients
       .matchAll({ type: "window", includeUncontrolled: true })
       .then((clientList) => {
-        // IMPORTANT: Only consider windows that belong to THIS app's origin.
-        // Without this filter, the browser may focus a Gmail or other tab
-        // and navigate it to the Winston URL instead of opening Winston.
-        let appOrigin;
-        try {
-          appOrigin = new URL(scope).origin;
-        } catch {
-          appOrigin = null;
-        }
+        // Find any existing Winston window (same origin)
+        let appOrigin = null;
+        try { appOrigin = new URL(scope).origin; } catch {}
 
-        const winstonClients = appOrigin
-          ? clientList.filter((client) => {
-              try {
-                return new URL(client.url).origin === appOrigin;
-              } catch {
-                return false;
-              }
+        const winstonClient = appOrigin
+          ? clientList.find((c) => {
+              try { return new URL(c.url).origin === appOrigin; } catch { return false; }
             })
-          : [];
+          : null;
 
-        if (winstonClients.length > 0) {
-          const client = winstonClients[0];
-          // Navigate to the target URL (deep link for reminders/morning)
-          if ("navigate" in client) {
-            return client.navigate(targetUrl).then((c) => c && c.focus());
-          }
-          // Fallback: post a message so the app can handle navigation itself
-          client.postMessage({ type: "NOTIFICATION_CLICK", url: targetUrl });
-          return client.focus();
+        if (winstonClient) {
+          // App is already open — bring it to the foreground.
+          // Do NOT use client.navigate() — it silently fails on Safari/iOS and
+          // many Chrome environments, leaving the user with no visible response.
+          // focus() reliably brings the existing window/tab to the front.
+          return winstonClient.focus().catch(() => {
+            // focus() failed (e.g. permission denied) — open a fresh window instead
+            return self.clients.openWindow(targetUrl);
+          });
         }
 
-        // No existing Winston window — open a new one
+        // No existing Winston window — open a new one.
+        // openWindow() is the most reliable cross-browser way to show the app.
         return self.clients.openWindow(targetUrl);
       })
   );
