@@ -92,10 +92,36 @@ function interpolate(sql: string, params: unknown[]): string {
   );
 }
 
-// ---------- REST exec_sql call ----------
+// ---------- Detect DML+RETURNING so we route it correctly ----------
+// exec_sql's `FROM (%s) r` wrapper is invalid for data-modifying statements.
+// We route those through exec_dml_ret (a Supabase function that uses a proper
+// CTE wrapper: WITH __r AS (%s) SELECT … FROM __r).
+// exec_dml_ret's own definition uses only RETURN (not RETURNING) so it's
+// invisible to exec_sql's word-boundary regex and installs via the DDL branch.
+function isDmlWithReturning(sql: string): boolean {
+  const trimmed = sql.trimStart();
+  return (
+    /^(insert|update|delete)\b/i.test(trimmed) &&
+    /\breturning\b/i.test(trimmed)
+  );
+}
+
+// ---------- REST exec_sql / exec_dml_ret call ----------
 async function execViaRest<T extends pg.QueryResultRow>(
   sql: string
 ): Promise<pg.QueryResult<T>> {
+  let sqlToSend: string;
+  let isDmlRet = false;
+
+  if (isDmlWithReturning(sql)) {
+    // Escape single-quotes in the SQL string for safe embedding as a SQL literal
+    const escaped = sql.replace(/'/g, "''");
+    sqlToSend = `SELECT exec_dml_ret('${escaped}')`;
+    isDmlRet = true;
+  } else {
+    sqlToSend = sql;
+  }
+
   const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/exec_sql`, {
     method: "POST",
     headers: {
@@ -103,7 +129,7 @@ async function execViaRest<T extends pg.QueryResultRow>(
       Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ sql_text: sql }),
+    body: JSON.stringify({ sql_text: sqlToSend }),
   });
 
   if (!res.ok) {
@@ -119,7 +145,24 @@ async function execViaRest<T extends pg.QueryResultRow>(
     );
   }
 
-  const result = (await res.json()) as { rows?: T[]; rowCount?: number };
+  const raw = (await res.json()) as { rows?: unknown[]; rowCount?: number };
+
+  // When routed through exec_dml_ret, the result is wrapped one level deeper:
+  // raw.rows = [{ exec_dml_ret: { rows: T[], rowCount: number } }]
+  if (isDmlRet) {
+    type DmlRetRow = { exec_dml_ret: { rows: T[]; rowCount: number } };
+    const outer = (raw.rows ?? []) as DmlRetRow[];
+    const inner = outer[0]?.exec_dml_ret ?? { rows: [], rowCount: 0 };
+    return {
+      rows: inner.rows,
+      rowCount: inner.rowCount,
+      command: "",
+      oid: 0,
+      fields: [],
+    } as unknown as pg.QueryResult<T>;
+  }
+
+  const result = raw as { rows?: T[]; rowCount?: number };
   return {
     rows: result.rows ?? [],
     rowCount: result.rowCount ?? 0,

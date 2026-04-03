@@ -965,15 +965,27 @@ export default function Chat({ onSignOut, companionName: companionNameProp, user
             onClick={() => {
               if (notif.permission === "granted" && notif.isSubscribed) {
                 void notif.unsubscribe();
+              } else if (notif.permission === "granted" && !notif.isSubscribed) {
+                void notif.resubscribe();
               } else if (notif.permission !== "denied") {
                 void notif.requestPermission();
               }
             }}
             className={`text-muted-foreground hover:text-foreground transition-colors p-1.5 rounded-full hover:bg-white/10 border border-white/10 hover:border-white/20 ${notif.isSubscribed ? "text-primary/70" : ""}`}
-            title={notif.isSubscribed ? "Notifications on — click to disable" : "Enable push notifications"}
-            disabled={notif.isLoading}
+            title={
+              notif.isSubscribed
+                ? "Notifications on — click to disable"
+                : notif.permission === "denied"
+                ? "Notifications blocked — reset in browser settings"
+                : "Enable push notifications"
+            }
+            disabled={notif.isLoading || notif.permission === "denied"}
           >
-            {notif.isSubscribed ? <Bell className="h-4 w-4" /> : <BellOff className="h-4 w-4 opacity-50" />}
+            {notif.isLoading
+              ? <Loader2 className="h-4 w-4 animate-spin opacity-50" />
+              : notif.isSubscribed
+              ? <Bell className="h-4 w-4" />
+              : <BellOff className="h-4 w-4 opacity-50" />}
           </button>
         )}
 
@@ -1094,6 +1106,38 @@ export default function Chat({ onSignOut, companionName: companionNameProp, user
                 className="w-full bg-input border border-border rounded-xl px-4 py-3 text-foreground text-sm focus:outline-none focus:ring-1 focus:ring-primary/40 disabled:opacity-40 transition-opacity"
               />
             </div>
+
+            {/* Notification re-enable section */}
+            {isNotificationsSupported() && (
+              <div className="mb-5 pt-4 border-t border-white/10">
+                <div className="flex items-center justify-between">
+                  <div className="flex-1 min-w-0 pr-3">
+                    <p className="text-sm text-foreground">Push notifications</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {notif.permission === "denied"
+                        ? "Blocked in browser — reset in browser settings"
+                        : notif.isSubscribed
+                        ? "Active — Emma can reach you"
+                        : "Not registered — tap to enable"}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => void notif.resubscribe()}
+                    disabled={notif.isLoading || notif.permission === "denied"}
+                    className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full border transition-colors whitespace-nowrap
+                      border-primary/30 bg-primary/10 text-primary hover:bg-primary/20
+                      disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {notif.isLoading ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Bell className="h-3 w-3" />
+                    )}
+                    {notif.isSubscribed ? "Re-register" : "Enable"}
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div className="flex gap-3">
               <Button
