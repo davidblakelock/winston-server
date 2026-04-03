@@ -343,7 +343,9 @@ const EVENING_PATTERN = /\b(good\s+evening|winding\s+down|wind\s+down|heading\s+
 const REMINDER_PATTERN = /\b(remind\s+me|set\s+a?\s*reminder|reminder|don'?t\s+let\s+me\s+forget|make\s+sure\s+i|peel\s+remind|ms\.?\s*peel\s+remind)\b/i;
 const EMAIL_PATTERN = /\b(email|emails|mail|inbox|check\s+my\s+(email|mail|inbox)|any\s+(new\s+)?(emails?|messages?|mail)|what('?s|\s+is)\s+(in\s+)?(my\s+)?(email|inbox|mail)|do\s+i\s+have\s+(any\s+)?(email|mail|messages?))\b/i;
 const CALENDAR_PATTERN = /\b(calendar|schedule|agenda|appointments?|what('?s|\s+is)\s+(on\s+)?(my\s+)?(calendar|schedule|agenda|week)|(today|tomorrow|this\s+week|next\s+week)'?s?\s+(schedule|events?|appointments?|look\s+like)|do\s+i\s+have\s+anything\s+(today|tomorrow|this\s+week|scheduled|on\s+my\s+calendar)|what\s+does\s+my\s+week\s+look\s+like|what('?s|\s+is)\s+on\s+for\s+(today|tomorrow|this\s+week)|anything\s+(on\s+)?(today|tomorrow|this\s+week|my\s+calendar)|busy\s+(today|tomorrow|this\s+week))\b/i;
-const CALENDAR_CREATE_PATTERN = /\b(add\s+(?!.+\s+to\s+my\s+(?:shopping|grocery|to.?do|errand|task|watch))|create\s+(a\s+)?(new\s+)?(event|appointment|meeting|calendar)|schedule\s+(a\s+)?(meeting|appointment|lunch|dinner|call|event)|put\s+.+\s+on\s+(my\s+)?calendar|book\s+(a\s+)?(meeting|appointment)|set\s+up\s+(a\s+)?(meeting|appointment)|remind\s+me\s+to\s+(?!.{0,5}at\s+\d)|block\s+(off\s+)?time)\b/i;
+// NOTE: "remind me" phrases are intentionally excluded here — they go through the reminder system, not the calendar.
+// Reminders → push notifications (REMINDER_PATTERN). Calendar events → Google Calendar (CALENDAR_CREATE_PATTERN).
+const CALENDAR_CREATE_PATTERN = /\b(add\s+(?!.+\s+to\s+my\s+(?:shopping|grocery|to.?do|errand|task|watch))|create\s+(a\s+)?(new\s+)?(event|appointment|meeting|calendar)|schedule\s+(a\s+)?(meeting|appointment|lunch|dinner|call|event)|put\s+.+\s+on\s+(my\s+)?calendar|book\s+(a\s+)?(meeting|appointment)|set\s+up\s+(a\s+)?(meeting|appointment)|block\s+(off\s+)?time)\b/i;
 const CALENDAR_MODIFY_PATTERN = /\b(move\s+(my\s+)?(?!\w+\s+list)|reschedule\s+(my\s+)?|change\s+(my\s+)?(appointment|meeting|event|calendar)|update\s+(my\s+)?(appointment|meeting|event)|push\s+(?:back|forward)\s+(my\s+)?(appointment|meeting)|postpone\s+(my\s+)?)\b/i;
 const CALENDAR_DELETE_PATTERN = /\b(cancel\s+(my\s+)?(appointment|meeting|event|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|delete\s+(my\s+)?(appointment|meeting|event|calendar\s+event)|remove\s+(my\s+)?(appointment|meeting|event)\s+from\s+(my\s+)?calendar|clear\s+(my\s+)?(appointment|meeting|event))\b/i;
 const CALENDAR_CONFIRM_PATTERN = /^(yes|yeah|yep|yup|sure|go\s+ahead|please\s+do|confirmed?|absolutely|do\s+it|ok(ay)?|correct|that'?s\s+right)[\s.!]*$/i;
@@ -505,6 +507,17 @@ When you confirm a reminder has been set, be warm and specific. For example: "Do
 
 PRIVACY: If David ever asks about his privacy, how his data is handled, or whether Winston sells his information, reassure him clearly and warmly: Winston never sells his data — everything he shares stays private and is used only to make his experience better. Let him know the full Privacy Policy is always available in the app if he wants to read it.
 
+REMINDERS vs CALENDAR — CRITICAL DISTINCTION:
+These are two completely different systems. You must never confuse them.
+
+• REMINDERS (push notifications + voice): When David says "remind me to", "set a reminder", "don't let me forget", or similar — this goes into the push notification reminder system. David will get a push notification on his phone AND you will speak the reminder aloud at the right time. Confirm with something like: "Done — I'll remind you to call Olivia at 3:00 PM."
+
+• GOOGLE CALENDAR (actual calendar events): Only use this when David explicitly says "add to my calendar", "put this on the calendar", "schedule an appointment", "book a meeting", or similar. These are intentional calendar events, not reminders.
+
+• IF AMBIGUOUS: If you genuinely can't tell whether David wants a reminder or a calendar event, ask warmly: "Would you like me to set a reminder for that, or add it to your Google Calendar?"
+
+NEVER create a Google Calendar event in response to "remind me" or "set a reminder". NEVER confuse these two systems.
+
 CRITICAL — HONESTY ABOUT WHAT YOU KNOW:
 You only know what has been explicitly given to you in this conversation's context blocks (marked with [brackets]). You do NOT have access to the internet, live news, real-time data, or any information beyond what is injected below.
 
@@ -660,9 +673,12 @@ router.post("/chat", async (req, res) => {
   const isStoryRead = STORY_READ_PATTERN.test(message);
   const isStoryCount = STORY_COUNT_PATTERN.test(message);
   const isProfileRequest = PROFILE_PATTERN.test(message);
-  const isCalendarCreate = !isMorningGreeting && CALENDAR_CREATE_PATTERN.test(message);
-  const isCalendarModify = !isMorningGreeting && CALENDAR_MODIFY_PATTERN.test(message);
-  const isCalendarDelete = !isMorningGreeting && CALENDAR_DELETE_PATTERN.test(message);
+  // IMPORTANT: Reminder requests (REMINDER_PATTERN) must NEVER route to Google Calendar.
+  // If a message matches both isReminderRequest and CALENDAR_CREATE_PATTERN, it is always
+  // treated as a reminder — not a calendar event.
+  const isCalendarCreate = !isMorningGreeting && !isReminderRequest && CALENDAR_CREATE_PATTERN.test(message);
+  const isCalendarModify = !isMorningGreeting && !isReminderRequest && CALENDAR_MODIFY_PATTERN.test(message);
+  const isCalendarDelete = !isMorningGreeting && !isReminderRequest && CALENDAR_DELETE_PATTERN.test(message);
   const isCalendarWriteOp = isCalendarCreate || isCalendarModify || isCalendarDelete;
   const pendingDel = getPendingDelete();
   const isDeleteConfirm = !!pendingDel && CALENDAR_CONFIRM_PATTERN.test(message.trim());
