@@ -16,10 +16,44 @@ import { isTodayPickleballDay, hasRecentKneeIssue } from "../pickleball/pickleba
 import { fetchMarkets, buildMarketsBlock } from "../markets/marketsManager.js";
 import { getPendingFollowUps, buildRecommendationFollowUpBlock } from "../recommendations/recommendationsManager.js";
 import { collectSundayData, buildSundaySummaryBlock } from "../sundaySummary/sundaySummaryManager.js";
+import { getJournalCountThisWeek, getRecentJournalEntries } from "../journal/journalManager.js";
+import { getStoryCount } from "../stories/storyManager.js";
 import { setCachedBriefing } from "./briefingCache.js";
 import { logger } from "../lib/logger.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+// ── Dallas local events (weekly cache, refreshed once daily) ─────────────────
+let _dallasEventsCache: { content: string; fetchedAt: Date } | null = null;
+
+async function fetchDallasLocalEvents(): Promise<string> {
+  if (_dallasEventsCache && Date.now() - _dallasEventsCache.fetchedAt.getTime() < 12 * 60 * 60 * 1000) {
+    return _dallasEventsCache.content;
+  }
+  try {
+    const now = new Date();
+    const weekLabel = now.toLocaleDateString("en-US", { timeZone: "America/Chicago", month: "long", day: "numeric", year: "numeric" });
+    const result = await anthropic.messages.create({
+      model: "claude-opus-4-5",
+      max_tokens: 256,
+      tools: [{ type: "web_search_20250305" as "web_search_20250305", name: "web_search", max_uses: 2 }],
+      system: `You are a Dallas local events researcher. Find ONE compelling event happening this week (${weekLabel}) in Dallas, TX that would interest David Blakelock — a 60-something man who enjoys music, food, sports, culture, and outdoor activities. Focus on: food festivals, live music, art exhibitions, sports events, farmers markets, restaurant openings, outdoor events, concerts. Return ONLY a single sentence describing the event — venue, date, and what it is. Example: "The Deep Ellum Blues Festival runs this Saturday at Main Street Garden Park, featuring 30 local and national blues acts from noon to midnight." If nothing compelling this week, return an empty string.`,
+      messages: [{ role: "user", content: `Find one compelling Dallas local event this week (week of ${weekLabel}).` }],
+    });
+    let eventText = "";
+    for (const block of result.content) {
+      if (block.type === "text" && block.text.trim().length > 20) {
+        eventText = block.text.trim();
+        break;
+      }
+    }
+    _dallasEventsCache = { content: eventText, fetchedAt: now };
+    return eventText;
+  } catch (err) {
+    logger.warn({ err }, "Dallas local events fetch failed");
+    return "";
+  }
+}
 
 const TOMORROW_CONDITIONS: Record<number, string> = {
   1000: "clear skies", 1001: "cloudy", 1100: "mostly clear", 1101: "partly cloudy",
@@ -191,7 +225,7 @@ function getCurrentDateTimeBlock(): string {
   );
 }
 
-const MASTER_BRIEFING_INSTRUCTION = `\n\n[MORNING BRIEFING — HOW TO DELIVER THIS]\nDeliver the morning briefing as a single flowing conversation. No headers. No bullet points. No section labels. No transition phrases. This should sound exactly like the most well-informed, trusted friend David has — someone who just called to make sure he starts the day right.\n\nTHE BOTTOM LINE PHILOSOPHY: Every piece of information is condensed, essential, and actionable. Include a brief sentence of context for why it matters. Cut anything that doesn't earn its place. If a news story isn't interesting or relevant, skip it. If an email isn't worth mentioning, don't mention it.\n\nTHE FLOW — weave naturally, one topic into the next without announcing what comes next:\n\n1. OPENING: Warm personal good morning. Use his name. Name the day of the week. One sentence.\n\n2. WEATHER: Lead with what it means for his morning activity — not just the temperature. Use the key signals in the weather data. If conditions are perfect, say so with genuine enthusiasm. If there's a problem, be direct and practical. One to three sentences. Include a brief mention of Olivia's weather in Knoxville if anything notable.\n\n3. EMAILS: Only the one or two that actually matter — something he needs to act on, something from someone important, something he'd genuinely want to know. Tell him who it's from and why it matters. If nothing is worth flagging, skip this entirely. Never say how many unread messages he has.\n\n4. MARKETS: Two to three sentences. The numbers and the story behind them — what moved, what drove it, why it matters. Always mention when the data was last fetched, naturally ("as of yesterday's close"). Skip if nothing notable happened.\n\n5. NEWS: Ten stories, told as one fast-moving conversational sweep. USA Today brevity, Wall Street Journal relevance. Four hard news stories first (Rangers, markets, politics, AI/tech). Then two cultural stories. Then always — always — end the news section with the four light and surprising stories. These are the fun ones: weird science, bizarre records, unexpected discoveries, odd human achievements. Never drop them. Introduce them with something natural like "and here are a couple of things that'll make you smile" or "oh, and a few good ones to share later" — then deliver them one after another without lingering. Do not say "pickleball." Each story: max three sentences. Short brisk transitions only ("also —", "meanwhile —", "oh, and —"). Never say "in other news." Never linger. Keep moving.\n\n6. CALENDAR: Any appointments today, woven in naturally. If David needs to leave home for anything, include approximate departure time. If the day is clear, say so warmly in one sentence.\n\n7. REMINDERS & BILLS: Any reminders due today. Any bills due within 7 days get a brief mention. Skip if nothing is due. Skip bills entirely if nothing is within 7 days.\n\n8. CLOSING: End with something light and personal. A sports result if his teams played. A show airing tonight if one of his shows is on. A gentle medication reminder if he hasn't taken his meds. Maybe something personal David would enjoy as a send-off. Feel like a friend's parting thought — warm, quick, and real. If there's a birthday or anniversary coming up, weave it in here.\n\nFORBIDDEN PHRASES — never use:\n• "Here is your morning briefing" / "Good morning, David, here's what you need to know"\n• "Moving on to" / "Let's talk about" / "Turning to" / "Now for"\n• "In other news" / "Speaking of which" / "On the topic of"\n• "Here is your weather update" / "In terms of the weather"\n• Any phrase that sounds like you're introducing a new section\n\nTONE: Warm but not gushing. Sharp but not cold. Personal but not sentimental. Emma knows David — use what you know about his routine, his people, his interests. Every number needs context. "S&P up 0.8%" means nothing. "S&P up nearly a percent — tech led the rally" means something. The briefing should take 3-4 minutes to speak at a natural conversational pace.\n\nIMPORTANT: The data blocks above this instruction contain the information. This instruction tells you how to weave it all together. Follow this over any other formatting guidance in the data blocks.`;
+const MASTER_BRIEFING_INSTRUCTION = `\n\n[MORNING BRIEFING — HOW TO DELIVER THIS]\nDeliver the morning briefing as a single flowing conversation. No headers. No bullet points. No section labels. No transition phrases. This should sound exactly like the most well-informed, trusted friend David has — someone who just called to make sure he starts the day right.\n\nTHE BOTTOM LINE PHILOSOPHY: Every piece of information is condensed, essential, and actionable. Include a brief sentence of context for why it matters. Cut anything that doesn't earn its place. If a news story isn't interesting or relevant, skip it. If an email isn't worth mentioning, don't mention it.\n\nTHE FLOW — weave naturally, one topic into the next without announcing what comes next:\n\n1. OPENING: Warm personal good morning. Use his name. Name the day of the week. One sentence.\n\n2. MORNING MOTIVATION: After the opening, deliver one brief, genuine motivating thought — 2 to 3 sentences maximum. This must NOT be a generic quote. It must be specific to David's life today:\n   • If it's a pickleball day: acknowledge his athletic commitment warmly ("You're out there three times a week — that discipline really matters.")\n   • If he has therapy or a medical appointment: acknowledge his commitment to wellbeing\n   • If he captured a story for Olivia recently: acknowledge what a gift that is ("Every story you capture is something Olivia will treasure.")\n   • If his recent journal entries show something positive: reference it warmly without quoting it\n   • If it's a Sunday and he's reviewing his week: open with something celebratory\n   • Otherwise: find something genuine based on his life and routine — his consistency, his relationships, his interests\n   Tone: warm, specific, short. Not a pep talk. Not a quote. Just a genuine friend noting something real.\n\n3. WEATHER: Lead with what it means for his morning activity — not just the temperature. Use the key signals in the weather data. If conditions are perfect, say so with genuine enthusiasm. If there's a problem, be direct and practical. One to three sentences. Include a brief mention of Olivia's weather in Knoxville if anything notable.\n\n4. EMAILS: Only the one or two that actually matter — something he needs to act on, something from someone important, something he'd genuinely want to know. Tell him who it's from and why it matters. If nothing is worth flagging, skip this entirely. Never say how many unread messages he has.\n\n5. MARKETS: Two to three sentences. The numbers and the story behind them — what moved, what drove it, why it matters. Always mention when the data was last fetched, naturally ("as of yesterday's close"). Skip if nothing notable happened.\n\n6. NEWS: Ten stories, told as one fast-moving conversational sweep. USA Today brevity, Wall Street Journal relevance. Four hard news stories first (Rangers, markets, politics, AI/tech). Then two cultural stories. Then always — always — end the news section with the four light and surprising stories. These are the fun ones: weird science, bizarre records, unexpected discoveries, odd human achievements. Never drop them. Introduce them with something natural like "and here are a couple of things that'll make you smile" or "oh, and a few good ones to share later" — then deliver them one after another without lingering. Do not say "pickleball." Each story: max three sentences. Short brisk transitions only ("also —", "meanwhile —", "oh, and —"). Never say "in other news." Never linger. Keep moving.\n\n7. CALENDAR: Any appointments today, woven in naturally. If David needs to leave home for anything, include approximate departure time. If the day is clear, say so warmly in one sentence.\n\n8. REMINDERS & BILLS: Any reminders due today. Any bills due within 7 days get a brief mention. Skip if nothing is due. Skip bills entirely if nothing is within 7 days.\n\n9. CLOSING: End with something light and personal. A sports result if his teams played. A show airing tonight if one of his shows is on. A gentle medication reminder if he hasn't taken his meds. If there's a Dallas local event in the data, mention it in one sentence — just enough to spark interest ("Oh, and there's a food festival this weekend at Klyde Warren Park if you're looking for something fun"). Feel like a friend's parting thought — warm, quick, and real. If there's a birthday or anniversary coming up, weave it in here.\n\nFORBIDDEN PHRASES — never use:\n• "Here is your morning briefing" / "Good morning, David, here's what you need to know"\n• "Moving on to" / "Let's talk about" / "Turning to" / "Now for"\n• "In other news" / "Speaking of which" / "On the topic of"\n• "Here is your weather update" / "In terms of the weather"\n• Any phrase that sounds like you're introducing a new section\n\nTONE: Warm but not gushing. Sharp but not cold. Personal but not sentimental. Emma knows David — use what you know about his routine, his people, his interests. Every number needs context. "S&P up 0.8%" means nothing. "S&P up nearly a percent — tech led the rally" means something. The briefing should take 3-4 minutes to speak at a natural conversational pace.\n\nIMPORTANT: The data blocks above this instruction contain the information. This instruction tells you how to weave it all together. Follow this over any other formatting guidance in the data blocks.`;
 
 export async function preFetchMorningBriefing(userName: string): Promise<void> {
   logger.info({ userName }, "Pre-generating morning briefing");
@@ -215,7 +249,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
         ? buildSystemPromptFromProfile(userProfile, userProfile.rawData as CollectedData)
         : BASE_SYSTEM_PROMPT;
 
-    const [dallas, knoxville, emails, events, lastNightNotes, newsBlock, yesterdayEps, todayEps, morningMeds, medsAlreadyTaken, sportsScores, upcomingBills, marketsData, upcomingDates, sundayData, pendingFollowUps, kneeIssueRecent] = await Promise.all([
+    const [dallas, knoxville, emails, events, lastNightNotes, newsBlock, yesterdayEps, todayEps, morningMeds, medsAlreadyTaken, sportsScores, upcomingBills, marketsData, upcomingDates, sundayData, pendingFollowUps, kneeIssueRecent, dallasEvents, journalCountWeek, recentJournals, totalStories] = await Promise.all([
       fetchCityWeather("Dallas", 32.7767, -96.7970).catch(() => null),
       fetchCityWeather("Knoxville", 35.9606, -83.9207).catch(() => null),
       fetchRecentEmails(8).catch(() => null),
@@ -233,6 +267,10 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       isSunday ? collectSundayData().catch(() => null) : Promise.resolve(null),
       getPendingFollowUps(2, 14).catch(() => []),
       hasRecentKneeIssue(14).catch(() => false),
+      fetchDallasLocalEvents().catch(() => ""),
+      getJournalCountThisWeek().catch(() => 0),
+      getRecentJournalEntries(3).catch(() => []),
+      getStoryCount().catch(() => 0),
     ]);
 
     const weatherBlock = dallas && knoxville
@@ -289,10 +327,31 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       ? `\n\n[Health Note]\nDavid mentioned knee issues recently from pickleball.`
       : "";
 
+    const dallasEventsBlock = dallasEvents
+      ? `\n\n[Local Dallas Event This Week]\n${dallasEvents}`
+      : "";
+
+    const motivationContextBlock = (() => {
+      const tz = "America/Chicago";
+      const dayName = now.toLocaleDateString("en-US", { timeZone: tz, weekday: "long" });
+      const isPickleballDay = ["Monday", "Wednesday", "Friday", "Saturday"].includes(dayName);
+      const recentJournalSnippet = recentJournals.length > 0
+        ? recentJournals.slice(0, 2).map(j => j.content.substring(0, 150)).join(" / ")
+        : "";
+      let block = `\n\n[Morning Motivation Context — for Emma's personal touch]\n`;
+      block += `• Today is ${dayName}${isPickleballDay ? " — a pickleball day" : ""}\n`;
+      block += `• Journal entries this week: ${journalCountWeek}\n`;
+      if (recentJournalSnippet) block += `• Recent journal themes (brief snippets, handle with care): "${recentJournalSnippet}"\n`;
+      block += `• Total stories captured for Olivia: ${totalStories}\n`;
+      block += `Use this to craft a specific, warm 2-3 sentence motivating thought in the opening — not generic, not a quote, just Emma noticing something real about David's life.`;
+      return block;
+    })();
+
     const systemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + memoryBlock + dynamicProfileBlock +
       notesBlock + weatherBlock + gmailBlock + calendarBlock + tvMorningBlock + medMorningBlock +
       sportsBlock + billsMorningBlock + marketsBlock + datesBlock + sundaySummaryBlock +
-      pickleballMorningBlock + kneeCheckBlock + recFollowUpBlock + newsBlock + MASTER_BRIEFING_INSTRUCTION;
+      pickleballMorningBlock + kneeCheckBlock + recFollowUpBlock + motivationContextBlock +
+      dallasEventsBlock + newsBlock + MASTER_BRIEFING_INSTRUCTION;
 
     logger.info({ userName, newsChars: newsBlock.length }, "Pre-generate: calling Claude for briefing");
 

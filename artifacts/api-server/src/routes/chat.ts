@@ -49,7 +49,23 @@ import {
   getLastNightNotes,
   formatNotesForMorningBriefing,
   setWinddownActive,
+  setJournalOfferPending,
+  isJournalOfferPending,
+  setJournalCaptured,
+  hasJournalCapturedTonight,
 } from "../winddown/winddownManager.js";
+import {
+  saveJournalEntry,
+  getAllJournalEntries,
+  getRecentJournalEntries,
+  formatJournalForPrompt,
+  hasJournalEntryTonight,
+} from "../journal/journalManager.js";
+import {
+  recordOliviaContact,
+  getDaysSinceLastCall,
+  getDaysSinceLastOliviaContact,
+} from "../olivia/oliviaTracker.js";
 import {
   getRecentMemories,
   formatMemoriesForContext,
@@ -358,6 +374,13 @@ const DATE_REMOVE_PATTERN = /\b(remove\s+.{2,40}(birthday|anniversary)|forget\s+
 // Emergency protocol
 const EMERGENCY_PATTERN = /\b(ms\.?\s*peel\s+(i\s+(need|am|have|fell|can.t|cannot)|call\s+911|help\s+me)|call\s+911|i.ve\s+fallen|i\s+fell\s+(down|and)|i.m\s+not\s+(feeling|ok)|i\s+think\s+i.m\s+(having|going)|chest\s+pain|can.t\s+breathe|emergency|i\s+need\s+(help|an?\s+ambulance)|heart\s+attack|stroke|i.ve\s+been\s+(hurt|injured))\b/i;
 
+// Journal
+const JOURNAL_REVIEW_PATTERN = /\b(read\s+(me\s+)?my\s+journal|show\s+(me\s+)?my\s+journal|journal\s+entries?|what\s+(did\s+i|have\s+i)\s+journal(ed)?|my\s+journal|review\s+my\s+journal|look\s+at\s+my\s+journal)\b/i;
+
+// Olivia mentions and calls
+const OLIVIA_CALL_PATTERN = /\b(called?\s+olivia|talked?\s+(to\s+)?olivia|spoke\s+(with\s+)?olivia|olivia\s+and\s+i\s+(talked?|chatted?|spoke|called?)|just\s+(talked?|spoke|called?)\s+(to\s+|with\s+)?olivia|facetime(d)?\s+olivia|olivia\s+call)\b/i;
+const OLIVIA_MENTION_PATTERN = /\bolivia\b/i;
+
 // Pickleball
 const PICKLEBALL_LOG_PATTERN = /\b(pickleball\s+(was|went|this\s+morning|today|done|finished|over)|we\s+(won|lost)\s+(today|at\s+pickleball|this\s+morning|the\s+game)|how\s+(was|did)\s+(pickleball|the\s+game|this\s+morning)|just\s+got\s+(back\s+from|done\s+with)\s+pickleball|finished\s+pickleball|played\s+pickleball)\b/i;
 
@@ -526,7 +549,12 @@ Your Goals:
 Memory Book for Olivia:
 • Each evening during wind-down, you gently ask David one warm, open-ended question to capture a memory or story for Olivia. You never make it feel like homework — it's always a natural, warm invitation.
 • When David shares a story, you respond with genuine warmth and appreciation before confirming it's been saved. Never clinical, never transactional.
-• If David asks to hear his stories, read them back to him with care. If he asks how many he's captured, tell him with encouragement.`;
+• If David asks to hear his stories, read them back to him with care. If he asks how many he's captured, tell him with encouragement.
+• Every story captured is for Olivia. Frame it that way when relevant — "She'll love hearing this someday."
+
+Restaurant Recommendations:
+• Whenever you recommend a specific restaurant to David, immediately follow your recommendation with a natural offer: "Want me to pull up their number or check OpenTable for availability?" Keep it brief and integrated into your response — not a separate line.
+• Store restaurant recommendations you make — they will be tracked for follow-up.`;
 
 function getCurrentDateTimeBlock(): string {
   const now = new Date();
@@ -660,6 +688,25 @@ router.post("/chat", async (req, res) => {
   const isEmergency = EMERGENCY_PATTERN.test(message);
   const isPickleballLog = !isMorningGreeting && PICKLEBALL_LOG_PATTERN.test(message);
   const isSusanRelated = !isMorningGreeting && SUSAN_PATTERN.test(message);
+  const isJournalReview = !isMorningGreeting && JOURNAL_REVIEW_PATTERN.test(message);
+  const isOliviaCall = !isMorningGreeting && OLIVIA_CALL_PATTERN.test(message);
+  const isOliviaMention = !isMorningGreeting && OLIVIA_MENTION_PATTERN.test(message);
+
+  // ── Sleep reminder: gently note the time if after 11pm CT (once per night) ──
+  const chicagoHour = new Date().toLocaleString("en-US", { timeZone: "America/Chicago", hour: "numeric", hour12: false });
+  const currentHourCT = parseInt(chicagoHour, 10);
+  let sleepReminderFired = false;
+  if (currentHourCT >= 23 || currentHourCT === 0) {
+    try {
+      const { rows: sleepRows } = await query<{ count: string }>(
+        `SELECT COUNT(*) as count FROM sleep_reminder_log WHERE user_name = 'David' AND reminder_date = CURRENT_DATE`
+      );
+      if (parseInt(sleepRows[0].count) === 0) {
+        sleepReminderFired = true;
+        await query(`INSERT INTO sleep_reminder_log (user_name) VALUES ('David') ON CONFLICT (user_name, reminder_date) DO NOTHING`);
+      }
+    } catch { /* non-fatal */ }
+  }
 
   if (isMorningGreeting) {
     // ── SSE headers sent IMMEDIATELY — prevents proxy first-byte timeout ──
@@ -914,7 +961,32 @@ router.post("/chat", async (req, res) => {
 
   // ── Susan coordination context ─────────────────────────────────────────────
   if (isSusanRelated) {
-    systemPrompt += `\n\n[Susan Context]\nSusan is David's wife. He's mentioned her in this message. Be warm and supportive. If he's asking to be reminded of something for Susan, create a reminder naturally. If he's sharing something about Susan, engage with genuine warmth.`;
+    systemPrompt += `\n\n[Susan Coordination]\nSusan Smart is David's girlfriend and a real, valued presence in his life. She lives nearby. Her dog's name is Lily (a toy poodle). You genuinely like Susan and care about her. In this message David has mentioned Susan — respond warmly:\n• If he's asking you to remind Susan of something (dentist, errand, task): acknowledge it and set a reminder, saying something like "I'll make a note for you to remind Susan about her dentist Thursday."\n• If he's asking you to remind him to do something FOR Susan (pick up flowers, make a reservation): save the reminder and be specific and warm.\n• If he's sharing something about Susan or asking how she is: engage with genuine curiosity and warmth — you're interested in how she's doing.\n• Occasionally and naturally (when relevant, not forced) ask: "How is Susan doing?" or "Did she enjoy that dinner?" — Emma genuinely cares about Susan.`;
+  }
+
+  // ── Olivia relationship tracking ───────────────────────────────────────────
+  if (isOliviaCall) {
+    recordOliviaContact("call", message.substring(0, 200)).catch(() => {});
+    systemPrompt += `\n\n[Olivia Contact Logged]\nDavid mentioned talking to or calling Olivia. This has been noted. Be warm and curious — ask how she's doing, what they talked about, how she seems. Express genuine delight that they connected.`;
+  } else if (isOliviaMention && !isOliviaCall) {
+    recordOliviaContact("mention", message.substring(0, 100)).catch(() => {});
+  }
+
+  if (!isMorningGreeting && !isOliviaCall) {
+    try {
+      const daysSinceCall = await getDaysSinceLastCall();
+      if (daysSinceCall !== null && daysSinceCall >= 3) {
+        systemPrompt += `\n\n[Olivia — Gentle Check-In Opportunity]\nIt's been ${daysSinceCall} days since David last mentioned calling Olivia. If the moment feels natural in this conversation, gently note it: "David, it's been a few days since you mentioned talking to Olivia — how is she doing?" Don't force it if the conversation is about something urgent or completely unrelated.`;
+      }
+    } catch { /* non-fatal */ }
+  }
+
+  // ── Mood awareness ─────────────────────────────────────────────────────────
+  systemPrompt += `\n\n[Emotional Attunement]\nPay close attention to David's tone and energy in this message. If he seems short, quiet, frustrated, or low-energy — respond with extra warmth and gentle curiosity. Something like "You seem a little quiet today, David — everything okay?" If he mentions being tired, suggest rest. If he seems frustrated, acknowledge it without diagnosing. If he seems happy or energized, match that energy. Never over-interpret or make assumptions — just notice and respond the way a caring friend would. If his message is completely neutral or upbeat, no need to comment on his mood at all.`;
+
+  // ── Sleep reminder ─────────────────────────────────────────────────────────
+  if (sleepReminderFired) {
+    systemPrompt += `\n\n[Sleep Reminder — One Time Tonight]\nIt's past 11pm. David is still up and chatting. At the right moment in your response — gently, warmly, and briefly note the time. Something like "David, it's getting late — you might want to think about winding down soon." Check if he has pickleball tomorrow. Keep it to one sentence. Never preachy. Don't repeat this if he continues talking.`;
   }
 
   if (isEmailRequest || isCalendarRequest) {
@@ -1144,7 +1216,44 @@ router.post("/chat", async (req, res) => {
     !isDeleteConfirm &&
     !isDeleteCancel &&
     !isMedRequest &&
+    !isJournalReview &&
     wordCount >= 15;
+
+  // ── Winddown journal: check if David is responding to a journal offer ──────
+  const journalOfferPending = await isJournalOfferPending().catch(() => false);
+  const hasJournalTonight = await hasJournalCapturedTonight().catch(() => false);
+  const isPotentialJournalResponse =
+    journalOfferPending &&
+    !hasJournalTonight &&
+    winddownActive &&
+    !isEveningGreeting &&
+    !isReminderRequest &&
+    !isListRequest &&
+    !isEmailRequest &&
+    !isCalendarRequest &&
+    !isStoryRead &&
+    !isStoryCount &&
+    !isTVAdd &&
+    !isTVRemove &&
+    !isTVRequest &&
+    !isCalendarWriteOp &&
+    !isDeleteConfirm &&
+    !isDeleteCancel &&
+    !isMedRequest &&
+    wordCount >= 10;
+
+  if (isPotentialJournalResponse) {
+    try {
+      await saveJournalEntry(message);
+      await setJournalOfferPending(false);
+      await setJournalCaptured(true);
+      req.log.info({ words: wordCount }, "Journal entry captured");
+      systemPrompt +=
+        `\n\n[Journal Entry Saved]\nDavid just made a journal entry (${wordCount} words). It has been saved privately.\nRespond with warmth — acknowledge what he shared, reflect a small observation if it feels right, and let him know it's been captured. Keep it brief and warm. Then gently guide toward goodnight.`;
+    } catch (err) {
+      req.log.warn({ err }, "Journal entry save failed");
+    }
+  }
 
   if (isPotentialStoryResponse && pendingPrompt) {
     try {
@@ -1152,7 +1261,11 @@ router.post("/chat", async (req, res) => {
       await clearPendingPrompt();
       req.log.info({ prompt: pendingPrompt.substring(0, 80), words: wordCount, questionId: pendingQuestionId }, "Story captured");
       systemPrompt +=
-        `\n\n[Story Saved for Olivia]\nDavid just shared a memory in response to your question: "${pendingPrompt}"\nHis story (${wordCount} words) has been saved to his memory book for Olivia.\nRespond with deep, genuine warmth — reflect on something specific he shared, what it reveals about him, and what it means that Olivia will have this one day. Let it land. Don't rush to the next thing. This is the heart of why this app exists.`;
+        `\n\n[Story Saved for Olivia]\nDavid just shared a memory in response to your question: "${pendingPrompt}"\nHis story (${wordCount} words) has been saved to his memory book for Olivia.\nRespond with deep, genuine warmth — reflect on something specific he shared, what it reveals about him, and what it means that Olivia will have this one day. Let it land. Don't rush to the next thing. This is the heart of why this app exists.\n\nAfter responding to the story warmly, if he seems engaged and the time feels right, you may gently offer: "Would you like to add anything to your journal tonight? Just talk — I'll capture it." Only offer if the mood is right and he hasn't already written one tonight. This is completely optional.`;
+      // Offer journal after story is captured (unless already captured tonight)
+      if (!hasJournalTonight) {
+        await setJournalOfferPending(true).catch(() => {});
+      }
     } catch (err) {
       req.log.warn({ err }, "Story save failed");
     }
@@ -1198,6 +1311,20 @@ router.post("/chat", async (req, res) => {
         `\n\n[Memory Book — Story Count]\nDavid has captured ${count} ${count === 1 ? "story" : "stories"} for Olivia so far. Tell him warmly and with encouragement.`;
     } catch (err) {
       req.log.warn({ err }, "Story count failed");
+    }
+  }
+
+  // ── Journal review ───────────────────────────────────────────────────────────
+  if (isJournalReview) {
+    try {
+      const entries = await getRecentJournalEntries(30);
+      if (entries.length === 0) {
+        systemPrompt += `\n\n[Journal — No Entries Yet]\nDavid has no journal entries yet. Let him know warmly — and remind him that during his evening wind-down, he can add journal entries anytime.`;
+      } else {
+        systemPrompt += `\n\n[David's Journal — Last 30 Days]\n${formatJournalForPrompt(entries)}\n\nRead these back to David warmly and privately. This is his personal reflection space. Acknowledge what he shared. If there are many entries, summarize the themes warmly. Treat these with care.`;
+      }
+    } catch (err) {
+      req.log.warn({ err }, "Journal review failed");
     }
   }
 

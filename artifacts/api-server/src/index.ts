@@ -15,6 +15,7 @@ import { startBillScheduler } from "./bills/billScheduler";
 import { startDatesScheduler } from "./dates/datesScheduler";
 import { startDepartureScheduler } from "./departure/departureScheduler";
 import { startPickleballScheduler } from "./pickleball/pickleballScheduler";
+import { startConversationStarterScheduler } from "./push/conversationStarterScheduler";
 
 const rawPort = process.env["PORT"];
 
@@ -56,6 +57,7 @@ app.listen(port, async (err) => {
   await startDatesScheduler();
   startDepartureScheduler();
   startPickleballScheduler();
+  startConversationStarterScheduler();
 
   try {
     await seedDefaultMedications();

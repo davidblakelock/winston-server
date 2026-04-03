@@ -146,3 +146,41 @@ export function formatNotesForMorningBriefing(notes: WinddownNote[]): string {
     `\nMention these naturally early in your morning briefing.`
   );
 }
+
+export async function setJournalOfferPending(pending: boolean): Promise<void> {
+  const tz = "America/Chicago";
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
+  await query(
+    `UPDATE winddown_state SET journal_offer_pending = $1 WHERE trigger_date = $2`,
+    [pending, today]
+  );
+}
+
+export async function isJournalOfferPending(): Promise<boolean> {
+  const tz = "America/Chicago";
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
+  const { rows } = await query<{ journal_offer_pending: boolean }>(
+    `SELECT journal_offer_pending FROM winddown_state WHERE trigger_date = $1`,
+    [today]
+  );
+  return rows.length > 0 && rows[0].journal_offer_pending === true;
+}
+
+export async function setJournalCaptured(captured: boolean): Promise<void> {
+  const tz = "America/Chicago";
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
+  await query(
+    `UPDATE winddown_state SET journal_captured = $1 WHERE trigger_date = $2`,
+    [captured, today]
+  );
+}
+
+export async function hasJournalCapturedTonight(): Promise<boolean> {
+  const tz = "America/Chicago";
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
+  const { rows } = await query<{ journal_captured: boolean }>(
+    `SELECT journal_captured FROM winddown_state WHERE trigger_date = $1`,
+    [today]
+  );
+  return rows.length > 0 && rows[0].journal_captured === true;
+}
