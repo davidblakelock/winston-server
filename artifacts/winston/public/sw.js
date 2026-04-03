@@ -1,11 +1,30 @@
 // Emma Peel — Winston AI Companion Service Worker
 
-self.addEventListener("install", (event) => {
+// The scope is the full absolute URL of this app, e.g.:
+// https://winston-companion--davidblakelock.replit.app/
+// self.registration.scope is always an absolute URL — never a relative path.
+function getAppUrl() {
+  // scope ends with "/", which is the correct URL to open the app
+  return self.registration.scope;
+}
+
+self.addEventListener("install", () => {
+  // Take control immediately without waiting for old SW to be discarded
   self.skipWaiting();
 });
 
 self.addEventListener("activate", (event) => {
-  event.waitUntil(self.clients.claim());
+  // Claim all open clients so this SW controls them right away
+  event.waitUntil(
+    self.clients.claim().then(() => {
+      // Notify all clients that the service worker is active
+      return self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+        clients.forEach((client) => {
+          client.postMessage({ type: "SW_ACTIVE" });
+        });
+      });
+    })
+  );
 });
 
 // Handle incoming push messages
@@ -14,74 +33,71 @@ self.addEventListener("push", (event) => {
   try {
     data = event.data ? event.data.json() : {};
   } catch {
-    data = { title: "Emma Peel", body: event.data ? event.data.text() : "New message from Emma Peel" };
+    data = {
+      title: "Emma Peel",
+      body: event.data ? event.data.text() : "Tap to open Winston.",
+    };
   }
 
-  const scope = self.registration.scope.replace(/\/$/, "");
-
+  const appUrl = getAppUrl();
   const title = data.title || "Emma Peel";
   const options = {
     body: data.body || "Tap to open Winston.",
-    icon: data.icon || `${scope}/icon-192.png`,
-    badge: data.badge || `${scope}/badge-72.png`,
+    icon: `${appUrl}icon-192.png`,
+    badge: `${appUrl}badge-72.png`,
     tag: data.tag || "winston",
-    data: { url: data.url || scope + "/" },
+    // Store the full absolute app URL in notification data so the click
+    // handler always has an absolute URL to pass to openWindow.
+    data: {
+      url: data.url || appUrl,
+    },
     requireInteraction: data.requireInteraction || false,
     silent: data.silent || false,
     vibrate: [200, 100, 200],
-    actions: [
-      { action: "open", title: "Open Winston" },
-      { action: "dismiss", title: "Dismiss" },
-    ],
   };
 
   event.waitUntil(self.registration.showNotification(title, options));
 });
 
-// Handle notification clicks
+// Handle notification clicks — open or focus the Winston app
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
 
   if (event.action === "dismiss") return;
 
-  const scope = self.registration.scope.replace(/\/$/, "");
-  const targetUrl = event.notification.data?.url || scope + "/";
+  // Always use the full absolute HTTPS URL — never a relative path.
+  // data.url is set above from getAppUrl() which is self.registration.scope,
+  // guaranteed to be absolute (e.g. https://winston-companion--davidblakelock.replit.app/).
+  const targetUrl = event.notification.data?.url || getAppUrl();
 
   event.waitUntil(
     self.clients
       .matchAll({ type: "window", includeUncontrolled: true })
       .then((clientList) => {
-        // Find any existing Winston window (same origin)
-        let appOrigin = null;
-        try { appOrigin = new URL(scope).origin; } catch {}
+        // Look for an already-open Winston window (same origin)
+        const targetOrigin = new URL(targetUrl).origin;
 
-        const winstonClient = appOrigin
-          ? clientList.find((c) => {
-              try { return new URL(c.url).origin === appOrigin; } catch { return false; }
-            })
-          : null;
-
-        if (winstonClient) {
-          // App is already open — bring it to the foreground.
-          // Do NOT use client.navigate() — it silently fails on Safari/iOS and
-          // many Chrome environments, leaving the user with no visible response.
-          // focus() reliably brings the existing window/tab to the front.
-          return winstonClient.focus().catch(() => {
-            // focus() failed (e.g. permission denied) — open a fresh window instead
-            return self.clients.openWindow(targetUrl);
-          });
+        for (const client of clientList) {
+          try {
+            if (new URL(client.url).origin === targetOrigin) {
+              // App is open — bring it to the foreground
+              return client.focus();
+            }
+          } catch {
+            // invalid URL, skip
+          }
         }
 
-        // No existing Winston window — open a new one.
-        // openWindow() is the most reliable cross-browser way to show the app.
+        // App is not open — open it with the full absolute URL
+        // This is the critical call: targetUrl must be https://... not a relative path
         return self.clients.openWindow(targetUrl);
       })
   );
 });
 
-// Handle push subscription change (re-subscribe if expired)
+// Handle push subscription expiry — re-subscribe automatically
 self.addEventListener("pushsubscriptionchange", (event) => {
-  const scope = self.registration.scope.replace(/\/$/, "");
+  const appUrl = getAppUrl();
   event.waitUntil(
     self.registration.pushManager
       .subscribe({
@@ -90,7 +106,7 @@ self.addEventListener("pushsubscriptionchange", (event) => {
       })
       .then((newSub) => {
         const token = self._winstonToken || null;
-        return fetch(`${scope}/api/push/subscribe`, {
+        return fetch(`${appUrl}api/push/subscribe`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -109,8 +125,7 @@ self.addEventListener("pushsubscriptionchange", (event) => {
   );
 });
 
-// Allow the app to store the session token in the service worker
-// so pushsubscriptionchange can re-subscribe with auth
+// Allow the app to store the session token so pushsubscriptionchange can re-subscribe with auth
 self.addEventListener("message", (event) => {
   if (event.data?.type === "SET_TOKEN") {
     self._winstonToken = event.data.token;

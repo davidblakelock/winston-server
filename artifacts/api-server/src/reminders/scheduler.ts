@@ -16,21 +16,36 @@ interface ReminderRow {
 }
 
 function nextOccurrence(timeStr: string, tz: string): Date {
+  const [desiredH, desiredM] = timeStr.split(":").map(Number);
   const now = new Date();
-  const [hours, minutes] = timeStr.split(":").map(Number);
 
-  const candidate = new Date(
-    now.toLocaleString("en-US", { timeZone: tz })
-  );
-  candidate.setHours(hours, minutes, 0, 0);
+  // Use Intl.DateTimeFormat.formatToParts — reliable across all Node.js environments.
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  const p = Object.fromEntries(fmt.formatToParts(now).map((x) => [x.type, x.value]));
+  const tzYear  = parseInt(p.year,   10);
+  const tzMonth = parseInt(p.month,  10) - 1;
+  const tzDay   = parseInt(p.day,    10);
+  const tzHour  = parseInt(p.hour,   10);
+  const tzMin   = parseInt(p.minute, 10);
 
-  const nowLocal = new Date(now.toLocaleString("en-US", { timeZone: tz }));
-  if (candidate <= nowLocal) {
-    candidate.setDate(candidate.getDate() + 1);
+  const localNowMs = Date.UTC(tzYear, tzMonth, tzDay, tzHour, tzMin, 0);
+  const offsetMs   = now.getTime() - localNowMs;
+
+  // Always schedule for the NEXT occurrence (i.e., tomorrow or later today if before now)
+  let candidateMs = Date.UTC(tzYear, tzMonth, tzDay, desiredH, desiredM, 0);
+  if (candidateMs <= localNowMs) {
+    candidateMs += 24 * 60 * 60 * 1000;
   }
 
-  const offsetMs = now.getTime() - nowLocal.getTime();
-  return new Date(candidate.getTime() + offsetMs);
+  return new Date(candidateMs + offsetMs);
 }
 
 export function startScheduler(): void {

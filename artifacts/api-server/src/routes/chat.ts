@@ -484,19 +484,43 @@ Examples:
 }
 
 function computeFireAt(timeStr: string, tz: string): Date {
+  const [desiredH, desiredM] = timeStr.split(":").map(Number);
   const now = new Date();
-  const localNow = new Date(now.toLocaleString("en-US", { timeZone: tz }));
-  const [hours, minutes] = timeStr.split(":").map(Number);
 
-  const candidate = new Date(localNow);
-  candidate.setHours(hours, minutes, 0, 0);
+  // Use Intl.DateTimeFormat.formatToParts — reliable across all Node.js environments.
+  // toLocaleString() + new Date(string) is fragile: the string format varies by platform
+  // and new Date() parses it in the SERVER's local timezone, causing off-by-offset errors.
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  const p = Object.fromEntries(fmt.formatToParts(now).map((x) => [x.type, x.value]));
+  const tzYear  = parseInt(p.year,   10);
+  const tzMonth = parseInt(p.month,  10) - 1; // 0-indexed
+  const tzDay   = parseInt(p.day,    10);
+  const tzHour  = parseInt(p.hour,   10);
+  const tzMin   = parseInt(p.minute, 10);
 
-  if (candidate <= localNow) {
-    candidate.setDate(candidate.getDate() + 1);
+  // Represent "now" as a fake-UTC ms value using the tz wall-clock values.
+  // This lets us do arithmetic purely with UTC math.
+  const localNowMs = Date.UTC(tzYear, tzMonth, tzDay, tzHour, tzMin, 0);
+  const offsetMs   = now.getTime() - localNowMs; // e.g. CDT = UTC-5 → offsetMs ≈ +5h
+
+  // Build the desired fire time on today's tz date (using fake-UTC)
+  let candidateMs = Date.UTC(tzYear, tzMonth, tzDay, desiredH, desiredM, 0);
+
+  // If the desired time is at or before current tz time, push to tomorrow
+  if (candidateMs <= localNowMs) {
+    candidateMs += 24 * 60 * 60 * 1000;
   }
 
-  const offsetMs = now.getTime() - localNow.getTime();
-  return new Date(candidate.getTime() + offsetMs);
+  // Shift fake-UTC back to real UTC by adding the offset
+  return new Date(candidateMs + offsetMs);
 }
 
 const BASE_SYSTEM_PROMPT = `You are Emma Peel — David's sharp, warm, and deeply trusted personal AI companion. You know David's life well: his routines, his people, his places, and what matters to him. You speak to him like a close friend who happens to know everything — conversational, direct, never stiff or overly formal. You remember context from the conversation and build on it naturally.
