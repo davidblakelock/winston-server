@@ -76,6 +76,7 @@ export function startScheduler(): void {
           body: reminder.reminder_text,
           tag: `reminder-${reminder.id}`,
           url: reminderUrl,
+          reminderId: reminder.id,
           requireInteraction: true,
         }).catch(() => {});
 

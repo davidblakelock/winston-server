@@ -21,6 +21,7 @@ export interface PushPayload {
   icon?: string;
   badge?: string;
   url?: string;
+  reminderId?: number;
   requireInteraction?: boolean;
   silent?: boolean;
 }
@@ -88,6 +89,7 @@ export async function sendPushToAll(
   if (payload.url) notificationData.url = payload.url;
   if (payload.icon) notificationData.icon = payload.icon;
   if (payload.badge) notificationData.badge = payload.badge;
+  if (payload.reminderId != null) notificationData.reminderId = payload.reminderId;
   const body = JSON.stringify(notificationData);
 
   await Promise.all(

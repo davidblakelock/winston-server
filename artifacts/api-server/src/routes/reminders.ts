@@ -70,4 +70,20 @@ router.delete("/reminders/:id", async (req: Request, res: Response) => {
   res.json({ success: true });
 });
 
+// Snooze a reminder by resetting fire_at to now + N minutes
+router.post("/reminders/:id/snooze", async (req: Request, res: Response) => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) {
+    res.status(400).json({ error: "Invalid reminder ID" });
+    return;
+  }
+  const minutes = typeof req.body?.minutes === "number" ? req.body.minutes : 10;
+  const snoozeUntil = new Date(Date.now() + minutes * 60 * 1000);
+  await query(
+    `UPDATE reminders SET fire_at = $1, last_fired_at = NULL WHERE id = $2`,
+    [snoozeUntil, id]
+  );
+  res.json({ success: true, snoozedUntil: snoozeUntil });
+});
+
 export default router;
