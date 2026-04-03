@@ -13,13 +13,13 @@ interface ReminderRow {
   recurring: string | null;
   recurring_time: string | null;
   timezone: string;
+  status: string;
 }
 
 function nextOccurrence(timeStr: string, tz: string): Date {
   const [desiredH, desiredM] = timeStr.split(":").map(Number);
   const now = new Date();
 
-  // Use Intl.DateTimeFormat.formatToParts — reliable across all Node.js environments.
   const fmt = new Intl.DateTimeFormat("en-US", {
     timeZone: tz,
     year: "numeric",
@@ -39,7 +39,6 @@ function nextOccurrence(timeStr: string, tz: string): Date {
   const localNowMs = Date.UTC(tzYear, tzMonth, tzDay, tzHour, tzMin, 0);
   const offsetMs   = now.getTime() - localNowMs;
 
-  // Always schedule for the NEXT occurrence (i.e., tomorrow or later today if before now)
   let candidateMs = Date.UTC(tzYear, tzMonth, tzDay, desiredH, desiredM, 0);
   if (candidateMs <= localNowMs) {
     candidateMs += 24 * 60 * 60 * 1000;
@@ -51,16 +50,33 @@ function nextOccurrence(timeStr: string, tz: string): Date {
 export function startScheduler(): void {
   cron.schedule("* * * * *", async () => {
     try {
+      // Select only 'pending' reminders whose fire_at has passed.
+      // Using status = 'pending' (not last_fired_at) is the definitive guard against
+      // double-firing — the status is updated to 'fired' atomically before the push
+      // is sent, so even if the scheduler runs twice in close succession the second
+      // run will never select the same reminder.
       const { rows } = await query<ReminderRow>(
         `SELECT * FROM reminders
-         WHERE fire_at <= NOW()
-           AND (last_fired_at IS NULL OR recurring IS NOT NULL)
-           AND (last_fired_at IS NULL OR fire_at > last_fired_at)`
+         WHERE status = 'pending'
+           AND fire_at <= NOW()`
       );
 
       for (const reminder of rows) {
+        // ── 1. Mark as 'fired' IMMEDIATELY — prevents any race-condition double-fire ──
+        const updated = await query(
+          `UPDATE reminders
+              SET status = 'fired', last_fired_at = NOW()
+            WHERE id = $1 AND status = 'pending'
+            RETURNING id`,
+          [reminder.id]
+        );
+
+        // If nothing was updated another scheduler beat us to it — skip
+        if (!updated.rows.length) continue;
+
         const speakText = `Hey ${reminder.user_name}, your reminder: ${reminder.reminder_text}.`;
 
+        // ── 2. Broadcast via SSE to any open browser tabs ──
         broadcast("reminder", {
           id: reminder.id,
           userName: reminder.user_name,
@@ -68,32 +84,31 @@ export function startScheduler(): void {
           speakText,
         });
 
-        // Also send a push notification so David is notified even if the app is closed
+        // ── 3. Send push notification to all registered devices ──
         const appUrl = getAppUrl();
         const reminderUrl = `${appUrl}/?notification=reminder&text=${encodeURIComponent(reminder.reminder_text)}`;
-        sendPushToAll({
+        await sendPushToAll({
           title: "⏰ Reminder — Emma Peel",
           body: reminder.reminder_text,
           tag: `reminder-${reminder.id}`,
           url: reminderUrl,
           reminderId: reminder.id,
           requireInteraction: true,
-        }).catch(() => {});
+        });
 
         logger.info({ id: reminder.id, text: reminder.reminder_text }, "Reminder fired");
 
+        // ── 4. For recurring reminders: schedule next occurrence and reset to 'pending' ──
         if (reminder.recurring && reminder.recurring_time) {
           const nextFire = nextOccurrence(reminder.recurring_time, reminder.timezone);
           await query(
-            `UPDATE reminders SET fire_at = $1, last_fired_at = NOW() WHERE id = $2`,
+            `UPDATE reminders
+                SET fire_at = $1, status = 'pending', last_fired_at = NOW()
+              WHERE id = $2`,
             [nextFire, reminder.id]
           );
-        } else {
-          await query(
-            `UPDATE reminders SET last_fired_at = NOW() WHERE id = $1`,
-            [reminder.id]
-          );
         }
+        // One-time reminders stay as 'fired' — they won't be selected again
       }
     } catch (err) {
       logger.error({ err }, "Scheduler error");

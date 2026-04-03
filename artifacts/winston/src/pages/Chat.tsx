@@ -739,19 +739,6 @@ export default function Chat({ onSignOut, companionName: companionNameProp, user
     } catch { /* IDB unavailable in this browser — ignore */ }
   }, []);
 
-  const fireReminderAlert = useCallback(
-    (event: ReminderEvent) => {
-      const msgId = `reminder-${event.id}-${Date.now()}`;
-      const displayContent = `Hey David — your reminder: ${event.reminderText}`;
-      setMessages((prev) => [
-        ...prev,
-        { id: msgId, role: "assistant", content: displayContent, isReminder: true },
-      ]);
-      speakReply(msgId, event.speakText);
-    },
-    [speakReply]
-  );
-
   // ── Fetch wind-down settings on mount ──
   useEffect(() => {
     fetch("/api/winddown/settings")
@@ -793,12 +780,37 @@ export default function Chat({ onSignOut, companionName: companionNameProp, user
     [speakReply]
   );
 
+  // Tracks reminder IDs already spoken on this device so SSE and polling
+  // never double-speak the same reminder within the same session.
+  const spokenReminderIds = useRef<Set<number>>(new Set());
+
+  const fireReminderAlert = useCallback(
+    (event: ReminderEvent) => {
+      // Guard: skip if already spoken this session (e.g. both SSE and poll fired)
+      if (spokenReminderIds.current.has(event.id)) return;
+      spokenReminderIds.current.add(event.id);
+
+      const msgId = `reminder-${event.id}-${Date.now()}`;
+      const displayContent = `Hey David — your reminder: ${event.reminderText}`;
+      setMessages((prev) => [
+        ...prev,
+        { id: msgId, role: "assistant", content: displayContent, isReminder: true },
+      ]);
+      speakReply(msgId, event.speakText);
+
+      // Acknowledge to the server so /api/reminders/due won't return this to other devices
+      fetch(`/api/reminders/${event.id}/acknowledge`, { method: "POST" }).catch(() => {});
+    },
+    [speakReply]
+  );
+
   // Stable refs so the SSE effect never needs to re-run when callbacks change
   const fireReminderAlertRef = useRef(fireReminderAlert);
   const fireWinddownStartRef = useRef(fireWinddownStart);
   useEffect(() => { fireReminderAlertRef.current = fireReminderAlert; }, [fireReminderAlert]);
   useEffect(() => { fireWinddownStartRef.current = fireWinddownStart; }, [fireWinddownStart]);
 
+  // ── SSE: real-time reminders + wind-down (primary delivery when app is open) ──
   useEffect(() => {
     const es = new EventSource("/api/reminders/stream");
     es.addEventListener("reminder", (e) => {
@@ -812,6 +824,34 @@ export default function Chat({ onSignOut, companionName: companionNameProp, user
     });
     return () => es.close();
   }, []); // empty deps — created once, refs always stay current
+
+  // ── Polling fallback: checks /api/reminders/due every 30 s ───────────────────
+  // Reliable on mobile where SSE connections drop silently.  Uses spokenReminderIds
+  // to skip reminders already handled by SSE in the same session.
+  useEffect(() => {
+    const poll = async () => {
+      try {
+        const res = await fetch("/api/reminders/due");
+        if (!res.ok) return;
+        const due = await res.json() as Array<{ id: number; reminder_text: string }>;
+        for (const reminder of due) {
+          if (spokenReminderIds.current.has(reminder.id)) continue;
+          fireReminderAlertRef.current({
+            id: reminder.id,
+            userName: "David",
+            reminderText: reminder.reminder_text,
+            speakText: `Hey David, your reminder: ${reminder.reminder_text}.`,
+          });
+        }
+      } catch { /* network unavailable — silent */ }
+    };
+
+    // First poll after 15 s (give SSE a chance to fire first)
+    const initial = setTimeout(poll, 15_000);
+    // Then every 30 s
+    const interval = setInterval(poll, 30_000);
+    return () => { clearTimeout(initial); clearInterval(interval); };
+  }, []); // empty deps — refs and fetch are stable
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitText(input); }
