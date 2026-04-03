@@ -11,6 +11,7 @@ import onboardingRouter from "./onboarding";
 import pushRouter from "./push";
 import oliviaRouter from "./olivia";
 import demoRouter from "./demo";
+import legalRouter from "./legal";
 
 const router: IRouter = Router();
 
@@ -18,6 +19,7 @@ router.use(healthRouter);
 router.use(demoRouter);
 router.use(authRouter);
 router.use(onboardingRouter);
+router.use(legalRouter);
 router.use(chatRouter);
 router.use(remindersRouter);
 router.use(transcribeRouter);

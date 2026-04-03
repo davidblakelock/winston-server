@@ -1202,6 +1202,41 @@ export default function Chat({ onSignOut, companionName: companionNameProp, user
     </div>
 
     {showEmergency && <EmergencyOverlay onDismiss={() => setShowEmergency(false)} />}
+
+    {/* Legal footer */}
+    <div style={{
+      position: "fixed",
+      bottom: "6px",
+      left: 0,
+      right: 0,
+      textAlign: "center",
+      zIndex: 10,
+      pointerEvents: "none",
+    }}>
+      <span style={{ fontSize: "0.62rem", color: "#2a2a42", pointerEvents: "auto" }}>
+        <a
+          href="/api/terms"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ color: "#2a2a42", textDecoration: "none" }}
+          onMouseEnter={(e) => (e.currentTarget.style.color = "#4f46e5")}
+          onMouseLeave={(e) => (e.currentTarget.style.color = "#2a2a42")}
+        >
+          Terms of Service
+        </a>
+        {" · "}
+        <a
+          href="/api/privacy"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ color: "#2a2a42", textDecoration: "none" }}
+          onMouseEnter={(e) => (e.currentTarget.style.color = "#4f46e5")}
+          onMouseLeave={(e) => (e.currentTarget.style.color = "#2a2a42")}
+        >
+          Privacy Policy
+        </a>
+      </span>
+    </div>
     </>
   );
 }

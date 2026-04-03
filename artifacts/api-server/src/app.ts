@@ -1,5 +1,6 @@
-import express, { type Express } from "express";
+import express, { type Express, type Request, type Response } from "express";
 import cors from "cors";
+import path from "path";
 import pinoHttp from "pino-http";
 import router from "./routes";
 import { logger } from "./lib/logger";
@@ -28,6 +29,21 @@ app.use(
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Serve static files from the public folder
+const publicDir = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "public");
+app.use(express.static(publicDir));
+
+// Legal document routes
+app.get("/privacy", (_req: Request, res: Response) => {
+  res.setHeader("Content-Type", "application/pdf");
+  res.sendFile(path.join(publicDir, "Winston_Privacy_Policy.pdf"));
+});
+
+app.get("/terms", (_req: Request, res: Response) => {
+  res.setHeader("Content-Type", "application/pdf");
+  res.sendFile(path.join(publicDir, "Winston_Terms_of_Service.pdf"));
+});
 
 app.use("/api", router);
 

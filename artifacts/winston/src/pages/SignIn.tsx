@@ -89,8 +89,33 @@ export default function SignIn() {
           </button>
         </div>
 
-        <p style={{ color: "#22223a", fontSize: "0.70rem", marginTop: "12px" }}>
+        <p style={{ color: "#35354f", fontSize: "0.70rem", marginTop: "12px" }}>
           Private &amp; invitation-only
+        </p>
+
+        <p style={{ color: "#3a3a58", fontSize: "0.68rem", marginTop: "20px", lineHeight: "1.6" }}>
+          By signing in you agree to our{" "}
+          <a
+            href="/api/terms"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: "#4f46e5", textDecoration: "none", opacity: 0.7 }}
+            onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
+            onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.7")}
+          >
+            Terms of Service
+          </a>
+          {" "}and{" "}
+          <a
+            href="/api/privacy"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: "#4f46e5", textDecoration: "none", opacity: 0.7 }}
+            onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
+            onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.7")}
+          >
+            Privacy Policy
+          </a>
         </p>
       </div>
     </div>
