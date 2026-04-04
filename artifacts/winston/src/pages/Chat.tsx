@@ -262,10 +262,22 @@ function useGoogleAuth(): [GoogleAuthStatus, () => Promise<void>] {
   return [status, refresh];
 }
 
-// ─── User avatar (Google photo with initials fallback) ────────────────────────
+// ─── User avatar ──────────────────────────────────────────────────────────────
+// Priority: 1) custom base64 from DB  2) Google profile photo  3) initials
 
-function UserAvatar({ picture, fullName, userName }: { picture?: string; fullName?: string; userName?: string }) {
-  const [imgFailed, setImgFailed] = useState(false);
+function UserAvatar({
+  avatarBase64,
+  googlePicture,
+  fullName,
+  userName,
+}: {
+  avatarBase64?: string | null;
+  googlePicture?: string;
+  fullName?: string;
+  userName?: string;
+}) {
+  const [googleFailed, setGoogleFailed] = useState(false);
+
   const initials = (() => {
     const name = fullName || userName || "";
     const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -274,30 +286,46 @@ function UserAvatar({ picture, fullName, userName }: { picture?: string; fullNam
     return "?";
   })();
 
-  const showImage = !!picture && !imgFailed;
+  const circleStyle: React.CSSProperties = {
+    width: 36, height: 36, borderRadius: "50%", objectFit: "cover",
+    flexShrink: 0, border: "2px solid rgba(255,255,255,0.15)",
+  };
 
-  return showImage ? (
-    <img
-      src={picture}
-      alt="Profile"
-      referrerPolicy="no-referrer"
-      onError={() => {
-        console.warn("[AVATAR] Google profile picture failed to load, falling back to initials. src:", picture?.slice(0, 60));
-        setImgFailed(true);
-      }}
-      onLoad={() => console.log("[AVATAR] Google profile picture loaded successfully")}
-      style={{ width: 36, height: 36, borderRadius: "50%", objectFit: "cover", flexShrink: 0, border: "2px solid rgba(255,255,255,0.15)" }}
-    />
-  ) : (
-    <div
-      style={{
-        width: 36, height: 36, borderRadius: "50%",
-        display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
-        background: "linear-gradient(135deg, #d97706 0%, #b45309 100%)",
-        border: "2px solid rgba(217,119,6,0.4)",
-        flexDirection: "column",
-      }}
-    >
+  // Priority 1: custom avatar stored in DB as base64 data URL
+  if (avatarBase64) {
+    console.log("[AVATAR] Displaying custom base64 avatar");
+    return (
+      <img
+        src={avatarBase64}
+        alt="Profile"
+        style={circleStyle}
+        onError={() => console.warn("[AVATAR] Base64 avatar failed to render")}
+      />
+    );
+  }
+
+  // Priority 2: Google profile photo
+  if (googlePicture && !googleFailed) {
+    return (
+      <img
+        src={googlePicture}
+        alt="Profile"
+        referrerPolicy="no-referrer"
+        onError={() => { console.warn("[AVATAR] Google photo failed, falling back to initials"); setGoogleFailed(true); }}
+        onLoad={() => console.log("[AVATAR] Google photo loaded")}
+        style={circleStyle}
+      />
+    );
+  }
+
+  // Priority 3: initials
+  return (
+    <div style={{
+      width: 36, height: 36, borderRadius: "50%", flexShrink: 0,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      background: "linear-gradient(135deg, #d97706 0%, #b45309 100%)",
+      border: "2px solid rgba(217,119,6,0.4)",
+    }}>
       <span style={{ color: "white", fontSize: "13px", fontWeight: 700, lineHeight: 1, letterSpacing: "-0.02em" }}>{initials}</span>
     </div>
   );
@@ -315,12 +343,13 @@ interface ChatProps {
   companionName?: string | null;
   voiceId?: string | null;
   photoUrl?: string | null;
+  avatarBase64?: string | null;
   userPicture?: string;
   userFullName?: string;
   userName?: string;
 }
 
-export default function Chat({ onSignOut, companionName: companionNameProp, voiceId: voiceIdProp, photoUrl: photoUrlProp, userPicture, userFullName, userName }: ChatProps) {
+export default function Chat({ onSignOut, companionName: companionNameProp, voiceId: voiceIdProp, photoUrl: photoUrlProp, avatarBase64: avatarBase64Prop, userPicture, userFullName, userName }: ChatProps) {
   const baseUrl = (import.meta.env.BASE_URL as string).replace(/\/$/, "");
 
   // Resolved name: prop → localStorage cache → null (fetched below)
@@ -373,8 +402,8 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
   useEffect(() => { if (voiceIdProp) { setResolvedVoiceId(voiceIdProp); localStorage.setItem("winston_voice_id", voiceIdProp); } }, [voiceIdProp]);
 
   // ── Custom photo URL ──────────────────────────────────────────────────────
-  const [customPhotoUrl, setCustomPhotoUrl] = useState<string | null>(photoUrlProp ?? null);
-  useEffect(() => { setCustomPhotoUrl(photoUrlProp ?? null); }, [photoUrlProp]);
+  const [customAvatarBase64, setCustomAvatarBase64] = useState<string | null>(avatarBase64Prop ?? null);
+  useEffect(() => { setCustomAvatarBase64(avatarBase64Prop ?? null); }, [avatarBase64Prop]);
 
   // ── Play TTS audio from settings confirmation ─────────────────────────────
   const settingsAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -1365,7 +1394,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         {/* User identity chip — Google profile picture + companion name */}
         <div className="flex items-center gap-2 ml-1 pl-2 border-l border-white/10">
           {/* Avatar: Google photo or warm-amber initials fallback */}
-          <UserAvatar picture={customPhotoUrl || userPicture} fullName={userFullName} userName={userName} />
+          <UserAvatar avatarBase64={customAvatarBase64} googlePicture={userPicture} fullName={userFullName} userName={userName} />
           {/* Companion name label */}
           {companionNameFinal && (
             <span className="text-sm font-medium text-foreground/80 whitespace-nowrap">
@@ -1438,11 +1467,11 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
           localStorage.setItem("winston_companion_name", name);
           if (audio) playSettingsAudio(audio.audioBase64, audio.mimeType);
         }}
-        currentPhotoUrl={customPhotoUrl}
+        currentAvatarBase64={customAvatarBase64}
         googlePhotoUrl={userPicture}
         userFullName={userFullName}
         userName={userName}
-        onPhotoChange={(url) => setCustomPhotoUrl(url)}
+        onAvatarChange={(dataUrl) => setCustomAvatarBase64(dataUrl)}
         winddownSettings={winddownSettings}
         onWinddownChange={setWinddownSettings}
         localTime={localTime}

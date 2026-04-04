@@ -11,8 +11,6 @@ import { getProfilePlaces } from "../profile/profileManager.js";
 const router: IRouter = Router();
 
 const EL_KEY = () => (process.env.EL_API_KEY ?? process.env.ELEVENLABS_API_KEY ?? "").trim();
-const SUPABASE_URL = process.env.SUPABASE_URL ?? "";
-const SUPABASE_SERVICE_KEY = () => (process.env.SUPABASE_SERVICE_KEY ?? "").trim();
 
 async function generateTTS(voiceId: string, text: string): Promise<{ audioBase64: string; mimeType: string } | null> {
   const apiKey = EL_KEY();
@@ -58,6 +56,7 @@ router.get("/settings/profile", async (req, res) => {
     voiceId: profile?.voiceId ?? null,
     companionName: profile?.companionName ?? null,
     photoUrl: profile?.photoUrl ?? null,
+    avatarBase64: profile?.avatarBase64 ?? null,
     voices: VOICE_OPTIONS,
   });
 });
@@ -107,160 +106,68 @@ router.patch("/settings/name", express.json({ limit: "1mb" }), async (req, res) 
   res.json({ ok: true, companionName: name, audio });
 });
 
-// ── POST /api/profile/photo ────────────────────────────────────────────────────
-// Full rebuild — logs every step so any failure is immediately visible.
-router.post("/profile/photo", express.json({ limit: "16mb" }), async (req, res) => {
+// ── POST /api/profile/avatar ──────────────────────────────────────────────────
+// New approach: store avatar as base64 directly in user_profiles.avatar_base64.
+// No external storage. No bucket. Just the database.
+router.post("/profile/avatar", express.json({ limit: "4mb" }), async (req, res) => {
+  req.log.info("[AVATAR] Step 1 — received avatar upload request");
 
-  // ── Step 1: Auth ──────────────────────────────────────────────────────────
-  req.log.info("[PHOTO] Step 1 — received upload request");
-  const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith("Bearer ")) {
-    req.log.warn("[PHOTO] Step 1 FAIL — no Bearer token in request");
-    res.status(401).json({ error: "authentication_required" });
-    return;
-  }
-  const session = await validateSession(authHeader.slice(7));
-  if (!session) {
-    req.log.warn({ tokenPrefix: authHeader.slice(7, 15) }, "[PHOTO] Step 1 FAIL — session invalid or expired");
-    res.status(401).json({ error: "session_expired" });
-    return;
-  }
-  req.log.info({ userName: session.userName, googleId: session.googleId ?? "none" }, "[PHOTO] Step 1 OK — user authenticated");
-
-  // ── Step 2: Validate payload ──────────────────────────────────────────────
-  const { imageBase64 } = req.body as { imageBase64?: string };
-  req.log.info({ hasBase64: !!imageBase64, base64Length: imageBase64?.length ?? 0 }, "[PHOTO] Step 2 — checking payload");
-  if (!imageBase64) {
-    req.log.warn("[PHOTO] Step 2 FAIL — imageBase64 missing from request body");
-    res.status(400).json({ error: "No image data received. Please try uploading again." });
-    return;
-  }
-
-  // ── Step 3: Decode base64 → Buffer ───────────────────────────────────────
-  req.log.info("[PHOTO] Step 3 — decoding base64 to buffer");
-  let buf: Buffer;
-  try {
-    buf = Buffer.from(imageBase64, "base64");
-  } catch (decodeErr) {
-    req.log.error({ decodeErr }, "[PHOTO] Step 3 FAIL — base64 decode error");
-    res.status(400).json({ error: "Image data is corrupted. Please try selecting the photo again." });
-    return;
-  }
-  req.log.info({ bytes: buf.length }, "[PHOTO] Step 3 OK — decoded buffer");
-
-  // ── Step 4: Size guard ────────────────────────────────────────────────────
-  if (buf.length > 10 * 1024 * 1024) {
-    req.log.warn({ bytes: buf.length }, "[PHOTO] Step 4 FAIL — image exceeds 10 MB after decode");
-    res.status(400).json({ error: "Image is too large. Maximum allowed size is 10 MB." });
-    return;
-  }
-  req.log.info("[PHOTO] Step 4 OK — size within limit");
-
-  // ── Step 5: Magic-byte format detection ───────────────────────────────────
-  // Reads actual file bytes — not client MIME type (unreliable on iOS/Android).
-  const first12 = Array.from(buf.slice(0, 12)).map(b => b.toString(16).padStart(2, "0")).join(" ");
-  req.log.info({ first12 }, "[PHOTO] Step 5 — detecting format from magic bytes");
-
-  let fmt: { mime: string; ext: string } | null = null;
-  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
-    fmt = { mime: "image/jpeg", ext: "jpg" };
-  } else if (buf.length >= 4 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
-    fmt = { mime: "image/png", ext: "png" };
-  } else if (buf.length >= 12 && buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46
-                              && buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50) {
-    fmt = { mime: "image/webp", ext: "webp" };
-  }
-
-  if (!fmt) {
-    req.log.warn({ first12 }, "[PHOTO] Step 5 FAIL — unrecognised image format (not JPEG/PNG/WebP)");
-    res.status(400).json({ error: "Unsupported image format. Please upload a JPG, PNG, or WebP photo." });
-    return;
-  }
-  req.log.info({ detectedMime: fmt.mime }, "[PHOTO] Step 5 OK — format detected");
-
-  // ── Step 6: Check Supabase config ─────────────────────────────────────────
-  const supabaseUrl = SUPABASE_URL.replace(/\/$/, "");
-  const serviceKey = SUPABASE_SERVICE_KEY();
-  req.log.info({ hasUrl: !!supabaseUrl, hasKey: !!serviceKey }, "[PHOTO] Step 6 — checking Supabase config");
-  if (!supabaseUrl || !serviceKey) {
-    req.log.error("[PHOTO] Step 6 FAIL — SUPABASE_URL or SUPABASE_SERVICE_KEY not configured");
-    res.status(503).json({ error: "Storage is not configured on this server. Contact the administrator." });
-    return;
-  }
-
-  // ── Step 7: Upload to Supabase Storage ───────────────────────────────────
-  const fileId = session.googleId ?? session.userName;
-  const objectPath = `${fileId}.${fmt.ext}`;
-  const uploadUrl = `${supabaseUrl}/storage/v1/object/profile-photos/${objectPath}`;
-  req.log.info({ objectPath, uploadUrl }, "[PHOTO] Step 7 — uploading to Supabase Storage");
-
-  let uploadRes: Response;
-  try {
-    uploadRes = await fetch(uploadUrl, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${serviceKey}`,
-        "Content-Type": fmt.mime,
-        "x-upsert": "true",
-      },
-      body: buf,
-    });
-  } catch (fetchErr) {
-    req.log.error({ fetchErr }, "[PHOTO] Step 7 FAIL — network error reaching Supabase");
-    res.status(503).json({ error: "Could not reach storage service. Please try again." });
-    return;
-  }
-
-  req.log.info({ status: uploadRes.status, ok: uploadRes.ok }, "[PHOTO] Step 7 — Supabase responded");
-
-  if (!uploadRes.ok) {
-    const errText = await uploadRes.text().catch(() => "");
-    req.log.error({ status: uploadRes.status, errText, objectPath }, "[PHOTO] Step 7 FAIL — Supabase upload rejected");
-
-    if (uploadRes.status === 404 || errText.toLowerCase().includes("not found")) {
-      res.status(503).json({ error: "Storage bucket 'profile-photos' not found. Please create it in Supabase Dashboard → Storage → New bucket → name: profile-photos → Public." });
-      return;
-    }
-    if (uploadRes.status === 401 || uploadRes.status === 403) {
-      res.status(503).json({ error: "Storage permission denied. The service key may not have storage access." });
-      return;
-    }
-    if (uploadRes.status === 413) {
-      res.status(400).json({ error: "Image is too large for storage. Please use an image under 10 MB." });
-      return;
-    }
-    res.status(500).json({ error: `Upload failed (HTTP ${uploadRes.status}): ${errText.slice(0, 120)}` });
-    return;
-  }
-  req.log.info({ objectPath }, "[PHOTO] Step 7 OK — file stored in Supabase");
-
-  // ── Step 8: Build public URL ──────────────────────────────────────────────
-  const publicUrl = `${supabaseUrl}/storage/v1/object/public/profile-photos/${objectPath}`;
-  req.log.info({ publicUrl }, "[PHOTO] Step 8 — public URL built");
-
-  // ── Step 9: Persist to user_profiles ─────────────────────────────────────
-  req.log.info({ userName: session.userName }, "[PHOTO] Step 9 — saving photoUrl to user_profiles");
-  try {
-    await updateProfileField(session.userName, { photoUrl: publicUrl });
-  } catch (dbErr) {
-    req.log.error({ dbErr }, "[PHOTO] Step 9 FAIL — could not save photoUrl to database");
-    res.status(500).json({ error: "Photo was uploaded but could not be saved to your profile. Please try again." });
-    return;
-  }
-
-  req.log.info({ userName: session.userName, publicUrl }, "[PHOTO] ✅ All steps complete — photo uploaded and saved");
-  res.json({ ok: true, photoUrl: publicUrl });
-});
-
-// ── DELETE /api/profile/photo  (and legacy /settings/photo) ──────────────────
-async function handlePhotoDelete(req: express.Request, res: express.Response) {
   const userName = await authenticate(req, res);
   if (!userName) return;
-  await updateProfileField(userName, { photoUrl: "" });
+  req.log.info({ userName }, "[AVATAR] Step 1 OK — authenticated");
+
+  const { avatarDataUrl } = req.body as { avatarDataUrl?: string };
+  req.log.info({ hasDataUrl: !!avatarDataUrl, length: avatarDataUrl?.length ?? 0 }, "[AVATAR] Step 2 — checking payload");
+
+  if (!avatarDataUrl) {
+    req.log.warn("[AVATAR] Step 2 FAIL — avatarDataUrl missing");
+    res.status(400).json({ error: "No image data received." });
+    return;
+  }
+
+  // Must be a data URL (data:image/...;base64,...)
+  if (!avatarDataUrl.startsWith("data:image/")) {
+    req.log.warn({ prefix: avatarDataUrl.slice(0, 30) }, "[AVATAR] Step 2 FAIL — not an image data URL");
+    res.status(400).json({ error: "Not a valid image. Please select a JPG, PNG, or WebP file." });
+    return;
+  }
+
+  // Size guard: 2 MB on the raw data URL string (base64 is ~33% larger than binary)
+  const TWO_MB_BASE64 = 2 * 1024 * 1024 * 1.37; // ~2.74 MB base64 ≈ 2 MB file
+  if (avatarDataUrl.length > TWO_MB_BASE64) {
+    req.log.warn({ length: avatarDataUrl.length }, "[AVATAR] Step 2 FAIL — image exceeds 2 MB");
+    res.status(400).json({ error: "Image is too large. Please choose a photo under 2 MB." });
+    return;
+  }
+  req.log.info("[AVATAR] Step 2 OK — payload valid");
+
+  req.log.info({ userName }, "[AVATAR] Step 3 — saving to database");
+  try {
+    await updateProfileField(userName, { avatarBase64: avatarDataUrl });
+  } catch (dbErr) {
+    req.log.error({ dbErr: String(dbErr) }, "[AVATAR] Step 3 FAIL — database save error");
+    res.status(500).json({ error: "Could not save photo to your profile. Please try again." });
+    return;
+  }
+
+  req.log.info({ userName }, "[AVATAR] ✅ Avatar saved to database");
   res.json({ ok: true });
-}
-router.delete("/profile/photo", handlePhotoDelete);
-router.delete("/settings/photo", handlePhotoDelete);
+});
+
+// ── DELETE /api/profile/avatar ────────────────────────────────────────────────
+router.delete("/profile/avatar", async (req, res) => {
+  req.log.info("[AVATAR] DELETE — received remove avatar request");
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  try {
+    await updateProfileField(userName, { avatarBase64: null });
+    req.log.info({ userName }, "[AVATAR] DELETE OK — avatar cleared");
+    res.json({ ok: true });
+  } catch (dbErr) {
+    req.log.error({ dbErr: String(dbErr) }, "[AVATAR] DELETE FAIL — database error");
+    res.status(500).json({ error: "Could not remove photo. Please try again." });
+  }
+});
 
 // ── GET /api/navigation/places ────────────────────────────────────────────────
 // Returns hardcoded saved locations merged with profile_items places.

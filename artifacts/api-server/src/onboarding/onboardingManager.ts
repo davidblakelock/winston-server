@@ -12,6 +12,7 @@ export interface UserProfile {
   healthNotes: string | null;
   companionName: string | null;
   photoUrl: string | null;
+  avatarBase64: string | null;
   rawData: Record<string, unknown>;
   onboardingCompleted: boolean;
   createdAt: Date;
@@ -69,6 +70,7 @@ export async function ensureOnboardingTable(): Promise<void> {
     )
   `);
   await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS photo_url text`);
+  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS avatar_base64 text`);
 }
 
 export async function getProfile(userName = "David"): Promise<UserProfile | null> {
@@ -84,6 +86,7 @@ export async function getProfile(userName = "David"): Promise<UserProfile | null
     health_notes: string | null;
     companion_name: string | null;
     photo_url: string | null;
+    avatar_base64: string | null;
     raw_data: Record<string, unknown>;
     onboarding_completed: boolean;
     created_at: Date;
@@ -103,6 +106,7 @@ export async function getProfile(userName = "David"): Promise<UserProfile | null
     healthNotes: r.health_notes,
     companionName: r.companion_name || null,
     photoUrl: r.photo_url || null,
+    avatarBase64: r.avatar_base64 || null,
     rawData: r.raw_data ?? {},
     onboardingCompleted: r.onboarding_completed,
     createdAt: r.created_at,
@@ -111,7 +115,7 @@ export async function getProfile(userName = "David"): Promise<UserProfile | null
 
 export async function updateProfileField(
   userName: string,
-  fields: { voiceId?: string; companionName?: string; photoUrl?: string }
+  fields: { voiceId?: string; companionName?: string; photoUrl?: string; avatarBase64?: string | null }
 ): Promise<void> {
   const sets: string[] = [];
   const vals: unknown[] = [];
@@ -119,6 +123,7 @@ export async function updateProfileField(
   if (fields.voiceId !== undefined) { sets.push(`voice_id = $${idx++}`); vals.push(fields.voiceId); }
   if (fields.companionName !== undefined) { sets.push(`companion_name = $${idx++}`); vals.push(fields.companionName); }
   if (fields.photoUrl !== undefined) { sets.push(`photo_url = $${idx++}`); vals.push(fields.photoUrl); }
+  if (fields.avatarBase64 !== undefined) { sets.push(`avatar_base64 = $${idx++}`); vals.push(fields.avatarBase64); }
   if (sets.length === 0) return;
   vals.push(userName);
   await query(`UPDATE user_profiles SET ${sets.join(", ")} WHERE user_name = $${idx}`, vals);

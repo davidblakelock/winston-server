@@ -37,11 +37,11 @@ interface SettingsPanelProps {
   currentCompanionName: string;
   onNameChange: (name: string, audio: { audioBase64: string; mimeType: string } | null) => void;
 
-  currentPhotoUrl: string | null;
+  currentAvatarBase64: string | null;
   googlePhotoUrl: string | undefined;
   userFullName: string | undefined;
   userName: string | undefined;
-  onPhotoChange: (url: string | null) => void;
+  onAvatarChange: (dataUrl: string | null) => void;
 
   winddownSettings: WinddownSettings;
   onWinddownChange: (s: WinddownSettings) => void;
@@ -56,18 +56,17 @@ interface SettingsPanelProps {
 const CHAT_BASE = (typeof import.meta !== "undefined" ? (import.meta.env.BASE_URL as string) : "/").replace(/\/$/, "");
 
 function AvatarPreview({
-  photoUrl,
+  avatarBase64,
   googlePhotoUrl,
   fullName,
   size = 56,
 }: {
-  photoUrl?: string | null;
+  avatarBase64?: string | null;
   googlePhotoUrl?: string;
   fullName?: string;
   size?: number;
 }) {
-  const [imgFailed, setImgFailed] = useState(false);
-  const src = photoUrl || googlePhotoUrl;
+  const [googleFailed, setGoogleFailed] = useState(false);
   const initials = (() => {
     const name = fullName || "";
     const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -76,16 +75,21 @@ function AvatarPreview({
     return "?";
   })();
 
-  const showImage = !!src && !imgFailed;
-  return showImage ? (
-    <img
-      src={src}
-      alt="Profile"
-      referrerPolicy="no-referrer"
-      onError={() => setImgFailed(true)}
-      style={{ width: size, height: size, borderRadius: "50%", objectFit: "cover", border: "2px solid rgba(217,119,6,0.4)", flexShrink: 0 }}
-    />
-  ) : (
+  const circleStyle: React.CSSProperties = {
+    width: size, height: size, borderRadius: "50%", objectFit: "cover",
+    border: "2px solid rgba(217,119,6,0.4)", flexShrink: 0,
+  };
+
+  if (avatarBase64) {
+    return <img src={avatarBase64} alt="Profile" style={circleStyle} />;
+  }
+  if (googlePhotoUrl && !googleFailed) {
+    return (
+      <img src={googlePhotoUrl} alt="Profile" referrerPolicy="no-referrer"
+        onError={() => setGoogleFailed(true)} style={circleStyle} />
+    );
+  }
+  return (
     <div style={{
       width: size, height: size, borderRadius: "50%", display: "flex", alignItems: "center",
       justifyContent: "center", background: "linear-gradient(135deg, #d97706 0%, #b45309 100%)",
@@ -104,11 +108,11 @@ export default function SettingsPanel({
   onVoiceChange,
   currentCompanionName,
   onNameChange,
-  currentPhotoUrl,
+  currentAvatarBase64,
   googlePhotoUrl,
   userFullName,
   userName,
-  onPhotoChange,
+  onAvatarChange,
   winddownSettings,
   onWinddownChange,
   localTime,
@@ -126,8 +130,7 @@ export default function SettingsPanel({
   const [savingName, setSavingName] = useState(false);
   const [nameSaved, setNameSaved] = useState(false);
 
-  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
-  const [photoBase64, setPhotoBase64] = useState<string | null>(null);
+  const [pendingAvatarDataUrl, setPendingAvatarDataUrl] = useState<string | null>(null);
   const [savingPhoto, setSavingPhoto] = useState(false);
   const [photoError, setPhotoError] = useState<string | null>(null);
 
@@ -138,8 +141,8 @@ export default function SettingsPanel({
     if (!isOpen) return;
     setSelectedVoiceId(currentVoiceId);
     setNameInput(currentCompanionName);
-    setPhotoPreview(null);
-    setPhotoBase64(null);
+    setPendingAvatarDataUrl(null);
+    setPhotoError(null);
     setNameSaved(false);
   }, [isOpen, currentVoiceId, currentCompanionName]);
 
@@ -228,11 +231,12 @@ export default function SettingsPanel({
     console.log("[PHOTO] Step 1 — file selected:", file ? `${file.name} (${file.size} bytes, type="${file.type}")` : "none");
     if (!file) return;
     setPhotoError(null);
+    setPendingAvatarDataUrl(null);
 
-    const MAX = 10 * 1024 * 1024;
-    if (file.size > MAX) {
-      console.log("[PHOTO] Step 1 FAIL — file too large:", file.size, "bytes");
-      setPhotoError("Image is too large. Please choose a photo under 10 MB.");
+    const MAX_BYTES = 2 * 1024 * 1024;
+    if (file.size > MAX_BYTES) {
+      console.warn("[PHOTO] Step 1 FAIL — file too large:", file.size, "bytes (limit 2 MB)");
+      setPhotoError("Image too large — please choose a photo under 2 MB.");
       return;
     }
 
@@ -240,15 +244,13 @@ export default function SettingsPanel({
     const reader = new FileReader();
     reader.onload = (ev) => {
       const result = ev.target?.result as string;
-      if (!result || !result.includes(",")) {
+      if (!result || !result.startsWith("data:")) {
         console.error("[PHOTO] Step 2 FAIL — unexpected data URL format:", result?.slice(0, 40));
         setPhotoError("Could not read the file. Please try another image.");
         return;
       }
-      const b64 = result.split(",")[1];
-      console.log("[PHOTO] Step 2 OK — base64 length:", b64.length, "preview dataUrl prefix:", result.slice(0, 30));
-      setPhotoBase64(b64);
-      setPhotoPreview(result);
+      console.log("[PHOTO] Step 2 OK — data URL length:", result.length, "prefix:", result.slice(0, 30));
+      setPendingAvatarDataUrl(result);
     };
     reader.onerror = (ev) => {
       console.error("[PHOTO] Step 2 FAIL — FileReader error:", ev);
@@ -258,15 +260,13 @@ export default function SettingsPanel({
   }, []);
 
   const savePhoto = useCallback(async () => {
-    if (!photoBase64) { console.warn("[PHOTO] savePhoto called but no base64 data"); return; }
+    if (!pendingAvatarDataUrl) { console.warn("[PHOTO] savePhoto called but no pending data URL"); return; }
     setSavingPhoto(true);
     setPhotoError(null);
     try {
       const token = localStorage.getItem("winston_session_token") ?? "";
-      console.log("[PHOTO] Step 3 — sending to /api/profile/photo, base64 length:", photoBase64.length, "token prefix:", token ? token.slice(0, 8) : "MISSING");
-
-      const url = `${CHAT_BASE}/api/profile/photo`;
-      console.log("[PHOTO] Step 3 — POST to:", url);
+      const url = `${CHAT_BASE}/api/profile/avatar`;
+      console.log("[PHOTO] Step 3 — POST to:", url, "| data URL length:", pendingAvatarDataUrl.length, "| token prefix:", token.slice(0, 8) || "MISSING");
 
       const res = await fetch(url, {
         method: "POST",
@@ -274,30 +274,25 @@ export default function SettingsPanel({
           "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ imageBase64: photoBase64 }),
+        body: JSON.stringify({ avatarDataUrl: pendingAvatarDataUrl }),
       });
 
-      console.log("[PHOTO] Step 4 — server responded, HTTP status:", res.status);
+      console.log("[PHOTO] Step 4 — HTTP status:", res.status);
 
-      let data: { ok?: boolean; photoUrl?: string; error?: string } = {};
+      let data: { ok?: boolean; error?: string } = {};
       try {
         data = (await res.json()) as typeof data;
         console.log("[PHOTO] Step 4 — response body:", JSON.stringify(data));
       } catch (jsonErr) {
-        console.error("[PHOTO] Step 4 FAIL — could not parse JSON response:", jsonErr);
-        if (res.status === 413) {
-          setPhotoError("Image is too large. Please choose a photo under 10 MB.");
-          return;
-        }
-        setPhotoError("Upload failed (bad server response). Please try again.");
+        console.error("[PHOTO] Step 4 FAIL — JSON parse error:", jsonErr);
+        setPhotoError(res.status === 413 ? "Image too large (server rejected). Use a photo under 2 MB." : "Upload failed. Please try again.");
         return;
       }
 
-      if (data.ok && data.photoUrl) {
-        console.log("[PHOTO] Step 5 OK — photo URL:", data.photoUrl);
-        onPhotoChange(data.photoUrl);
-        setPhotoPreview(null);
-        setPhotoBase64(null);
+      if (data.ok) {
+        console.log("[PHOTO] Step 5 OK — avatar saved to DB");
+        onAvatarChange(pendingAvatarDataUrl);
+        setPendingAvatarDataUrl(null);
       } else {
         console.warn("[PHOTO] Step 5 FAIL — server error:", data.error);
         setPhotoError(data.error ?? "Upload failed. Please try again.");
@@ -308,24 +303,25 @@ export default function SettingsPanel({
     } finally {
       setSavingPhoto(false);
     }
-  }, [photoBase64, onPhotoChange]);
+  }, [pendingAvatarDataUrl, onAvatarChange]);
 
   const removeCustomPhoto = useCallback(async () => {
     const token = localStorage.getItem("winston_session_token") ?? "";
-    await fetch(`${CHAT_BASE}/api/profile/photo`, {
+    console.log("[PHOTO] Remove — DELETE /api/profile/avatar");
+    await fetch(`${CHAT_BASE}/api/profile/avatar`, {
       method: "DELETE",
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
-    onPhotoChange(null);
-    setPhotoPreview(null);
-    setPhotoBase64(null);
-  }, [onPhotoChange]);
+    console.log("[PHOTO] Remove — done");
+    onAvatarChange(null);
+    setPendingAvatarDataUrl(null);
+  }, [onAvatarChange]);
 
   if (!isOpen) return null;
 
   const voiceChanged = selectedVoiceId && selectedVoiceId !== currentVoiceId;
   const nameChanged = nameInput.trim() && nameInput.trim() !== currentCompanionName;
-  const displayPhotoUrl = photoPreview || currentPhotoUrl;
+  const displayAvatarBase64 = pendingAvatarDataUrl ?? currentAvatarBase64;
 
   return (
     <div
@@ -464,18 +460,18 @@ export default function SettingsPanel({
 
             <div className="flex items-start gap-4 mb-4">
               <AvatarPreview
-                photoUrl={displayPhotoUrl}
+                avatarBase64={displayAvatarBase64}
                 googlePhotoUrl={googlePhotoUrl}
                 fullName={userFullName}
                 size={64}
               />
               <div className="flex-1 min-w-0">
                 <p className="text-xs text-muted-foreground leading-relaxed mb-3">
-                  {currentPhotoUrl
+                  {currentAvatarBase64
                     ? "Custom photo active — shown in the header."
                     : googlePhotoUrl
                     ? "Using your Google profile photo. Upload a custom photo to override it."
-                    : "Upload any photo — a portrait, a favourite image, anything you like."}
+                    : "Upload any photo — a portrait, a favourite image, anything you like. (Max 2 MB)"}
                 </p>
                 <div className="flex gap-2 flex-wrap">
                   <button
@@ -483,9 +479,9 @@ export default function SettingsPanel({
                     className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full border border-white/15 bg-white/5 text-foreground/80 hover:bg-white/10 hover:border-white/25 transition-colors"
                   >
                     <Upload className="h-3 w-3" />
-                    {currentPhotoUrl ? "Replace photo" : "Upload photo"}
+                    {currentAvatarBase64 ? "Replace photo" : "Upload photo"}
                   </button>
-                  {currentPhotoUrl && (
+                  {currentAvatarBase64 && (
                     <button
                       onClick={() => void removeCustomPhoto()}
                       className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full border border-red-500/20 bg-red-950/20 text-red-400/80 hover:bg-red-950/40 hover:border-red-500/30 transition-colors"
@@ -505,12 +501,12 @@ export default function SettingsPanel({
               onChange={onFileSelect}
             />
 
-            {photoPreview && (
+            {pendingAvatarDataUrl && (
               <div className="mt-3 p-3 bg-white/5 border border-white/10 rounded-xl">
                 <p className="text-xs text-muted-foreground mb-2">Preview — looks good?</p>
                 <div className="flex items-center gap-3">
                   <img
-                    src={photoPreview}
+                    src={pendingAvatarDataUrl}
                     alt="Preview"
                     style={{ width: 48, height: 48, borderRadius: "50%", objectFit: "cover", border: "2px solid rgba(217,119,6,0.4)" }}
                   />
@@ -523,7 +519,7 @@ export default function SettingsPanel({
                       {savingPhoto ? <Loader2 className="h-3 w-3 animate-spin" /> : "Save photo"}
                     </Button>
                     <button
-                      onClick={() => { setPhotoPreview(null); setPhotoBase64(null); }}
+                      onClick={() => setPendingAvatarDataUrl(null)}
                       className="text-xs text-muted-foreground hover:text-foreground px-2 py-1 transition-colors"
                     >
                       Cancel
@@ -533,7 +529,7 @@ export default function SettingsPanel({
                 {photoError && <p className="text-xs text-red-400/80 mt-2">{photoError}</p>}
               </div>
             )}
-            {photoError && !photoPreview && (
+            {photoError && !pendingAvatarDataUrl && (
               <p className="text-xs text-red-400/80 mt-2">{photoError}</p>
             )}
           </section>
