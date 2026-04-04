@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, KeyboardEvent, ChangeEvent } from "react";
-import { Send, Play, Loader2, Disc3, Mic, MicOff, MapPin, Mail, LogOut, Settings, X, Moon, Bell, BellOff, Clock, ChevronDown, ChevronUp } from "lucide-react";
+import { Send, Play, Loader2, Disc3, Mic, MicOff, MapPin, Mail, LogOut, Settings, X, Moon, Bell, BellOff, Clock, ChevronDown, ChevronUp, HelpCircle } from "lucide-react";
 import { useTextToSpeech } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -1344,11 +1344,20 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
           </div>
         )}
 
+        {/* Help button */}
+        <button
+          onClick={() => window.open("/guide.html", "_blank", "noopener,noreferrer")}
+          className="text-muted-foreground hover:text-foreground transition-colors p-1.5 rounded-full hover:bg-white/10 border border-white/10 hover:border-white/20"
+          title="User guide"
+        >
+          <HelpCircle className="h-4 w-4" />
+        </button>
+
         {/* Settings gear */}
         <button
           onClick={() => { setShowSettings(true); setShowRemindersPanel(false); }}
           className="text-muted-foreground hover:text-foreground transition-colors p-1.5 rounded-full hover:bg-white/10 border border-white/10 hover:border-white/20"
-          title="Evening wind-down settings"
+          title="Settings"
         >
           <Settings className="h-4 w-4" />
         </button>
