@@ -229,18 +229,31 @@ export default function SettingsPanel({
     if (!file) return;
     setPhotoError(null);
 
-    // Format validation
-    const allowedTypes = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
-    const mime = (file.type || "").toLowerCase();
-    if (!allowedTypes.includes(mime)) {
-      setPhotoError("Wrong format. Please choose a JPG, PNG, or WebP image.");
+    // Resolve MIME type — prefer file.type, fall back to extension.
+    // Some browsers (especially iOS Safari) return an empty file.type.
+    const extMap: Record<string, string> = {
+      jpg: "image/jpeg", jpeg: "image/jpeg",
+      png: "image/png", webp: "image/webp",
+    };
+    const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+    const rawMime = (file.type || "").toLowerCase();
+    const mime = rawMime.startsWith("image/")
+      ? (rawMime === "image/jpg" ? "image/jpeg" : rawMime)
+      : (extMap[ext] ?? "");
+
+    if (!mime) {
+      setPhotoError("Unrecognised file type. Please choose a JPG, PNG, or WebP image.");
+      return;
+    }
+    if (!["image/jpeg", "image/png", "image/webp"].includes(mime)) {
+      setPhotoError(`"${ext.toUpperCase() || file.type}" is not supported. Please use a JPG, PNG, or WebP photo.`);
       return;
     }
 
-    // Size validation (8 MB)
-    const MAX = 8 * 1024 * 1024;
+    // Size validation (10 MB)
+    const MAX = 10 * 1024 * 1024;
     if (file.size > MAX) {
-      setPhotoError("Image is too large. Please choose a photo under 8 MB.");
+      setPhotoError("Image is too large. Please choose a photo under 10 MB.");
       return;
     }
 
@@ -249,7 +262,7 @@ export default function SettingsPanel({
       const result = ev.target?.result as string;
       const b64 = result.split(",")[1];
       setPhotoBase64(b64);
-      setPhotoMime(mime || "image/jpeg");
+      setPhotoMime(mime);
       setPhotoPreview(result);
     };
     reader.onerror = () => setPhotoError("Could not read the file. Please try another image.");
@@ -277,7 +290,7 @@ export default function SettingsPanel({
       } catch {
         // Non-JSON response (e.g. 413 from proxy)
         if (res.status === 413) {
-          setPhotoError("Image is too large. Please choose a photo under 8 MB.");
+          setPhotoError("Image is too large. Please choose a photo under 10 MB.");
           return;
         }
         setPhotoError("Upload failed. Please try again.");
@@ -489,7 +502,7 @@ export default function SettingsPanel({
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/jpeg,image/png,image/webp"
+              accept="image/jpeg,image/jpg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
               className="hidden"
               onChange={onFileSelect}
             />

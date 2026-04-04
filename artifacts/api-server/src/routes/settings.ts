@@ -111,7 +111,7 @@ router.patch("/settings/name", express.json({ limit: "1mb" }), async (req, res) 
 // Uploads a profile photo to Supabase Storage.
 // Uses Google ID as the filename so the same file is overwritten on each upload
 // (no storage bloat, and the URL stays consistent).
-router.post("/profile/photo", express.json({ limit: "12mb" }), async (req, res) => {
+router.post("/profile/photo", express.json({ limit: "16mb" }), async (req, res) => {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith("Bearer ")) {
     res.status(401).json({ error: "authentication_required" });
@@ -130,15 +130,20 @@ router.post("/profile/photo", express.json({ limit: "12mb" }), async (req, res) 
     return;
   }
 
-  // Format validation — only jpg/png/webp allowed
-  const cleanMime = (mimeType ?? "image/jpeg").toLowerCase().trim();
-  const allowed = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
+  // Normalise MIME type — map image/jpg → image/jpeg, default to jpeg if missing
+  const rawMime = (mimeType ?? "").toLowerCase().trim();
+  const cleanMime = rawMime === "image/jpg" ? "image/jpeg"
+    : rawMime.startsWith("image/") ? rawMime
+    : "image/jpeg";
+
+  // Only allow raster image formats Supabase Storage handles reliably
+  const allowed = ["image/jpeg", "image/png", "image/webp"];
   if (!allowed.includes(cleanMime)) {
-    res.status(400).json({ error: "Unsupported format. Please upload a JPG, PNG, or WebP image." });
+    res.status(400).json({ error: `Unsupported format (${rawMime || "unknown"}). Please upload a JPG, PNG, or WebP image.` });
     return;
   }
 
-  // Decode and size-check (8 MB limit after decode)
+  // Decode and size-check (10 MB limit after decode)
   let buf: Buffer;
   try {
     buf = Buffer.from(imageBase64, "base64");
@@ -146,8 +151,8 @@ router.post("/profile/photo", express.json({ limit: "12mb" }), async (req, res) 
     res.status(400).json({ error: "Invalid image data — could not decode." });
     return;
   }
-  if (buf.length > 8 * 1024 * 1024) {
-    res.status(400).json({ error: "Image is too large. Maximum allowed size is 8 MB." });
+  if (buf.length > 10 * 1024 * 1024) {
+    res.status(400).json({ error: "Image is too large. Maximum allowed size is 10 MB." });
     return;
   }
 
@@ -196,7 +201,7 @@ router.post("/profile/photo", express.json({ limit: "12mb" }), async (req, res) 
         return;
       }
       if (uploadRes.status === 413) {
-        res.status(400).json({ error: "Image is too large for storage. Please use an image under 8 MB." });
+        res.status(400).json({ error: "Image is too large for storage. Please use an image under 10 MB." });
         return;
       }
       res.status(500).json({ error: `Upload failed (HTTP ${uploadRes.status}). Please try again.` });
