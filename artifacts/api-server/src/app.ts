@@ -27,8 +27,8 @@ app.use(
   }),
 );
 app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ limit: "10mb", extended: true }));
 
 // Serve static files from the public folder
 const publicDir = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "public");
