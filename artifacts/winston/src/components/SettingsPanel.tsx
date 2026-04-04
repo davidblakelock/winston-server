@@ -237,10 +237,10 @@ export default function SettingsPanel({
       return;
     }
 
-    // Size validation (5 MB)
-    const MAX = 5 * 1024 * 1024;
+    // Size validation (8 MB)
+    const MAX = 8 * 1024 * 1024;
     if (file.size > MAX) {
-      setPhotoError("Image is too large. Please choose a photo under 5 MB.");
+      setPhotoError("Image is too large. Please choose a photo under 8 MB.");
       return;
     }
 
