@@ -1,7 +1,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { randomUUID } from "crypto";
 import { query } from "../db.js";
-import { addClient, removeClient } from "../reminders/sseStore.js";
+import { addClient, removeClient, broadcast } from "../reminders/sseStore.js";
 
 const router: IRouter = Router();
 
@@ -88,13 +88,19 @@ router.post("/reminders", async (req: Request, res: Response) => {
     ]
   );
 
-  res.json(rows[0]);
+  const newReminder = rows[0];
+  res.json(newReminder);
+
+  // Broadcast to all open tabs so their reminders lists update immediately
+  broadcast("reminder_sync", { action: "created", reminder: newReminder });
 });
 
 // ── DELETE /api/reminders/:id — cancel a reminder by ID ──────────────────────
 router.delete("/reminders/:id", async (req: Request, res: Response) => {
-  await query(`DELETE FROM reminders WHERE id = $1`, [req.params.id]);
+  const id = parseInt(req.params.id, 10);
+  await query(`DELETE FROM reminders WHERE id = $1`, [id]);
   res.json({ success: true });
+  broadcast("reminder_sync", { action: "deleted", id });
 });
 
 // ── DELETE /api/reminders/delete — body-based delete (alternate form) ─────────
@@ -103,6 +109,7 @@ router.delete("/reminders/delete", async (req: Request, res: Response) => {
   if (!id) { res.status(400).json({ error: "id required" }); return; }
   await query(`DELETE FROM reminders WHERE id = $1`, [id]);
   res.json({ success: true });
+  broadcast("reminder_sync", { action: "deleted", id: parseInt(String(id), 10) });
 });
 
 // ── POST /api/reminders/:id/snooze — delay a fired reminder by N minutes ─────

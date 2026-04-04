@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, KeyboardEvent, ChangeEvent } from "react";
-import { Send, Play, Loader2, Disc3, Mic, MicOff, MapPin, Mail, LogOut, Settings, X, Moon, Bell, BellOff } from "lucide-react";
+import { Send, Play, Loader2, Disc3, Mic, MicOff, MapPin, Mail, LogOut, Settings, X, Moon, Bell, BellOff, Clock, ChevronDown, ChevronUp } from "lucide-react";
 import { useTextToSpeech } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -25,6 +25,14 @@ interface ReminderEvent {
   userName: string;
   reminderText: string;
   speakText: string;
+}
+
+interface UpcomingReminder {
+  id: number;
+  reminder_text: string;
+  fire_at: string;
+  status: string;
+  recurring: string | null;
 }
 
 // ─── Browser TTS fallback ────────────────────────────────────────────────────
@@ -336,6 +344,8 @@ export default function Chat({ onSignOut, companionName: companionNameProp, user
   const [input, setInput] = useState("");
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [upcomingReminders, setUpcomingReminders] = useState<UpcomingReminder[]>([]);
+  const [showRemindersPanel, setShowRemindersPanel] = useState(false);
   const notif = useNotifications();
   const [notifBannerDismissed, setNotifBannerDismissed] = useState(
     () => localStorage.getItem("notif-banner-dismissed") === "1"
@@ -767,6 +777,14 @@ export default function Chat({ onSignOut, companionName: companionNameProp, user
     setSettingsSaving(false);
   }, [winddownSettings.enabled, localTime]);
 
+  // ── Load upcoming (pending) reminders on mount ────────────────────────────
+  useEffect(() => {
+    fetch(`${CHAT_BASE}/api/reminders/list`)
+      .then((r) => (r.ok ? (r.json() as Promise<UpcomingReminder[]>) : []))
+      .then((data) => setUpcomingReminders(Array.isArray(data) ? data : []))
+      .catch(() => {});
+  }, []);
+
   // ── SSE: reminders + wind-down start ──
   const fireWinddownStart = useCallback(
     (message: string) => {
@@ -790,6 +808,9 @@ export default function Chat({ onSignOut, companionName: companionNameProp, user
       if (spokenReminderIds.current.has(event.id)) return;
       spokenReminderIds.current.add(event.id);
 
+      // Remove from upcoming reminders panel since it's now firing
+      setUpcomingReminders((prev) => prev.filter((r) => r.id !== event.id));
+
       const msgId = `reminder-${event.id}-${Date.now()}`;
       const displayContent = `Hey David — your reminder: ${event.reminderText}`;
       setMessages((prev) => [
@@ -799,7 +820,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, user
       speakReply(msgId, event.speakText);
 
       // Acknowledge to the server so /api/reminders/due won't return this to other devices
-      fetch(`/api/reminders/${event.id}/acknowledge`, { method: "POST" }).catch(() => {});
+      fetch(`${CHAT_BASE}/api/reminders/${event.id}/acknowledge`, { method: "POST" }).catch(() => {});
     },
     [speakReply]
   );
@@ -811,18 +832,70 @@ export default function Chat({ onSignOut, companionName: companionNameProp, user
   useEffect(() => { fireWinddownStartRef.current = fireWinddownStart; }, [fireWinddownStart]);
 
   // ── SSE: real-time reminders + wind-down (primary delivery when app is open) ──
+  // Uses CHAT_BASE for correct path under any Vite base, with exponential-backoff
+  // reconnection so mobile devices auto-recover after SSE drops.
   useEffect(() => {
-    const es = new EventSource("/api/reminders/stream");
-    es.addEventListener("reminder", (e) => {
-      try { fireReminderAlertRef.current(JSON.parse(e.data) as ReminderEvent); } catch {}
-    });
-    es.addEventListener("winddown-start", (e) => {
-      try {
-        const data = JSON.parse(e.data) as { message: string };
-        fireWinddownStartRef.current(data.message);
-      } catch {}
-    });
-    return () => es.close();
+    let es: EventSource | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let backoffMs = 2_000;
+    let destroyed = false;
+
+    const attach = (source: EventSource) => {
+      source.addEventListener("reminder", (e) => {
+        try { fireReminderAlertRef.current(JSON.parse(e.data) as ReminderEvent); } catch {}
+      });
+
+      // Live sync: reminder created or deleted on any device
+      source.addEventListener("reminder_sync", (e) => {
+        try {
+          const data = JSON.parse(e.data) as {
+            action: "created" | "deleted";
+            reminder?: UpcomingReminder;
+            id?: number;
+          };
+          if (data.action === "created" && data.reminder) {
+            setUpcomingReminders((prev) => {
+              // Avoid duplicates
+              if (prev.some((r) => r.id === data.reminder!.id)) return prev;
+              return [...prev, data.reminder!].sort(
+                (a, b) => new Date(a.fire_at).getTime() - new Date(b.fire_at).getTime()
+              );
+            });
+          } else if (data.action === "deleted" && data.id != null) {
+            setUpcomingReminders((prev) => prev.filter((r) => r.id !== data.id));
+          }
+        } catch {}
+      });
+
+      source.addEventListener("winddown-start", (e) => {
+        try {
+          const data = JSON.parse(e.data) as { message: string };
+          fireWinddownStartRef.current(data.message);
+        } catch {}
+      });
+
+      source.onopen = () => { backoffMs = 2_000; }; // reset on successful connect
+
+      source.onerror = () => {
+        source.close();
+        if (destroyed) return;
+        reconnectTimer = setTimeout(() => {
+          if (destroyed) return;
+          backoffMs = Math.min(backoffMs * 2, 30_000);
+          es = new EventSource(`${CHAT_BASE}/api/reminders/stream`);
+          attach(es);
+        }, backoffMs);
+      };
+    };
+
+    es = new EventSource(`${CHAT_BASE}/api/reminders/stream`);
+    attach(es);
+
+    return () => {
+      destroyed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      es?.close();
+    };
   }, []); // empty deps — created once, refs always stay current
 
   // ── Polling fallback: checks /api/reminders/due every 30 s ───────────────────
@@ -831,7 +904,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, user
   useEffect(() => {
     const poll = async () => {
       try {
-        const res = await fetch("/api/reminders/due");
+        const res = await fetch(`${CHAT_BASE}/api/reminders/due`);
         if (!res.ok) return;
         const due = await res.json() as Array<{ id: number; reminder_text: string }>;
         for (const reminder of due) {
@@ -989,9 +1062,82 @@ export default function Chat({ onSignOut, companionName: companionNameProp, user
           </button>
         )}
 
+        {/* Upcoming reminders pill */}
+        {upcomingReminders.length > 0 && (
+          <div className="relative">
+            <button
+              onClick={() => setShowRemindersPanel((v) => !v)}
+              className="flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-full border transition-colors
+                border-amber-500/30 bg-amber-950/30 text-amber-400/90 hover:bg-amber-950/50 hover:border-amber-500/50"
+              title="Upcoming reminders"
+            >
+              <Clock className="h-3 w-3 flex-shrink-0" />
+              <span>{upcomingReminders.length}</span>
+              {showRemindersPanel
+                ? <ChevronUp className="h-3 w-3 flex-shrink-0" />
+                : <ChevronDown className="h-3 w-3 flex-shrink-0" />}
+            </button>
+
+            {/* Dropdown panel */}
+            {showRemindersPanel && (
+              <>
+                {/* invisible backdrop to close on outside-click */}
+                <div
+                  className="fixed inset-0 z-40"
+                  onClick={() => setShowRemindersPanel(false)}
+                />
+              <div className="absolute right-0 top-full mt-2 w-72 bg-card border border-white/10 rounded-2xl shadow-xl z-50 overflow-hidden">
+                <div className="px-4 py-3 border-b border-white/5">
+                  <p className="text-xs font-semibold tracking-widest uppercase text-muted-foreground">
+                    Upcoming Reminders
+                  </p>
+                </div>
+                <ul className="max-h-64 overflow-y-auto divide-y divide-white/5">
+                  {upcomingReminders.map((r) => {
+                    const when = new Date(r.fire_at);
+                    const now = new Date();
+                    const diffMs = when.getTime() - now.getTime();
+                    const diffMin = Math.round(diffMs / 60_000);
+                    const diffHr = Math.round(diffMs / 3_600_000);
+                    let timeLabel: string;
+                    if (diffMs < 0) timeLabel = "overdue";
+                    else if (diffMin < 60) timeLabel = `in ${diffMin}m`;
+                    else if (diffHr < 24) timeLabel = `in ${diffHr}h`;
+                    else {
+                      timeLabel = when.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+                    }
+                    return (
+                      <li key={r.id} className="px-4 py-2.5 flex items-start justify-between gap-3 hover:bg-white/5 transition-colors">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm text-foreground truncate">{r.reminder_text}</p>
+                          <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1">
+                            {r.recurring && <span className="text-primary/60">↻</span>}
+                            {timeLabel}
+                          </p>
+                        </div>
+                        <button
+                          onClick={async () => {
+                            await fetch(`${CHAT_BASE}/api/reminders/${r.id}`, { method: "DELETE" });
+                            setUpcomingReminders((prev) => prev.filter((x) => x.id !== r.id));
+                          }}
+                          className="text-muted-foreground/40 hover:text-red-400 transition-colors flex-shrink-0 mt-0.5"
+                          title="Cancel reminder"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+              </>
+            )}
+          </div>
+        )}
+
         {/* Settings gear */}
         <button
-          onClick={() => setShowSettings(true)}
+          onClick={() => { setShowSettings(true); setShowRemindersPanel(false); }}
           className="text-muted-foreground hover:text-foreground transition-colors p-1.5 rounded-full hover:bg-white/10 border border-white/10 hover:border-white/20"
           title="Evening wind-down settings"
         >
