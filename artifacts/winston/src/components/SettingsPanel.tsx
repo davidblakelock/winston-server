@@ -229,33 +229,19 @@ export default function SettingsPanel({
     if (!file) return;
     setPhotoError(null);
 
-    // Resolve MIME type — prefer file.type, fall back to extension.
-    // Some browsers (especially iOS Safari) return an empty file.type.
-    const extMap: Record<string, string> = {
-      jpg: "image/jpeg", jpeg: "image/jpeg",
-      png: "image/png", webp: "image/webp",
-    };
-    const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
-    const rawMime = (file.type || "").toLowerCase();
-    const mime = rawMime.startsWith("image/")
-      ? (rawMime === "image/jpg" ? "image/jpeg" : rawMime)
-      : (extMap[ext] ?? "");
-
-    if (!mime) {
-      setPhotoError("Unrecognised file type. Please choose a JPG, PNG, or WebP image.");
-      return;
-    }
-    if (!["image/jpeg", "image/png", "image/webp"].includes(mime)) {
-      setPhotoError(`"${ext.toUpperCase() || file.type}" is not supported. Please use a JPG, PNG, or WebP photo.`);
-      return;
-    }
-
-    // Size validation (10 MB)
+    // Size is the only check we do here — 10 MB hard limit.
+    // Format detection is done on the backend from the actual file bytes,
+    // so we don't try to second-guess browser MIME types (which are unreliable
+    // on iOS Safari and Chrome for Android).
     const MAX = 10 * 1024 * 1024;
     if (file.size > MAX) {
       setPhotoError("Image is too large. Please choose a photo under 10 MB.");
       return;
     }
+
+    // Pass the raw MIME to the backend as a hint; backend ignores it and
+    // detects format from magic bytes instead.
+    const mime = (file.type || "image/jpeg").toLowerCase();
 
     const reader = new FileReader();
     reader.onload = (ev) => {

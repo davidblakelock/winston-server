@@ -123,27 +123,15 @@ router.post("/profile/photo", express.json({ limit: "16mb" }), async (req, res) 
     return;
   }
 
-  const { imageBase64, mimeType } = req.body as { imageBase64?: string; mimeType?: string };
+  const { imageBase64 } = req.body as { imageBase64?: string; mimeType?: string };
 
   if (!imageBase64) {
     res.status(400).json({ error: "No image data received." });
     return;
   }
 
-  // Normalise MIME type — map image/jpg → image/jpeg, default to jpeg if missing
-  const rawMime = (mimeType ?? "").toLowerCase().trim();
-  const cleanMime = rawMime === "image/jpg" ? "image/jpeg"
-    : rawMime.startsWith("image/") ? rawMime
-    : "image/jpeg";
-
-  // Only allow raster image formats Supabase Storage handles reliably
-  const allowed = ["image/jpeg", "image/png", "image/webp"];
-  if (!allowed.includes(cleanMime)) {
-    res.status(400).json({ error: `Unsupported format (${rawMime || "unknown"}). Please upload a JPG, PNG, or WebP image.` });
-    return;
-  }
-
-  // Decode and size-check (10 MB limit after decode)
+  // Decode first — format detection happens from the actual bytes, not from
+  // the client-supplied MIME type (which is unreliable on iOS / Android).
   let buf: Buffer;
   try {
     buf = Buffer.from(imageBase64, "base64");
@@ -151,8 +139,29 @@ router.post("/profile/photo", express.json({ limit: "16mb" }), async (req, res) 
     res.status(400).json({ error: "Invalid image data — could not decode." });
     return;
   }
+
+  // Size check (10 MB on decoded bytes)
   if (buf.length > 10 * 1024 * 1024) {
     res.status(400).json({ error: "Image is too large. Maximum allowed size is 10 MB." });
+    return;
+  }
+
+  // Detect format from magic bytes — completely ignores client MIME type.
+  // JPEG: FF D8 FF
+  // PNG:  89 50 4E 47
+  // WebP: 52 49 46 46 ?? ?? ?? ?? 57 45 42 50  (RIFF....WEBP)
+  function detectImageFormat(b: Buffer): { mime: string; ext: string } | null {
+    if (b.length < 12) return null;
+    if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return { mime: "image/jpeg", ext: "jpg" };
+    if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return { mime: "image/png", ext: "png" };
+    if (b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 &&
+        b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) return { mime: "image/webp", ext: "webp" };
+    return null;
+  }
+
+  const fmt = detectImageFormat(buf);
+  if (!fmt) {
+    res.status(400).json({ error: "Unsupported image format. Please upload a JPG, PNG, or WebP photo." });
     return;
   }
 
@@ -166,12 +175,11 @@ router.post("/profile/photo", express.json({ limit: "16mb" }), async (req, res) 
 
   // File path: <googleId>.<ext> — one file per user, overwritten on each upload
   const fileId = session.googleId ?? session.userName;
-  const ext = cleanMime === "image/png" ? "png" : cleanMime === "image/webp" ? "webp" : "jpg";
-  const objectPath = `${fileId}.${ext}`;
+  const objectPath = `${fileId}.${fmt.ext}`;
   const uploadUrl = `${supabaseUrl}/storage/v1/object/profile-photos/${objectPath}`;
 
   req.log.info(
-    { userName: session.userName, googleId: session.googleId ?? "none", objectPath, mimeType: cleanMime, bytes: buf.length },
+    { userName: session.userName, googleId: session.googleId ?? "none", objectPath, detectedMime: fmt.mime, bytes: buf.length },
     "[PHOTO] Uploading to Supabase Storage…"
   );
 
@@ -180,7 +188,7 @@ router.post("/profile/photo", express.json({ limit: "16mb" }), async (req, res) 
       method: "POST",
       headers: {
         Authorization: `Bearer ${serviceKey}`,
-        "Content-Type": cleanMime,
+        "Content-Type": fmt.mime,
         "x-upsert": "true",
       },
       body: buf,
