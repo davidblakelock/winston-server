@@ -14,6 +14,100 @@ import { useAuth } from "@/hooks/useAuth";
 const queryClient = new QueryClient();
 const API = import.meta.env.BASE_URL.replace(/\/$/, "");
 
+// ── In-app browser detection & banner ────────────────────────────────────────
+
+const WINSTON_URL = "https://winston-companion--davidblakelock.replit.app/";
+const ANDROID_CHROME_INTENT = `intent://${WINSTON_URL.replace(/^https?:\/\//, "")}#Intent;scheme=https;package=com.android.chrome;end`;
+
+function detectInAppBrowser(): { detected: boolean; isAndroid: boolean; appName: string } {
+  const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
+  const isAndroid = /Android/i.test(ua);
+  // Known in-app browser markers
+  const markers: { pattern: RegExp; name: string }[] = [
+    { pattern: /FBAN|FBAV|FB_IAB|FBIOS/i, name: "Facebook" },
+    { pattern: /Instagram/i, name: "Instagram" },
+    { pattern: /Twitter|twttr/i, name: "Twitter / X" },
+    { pattern: /LinkedInApp/i, name: "LinkedIn" },
+    { pattern: /MicroMessenger/i, name: "WeChat" },
+    { pattern: /musical_ly|TikTok/i, name: "TikTok" },
+    { pattern: /Snapchat/i, name: "Snapchat" },
+    // Gmail / Google App WebView
+    { pattern: /GSA\//i, name: "Gmail" },
+    // Generic Android WebView (wv flag, or WebView without Chrome/Firefox/Samsung)
+    { pattern: /wv\)|; wv;/i, name: "in-app browser" },
+  ];
+  // If it looks like a real browser, don't flag it
+  const isSafariNative = /Safari\//.test(ua) && !/Chrome\/|CriOS\/|FxiOS\//.test(ua) && !/FBAN|FBAV|Instagram|Twitter|GSA|LinkedInApp|wv\)/i.test(ua);
+  const isChrome = /Chrome\//.test(ua) && !/Edg\/|OPR\//.test(ua) && !/wv\)|; wv;/i.test(ua);
+  const isFirefox = /Firefox\/|FxiOS\//.test(ua);
+  if (isSafariNative || isChrome || isFirefox) return { detected: false, isAndroid, appName: "" };
+
+  for (const { pattern, name } of markers) {
+    if (pattern.test(ua)) return { detected: true, isAndroid, appName: name };
+  }
+  return { detected: false, isAndroid, appName: "" };
+}
+
+function InAppBrowserBanner() {
+  const [dismissed, setDismissed] = useState(() => sessionStorage.getItem("iab-banner-dismissed") === "1");
+  const { detected, isAndroid, appName } = detectInAppBrowser();
+
+  if (!detected || dismissed) return null;
+
+  const handleDismiss = () => {
+    sessionStorage.setItem("iab-banner-dismissed", "1");
+    setDismissed(true);
+  };
+
+  return (
+    <div
+      className="fixed top-0 left-0 right-0 z-[100] px-4 py-3 text-sm shadow-xl"
+      style={{
+        background: "linear-gradient(90deg, #92400e 0%, #78350f 60%, #92400e 100%)",
+        borderBottom: "1px solid rgba(217,119,6,0.5)",
+      }}
+    >
+      <div className="max-w-lg mx-auto">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex-1 min-w-0">
+            <p className="font-semibold text-amber-50 leading-snug">
+              For the best experience, open Winston in Chrome
+            </p>
+            <p className="text-amber-200/80 text-xs mt-0.5 leading-relaxed">
+              {appName ? `You're currently in the ${appName} browser. ` : ""}
+              {isAndroid
+                ? 'Tap the three-dot menu (⋮) and select "Open in Chrome".'
+                : 'Tap the share icon and select "Open in Safari" or "Open in Chrome".'}
+            </p>
+          </div>
+          <button
+            onClick={handleDismiss}
+            aria-label="Dismiss"
+            className="flex-shrink-0 text-amber-200/60 hover:text-amber-100 transition-colors text-lg leading-none mt-0.5"
+          >
+            ✕
+          </button>
+        </div>
+        {isAndroid && (
+          <a
+            href={ANDROID_CHROME_INTENT}
+            className="mt-2.5 w-full flex items-center justify-center gap-2 rounded-lg px-4 py-2 font-semibold text-sm text-white transition-colors"
+            style={{ background: "rgba(0,0,0,0.35)", border: "1px solid rgba(217,119,6,0.5)" }}
+          >
+            <svg className="h-4 w-4 flex-shrink-0" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="10" fill="#4285F4"/>
+              <path d="M12 12m-4 0a4 4 0 1 0 8 0a4 4 0 1 0 -8 0" fill="white"/>
+              <path d="M12 8h8.9A10 10 0 0 0 3.6 6.3L7.7 13" stroke="#EA4335" strokeWidth="2" fill="none"/>
+              <path d="M12 8a4 4 0 0 1 3.46 2H20.9" stroke="#FBBC05" strokeWidth="2" fill="none"/>
+            </svg>
+            Open in Chrome
+          </a>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Loading spinner ───────────────────────────────────────────────────────────
 
 function LoadingScreen() {
@@ -276,6 +370,7 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
+        <InAppBrowserBanner />
         <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
           <Switch>
             <Route path="/demo">{() => <Demo />}</Route>
