@@ -414,6 +414,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [localTime, setLocalTime] = useState("21:00");
   const [showEmergency, setShowEmergency] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<"online" | "reconnecting" | "offline">("online");
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -622,6 +623,92 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
     [playElevenLabsAudio, playBrowserTTS]
   );
 
+  // ── Session validity check (Bug 6) ───────────────────────────────────────
+  // Check on startup if the session token is still valid. If it has expired,
+  // clear credentials and redirect to login so the user re-authenticates cleanly.
+  useEffect(() => {
+    const token = localStorage.getItem("winston_session_token");
+    if (!token) return;
+    const baseUrl = (import.meta.env.BASE_URL as string).replace(/\/$/, "");
+    fetch(`${baseUrl}/api/auth/session`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(async (r) => {
+        if (r.status === 401 || r.status === 403) {
+          // Session expired — clear credentials and redirect to login
+          localStorage.removeItem("winston_session_token");
+          localStorage.removeItem("winston_user_name");
+          localStorage.removeItem("winston_companion_name");
+          localStorage.removeItem("winston_user_picture");
+          localStorage.removeItem("winston_voice_id");
+          window.location.href = (import.meta.env.BASE_URL as string) || "/";
+        }
+      })
+      .catch(() => {}); // network error — don't log out, just ignore
+  }, []);
+
+  // ── Keep-alive ping + connection status (Bug 1) ───────────────────────────
+  // Pings /api/health every 5 minutes to keep the server connection warm and
+  // detect if the app has gone stale. Retries every 30s if the server is down,
+  // and shows a subtle reconnecting indicator in the header.
+  useEffect(() => {
+    const baseUrl = (import.meta.env.BASE_URL as string).replace(/\/$/, "");
+    let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
+    let reconnectTimer: ReturnType<typeof setInterval> | null = null;
+
+    const ping = async (): Promise<boolean> => {
+      try {
+        const r = await fetch(`${baseUrl}/api/health`, { cache: "no-store" });
+        return r.ok;
+      } catch {
+        return false;
+      }
+    };
+
+    const startReconnecting = () => {
+      setConnectionStatus("reconnecting");
+      reconnectTimer = setInterval(async () => {
+        const ok = await ping();
+        if (ok) {
+          setConnectionStatus("online");
+          if (reconnectTimer) { clearInterval(reconnectTimer); reconnectTimer = null; }
+        }
+      }, 30_000);
+    };
+
+    const runPing = async () => {
+      const ok = await ping();
+      if (!ok) {
+        setConnectionStatus("reconnecting");
+        startReconnecting();
+      } else {
+        setConnectionStatus("online");
+      }
+    };
+
+    // Ping every 5 minutes
+    keepAliveTimer = setInterval(() => { void runPing(); }, 5 * 60_000);
+
+    // Log system health every 5 min in console (for diagnostics)
+    const logHealth = async () => {
+      try {
+        const r = await fetch(`${baseUrl}/api/health`, { cache: "no-store" });
+        if (r.ok) {
+          const data = await r.json() as { db: string; uptime: number; dbLatencyMs: number };
+          console.log(`[HEALTH] db=${data.db} uptime=${data.uptime}s dbLatency=${data.dbLatencyMs}ms`);
+        }
+      } catch {}
+    };
+    void logHealth();
+    const healthLogTimer = setInterval(() => { void logHealth(); }, 5 * 60_000);
+
+    return () => {
+      if (keepAliveTimer) clearInterval(keepAliveTimer);
+      if (reconnectTimer) clearInterval(reconnectTimer);
+      clearInterval(healthLogTimer);
+    };
+  }, []);
+
   // ── Fetch saved navigation places from API ────────────────────────────────
   // Pre-loaded so detectNavUrl() works immediately when the user hits Send.
   useEffect(() => {
@@ -711,43 +798,75 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
       setInput("");
       if (textareaRef.current) textareaRef.current.style.height = "auto";
 
+      // Bug 5: Warm error + auto-retry. First failure shows a gentle message and
+      // retries automatically once. Second failure shows a final message.
+      let chatRetried = false;
+
+      const onComplete = (reply: string, navUrl?: string) => {
+        speakReply(assistantMsgId, reply);
+        const resolvedNavUrl = navUrl ?? immediateNavUrl ?? undefined;
+        if (resolvedNavUrl) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMsgId ? { ...m, navigationUrl: resolvedNavUrl } : m
+            )
+          );
+        }
+        const token = localStorage.getItem("winston_session_token");
+        if (token) {
+          const baseUrl = (import.meta.env.BASE_URL as string).replace(/\/$/, "");
+          fetch(`${baseUrl}/api/messages`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+            body: JSON.stringify({
+              messages: [
+                { role: "user", content: userMsg.content },
+                { role: "assistant", content: reply },
+              ],
+            }),
+          }).catch(() => {});
+        }
+      };
+
+      const onError = (errReply?: string) => {
+        if (errReply) {
+          // Backend sent a specific error (e.g., Claude overload) — show it directly
+          setMessages((prev) =>
+            prev.map((m) => m.id === assistantMsgId ? { ...m, content: errReply } : m)
+          );
+          return;
+        }
+        if (!chatRetried) {
+          // First failure: warm message + auto-retry in 2 seconds
+          chatRetried = true;
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMsgId
+                ? { ...m, content: "I seem to be having a moment — give me just a second…" }
+                : m
+            )
+          );
+          setTimeout(() => {
+            streamChat(userMsg.content, historyForApi, assistantMsgId, onComplete, onError);
+          }, 2000);
+        } else {
+          // Second failure: final error message
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMsgId
+                ? { ...m, content: "I'm having some technical difficulties right now. Everything should be back to normal shortly." }
+                : m
+            )
+          );
+        }
+      };
+
       streamChat(
         userMsg.content,
         historyForApi,
         assistantMsgId,
-        (reply, navUrl) => {
-          speakReply(assistantMsgId, reply);
-          // Store navUrl on the message so the bubble "Open in Maps" link works.
-          // Also fall back to the url we detected client-side if API didn't return one.
-          const resolvedNavUrl = navUrl ?? immediateNavUrl ?? undefined;
-          if (resolvedNavUrl) {
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantMsgId ? { ...m, navigationUrl: resolvedNavUrl } : m
-              )
-            );
-          }
-          const token = localStorage.getItem("winston_session_token");
-          if (token) {
-            const baseUrl = (import.meta.env.BASE_URL as string).replace(/\/$/, "");
-            fetch(`${baseUrl}/api/messages`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-              body: JSON.stringify({
-                messages: [
-                  { role: "user", content: userMsg.content },
-                  { role: "assistant", content: reply },
-                ],
-              }),
-            }).catch(() => {});
-          }
-        },
-        (errReply) => {
-          const fallback = errReply ?? "I'm having trouble right now. Please try again.";
-          setMessages((prev) =>
-            prev.map((m) => m.id === assistantMsgId ? { ...m, content: fallback } : m)
-          );
-        },
+        onComplete,
+        onError,
       );
     },
     [messages, isStreaming, streamChat, speakReply]
@@ -1082,7 +1201,14 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
           </Avatar>
           <div>
             <h1 className="text-xl font-serif font-medium text-foreground tracking-wide">{companionName}</h1>
-            <p className="text-xs text-muted-foreground font-medium tracking-widest uppercase">Always Here</p>
+            {connectionStatus === "reconnecting" ? (
+              <p className="text-xs text-amber-400/80 font-medium tracking-widest uppercase flex items-center gap-1.5">
+                <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
+                Reconnecting…
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground font-medium tracking-widest uppercase">Always Here</p>
+            )}
           </div>
         </div>
 

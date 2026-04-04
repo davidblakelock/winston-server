@@ -40,6 +40,22 @@ export function isNotificationsSupported(): boolean {
   );
 }
 
+// ── Stable per-device identifier ──────────────────────────────────────────────
+// Each browser/device gets a unique ID stored in localStorage. This ensures
+// that every device (phone, laptop, tablet) gets its own push_subscriptions row
+// so notifications reach the right device.
+function getOrCreateDeviceId(): string {
+  const key = "winston_device_id";
+  let id = localStorage.getItem(key);
+  if (!id) {
+    // Generate a random ID with timestamp for uniqueness
+    id = `dev_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    localStorage.setItem(key, id);
+    LOG("Generated new device ID:", id);
+  }
+  return id;
+}
+
 async function getVapidPublicKey(): Promise<string | null> {
   try {
     LOG("Fetching VAPID public key from server…");
@@ -74,6 +90,7 @@ async function sendSubscriptionToServer(sub: PushSubscription): Promise<void> {
 
   const token = getSessionToken();
   const userName = getUserName();
+  const deviceId = getOrCreateDeviceId();
 
   const payload = {
     endpoint: sub.endpoint,
@@ -82,11 +99,12 @@ async function sendSubscriptionToServer(sub: PushSubscription): Promise<void> {
       auth: arrayBufferToBase64(auth),
     },
     userName,
+    deviceId,
   };
 
   LOG("Sending subscription to /api/push/subscribe…");
   LOG("  endpoint (last 30):", sub.endpoint.slice(-30));
-  LOG("  userName:", userName);
+  LOG("  userName:", userName, "| deviceId:", deviceId);
 
   const res = await fetch(`${BASE}api/push/subscribe`, {
     method: "POST",
@@ -99,7 +117,7 @@ async function sendSubscriptionToServer(sub: PushSubscription): Promise<void> {
 
   const data = await res.json() as { success?: boolean; error?: string; id?: number };
   if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
-  LOG("✅ Subscription saved to Supabase — row id:", data.id);
+  LOG("✅ Subscription saved to Supabase — row id:", data.id, "| device:", deviceId);
 }
 
 async function deleteSubscriptionFromServer(endpoint: string): Promise<void> {
@@ -117,7 +135,7 @@ async function doSubscribe(
   setPermission: (v: NotificationPermission) => void,
   forceRenew = false
 ): Promise<boolean> {
-  LOG("=== Starting push subscription flow ===");
+  LOG("=== Starting push subscription flow === device:", getOrCreateDeviceId());
   LOG("Browser support:", isNotificationsSupported());
 
   // 1. Register service worker
@@ -151,7 +169,7 @@ async function doSubscribe(
   if (!forceRenew) {
     const existing = await reg.pushManager.getSubscription();
     if (existing) {
-      LOG("Existing PushManager subscription found — re-registering with server to ensure Supabase row exists");
+      LOG("Existing PushManager subscription found — re-registering with server to ensure Supabase row exists for device:", getOrCreateDeviceId());
       try {
         await sendSubscriptionToServer(existing);
         setIsSubscribed(true);
@@ -184,10 +202,10 @@ async function doSubscribe(
   });
   LOG("Push subscription created:", sub.endpoint.slice(-40));
 
-  // 6. Save to server (→ Supabase)
+  // 6. Save to server (→ Supabase) with device ID
   await sendSubscriptionToServer(sub);
   setIsSubscribed(true);
-  LOG("=== Push subscription flow complete ✅ ===");
+  LOG("=== Push subscription flow complete ✅ === device:", getOrCreateDeviceId());
   return true;
 }
 
@@ -200,7 +218,9 @@ export function useNotifications(): UseNotificationsResult {
   const [isSubscribed, setIsSubscribed] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
-  // On mount: relay token to SW, and auto-register if already permitted
+  // On EVERY mount: relay token to SW and auto-register if permission already granted.
+  // This ensures every device (phone, laptop, etc.) has its own row in push_subscriptions
+  // even after app updates or service worker restarts clear existing subscriptions.
   useEffect(() => {
     if (!supported) return;
 
@@ -208,18 +228,21 @@ export function useNotifications(): UseNotificationsResult {
       // Relay session token to service worker for auth
       sendTokenToServiceWorker(getSessionToken());
 
-      reg.pushManager.getSubscription().then(async (sub) => {
+      void (async () => {
+        const sub = await reg.pushManager.getSubscription();
         if (sub) {
-          LOG("Mount check: PushManager subscription exists — ensuring Supabase row is current");
+          LOG("Mount check: PushManager subscription exists — silently re-registering device:", getOrCreateDeviceId());
           setIsSubscribed(true);
-          // Silently re-register to make sure the Supabase row exists
+          // Always re-register on every page load to ensure the Supabase row exists for THIS device
           try {
             await sendSubscriptionToServer(sub);
+            LOG("Mount check: device subscription refreshed in Supabase ✅");
           } catch (e) {
-            LOG("Silent re-registration failed (non-fatal):", e);
+            LOG("Mount check: silent re-registration failed (non-fatal):", e);
           }
         } else if (Notification.permission === "granted") {
-          LOG("Mount check: permission=granted but no subscription — auto-subscribing");
+          // Permission granted but no subscription — create one automatically and silently
+          LOG("Mount check: permission=granted but no subscription — auto-subscribing device:", getOrCreateDeviceId());
           setIsLoading(true);
           try {
             await doSubscribe(setIsSubscribed, setPermission, false);
@@ -229,9 +252,9 @@ export function useNotifications(): UseNotificationsResult {
             setIsLoading(false);
           }
         } else {
-          LOG("Mount check: permission =", Notification.permission, "| no subscription");
+          LOG("Mount check: permission =", Notification.permission, "| no subscription — waiting for user to grant");
         }
-      });
+      })();
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supported]);
@@ -253,7 +276,7 @@ export function useNotifications(): UseNotificationsResult {
   const resubscribe = useCallback(async (): Promise<boolean> => {
     if (!supported) return false;
     setIsLoading(true);
-    LOG("=== Re-enable Notifications triggered ===");
+    LOG("=== Re-enable Notifications triggered === device:", getOrCreateDeviceId());
     try {
       return await doSubscribe(setIsSubscribed, setPermission, true);
     } catch (err) {
@@ -274,7 +297,7 @@ export function useNotifications(): UseNotificationsResult {
         await deleteSubscriptionFromServer(sub.endpoint);
         await sub.unsubscribe();
         setIsSubscribed(false);
-        LOG("Unsubscribed successfully");
+        LOG("Unsubscribed successfully — device:", getOrCreateDeviceId());
       }
     } catch (err) {
       ERR("Unsubscribe failed:", err);

@@ -35,18 +35,20 @@ export interface PushSubscriptionData {
 export async function saveSubscription(
   userName: string,
   sub: PushSubscriptionData,
-  userAgent?: string
+  userAgent?: string,
+  deviceId?: string
 ): Promise<number | null> {
   const { rows } = await query<{ id: number }>(
-    `INSERT INTO push_subscriptions (user_name, endpoint, p256dh, auth, user_agent)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO push_subscriptions (user_name, endpoint, p256dh, auth, user_agent, device_id)
+     VALUES ($1, $2, $3, $4, $5, $6)
      ON CONFLICT (endpoint) DO UPDATE SET
        user_name = EXCLUDED.user_name,
        p256dh = EXCLUDED.p256dh,
        auth = EXCLUDED.auth,
-       user_agent = EXCLUDED.user_agent
+       user_agent = EXCLUDED.user_agent,
+       device_id = EXCLUDED.device_id
      RETURNING id`,
-    [userName, sub.endpoint, sub.p256dh, sub.auth, userAgent ?? null]
+    [userName, sub.endpoint, sub.p256dh, sub.auth, userAgent ?? null, deviceId ?? null]
   );
   return rows[0]?.id ?? null;
 }

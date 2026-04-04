@@ -31,10 +31,12 @@ router.post("/push/subscribe", async (req, res) => {
       endpoint,
       keys,
       userName = "David",
+      deviceId,
     } = req.body as {
       endpoint: string;
       keys: { p256dh: string; auth: string };
       userName?: string;
+      deviceId?: string;
     };
 
     // Validate required fields
@@ -62,11 +64,12 @@ router.post("/push/subscribe", async (req, res) => {
         userName,
         endpointTail: endpoint.slice(-30),
         userAgent: userAgent.slice(0, 80),
+        deviceId: deviceId ?? "none",
       },
       "[PUSH] Saving subscription to Supabase…"
     );
 
-    const savedId = await saveSubscription(userName, sub, userAgent);
+    const savedId = await saveSubscription(userName, sub, userAgent, deviceId);
 
     logger.info(
       { userName, endpointTail: endpoint.slice(-30), savedId },

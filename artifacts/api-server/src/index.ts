@@ -65,6 +65,14 @@ app.listen(port, async (err) => {
     logger.warn({ e }, "Medication seed warning");
   }
 
+  // Add device_id column to push_subscriptions for multi-device notification routing.
+  try {
+    await query(`ALTER TABLE push_subscriptions ADD COLUMN IF NOT EXISTS device_id text`);
+    logger.info("Startup migration: push_subscriptions.device_id column ready");
+  } catch (e) {
+    logger.warn({ e }, "Startup migration warning: push_subscriptions device_id");
+  }
+
   // One-time data migration: set companion_name for David if it was never saved during onboarding.
   // Safe to run every startup — WHERE condition makes it a no-op once the name is set.
   try {
