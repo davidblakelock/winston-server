@@ -1,0 +1,18 @@
+The photo upload feature is completely broken and not allowing any photos to be uploaded regardless of file size. Please completely rebuild the photo upload feature from scratch. Here is exactly how it should work.
+Step 1 — Frontend: Add a photo upload button in the settings panel. When clicked it opens the device file picker filtered to image files jpg png and webp only. When the user selects a photo immediately show a preview of the image in a circle so they can confirm it looks right before saving.
+Step 2 — Upload: When the user confirms convert the image to base64 on the frontend. Send it via POST request to a backend endpoint at /api/profile/photo with the base64 image data and the user's Google ID in the request body. Do not use multipart form data — use JSON with the base64 string.
+Step 3 — Backend: Create the POST route at /api/profile/photo. Receive the base64 image string. Validate it is a real image. Upload it to Supabase Storage in a bucket called profile-photos using the user's Google ID as the filename. Return the public URL of the uploaded image.
+Step 4 — Supabase Storage: Make sure a Supabase Storage bucket called profile-photos exists and has public read access. If it does not exist create it automatically when the first photo is uploaded.
+Step 5 — Save and display: Save the returned public URL to the user's profile in the Supabase user_profiles table. Immediately update the avatar displayed in the header to show the new photo. The avatar should be circular, approximately 40 pixels, and display cleanly on both desktop and mobile.
+Step 6 — Error handling: If anything fails show a specific friendly error message — file too large, wrong format, upload failed, storage not configured. Never show a generic failed message. Add console logging at every step so we can diagnose any issues.
+Please also verify that the Supabase Storage bucket profile-photos exists with public access before building the upload code. If it does not exist create it as part of this fix."
+While Replit builds — also do this in Supabase:
+
+Go to your Supabase dashboard
+Click Storage in the left sidebar
+Click New bucket
+Name it profile-photos
+Toggle Public bucket to ON
+Click Create bucket
+
+That bucket must exist before photo uploads will work

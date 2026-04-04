@@ -128,7 +128,6 @@ export default function SettingsPanel({
 
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [photoBase64, setPhotoBase64] = useState<string | null>(null);
-  const [photoMime, setPhotoMime] = useState<string>("image/jpeg");
   const [savingPhoto, setSavingPhoto] = useState(false);
   const [photoError, setPhotoError] = useState<string | null>(null);
 
@@ -226,77 +225,90 @@ export default function SettingsPanel({
   const onFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = "";
+    console.log("[PHOTO] Step 1 — file selected:", file ? `${file.name} (${file.size} bytes, type="${file.type}")` : "none");
     if (!file) return;
     setPhotoError(null);
 
-    // Size is the only check we do here — 10 MB hard limit.
-    // Format detection is done on the backend from the actual file bytes,
-    // so we don't try to second-guess browser MIME types (which are unreliable
-    // on iOS Safari and Chrome for Android).
     const MAX = 10 * 1024 * 1024;
     if (file.size > MAX) {
+      console.log("[PHOTO] Step 1 FAIL — file too large:", file.size, "bytes");
       setPhotoError("Image is too large. Please choose a photo under 10 MB.");
       return;
     }
 
-    // Pass the raw MIME to the backend as a hint; backend ignores it and
-    // detects format from magic bytes instead.
-    const mime = (file.type || "image/jpeg").toLowerCase();
-
+    console.log("[PHOTO] Step 2 — reading file with FileReader…");
     const reader = new FileReader();
     reader.onload = (ev) => {
       const result = ev.target?.result as string;
+      if (!result || !result.includes(",")) {
+        console.error("[PHOTO] Step 2 FAIL — unexpected data URL format:", result?.slice(0, 40));
+        setPhotoError("Could not read the file. Please try another image.");
+        return;
+      }
       const b64 = result.split(",")[1];
+      console.log("[PHOTO] Step 2 OK — base64 length:", b64.length, "preview dataUrl prefix:", result.slice(0, 30));
       setPhotoBase64(b64);
-      setPhotoMime(mime);
       setPhotoPreview(result);
     };
-    reader.onerror = () => setPhotoError("Could not read the file. Please try another image.");
+    reader.onerror = (ev) => {
+      console.error("[PHOTO] Step 2 FAIL — FileReader error:", ev);
+      setPhotoError("Could not read the file. Please try another image.");
+    };
     reader.readAsDataURL(file);
   }, []);
 
   const savePhoto = useCallback(async () => {
-    if (!photoBase64) return;
+    if (!photoBase64) { console.warn("[PHOTO] savePhoto called but no base64 data"); return; }
     setSavingPhoto(true);
     setPhotoError(null);
     try {
       const token = localStorage.getItem("winston_session_token") ?? "";
-      const res = await fetch(`${CHAT_BASE}/api/profile/photo`, {
+      console.log("[PHOTO] Step 3 — sending to /api/profile/photo, base64 length:", photoBase64.length, "token prefix:", token ? token.slice(0, 8) : "MISSING");
+
+      const url = `${CHAT_BASE}/api/profile/photo`;
+      console.log("[PHOTO] Step 3 — POST to:", url);
+
+      const res = await fetch(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ imageBase64: photoBase64, mimeType: photoMime }),
+        body: JSON.stringify({ imageBase64: photoBase64 }),
       });
+
+      console.log("[PHOTO] Step 4 — server responded, HTTP status:", res.status);
 
       let data: { ok?: boolean; photoUrl?: string; error?: string } = {};
       try {
         data = (await res.json()) as typeof data;
-      } catch {
-        // Non-JSON response (e.g. 413 from proxy)
+        console.log("[PHOTO] Step 4 — response body:", JSON.stringify(data));
+      } catch (jsonErr) {
+        console.error("[PHOTO] Step 4 FAIL — could not parse JSON response:", jsonErr);
         if (res.status === 413) {
           setPhotoError("Image is too large. Please choose a photo under 10 MB.");
           return;
         }
-        setPhotoError("Upload failed. Please try again.");
+        setPhotoError("Upload failed (bad server response). Please try again.");
         return;
       }
 
       if (data.ok && data.photoUrl) {
+        console.log("[PHOTO] Step 5 OK — photo URL:", data.photoUrl);
         onPhotoChange(data.photoUrl);
         setPhotoPreview(null);
         setPhotoBase64(null);
       } else {
-        // Use the server's specific message, or fall back to a sensible default
+        console.warn("[PHOTO] Step 5 FAIL — server error:", data.error);
         setPhotoError(data.error ?? "Upload failed. Please try again.");
       }
-    } catch {
+    } catch (err) {
+      console.error("[PHOTO] Step 3–5 network error:", err);
       setPhotoError("Couldn't reach the server. Check your connection and try again.");
     } finally {
       setSavingPhoto(false);
     }
-  }, [photoBase64, photoMime, onPhotoChange]);
+  }, [photoBase64, onPhotoChange]);
 
   const removeCustomPhoto = useCallback(async () => {
     const token = localStorage.getItem("winston_session_token") ?? "";
@@ -488,7 +500,7 @@ export default function SettingsPanel({
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/jpeg,image/jpg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+              accept="image/*"
               className="hidden"
               onChange={onFileSelect}
             />
