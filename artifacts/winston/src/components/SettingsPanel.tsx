@@ -225,21 +225,35 @@ export default function SettingsPanel({
 
   const onFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = "";
     if (!file) return;
     setPhotoError(null);
+
+    // Format validation
+    const allowedTypes = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
+    const mime = (file.type || "").toLowerCase();
+    if (!allowedTypes.includes(mime)) {
+      setPhotoError("Wrong format. Please choose a JPG, PNG, or WebP image.");
+      return;
+    }
+
+    // Size validation (5 MB)
     const MAX = 5 * 1024 * 1024;
-    if (file.size > MAX) { setPhotoError("Image must be under 5 MB."); return; }
-    const mime = file.type || "image/jpeg";
+    if (file.size > MAX) {
+      setPhotoError("Image is too large. Please choose a photo under 5 MB.");
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = (ev) => {
       const result = ev.target?.result as string;
       const b64 = result.split(",")[1];
       setPhotoBase64(b64);
-      setPhotoMime(mime);
+      setPhotoMime(mime || "image/jpeg");
       setPhotoPreview(result);
     };
+    reader.onerror = () => setPhotoError("Could not read the file. Please try another image.");
     reader.readAsDataURL(file);
-    e.target.value = "";
   }, []);
 
   const savePhoto = useCallback(async () => {
@@ -248,21 +262,38 @@ export default function SettingsPanel({
     setPhotoError(null);
     try {
       const token = localStorage.getItem("winston_session_token") ?? "";
-      const res = await fetch(`${CHAT_BASE}/api/settings/photo`, {
+      const res = await fetch(`${CHAT_BASE}/api/profile/photo`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({ imageBase64: photoBase64, mimeType: photoMime }),
       });
-      const data = (await res.json()) as { ok?: boolean; photoUrl?: string; error?: string };
+
+      let data: { ok?: boolean; photoUrl?: string; error?: string } = {};
+      try {
+        data = (await res.json()) as typeof data;
+      } catch {
+        // Non-JSON response (e.g. 413 from proxy)
+        if (res.status === 413) {
+          setPhotoError("Image is too large. Please choose a photo under 5 MB.");
+          return;
+        }
+        setPhotoError("Upload failed. Please try again.");
+        return;
+      }
+
       if (data.ok && data.photoUrl) {
         onPhotoChange(data.photoUrl);
         setPhotoPreview(null);
         setPhotoBase64(null);
       } else {
+        // Use the server's specific message, or fall back to a sensible default
         setPhotoError(data.error ?? "Upload failed. Please try again.");
       }
     } catch {
-      setPhotoError("Upload failed. Please try again.");
+      setPhotoError("Couldn't reach the server. Check your connection and try again.");
     } finally {
       setSavingPhoto(false);
     }
@@ -270,7 +301,7 @@ export default function SettingsPanel({
 
   const removeCustomPhoto = useCallback(async () => {
     const token = localStorage.getItem("winston_session_token") ?? "";
-    await fetch(`${CHAT_BASE}/api/settings/photo`, {
+    await fetch(`${CHAT_BASE}/api/profile/photo`, {
       method: "DELETE",
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });

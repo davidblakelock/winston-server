@@ -107,29 +107,75 @@ router.patch("/settings/name", express.json({ limit: "1mb" }), async (req, res) 
   res.json({ ok: true, companionName: name, audio });
 });
 
-// ── POST /api/settings/photo ──────────────────────────────────────────────────
-router.post("/settings/photo", express.json({ limit: "8mb" }), async (req, res) => {
-  const userName = await authenticate(req, res);
-  if (!userName) return;
-
-  const { imageBase64, mimeType = "image/jpeg" } = req.body as { imageBase64?: string; mimeType?: string };
-  if (!imageBase64) { res.status(400).json({ error: "imageBase64 required" }); return; }
-
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY()) {
-    res.status(500).json({ error: "Storage not configured" });
+// ── POST /api/profile/photo ────────────────────────────────────────────────────
+// Uploads a profile photo to Supabase Storage.
+// Uses Google ID as the filename so the same file is overwritten on each upload
+// (no storage bloat, and the URL stays consistent).
+router.post("/profile/photo", express.json({ limit: "10mb" }), async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith("Bearer ")) {
+    res.status(401).json({ error: "authentication_required" });
+    return;
+  }
+  const session = await validateSession(authHeader.slice(7));
+  if (!session) {
+    res.status(401).json({ error: "session_expired" });
     return;
   }
 
-  try {
-    const buf = Buffer.from(imageBase64, "base64");
-    const ext = mimeType === "image/png" ? "png" : mimeType === "image/webp" ? "webp" : "jpg";
-    const path = `${userName}/${Date.now()}.${ext}`;
+  const { imageBase64, mimeType } = req.body as { imageBase64?: string; mimeType?: string };
 
-    const uploadRes = await fetch(`${SUPABASE_URL}/storage/v1/object/profile-photos/${path}`, {
+  if (!imageBase64) {
+    res.status(400).json({ error: "No image data received." });
+    return;
+  }
+
+  // Format validation — only jpg/png/webp allowed
+  const cleanMime = (mimeType ?? "image/jpeg").toLowerCase().trim();
+  const allowed = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
+  if (!allowed.includes(cleanMime)) {
+    res.status(400).json({ error: "Unsupported format. Please upload a JPG, PNG, or WebP image." });
+    return;
+  }
+
+  // Decode and size-check (5 MB limit after decode)
+  let buf: Buffer;
+  try {
+    buf = Buffer.from(imageBase64, "base64");
+  } catch {
+    res.status(400).json({ error: "Invalid image data — could not decode." });
+    return;
+  }
+  if (buf.length > 5 * 1024 * 1024) {
+    res.status(400).json({ error: "Image is too large. Maximum allowed size is 5 MB." });
+    return;
+  }
+
+  const supabaseUrl = SUPABASE_URL.replace(/\/$/, "");
+  const serviceKey = SUPABASE_SERVICE_KEY();
+  if (!supabaseUrl || !serviceKey) {
+    req.log.error("SUPABASE_URL or SUPABASE_SERVICE_KEY not configured");
+    res.status(503).json({ error: "Storage is not configured on this server." });
+    return;
+  }
+
+  // File path: <googleId>.<ext> — one file per user, overwritten on each upload
+  const fileId = session.googleId ?? session.userName;
+  const ext = cleanMime === "image/png" ? "png" : cleanMime === "image/webp" ? "webp" : "jpg";
+  const objectPath = `${fileId}.${ext}`;
+  const uploadUrl = `${supabaseUrl}/storage/v1/object/profile-photos/${objectPath}`;
+
+  req.log.info(
+    { userName: session.userName, googleId: session.googleId ?? "none", objectPath, mimeType: cleanMime, bytes: buf.length },
+    "[PHOTO] Uploading to Supabase Storage…"
+  );
+
+  try {
+    const uploadRes = await fetch(uploadUrl, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${SUPABASE_SERVICE_KEY()}`,
-        "Content-Type": mimeType,
+        Authorization: `Bearer ${serviceKey}`,
+        "Content-Type": cleanMime,
         "x-upsert": "true",
       },
       body: buf,
@@ -137,53 +183,50 @@ router.post("/settings/photo", express.json({ limit: "8mb" }), async (req, res) 
 
     if (!uploadRes.ok) {
       const errText = await uploadRes.text().catch(() => "");
-      if (errText.includes("Bucket not found")) {
-        const bucketRes = await fetch(`${SUPABASE_URL}/storage/v1/bucket`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${SUPABASE_SERVICE_KEY()}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ id: "profile-photos", name: "profile-photos", public: true }),
+      req.log.warn({ status: uploadRes.status, errText, objectPath }, "[PHOTO] Supabase Storage upload failed");
+
+      if (uploadRes.status === 404 || errText.toLowerCase().includes("bucket not found") || errText.toLowerCase().includes("not found")) {
+        res.status(503).json({
+          error: "The profile-photos storage bucket does not exist. Please create it in Supabase Dashboard → Storage → New bucket → name: profile-photos → Public.",
         });
-        if (!bucketRes.ok) {
-          req.log.warn({ status: bucketRes.status }, "Failed to create storage bucket");
-          res.status(500).json({ error: "Storage setup failed" });
-          return;
-        }
-        const retry = await fetch(`${SUPABASE_URL}/storage/v1/object/profile-photos/${path}`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${SUPABASE_SERVICE_KEY()}`,
-            "Content-Type": mimeType,
-            "x-upsert": "true",
-          },
-          body: buf,
-        });
-        if (!retry.ok) { res.status(500).json({ error: "Upload failed" }); return; }
-      } else {
-        req.log.warn({ status: uploadRes.status, errText }, "Photo upload failed");
-        res.status(500).json({ error: "Upload failed" });
         return;
       }
+      if (uploadRes.status === 401 || uploadRes.status === 403) {
+        res.status(503).json({ error: "Storage permission denied. Check that SUPABASE_SERVICE_KEY has storage access." });
+        return;
+      }
+      if (uploadRes.status === 413) {
+        res.status(400).json({ error: "Image is too large for storage. Please use an image under 5 MB." });
+        return;
+      }
+      res.status(500).json({ error: `Upload failed (HTTP ${uploadRes.status}). Please try again.` });
+      return;
     }
 
-    const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/profile-photos/${path}`;
-    await updateProfileField(userName, { photoUrl: publicUrl });
+    // Build the public URL for the uploaded file
+    const publicUrl = `${supabaseUrl}/storage/v1/object/public/profile-photos/${objectPath}`;
+
+    // Persist to user_profiles
+    await updateProfileField(session.userName, { photoUrl: publicUrl });
+
+    req.log.info({ userName: session.userName, objectPath, publicUrl }, "[PHOTO] ✅ Photo uploaded and saved");
     res.json({ ok: true, photoUrl: publicUrl });
+
   } catch (err) {
-    req.log.error({ err }, "Photo upload error");
-    res.status(500).json({ error: "Upload error" });
+    req.log.error({ err }, "[PHOTO] Upload error");
+    res.status(500).json({ error: "Upload failed due to a server error. Please try again." });
   }
 });
 
-// ── DELETE /api/settings/photo ────────────────────────────────────────────────
-router.delete("/settings/photo", async (req, res) => {
+// ── DELETE /api/profile/photo  (and legacy /settings/photo) ──────────────────
+async function handlePhotoDelete(req: express.Request, res: express.Response) {
   const userName = await authenticate(req, res);
   if (!userName) return;
   await updateProfileField(userName, { photoUrl: "" });
   res.json({ ok: true });
-});
+}
+router.delete("/profile/photo", handlePhotoDelete);
+router.delete("/settings/photo", handlePhotoDelete);
 
 // ── GET /api/navigation/places ────────────────────────────────────────────────
 // Returns hardcoded saved locations merged with profile_items places.
