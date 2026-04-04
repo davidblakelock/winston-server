@@ -29,15 +29,31 @@ const DEFAULT_PLACES: SavedPlace[] = [
   { name: "Semones YMCA", address: "4332 Northaven Road Dallas Texas 75229", keywords: ["semones", "semones ymca", "semones y", "the gym", "gym", "the y", "ymca"] },
 ];
 
-function detectNavUrl(text: string, places: SavedPlace[]): string | null {
+interface DetectedNav {
+  url: string;
+  name: string;
+}
+
+function detectNav(text: string, places: SavedPlace[]): DetectedNav | null {
   if (!NAV_PHRASE_REGEX.test(text)) return null;
   const lower = text.toLowerCase();
   for (const place of places) {
     if (place.keywords.some((kw) => lower.includes(kw))) {
-      return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(place.address)}`;
+      return {
+        url: `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(place.address)}`,
+        name: place.name,
+      };
     }
   }
   return null;
+}
+
+function destinationFromUrl(url: string): string {
+  try {
+    return new URLSearchParams(new URL(url).search).get("destination") ?? "your destination";
+  } catch {
+    return "your destination";
+  }
 }
 
 interface Message {
@@ -48,6 +64,7 @@ interface Message {
   mimeType?: string;
   isReminder?: boolean;
   navigationUrl?: string;
+  navigationDestination?: string;
   isWinddown?: boolean;
 }
 
@@ -444,6 +461,8 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
   const [localTime, setLocalTime] = useState("21:00");
   const [showEmergency, setShowEmergency] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<"online" | "reconnecting" | "offline">("online");
+  const [navBannerVisible, setNavBannerVisible] = useState(false);
+  const navBannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -455,6 +474,12 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
   const browserTTS = useBrowserTTS();
   const [googleAuth, refreshGoogleAuth] = useGoogleAuth();
   const [isStreaming, setIsStreaming] = useState(false);
+
+  const triggerNavBanner = useCallback(() => {
+    setNavBannerVisible(true);
+    if (navBannerTimerRef.current) clearTimeout(navBannerTimerRef.current);
+    navBannerTimerRef.current = setTimeout(() => setNavBannerVisible(false), 60_000);
+  }, []);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -810,9 +835,16 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
       // ── Navigation: detect & open HERE (user-gesture context) ──────────────
       // window.open() MUST be called synchronously in the click handler.
       // Calling it later (inside async callbacks) gets blocked by popup blockers.
-      const immediateNavUrl = detectNavUrl(text.trim(), savedPlacesRef.current);
-      if (immediateNavUrl) {
-        window.open(immediateNavUrl, "_blank", "noopener,noreferrer");
+      const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+      const detectedNav = detectNav(text.trim(), savedPlacesRef.current);
+      const immediateNavUrl = detectedNav?.url ?? null;
+      if (detectedNav) {
+        if (!isMobile) {
+          // Desktop: open Maps in a new tab — Winston stays open in the original tab
+          window.open(detectedNav.url, "_blank", "noopener,noreferrer");
+        }
+        // Both desktop and mobile: show the return banner
+        triggerNavBanner();
       }
 
       const userMsg: Message = { id: Date.now().toString(), role: "user", content: text.trim() };
@@ -835,9 +867,10 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         speakReply(assistantMsgId, reply);
         const resolvedNavUrl = navUrl ?? immediateNavUrl ?? undefined;
         if (resolvedNavUrl) {
+          const resolvedDest = detectedNav?.name ?? destinationFromUrl(resolvedNavUrl);
           setMessages((prev) =>
             prev.map((m) =>
-              m.id === assistantMsgId ? { ...m, navigationUrl: resolvedNavUrl } : m
+              m.id === assistantMsgId ? { ...m, navigationUrl: resolvedNavUrl, navigationDestination: resolvedDest } : m
             )
           );
         }
@@ -1217,6 +1250,24 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
 
   return (
     <>
+    {/* ── "Return to Winston" sticky banner — shown for 60 s after navigation ─ */}
+    {navBannerVisible && (
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => {
+          scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+          setNavBannerVisible(false);
+        }}
+        onKeyDown={(e) => e.key === "Enter" && scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" })}
+        className="fixed top-0 left-0 right-0 z-50 flex items-center justify-center gap-2 px-4 py-3 cursor-pointer select-none animate-in slide-in-from-top-2 duration-300"
+        style={{ background: "linear-gradient(90deg, #92400e 0%, #78350f 60%, #92400e 100%)", borderBottom: "1px solid rgba(217,119,6,0.4)", boxShadow: "0 2px 12px rgba(0,0,0,0.4)" }}
+      >
+        <ChevronDown className="h-4 w-4 text-amber-200 flex-shrink-0" />
+        <span className="text-sm font-semibold text-amber-50 tracking-wide">Tap here to return to Winston</span>
+        <ChevronDown className="h-4 w-4 text-amber-200 flex-shrink-0" />
+      </div>
+    )}
     <div className="flex flex-col h-[100dvh] max-w-4xl mx-auto overflow-hidden bg-background">
       {/* Header */}
       <header className="flex-shrink-0 border-b border-white/5 py-3 px-4 sm:px-6 flex items-center justify-between bg-background/80 backdrop-blur-sm z-10 sticky top-0">
@@ -1497,8 +1548,6 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
                   ? "bg-primary/10 border border-primary/30 text-card-foreground rounded-bl-sm"
                   : msg.isWinddown
                   ? "bg-indigo-950/40 border border-indigo-500/20 text-card-foreground rounded-bl-sm"
-                  : msg.navigationUrl
-                  ? "bg-blue-950/40 border border-blue-500/20 text-card-foreground rounded-bl-sm"
                   : "bg-card border border-white/5 text-card-foreground rounded-bl-sm"
               }`}
             >
@@ -1511,13 +1560,31 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
                   Evening Wind-Down
                 </p>
               )}
-              {msg.navigationUrl && (
-                <p className="text-[11px] font-semibold tracking-widest uppercase text-blue-400/80 mb-2 flex items-center gap-1.5">
-                  <MapPin className="h-3 w-3" />
-                  Navigation
-                </p>
-              )}
               <div className="whitespace-pre-wrap font-sans">{msg.content}</div>
+
+              {/* Navigation card — shown for messages that triggered directions */}
+              {msg.role === "assistant" && msg.navigationUrl && (
+                <div className="mt-3 rounded-xl overflow-hidden border border-amber-700/40" style={{ background: "linear-gradient(135deg, rgba(120,53,15,0.35) 0%, rgba(146,64,14,0.25) 100%)" }}>
+                  <div className="px-3.5 pt-3 pb-1 flex items-center gap-2">
+                    <MapPin className="h-3.5 w-3.5 text-amber-400 flex-shrink-0" />
+                    <span className="text-[11px] font-semibold tracking-widest uppercase text-amber-400/90">Navigation</span>
+                  </div>
+                  {msg.navigationDestination && (
+                    <p className="px-3.5 pb-2 text-sm font-medium text-amber-100/90">{msg.navigationDestination}</p>
+                  )}
+                  <button
+                    onClick={() => {
+                      window.open(msg.navigationUrl!, "_blank", "noopener,noreferrer");
+                      triggerNavBanner();
+                    }}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-3 font-semibold text-sm text-white transition-colors hover:brightness-110 active:brightness-90"
+                    style={{ background: "linear-gradient(90deg, #b45309 0%, #92400e 100%)" }}
+                  >
+                    <MapPin className="h-4 w-4" />
+                    Open in Google Maps
+                  </button>
+                </div>
+              )}
 
               {msg.role === "assistant" && (
                 <div className="mt-4 pt-3 border-t border-white/5 flex items-center gap-2 flex-wrap">
@@ -1541,17 +1608,6 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
                   <span className="text-xs text-muted-foreground/70 font-medium">
                     {playingId === msg.id ? "Playing..." : "Listen"}
                   </span>
-                  {msg.navigationUrl && (
-                    <a
-                      href={msg.navigationUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-blue-500/20 border border-blue-500/30 text-xs font-semibold text-blue-300 hover:bg-blue-500/30 hover:text-blue-200 transition-all"
-                    >
-                      <MapPin className="h-3.5 w-3.5" />
-                      Open in Maps
-                    </a>
-                  )}
                 </div>
               )}
             </div>
