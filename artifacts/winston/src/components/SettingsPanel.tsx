@@ -277,7 +277,7 @@ export default function SettingsPanel({
       } catch {
         // Non-JSON response (e.g. 413 from proxy)
         if (res.status === 413) {
-          setPhotoError("Image is too large. Please choose a photo under 5 MB.");
+          setPhotoError("Image is too large. Please choose a photo under 8 MB.");
           return;
         }
         setPhotoError("Upload failed. Please try again.");

@@ -138,7 +138,7 @@ router.post("/profile/photo", express.json({ limit: "12mb" }), async (req, res) 
     return;
   }
 
-  // Decode and size-check (5 MB limit after decode)
+  // Decode and size-check (8 MB limit after decode)
   let buf: Buffer;
   try {
     buf = Buffer.from(imageBase64, "base64");
@@ -196,7 +196,7 @@ router.post("/profile/photo", express.json({ limit: "12mb" }), async (req, res) 
         return;
       }
       if (uploadRes.status === 413) {
-        res.status(400).json({ error: "Image is too large for storage. Please use an image under 5 MB." });
+        res.status(400).json({ error: "Image is too large for storage. Please use an image under 8 MB." });
         return;
       }
       res.status(500).json({ error: `Upload failed (HTTP ${uploadRes.status}). Please try again.` });
