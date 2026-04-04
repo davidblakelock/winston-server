@@ -50,6 +50,8 @@ interface AppShellProps {
 
 interface ProfileInfo {
   companionName: string | null;
+  voiceId: string | null;
+  photoUrl: string | null;
 }
 
 function AppShell({ onSignOut, userPicture, userName, userFullName }: AppShellProps) {
@@ -85,9 +87,9 @@ function AppShell({ onSignOut, userPicture, userName, userFullName }: AppShellPr
         console.log("[AUTH] AppShell — /api/onboarding/status HTTP status:", r.status);
         if (r.status === 401) {
           console.warn("[AUTH] AppShell — 401 from /api/onboarding/status, treating as new user");
-          return { isNewUser: true, profile: null } as { isNewUser: boolean; profile: { companionName: string | null } | null };
+          return { isNewUser: true, profile: null } as { isNewUser: boolean; profile: { companionName: string | null; voiceId?: string | null; photoUrl?: string | null } | null };
         }
-        return r.json() as Promise<{ isNewUser: boolean; profile: { companionName: string | null } | null }>;
+        return r.json() as Promise<{ isNewUser: boolean; profile: { companionName: string | null; voiceId?: string | null; photoUrl?: string | null } | null }>;
       })
       .then((data) => {
         console.log("[AUTH] AppShell — /api/onboarding/status response:", {
@@ -95,9 +97,14 @@ function AppShell({ onSignOut, userPicture, userName, userFullName }: AppShellPr
           hasProfile: !!data.profile,
           companionName: data.profile?.companionName ?? null,
         });
-        if (data.profile?.companionName) {
-          setProfile({ companionName: data.profile.companionName });
-          localStorage.setItem("winston_companion_name", data.profile.companionName);
+        if (data.profile) {
+          setProfile({
+            companionName: data.profile.companionName ?? null,
+            voiceId: data.profile.voiceId ?? null,
+            photoUrl: data.profile.photoUrl ?? null,
+          });
+          if (data.profile.companionName) localStorage.setItem("winston_companion_name", data.profile.companionName);
+          if (data.profile.voiceId) localStorage.setItem("winston_voice_id", data.profile.voiceId);
         }
         const routing = data.isNewUser ? "new" : "returning";
         console.log("[AUTH] AppShell — routing decision:", routing);
@@ -114,14 +121,14 @@ function AppShell({ onSignOut, userPicture, userName, userFullName }: AppShellPr
 
   if (onboardingStatus === "new") {
     return <Onboarding onComplete={(companionName?: string) => {
-      if (companionName) setProfile({ companionName });
+      if (companionName) setProfile({ companionName, voiceId: null, photoUrl: null });
       setOnboardingStatus("returning");
     }} />;
   }
 
   return (
     <Switch>
-      <Route path="/">{() => <Chat onSignOut={onSignOut} companionName={profile?.companionName ?? null} userPicture={userPicture} userName={userName} userFullName={userFullName} />}</Route>
+      <Route path="/">{() => <Chat onSignOut={onSignOut} companionName={profile?.companionName ?? null} voiceId={profile?.voiceId ?? null} photoUrl={profile?.photoUrl ?? null} userPicture={userPicture} userName={userName} userFullName={userFullName} />}</Route>
       <Route component={NotFound} />
     </Switch>
   );

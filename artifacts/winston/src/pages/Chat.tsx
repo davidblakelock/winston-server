@@ -6,6 +6,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useNotifications, isNotificationsSupported } from "@/hooks/useNotifications";
 import { EmergencyOverlay } from "@/components/EmergencyOverlay";
+import SettingsPanel from "@/components/SettingsPanel";
 
 const EMERGENCY_REGEX = /\b(ms\.?\s*peel\s+(i\s+(need|am|have|fell|can.t|cannot)|call\s+911|help\s+me)|call\s+911|i.ve\s+fallen|i\s+fell\s+(down|and)|i.m\s+not\s+(feeling|ok)|i\s+think\s+i.m\s+(having|going)|chest\s+pain|can.t\s+breathe|emergency|i\s+need\s+(help|an?\s+ambulance)|heart\s+attack|stroke|i.ve\s+been\s+(hurt|injured))\b/i;
 
@@ -282,12 +283,14 @@ interface WinddownSettings {
 interface ChatProps {
   onSignOut?: () => void;
   companionName?: string | null;
+  voiceId?: string | null;
+  photoUrl?: string | null;
   userPicture?: string;
   userFullName?: string;
   userName?: string;
 }
 
-export default function Chat({ onSignOut, companionName: companionNameProp, userPicture, userFullName, userName }: ChatProps) {
+export default function Chat({ onSignOut, companionName: companionNameProp, voiceId: voiceIdProp, photoUrl: photoUrlProp, userPicture, userFullName, userName }: ChatProps) {
   const baseUrl = (import.meta.env.BASE_URL as string).replace(/\/$/, "");
 
   // Resolved name: prop → localStorage cache → null (fetched below)
@@ -332,6 +335,26 @@ export default function Chat({ onSignOut, companionName: companionNameProp, user
     document.title = companionNameFinal || "Winston";
     return () => { document.title = "Winston"; };
   }, [companionNameFinal]);
+
+  // ── Voice ID — prop → localStorage → null ────────────────────────────────
+  const [resolvedVoiceId, setResolvedVoiceId] = useState<string | null>(
+    () => voiceIdProp ?? localStorage.getItem("winston_voice_id")
+  );
+  useEffect(() => { if (voiceIdProp) { setResolvedVoiceId(voiceIdProp); localStorage.setItem("winston_voice_id", voiceIdProp); } }, [voiceIdProp]);
+
+  // ── Custom photo URL ──────────────────────────────────────────────────────
+  const [customPhotoUrl, setCustomPhotoUrl] = useState<string | null>(photoUrlProp ?? null);
+  useEffect(() => { setCustomPhotoUrl(photoUrlProp ?? null); }, [photoUrlProp]);
+
+  // ── Play TTS audio from settings confirmation ─────────────────────────────
+  const settingsAudioRef = useRef<HTMLAudioElement | null>(null);
+  const playSettingsAudio = useCallback((audioBase64: string, mimeType: string) => {
+    settingsAudioRef.current?.pause();
+    const audio = new Audio(`data:${mimeType};base64,${audioBase64}`);
+    settingsAudioRef.current = audio;
+    void audio.play().catch(() => {});
+  }, []);
+
   const [messages, setMessages] = useState<Message[]>([]);
   const [messagesLoaded, setMessagesLoaded] = useState(false);
   const [pendingNotification, setPendingNotification] = useState<{ type: "morning" | "reminder"; text?: string } | null>(() => {
@@ -1147,7 +1170,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, user
         {/* User identity chip — Google profile picture + companion name */}
         <div className="flex items-center gap-2 ml-1 pl-2 border-l border-white/10">
           {/* Avatar: Google photo or warm-amber initials fallback */}
-          <UserAvatar picture={userPicture} fullName={userFullName} userName={userName} />
+          <UserAvatar picture={customPhotoUrl || userPicture} fullName={userFullName} userName={userName} />
           {/* Companion name label */}
           {companionNameFinal && (
             <span className="text-sm font-medium text-foreground/80 whitespace-nowrap">
@@ -1204,106 +1227,35 @@ export default function Chat({ onSignOut, companionName: companionNameProp, user
       )}
 
       {/* Wind-down settings modal */}
-      {showSettings && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
-          <div className="bg-card border border-white/10 rounded-2xl p-6 w-full max-w-sm shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-            <div className="flex items-center justify-between mb-5">
-              <div className="flex items-center gap-2">
-                <Moon className="h-4 w-4 text-primary/70" />
-                <h2 className="text-base font-medium text-foreground">Evening Wind-Down</h2>
-              </div>
-              <button
-                onClick={() => setShowSettings(false)}
-                className="text-muted-foreground/50 hover:text-muted-foreground transition-colors"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <p className="text-sm text-muted-foreground mb-5 leading-relaxed">
-              Each evening at your chosen time, {companionName} will check in — asking about your day, capturing any notes for tomorrow, and inviting a memory for Olivia's book.
-            </p>
-
-            {/* Enable toggle */}
-            <div className="flex items-center justify-between mb-5">
-              <span className="text-sm text-foreground">Enable evening wind-down</span>
-              <button
-                onClick={() => setWinddownSettings((s) => ({ ...s, enabled: !s.enabled }))}
-                className={`relative w-11 h-6 rounded-full transition-colors duration-200 focus:outline-none ${
-                  winddownSettings.enabled ? "bg-primary" : "bg-white/10"
-                }`}
-              >
-                <span
-                  className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200 ${
-                    winddownSettings.enabled ? "translate-x-5" : "translate-x-0"
-                  }`}
-                />
-              </button>
-            </div>
-
-            {/* Time picker */}
-            <div className="mb-6">
-              <label className="text-sm text-foreground block mb-2">Start time (Central Time)</label>
-              <input
-                type="time"
-                value={localTime}
-                onChange={(e) => setLocalTime(e.target.value)}
-                disabled={!winddownSettings.enabled}
-                className="w-full bg-input border border-border rounded-xl px-4 py-3 text-foreground text-sm focus:outline-none focus:ring-1 focus:ring-primary/40 disabled:opacity-40 transition-opacity"
-              />
-            </div>
-
-            {/* Notification re-enable section */}
-            {isNotificationsSupported() && (
-              <div className="mb-5 pt-4 border-t border-white/10">
-                <div className="flex items-center justify-between">
-                  <div className="flex-1 min-w-0 pr-3">
-                    <p className="text-sm text-foreground">Push notifications</p>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {notif.permission === "denied"
-                        ? "Blocked in browser — reset in browser settings"
-                        : notif.isSubscribed
-                        ? "Active — Emma can reach you"
-                        : "Not registered — tap to enable"}
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => void notif.resubscribe()}
-                    disabled={notif.isLoading || notif.permission === "denied"}
-                    className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full border transition-colors whitespace-nowrap
-                      border-primary/30 bg-primary/10 text-primary hover:bg-primary/20
-                      disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    {notif.isLoading ? (
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                    ) : (
-                      <Bell className="h-3 w-3" />
-                    )}
-                    {notif.isSubscribed ? "Re-register" : "Enable"}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            <div className="flex gap-3">
-              <Button
-                variant="outline"
-                className="flex-1"
-                onClick={() => setShowSettings(false)}
-              >
-                Cancel
-              </Button>
-              <Button
-                className="flex-1"
-                onClick={() => void saveWinddownSettings()}
-                disabled={settingsSaving}
-              >
-                {settingsSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+      <SettingsPanel
+        isOpen={showSettings}
+        onClose={() => setShowSettings(false)}
+        baseUrl={baseUrl}
+        currentVoiceId={resolvedVoiceId}
+        onVoiceChange={(voiceId, voiceName, audio) => {
+          setResolvedVoiceId(voiceId);
+          localStorage.setItem("winston_voice_id", voiceId);
+          if (audio) playSettingsAudio(audio.audioBase64, audio.mimeType);
+        }}
+        currentCompanionName={companionName}
+        onNameChange={(name, audio) => {
+          setResolvedCompanionName(name);
+          localStorage.setItem("winston_companion_name", name);
+          if (audio) playSettingsAudio(audio.audioBase64, audio.mimeType);
+        }}
+        currentPhotoUrl={customPhotoUrl}
+        googlePhotoUrl={userPicture}
+        userFullName={userFullName}
+        userName={userName}
+        onPhotoChange={(url) => setCustomPhotoUrl(url)}
+        winddownSettings={winddownSettings}
+        onWinddownChange={setWinddownSettings}
+        localTime={localTime}
+        onLocalTimeChange={setLocalTime}
+        onWinddownSave={saveWinddownSettings}
+        settingsSaving={settingsSaving}
+        notif={notif}
+      />
 
       {/* Chat Area */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 sm:p-6 pb-24 sm:pb-32 space-y-8">

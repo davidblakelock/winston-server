@@ -12,6 +12,7 @@ import pushRouter from "./push";
 import oliviaRouter from "./olivia";
 import demoRouter from "./demo";
 import legalRouter from "./legal";
+import settingsRouter from "./settings";
 
 const router: IRouter = Router();
 
@@ -28,5 +29,6 @@ router.use(memoryRouter);
 router.use(messagesRouter);
 router.use(pushRouter);
 router.use(oliviaRouter);
+router.use(settingsRouter);
 
 export default router;
