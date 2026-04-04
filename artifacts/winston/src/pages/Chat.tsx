@@ -10,6 +10,36 @@ import SettingsPanel from "@/components/SettingsPanel";
 
 const EMERGENCY_REGEX = /\b(ms\.?\s*peel\s+(i\s+(need|am|have|fell|can.t|cannot)|call\s+911|help\s+me)|call\s+911|i.ve\s+fallen|i\s+fell\s+(down|and)|i.m\s+not\s+(feeling|ok)|i\s+think\s+i.m\s+(having|going)|chest\s+pain|can.t\s+breathe|emergency|i\s+need\s+(help|an?\s+ambulance)|heart\s+attack|stroke|i.ve\s+been\s+(hurt|injured))\b/i;
 
+// ─── Client-side navigation detection ────────────────────────────────────────
+// We detect navigation intent HERE (in the click handler) so window.open() is
+// called within the user-gesture context — browser popup blockers won't fire.
+
+const NAV_PHRASE_REGEX = /\b(take\s+me\s+to|directions?\s+to|navigate\s+to|get\s+me\s+to|how\s+do\s+i\s+get\s+to|maps?\s+to|open\s+maps?\s+(for|to)|i\s+need\s+to\s+go\s+to|i\s+need\s+directions?\s+to|i\s+want\s+to\s+go\s+to|can\s+you\s+take\s+me\s+to|take\s+me|get\s+directions?\s+to|show\s+me\s+how\s+to\s+get\s+to)\b/i;
+
+interface SavedPlace {
+  name: string;
+  address: string;
+  keywords: string[];
+}
+
+const DEFAULT_PLACES: SavedPlace[] = [
+  { name: "home", address: "6345 Diamond Head Circle Dallas Texas 75225", keywords: ["home", "my place", "my condo", "my house"] },
+  { name: "Doctor Bonnet", address: "403 West Campbell Road Richardson Texas", keywords: ["doctor", "doc", "doctor bonnet", "bonnet", "physician", "my doctor", "the doctor"] },
+  { name: "Moody YMCA", address: "6000 Preston Road Dallas Texas 75205", keywords: ["moody", "moody ymca", "moody y"] },
+  { name: "Semones YMCA", address: "4332 Northaven Road Dallas Texas 75229", keywords: ["semones", "semones ymca", "semones y", "the gym", "gym", "the y", "ymca"] },
+];
+
+function detectNavUrl(text: string, places: SavedPlace[]): string | null {
+  if (!NAV_PHRASE_REGEX.test(text)) return null;
+  const lower = text.toLowerCase();
+  for (const place of places) {
+    if (place.keywords.some((kw) => lower.includes(kw))) {
+      return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(place.address)}`;
+    }
+  }
+  return null;
+}
+
 interface Message {
   id: string;
   role: "user" | "assistant";
@@ -389,6 +419,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const greetedRef = useRef(false);
+  const savedPlacesRef = useRef<SavedPlace[]>(DEFAULT_PLACES);
 
   const ttsMutation = useTextToSpeech();
   const browserTTS = useBrowserTTS();
@@ -591,6 +622,18 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
     [playElevenLabsAudio, playBrowserTTS]
   );
 
+  // ── Fetch saved navigation places from API ────────────────────────────────
+  // Pre-loaded so detectNavUrl() works immediately when the user hits Send.
+  useEffect(() => {
+    const token = localStorage.getItem("winston_session_token");
+    if (!token) return;
+    const baseUrl = (import.meta.env.BASE_URL as string).replace(/\/$/, "");
+    fetch(`${baseUrl}/api/navigation/places`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.ok ? (r.json() as Promise<{ places: SavedPlace[] }>) : null)
+      .then((data) => { if (data?.places?.length) savedPlacesRef.current = data.places; })
+      .catch(() => {});
+  }, []);
+
   // ── Load message history from DB, then greet if no history ─────────────
   useEffect(() => {
     if (greetedRef.current) return;
@@ -648,6 +691,14 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         setShowEmergency(true);
       }
 
+      // ── Navigation: detect & open HERE (user-gesture context) ──────────────
+      // window.open() MUST be called synchronously in the click handler.
+      // Calling it later (inside async callbacks) gets blocked by popup blockers.
+      const immediateNavUrl = detectNavUrl(text.trim(), savedPlacesRef.current);
+      if (immediateNavUrl) {
+        window.open(immediateNavUrl, "_blank", "noopener,noreferrer");
+      }
+
       const userMsg: Message = { id: Date.now().toString(), role: "user", content: text.trim() };
       const historyForApi = messages.slice(-30).map((m) => ({ role: m.role, content: m.content }));
       const assistantMsgId = (Date.now() + 1).toString();
@@ -666,6 +717,16 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         assistantMsgId,
         (reply, navUrl) => {
           speakReply(assistantMsgId, reply);
+          // Store navUrl on the message so the bubble "Open in Maps" link works.
+          // Also fall back to the url we detected client-side if API didn't return one.
+          const resolvedNavUrl = navUrl ?? immediateNavUrl ?? undefined;
+          if (resolvedNavUrl) {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantMsgId ? { ...m, navigationUrl: resolvedNavUrl } : m
+              )
+            );
+          }
           const token = localStorage.getItem("winston_session_token");
           if (token) {
             const baseUrl = (import.meta.env.BASE_URL as string).replace(/\/$/, "");
@@ -680,7 +741,6 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
               }),
             }).catch(() => {});
           }
-          if (navUrl) window.open(navUrl, "_blank", "noopener,noreferrer");
         },
         (errReply) => {
           const fallback = errReply ?? "I'm having trouble right now. Please try again.";
@@ -1322,7 +1382,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
                       href={msg.navigationUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="ml-2 flex items-center gap-1.5 text-xs font-medium text-blue-400 hover:text-blue-300 transition-colors"
+                      className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-blue-500/20 border border-blue-500/30 text-xs font-semibold text-blue-300 hover:bg-blue-500/30 hover:text-blue-200 transition-all"
                     >
                       <MapPin className="h-3.5 w-3.5" />
                       Open in Maps

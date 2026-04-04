@@ -6,6 +6,7 @@ import {
   VOICE_OPTIONS,
 } from "../onboarding/onboardingManager.js";
 import { validateSession } from "../auth/sessionAuth.js";
+import { getProfilePlaces } from "../profile/profileManager.js";
 
 const router: IRouter = Router();
 
@@ -182,6 +183,47 @@ router.delete("/settings/photo", async (req, res) => {
   if (!userName) return;
   await updateProfileField(userName, { photoUrl: "" });
   res.json({ ok: true });
+});
+
+// ── GET /api/navigation/places ────────────────────────────────────────────────
+// Returns hardcoded saved locations merged with profile_items places.
+// Frontend uses this to detect navigation intent in the user-gesture context
+// (so window.open() is never blocked by popup blockers).
+const HARDCODED_PLACES = [
+  {
+    name: "home",
+    address: "6345 Diamond Head Circle Dallas Texas 75225",
+    keywords: ["home", "my place", "my condo", "my house"],
+  },
+  {
+    name: "Doctor Bonnet",
+    address: "403 West Campbell Road Richardson Texas",
+    keywords: ["doctor", "doc", "doctor bonnet", "bonnet", "physician", "my doctor", "the doctor"],
+  },
+  {
+    name: "Moody YMCA",
+    address: "6000 Preston Road Dallas Texas 75205",
+    keywords: ["moody", "moody ymca", "moody y"],
+  },
+  {
+    name: "Semones YMCA",
+    address: "4332 Northaven Road Dallas Texas 75229",
+    keywords: ["semones", "semones ymca", "semones y", "the gym", "gym", "the y", "ymca"],
+  },
+];
+
+router.get("/navigation/places", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  try {
+    const profilePlaces = await getProfilePlaces();
+    const extra = profilePlaces
+      .filter((p) => !HARDCODED_PLACES.some((h) => h.name.toLowerCase() === p.name.toLowerCase()))
+      .map((p) => ({ name: p.name, address: p.address, keywords: [p.name.toLowerCase()] }));
+    res.json({ places: [...HARDCODED_PLACES, ...extra] });
+  } catch {
+    res.json({ places: HARDCODED_PLACES });
+  }
 });
 
 export default router;
