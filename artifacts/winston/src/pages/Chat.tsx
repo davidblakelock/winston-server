@@ -1403,30 +1403,43 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
                     const diffMs = when.getTime() - now.getTime();
                     const diffMin = Math.round(diffMs / 60_000);
                     const diffHr = Math.round(diffMs / 3_600_000);
+                    const isPastDue = diffMs < 0;
                     let timeLabel: string;
-                    if (diffMs < 0) timeLabel = "overdue";
+                    if (isPastDue)        timeLabel = "Past due";
                     else if (diffMin < 60) timeLabel = `in ${diffMin}m`;
-                    else if (diffHr < 24) timeLabel = `in ${diffHr}h`;
-                    else {
-                      timeLabel = when.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-                    }
+                    else if (diffHr < 24)  timeLabel = `in ${diffHr}h`;
+                    else                   timeLabel = when.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
+                    const dismiss = async () => {
+                      setUpcomingReminders((prev) => prev.filter((x) => x.id !== r.id));
+                      await fetch(`${CHAT_BASE}/api/reminders/${r.id}/complete`, { method: "POST" });
+                    };
                     return (
-                      <li key={r.id} className="px-4 py-2.5 flex items-start justify-between gap-3 hover:bg-white/5 transition-colors">
+                      <li
+                        key={r.id}
+                        className={`px-4 py-2.5 flex items-start justify-between gap-3 hover:bg-white/5 transition-colors ${isPastDue ? "bg-amber-950/20" : ""}`}
+                      >
                         <div className="flex-1 min-w-0">
                           <p className="text-sm text-foreground truncate">{r.reminder_text}</p>
-                          <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1">
+                          <p className={`text-xs mt-0.5 flex items-center gap-1 ${isPastDue ? "text-amber-400/80" : "text-muted-foreground"}`}>
                             {r.recurring && <span className="text-primary/60">↻</span>}
                             {timeLabel}
+                            {/* Past-due gets an inline dismiss link */}
+                            {isPastDue && (
+                              <button
+                                onClick={dismiss}
+                                className="ml-1 underline underline-offset-2 text-amber-400/70 hover:text-amber-300 transition-colors"
+                              >
+                                Dismiss
+                              </button>
+                            )}
                           </p>
                         </div>
                         <div className="flex items-center gap-1 flex-shrink-0 mt-0.5">
-                          {/* Dismiss (mark completed) */}
+                          {/* Mark done (✓) */}
                           <button
-                            onClick={async () => {
-                              setUpcomingReminders((prev) => prev.filter((x) => x.id !== r.id));
-                              await fetch(`${CHAT_BASE}/api/reminders/${r.id}/complete`, { method: "POST" });
-                            }}
-                            className="text-muted-foreground/40 hover:text-green-400 transition-colors"
+                            onClick={dismiss}
+                            className={`transition-colors ${isPastDue ? "text-amber-400 hover:text-amber-300" : "text-muted-foreground/40 hover:text-green-400"}`}
                             title="Mark done"
                           >
                             <Check className="h-3.5 w-3.5" />

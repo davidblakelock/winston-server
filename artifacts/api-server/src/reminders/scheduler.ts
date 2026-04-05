@@ -109,12 +109,17 @@ export function startScheduler(): void {
         // ── 4. For recurring reminders: schedule next occurrence and reset to 'pending' ──
         if (reminder.recurring && reminder.recurring_time) {
           const nextFire = nextOccurrence(reminder.recurring_time, reminder.timezone);
-          await query(
+          const { rows: updated } = await query<ReminderRow>(
             `UPDATE reminders
                 SET fire_at = $1, status = 'pending', last_fired_at = NOW()
-              WHERE id = $2`,
+              WHERE id = $2
+            RETURNING *`,
             [nextFire, reminder.id]
           );
+          // Tell all open panels about the rescheduled occurrence immediately
+          if (updated[0]) {
+            broadcast("reminder_sync", { action: "created", reminder: updated[0] });
+          }
         }
         // One-time reminders stay as 'fired' — they won't be selected again
       }

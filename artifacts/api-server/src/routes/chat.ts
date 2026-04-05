@@ -147,6 +147,7 @@ import {
 import { validateSession } from "../auth/sessionAuth.js";
 import { getCachedBriefing, setCachedBriefing } from "../morning/briefingCache.js";
 import { preFetchMorningBriefing } from "../morning/briefingPregenerate.js";
+import { createReminder } from "../reminders/reminderManager.js";
 
 const router: IRouter = Router();
 
@@ -1404,18 +1405,14 @@ router.post("/chat", async (req, res) => {
           hour12: true,
         });
 
-        await query(
-          `INSERT INTO reminders (user_name, reminder_text, fire_at, recurring, recurring_time, timezone)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
-          [
-            "David",
-            extracted.reminderText,
-            fireAt,
-            extracted.recurring ?? null,
-            extracted.isRecurring ? extracted.time : null,
-            "America/Chicago",
-          ]
-        );
+        await createReminder({
+          userName: "David",
+          reminderText: extracted.reminderText,
+          fireAt,
+          recurring: extracted.recurring ?? null,
+          recurringTime: extracted.isRecurring ? extracted.time : null,
+          timezone: "America/Chicago",
+        });
 
         req.log.info({ extracted, fireAt }, "Reminder saved");
 

@@ -2,6 +2,7 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import { randomUUID } from "crypto";
 import { query } from "../db.js";
 import { addClient, removeClient, broadcast } from "../reminders/sseStore.js";
+import { createReminder } from "../reminders/reminderManager.js";
 
 const router: IRouter = Router();
 
@@ -73,43 +74,9 @@ router.post("/reminders", async (req: Request, res: Response) => {
     return;
   }
 
-  const resolvedUser = userName ?? "David";
-
-  // ── Duplicate guard: don't insert if same text + fire_at already pending ──
-  const { rows: existing } = await query(
-    `SELECT id FROM reminders
-      WHERE user_name = $1
-        AND reminder_text = $2
-        AND fire_at = $3
-        AND status = 'pending'
-      LIMIT 1`,
-    [resolvedUser, reminderText, fireAt]
-  );
-  if (existing.length > 0) {
-    res.json(existing[0]); // return the existing row — idempotent
-    return;
-  }
-
-  const { rows } = await query(
-    `INSERT INTO reminders
-       (user_name, reminder_text, fire_at, recurring, recurring_time, timezone, status)
-       VALUES ($1, $2, $3, $4, $5, $6, 'pending')
-       RETURNING *`,
-    [
-      resolvedUser,
-      reminderText,
-      fireAt,
-      recurring ?? null,
-      recurringTime ?? null,
-      timezone ?? "America/Chicago",
-    ]
-  );
-
-  const newReminder = rows[0];
-  res.json(newReminder);
-
-  // Broadcast to all open tabs so their reminders lists update immediately
-  broadcast("reminder_sync", { action: "created", reminder: newReminder });
+  // createReminder handles duplicate guard + insert + SSE broadcast
+  const reminder = await createReminder({ userName, reminderText, fireAt, recurring, recurringTime, timezone });
+  res.json(reminder);
 });
 
 // ── DELETE /api/reminders/:id — cancel a reminder by ID ──────────────────────
