@@ -1078,6 +1078,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
 
   const fireReminderAlert = useCallback(
     (event: ReminderEvent) => {
+      console.log("FIRE: fireReminderAlert called for id", event.id);
       console.log("[REMINDER] fireReminderAlert called:", event);
 
       // Guard: skip if already spoken this session (e.g. both SSE and poll fired)
@@ -1145,6 +1146,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
 
     const attach = (source: EventSource) => {
       source.addEventListener("reminder", (e) => {
+        console.log("SSE: reminder event received", e.data);
         console.log("[REMINDER] SSE 'reminder' event received:", e.data);
         try {
           fireReminderAlertRef.current(JSON.parse(e.data) as ReminderEvent);
@@ -1155,6 +1157,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
 
       // Live sync: reminder created, deleted, fired, or completed on any device
       source.addEventListener("reminder_sync", (e) => {
+        console.log("SSE: connection state", source.readyState, "— reminder_sync action:", JSON.parse(e.data)?.action ?? e.data);
         try {
           const data = JSON.parse(e.data) as {
             action: "created" | "deleted" | "fired" | "completed";

@@ -21,12 +21,12 @@ const STEP = (n: number, msg: string, extra?: unknown) =>
 
 // ── Support check ─────────────────────────────────────────────────────────────
 export function isNotificationsSupported(): boolean {
-  const sw = "serviceWorker" in navigator;
-  const pm = "PushManager" in window;
-  const notif = "Notification" in window;
-  LOG(`Support check — serviceWorker:${sw} PushManager:${pm} Notification:${notif}`);
-  return sw && pm && notif;
+  return "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
 }
+
+// Module-level flag: push registration runs at most once per page load regardless
+// of how many times the component mounts/unmounts (React strict mode, route changes, etc.)
+let pushRegistered = false;
 
 // ── Device ID ─────────────────────────────────────────────────────────────────
 // Stable per-device identifier stored in localStorage.
@@ -360,6 +360,12 @@ export function useNotifications(): UseNotificationsResult {
       LOG("Mount check: push notifications not supported on this browser/device — skipping");
       return;
     }
+
+    if (pushRegistered) {
+      LOG("Mount check: already ran once this page load — skipping");
+      return;
+    }
+    pushRegistered = true;
 
     LOG("Mount check: starting — device:", getOrCreateDeviceId());
     LOG("Mount check: UA:", navigator.userAgent.slice(0, 100));
