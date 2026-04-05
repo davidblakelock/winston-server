@@ -3,6 +3,7 @@ import { query } from "../db.js";
 import { broadcast } from "./sseStore.js";
 import { sendPushToAll } from "../push/pushManager.js";
 import { getAppUrl } from "../auth/sessionAuth.js";
+import { getProfile } from "../onboarding/onboardingManager.js";
 import { logger } from "../lib/logger.js";
 
 interface ReminderRow {
@@ -84,11 +85,18 @@ export function startScheduler(): void {
           speakText,
         });
 
+        // Also sync all panels to remove this reminder immediately
+        broadcast("reminder_sync", { action: "fired", id: reminder.id });
+
         // ── 3. Send push notification to all registered devices ──
+        // Look up companion_name dynamically so the notification always uses the current name
+        const profile = await getProfile(reminder.user_name).catch(() => null);
+        const companionName = profile?.companionName ?? "Your Companion";
+
         const appUrl = getAppUrl();
         const reminderUrl = `${appUrl}/?notification=reminder&text=${encodeURIComponent(reminder.reminder_text)}`;
         await sendPushToAll({
-          title: "⏰ Reminder — Emma Peel",
+          title: `⏰ Reminder — ${companionName}`,
           body: reminder.reminder_text,
           tag: `reminder-${reminder.id}`,
           url: reminderUrl,

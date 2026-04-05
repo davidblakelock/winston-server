@@ -73,13 +73,30 @@ router.post("/reminders", async (req: Request, res: Response) => {
     return;
   }
 
+  const resolvedUser = userName ?? "David";
+
+  // ── Duplicate guard: don't insert if same text + fire_at already pending ──
+  const { rows: existing } = await query(
+    `SELECT id FROM reminders
+      WHERE user_name = $1
+        AND reminder_text = $2
+        AND fire_at = $3
+        AND status = 'pending'
+      LIMIT 1`,
+    [resolvedUser, reminderText, fireAt]
+  );
+  if (existing.length > 0) {
+    res.json(existing[0]); // return the existing row — idempotent
+    return;
+  }
+
   const { rows } = await query(
     `INSERT INTO reminders
        (user_name, reminder_text, fire_at, recurring, recurring_time, timezone, status)
        VALUES ($1, $2, $3, $4, $5, $6, 'pending')
        RETURNING *`,
     [
-      userName ?? "David",
+      resolvedUser,
       reminderText,
       fireAt,
       recurring ?? null,
@@ -141,6 +158,23 @@ router.post("/reminders/:id/acknowledge", async (req: Request, res: Response) =>
     [id]
   );
   res.json({ success: true });
+  // Tell all open panels to remove this reminder
+  broadcast("reminder_sync", { action: "completed", id });
+});
+
+// ── POST /api/reminders/:id/complete — dismiss from panel (mark completed) ────
+// Called when the user taps the dismiss (✓) button in the upcoming reminders panel.
+router.post("/reminders/:id/complete", async (req: Request, res: Response) => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid reminder ID" }); return; }
+
+  await query(
+    `UPDATE reminders SET status = 'completed' WHERE id = $1 AND status IN ('pending', 'fired')`,
+    [id]
+  );
+  res.json({ success: true });
+  // Broadcast so all open panels on all devices remove this reminder immediately
+  broadcast("reminder_sync", { action: "completed", id });
 });
 
 export default router;

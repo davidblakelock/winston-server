@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, KeyboardEvent, ChangeEvent } from "react";
-import { Send, Play, Loader2, Disc3, Mic, MicOff, MapPin, Mail, LogOut, Settings, X, Moon, Bell, BellOff, Clock, ChevronDown, ChevronUp, HelpCircle } from "lucide-react";
+import { Send, Play, Loader2, Disc3, Mic, MicOff, MapPin, Mail, LogOut, Settings, X, Moon, Bell, BellOff, Clock, ChevronDown, ChevronUp, HelpCircle, Check } from "lucide-react";
 import { useTextToSpeech } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -1109,11 +1109,11 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         try { fireReminderAlertRef.current(JSON.parse(e.data) as ReminderEvent); } catch {}
       });
 
-      // Live sync: reminder created or deleted on any device
+      // Live sync: reminder created, deleted, fired, or completed on any device
       source.addEventListener("reminder_sync", (e) => {
         try {
           const data = JSON.parse(e.data) as {
-            action: "created" | "deleted";
+            action: "created" | "deleted" | "fired" | "completed";
             reminder?: UpcomingReminder;
             id?: number;
           };
@@ -1125,7 +1125,10 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
                 (a, b) => new Date(a.fire_at).getTime() - new Date(b.fire_at).getTime()
               );
             });
-          } else if (data.action === "deleted" && data.id != null) {
+          } else if (
+            (data.action === "deleted" || data.action === "fired" || data.action === "completed") &&
+            data.id != null
+          ) {
             setUpcomingReminders((prev) => prev.filter((r) => r.id !== data.id));
           }
         } catch {}
@@ -1416,16 +1419,30 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
                             {timeLabel}
                           </p>
                         </div>
-                        <button
-                          onClick={async () => {
-                            await fetch(`${CHAT_BASE}/api/reminders/${r.id}`, { method: "DELETE" });
-                            setUpcomingReminders((prev) => prev.filter((x) => x.id !== r.id));
-                          }}
-                          className="text-muted-foreground/40 hover:text-red-400 transition-colors flex-shrink-0 mt-0.5"
-                          title="Cancel reminder"
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </button>
+                        <div className="flex items-center gap-1 flex-shrink-0 mt-0.5">
+                          {/* Dismiss (mark completed) */}
+                          <button
+                            onClick={async () => {
+                              setUpcomingReminders((prev) => prev.filter((x) => x.id !== r.id));
+                              await fetch(`${CHAT_BASE}/api/reminders/${r.id}/complete`, { method: "POST" });
+                            }}
+                            className="text-muted-foreground/40 hover:text-green-400 transition-colors"
+                            title="Mark done"
+                          >
+                            <Check className="h-3.5 w-3.5" />
+                          </button>
+                          {/* Delete entirely */}
+                          <button
+                            onClick={async () => {
+                              setUpcomingReminders((prev) => prev.filter((x) => x.id !== r.id));
+                              await fetch(`${CHAT_BASE}/api/reminders/${r.id}`, { method: "DELETE" });
+                            }}
+                            className="text-muted-foreground/40 hover:text-red-400 transition-colors"
+                            title="Delete reminder"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
                       </li>
                     );
                   })}
