@@ -90,6 +90,10 @@ export async function sendPushToAll(
   }
 
   const subs = await getSubscriptions(userName);
+  logger.info(
+    { count: subs.length, tag: payload.tag, title: payload.title },
+    "[Push] sendPushToAll starting"
+  );
   if (!subs.length) return { sent: 0, failed: 0 };
 
   let sent = 0;
@@ -113,28 +117,59 @@ export async function sendPushToAll(
 
   await Promise.all(
     subs.map(async (sub) => {
+      // Log the full endpoint so we can identify which device each attempt targets
+      const endpointShort = sub.endpoint.slice(-40);
+      logger.info({ endpoint: endpointShort }, "[Push] Attempting delivery");
+
       try {
-        await webpush.sendNotification(
+        const result = await webpush.sendNotification(
           { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
           body,
           { TTL: 60 * 60 * 4 } // 4 hour TTL
         );
+        logger.info(
+          {
+            endpoint: endpointShort,
+            statusCode: result.statusCode,
+            body: result.body ?? "(empty)",
+          },
+          "[Push] FCM accepted"
+        );
         sent++;
       } catch (err: unknown) {
-        const status = (err as { statusCode?: number }).statusCode;
-        if (status === 410 || status === 404) {
-          // Subscription expired — clean up
-          await removeSubscription(sub.endpoint).catch(() => {});
-          logger.info({ endpoint: sub.endpoint.slice(-20) }, "Removed expired push subscription");
-        } else {
-          logger.warn({ err, endpoint: sub.endpoint.slice(-20) }, "Push notification failed");
+        const e = err as { statusCode?: number; body?: string; headers?: Record<string, string>; message?: string };
+        const status = e.statusCode;
+        const responseBody = e.body ?? "(no body)";
+
+        logger.warn(
+          {
+            endpoint: endpointShort,
+            statusCode: status,
+            responseBody,
+          },
+          "[Push] FCM error response"
+        );
+
+        // 410 = subscription gone (browser unsubscribed)
+        // 404 = subscription not found on FCM
+        // 400 = malformed / invalid subscription (often means VAPID key mismatch
+        //       or the subscription was created against a different VAPID key)
+        if (status === 410 || status === 404 || status === 400) {
+          await removeSubscription(sub.endpoint).catch((dbErr) => {
+            logger.error({ dbErr, endpoint: endpointShort }, "[Push] Failed to delete expired subscription from DB");
+          });
+          logger.info(
+            { endpoint: endpointShort, statusCode: status, reason: status === 400 ? "invalid/VAPID-mismatch" : "expired" },
+            "[Push] Removed invalid/expired subscription from Supabase"
+          );
         }
+
         failed++;
       }
     })
   );
 
-  logger.info({ sent, failed, tag: payload.tag }, "Push notifications sent");
+  logger.info({ sent, failed, tag: payload.tag }, "[Push] sendPushToAll complete");
   return { sent, failed };
 }
 
