@@ -67,6 +67,11 @@ import {
   getDaysSinceLastOliviaContact,
 } from "../olivia/oliviaTracker.js";
 import {
+  detectPersonMention,
+  recordMention,
+  getDaysSinceLastMention,
+} from "../relationships/relationshipManager.js";
+import {
   getRecentMemories,
   formatMemoriesForContext,
 } from "../memory/memoryManager.js";
@@ -1024,6 +1029,30 @@ router.post("/chat", async (req, res) => {
   // ── Susan coordination context ─────────────────────────────────────────────
   if (isSusanRelated) {
     systemPrompt += `\n\n[Susan Coordination]\nSusan Smart is David's girlfriend and a real, valued presence in his life. She lives nearby. Her dog's name is Lily (a toy poodle). You genuinely like Susan and care about her. In this message David has mentioned Susan — respond warmly:\n• If he's asking you to remind Susan of something (dentist, errand, task): acknowledge it and set a reminder, saying something like "I'll make a note for you to remind Susan about her dentist Thursday."\n• If he's asking you to remind him to do something FOR Susan (pick up flowers, make a reservation): save the reminder and be specific and warm.\n• If he's sharing something about Susan or asking how she is: engage with genuine curiosity and warmth — you're interested in how she's doing.\n• Occasionally and naturally (when relevant, not forced) ask: "How is Susan doing?" or "Did she enjoy that dinner?" — Emma genuinely cares about Susan.`;
+  }
+
+  // ── Generic relationship tracking (Susan + others from profile) ────────────
+  {
+    const detected = detectPersonMention(message);
+    if (detected && !isMorningGreeting) {
+      const { person, isCall } = detected;
+      const mentionType = isCall ? "call" : "mention";
+      recordMention(person.name, person.relationship, mentionType, message.substring(0, 150)).catch(() => {});
+    }
+
+    // If Susan hasn't been mentioned in 3+ days and this isn't a Susan message or morning greeting,
+    // give Emma a gentle opportunity to ask about her
+    if (!isSusanRelated && !isMorningGreeting) {
+      try {
+        const daysSinceSusan = await getDaysSinceLastMention("Susan");
+        if (daysSinceSusan !== null && daysSinceSusan >= 3) {
+          systemPrompt += `\n\n[Susan — Gentle Check-In Opportunity]\nIt's been ${daysSinceSusan} days since David last mentioned Susan. If the moment feels natural, gently ask how she's doing — "How is Susan? Have you two been able to get together?" Don't force it if the conversation is urgent or unrelated.`;
+        } else if (daysSinceSusan === null) {
+          // Never mentioned Susan — seed so we don't nudge forever
+          // No nudge needed on very first use
+        }
+      } catch { /* non-fatal */ }
+    }
   }
 
   // ── Olivia relationship tracking ───────────────────────────────────────────
