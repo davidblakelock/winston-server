@@ -101,6 +101,7 @@ export function startScheduler(): void {
           tag: `reminder-${reminder.id}`,
           url: reminderUrl,
           reminderId: reminder.id,
+          companion_name: companionName,
           requireInteraction: true,
         });
 

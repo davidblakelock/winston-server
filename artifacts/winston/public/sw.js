@@ -1,4 +1,4 @@
-// Emma Peel — Winston AI Companion Service Worker
+// Winston AI Companion Service Worker
 const WINSTON_URL = "https://winston-companion--davidblakelock.replit.app/";
 
 // ── IndexedDB helpers ─────────────────────────────────────────────────────────

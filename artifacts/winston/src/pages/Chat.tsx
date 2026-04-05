@@ -1122,6 +1122,27 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
     let backoffMs = 2_000;
     let destroyed = false;
 
+    let hasConnectedOnce = false;
+
+    const pollMissedReminders = async () => {
+      try {
+        const res = await fetch(`${CHAT_BASE}/api/reminders/due`);
+        if (!res.ok) return;
+        const due = await res.json() as Array<{ id: number; reminder_text: string }>;
+        if (due.length > 0) console.log("[REMINDER] Reconnect poll found missed reminders:", due);
+        for (const reminder of due) {
+          if (spokenReminderIds.current.has(reminder.id)) continue;
+          console.log("[REMINDER] Reconnect poll: firing missed reminder:", reminder);
+          fireReminderAlertRef.current({
+            id: reminder.id,
+            userName: "David",
+            reminderText: reminder.reminder_text,
+            speakText: `Hey David, your reminder: ${reminder.reminder_text}.`,
+          });
+        }
+      } catch { /* network unavailable — silent */ }
+    };
+
     const attach = (source: EventSource) => {
       source.addEventListener("reminder", (e) => {
         console.log("[REMINDER] SSE 'reminder' event received:", e.data);
@@ -1164,7 +1185,16 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         } catch {}
       });
 
-      source.onopen = () => { backoffMs = 2_000; }; // reset on successful connect
+      source.onopen = () => {
+        backoffMs = 2_000; // reset backoff on successful connect
+        if (hasConnectedOnce) {
+          // SSE reconnected after a drop — immediately check for any reminders
+          // that fired while the connection was down (screen lock, background tab, etc.)
+          console.log("[REMINDER] SSE reconnected — polling for missed reminders");
+          void pollMissedReminders();
+        }
+        hasConnectedOnce = true;
+      };
 
       source.onerror = () => {
         source.close();
