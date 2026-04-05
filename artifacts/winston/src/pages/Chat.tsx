@@ -303,7 +303,7 @@ function UserAvatar({
   })();
 
   const circleStyle: React.CSSProperties = {
-    width: 36, height: 36, borderRadius: "50%", objectFit: "cover",
+    width: 44, height: 44, borderRadius: "50%", objectFit: "cover",
     flexShrink: 0, border: "2px solid rgba(255,255,255,0.15)",
   };
 
@@ -337,12 +337,12 @@ function UserAvatar({
   // Priority 3: initials
   return (
     <div style={{
-      width: 36, height: 36, borderRadius: "50%", flexShrink: 0,
+      width: 44, height: 44, borderRadius: "50%", flexShrink: 0,
       display: "flex", alignItems: "center", justifyContent: "center",
       background: "linear-gradient(135deg, #d97706 0%, #b45309 100%)",
       border: "2px solid rgba(217,119,6,0.4)",
     }}>
-      <span style={{ color: "white", fontSize: "13px", fontWeight: 700, lineHeight: 1, letterSpacing: "-0.02em" }}>{initials}</span>
+      <span style={{ color: "white", fontSize: "14px", fontWeight: 700, lineHeight: 1, letterSpacing: "-0.02em" }}>{initials}</span>
     </div>
   );
 }
@@ -1381,25 +1381,15 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
     <div className="flex flex-col h-[100dvh] max-w-4xl mx-auto overflow-hidden bg-background">
       {/* Header */}
       <header className="flex-shrink-0 border-b border-white/5 py-3 px-4 sm:px-6 flex items-center justify-between bg-background/80 backdrop-blur-sm z-10 sticky top-0">
-        {/* Left — companion identity */}
+        {/* Left — user identity: profile photo + companion name */}
         <div className="flex items-center gap-3 min-w-0">
-          {/* Companion avatar — photo if available, initials fallback */}
-          <div className="h-11 w-11 rounded-full border border-primary/20 bg-card overflow-hidden flex-shrink-0 flex items-center justify-center">
-            {photoUrlProp ? (
-              <img
-                src={photoUrlProp}
-                alt={companionNameFinal ?? "Companion"}
-                className="h-full w-full object-cover"
-                onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
-              />
-            ) : (
-              <span className="text-primary font-serif font-medium text-lg select-none">
-                {companionNameFinal
-                  ? companionNameFinal.trim().split(/\s+/).map((w) => w[0].toUpperCase()).join("").slice(0, 2)
-                  : "W"}
-              </span>
-            )}
-          </div>
+          {/* User profile photo — base64 DB photo first, Google photo second, initials fallback */}
+          <UserAvatar
+            avatarBase64={customAvatarBase64}
+            googlePicture={userPicture}
+            fullName={userFullName}
+            userName={userName}
+          />
           <div className="min-w-0">
             <h1 className="text-xl font-serif font-medium text-foreground tracking-wide truncate">{companionName}</h1>
             {connectionStatus === "reconnecting" ? (
@@ -1584,14 +1574,6 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         >
           <Settings className="h-4 w-4" />
         </button>
-
-        {/* User profile photo — base64 DB photo first, Google photo second, initials fallback */}
-        <UserAvatar
-          avatarBase64={customAvatarBase64}
-          googlePicture={userPicture}
-          fullName={userFullName}
-          userName={userName}
-        />
 
         {/* Sign out */}
         {onSignOut && (
