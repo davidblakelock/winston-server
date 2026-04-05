@@ -214,20 +214,46 @@ export function analyzeEmailForScam(email: {
   return { isSuspicious, riskLevel, flags, summary };
 }
 
-export async function fetchRecentEmails(maxResults = 8): Promise<EmailSummary[] | null> {
+export async function fetchRecentEmails(maxResults = 10): Promise<EmailSummary[] | null> {
+  const fetchStart = new Date();
+  console.log(`[Gmail] fetchRecentEmails called at ${fetchStart.toISOString()} — maxResults=${maxResults}`);
+
   const auth = await getAuthClient();
-  if (!auth) return null;
+  if (!auth) {
+    console.warn("[Gmail] No auth client — Google not connected");
+    return null;
+  }
+
+  // ── Explicit token refresh before every call ───────────────────────────────
+  // The access token expires after 1 hour. We call getAccessToken() which
+  // automatically refreshes via the stored refresh_token if the current
+  // access_token is expired. This prevents silent failures on stale tokens.
+  try {
+    const tokenResult = await auth.getAccessToken();
+    if (!tokenResult.token) {
+      console.warn("[Gmail] getAccessToken returned empty token — refresh may have failed");
+    } else {
+      console.log("[Gmail] Token OK — proceeding with Gmail API call");
+    }
+  } catch (refreshErr) {
+    console.error("[Gmail] Token refresh failed — aborting Gmail fetch:", refreshErr);
+    return null;
+  }
 
   const gmail = google.gmail({ version: "v1", auth });
 
+  // ── Fetch most recent 10 unread emails, no category filtering ─────────────
+  // Removed: -category:promotions -category:social (was excluding forwarded emails)
+  // Removed: labelIds: ["INBOX"] (was double-filtering and missing some inboxes)
+  // Result order: newest first by default (Gmail API returns by internalDate desc)
   const list = await gmail.users.messages.list({
     userId: "me",
     maxResults,
-    q: "in:inbox is:unread -category:promotions -category:social",
-    labelIds: ["INBOX"],
+    q: "is:unread",
   });
 
   const messages = list.data.messages ?? [];
+  console.log(`[Gmail] messages.list returned ${messages.length} messages`);
   if (messages.length === 0) return [];
 
   const emails: EmailSummary[] = [];
@@ -251,6 +277,7 @@ export async function fetchRecentEmails(maxResults = 8): Promise<EmailSummary[] 
     const from = fromMatch ? fromMatch[1].trim().replace(/^"(.*)"$/, "$1") : rawFrom;
     const subject = get("Subject") || "(no subject)";
     const snippet = detail.data.snippet ?? "";
+    const date = get("Date");
 
     const suspicion = analyzeEmailForScam({ from, fromEmail, subject, snippet });
 
@@ -259,10 +286,18 @@ export async function fetchRecentEmails(maxResults = 8): Promise<EmailSummary[] 
       fromEmail,
       subject,
       snippet,
-      date: get("Date"),
+      date,
       suspicion: suspicion.isSuspicious ? suspicion : null,
     });
   }
+
+  // ── Diagnostic: log fetch summary ─────────────────────────────────────────
+  const mostRecentDate = emails[0]?.date ?? "none";
+  const fetchDurationMs = Date.now() - fetchStart.getTime();
+  console.log(
+    `[Gmail] Fetch complete — ${emails.length} emails returned in ${fetchDurationMs}ms` +
+    ` — most recent: ${mostRecentDate}`
+  );
 
   return emails;
 }
