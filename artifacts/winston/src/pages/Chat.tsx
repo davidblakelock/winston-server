@@ -1157,6 +1157,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
 
       // Live sync: reminder created, deleted, fired, or completed on any device
       source.addEventListener("reminder_sync", (e) => {
+        try { const d = JSON.parse(e.data); console.log("SSE: reminder_sync received — action:", d.action, "id:", d.id ?? d.reminder?.id ?? null, "readyState:", source.readyState); } catch { console.log("SSE: reminder_sync raw:", e.data); }
         console.log("SSE: connection state", source.readyState, "— reminder_sync action:", JSON.parse(e.data)?.action ?? e.data);
         try {
           const data = JSON.parse(e.data) as {
@@ -1190,6 +1191,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
 
       source.onopen = () => {
         backoffMs = 2_000; // reset backoff on successful connect
+        console.log("SSE CONNECTED — readyState:", source.readyState);
         if (hasConnectedOnce) {
           // SSE reconnected after a drop — immediately check for any reminders
           // that fired while the connection was down (screen lock, background tab, etc.)
@@ -1200,6 +1202,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
       };
 
       source.onerror = () => {
+        console.log("SSE DISCONNECTED — readyState:", source.readyState);
         source.close();
         if (destroyed) return;
         reconnectTimer = setTimeout(() => {
@@ -1371,27 +1374,10 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
 
         {/* Google auth badge */}
         {googleAuth.connected ? (
-            <div className="flex items-center gap-2">
-              <div className="flex items-center gap-1.5 text-xs text-green-400/80 bg-green-950/30 border border-green-500/20 rounded-full px-3 py-1.5">
-                <Mail className="h-3 w-3" />
-                <span className="hidden sm:inline">{googleAuth.email}</span>
-                <span className="sm:hidden">Gmail</span>
-              </div>
-              <button
-                onClick={async () => {
-                  const baseUrl = (import.meta.env.BASE_URL as string).replace(/\/$/, "");
-                  const token = localStorage.getItem("winston_session_token") ?? "";
-                  await fetch(`${baseUrl}/api/auth/logout`, {
-                    method: "POST",
-                    headers: { Authorization: `Bearer ${token}` },
-                  });
-                  void refreshGoogleAuth();
-                }}
-                className="text-muted-foreground/50 hover:text-muted-foreground transition-colors p-1"
-                title="Disconnect Google"
-              >
-                <LogOut className="h-3.5 w-3.5" />
-              </button>
+            <div className="flex items-center gap-1.5 text-xs text-green-400/80 bg-green-950/30 border border-green-500/20 rounded-full px-3 py-1.5">
+              <Mail className="h-3 w-3" />
+              <span className="hidden sm:inline">{googleAuth.email}</span>
+              <span className="sm:hidden">Gmail</span>
             </div>
           ) : connectGoogleBtn
         }
