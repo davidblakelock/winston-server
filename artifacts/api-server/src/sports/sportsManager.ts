@@ -58,8 +58,13 @@ async function fetchTeamSchedule(
   teamId: string
 ): Promise<EspnEvent[]> {
   const url = `https://site.api.espn.com/apis/site/v2/sports/${sport}/${league}/teams/${teamId}/schedule`;
+  const fetchedAt = new Date().toISOString();
   const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
-  if (!resp.ok) throw new Error(`ESPN schedule error: ${resp.status}`);
+  console.log(`[API] ESPN schedule (${league.toUpperCase()} team ${teamId}) — HTTP ${resp.status} at ${fetchedAt}`);
+  if (!resp.ok) {
+    if (resp.status === 429) console.warn(`RATE LIMIT DETECTED on ESPN (${league.toUpperCase()}) at ${fetchedAt} — HTTP 429`);
+    throw new Error(`ESPN schedule error: ${resp.status}`);
+  }
   const data = await resp.json() as EspnScheduleResponse;
   return data.events || [];
 }
@@ -71,8 +76,13 @@ async function fetchTodayScoreboard(
 ): Promise<EspnEvent | null> {
   const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" }).replace(/-/g, "");
   const url = `https://site.api.espn.com/apis/site/v2/sports/${sport}/${league}/scoreboard?dates=${today}`;
+  const fetchedAt = new Date().toISOString();
   const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
-  if (!resp.ok) return null;
+  console.log(`[API] ESPN scoreboard (${league.toUpperCase()} ${teamAbbr}) — HTTP ${resp.status} at ${fetchedAt}`);
+  if (!resp.ok) {
+    if (resp.status === 429) console.warn(`RATE LIMIT DETECTED on ESPN (${league.toUpperCase()}) at ${fetchedAt} — HTTP 429`);
+    return null;
+  }
   const data = await resp.json() as { events?: EspnEvent[] };
   const events = data.events || [];
   return events.find((e) =>

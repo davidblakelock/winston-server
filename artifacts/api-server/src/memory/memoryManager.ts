@@ -119,14 +119,25 @@ export async function getRecentMemories(days = 7): Promise<ConversationMemory[]>
   }));
 }
 
-// Format memories for injection into the system prompt
+// Format memories for injection into the system prompt.
+// Memories from the last 72 hours (3 days) are marked as active follow-up context —
+// Emma can and should ask natural follow-up questions about them.
+// Memories older than 72 hours are included as background context only —
+// Emma knows them but must NOT proactively ask follow-up questions about them
+// unless David brings the topic up first. This prevents stale check-ins about
+// events from last week (knee injuries, dinners, trips that are long past).
 export function formatMemoriesForContext(memories: ConversationMemory[]): string {
   if (memories.length === 0) return "";
 
   const tz = "America/Chicago";
   const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
 
-  const lines = memories.map((m) => {
+  const FOLLOWUP_CUTOFF_DAYS = 3; // 72 hours
+
+  const recent: string[] = [];  // ≤3 days — active follow-up allowed
+  const older: string[] = [];   // >3 days — background context only
+
+  for (const m of memories) {
     const date = new Date(`${m.conversationDate}T12:00:00`);
     const diffDays = Math.round(
       (new Date(`${today}T12:00:00`).getTime() - date.getTime()) /
@@ -142,14 +153,35 @@ export function formatMemoriesForContext(memories: ConversationMemory[]): string
       label = date.toLocaleDateString("en-US", { month: "long", day: "numeric" });
     }
 
-    return `${label}: ${m.summary}`;
-  });
+    const line = `${label}: ${m.summary}`;
 
-  return (
-    `\n\n[Conversation Memory — what you remember from recent conversations with David]\n` +
-    lines.join("\n\n") +
-    `\n\nUse these memories naturally — the way a close friend would. Reference them when relevant ` +
-    `(e.g., "How's the knee today?" or "Did you end up calling Olivia?"). ` +
-    `Don't recite them robotically or all at once. Let them inform how you engage, not dominate it.`
-  );
+    if (diffDays <= FOLLOWUP_CUTOFF_DAYS) {
+      recent.push(line);
+    } else {
+      older.push(line);
+    }
+  }
+
+  let result = `\n\n[Conversation Memory — what you remember from recent conversations with David]\n`;
+
+  if (recent.length > 0) {
+    result +=
+      `[Recent — last 72 hours — active follow-up appropriate]\n` +
+      recent.join("\n\n") +
+      `\n\nFor these recent memories, use them naturally — the way a close friend would. ` +
+      `Reference them when relevant (e.g., "How's the knee today?" or "Did you end up calling Olivia?"). ` +
+      `Don't recite them robotically or all at once. Let them inform how you engage, not dominate it.\n`;
+  }
+
+  if (older.length > 0) {
+    result +=
+      `\n[Background context — older than 72 hours — DO NOT use for proactive follow-up]\n` +
+      older.join("\n\n") +
+      `\n\nIMPORTANT: These older memories inform your understanding of David's life and history, ` +
+      `but you must NOT proactively ask follow-up questions about them (e.g., do NOT say "how did that dinner go?" ` +
+      `if the dinner was 5 days ago). Only reference older context if David brings up the topic himself ` +
+      `or if it is directly relevant to what he is currently discussing.\n`;
+  }
+
+  return result;
 }

@@ -79,6 +79,11 @@ async function fetchCityWeather(city: string, lat: number, lon: number): Promise
     fetch(`https://api.tomorrow.io/v4/weather/realtime?location=${location}&units=imperial&apikey=${apiKey}`, { signal: AbortSignal.timeout(10000) }),
     fetch(`https://api.tomorrow.io/v4/weather/forecast?location=${location}&units=imperial&timesteps=1d&apikey=${apiKey}`, { signal: AbortSignal.timeout(10000) }),
   ]);
+  const weatherFetchedAt = new Date().toISOString();
+  console.log(`[API] Tomorrow.io weather/briefing (${city}) — realtime HTTP ${realtimeResp.status}, forecast HTTP ${forecastResp.status} at ${weatherFetchedAt}`);
+  if (realtimeResp.status === 429 || forecastResp.status === 429) {
+    console.warn(`RATE LIMIT DETECTED on Tomorrow.io (weather/${city}) at ${weatherFetchedAt} — HTTP 429`);
+  }
   if (!realtimeResp.ok) throw new Error(`Tomorrow.io realtime error for ${city}: ${realtimeResp.status}`);
   if (!forecastResp.ok) throw new Error(`Tomorrow.io forecast error for ${city}: ${forecastResp.status}`);
   const [realtime, forecast] = await Promise.all([

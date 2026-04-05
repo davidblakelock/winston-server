@@ -40,9 +40,14 @@ async function fetchAlphaVantageQuote(
   const url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${encodeURIComponent(symbol)}&apikey=${apiKey}`;
 
   try {
+    const fetchedAt = new Date().toISOString();
     const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    console.log(`[API] Alpha Vantage (${symbol}) — HTTP ${res.status} at ${fetchedAt}`);
 
     if (!res.ok) {
+      if (res.status === 429) {
+        console.warn(`RATE LIMIT DETECTED on Alpha Vantage (${symbol}) at ${fetchedAt} — HTTP 429`);
+      }
       logger.warn({ symbol, status: res.status }, "Alpha Vantage API non-OK");
       return null;
     }
@@ -61,7 +66,12 @@ async function fetchAlphaVantageQuote(
 
     // Rate limit or info message
     if (data.Note || data.Information) {
-      logger.warn({ symbol, note: data.Note ?? data.Information }, "Alpha Vantage rate limit / info");
+      const msg = data.Note ?? data.Information ?? "";
+      const isRateLimit = /rate limit|call frequency|premium/i.test(msg);
+      if (isRateLimit) {
+        console.warn(`RATE LIMIT DETECTED on Alpha Vantage (${symbol}) at ${new Date().toISOString()} — ${msg}`);
+      }
+      logger.warn({ symbol, note: msg }, "Alpha Vantage rate limit / info");
       return null;
     }
 

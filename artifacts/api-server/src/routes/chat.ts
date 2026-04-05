@@ -252,6 +252,11 @@ async function fetchCityWeather(
     ),
   ]);
 
+  const weatherFetchedAt = new Date().toISOString();
+  console.log(`[API] Tomorrow.io weather (${city}) — realtime HTTP ${realtimeResp.status}, forecast HTTP ${forecastResp.status} at ${weatherFetchedAt}`);
+  if (realtimeResp.status === 429 || forecastResp.status === 429) {
+    console.warn(`RATE LIMIT DETECTED on Tomorrow.io (weather/${city}) at ${weatherFetchedAt} — HTTP 429`);
+  }
   if (!realtimeResp.ok) throw new Error(`Tomorrow.io realtime error for ${city}: ${realtimeResp.status}`);
   if (!forecastResp.ok) throw new Error(`Tomorrow.io forecast error for ${city}: ${forecastResp.status}`);
 
