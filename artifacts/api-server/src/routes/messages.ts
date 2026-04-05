@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { query } from "../db.js";
 import { validateSession } from "../auth/sessionAuth.js";
+import { broadcastToUser } from "../reminders/sseStore.js";
 
 const router = Router();
 
@@ -69,11 +70,21 @@ router.post("/messages", async (req: Request, res: Response) => {
       (m) => m.role === "user" || m.role === "assistant"
     );
 
+    const senderDeviceId = (req.body as { deviceId?: string }).deviceId ?? null;
+    const savedAt = new Date().toISOString();
+
     for (const m of toSave) {
       await query(
         "INSERT INTO chat_messages (user_name, role, content) VALUES ($1, $2, $3)",
         [userName, m.role, m.content.slice(0, 8000)] // cap at 8k chars
       );
+      // Broadcast to all other devices for this user so chat stays in sync
+      broadcastToUser(userName, "chat_sync", {
+        role: m.role,
+        content: m.content.slice(0, 8000),
+        createdAt: savedAt,
+        senderDeviceId,
+      });
     }
 
     // Auto-prune messages older than 14 days to keep DB tidy

@@ -821,7 +821,10 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
             fetch(`${baseUrl}/api/messages`, {
               method: "POST",
               headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-              body: JSON.stringify({ messages: [{ role: "assistant", content: reply }] }),
+              body: JSON.stringify({
+                messages: [{ role: "assistant", content: reply }],
+                deviceId: localStorage.getItem("winston_device_id"),
+              }),
             }).catch(() => {});
             setTimeout(() => speakReply(greetingId, reply), 400);
           },
@@ -895,6 +898,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
                 { role: "user", content: userMsg.content },
                 { role: "assistant", content: reply },
               ],
+              deviceId: localStorage.getItem("winston_device_id"),
             }),
           }).catch(() => {});
         }
@@ -1134,6 +1138,12 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
 
     let hasConnectedOnce = false;
 
+    // Include session token so the server can identify the user and route
+    // user-scoped events (chat_sync, etc.). EventSource doesn't support custom
+    // headers so the token is passed as a query param.
+    const sseToken = localStorage.getItem("winston_session_token") ?? "";
+    const sseUrl = `${CHAT_BASE}/api/reminders/stream${sseToken ? `?token=${encodeURIComponent(sseToken)}` : ""}`;
+
     const pollMissedReminders = async () => {
       try {
         const res = await fetch(`${CHAT_BASE}/api/reminders/due`, { cache: "no-store" });
@@ -1198,6 +1208,30 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         } catch {}
       });
 
+      // Chat message sync — another device sent a message; add it locally
+      // so both screens show the same conversation without a page refresh.
+      source.addEventListener("chat_sync", (e) => {
+        try {
+          const data = JSON.parse(e.data) as {
+            role: string;
+            content: string;
+            createdAt: string;
+            senderDeviceId: string | null;
+          };
+          // Skip messages that originated from this device (we already show them)
+          const myDeviceId = localStorage.getItem("winston_device_id");
+          if (myDeviceId && data.senderDeviceId === myDeviceId) return;
+          const msgId = `sync-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+          console.log("[CHAT SYNC] Received message from other device:", data.role, data.senderDeviceId);
+          setMessages((prev) => [
+            ...prev,
+            { id: msgId, role: data.role as "user" | "assistant", content: data.content },
+          ]);
+        } catch (err) {
+          console.error("[CHAT SYNC] Error handling chat_sync event:", err);
+        }
+      });
+
       source.onopen = () => {
         backoffMs = 2_000; // reset backoff on successful connect
         console.log("SSE CONNECTED — readyState:", source.readyState);
@@ -1217,13 +1251,13 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         reconnectTimer = setTimeout(() => {
           if (destroyed) return;
           backoffMs = Math.min(backoffMs * 2, 30_000);
-          es = new EventSource(`${CHAT_BASE}/api/reminders/stream`);
+          es = new EventSource(sseUrl);
           attach(es);
         }, backoffMs);
       };
     };
 
-    es = new EventSource(`${CHAT_BASE}/api/reminders/stream`);
+    es = new EventSource(sseUrl);
     attach(es);
 
     return () => {
@@ -1550,6 +1584,14 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         >
           <Settings className="h-4 w-4" />
         </button>
+
+        {/* User profile photo — base64 DB photo first, Google photo second, initials fallback */}
+        <UserAvatar
+          avatarBase64={customAvatarBase64}
+          googlePicture={userPicture}
+          fullName={userFullName}
+          userName={userName}
+        />
 
         {/* Sign out */}
         {onSignOut && (

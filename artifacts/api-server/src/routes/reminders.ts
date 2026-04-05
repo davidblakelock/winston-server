@@ -1,13 +1,14 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { randomUUID } from "crypto";
 import { query } from "../db.js";
-import { addClient, removeClient, broadcast } from "../reminders/sseStore.js";
+import { addClient, removeClient, broadcast, registerClientUser } from "../reminders/sseStore.js";
 import { createReminder } from "../reminders/reminderManager.js";
+import { validateSession } from "../auth/sessionAuth.js";
 
 const router: IRouter = Router();
 
 // ── SSE stream ────────────────────────────────────────────────────────────────
-router.get("/reminders/stream", (req: Request, res: Response) => {
+router.get("/reminders/stream", async (req: Request, res: Response) => {
   const clientId = randomUUID();
 
   res.setHeader("Content-Type", "text/event-stream");
@@ -18,6 +19,16 @@ router.get("/reminders/stream", (req: Request, res: Response) => {
 
   res.write(`: connected\n\n`);
   addClient(clientId, res);
+
+  // Identify the connected user so we can route user-specific events (e.g. chat_sync).
+  // The token is passed as a query param because EventSource doesn't support custom headers.
+  const token = req.query.token as string | undefined;
+  if (token) {
+    try {
+      const session = await validateSession(token);
+      if (session?.userName) registerClientUser(clientId, session.userName);
+    } catch { /* non-fatal — user just won't get user-scoped events */ }
+  }
 
   // Send a keepalive ping every 30 s as an SSE comment.
   // This resets the production proxy's idle timeout, preventing the
