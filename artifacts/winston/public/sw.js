@@ -32,16 +32,26 @@ self.addEventListener("install", () => {
 });
 
 self.addEventListener("activate", (event) => {
-  event.waitUntil(self.clients.claim());
+  // claim() takes control of all open clients immediately so this service
+  // worker handles fetches/pushes without waiting for a page reload.
+  // update() checks the server for a newer sw.js and installs it if found —
+  // this ensures the latest version is always active after each deployment.
+  event.waitUntil(
+    self.clients.claim().then(() => self.registration.update())
+  );
 });
 
 // ── Push event ────────────────────────────────────────────────────────────────
 self.addEventListener("push", (event) => {
+  console.log("[SW] push event fired — service worker woke up", new Date().toISOString());
+
   let data = {};
   try {
     data = event.data ? event.data.json() : {};
+    console.log("[SW] push payload parsed:", JSON.stringify(data));
   } catch {
     data = { body: event.data ? event.data.text() : "Tap to open Winston." };
+    console.log("[SW] push payload was not JSON, using raw text:", data.body);
   }
 
   const title        = data.title || "Winston";
@@ -68,7 +78,15 @@ self.addEventListener("push", (event) => {
     ],
   };
 
-  event.waitUntil(self.registration.showNotification(title, options));
+  console.log("[SW] calling showNotification:", title, "—", reminderText || "(no body)");
+
+  // event.waitUntil keeps the service worker alive until the promise resolves.
+  // Without this the browser may kill the worker before showNotification completes.
+  event.waitUntil(
+    self.registration.showNotification(title, options)
+      .then(() => console.log("[SW] showNotification resolved — notification displayed"))
+      .catch((err) => console.error("[SW] showNotification failed:", err))
+  );
 });
 
 // ── Notification click ────────────────────────────────────────────────────────
