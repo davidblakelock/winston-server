@@ -117,8 +117,10 @@ export async function sendPushToAll(
 
   await Promise.all(
     subs.map(async (sub) => {
-      // Log the full endpoint so we can identify which device each attempt targets
       const endpointShort = sub.endpoint.slice(-40);
+      const endpoint50 = sub.endpoint.slice(0, 50);
+
+      console.log(`PUSH SEND: attempting to send to endpoint ${endpoint50}`);
       logger.info({ endpoint: endpointShort }, "[Push] Attempting delivery");
 
       try {
@@ -127,6 +129,8 @@ export async function sendPushToAll(
           body,
           { TTL: 60 * 60 * 4 } // 4 hour TTL
         );
+        console.log(`PUSH SEND: FCM response status ${result.statusCode}`);
+        console.log(`PUSH SEND: FCM response body ${result.body || "(empty)"}`);
         logger.info(
           {
             endpoint: endpointShort,
@@ -141,6 +145,8 @@ export async function sendPushToAll(
         const status = e.statusCode;
         const responseBody = e.body ?? "(no body)";
 
+        console.log(`PUSH SEND: FCM response status ${status}`);
+        console.log(`PUSH SEND: FCM response body ${responseBody}`);
         logger.warn(
           {
             endpoint: endpointShort,
@@ -158,6 +164,7 @@ export async function sendPushToAll(
           await removeSubscription(sub.endpoint).catch((dbErr) => {
             logger.error({ dbErr, endpoint: endpointShort }, "[Push] Failed to delete expired subscription from DB");
           });
+          console.log(`PUSH SEND: removed invalid/expired subscription from Supabase — status ${status} — endpoint ${endpoint50}`);
           logger.info(
             { endpoint: endpointShort, statusCode: status, reason: status === 400 ? "invalid/VAPID-mismatch" : "expired" },
             "[Push] Removed invalid/expired subscription from Supabase"
