@@ -73,7 +73,7 @@ self.addEventListener("push", (event) => {
 
 // ── Notification click ────────────────────────────────────────────────────────
 self.addEventListener("notificationclick", (event) => {
-  // Always close the notification first
+  // Step 1: always close the notification immediately
   event.notification.close();
 
   const action       = event.action; // "open" | "snooze" | "dismiss" | "" (body tap)
@@ -99,38 +99,37 @@ self.addEventListener("notificationclick", (event) => {
   }
 
   // ── Open (action === "open") or body tap (action === "") ───────────────────
-  // Both should open / focus Winston and deliver the reminder to the app.
+  // CRITICAL: clients.openWindow MUST be inside event.waitUntil or it will be
+  // blocked by the browser. Everything is chained inside the single waitUntil.
   event.waitUntil(
     self.clients
       .matchAll({ type: "window", includeUncontrolled: true })
       .then((clientList) => {
-        // Check if Winston is already open
-        const existing = clientList.find((c) => c.url.startsWith(WINSTON_URL));
+        // Find any open Winston tab using includes() — matches regardless of
+        // trailing slashes, query params, or path variations.
+        const existing = clientList.find(
+          (c) => c.url.includes("winston-companion--davidblakelock.replit.app")
+        );
 
         if (existing) {
-          // App is open — bring it to the foreground, then deliver the reminder
-          // by posting NOTIFICATION_CLICK with the full URL (including ?text= params).
-          // Chat.tsx listens for this message and calls speakReply immediately.
-          return existing.focus()
-            .then(() => {
-              existing.postMessage({
-                type: "NOTIFICATION_CLICK",
-                url:  targetUrl,
-              });
-            })
-            .catch(() => {
-              // focus() failed (some browsers block it) — try opening a new window instead
-              return storePendingReminder(reminderText, reminderId)
-                .catch(() => {})
-                .then(() => self.clients.openWindow(targetUrl));
-            });
+          // App is already open — focus it, then deliver the reminder via postMessage.
+          // Chat.tsx listens for NOTIFICATION_CLICK and calls speakReply immediately.
+          return existing.focus().then(() => {
+            existing.postMessage({ type: "NOTIFICATION_CLICK", url: targetUrl });
+          }).catch(() => {
+            // focus() rejected (some Android Chrome versions block it when the
+            // page is not in the foreground) — store in IDB and open a fresh window.
+            return storePendingReminder(reminderText, reminderId)
+              .catch(() => {})
+              .then(() => self.clients.openWindow(WINSTON_URL));
+          });
         }
 
-        // App is not open — store reminder in IndexedDB before opening so the
-        // app can speak it even if URL params are stripped or unavailable.
+        // App is not open at all — store reminder in IndexedDB first so the app
+        // can speak it on load even without URL params, then open the window.
         return storePendingReminder(reminderText, reminderId)
           .catch(() => {})
-          .then(() => self.clients.openWindow(targetUrl));
+          .then(() => self.clients.openWindow(WINSTON_URL));
       })
   );
 });

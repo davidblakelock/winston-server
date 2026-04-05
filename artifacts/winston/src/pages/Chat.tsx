@@ -629,9 +629,15 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
       if (playingId === messageId) { setPlayingId(null); return; }
       const audio = new Audio(`data:${mimeType};base64,${base64}`);
       audio.onended = () => setPlayingId(null);
-      audio.onerror = () => setPlayingId(null);
+      audio.onerror = (e) => {
+        console.warn("[AUDIO] playElevenLabsAudio onerror:", e);
+        setPlayingId(null);
+      };
       audioRef.current = audio;
-      audio.play().catch(() => setPlayingId(null));
+      audio.play().catch((err) => {
+        console.warn("[AUDIO] play() blocked or failed:", err);
+        setPlayingId(null);
+      });
       setPlayingId(messageId);
     },
     [playingId]
@@ -649,10 +655,12 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
 
   const speakReply = useCallback(
     (messageId: string, text: string) => {
+      console.log("[SPEAK] speakReply called, msgId:", messageId, "text:", text);
       ttsMutation.mutate(
         { data: { text } },
         {
           onSuccess: (ttsData) => {
+            console.log("[SPEAK] TTS success, playing audio for:", messageId);
             setMessages((prev) =>
               prev.map((m) =>
                 m.id === messageId
@@ -662,7 +670,10 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
             );
             playElevenLabsAudio(messageId, ttsData.audioBase64, ttsData.mimeType);
           },
-          onError: () => playBrowserTTS(messageId, text),
+          onError: (err) => {
+            console.warn("[SPEAK] TTS failed, falling back to browser TTS. Error:", err);
+            playBrowserTTS(messageId, text);
+          },
         }
       );
     },
@@ -1068,20 +1079,28 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
 
   const fireReminderAlert = useCallback(
     (event: ReminderEvent) => {
+      console.log("[REMINDER] fireReminderAlert called:", event);
+
       // Guard: skip if already spoken this session (e.g. both SSE and poll fired)
-      if (spokenReminderIds.current.has(event.id)) return;
+      if (spokenReminderIds.current.has(event.id)) {
+        console.log("[REMINDER] Already spoken this session, skipping:", event.id);
+        return;
+      }
       spokenReminderIds.current.add(event.id);
 
       // Remove from upcoming reminders panel since it's now firing
       setUpcomingReminders((prev) => prev.filter((r) => r.id !== event.id));
 
       const msgId = `reminder-${event.id}-${Date.now()}`;
+      const speakText = `Hey David, your reminder: ${event.reminderText}.`;
       const displayContent = `Hey David — your reminder: ${event.reminderText}`;
       setMessages((prev) => [
         ...prev,
         { id: msgId, role: "assistant", content: displayContent, isReminder: true },
       ]);
-      speakReply(msgId, event.speakText);
+
+      console.log("[REMINDER] Calling speakReply with:", speakText);
+      speakReply(msgId, speakText);
 
       // Acknowledge to the server so /api/reminders/due won't return this to other devices
       fetch(`${CHAT_BASE}/api/reminders/${event.id}/acknowledge`, { method: "POST" }).catch(() => {});
@@ -1106,7 +1125,12 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
 
     const attach = (source: EventSource) => {
       source.addEventListener("reminder", (e) => {
-        try { fireReminderAlertRef.current(JSON.parse(e.data) as ReminderEvent); } catch {}
+        console.log("[REMINDER] SSE 'reminder' event received:", e.data);
+        try {
+          fireReminderAlertRef.current(JSON.parse(e.data) as ReminderEvent);
+        } catch (err) {
+          console.error("[REMINDER] Error in SSE reminder handler:", err);
+        }
       });
 
       // Live sync: reminder created, deleted, fired, or completed on any device
@@ -1174,8 +1198,13 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         const res = await fetch(`${CHAT_BASE}/api/reminders/due`);
         if (!res.ok) return;
         const due = await res.json() as Array<{ id: number; reminder_text: string }>;
+        if (due.length > 0) console.log("[REMINDER] Poll found due reminders:", due);
         for (const reminder of due) {
-          if (spokenReminderIds.current.has(reminder.id)) continue;
+          if (spokenReminderIds.current.has(reminder.id)) {
+            console.log("[REMINDER] Poll: already spoken, skipping:", reminder.id);
+            continue;
+          }
+          console.log("[REMINDER] Poll: firing reminder via fallback:", reminder);
           fireReminderAlertRef.current({
             id: reminder.id,
             userName: "David",
