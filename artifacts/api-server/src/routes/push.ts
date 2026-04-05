@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
   saveSubscription,
+  saveSubscriptionWithAction,
   removeSubscription,
   getSubscriptions,
   sendPushToAll,
@@ -24,62 +25,60 @@ router.get("/push/vapid-public-key", (_req, res) => {
 
 // POST /api/push/subscribe — save a push subscription to Supabase
 router.post("/push/subscribe", async (req, res) => {
-  logger.info({ body: JSON.stringify(req.body).slice(0, 200) }, "[PUSH] /subscribe received");
+  const body = req.body as {
+    endpoint?: string;
+    keys?: { p256dh?: string; auth?: string };
+    userName?: string;
+    deviceId?: string;
+  };
+
+  logger.info(
+    { endpointTail: body.endpoint?.slice(-40) ?? "MISSING", userName: body.userName, deviceId: body.deviceId },
+    "[PUSH STEP B1] Subscribe request received"
+  );
+
+  // STEP B2 — Validate payload
+  const { endpoint, keys, userName = "David", deviceId } = body;
+
+  if (!endpoint) {
+    logger.warn("[PUSH STEP B2] FAIL — Missing endpoint in request body");
+    res.status(400).json({ error: "Missing endpoint" });
+    return;
+  }
+  if (!keys?.p256dh || !keys?.auth) {
+    logger.warn({ hasP256dh: !!keys?.p256dh, hasAuth: !!keys?.auth }, "[PUSH STEP B2] FAIL — Missing subscription keys");
+    res.status(400).json({ error: "Missing subscription keys (p256dh / auth)" });
+    return;
+  }
+  logger.info("[PUSH STEP B2] Payload validated — endpoint, p256dh, auth all present");
 
   try {
-    const {
-      endpoint,
-      keys,
-      userName = "David",
-      deviceId,
-    } = req.body as {
-      endpoint: string;
-      keys: { p256dh: string; auth: string };
-      userName?: string;
-      deviceId?: string;
-    };
-
-    // Validate required fields
-    if (!endpoint) {
-      logger.warn("[PUSH] Missing endpoint in subscribe request");
-      res.status(400).json({ error: "Missing endpoint" });
-      return;
-    }
-    if (!keys?.p256dh || !keys?.auth) {
-      logger.warn({ keys: JSON.stringify(keys) }, "[PUSH] Missing keys in subscribe request");
-      res.status(400).json({ error: "Missing subscription keys (p256dh / auth)" });
-      return;
-    }
-
     const sub: PushSubscriptionData = {
       endpoint,
       p256dh: keys.p256dh,
       auth: keys.auth,
     };
 
-    const userAgent = req.headers["user-agent"] ?? "unknown";
+    const userAgent = (req.headers["user-agent"] ?? "unknown").slice(0, 200);
 
+    // STEP B3 — Upsert into Supabase
     logger.info(
-      {
-        userName,
-        endpointTail: endpoint.slice(-30),
-        userAgent: userAgent.slice(0, 80),
-        deviceId: deviceId ?? "none",
-      },
-      "[PUSH] Saving subscription to Supabase…"
+      { userName, endpointTail: endpoint.slice(-40), deviceId: deviceId ?? "none", userAgent: userAgent.slice(0, 100) },
+      "[PUSH STEP B3] Upserting subscription into Supabase push_subscriptions…"
     );
 
-    const savedId = await saveSubscription(userName, sub, userAgent, deviceId);
+    const { id, action } = await saveSubscriptionWithAction(userName, sub, userAgent, deviceId);
 
+    // STEP B4 — Return result
     logger.info(
-      { userName, endpointTail: endpoint.slice(-30), savedId },
-      "[PUSH] ✅ Subscription saved to Supabase successfully"
+      { userName, deviceId: deviceId ?? "none", endpointTail: endpoint.slice(-40), id, action },
+      "[PUSH STEP B4] ✅ Subscription saved successfully"
     );
 
-    res.json({ success: true, id: savedId });
+    res.json({ success: true, id, action });
   } catch (err) {
-    logger.error({ err }, "[PUSH] ❌ Subscribe failed");
-    res.status(500).json({ error: "Failed to save subscription" });
+    logger.error({ err, endpoint: endpoint?.slice(-40), userName }, "[PUSH STEP B3] ❌ Supabase upsert failed");
+    res.status(500).json({ error: "Failed to save subscription to database" });
   }
 });
 

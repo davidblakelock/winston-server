@@ -38,7 +38,18 @@ export async function saveSubscription(
   userAgent?: string,
   deviceId?: string
 ): Promise<number | null> {
-  const { rows } = await query<{ id: number }>(
+  const { id } = await saveSubscriptionWithAction(userName, sub, userAgent, deviceId);
+  return id;
+}
+
+export async function saveSubscriptionWithAction(
+  userName: string,
+  sub: PushSubscriptionData,
+  userAgent?: string,
+  deviceId?: string
+): Promise<{ id: number | null; action: "inserted" | "updated" }> {
+  // Use xmax to detect insert vs update
+  const { rows } = await query<{ id: number; xmax: string }>(
     `INSERT INTO push_subscriptions (user_name, endpoint, p256dh, auth, user_agent, device_id)
      VALUES ($1, $2, $3, $4, $5, $6)
      ON CONFLICT (endpoint) DO UPDATE SET
@@ -47,10 +58,14 @@ export async function saveSubscription(
        auth = EXCLUDED.auth,
        user_agent = EXCLUDED.user_agent,
        device_id = EXCLUDED.device_id
-     RETURNING id`,
+     RETURNING id, xmax::text`,
     [userName, sub.endpoint, sub.p256dh, sub.auth, userAgent ?? null, deviceId ?? null]
   );
-  return rows[0]?.id ?? null;
+  const row = rows[0];
+  if (!row) return { id: null, action: "inserted" };
+  // xmax = 0 means inserted; non-zero means updated
+  const action = row.xmax === "0" ? "inserted" : "updated";
+  return { id: row.id, action };
 }
 
 export async function removeSubscription(endpoint: string): Promise<void> {

@@ -1321,34 +1321,46 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
           ) : connectGoogleBtn
         }
 
-        {/* Notification bell */}
+        {/* Notification bell — green=registered, red=not registered */}
         {isNotificationsSupported() && (
-          <button
-            onClick={() => {
-              if (notif.permission === "granted" && notif.isSubscribed) {
-                void notif.unsubscribe();
-              } else if (notif.permission === "granted" && !notif.isSubscribed) {
-                void notif.resubscribe();
-              } else if (notif.permission !== "denied") {
-                void notif.requestPermission();
+          <div className="relative">
+            <button
+              onClick={() => {
+                if (notif.permission === "granted" && notif.isSubscribed) {
+                  void notif.unsubscribe();
+                } else if (notif.permission === "granted" && !notif.isSubscribed) {
+                  void notif.resubscribe();
+                } else if (notif.permission !== "denied") {
+                  void notif.requestPermission();
+                }
+              }}
+              className={`transition-colors p-1.5 rounded-full border ${
+                notif.isSubscribed
+                  ? "text-green-400 border-green-500/30 bg-green-950/30 hover:bg-green-950/50"
+                  : notif.permission === "denied"
+                  ? "text-muted-foreground/40 border-white/10 cursor-not-allowed"
+                  : "text-red-400 border-red-500/30 bg-red-950/30 hover:bg-red-950/50"
+              }`}
+              title={
+                notif.isSubscribed
+                  ? "Notifications on — tap to disable"
+                  : notif.permission === "denied"
+                  ? "Notifications blocked — reset in browser settings"
+                  : "Notifications not registered — tap to enable"
               }
-            }}
-            className={`text-muted-foreground hover:text-foreground transition-colors p-1.5 rounded-full hover:bg-white/10 border border-white/10 hover:border-white/20 ${notif.isSubscribed ? "text-primary/70" : ""}`}
-            title={
-              notif.isSubscribed
-                ? "Notifications on — click to disable"
-                : notif.permission === "denied"
-                ? "Notifications blocked — reset in browser settings"
-                : "Enable push notifications"
-            }
-            disabled={notif.isLoading || notif.permission === "denied"}
-          >
-            {notif.isLoading
-              ? <Loader2 className="h-4 w-4 animate-spin opacity-50" />
-              : notif.isSubscribed
-              ? <Bell className="h-4 w-4" />
-              : <BellOff className="h-4 w-4 opacity-50" />}
-          </button>
+              disabled={notif.isLoading || notif.permission === "denied"}
+            >
+              {notif.isLoading
+                ? <Loader2 className="h-4 w-4 animate-spin" />
+                : notif.isSubscribed
+                ? <Bell className="h-4 w-4" />
+                : <BellOff className="h-4 w-4" />}
+            </button>
+            {/* Red dot badge when not subscribed */}
+            {!notif.isSubscribed && !notif.isLoading && notif.permission !== "denied" && (
+              <span className="absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-red-500 border border-background animate-pulse" />
+            )}
+          </div>
         )}
 
         {/* Upcoming reminders pill */}
