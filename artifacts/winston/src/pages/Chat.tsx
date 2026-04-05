@@ -3,7 +3,6 @@ import { Send, Play, Loader2, Disc3, Mic, MicOff, MapPin, Mail, LogOut, Settings
 import { useTextToSpeech } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useNotifications, isNotificationsSupported } from "@/hooks/useNotifications";
 import { EmergencyOverlay } from "@/components/EmergencyOverlay";
 import SettingsPanel from "@/components/SettingsPanel";
@@ -1303,23 +1302,34 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
     <div className="flex flex-col h-[100dvh] max-w-4xl mx-auto overflow-hidden bg-background">
       {/* Header */}
       <header className="flex-shrink-0 border-b border-white/5 py-3 px-4 sm:px-6 flex items-center justify-between bg-background/80 backdrop-blur-sm z-10 sticky top-0">
-        <div className="flex items-center gap-3">
-          <Avatar className="h-10 w-10 border border-primary/20 bg-card">
-            <AvatarFallback className="bg-card text-primary font-serif font-medium text-lg">
-              {companionNameFinal
-                ? companionNameFinal.trim().split(/\s+/).map((w) => w[0].toUpperCase()).join("").slice(0, 2)
-                : "W"}
-            </AvatarFallback>
-          </Avatar>
-          <div>
-            <h1 className="text-xl font-serif font-medium text-foreground tracking-wide">{companionName}</h1>
+        {/* Left — companion identity */}
+        <div className="flex items-center gap-3 min-w-0">
+          {/* Companion avatar — photo if available, initials fallback */}
+          <div className="h-11 w-11 rounded-full border border-primary/20 bg-card overflow-hidden flex-shrink-0 flex items-center justify-center">
+            {photoUrlProp ? (
+              <img
+                src={photoUrlProp}
+                alt={companionNameFinal ?? "Companion"}
+                className="h-full w-full object-cover"
+                onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+              />
+            ) : (
+              <span className="text-primary font-serif font-medium text-lg select-none">
+                {companionNameFinal
+                  ? companionNameFinal.trim().split(/\s+/).map((w) => w[0].toUpperCase()).join("").slice(0, 2)
+                  : "W"}
+              </span>
+            )}
+          </div>
+          <div className="min-w-0">
+            <h1 className="text-xl font-serif font-medium text-foreground tracking-wide truncate">{companionName}</h1>
             {connectionStatus === "reconnecting" ? (
               <p className="text-xs text-amber-400/80 font-medium tracking-widest uppercase flex items-center gap-1.5">
                 <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
                 Reconnecting…
               </p>
             ) : (
-              <p className="text-xs text-muted-foreground font-medium tracking-widest uppercase">Always Here</p>
+              <p className="hidden sm:block text-xs text-muted-foreground font-medium tracking-widest uppercase">Always Here</p>
             )}
           </div>
         </div>
@@ -1513,27 +1523,16 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
           <Settings className="h-4 w-4" />
         </button>
 
-        {/* User identity chip — Google profile picture + companion name */}
-        <div className="flex items-center gap-2 ml-1 pl-2 border-l border-white/10">
-          {/* Avatar: Google photo or warm-amber initials fallback */}
-          <UserAvatar avatarBase64={customAvatarBase64} googlePicture={userPicture} fullName={userFullName} userName={userName} />
-          {/* Companion name label */}
-          {companionNameFinal && (
-            <span className="text-sm font-medium text-foreground/80 whitespace-nowrap">
-              {companionNameFinal}
-            </span>
-          )}
-          {/* Sign out */}
-          {onSignOut && (
-            <button
-              onClick={onSignOut}
-              className="text-muted-foreground/40 hover:text-red-400/70 transition-colors p-1 rounded-full hover:bg-red-950/20"
-              title="Sign out"
-            >
-              <LogOut className="h-3.5 w-3.5" />
-            </button>
-          )}
-        </div>
+        {/* Sign out */}
+        {onSignOut && (
+          <button
+            onClick={onSignOut}
+            className="text-muted-foreground/40 hover:text-red-400/70 transition-colors p-1.5 rounded-full hover:bg-red-950/20 border border-white/10 hover:border-red-500/20"
+            title="Sign out"
+          >
+            <LogOut className="h-4 w-4" />
+          </button>
+        )}
         </div>
       </header>
 
