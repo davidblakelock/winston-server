@@ -1103,7 +1103,16 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
       speakReply(msgId, speakText);
 
       // Acknowledge to the server so /api/reminders/due won't return this to other devices
-      fetch(`${CHAT_BASE}/api/reminders/${event.id}/acknowledge`, { method: "POST" }).catch(() => {});
+      fetch(`${CHAT_BASE}/api/reminders/${event.id}/acknowledge`, { method: "POST" })
+        .then(async (r) => {
+          if (!r.ok) {
+            const body = await r.text().catch(() => "");
+            console.error(`[ACKNOWLEDGE] Server error for id=${event.id} status=${r.status}:`, body);
+          } else {
+            console.log(`[ACKNOWLEDGE] id=${event.id} acknowledged OK`);
+          }
+        })
+        .catch((err) => console.error(`[ACKNOWLEDGE] Network error for id=${event.id}:`, err));
     },
     [speakReply]
   );
@@ -1127,7 +1136,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
 
     const pollMissedReminders = async () => {
       try {
-        const res = await fetch(`${CHAT_BASE}/api/reminders/due`);
+        const res = await fetch(`${CHAT_BASE}/api/reminders/due`, { cache: "no-store" });
         if (!res.ok) return;
         const due = await res.json() as Array<{ id: number; reminder_text: string }>;
         if (due.length > 0) console.log("[REMINDER] Reconnect poll found missed reminders:", due);
@@ -1230,7 +1239,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
   useEffect(() => {
     const poll = async () => {
       try {
-        const res = await fetch(`${CHAT_BASE}/api/reminders/due`);
+        const res = await fetch(`${CHAT_BASE}/api/reminders/due`, { cache: "no-store" });
         if (!res.ok) return;
         const due = await res.json() as Array<{ id: number; reminder_text: string }>;
         if (due.length > 0) console.log("[REMINDER] Poll found due reminders:", due);

@@ -19,9 +19,12 @@ router.get("/reminders/stream", (req: Request, res: Response) => {
   res.write(`: connected\n\n`);
   addClient(clientId, res);
 
+  // Send a keepalive ping every 30 s as an SSE comment.
+  // This resets the production proxy's idle timeout, preventing the
+  // connection from being killed at the proxy's 5-minute hard limit.
   const heartbeat = setInterval(() => {
-    try { res.write(`: ping\n\n`); } catch { clearInterval(heartbeat); }
-  }, 25000);
+    try { res.write(`: ping\n\n`); (res as any).flush?.(); } catch { clearInterval(heartbeat); }
+  }, 30000);
 
   req.on("close", () => { clearInterval(heartbeat); removeClient(clientId); });
 });
@@ -50,16 +53,20 @@ router.get("/reminders/list", async (_req: Request, res: Response) => {
 });
 
 // ── GET /api/reminders/due ────────────────────────────────────────────────────
-// Returns reminders that fired in the last 3 minutes (status = 'fired').
+// Returns reminders that fired in the last 10 minutes (status = 'fired').
 // The frontend polls this every 30 s as a reliable fallback for when the SSE
 // stream drops on mobile — it speaks any reminder it hasn't already spoken
 // (tracked client-side by reminder ID).
+// No-cache headers ensure the browser always fetches fresh data.
 router.get("/reminders/due", async (_req: Request, res: Response) => {
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
   const { rows } = await query(
     `SELECT id, user_name, reminder_text, fire_at, status, last_fired_at
        FROM reminders
       WHERE status = 'fired'
-        AND last_fired_at > NOW() - INTERVAL '3 minutes'
+        AND last_fired_at > NOW() - INTERVAL '10 minutes'
       ORDER BY last_fired_at DESC`
   );
   res.json(rows);
@@ -129,10 +136,17 @@ router.post("/reminders/:id/acknowledge", async (req: Request, res: Response) =>
     return;
   }
 
-  await query(
-    `UPDATE reminders SET status = 'completed' WHERE id = $1 AND status = 'fired'`,
-    [numId]
-  );
+  try {
+    const result = await query(
+      `UPDATE reminders SET status = 'completed' WHERE id = $1 AND status = 'fired'`,
+      [numId]
+    );
+    console.log(`[ACKNOWLEDGE] id=${numId} rowsAffected=${result.rowCount}`);
+  } catch (err) {
+    console.error(`[ACKNOWLEDGE] Failed to update id=${numId}:`, err);
+    res.status(500).json({ error: "acknowledge failed", detail: String(err) });
+    return;
+  }
   res.json({ success: true });
   // Tell all open panels to remove this reminder
   broadcast("reminder_sync", { action: "completed", id: numId });
