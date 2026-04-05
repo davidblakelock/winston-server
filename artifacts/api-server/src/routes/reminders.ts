@@ -114,34 +114,50 @@ router.post("/reminders/:id/snooze", async (req: Request, res: Response) => {
 });
 
 // ── POST /api/reminders/:id/acknowledge — mark a reminder as completed ────────
-// Called by the frontend after Emma speaks the reminder so it won't be returned
-// by /api/reminders/due on subsequent polls from other devices.
+// Called by the frontend after the companion speaks the reminder so it won't be
+// returned by /api/reminders/due on subsequent polls from other devices.
+// Handles both numeric DB IDs and synthetic string IDs (e.g. med-init-*, briefing-*)
+// that have no row in the reminders table — those are acknowledged with 200 immediately.
 router.post("/reminders/:id/acknowledge", async (req: Request, res: Response) => {
-  const id = parseInt(req.params.id, 10);
-  if (isNaN(id)) { res.status(400).json({ error: "Invalid reminder ID" }); return; }
+  const rawId = req.params.id;
+  const numId = parseInt(rawId, 10);
+
+  // Non-numeric ID — synthetic reminder (medication init, briefing, etc.) with no DB row.
+  // Nothing to update; just return 200 so the frontend can clear it cleanly.
+  if (isNaN(numId) || rawId !== String(numId)) {
+    res.json({ success: true, synthetic: true });
+    return;
+  }
 
   await query(
     `UPDATE reminders SET status = 'completed' WHERE id = $1 AND status = 'fired'`,
-    [id]
+    [numId]
   );
   res.json({ success: true });
   // Tell all open panels to remove this reminder
-  broadcast("reminder_sync", { action: "completed", id });
+  broadcast("reminder_sync", { action: "completed", id: numId });
 });
 
 // ── POST /api/reminders/:id/complete — dismiss from panel (mark completed) ────
 // Called when the user taps the dismiss (✓) button in the upcoming reminders panel.
+// Also handles synthetic string IDs gracefully.
 router.post("/reminders/:id/complete", async (req: Request, res: Response) => {
-  const id = parseInt(req.params.id, 10);
-  if (isNaN(id)) { res.status(400).json({ error: "Invalid reminder ID" }); return; }
+  const rawId = req.params.id;
+  const numId = parseInt(rawId, 10);
+
+  // Non-numeric ID — synthetic reminder with no DB row; return 200 immediately.
+  if (isNaN(numId) || rawId !== String(numId)) {
+    res.json({ success: true, synthetic: true });
+    return;
+  }
 
   await query(
     `UPDATE reminders SET status = 'completed' WHERE id = $1 AND status IN ('pending', 'fired')`,
-    [id]
+    [numId]
   );
   res.json({ success: true });
   // Broadcast so all open panels on all devices remove this reminder immediately
-  broadcast("reminder_sync", { action: "completed", id });
+  broadcast("reminder_sync", { action: "completed", id: numId });
 });
 
 export default router;
