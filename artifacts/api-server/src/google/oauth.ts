@@ -10,9 +10,20 @@ export const SCOPES = [
   "https://www.googleapis.com/auth/contacts.readonly",
 ];
 
+// ── Account preference SQL ─────────────────────────────────────────────────────
+// Prefer the real personal account (non-winston) over the app service account.
+// When David re-authenticated with davidblakelock01@gmail.com, it was stored as
+// user_name='David2'. This ordering ensures Gmail, Calendar, and scope checks
+// always resolve to his real account if it exists.
+const PREFERRED_ACCOUNT_ORDER = `
+  ORDER BY
+    CASE WHEN email NOT LIKE '%winston%' THEN 0 ELSE 1 END,
+    updated_at DESC NULLS LAST
+`;
+
 export async function hasCalendarWriteScope(): Promise<boolean> {
   const { rows } = await query<{ scope: string | null }>(
-    "SELECT scope FROM google_auth WHERE user_name = 'David' LIMIT 1"
+    `SELECT scope FROM google_auth ${PREFERRED_ACCOUNT_ORDER} LIMIT 1`
   );
   if (!rows.length || !rows[0].scope) return false;
   return rows[0].scope
@@ -22,7 +33,7 @@ export async function hasCalendarWriteScope(): Promise<boolean> {
 
 export async function hasContactsScope(): Promise<boolean> {
   const { rows } = await query<{ scope: string | null }>(
-    "SELECT scope FROM google_auth WHERE user_name = 'David' LIMIT 1"
+    `SELECT scope FROM google_auth ${PREFERRED_ACCOUNT_ORDER} LIMIT 1`
   );
   if (!rows.length || !rows[0].scope) return false;
   return rows[0].scope
@@ -31,7 +42,6 @@ export async function hasContactsScope(): Promise<boolean> {
 }
 
 export function getRedirectUri(): string {
-  // Allow an explicit override (needed for production deployments)
   if (process.env.GOOGLE_REDIRECT_URI) {
     return process.env.GOOGLE_REDIRECT_URI;
   }
@@ -60,12 +70,18 @@ interface GoogleAuthRow {
 }
 
 export async function getAuthClient(): Promise<InstanceType<typeof google.auth.OAuth2> | null> {
+  // Select all rows ordered by preference — real personal account first, then
+  // most recently updated. Falls back to the winston app account if needed.
   const { rows } = await query<GoogleAuthRow>(
-    "SELECT * FROM google_auth WHERE user_name = 'David' LIMIT 1"
+    `SELECT * FROM google_auth ${PREFERRED_ACCOUNT_ORDER} LIMIT 5`
   );
-  if (rows.length === 0 || !rows[0].access_token) return null;
 
-  const auth = rows[0];
+  // Find the first row that has a usable token
+  const auth = rows.find((r) => r.access_token || r.refresh_token);
+  if (!auth) return null;
+
+  console.log(`[OAuth] getAuthClient using ${auth.email ?? "unknown"} (user_name=${auth.user_name})`);
+
   const oauth2Client = createOAuthClient();
 
   oauth2Client.setCredentials({
@@ -74,6 +90,7 @@ export async function getAuthClient(): Promise<InstanceType<typeof google.auth.O
     expiry_date: auth.token_expiry ? new Date(auth.token_expiry).getTime() : undefined,
   });
 
+  // When the token auto-refreshes, update the correct row (not hardcoded 'David')
   oauth2Client.on("tokens", async (tokens) => {
     if (tokens.access_token) {
       await query(
@@ -81,8 +98,8 @@ export async function getAuthClient(): Promise<InstanceType<typeof google.auth.O
          SET access_token = $1,
              token_expiry = $2,
              updated_at   = NOW()
-         WHERE user_name = 'David'`,
-        [tokens.access_token, tokens.expiry_date ? new Date(tokens.expiry_date) : null]
+         WHERE user_name = $3`,
+        [tokens.access_token, tokens.expiry_date ? new Date(tokens.expiry_date) : null, auth.user_name]
       );
     }
   });
