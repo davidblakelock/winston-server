@@ -219,14 +219,79 @@ export function formatMarketsForPrompt(snapshot: MarketSnapshot): string {
   return `[Financial Markets — Last trading day close, as of ${fetchedStr} CT]\n${trend}.\n${lines.join("\n")}`;
 }
 
-export function buildMarketsBlock(snapshot: MarketSnapshot): string {
+// US federal holidays (month is 0-based, day is date)
+// Using fixed-date holidays only; floating holidays (Labor Day, Thanksgiving) omitted for simplicity.
+const FIXED_HOLIDAYS: Array<{ month: number; day: number; name: string }> = [
+  { month: 0,  day: 1,  name: "New Year's Day" },
+  { month: 6,  day: 4,  name: "Independence Day" },
+  { month: 11, day: 25, name: "Christmas" },
+];
+
+function isFederalHoliday(date: Date): string | null {
+  const ct = new Date(date.toLocaleString("en-US", { timeZone: "America/Chicago" }));
+  for (const h of FIXED_HOLIDAYS) {
+    if (ct.getMonth() === h.month && ct.getDate() === h.day) return h.name;
+  }
+  return null;
+}
+
+function getPreviousTradingDayLabel(now: Date): { label: string; wasHoliday: boolean } {
+  const ct = new Date(now.toLocaleString("en-US", { timeZone: "America/Chicago" }));
+  const dow = ct.getDay(); // 0=Sun, 1=Mon...6=Sat
+  let prevDate = new Date(ct);
+
+  // Step back to the previous trading day
+  if (dow === 1) {
+    // Monday → previous Friday
+    prevDate.setDate(ct.getDate() - 3);
+    const holiday = isFederalHoliday(prevDate);
+    if (holiday) {
+      prevDate.setDate(prevDate.getDate() - 1); // step back further
+      return { label: "Thursday", wasHoliday: true };
+    }
+    return { label: "Friday", wasHoliday: false };
+  } else if (dow === 0) {
+    prevDate.setDate(ct.getDate() - 2);
+  } else {
+    prevDate.setDate(ct.getDate() - 1);
+  }
+  const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const holiday = isFederalHoliday(prevDate);
+  const label = days[prevDate.getDay()];
+  return { label, wasHoliday: !!holiday };
+}
+
+export function buildMarketsBlock(snapshot: MarketSnapshot, now?: Date): string {
+  const effectiveNow = now ?? new Date();
+  const ct = new Date(effectiveNow.toLocaleString("en-US", { timeZone: "America/Chicago" }));
+  const dow = ct.getDay(); // 0=Sun, 6=Sat
+  const isWeekend = dow === 0 || dow === 6;
+
+  // On weekends: markets are closed — skip the data entirely
+  if (isWeekend) {
+    const nextOpen = dow === 6 ? "Monday" : "Monday"; // both Sat and Sun → Monday
+    return `\n\n[Financial Markets]\nMarkets are closed this weekend. They reopen ${nextOpen}. Do not report market data today.`;
+  }
+
+  // Check if today is a holiday
+  const todayHoliday = isFederalHoliday(ct);
+  if (todayHoliday) {
+    return `\n\n[Financial Markets]\nMarkets are closed today for ${todayHoliday}. Skip market data in the briefing.`;
+  }
+
   const formatted = formatMarketsForPrompt(snapshot);
   if (!formatted) return "";
 
+  // Determine the label for the data: "Friday's close", "yesterday's close", etc.
+  const { label: prevDayLabel } = getPreviousTradingDayLabel(effectiveNow);
   const fetchedStr = formatFetchTime(snapshot.fetchedAt);
+  const isMonday = dow === 1;
+  const prevLabel = isMonday ? "Friday's close" : "yesterday's close";
 
   return (
     `\n\n${formatted}\n` +
-    `Data last fetched: ${fetchedStr} CT — always mention the data freshness naturally when referencing markets. Report direction and percentages exactly as shown. Note oil only if it moved more than 1%.`
+    `Data is ${prevDayLabel}'s close (${prevLabel}), fetched at ${fetchedStr} CT. ` +
+    `Always label it as "${prevLabel}" when speaking — never say "today's market" since these are closing figures from ${prevDayLabel}. ` +
+    `Report direction and percentages exactly as shown. Note oil only if it moved more than 1%.`
   );
 }

@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { fetchAndSummarizeEmails, formatEmailsForPrompt, buildScamWarningInstruction } from "../google/gmail.js";
-import { fetchTodayEvents, formatCalendarForPrompt, type CalendarEvent } from "../google/calendar.js";
+import { fetchWeekEvents, formatCalendarForPrompt, type CalendarEvent } from "../google/calendar.js";
 import { estimateDriveTime, extractEventLocation } from "../departure/departureManager.js";
 import { populateCalendarSyncState } from "../departure/calendarSyncScheduler.js";
 import { getMedications, hasTakenMedicationsToday, buildMedReminderText } from "../medications/medicationManager.js";
@@ -331,13 +331,41 @@ function getCurrentDateTimeBlock(): string {
   const time = now.toLocaleTimeString("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit", hour12: true });
   const localHour = parseInt(now.toLocaleTimeString("en-US", { timeZone: tz, hour: "numeric", hour12: false }), 10);
   const partOfDay = localHour < 12 ? "morning" : localHour < 17 ? "afternoon" : localHour < 21 ? "evening" : "night";
-  const localDow = new Date(now.toLocaleString("en-US", { timeZone: tz })).getDay();
-  const isWeekend = localDow === 0 || localDow === 6;
+
+  const ctDate = new Date(now.toLocaleString("en-US", { timeZone: tz }));
+  const dow = ctDate.getDay(); // 0=Sun, 1=Mon...6=Sat
+  const isWeekend = dow === 0 || dow === 6;
+
+  // Yesterday's day name
+  const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const yesterdayName = DAYS[(dow + 6) % 7];
+
+  // Market status
+  let marketStatus: string;
+  let lastTradingDay: string;
+  if (dow === 0 || dow === 6) {
+    marketStatus = "closed — it is the weekend";
+    lastTradingDay = dow === 6 ? "Friday" : "Friday"; // both Sat/Sun → Friday
+  } else if (dow === 1) {
+    marketStatus = "open today (Monday)";
+    lastTradingDay = "Friday";
+  } else {
+    marketStatus = "open today";
+    lastTradingDay = DAYS[dow - 1];
+  }
+
+  // Tomorrow's name
+  const tomorrowName = DAYS[(dow + 1) % 7];
+
   return (
-    `[Current date and time — injected fresh on every message]\n` +
+    `[Current date and time — injected fresh on every briefing]\n` +
     `Today is ${dayName}, ${monthName} ${day}, ${year}.\n` +
     `Current time: ${time} Central Time (${partOfDay}).\n` +
     `Day type: ${isWeekend ? "weekend" : "weekday"}.\n` +
+    `Yesterday was ${yesterdayName}. Tomorrow is ${tomorrowName}.\n` +
+    `Stock markets: ${marketStatus}. Last trading day was ${lastTradingDay}.\n` +
+    `Use ONLY these values when referring to days. "Yesterday" means ${yesterdayName}. "Tomorrow" means ${tomorrowName}.\n` +
+    `Market data in this briefing is from ${lastTradingDay}'s close — always label it as "${lastTradingDay}'s close" or "as of ${lastTradingDay}'s close" when speaking.\n` +
     `When David asks what time or day it is, answer directly using exactly the values above.\n`
   );
 }
@@ -370,7 +398,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       fetchCityWeather("Dallas", 32.7767, -96.7970).catch(() => null),
       fetchCityWeather("Knoxville", 35.9606, -83.9207).catch(() => null),
       fetchAndSummarizeEmails(15).catch(() => null),
-      fetchTodayEvents().catch(() => null),
+      fetchWeekEvents().catch(() => null),
       getLastNightNotes().catch(() => []),
       fetchMorningNews().catch(() => ""),
       fetchEpisodesForDate(yesterday, watchedIds).catch(() => []),
@@ -407,8 +435,10 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       : (dallas ? `\n\n[Dallas Weather]\n${formatWeatherBlock(dallas)}` + pollenBlock : "");
 
     const gmailBlock = emails !== null
-      ? `\n\n[Gmail — unread inbox (fetched just now)]\n${formatEmailsForPrompt(emails)}` +
-        buildScamWarningInstruction(emails)
+      ? (emails.length === 0
+          ? `\n\n[Gmail — no new emails in the last 24 hours]\nDo not mention email in the briefing — tell David his inbox is quiet if he asks.`
+          : `\n\n[Gmail — emails received in the last 24 hours (fetched just now)]\n${formatEmailsForPrompt(emails)}` +
+            buildScamWarningInstruction(emails))
       : "";
 
     // Build calendar block with departure times, and pre-populate sync state so
@@ -419,7 +449,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     ]);
 
     const calendarBlock = events !== null
-      ? `\n\n[Google Calendar — today's schedule]\n${formatCalendarForPrompt(events, "today")}${calendarDepartureTimes}`
+      ? `\n\n[Google Calendar — today and next 7 days (past events excluded)]\n${formatCalendarForPrompt(events, "this week")}${calendarDepartureTimes}`
       : "";
 
     const notesBlock = formatNotesForMorningBriefing(lastNightNotes);
@@ -443,7 +473,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       ? `\n\n[Upcoming Financial Obligations — next 14 days]\n${formatBillsForPrompt(upcomingBills)}`
       : "";
 
-    const marketsBlock = marketsData ? buildMarketsBlock(marketsData) : "";
+    const marketsBlock = marketsData ? buildMarketsBlock(marketsData, now) : "";
 
     const datesBlock = upcomingDates.length > 0
       ? `\n\n[Upcoming Birthdays & Anniversaries]\n${formatDatesForPrompt(upcomingDates)}`

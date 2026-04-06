@@ -243,11 +243,11 @@ export async function fetchAndSummarizeEmails(maxResults = 15): Promise<EmailSum
 
   const gmail = google.gmail({ version: "v1", auth });
 
-  // Fetch all recent inbox emails regardless of read status, newest first
+  // Fetch emails received in the last 24 hours only — prevents stale emails in briefing
   const list = await gmail.users.messages.list({
     userId: "me",
     maxResults,
-    q: "in:inbox",
+    q: "in:inbox newer_than:1d",
   });
 
   const messages = list.data.messages ?? [];
@@ -289,10 +289,11 @@ export async function fetchAndSummarizeEmails(maxResults = 15): Promise<EmailSum
     });
   }
 
-  const mostRecentDate = emails[0]?.date ?? "none";
   const fetchDurationMs = Date.now() - fetchStart.getTime();
+  const mostRecentDate = emails.length > 0 ? emails[0].date : "(none in last 24h)";
+  console.log(`[Gmail] fetchAndSummarizeEmails: most recent email date = ${mostRecentDate}`);
   console.log(
-    `[Gmail] fetchAndSummarizeEmails complete — ${emails.length} emails in ${fetchDurationMs}ms` +
+    `[Gmail] fetchAndSummarizeEmails complete — ${emails.length} emails (last 24h) in ${fetchDurationMs}ms` +
     ` — most recent: ${mostRecentDate}`
   );
 

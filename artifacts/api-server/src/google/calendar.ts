@@ -69,22 +69,28 @@ export async function fetchTodayEvents(): Promise<CalendarEvent[] | null> {
     maxResults: 20,
   });
 
-  return (response.data.items ?? []).map((event) => {
-    const isoDate = event.start?.date ?? event.start?.dateTime?.slice(0, 10) ?? todayStr;
-    return {
-      id: event.id ?? "",
-      summary: event.summary ?? "(no title)",
-      start: formatTime(event.start?.dateTime, event.start?.date),
-      end: formatTime(event.end?.dateTime, event.end?.date),
-      startIso: event.start?.dateTime ?? undefined,
-      endIso: event.end?.dateTime ?? undefined,
-      dateLabel: getDayLabel(isoDate, todayStr, tomorrowStr),
-      isoDate,
-      location: event.location ?? undefined,
-      description: event.description ?? undefined,
-      allDay: !event.start?.dateTime,
-    };
-  });
+  return (response.data.items ?? [])
+    .map((event) => {
+      const isoDate = event.start?.date ?? event.start?.dateTime?.slice(0, 10) ?? todayStr;
+      return {
+        id: event.id ?? "",
+        summary: event.summary ?? "(no title)",
+        start: formatTime(event.start?.dateTime, event.start?.date),
+        end: formatTime(event.end?.dateTime, event.end?.date),
+        startIso: event.start?.dateTime ?? undefined,
+        endIso: event.end?.dateTime ?? undefined,
+        dateLabel: getDayLabel(isoDate, todayStr, tomorrowStr),
+        isoDate,
+        location: event.location ?? undefined,
+        description: event.description ?? undefined,
+        allDay: !event.start?.dateTime,
+      };
+    })
+    .filter((event) => {
+      // Skip timed events whose start time is already in the past
+      if (event.startIso) return new Date(event.startIso) >= now;
+      return true; // Keep all-day events regardless of time
+    });
 }
 
 export async function fetchWeekEvents(): Promise<CalendarEvent[] | null> {
@@ -113,22 +119,27 @@ export async function fetchWeekEvents(): Promise<CalendarEvent[] | null> {
     maxResults: 50,
   });
 
-  return (response.data.items ?? []).map((event) => {
-    const isoDate = event.start?.date ?? event.start?.dateTime?.slice(0, 10) ?? todayStr;
-    return {
-      id: event.id ?? "",
-      summary: event.summary ?? "(no title)",
-      start: formatTime(event.start?.dateTime, event.start?.date),
-      end: formatTime(event.end?.dateTime, event.end?.date),
-      startIso: event.start?.dateTime ?? undefined,
-      endIso: event.end?.dateTime ?? undefined,
-      dateLabel: getDayLabel(isoDate, todayStr, tomorrowStr),
-      isoDate,
-      location: event.location ?? undefined,
-      description: event.description ?? undefined,
-      allDay: !event.start?.dateTime,
-    };
-  });
+  return (response.data.items ?? [])
+    .map((event) => {
+      const isoDate = event.start?.date ?? event.start?.dateTime?.slice(0, 10) ?? todayStr;
+      return {
+        id: event.id ?? "",
+        summary: event.summary ?? "(no title)",
+        start: formatTime(event.start?.dateTime, event.start?.date),
+        end: formatTime(event.end?.dateTime, event.end?.date),
+        startIso: event.start?.dateTime ?? undefined,
+        endIso: event.end?.dateTime ?? undefined,
+        dateLabel: getDayLabel(isoDate, todayStr, tomorrowStr),
+        isoDate,
+        location: event.location ?? undefined,
+        description: event.description ?? undefined,
+        allDay: !event.start?.dateTime,
+      };
+    })
+    .filter((event) => {
+      if (event.startIso) return new Date(event.startIso) >= now;
+      return true;
+    });
 }
 
 export function formatCalendarForPrompt(events: CalendarEvent[], label = "today"): string {
