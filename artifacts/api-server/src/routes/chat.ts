@@ -1827,15 +1827,16 @@ router.post("/chat", async (req, res) => {
     });
 
     // ── Speak sync — Rule 1: user-initiated conversation ─────────────────────
-    // speak_on_all=false means other devices display the text (via chat_sync)
-    // but do NOT speak it. Only the device that sent the message speaks.
-    // The originating device already streamed the response and spoke it live;
-    // it ignores this event because messageId is in its ownedMessageIds set.
+    // initiated_by = the device that sent the message.
+    // Frontend suppresses TTS on ALL devices when initiated_by is truthy:
+    //   • Originating device already spoke live during streaming.
+    //   • Other devices show text via chat_sync but must NOT speak.
+    // initiated_by=null is reserved for system-initiated messages (proactive
+    // briefings, reminders) which should speak on every device.
     broadcastToUser(sessionUserName, "speak_sync", {
       text: reply,
       messageId,
-      senderDeviceId: deviceId ?? null,
-      speak_on_all: false,
+      initiated_by: deviceId ?? null,
     });
 
     // ── Post-response: cache the morning briefing so next call is instant ──

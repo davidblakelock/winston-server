@@ -1338,33 +1338,30 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
       });
 
       // Speak sync — Rule 1: user-initiated conversation.
-      // speak_on_all=false → only the originating device speaks (it already did
-      // during streaming). Other devices display text via chat_sync but skip TTS.
-      // speak_on_all=true → every device speaks (system-initiated messages).
+      // initiated_by = device that sent the message (user-initiated).
+      // If initiated_by is truthy, this is a user-initiated response:
+      //   - Originating device already spoke during streaming → suppress.
+      //   - All other devices must NOT speak → suppress.
+      // If initiated_by is null/undefined, this is system-initiated → speak on all devices.
       source.addEventListener("speak_sync", (e) => {
         try {
           const data = JSON.parse(e.data) as {
             text: string;
             messageId: string;
-            senderDeviceId: string | null;
-            speak_on_all?: boolean;
+            initiated_by?: string | null;
           };
 
-          // Originating device already spoke during streaming — skip always.
-          if (data.messageId && ownedMessageIds.current.has(data.messageId)) {
-            console.log("[SPEAK SYNC] Already spoke locally — skipping:", data.messageId);
+          if (data.initiated_by) {
+            // User-initiated: suppress TTS on every device.
+            // Originating device already spoke during streaming.
+            // Other devices show text via chat_sync only.
+            console.log("[SPEAK SYNC] User-initiated (initiated_by:", data.initiated_by, ") — suppressing TTS on all devices");
             return;
           }
 
-          // Rule 1: if speak_on_all is false (conversation response), other
-          // devices must NOT speak. Text is already shown via chat_sync.
-          if (data.speak_on_all === false) {
-            console.log("[SPEAK SYNC] speak_on_all=false — suppressing TTS on non-originating device");
-            return;
-          }
-
+          // initiated_by is null/undefined = system-initiated → speak on all devices.
           const msgId = `speak-sync-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-          console.log("[SPEAK SYNC] speak_on_all=true — speaking on all devices");
+          console.log("[SPEAK SYNC] System-initiated — speaking on all devices");
           speakReplyRef.current(msgId, data.text);
         } catch (err) {
           console.error("[SPEAK SYNC] Error:", err);
@@ -1463,22 +1460,68 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
     es = new EventSource(sseUrl);
     attach(es);
 
-    // Fix 2: When app comes to foreground, flush any messages that arrived while hidden
+    // When app comes to foreground: fetch latest messages from server to catch up
+    // on any conversation that happened on another device while this one was backgrounded.
+    // This handles both the SSE queue case and the SSE-disconnected case (common on mobile).
     const handleVisibility = () => {
-      if (document.visibilityState === "visible" && pendingSyncQueue.current.length > 0) {
-        const pending = pendingSyncQueue.current.splice(0);
-        console.log("[CHAT SYNC] App foregrounded — applying", pending.length, "queued message(s)");
-        setMessages((prev) => {
-          let updated = [...prev];
-          for (const msg of pending) {
-            const recent = updated.slice(-10);
-            if (!recent.some((m) => m.role === msg.role && m.content === msg.content)) {
-              updated = [...updated, msg];
+      if (document.visibilityState !== "visible") return;
+
+      const tok = localStorage.getItem("winston_session_token") ?? "";
+      const bUrl = (import.meta.env.BASE_URL as string).replace(/\/$/, "");
+      console.log("[CATCH UP] App foregrounded — fetching latest messages from server");
+
+      fetch(`${bUrl}/api/messages?limit=100`, {
+        cache: "no-store",
+        headers: tok ? { Authorization: `Bearer ${tok}` } : {},
+      })
+        .then((r) => (r.ok ? (r.json() as Promise<{ messages: Message[] }>) : null))
+        .then((data) => {
+          if (!data?.messages?.length) return;
+          const serverMessages = data.messages;
+          setMessages((prev) => {
+            // Build a set of existing content fingerprints to detect duplicates
+            const existing = new Set(prev.map((m) => `${m.role}:${m.content}`));
+            const toAdd = serverMessages.filter(
+              (m) => !existing.has(`${m.role}:${m.content}`)
+            );
+            if (toAdd.length === 0) {
+              console.log("[CATCH UP] Already up to date — no new messages");
+              return prev;
             }
+            console.log("[CATCH UP] Merging", toAdd.length, "new message(s) from server");
+            // Merge: preserve local messages then append any server messages not already present
+            // Server messages are authoritative for ordering; rebuild from server list
+            const serverIds = new Set(serverMessages.map((m) => `${m.role}:${m.content}`));
+            const localOnly = prev.filter(
+              (m) => !serverIds.has(`${m.role}:${m.content}`) && m.id.startsWith("local-")
+            );
+            return [...serverMessages, ...localOnly];
+          });
+
+          // Also drain any SSE queued messages that arrived during backgrounding
+          const pending = pendingSyncQueue.current.splice(0);
+          if (pending.length > 0) {
+            console.log("[CATCH UP] Discarding", pending.length, "SSE queued message(s) — server fetch supersedes them");
           }
-          return updated;
+        })
+        .catch((err) => {
+          console.warn("[CATCH UP] Fetch failed, falling back to SSE queue:", err);
+          // Fallback: drain SSE queue if server fetch fails
+          const pending = pendingSyncQueue.current.splice(0);
+          if (pending.length > 0) {
+            console.log("[CATCH UP] Applying", pending.length, "queued SSE message(s) as fallback");
+            setMessages((prev) => {
+              let updated = [...prev];
+              for (const msg of pending) {
+                const recent = updated.slice(-10);
+                if (!recent.some((m) => m.role === msg.role && m.content === msg.content)) {
+                  updated = [...updated, msg];
+                }
+              }
+              return updated;
+            });
+          }
         });
-      }
     };
     document.addEventListener("visibilitychange", handleVisibility);
 

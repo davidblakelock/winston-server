@@ -312,16 +312,32 @@ export async function updateCalendarEvent(
     description?: string;
   }
 ): Promise<boolean> {
+  console.log(`[CALENDAR UPDATE] attempting to update event id: ${eventId}`, JSON.stringify(updates));
+
   const auth = await getAuthClient();
-  if (!auth) return false;
+  if (!auth) {
+    console.error("[CALENDAR UPDATE] ERROR — no auth client (Google not connected)");
+    return false;
+  }
 
   const calendar = google.calendar({ version: "v3", auth });
 
-  // Fetch current event first
-  const current = await calendar.events.get({ calendarId: "primary", eventId });
-  if (!current.data) return false;
+  // Fetch current event first so we can preserve unchanged fields
+  let current: Awaited<ReturnType<typeof calendar.events.get>>;
+  try {
+    current = await calendar.events.get({ calendarId: "primary", eventId });
+    console.log(`[CALENDAR UPDATE] fetched current event: "${current.data.summary}" start=${current.data.start?.dateTime ?? current.data.start?.date}`);
+  } catch (fetchErr: unknown) {
+    console.error("[CALENDAR UPDATE] ERROR fetching current event:", fetchErr);
+    return false;
+  }
 
-  const patch: any = {};
+  if (!current.data) {
+    console.error("[CALENDAR UPDATE] ERROR — event.get returned no data for eventId:", eventId);
+    return false;
+  }
+
+  const patch: Record<string, unknown> = {};
 
   if (updates.title) patch.summary = updates.title;
   if (updates.location !== undefined) patch.location = updates.location;
@@ -342,15 +358,37 @@ export async function updateCalendarEvent(
 
     patch.start = buildEventDateTime(newDate, newStart);
     patch.end = buildEventDateTime(newDate, newEnd);
+
+    console.log(`[CALENDAR UPDATE] new date/time: ${newDate} ${newStart} → ${newEnd}`);
   }
 
-  await calendar.events.patch({
-    calendarId: "primary",
-    eventId,
-    requestBody: patch,
-  });
+  if (Object.keys(patch).length === 0) {
+    console.warn("[CALENDAR UPDATE] patch object is empty — nothing to update. Updates:", JSON.stringify(updates));
+    return false;
+  }
 
-  return true;
+  console.log(`[CALENDAR UPDATE] calling Google Calendar API patch endpoint for eventId: ${eventId}`, JSON.stringify(patch));
+
+  try {
+    const patchResponse = await calendar.events.patch({
+      calendarId: "primary",
+      eventId,
+      requestBody: patch,
+    });
+    const status = patchResponse.status;
+    console.log(`[CALENDAR UPDATE] API response status: ${status}`);
+    if (status >= 200 && status < 300) {
+      console.log(`[CALENDAR UPDATE] success — event "${patchResponse.data.summary}" updated. htmlLink: ${patchResponse.data.htmlLink ?? "n/a"}`);
+      return true;
+    } else {
+      console.error(`[CALENDAR UPDATE] ERROR — unexpected status ${status} from Google Calendar API`);
+      return false;
+    }
+  } catch (patchErr: unknown) {
+    const errMsg = patchErr instanceof Error ? patchErr.message : String(patchErr);
+    console.error(`[CALENDAR UPDATE] ERROR — Google Calendar API patch failed: ${errMsg}`);
+    return false;
+  }
 }
 
 export async function deleteCalendarEvent(eventId: string): Promise<boolean> {
