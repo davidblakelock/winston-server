@@ -169,10 +169,13 @@ export async function addBill(
     [name]
   );
   if (existing.rows.length > 0) {
+    console.log(`[BILL SAVE] Duplicate detected — "${name}" already tracked (id: ${(existing.rows[0] as { id: number }).id})`);
     return { success: false, alreadyExists: true };
   }
 
   const leadDays = defaultLeadDays(frequency);
+  console.log(`[BILL SAVE] Attempting to save — name="${name}" category="${category}" freq="${frequency}" dueDay=${dueDay} dueMonths=${dueMonths ?? "null"} amount=${amount ?? "null"}`);
+
   const { rows } = await query<{
     id: number; name: string; category: string; amount: string | null;
     frequency: string; due_day: number; due_months: string | null;
@@ -186,6 +189,15 @@ export async function addBill(
                reminder_lead_days, notes, last_reminded_date`,
     [name, category, amount ?? null, frequency, dueDay, dueMonths ?? null, leadDays, notes ?? null]
   );
+
+  console.log(`[BILL SAVE] Supabase response — rowCount=${rows.length} rows=${JSON.stringify(rows)}`);
+
+  if (!rows[0]) {
+    console.error(`[BILL SAVE] ERROR — INSERT returned no rows for "${name}". Data may not have been saved.`);
+    throw new Error(`Bill INSERT returned no rows for "${name}"`);
+  }
+
+  console.log(`[BILL SAVE] Success — id=${rows[0].id} name="${rows[0].name}" due_day=${rows[0].due_day}`);
 
   return {
     success: true,
