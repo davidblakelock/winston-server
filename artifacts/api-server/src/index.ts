@@ -14,6 +14,7 @@ import { startWeatherAlertScheduler } from "./push/weatherAlertScheduler";
 import { startBillScheduler } from "./bills/billScheduler";
 import { startDatesScheduler } from "./dates/datesScheduler";
 import { startDepartureScheduler } from "./departure/departureScheduler";
+import { startCalendarSyncScheduler, ensureCalendarSyncTable } from "./departure/calendarSyncScheduler";
 import { startPickleballScheduler } from "./pickleball/pickleballScheduler";
 import { startConversationStarterScheduler } from "./push/conversationStarterScheduler";
 import { ensureRelationshipTable } from "./relationships/relationshipManager";
@@ -46,6 +47,7 @@ app.listen(port, async (err) => {
     await ensureProfileTable();
     await ensureOnboardingTable();
     await ensureRelationshipTable();
+    await ensureCalendarSyncTable();
   } catch (e) {
     logger.warn({ e }, "Table initialization warning");
   }
@@ -58,6 +60,7 @@ app.listen(port, async (err) => {
   startBillScheduler();
   await startDatesScheduler();
   startDepartureScheduler();
+  startCalendarSyncScheduler();
   startPickleballScheduler();
   startConversationStarterScheduler();
 

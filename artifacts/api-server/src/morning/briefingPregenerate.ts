@@ -1,6 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { fetchAndSummarizeEmails, formatEmailsForPrompt, buildScamWarningInstruction } from "../google/gmail.js";
-import { fetchTodayEvents, formatCalendarForPrompt } from "../google/calendar.js";
+import { fetchTodayEvents, formatCalendarForPrompt, type CalendarEvent } from "../google/calendar.js";
+import { estimateDriveTime, extractEventLocation } from "../departure/departureManager.js";
+import { populateCalendarSyncState } from "../departure/calendarSyncScheduler.js";
 import { getMedications, hasTakenMedicationsToday, buildMedReminderText } from "../medications/medicationManager.js";
 import { getLastNightNotes, formatNotesForMorningBriefing } from "../winddown/winddownManager.js";
 import { getRecentMemories, formatMemoriesForContext } from "../memory/memoryManager.js";
@@ -22,6 +24,62 @@ import { setCachedBriefing } from "./briefingCache.js";
 import { logger } from "../lib/logger.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+// ── Departure times for calendar events ───────────────────────────────────────
+// Calculates leave-by time for each event that has a location.
+// Runs all geocode/routing calls in parallel with a 10 s per-event timeout.
+async function buildCalendarDepartureTimes(events: CalendarEvent[]): Promise<string> {
+  if (!events || events.length === 0) return "";
+
+  const now = new Date();
+  const TZ_LOCAL = "America/Chicago";
+
+  const items: string[] = [];
+
+  await Promise.all(
+    events.map(async (event) => {
+      if (event.allDay || !event.startIso) return;
+
+      const eventStart = new Date(event.startIso);
+      if (eventStart.getTime() < now.getTime()) return; // already passed
+
+      const location = extractEventLocation({
+        summary: event.summary,
+        location: event.location,
+        description: event.description,
+      });
+      if (!location) return;
+
+      try {
+        const drive = await Promise.race([
+          estimateDriveTime(location),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 10_000)),
+        ]);
+        if (!drive) return;
+
+        const BUFFER = 10;
+        const leaveAt = new Date(eventStart.getTime() - (drive.durationMinutes + BUFFER) * 60_000);
+        const leaveStr = leaveAt.toLocaleTimeString("en-US", {
+          timeZone: TZ_LOCAL,
+          hour: "numeric",
+          minute: "2-digit",
+          hour12: true,
+        });
+        const sourceNote = drive.source === "osrm" ? "based on route" : "estimated";
+        items.push(
+          `  • ${event.summary} at ${event.start}: leave home by ${leaveStr} (~${Math.round(drive.durationMinutes)} min drive, ${sourceNote})`
+        );
+      } catch { /* skip silently if geocoding fails */ }
+    })
+  );
+
+  if (items.length === 0) return "";
+  return (
+    `\n\n[Departure Times — when David needs to leave home for today's events]\n` +
+    items.join("\n") +
+    `\n(These are calculated from home at 6345 Diamond Head Circle, Dallas TX)`
+  );
+}
 
 // ── Dallas local events (weekly cache, refreshed once daily) ─────────────────
 let _dallasEventsCache: { content: string; fetchedAt: Date } | null = null;
@@ -287,8 +345,15 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
         buildScamWarningInstruction(emails)
       : "";
 
+    // Build calendar block with departure times, and pre-populate sync state so
+    // events in the briefing are never flagged as "new" by the 30-min sync scheduler.
+    const [calendarDepartureTimes] = await Promise.all([
+      events !== null ? buildCalendarDepartureTimes(events) : Promise.resolve(""),
+      events !== null ? populateCalendarSyncState(events).catch(() => {}) : Promise.resolve(),
+    ]);
+
     const calendarBlock = events !== null
-      ? `\n\n[Google Calendar — today's schedule]\n${formatCalendarForPrompt(events, "today")}`
+      ? `\n\n[Google Calendar — today's schedule]\n${formatCalendarForPrompt(events, "today")}${calendarDepartureTimes}`
       : "";
 
     const notesBlock = formatNotesForMorningBriefing(lastNightNotes);

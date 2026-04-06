@@ -4,8 +4,10 @@ import { getAuthClient } from "./oauth.js";
 export interface CalendarEvent {
   id: string;
   summary: string;
-  start: string;
-  end: string;
+  start: string;        // formatted time e.g. "10:30 AM"
+  end: string;          // formatted time
+  startIso?: string;    // raw ISO datetime string for timed events (undefined for all-day)
+  endIso?: string;
   dateLabel: string;
   isoDate: string;
   location?: string;
@@ -74,6 +76,8 @@ export async function fetchTodayEvents(): Promise<CalendarEvent[] | null> {
       summary: event.summary ?? "(no title)",
       start: formatTime(event.start?.dateTime, event.start?.date),
       end: formatTime(event.end?.dateTime, event.end?.date),
+      startIso: event.start?.dateTime ?? undefined,
+      endIso: event.end?.dateTime ?? undefined,
       dateLabel: getDayLabel(isoDate, todayStr, tomorrowStr),
       isoDate,
       location: event.location ?? undefined,
@@ -116,6 +120,8 @@ export async function fetchWeekEvents(): Promise<CalendarEvent[] | null> {
       summary: event.summary ?? "(no title)",
       start: formatTime(event.start?.dateTime, event.start?.date),
       end: formatTime(event.end?.dateTime, event.end?.date),
+      startIso: event.start?.dateTime ?? undefined,
+      endIso: event.end?.dateTime ?? undefined,
       dateLabel: getDayLabel(isoDate, todayStr, tomorrowStr),
       isoDate,
       location: event.location ?? undefined,

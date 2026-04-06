@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { broadcast } from "../reminders/sseStore.js";
 import { sendPushToAll } from "../push/pushManager.js";
 import { logger } from "../lib/logger.js";
+import { getProfile } from "../onboarding/onboardingManager.js";
 import {
   estimateDriveTime,
   shouldFireAlert,
@@ -12,6 +13,11 @@ import { fetchTodayEvents } from "../google/calendar.js";
 import { query } from "../db.js";
 
 const TZ = "America/Chicago";
+
+async function getCompanionName(): Promise<string> {
+  const profile = await getProfile("David").catch(() => null);
+  return profile?.companionName ?? "Emma Peel";
+}
 
 function localDateStr(): string {
   return new Date().toLocaleDateString("en-CA", { timeZone: TZ });
@@ -64,12 +70,11 @@ function clearIfNewDay() {
 async function checkDepartureAlerts(): Promise<void> {
   clearIfNewDay();
 
-  // Only check if Google Calendar is available (we need events with locations)
   let events: Awaited<ReturnType<typeof fetchTodayEvents>>;
   try {
     events = await fetchTodayEvents();
   } catch {
-    return; // No calendar access — skip silently
+    return;
   }
 
   if (!events) return;
@@ -79,19 +84,19 @@ async function checkDepartureAlerts(): Promise<void> {
 
   for (const event of events) {
     if (!event.summary) continue;
+    if (event.allDay) continue;
 
-    // Only process future events (within next 2 hours)
-    const start = event.start?.dateTime ? new Date(event.start.dateTime) : null;
-    if (!start) continue;
+    // Use startIso (raw ISO datetime) — event.start is only a formatted string
+    if (!event.startIso) continue;
+    const start = new Date(event.startIso);
 
     const minutesUntilEvent = (start.getTime() - now.getTime()) / 60000;
     if (minutesUntilEvent < 0 || minutesUntilEvent > 120) continue;
 
-    // Get location from event
     const location = extractEventLocation({
       summary: event.summary,
-      location: (event as { location?: string }).location,
-      description: (event as { description?: string }).description,
+      location: event.location,
+      description: event.description,
     });
 
     if (!location) continue;
@@ -99,7 +104,6 @@ async function checkDepartureAlerts(): Promise<void> {
     const alreadySent = await hasAlertBeenSent(event.summary, today);
     if (alreadySent) continue;
 
-    // Estimate drive time
     const drive = await estimateDriveTime(location);
     if (!drive) continue;
 
@@ -114,6 +118,8 @@ async function checkDepartureAlerts(): Promise<void> {
       drive.source === "osrm"
     );
 
+    const companionName = await getCompanionName();
+
     broadcast("reminder", {
       id: `departure-${event.summary}-${Date.now()}`,
       userName: "David",
@@ -123,10 +129,9 @@ async function checkDepartureAlerts(): Promise<void> {
     });
 
     await sendPushToAll({
-      title: "🚗 Time to Leave — Emma Peel",
+      title: `🚗 Time to Leave — ${companionName}`,
       body: message,
       tag: `departure-${event.summary}`,
-
       requireInteraction: true,
     }).catch(() => {});
 
@@ -140,7 +145,6 @@ async function checkDepartureAlerts(): Promise<void> {
 }
 
 export function startDepartureScheduler(): void {
-  // Check every 2 minutes
   cron.schedule("*/2 * * * *", async () => {
     try {
       await checkDepartureAlerts();
