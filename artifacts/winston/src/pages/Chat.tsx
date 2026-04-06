@@ -1127,6 +1127,37 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
   useEffect(() => { fireReminderAlertRef.current = fireReminderAlert; }, [fireReminderAlert]);
   useEffect(() => { fireWinddownStartRef.current = fireWinddownStart; }, [fireWinddownStart]);
 
+  // ── Bug 4: Periodic session token validation + Google auth health check ───────
+  // Runs every 20 minutes. If the session is invalid the page reloads to force
+  // re-auth. Also refreshes the Google connection status so the header stays
+  // accurate after overnight sleep.
+  useEffect(() => {
+    const checkSession = async () => {
+      const token = localStorage.getItem("winston_session_token");
+      if (!token) return;
+      try {
+        const res = await fetch(`${CHAT_BASE}/api/auth/session`, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+        });
+        if (res.status === 401) {
+          console.warn("[AUTH] Session token invalid — clearing storage and reloading");
+          localStorage.removeItem("winston_session_token");
+          localStorage.removeItem("winston_user_name");
+          window.location.reload();
+          return;
+        }
+        // Also refresh Google auth status so the header/settings stay accurate
+        await refreshGoogleAuth().catch(() => {});
+      } catch { /* network unavailable — will retry in 20 minutes */ }
+    };
+
+    // Check once on mount (catches tokens invalidated while app was in background)
+    void checkSession();
+    const intervalId = setInterval(checkSession, 20 * 60 * 1000);
+    return () => clearInterval(intervalId);
+  }, [refreshGoogleAuth]);
+
   // ── SSE: real-time reminders + wind-down (primary delivery when app is open) ──
   // Uses CHAT_BASE for correct path under any Vite base, with exponential-backoff
   // reconnection so mobile devices auto-recover after SSE drops.
@@ -1323,6 +1354,43 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
     </svg>
   );
   const isMobileDevice = typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+  // ── Google disconnect (Bug 6) ───────────────────────────────────────────────
+  const handleGoogleDisconnect = useCallback(async () => {
+    const token = localStorage.getItem("winston_session_token") ?? "";
+    try {
+      await fetch(`${CHAT_BASE}/api/auth/google/disconnect`, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+    } catch { /* ignore network errors */ }
+    await refreshGoogleAuth();
+  }, [refreshGoogleAuth]);
+
+  // ── Google connect from settings (reuse popup logic) ────────────────────────
+  const handleGoogleConnect = useCallback(() => {
+    if (isMobileDevice) {
+      window.location.href = `${CHAT_BASE}/api/auth/google`;
+      return;
+    }
+    const popup = window.open(`${CHAT_BASE}/api/auth/google`, "google-oauth", "width=520,height=640,left=200,top=100,resizable=yes,scrollbars=yes");
+    if (!popup) { window.location.href = `${CHAT_BASE}/api/auth/google`; return; }
+    const onMessage = async (e: MessageEvent) => {
+      if (e.data === "google-connected") {
+        window.removeEventListener("message", onMessage);
+        clearInterval(poll);
+        await refreshGoogleAuth();
+        setMessages((prev) => [...prev, { id: `google-connected-${Date.now()}`, role: "assistant" as const, content: "Google connected — I now have access to your Gmail and Calendar. Say good morning and I'll give you a full briefing." }]);
+      } else if (e.data === "google-auth-error") {
+        window.removeEventListener("message", onMessage);
+        clearInterval(poll);
+      }
+    };
+    window.addEventListener("message", onMessage);
+    const poll = setInterval(() => {
+      if (popup.closed) { clearInterval(poll); window.removeEventListener("message", onMessage); void refreshGoogleAuth(); }
+    }, 1000);
+  }, [isMobileDevice, refreshGoogleAuth]);
+
   const connectGoogleBtn = isMobileDevice ? (
     <a href="/api/auth/google" className={googleBtnClass}>
       {googleBtnIcon}
@@ -1652,6 +1720,10 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         onWinddownSave={saveWinddownSettings}
         settingsSaving={settingsSaving}
         notif={notif}
+        googleConnected={googleAuth.connected}
+        googleEmail={googleAuth.email}
+        onGoogleDisconnect={() => void handleGoogleDisconnect()}
+        onGoogleConnect={handleGoogleConnect}
       />
 
       {/* Chat Area */}

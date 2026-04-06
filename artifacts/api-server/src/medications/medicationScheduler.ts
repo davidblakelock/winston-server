@@ -6,7 +6,13 @@ import {
   hasTakenMedicationsToday,
   buildMedReminderText,
 } from "./medicationManager.js";
+import { getProfile } from "../onboarding/onboardingManager.js";
 import { logger } from "../lib/logger.js";
+
+async function getCompanionName(): Promise<string> {
+  const profile = await getProfile("David").catch(() => null);
+  return profile?.companionName ?? "Emma Peel";
+}
 
 const TZ = "America/Chicago";
 
@@ -82,8 +88,9 @@ export function startMedicationScheduler(): void {
               speakText: buildInitialMessage(medText),
               isMedication: true,
             });
+            const companionName = await getCompanionName();
             sendPushToAll({
-              title: "💊 Medication Reminder — Emma Peel",
+              title: `💊 Medication Reminder — ${companionName}`,
               body: `Don't forget your ${medText} this morning. Take with food if you can.`,
               tag: "medication-morning",
 
@@ -112,8 +119,9 @@ export function startMedicationScheduler(): void {
             speakText: buildFollowUpMessage(medText),
             isMedication: true,
           });
+          const companionName2 = await getCompanionName();
           sendPushToAll({
-            title: "💊 Gentle Nudge — Emma Peel",
+            title: `💊 Gentle Nudge — ${companionName2}`,
             body: `Have you taken your ${medText} yet? Tap to confirm.`,
             tag: "medication-followup",
             url: "/",

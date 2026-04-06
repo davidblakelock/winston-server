@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { extractListOp, executeListOp, buildListContext } from "../lists/listManager.js";
-import { fetchRecentEmails, formatEmailsForPrompt, buildScamWarningInstruction } from "../google/gmail.js";
+import { fetchAndSummarizeEmails, formatEmailsForPrompt, buildScamWarningInstruction } from "../google/gmail.js";
 import {
   fetchTodayEvents,
   fetchWeekEvents,
@@ -1088,7 +1088,7 @@ router.post("/chat", async (req, res) => {
   if (isEmailRequest || isCalendarRequest) {
     try {
       const [emails, events] = await Promise.all([
-        isEmailRequest ? fetchRecentEmails(10).catch(() => null) : Promise.resolve(undefined),
+        isEmailRequest ? fetchAndSummarizeEmails(15).catch(() => null) : Promise.resolve(undefined),
         isCalendarRequest ? fetchWeekEvents().catch(() => null) : Promise.resolve(undefined),
       ]);
 

@@ -7,11 +7,17 @@ import {
   hasFiredToday,
   markFiredToday,
 } from "./winddownManager.js";
+import { getProfile } from "../onboarding/onboardingManager.js";
 import { logger } from "../lib/logger.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-async function generateOpeningMessage(): Promise<string> {
+async function getCompanionName(): Promise<string> {
+  const profile = await getProfile("David").catch(() => null);
+  return profile?.companionName ?? "Emma Peel";
+}
+
+async function generateOpeningMessage(companionName: string): Promise<string> {
   const tz = "America/Chicago";
   const now = new Date();
   const dayName = now.toLocaleDateString("en-US", {
@@ -35,7 +41,7 @@ async function generateOpeningMessage(): Promise<string> {
       : `Today was ${dayName}, a non-pickleball day — likely a run or workout.`;
 
   const prompt =
-    `You are Emma Peel, David Blakelock's warm personal AI companion. It's ${dayName} evening in Dallas. ` +
+    `You are ${companionName}, David Blakelock's warm personal AI companion. It's ${dayName} evening in Dallas. ` +
     `${contextHint}${tomorrowPickleballHint} ` +
     `Generate a warm, natural 2-3 sentence opening to start the evening wind-down. ` +
     `Start with "Good evening, David." then ask genuinely how his day went. ` +
@@ -80,7 +86,6 @@ export function startWinddownScheduler(): void {
   cron.schedule("* * * * *", async () => {
     try {
       const settings = await getSettings();
-      if (!settings.enabled) return;
 
       const tz = "America/Chicago";
       const now = new Date();
@@ -91,21 +96,32 @@ export function startWinddownScheduler(): void {
         hour12: false,
       });
 
+      console.log(`WINDDOWN: checking at ${localTime} (scheduled: ${settings.scheduledTime}, enabled: ${settings.enabled})`);
+
+      if (!settings.enabled) {
+        return;
+      }
+
       if (localTime !== settings.scheduledTime) return;
-      if (await hasFiredToday()) return;
+
+      if (await hasFiredToday()) {
+        console.log(`WINDDOWN: already fired today — skipping`);
+        return;
+      }
+
+      console.log(`WINDDOWN: firing at ${localTime}`);
 
       await markFiredToday();
       logger.info({ time: settings.scheduledTime }, "Wind-down initiated");
 
-      const message = await generateOpeningMessage();
+      const companionName = await getCompanionName();
+      const message = await generateOpeningMessage(companionName);
       broadcast("winddown-start", { message });
 
-      // Push notification for wind-down (app may be closed)
       sendPushToAll({
-        title: "🌙 Evening Wind-Down — Emma Peel",
-        body: "Emma Peel is ready for your evening check-in. Tap to chat.",
+        title: `🌙 Evening Wind-Down — ${companionName}`,
+        body: `${companionName} is ready for your evening check-in. Tap to chat.`,
         tag: "winddown",
-
         requireInteraction: false,
       }).catch(() => {});
     } catch (err) {

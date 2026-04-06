@@ -34,8 +34,17 @@ router.get("/reminders/stream", async (req: Request, res: Response) => {
   // This resets the production proxy's idle timeout, preventing the
   // connection from being killed at the proxy's 5-minute hard limit.
   const heartbeat = setInterval(() => {
-    try { res.write(`: ping\n\n`); (res as any).flush?.(); } catch { clearInterval(heartbeat); }
-  }, 30000);
+    try {
+      res.write(`: ping\n\n`);
+      // Explicit flush to push the ping through proxies immediately.
+      // Required for Replit's nginx proxy which buffers SSE by default.
+      if (typeof (res as any).flush === "function") {
+        (res as any).flush();
+      }
+    } catch {
+      clearInterval(heartbeat);
+    }
+  }, 25000); // 25s — safely under any 30s proxy idle timeout
 
   req.on("close", () => { clearInterval(heartbeat); removeClient(clientId); });
 });

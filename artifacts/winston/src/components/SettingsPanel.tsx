@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import {
   X, Volume2, Play, Check, Loader2, User, Camera, Moon, Bell,
-  Upload, Trash2, Music2
+  Upload, Trash2, Music2, Mail, CheckCircle2, AlertCircle
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { isNotificationsSupported } from "@/hooks/useNotifications";
@@ -51,6 +51,11 @@ interface SettingsPanelProps {
   settingsSaving: boolean;
 
   notif: NotifHook;
+
+  googleConnected: boolean;
+  googleEmail: string | null;
+  onGoogleDisconnect: () => void;
+  onGoogleConnect: () => void;
 }
 
 const CHAT_BASE = (typeof import.meta !== "undefined" ? (import.meta.env.BASE_URL as string) : "/").replace(/\/$/, "");
@@ -120,6 +125,10 @@ export default function SettingsPanel({
   onWinddownSave,
   settingsSaving,
   notif,
+  googleConnected,
+  googleEmail,
+  onGoogleDisconnect,
+  onGoogleConnect,
 }: SettingsPanelProps) {
   const [voices, setVoices] = useState<Voice[]>([]);
   const [selectedVoiceId, setSelectedVoiceId] = useState<string | null>(currentVoiceId);
@@ -620,6 +629,60 @@ export default function SettingsPanel({
               </section>
             </>
           )}
+
+          {/* ── Section 6: Google Connections ───────────────────────── */}
+          <div className="border-t border-white/8" />
+          <section className="pb-4">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="p-1.5 rounded-lg bg-primary/15">
+                <Mail className="h-3.5 w-3.5 text-primary" />
+              </div>
+              <h3 className="text-sm font-semibold text-foreground">Google Connections</h3>
+            </div>
+            <p className="text-xs text-muted-foreground mb-4 leading-relaxed">
+              Connecting Google gives {currentCompanionName} access to your Gmail and Calendar for morning briefings and scheduling.
+            </p>
+
+            <div className="rounded-xl border border-white/8 bg-white/3 p-4 space-y-3">
+              {googleConnected ? (
+                <>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 className="h-4 w-4 text-green-400 flex-shrink-0" />
+                      <div>
+                        <p className="text-sm text-foreground font-medium">Gmail &amp; Calendar</p>
+                        {googleEmail && (
+                          <p className="text-xs text-muted-foreground mt-0.5 truncate max-w-[180px]">{googleEmail}</p>
+                        )}
+                      </div>
+                    </div>
+                    <span className="text-xs text-green-400 font-medium px-2 py-0.5 rounded-full bg-green-400/10 border border-green-400/20">
+                      Connected
+                    </span>
+                  </div>
+                  <button
+                    onClick={onGoogleDisconnect}
+                    className="w-full text-xs font-medium px-3 py-2 rounded-lg border border-red-500/20 bg-red-950/20 text-red-400/80 hover:bg-red-950/40 hover:border-red-500/30 transition-colors"
+                  >
+                    Disconnect Google
+                  </button>
+                </>
+              ) : (
+                <>
+                  <div className="flex items-center gap-2 mb-3">
+                    <AlertCircle className="h-4 w-4 text-muted-foreground/60 flex-shrink-0" />
+                    <p className="text-sm text-muted-foreground">Not connected</p>
+                  </div>
+                  <Button
+                    className="w-full h-9 text-sm"
+                    onClick={onGoogleConnect}
+                  >
+                    Connect Gmail &amp; Calendar
+                  </Button>
+                </>
+              )}
+            </div>
+          </section>
 
         </div>
       </div>

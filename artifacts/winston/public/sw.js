@@ -56,7 +56,6 @@ self.addEventListener("push", (event) => {
 
   const title        = data.title || "Winston";
   const reminderText = data.body  || "";
-  // Full URL with ?notification=reminder&text=... query params for the tap target
   const targetUrl = data.url || WINSTON_URL;
 
   const options = {
@@ -65,8 +64,8 @@ self.addEventListener("push", (event) => {
     badge: WINSTON_URL + "badge-72.png",
     tag:   data.tag || "winston",
     data: {
-      url:          targetUrl,     // absolute URL including reminder query params
-      reminderText: reminderText,  // plain reminder text for postMessage / IDB
+      url:          targetUrl,
+      reminderText: reminderText,
       reminderId:   data.reminderId ?? null,
     },
     requireInteraction: true,
@@ -80,8 +79,6 @@ self.addEventListener("push", (event) => {
 
   console.log("[SW] calling showNotification:", title, "—", reminderText || "(no body)");
 
-  // event.waitUntil keeps the service worker alive until the promise resolves.
-  // Without this the browser may kill the worker before showNotification completes.
   event.waitUntil(
     self.registration.showNotification(title, options)
       .then(() => console.log("[SW] showNotification resolved — notification displayed"))
@@ -90,14 +87,18 @@ self.addEventListener("push", (event) => {
 });
 
 // ── Notification click ────────────────────────────────────────────────────────
+// Bug 3 fix: explicit async/await with try/catch so failures don't silently drop.
+// On Android Chrome, focus() can be blocked — we always fall back to openWindow.
 self.addEventListener("notificationclick", (event) => {
   // Step 1: always close the notification immediately
   event.notification.close();
 
-  const action       = event.action; // "open" | "snooze" | "dismiss" | "" (body tap)
+  const action       = event.action;
   const targetUrl    = event.notification.data?.url          || WINSTON_URL;
   const reminderText = event.notification.data?.reminderText || "";
   const reminderId   = event.notification.data?.reminderId   ?? null;
+
+  console.log("[SW] notificationclick — action:", action || "(body tap)", "| url:", targetUrl);
 
   // ── Dismiss ────────────────────────────────────────────────────────────────
   if (action === "dismiss") return;
@@ -117,39 +118,48 @@ self.addEventListener("notificationclick", (event) => {
   }
 
   // ── Open (action === "open") or body tap (action === "") ───────────────────
-  // CRITICAL: clients.openWindow MUST be inside event.waitUntil or it will be
-  // blocked by the browser. Everything is chained inside the single waitUntil.
-  event.waitUntil(
-    self.clients
-      .matchAll({ type: "window", includeUncontrolled: true })
-      .then((clientList) => {
-        // Find any open Winston tab using includes() — matches regardless of
-        // trailing slashes, query params, or path variations.
-        const existing = clientList.find(
-          (c) => c.url.includes("winston-companion--davidblakelock.replit.app")
-        );
+  event.waitUntil((async () => {
+    // Step 2: find any existing open Winston tab
+    let clientList = [];
+    try {
+      clientList = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    } catch (err) {
+      console.warn("[SW] matchAll failed:", err);
+    }
 
-        if (existing) {
-          // App is already open — focus it, then deliver the reminder via postMessage.
-          // Chat.tsx listens for NOTIFICATION_CLICK and calls speakReply immediately.
-          return existing.focus().then(() => {
-            existing.postMessage({ type: "NOTIFICATION_CLICK", url: targetUrl });
-          }).catch(() => {
-            // focus() rejected (some Android Chrome versions block it when the
-            // page is not in the foreground) — store in IDB and open a fresh window.
-            return storePendingReminder(reminderText, reminderId)
-              .catch(() => {})
-              .then(() => self.clients.openWindow(WINSTON_URL));
-          });
-        }
+    const existing = clientList.find(
+      (c) => c.url.includes("winston-companion--davidblakelock.replit.app")
+    );
 
-        // App is not open at all — store reminder in IndexedDB first so the app
-        // can speak it on load even without URL params, then open the window.
-        return storePendingReminder(reminderText, reminderId)
-          .catch(() => {})
-          .then(() => self.clients.openWindow(WINSTON_URL));
-      })
-  );
+    if (existing) {
+      console.log("[SW] existing Winston tab found — focusing and posting message");
+      // Step 3: focus the existing tab
+      try {
+        await existing.focus();
+        // Step 4: post message so the app can speak the reminder immediately
+        existing.postMessage({ type: "NOTIFICATION_CLICK", url: targetUrl });
+        console.log("[SW] focus + postMessage succeeded");
+        return;
+      } catch (focusErr) {
+        // focus() can fail on Android Chrome when tab is in background
+        // Fall through to openWindow
+        console.warn("[SW] focus() failed — falling back to openWindow:", focusErr);
+      }
+    }
+
+    // Step 5: no existing tab or focus failed — store reminder and open a fresh window
+    console.log("[SW] opening new window:", WINSTON_URL);
+    try {
+      await storePendingReminder(reminderText, reminderId);
+    } catch { /* non-fatal — IDB may fail on some devices */ }
+
+    try {
+      await self.clients.openWindow(WINSTON_URL);
+      console.log("[SW] openWindow succeeded");
+    } catch (openErr) {
+      console.error("[SW] openWindow failed:", openErr);
+    }
+  })());
 });
 
 // ── Token relay ───────────────────────────────────────────────────────────────

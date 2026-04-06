@@ -2,6 +2,7 @@ import cron from "node-cron";
 import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { sendPushToAll } from "./pushManager.js";
+import { getProfile } from "../onboarding/onboardingManager.js";
 import { logger } from "../lib/logger.js";
 import { getSessionCount as getPickleballSessionCount } from "../pickleball/pickleballManager.js";
 import { getDaysSinceLastOliviaContact } from "../olivia/oliviaTracker.js";
@@ -94,8 +95,10 @@ async function maybeFireStarter(): Promise<void> {
   const starter = await generateStarter();
   if (!starter) return;
 
+  const profile = await getProfile("David").catch(() => null);
+  const companionName = profile?.companionName ?? "Emma Peel";
   await sendPushToAll({
-    title: "Emma Peel",
+    title: companionName,
     body: starter,
     tag: "conversation-starter",
   });

@@ -8,6 +8,7 @@ import {
   getVapidPublicKey,
   type PushSubscriptionData,
 } from "../push/pushManager.js";
+import { getProfile } from "../onboarding/onboardingManager.js";
 import { logger } from "../lib/logger.js";
 
 const router = Router();
@@ -140,10 +141,13 @@ router.post("/push/test", async (req, res) => {
       return;
     }
 
+    const profile = await getProfile(userName).catch(() => null);
+    const companionNameForTest = profile?.companionName ?? "Your Companion";
+
     const result = await sendPushToAll(
       {
         title: "Winston — Test Notification ✅",
-        body: "Push notifications are working. Emma Peel can reach you.",
+        body: `Push notifications are working. ${companionNameForTest} can reach you.`,
         tag: "winston-test",
         requireInteraction: false,
       },

@@ -214,6 +214,91 @@ export function analyzeEmailForScam(email: {
   return { isSuspicious, riskLevel, flags, summary };
 }
 
+/**
+ * Unified email fetch used by BOTH the morning briefing and the manual email check.
+ * Fetches the most recent inbox emails regardless of read status, sorted by date
+ * descending (newest first). Both code paths use this so behaviour is identical.
+ */
+export async function fetchAndSummarizeEmails(maxResults = 15): Promise<EmailSummary[] | null> {
+  const fetchStart = new Date();
+  console.log(`[Gmail] fetchAndSummarizeEmails called at ${fetchStart.toISOString()} — maxResults=${maxResults}`);
+
+  const auth = await getAuthClient();
+  if (!auth) {
+    console.warn("[Gmail] No auth client — Google not connected");
+    return null;
+  }
+
+  try {
+    const tokenResult = await auth.getAccessToken();
+    if (!tokenResult.token) {
+      console.warn("[Gmail] getAccessToken returned empty token — refresh may have failed");
+    } else {
+      console.log("[Gmail] Token OK — proceeding with Gmail API call");
+    }
+  } catch (refreshErr) {
+    console.error("[Gmail] Token refresh failed — aborting Gmail fetch:", refreshErr);
+    return null;
+  }
+
+  const gmail = google.gmail({ version: "v1", auth });
+
+  // Fetch all recent inbox emails regardless of read status, newest first
+  const list = await gmail.users.messages.list({
+    userId: "me",
+    maxResults,
+    q: "in:inbox",
+  });
+
+  const messages = list.data.messages ?? [];
+  console.log(`[Gmail] fetchAndSummarizeEmails: messages.list returned ${messages.length} messages`);
+  if (messages.length === 0) return [];
+
+  const emails: EmailSummary[] = [];
+
+  for (const msg of messages.slice(0, maxResults)) {
+    if (!msg.id) continue;
+    const detail = await gmail.users.messages.get({
+      userId: "me",
+      id: msg.id,
+      format: "metadata",
+      metadataHeaders: ["From", "Subject", "Date"],
+    });
+
+    const headers = detail.data.payload?.headers ?? [];
+    const get = (name: string) =>
+      decodeHeader(headers.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value ?? "");
+
+    const rawFrom = get("From");
+    const fromEmail = extractEmailAddress(rawFrom);
+    const fromMatch = rawFrom.match(/^(.*?)\s*<[^>]+>/) ?? null;
+    const from = fromMatch ? fromMatch[1].trim().replace(/^"(.*)"$/, "$1") : rawFrom;
+    const subject = get("Subject") || "(no subject)";
+    const snippet = detail.data.snippet ?? "";
+    const date = get("Date");
+
+    const suspicion = analyzeEmailForScam({ from, fromEmail, subject, snippet });
+
+    emails.push({
+      from,
+      fromEmail,
+      subject,
+      snippet,
+      date,
+      suspicion: suspicion.isSuspicious ? suspicion : null,
+    });
+  }
+
+  const mostRecentDate = emails[0]?.date ?? "none";
+  const fetchDurationMs = Date.now() - fetchStart.getTime();
+  console.log(
+    `[Gmail] fetchAndSummarizeEmails complete — ${emails.length} emails in ${fetchDurationMs}ms` +
+    ` — most recent: ${mostRecentDate}`
+  );
+
+  return emails;
+}
+
 export async function fetchRecentEmails(maxResults = 10): Promise<EmailSummary[] | null> {
   const fetchStart = new Date();
   console.log(`[Gmail] fetchRecentEmails called at ${fetchStart.toISOString()} — maxResults=${maxResults}`);

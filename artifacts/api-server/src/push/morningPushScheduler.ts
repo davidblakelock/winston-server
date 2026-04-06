@@ -5,6 +5,12 @@ import { getWatchedShows } from "../tv/showManager.js";
 import { fetchEpisodesForDate } from "../tv/tvmaze.js";
 import { preFetchMorningNews } from "../news/newsManager.js";
 import { preFetchMorningBriefing } from "../morning/briefingPregenerate.js";
+import { getProfile } from "../onboarding/onboardingManager.js";
+
+async function getCompanionName(): Promise<string> {
+  const profile = await getProfile("David").catch(() => null);
+  return profile?.companionName ?? "Emma Peel";
+}
 
 const TZ = "America/Chicago";
 
@@ -26,7 +32,8 @@ function getLocalDateString(): string {
 }
 
 async function buildMorningBody(): Promise<string> {
-  const base = "Emma Peel is ready for your morning briefing. Say good morning to start.";
+  const companionName = await getCompanionName();
+  const base = `${companionName} is ready for your morning briefing. Say good morning to start.`;
 
   try {
     const watchedShows = await getWatchedShows();
