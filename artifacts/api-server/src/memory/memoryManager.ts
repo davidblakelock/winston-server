@@ -132,10 +132,10 @@ export function formatMemoriesForContext(memories: ConversationMemory[]): string
   const tz = "America/Chicago";
   const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
 
-  const FOLLOWUP_CUTOFF_DAYS = 3; // 72 hours
+  const FOLLOWUP_CUTOFF_DAYS = 5; // 120 hours
 
-  const recent: string[] = [];  // ≤3 days — active follow-up allowed
-  const older: string[] = [];   // >3 days — background context only
+  const recent: string[] = [];  // ≤5 days — active follow-up allowed
+  const older: string[] = [];   // >5 days — background context only
 
   for (const m of memories) {
     const date = new Date(`${m.conversationDate}T12:00:00`);
@@ -166,21 +166,25 @@ export function formatMemoriesForContext(memories: ConversationMemory[]): string
 
   if (recent.length > 0) {
     result +=
-      `[Recent — last 72 hours — active follow-up appropriate]\n` +
+      `[Recent — last 5 days — active follow-up appropriate for general topics]\n` +
       recent.join("\n\n") +
       `\n\nFor these recent memories, use them naturally — the way a close friend would. ` +
-      `Reference them when relevant (e.g., "How's the knee today?" or "Did you end up calling Olivia?"). ` +
-      `Don't recite them robotically or all at once. Let them inform how you engage, not dominate it.\n`;
+      `Reference them when relevant (e.g., "Did you end up calling Olivia?"). ` +
+      `Don't recite them robotically or all at once. Let them inform how you engage, not dominate it.\n` +
+      `HEALTH RULE: NEVER proactively ask about a health complaint, pain, injury, or soreness ` +
+      `(knee pain, back pain, feeling sick, etc.) mentioned more than 5 days ago unless David brings it up himself. ` +
+      `This includes the knee — do not ask "How's your knee?" unless David mentions it first today.\n`;
   }
 
   if (older.length > 0) {
     result +=
-      `\n[Background context — older than 72 hours — DO NOT use for proactive follow-up]\n` +
+      `\n[Background context — older than 5 days — DO NOT use for proactive follow-up]\n` +
       older.join("\n\n") +
       `\n\nIMPORTANT: These older memories inform your understanding of David's life and history, ` +
-      `but you must NOT proactively ask follow-up questions about them (e.g., do NOT say "how did that dinner go?" ` +
-      `if the dinner was 5 days ago). Only reference older context if David brings up the topic himself ` +
-      `or if it is directly relevant to what he is currently discussing.\n`;
+      `but you must NOT proactively ask follow-up questions about them. ` +
+      `Only reference older context if David brings up the topic himself ` +
+      `or if it is directly relevant to what he is currently discussing. ` +
+      `NEVER ask about old health complaints, injuries, or minor issues from this section.\n`;
   }
 
   return result;

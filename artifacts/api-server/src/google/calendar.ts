@@ -134,6 +134,53 @@ export async function fetchTodayEvents(): Promise<CalendarEvent[] | null> {
     .filter((event) => !isEventInPast(event));
 }
 
+export async function fetchTomorrowEvents(): Promise<CalendarEvent[] | null> {
+  const auth = await getAuthClient();
+  if (!auth) return null;
+
+  const calendar = google.calendar({ version: "v3", auth });
+  const now = new Date();
+
+  // Compute tomorrow's midnight and end-of-day in CT
+  const todayStr = getLocalYMD(now);
+  const tomorrowDate = new Date(now.getTime() + 86400000);
+  const tomorrowStr = getLocalYMD(tomorrowDate);
+
+  const localMidnightTomorrow = new Date(tomorrowDate.toLocaleString("en-US", { timeZone: TZ }));
+  localMidnightTomorrow.setHours(0, 0, 0, 0);
+  const offsetMs = tomorrowDate.getTime() - new Date(tomorrowDate.toLocaleString("en-US", { timeZone: TZ })).getTime();
+  const timeMin = new Date(localMidnightTomorrow.getTime() + offsetMs).toISOString();
+  const timeMax = new Date(localMidnightTomorrow.getTime() + offsetMs + 86399999).toISOString();
+
+  const response = await calendar.events.list({
+    calendarId: "primary",
+    timeMin,
+    timeMax,
+    singleEvents: true,
+    orderBy: "startTime",
+    maxResults: 20,
+  });
+
+  return (response.data.items ?? [])
+    .map((event) => {
+      const isoDate = event.start?.date ?? event.start?.dateTime?.slice(0, 10) ?? tomorrowStr;
+      return {
+        id: event.id ?? "",
+        summary: event.summary ?? "(no title)",
+        start: formatTime(event.start?.dateTime, event.start?.date),
+        end: formatTime(event.end?.dateTime, event.end?.date),
+        startIso: event.start?.dateTime ?? undefined,
+        endIso: event.end?.dateTime ?? undefined,
+        dateLabel: getDayLabel(isoDate, todayStr, tomorrowStr),
+        isoDate,
+        location: event.location ?? undefined,
+        description: event.description ?? undefined,
+        allDay: !event.start?.dateTime,
+      };
+    });
+  // Note: do NOT filter with isEventInPast — all tomorrow events are future events
+}
+
 export async function fetchWeekEvents(): Promise<CalendarEvent[] | null> {
   const auth = await getAuthClient();
   if (!auth) return null;

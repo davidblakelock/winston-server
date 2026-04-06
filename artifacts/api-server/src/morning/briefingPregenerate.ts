@@ -466,7 +466,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       getUpcomingDates(21).catch(() => []),
       isSunday ? collectSundayData().catch(() => null) : Promise.resolve(null),
       getPendingFollowUps(2, 14).catch(() => []),
-      hasRecentKneeIssue(14).catch(() => false),
+      hasRecentKneeIssue(5).catch(() => false),
       fetchDallasContent().catch(() => ""),
       getJournalCountThisWeek().catch(() => 0),
       getRecentJournalEntries(3).catch(() => []),

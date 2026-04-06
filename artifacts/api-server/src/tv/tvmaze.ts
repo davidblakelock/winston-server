@@ -16,6 +16,7 @@ export interface ScheduledEpisode {
   title: string;
   airtime: string;
   network: string;
+  airedAt?: string; // ISO timestamp from TVmaze airstamp — used for 48-hour staleness check
 }
 
 function localYMD(date: Date, tz = "America/Chicago"): string {
@@ -72,6 +73,7 @@ export async function getScheduleForDate(
         airtime: ep.airtime ?? "",
         network:
           ep.show.network?.name ?? ep.show.webChannel?.name ?? "streaming",
+        airedAt: ep.airstamp ?? undefined,
       }));
   } catch {
     return [];
@@ -98,6 +100,7 @@ export async function getWebScheduleForDate(
           showName: show.name,
           season: ep.season,
           number: ep.number,
+          airedAt: ep.airstamp ?? undefined,
           episodeLabel: `S${String(ep.season).padStart(2, "0")}E${String(ep.number).padStart(2, "0")}`,
           title: ep.name ?? "",
           airtime: ep.airtime ?? "",

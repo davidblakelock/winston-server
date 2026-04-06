@@ -7,6 +7,7 @@ import { fetchAndSummarizeEmails, formatEmailsForPrompt, buildScamWarningInstruc
 import {
   fetchTodayEvents,
   fetchWeekEvents,
+  fetchTomorrowEvents,
   formatCalendarForPrompt,
   createCalendarEvent,
   updateCalendarEvent,
@@ -1252,33 +1253,78 @@ router.post("/chat", async (req, res) => {
     const now = new Date();
     const dayName = now.toLocaleDateString("en-US", { timeZone: tz, weekday: "long" });
     const tomorrowPickleball = ["Sunday", "Tuesday", "Thursday", "Friday"].includes(dayName);
-    const tomorrowNote = tomorrowPickleball
-      ? `\nNote: Tomorrow is a pickleball day — mention it naturally if we reach goodnight.`
+    const tomorrowPickleballNote = tomorrowPickleball
+      ? `\n• Tomorrow is a pickleball day — mention it as part of the tomorrow preview.`
       : "";
 
-    // Check what's on TV tonight for watched shows
+    // ── Fetch tomorrow's calendar events for wind-down preview ──────────────
+    let tomorrowCalendarBlock = "";
+    try {
+      const tomorrowEvts = await fetchTomorrowEvents();
+      if (tomorrowEvts && tomorrowEvts.length > 0) {
+        const lines = tomorrowEvts.map((e) => {
+          const time = e.allDay ? "all day" : `${e.start}${e.end && e.end !== e.start ? ` – ${e.end}` : ""}`;
+          const loc = e.location ? ` at ${e.location}` : "";
+          return `  • ${e.summary} — ${time}${loc}`;
+        });
+        tomorrowCalendarBlock =
+          `\n\n[Tomorrow's Calendar — fetched now in CT]\n` +
+          lines.join("\n") +
+          `\nMention tomorrow's events naturally in Step 2 of the wind-down. ` +
+          `Include the time and location if relevant so David knows what to expect.`;
+      } else if (tomorrowEvts !== null) {
+        tomorrowCalendarBlock =
+          `\n\n[Tomorrow's Calendar]\nCalendar is clear tomorrow — nothing scheduled. ` +
+          `Tell David his calendar is clear tomorrow if we get to the tomorrow preview.`;
+      }
+    } catch { /* non-fatal */ }
+
+    // ── Check TV for episodes aired in the last 48 hours only (staleness guard) ──
     let tvEveningNote = "";
     try {
       const watchedShowsEvening = await getWatchedShows();
       const watchedIdsEvening = watchedShowsEvening.filter((s) => s.tvmazeId).map((s) => s.tvmazeId!);
       const tonightEps = await fetchEpisodesForDate(now, watchedIdsEvening);
-      if (tonightEps.length > 0) {
+      // Only suggest episodes that aired within the last 48 hours
+      const STALE_MS = 48 * 60 * 60 * 1000;
+      const freshEps = tonightEps.filter((ep) => {
+        if (!ep.airedAt) return true; // no timestamp — assume fresh (broadcast tonight)
+        const ageMs = Date.now() - new Date(ep.airedAt).getTime();
+        return ageMs <= STALE_MS;
+      });
+      if (freshEps.length > 0) {
         tvEveningNote =
-          `\n\n[TV Tonight — On Now or Coming Up]\n` +
-          tonightEps.map((ep) => `• ${formatEpisodeForPrompt(ep)}`).join("\n") +
-          `\n\nIf the moment feels right, mention naturally that something good is on tonight — e.g. "New Shrinking tonight if you feel like winding down with something good."`;
+          `\n\n[TV Tonight — New in Last 48 Hours]\n` +
+          freshEps.map((ep) => `• ${formatEpisodeForPrompt(ep)}`).join("\n") +
+          `\nIf the moment feels right in Step 3, mention one briefly — e.g. "New Shrinking tonight if you want something good." Only mention if it fits naturally.`;
       }
     } catch { /* non-fatal */ }
 
     systemPrompt +=
-      `\n\n[Evening Wind-Down Session — ACTIVE]\nDavid is in his evening wind-down. Guide the conversation naturally through:` +
-      `\n1. Warm check-in about how his day went (if not yet covered in this conversation)` +
-      `\n2. Any loose ends — things he wants to remember for tomorrow (note: anything he mentions wanting to remember should be saved for his morning briefing)` +
-      `\n3. A gentle memory prompt for Olivia's book (a natural invitation, not homework)` +
-      `\n4. A warm, personal goodnight — mention Winston the corgi, wish him well for tomorrow's activities` +
-      tomorrowNote +
-      tvEveningNote +
-      `\nLet the conversation breathe — don't rush through all stages at once. Follow his lead.`;
+      `\n\n[Evening Wind-Down Session — ACTIVE]\n` +
+      `Follow this exact structure — take it one step at a time, let it breathe:\n\n` +
+      `STEP 1 — WARM CHECK-IN: Ask how his day went. Reference one or two specific things from today ` +
+      `if you can (from calendar context or recent conversation). Keep it warm and genuine.\n\n` +
+      `STEP 2 — TOMORROW PREVIEW: After the check-in, briefly preview what's on tomorrow from the ` +
+      `[Tomorrow's Calendar] block. Include times. If the calendar is clear, say so warmly. ` +
+      `If he mentions wanting to remember something for tomorrow, save it (he knows you capture those notes).` +
+      tomorrowPickleballNote + `\n\n` +
+      `STEP 3 — OPTIONAL ENTERTAINMENT NOTE: If something relevant is in [TV Tonight], mention it ` +
+      `briefly and naturally. Skip entirely if nothing is listed or it doesn't fit the moment.\n\n` +
+      `STEP 4 — STORY CAPTURE (MANDATORY — always include): This is one of Winston's most important ` +
+      `features. After the check-in and tomorrow preview, ALWAYS ask the memory question for Olivia's book. ` +
+      `Do not skip it even if David seems tired or brief. Frame it warmly: ` +
+      `"Before we say goodnight, I'd love to capture something for Olivia..." then ask the question ` +
+      `from the [Tonight's Memory Question] block. One question only, never more.\n\n` +
+      `STEP 5 — JOURNAL PROMPT: After the story question is asked (or answered), ALWAYS offer a journal entry: ` +
+      `"Would you like to add anything to your journal tonight? Just a few thoughts about your day — ` +
+      `completely optional." If David says no or not tonight, move straight to goodnight.\n\n` +
+      `STEP 6 — GOODNIGHT: End warmly. If David hasn't taken his medications, remind him gently. ` +
+      `Mention Winston the corgi. Wish him well for tomorrow specifically (reference pickleball or any event). ` +
+      `Keep it warm, personal, brief.\n\n` +
+      `RULE: Never rush through multiple steps in one message. One step at a time.` +
+      tomorrowCalendarBlock +
+      tvEveningNote;
   }
 
   if (isWinddownNote) {
@@ -1384,16 +1430,23 @@ router.post("/chat", async (req, res) => {
           await setPendingQuestion(storyQ.id, storyQ.question);
           req.log.info({ questionId: storyQ.id, category: storyQ.category, prompt: storyQ.question.substring(0, 80) }, "Evening story question queued");
           systemPrompt +=
-            `\n\n[Tonight's Memory Question for Olivia — Hold Until the Right Moment]\nCategory: ${storyQ.category}\nQuestion: "${storyQ.question}"\n\nIMPORTANT: Do NOT ask this question right now. Save it for AFTER the check-in and loose ends are complete — it belongs as Step 3 of the wind-down. Read David's energy first:\n• If his responses have been very brief, he seems tired or distracted, or he signals he wants to wrap up — skip the story question tonight and say goodnight warmly\n• If he seems engaged and the conversation has flowed naturally — invite him with warmth: "Before you go, I'd love to ask you something for Olivia's book..." then ask the question\nMake it feel like a genuine invitation, never homework. One question only.`;
+            `\n\n[Tonight's Memory Question for Olivia — MANDATORY — Step 4]\nCategory: ${storyQ.category}\nQuestion: "${storyQ.question}"\n\nIMPORTANT: This question MUST be asked every wind-down session. Do not skip it even if David seems tired or brief. ` +
+            `Wait until Steps 1 and 2 (check-in and tomorrow preview) are complete, then ask warmly: ` +
+            `"Before we say goodnight, I'd love to capture something for Olivia's book..." and then ask the question. ` +
+            `Frame it as an invitation, never homework. One question only. This is one of Winston's most important features.`;
         }
       }
     } catch (err) {
       req.log.warn({ err }, "Evening story question queue failed");
     }
   } else if (winddownActive && pendingPrompt && !isPotentialStoryResponse) {
-    // Remind Emma of the pending question so she can still use it this session
+    // Story question was already queued in a previous message this session — remind Claude it's mandatory
     systemPrompt +=
-      `\n\n[Memory Question — Still Waiting]\nYou have an open memory question for Olivia that hasn't been answered yet: "${pendingPrompt}"\nIf the moment feels right and David seems engaged, gently revisit it. If not, let it go tonight.`;
+      `\n\n[Tonight's Memory Question — Still Pending — MANDATORY]\n` +
+      `Question for Olivia: "${pendingPrompt}"\n` +
+      `This question has not been answered yet tonight. It MUST be asked before goodnight. ` +
+      `If the check-in is done, ask it now warmly: "Before we wrap up, I'd love to capture something for Olivia's book..." ` +
+      `One question only. Do not skip it.`;
   }
 
   // ── Story retrieval ──
