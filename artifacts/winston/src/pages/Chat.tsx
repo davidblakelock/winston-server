@@ -1106,17 +1106,23 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
       console.log("[REMINDER] Calling speakReply with:", speakText);
       speakReply(msgId, speakText);
 
-      // Acknowledge to the server so /api/reminders/due won't return this to other devices
-      fetch(`${CHAT_BASE}/api/reminders/${event.id}/acknowledge`, { method: "POST" })
-        .then(async (r) => {
-          if (!r.ok) {
-            const body = await r.text().catch(() => "");
-            console.error(`[ACKNOWLEDGE] Server error for id=${event.id} status=${r.status}:`, body);
-          } else {
-            console.log(`[ACKNOWLEDGE] id=${event.id} acknowledged OK`);
-          }
-        })
-        .catch((err) => console.error(`[ACKNOWLEDGE] Network error for id=${event.id}:`, err));
+      // Acknowledge after 60 s — gives all devices (phone, laptop) a full minute
+      // to receive the push / SSE event and speak the reminder before the server
+      // marks it completed and removes it from /api/reminders/due polling results.
+      const ackId = event.id;
+      setTimeout(() => {
+        console.log(`[ACKNOWLEDGE] 60 s elapsed — acknowledging id=${ackId}`);
+        fetch(`${CHAT_BASE}/api/reminders/${ackId}/acknowledge`, { method: "POST" })
+          .then(async (r) => {
+            if (!r.ok) {
+              const body = await r.text().catch(() => "");
+              console.error(`[ACKNOWLEDGE] Server error for id=${ackId} status=${r.status}:`, body);
+            } else {
+              console.log(`[ACKNOWLEDGE] id=${ackId} acknowledged OK`);
+            }
+          })
+          .catch((err) => console.error(`[ACKNOWLEDGE] Network error for id=${ackId}:`, err));
+      }, 60_000);
     },
     [speakReply]
   );
@@ -1126,6 +1132,36 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
   const fireWinddownStartRef = useRef(fireWinddownStart);
   useEffect(() => { fireReminderAlertRef.current = fireReminderAlert; }, [fireReminderAlert]);
   useEffect(() => { fireWinddownStartRef.current = fireWinddownStart; }, [fireWinddownStart]);
+
+  // ── Fix 2: Service worker REMINDER_PUSH listener ───────────────────────────
+  // When the service worker receives a push notification it posts REMINDER_PUSH
+  // to every open Winston client.  This lets the foreground app speak the
+  // reminder immediately without waiting for the SSE stream to reconnect.
+  // spokenReminderIds guard inside fireReminderAlert prevents double-speaking
+  // if SSE also delivers the event within the same session.
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+    const handler = (event: MessageEvent) => {
+      const msg = event.data ?? {};
+      if (msg.type !== "REMINDER_PUSH") return;
+      const id = typeof msg.reminderId === "number"
+        ? msg.reminderId
+        : parseInt(String(msg.reminderId ?? ""), 10);
+      if (isNaN(id)) {
+        console.warn("[REMINDER] REMINDER_PUSH: invalid reminderId", msg.reminderId);
+        return;
+      }
+      console.log("[REMINDER] REMINDER_PUSH from service worker — id:", id, "text:", msg.reminderText);
+      fireReminderAlertRef.current({
+        id,
+        userName: "David",
+        reminderText: msg.reminderText ?? "",
+        speakText: `Hey David, your reminder: ${msg.reminderText}.`,
+      });
+    };
+    navigator.serviceWorker.addEventListener("message", handler);
+    return () => navigator.serviceWorker.removeEventListener("message", handler);
+  }, []); // empty deps — fireReminderAlertRef is always current
 
   // ── Bug 4: Periodic session token validation + Google auth health check ───────
   // Runs every 20 minutes. If the session is invalid the page reloads to force

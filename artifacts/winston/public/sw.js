@@ -79,10 +79,33 @@ self.addEventListener("push", (event) => {
 
   console.log("[SW] calling showNotification:", title, "—", reminderText || "(no body)");
 
+  const reminderId = data.reminderId ?? null;
+
+  // Post REMINDER_PUSH to every open Winston client so the foreground app can
+  // speak the reminder immediately — bypasses SSE entirely on the receiving device.
+  // spokenReminderIds guard in Chat.tsx prevents double-speak if SSE also fires.
+  const notifyClients = (reminderId != null)
+    ? self.clients
+        .matchAll({ type: "window", includeUncontrolled: true })
+        .then((clientList) => {
+          const msg = { type: "REMINDER_PUSH", reminderId, reminderText };
+          clientList.forEach((c) => {
+            if (c.url.includes("winston-companion")) {
+              console.log("[SW] posting REMINDER_PUSH to open client:", c.url, "reminderId:", reminderId);
+              c.postMessage(msg);
+            }
+          });
+        })
+        .catch((err) => console.warn("[SW] matchAll for REMINDER_PUSH failed:", err))
+    : Promise.resolve();
+
   event.waitUntil(
-    self.registration.showNotification(title, options)
-      .then(() => console.log("[SW] showNotification resolved — notification displayed"))
-      .catch((err) => console.error("[SW] showNotification failed:", err))
+    Promise.all([
+      self.registration.showNotification(title, options)
+        .then(() => console.log("[SW] showNotification resolved — notification displayed"))
+        .catch((err) => console.error("[SW] showNotification failed:", err)),
+      notifyClients,
+    ])
   );
 });
 
