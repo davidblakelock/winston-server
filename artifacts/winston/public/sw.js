@@ -98,27 +98,14 @@ self.addEventListener("notificationclick", (event) => {
   const reminderText = event.notification.data?.reminderText || "";
   const reminderId   = event.notification.data?.reminderId   ?? null;
 
-  console.log("[SW] notificationclick — action:", action || "(body tap)", "| url:", targetUrl);
+  console.log("[SW] notificationclick — action:", JSON.stringify(action), "| url:", targetUrl);
 
-  // ── Dismiss ────────────────────────────────────────────────────────────────
-  if (action === "dismiss") return;
-
-  // ── Snooze ─────────────────────────────────────────────────────────────────
-  if (action === "snooze") {
-    if (reminderId != null) {
-      event.waitUntil(
-        fetch(WINSTON_URL + "api/reminders/" + reminderId + "/snooze", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ minutes: 10 }),
-        }).catch(() => {})
-      );
-    }
-    return;
-  }
-
-  // ── Open (action === "open") or body tap (action === "") ───────────────────
-  event.waitUntil((async () => {
+  // ── Body tap or "open" — checked FIRST so an empty action can NEVER fall
+  //    through to snooze.  On some Android Chrome builds, tapping the body
+  //    can arrive with action="" which must always mean "open the app".
+  if (!action || action === "" || action === "open") {
+    console.log("[SW] body tap / open action — opening app");
+    event.waitUntil((async () => {
     // Step 2: find any existing open Winston tab
     let clientList = [];
     try {
@@ -160,6 +147,32 @@ self.addEventListener("notificationclick", (event) => {
       console.error("[SW] openWindow failed:", openErr);
     }
   })());
+  return;
+  }
+
+  // ── Dismiss ─────────────────────────────────────────────────────────────────
+  if (action === "dismiss") {
+    console.log("[SW] dismiss action — closing notification only");
+    return;
+  }
+
+  // ── Snooze ──────────────────────────────────────────────────────────────────
+  if (action === "snooze") {
+    console.log("[SW] snooze action — reminderId:", reminderId);
+    if (reminderId != null) {
+      event.waitUntil(
+        fetch(WINSTON_URL + "api/reminders/" + reminderId + "/snooze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ minutes: 10 }),
+        }).catch(() => {})
+      );
+    }
+    return;
+  }
+
+  // ── Unknown action — treat as open ──────────────────────────────────────────
+  console.warn("[SW] unknown action:", JSON.stringify(action), "— treating as open");
 });
 
 // ── Token relay ───────────────────────────────────────────────────────────────

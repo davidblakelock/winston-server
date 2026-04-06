@@ -1275,16 +1275,23 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         hasConnectedOnce = true;
       };
 
-      source.onerror = () => {
-        console.log("SSE DISCONNECTED — readyState:", source.readyState);
+      source.onerror = (e) => {
+        // Log the error with as much detail as possible — on mobile Chrome this
+        // often fires for QUIC protocol errors or ECONNRESET which look identical
+        // to normal reconnects from the EventSource API's perspective.
+        const errType = (e as Event & { type?: string })?.type ?? "unknown";
+        console.log(`SSE ERROR: ${errType} — readyState: ${source.readyState} — reconnecting in 1 s`);
         source.close();
         if (destroyed) return;
+        // Always reconnect after exactly 1 second regardless of error type.
+        // QUIC errors and proxy timeouts both resolve quickly, so a fixed 1 s
+        // delay beats exponential backoff for mobile reliability.
         reconnectTimer = setTimeout(() => {
           if (destroyed) return;
-          backoffMs = Math.min(backoffMs * 2, 30_000);
+          console.log("SSE RECONNECTING — creating new EventSource");
           es = new EventSource(sseUrl);
           attach(es);
-        }, backoffMs);
+        }, 1_000);
       };
     };
 
@@ -1298,22 +1305,32 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
     };
   }, []); // empty deps — created once, refs always stay current
 
-  // ── Polling fallback: checks /api/reminders/due every 30 s ───────────────────
-  // Reliable on mobile where SSE connections drop silently.  Uses spokenReminderIds
-  // to skip reminders already handled by SSE in the same session.
+  // ── Polling fallback: checks /api/reminders/due every 20 s ───────────────────
+  // Critical on mobile where SSE drops silently (QUIC errors, screen lock, etc).
+  // Uses spokenReminderIds to skip reminders already handled by SSE.
+  // Starts after 5 s (not 15) so the first poll catches reminders that fired
+  // while the SSE connection was being established.
   useEffect(() => {
     const poll = async () => {
+      const token = localStorage.getItem("winston_session_token") ?? "";
+      console.log("[REMINDER] Polling fallback — checking /api/reminders/due");
       try {
-        const res = await fetch(`${CHAT_BASE}/api/reminders/due`, { cache: "no-store" });
-        if (!res.ok) return;
+        const res = await fetch(`${CHAT_BASE}/api/reminders/due`, {
+          cache: "no-store",
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!res.ok) {
+          console.warn("[REMINDER] Poll: non-OK response:", res.status);
+          return;
+        }
         const due = await res.json() as Array<{ id: number; reminder_text: string }>;
-        if (due.length > 0) console.log("[REMINDER] Poll found due reminders:", due);
+        console.log(`[REMINDER] Poll: ${due.length} due reminder(s) found`);
         for (const reminder of due) {
           if (spokenReminderIds.current.has(reminder.id)) {
-            console.log("[REMINDER] Poll: already spoken, skipping:", reminder.id);
+            console.log("[REMINDER] Poll: already spoken, skipping id:", reminder.id);
             continue;
           }
-          console.log("[REMINDER] Poll: firing reminder via fallback:", reminder);
+          console.log("[REMINDER] Poll: firing missed reminder via fallback:", reminder);
           fireReminderAlertRef.current({
             id: reminder.id,
             userName: "David",
@@ -1321,13 +1338,15 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
             speakText: `Hey David, your reminder: ${reminder.reminder_text}.`,
           });
         }
-      } catch { /* network unavailable — silent */ }
+      } catch (err) {
+        console.warn("[REMINDER] Poll: network error —", err);
+      }
     };
 
-    // First poll after 15 s (give SSE a chance to fire first)
-    const initial = setTimeout(poll, 15_000);
-    // Then every 30 s
-    const interval = setInterval(poll, 30_000);
+    // First poll after 5 s (give SSE a chance to connect and fire first)
+    const initial = setTimeout(poll, 5_000);
+    // Then every 20 s — fast enough to catch a missed reminder quickly on mobile
+    const interval = setInterval(poll, 20_000);
     return () => { clearTimeout(initial); clearInterval(interval); };
   }, []); // empty deps — refs and fetch are stable
 
