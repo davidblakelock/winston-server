@@ -655,7 +655,6 @@ INSERT INTO public.google_auth (user_name, email, access_token, refresh_token, t
 -- list_items (2 rows)
 ALTER TABLE public.list_items OVERRIDING SYSTEM VALUE;
 INSERT INTO public.list_items (user_name, list_name, item_text, created_at) VALUES ('David', 'to do', 'call the plumber', '2026-03-31T12:39:32.836Z') ON CONFLICT DO NOTHING;
-INSERT INTO public.list_items (user_name, list_name, item_text, created_at) VALUES ('David', 'to do', 'call Erik Blackstone', '2026-03-31T12:42:29.379Z') ON CONFLICT DO NOTHING;
 
 -- magic_link_tokens (26 rows)
 ALTER TABLE public.magic_link_tokens OVERRIDING SYSTEM VALUE;

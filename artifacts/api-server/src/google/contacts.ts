@@ -259,18 +259,20 @@ async function searchCachedContacts(searchName: string, userName = "David"): Pro
 
 // ── Public search API ─────────────────────────────────────────────────────────
 
-export async function searchContacts(searchQuery: string): Promise<ContactSearchResult> {
+export async function searchContacts(searchQuery: string, forceRefresh = true): Promise<ContactSearchResult> {
   try {
-    console.log(`[CONTACTS] searching for name: "${searchQuery}"`);
+    console.log(`[CONTACTS] searching for name: "${searchQuery}" (forceRefresh=${forceRefresh})`);
 
-    // If cache is stale or empty, refresh it first
-    if (await isCacheStale()) {
-      console.log("[CONTACTS] cache is empty or stale — syncing from Google");
+    // Always do a live API sync before searching — never serve stale or cached contact data
+    // forceRefresh=true (default) means we always hit the Google People API fresh
+    if (forceRefresh || await isCacheStale()) {
+      console.log("[CONTACTS] syncing from Google People API (live) before search");
       const synced = await syncContactsToCache();
       if (synced === -1) {
         // needs reauth
         return { contacts: [], needsReauth: true };
       }
+      console.log(`[CONTACTS] live sync complete — ${synced} contacts in cache`);
     }
 
     // Search the local cache

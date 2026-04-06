@@ -1793,8 +1793,25 @@ router.post("/chat", async (req, res) => {
     req.log.info({ location: navLocation.name, url: navigationUrl }, "Navigation triggered");
   }
 
+  // ── Scrub contact data from conversation history ──────────────────────────
+  // When a contacts query is in progress, strip any previous assistant messages
+  // that contain contact-looking data (phone numbers, emails, "found X in contacts").
+  // This prevents Claude from reusing fabricated or stale contact data from prior turns.
+  const CONTACT_DATA_PATTERN = /\bPhone\s*:\s*[\d\s()+-]+|Email\s*:\s*\S+@\S+|\b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b|found\s+\w[\w\s]+in your contacts|@\w+\.(com|net|org|io)\b/i;
+
+  const filteredHistory = isContactRequest
+    ? history.filter((msg: { role: string; content: string }) => {
+        if (msg.role !== "assistant") return true; // Always keep user messages
+        const hasContactData = CONTACT_DATA_PATTERN.test(msg.content);
+        if (hasContactData) {
+          req.log.info("[CONTACTS] Stripped prior assistant message with contact-like data from history to prevent hallucination reuse");
+        }
+        return !hasContactData;
+      })
+    : history;
+
   const messages: Anthropic.MessageParam[] = [
-    ...history.map((msg: { role: string; content: string }) => ({
+    ...filteredHistory.map((msg: { role: string; content: string }) => ({
       role: msg.role as "user" | "assistant",
       content: msg.content,
     })),
