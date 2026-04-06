@@ -434,6 +434,109 @@ export async function findEventByKeywords(
   return bestScore > 0 ? best : pool.length === 1 ? pool[0] : null;
 }
 
+/**
+ * Find an event to update using Google's server-side text search (`q` parameter).
+ * Searches from 7 days ago through 60 days ahead — much broader than fetchWeekEvents().
+ * This is the right function to use for move/reschedule operations.
+ */
+export async function findEventForUpdate(keywords: string): Promise<CalendarEvent | null> {
+  const auth = await getAuthClient();
+  if (!auth) {
+    console.log("[CALENDAR] findEventForUpdate — no auth client");
+    return null;
+  }
+
+  const calendar = google.calendar({ version: "v3", auth });
+  const now = new Date();
+  const todayStr = getLocalYMD(now);
+
+  // Search from 7 days ago to 60 days ahead so we catch both recent and upcoming events
+  const timeMin = new Date(now.getTime() - 7 * 86400000).toISOString();
+  const timeMax = new Date(now.getTime() + 60 * 86400000).toISOString();
+
+  console.log(`[CALENDAR] findEventForUpdate — searching for existing event matching: "${keywords}"`);
+
+  try {
+    const response = await calendar.events.list({
+      calendarId: "primary",
+      q: keywords,          // server-side text search by Google
+      timeMin,
+      timeMax,
+      singleEvents: true,
+      orderBy: "startTime",
+      maxResults: 10,
+    });
+
+    const items = response.data.items ?? [];
+    console.log(`[CALENDAR] findEventForUpdate — Google text search returned ${items.length} result(s)`);
+
+    if (items.length === 0) {
+      // Fallback: fetch a broad window and do client-side scoring
+      console.log("[CALENDAR] findEventForUpdate — no results from q-search, falling back to keyword scoring");
+      const fallbackResponse = await calendar.events.list({
+        calendarId: "primary",
+        timeMin,
+        timeMax,
+        singleEvents: true,
+        orderBy: "startTime",
+        maxResults: 50,
+      });
+      const allItems = fallbackResponse.data.items ?? [];
+      const kw = keywords.toLowerCase();
+      const words = kw.split(/\s+/).filter((w) => w.length > 2);
+      let best: (typeof allItems)[0] | null = null;
+      let bestScore = 0;
+      for (const item of allItems) {
+        const haystack = `${item.summary ?? ""} ${item.location ?? ""} ${item.description ?? ""}`.toLowerCase();
+        const score = words.reduce((n, w) => n + (haystack.includes(w) ? 1 : 0), 0);
+        if (score > bestScore) { bestScore = score; best = item; }
+      }
+      if (!best || bestScore === 0) {
+        console.log("[CALENDAR] findEventForUpdate — fallback scoring also found nothing");
+        return null;
+      }
+      console.log(`[CALENDAR] findEventForUpdate — fallback found: "${best.summary}" id=${best.id}`);
+      return mapGoogleEvent(best, todayStr);
+    }
+
+    // Take the first result from the Google text search
+    const item = items[0];
+    const isoDate = item.start?.date ?? item.start?.dateTime?.slice(0, 10) ?? todayStr;
+    const tomorrowStr = getLocalYMD(new Date(now.getTime() + 86400000));
+    const mapped = mapGoogleEvent(item, todayStr);
+    console.log(`[CALENDAR] found event id: ${mapped.id} — "${mapped.summary}" on ${mapped.isoDate}`);
+    return mapped;
+  } catch (err) {
+    console.error("[CALENDAR] findEventForUpdate — error:", err);
+    return null;
+  }
+}
+
+function mapGoogleEvent(item: {
+  id?: string | null;
+  summary?: string | null;
+  start?: { date?: string | null; dateTime?: string | null };
+  end?: { date?: string | null; dateTime?: string | null };
+  location?: string | null;
+  description?: string | null;
+}, todayStr: string): CalendarEvent {
+  const tomorrowStr = getLocalYMD(new Date(new Date().getTime() + 86400000));
+  const isoDate = item.start?.date ?? item.start?.dateTime?.slice(0, 10) ?? todayStr;
+  return {
+    id: item.id ?? "",
+    summary: item.summary ?? "(no title)",
+    start: formatTime(item.start?.dateTime, item.start?.date),
+    end: formatTime(item.end?.dateTime, item.end?.date),
+    startIso: item.start?.dateTime ?? undefined,
+    endIso: item.end?.dateTime ?? undefined,
+    dateLabel: getDayLabel(isoDate, todayStr, tomorrowStr),
+    isoDate,
+    location: item.location ?? undefined,
+    description: item.description ?? undefined,
+    allDay: !item.start?.dateTime,
+  };
+}
+
 function addOneHour(time: string): string {
   const [h, m] = time.split(":").map(Number);
   const newH = (h + 1) % 24;

@@ -13,6 +13,7 @@ import {
   updateCalendarEvent,
   deleteCalendarEvent,
   findEventByKeywords,
+  findEventForUpdate,
 } from "../google/calendar.js";
 import {
   parseCalendarOperation,
@@ -363,7 +364,9 @@ const CALENDAR_PATTERN = /\b(calendar|schedule|agenda|appointments?|what('?s|\s+
 // NOTE: "remind me" phrases are intentionally excluded here — they go through the reminder system, not the calendar.
 // Reminders → push notifications (REMINDER_PATTERN). Calendar events → Google Calendar (CALENDAR_CREATE_PATTERN).
 const CALENDAR_CREATE_PATTERN = /\b(add\s+(?!.+\s+to\s+my\s+(?:shopping|grocery|to.?do|errand|task|watch))|create\s+(a\s+)?(new\s+)?(event|appointment|meeting|calendar)|schedule\s+(a\s+)?(meeting|appointment|lunch|dinner|call|event)|put\s+.+\s+on\s+(my\s+)?calendar|book\s+(a\s+)?(meeting|appointment)|set\s+up\s+(a\s+)?(meeting|appointment)|block\s+(off\s+)?time)\b/i;
-const CALENDAR_MODIFY_PATTERN = /\b(move\s+(my\s+)?(?!\w+\s+list)|reschedule\s+(my\s+)?|change\s+(my\s+)?(appointment|meeting|event|calendar)|update\s+(my\s+)?(appointment|meeting|event)|push\s+(?:back|forward)\s+(my\s+)?(appointment|meeting)|postpone\s+(my\s+)?)\b/i;
+// NOTE: MODIFY is evaluated BEFORE CREATE so move/reschedule phrases always win.
+// Covers: move, reschedule, change (the time of), push back/forward, postpone, shift, bump, delay, update time
+const CALENDAR_MODIFY_PATTERN = /\b(move\s+(my\s+)?(?!\w+\s+list)|reschedul|change\s+(my\s+|the\s+)?(time|date|appointment|meeting|event|calendar)|update\s+(my\s+|the\s+)?(time\s+of\s+|date\s+of\s+)?(appointment|meeting|event)|push\s+(?:back|forward|out|up)\s+(my\s+|the\s+)?(appointment|meeting|event)?|postpone\s+(my\s+|the\s+)?|shift\s+(my\s+|the\s+)?(appointment|meeting|event)|bump\s+(my\s+|the\s+)?(appointment|meeting|event)|delay\s+(my\s+|the\s+)?(appointment|meeting|event))\b/i;
 const CALENDAR_DELETE_PATTERN = /\b(cancel\s+(my\s+)?(appointment|meeting|event|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|delete\s+(my\s+)?(appointment|meeting|event|calendar\s+event)|remove\s+(my\s+)?(appointment|meeting|event)\s+from\s+(my\s+)?calendar|clear\s+(my\s+)?(appointment|meeting|event))\b/i;
 const CALENDAR_CONFIRM_PATTERN = /^(yes|yeah|yep|yup|sure|go\s+ahead|please\s+do|confirmed?|absolutely|do\s+it|ok(ay)?|correct|that'?s\s+right)[\s.!]*$/i;
 const CALENDAR_CANCEL_PATTERN = /^(no|nope|nah|never\s+mind|don'?t|keep\s+it|actually\s+no|cancel\s+that|forget\s+it|hold\s+on|wait)[\s.!]*$/i;
@@ -736,10 +739,10 @@ router.post("/chat", async (req, res) => {
   const isStoryCount = STORY_COUNT_PATTERN.test(message);
   const isProfileRequest = PROFILE_PATTERN.test(message);
   // IMPORTANT: Reminder requests (REMINDER_PATTERN) must NEVER route to Google Calendar.
-  // If a message matches both isReminderRequest and CALENDAR_CREATE_PATTERN, it is always
-  // treated as a reminder — not a calendar event.
-  const isCalendarCreate = !isMorningGreeting && !isReminderRequest && CALENDAR_CREATE_PATTERN.test(message);
+  // IMPORTANT: MODIFY is evaluated before CREATE — move/reschedule phrases always win over create.
+  // If both MODIFY and CREATE patterns match (e.g. "reschedule" contains "schedule"), MODIFY wins.
   const isCalendarModify = !isMorningGreeting && !isReminderRequest && CALENDAR_MODIFY_PATTERN.test(message);
+  const isCalendarCreate = !isMorningGreeting && !isReminderRequest && !isCalendarModify && CALENDAR_CREATE_PATTERN.test(message);
   const isCalendarDelete = !isMorningGreeting && !isReminderRequest && CALENDAR_DELETE_PATTERN.test(message);
   const isCalendarWriteOp = isCalendarCreate || isCalendarModify || isCalendarDelete;
   const pendingDel = getPendingDelete();
@@ -1181,14 +1184,24 @@ router.post("/chat", async (req, res) => {
         systemPrompt += `\n\n[Calendar Create — Parse Error]\nTell David you had trouble understanding the event details and ask him to repeat with the date and time.`;
       }
     } else if (isCalendarModify) {
+      console.log("[CALENDAR] intent detected as move or reschedule — routing to UPDATE path (events.patch)");
       try {
         const parsed = await parseCalendarOperation(message, "modify") as ParsedModifyEvent | null;
         if (!parsed) throw new Error("parse failed");
 
-        const event = await findEventByKeywords(parsed.searchKeywords, parsed.searchDate);
+        console.log(`[CALENDAR] searching for existing event matching: "${parsed.searchKeywords}"${parsed.searchDate ? ` on ${parsed.searchDate}` : ""}`);
+
+        // Use findEventForUpdate: server-side Google text search, timeMin 7 days ago,
+        // timeMax 60 days ahead — much more reliable than the old client-side week window.
+        const event = await findEventForUpdate(parsed.searchKeywords);
+
         if (!event) {
-          systemPrompt += `\n\n[Calendar Modify — Event Not Found]\nTell David you couldn't find "${parsed.searchKeywords}" in his calendar for the next 7 days. Ask him to double-check the name or date.`;
+          console.log(`[CALENDAR] event not found for keywords: "${parsed.searchKeywords}" — telling David`);
+          systemPrompt += `\n\n[Calendar Modify — Event Not Found]\nTell David you couldn't find "${parsed.searchKeywords}" in his calendar. Ask him to double-check the event name or tell you the date it's on.`;
         } else {
+          console.log(`[CALENDAR] found event id: ${event.id} — "${event.summary}" on ${event.isoDate}`);
+          console.log(`[CALENDAR] calling events.patch with new time: date=${parsed.newDate ?? "(unchanged)"} start=${parsed.newStartTime ?? "(unchanged)"} end=${parsed.newEndTime ?? "(unchanged)"}`);
+
           const updated = await updateCalendarEvent(event.id, {
             title: parsed.newTitle,
             date: parsed.newDate,
@@ -1196,6 +1209,9 @@ router.post("/chat", async (req, res) => {
             endTime: parsed.newEndTime,
             location: parsed.newLocation,
           });
+
+          console.log(`[CALENDAR] patch response: ${updated ? "SUCCESS" : "FAILED"} for event "${event.summary}"`);
+
           if (updated) {
             const newDate = parsed.newDate ?? event.isoDate;
             const confirmation = formatEventConfirmation({
@@ -1205,8 +1221,8 @@ router.post("/chat", async (req, res) => {
               location: parsed.newLocation ?? event.location,
             });
             systemPrompt +=
-              `\n\n[Calendar Event Updated]\n"${event.summary}" has been moved/updated.\nConfirm specifically: "Done — ${confirmation} is all set." Read the new details back to David.`;
-            req.log.info({ eventId: event.id, summary: event.summary }, "Calendar event updated");
+              `\n\n[Calendar Event Updated]\n"${event.summary}" has been moved/updated using events.patch (NOT insert).\nConfirm specifically: "Done — ${confirmation} is all set." Read the new details back to David.`;
+            req.log.info({ eventId: event.id, summary: event.summary }, "Calendar event updated via events.patch");
           } else {
             systemPrompt += `\n\n[Calendar Update Failed]\nTell David the update failed and suggest he try again or edit in Google Calendar directly.`;
           }
