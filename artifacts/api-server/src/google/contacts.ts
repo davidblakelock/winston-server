@@ -1,11 +1,11 @@
-import { google } from "googleapis";
-import { getAuthClient, hasContactsScope } from "./oauth.js";
+import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 
 export interface Contact {
   name: string;
   email?: string;
   phone?: string;
+  address?: string;
 }
 
 export interface ContactSearchResult {
@@ -13,56 +13,242 @@ export interface ContactSearchResult {
   needsReauth: boolean;
 }
 
-export async function searchContacts(searchQuery: string): Promise<ContactSearchResult> {
-  try {
-    // Check if the contacts scope is in David's stored token before hitting the API.
-    // The scope was added after his initial auth so his token won't have it until he
-    // reconnects Google via Settings → Reconnect Google.
-    const hasScope = await hasContactsScope();
-    if (!hasScope) {
-      logger.warn("[CONTACTS] contacts.readonly scope not in stored token — David needs to reconnect Google");
-      return { contacts: [], needsReauth: true };
+// ── Table management ──────────────────────────────────────────────────────────
+
+export async function ensureContactsTable(): Promise<void> {
+  await query(`
+    CREATE TABLE IF NOT EXISTS google_contacts (
+      id           SERIAL PRIMARY KEY,
+      user_name    VARCHAR(100) NOT NULL,
+      resource_name VARCHAR(255),
+      display_name  VARCHAR(255) NOT NULL,
+      email        VARCHAR(255),
+      phone        VARCHAR(100),
+      address      TEXT,
+      cached_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await query(`
+    CREATE INDEX IF NOT EXISTS google_contacts_user_name_idx
+    ON google_contacts(user_name)
+  `);
+  logger.info("[CONTACTS] google_contacts table ready");
+}
+
+// ── Token helper ──────────────────────────────────────────────────────────────
+
+interface GoogleAuthRow {
+  access_token: string | null;
+  refresh_token: string | null;
+  token_expiry: Date | null;
+  scope: string | null;
+}
+
+async function getAccessToken(): Promise<{ token: string; hasContactsScope: boolean } | null> {
+  const { rows } = await query<GoogleAuthRow>(
+    `SELECT access_token, refresh_token, token_expiry, scope
+     FROM google_auth WHERE user_name = 'David' LIMIT 1`
+  );
+  if (!rows.length || !rows[0].access_token) return null;
+
+  const row = rows[0];
+  const scope = row.scope ?? "";
+  const hasContactsScope =
+    scope.includes("contacts.readonly") ||
+    scope.includes("contacts") ||
+    scope.includes("directory.readonly");
+
+  // Check if token is expired (with 60s buffer)
+  const expiry = row.token_expiry ? new Date(row.token_expiry).getTime() : 0;
+  const isExpired = expiry > 0 && Date.now() > expiry - 60000;
+
+  if (isExpired && row.refresh_token) {
+    // Refresh the token
+    try {
+      const refreshResp = await fetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          client_id: process.env.GOOGLE_CLIENT_ID ?? "",
+          client_secret: process.env.GOOGLE_CLIENT_SECRET ?? "",
+          refresh_token: row.refresh_token,
+          grant_type: "refresh_token",
+        }),
+      });
+      const refreshData = (await refreshResp.json()) as {
+        access_token?: string;
+        expires_in?: number;
+        error?: string;
+      };
+      if (refreshData.access_token) {
+        const newExpiry = new Date(Date.now() + (refreshData.expires_in ?? 3600) * 1000);
+        await query(
+          `UPDATE google_auth SET access_token = $1, token_expiry = $2, updated_at = NOW() WHERE user_name = 'David'`,
+          [refreshData.access_token, newExpiry]
+        );
+        return { token: refreshData.access_token, hasContactsScope };
+      }
+    } catch (err) {
+      logger.warn({ err }, "[CONTACTS] Token refresh failed — using possibly-expired token");
     }
+  }
 
-    const auth = await getAuthClient();
-    if (!auth) {
-      logger.warn("[CONTACTS] No auth client available");
-      return { contacts: [], needsReauth: false };
-    }
+  return { token: row.access_token, hasContactsScope };
+}
 
-    const people = google.people({ version: "v1", auth });
+// ── Fetch contacts from Google and cache them ─────────────────────────────────
 
-    const resp = await people.people.searchContacts({
-      query: searchQuery,
-      readMask: "names,emailAddresses,phoneNumbers",
-      pageSize: 5,
+export async function syncContactsToCache(userName = "David"): Promise<number> {
+  console.log("[CONTACTS] fetching Google contacts");
+
+  const tokenInfo = await getAccessToken();
+  if (!tokenInfo) {
+    logger.warn("[CONTACTS] syncContactsToCache — no auth token available");
+    return 0;
+  }
+  if (!tokenInfo.hasContactsScope) {
+    logger.warn("[CONTACTS] syncContactsToCache — contacts.readonly scope not in token — David needs to reconnect Google");
+    return -1; // signal: needs reauth
+  }
+
+  const allContacts: Contact[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const url = new URL("https://people.googleapis.com/v1/people/me/connections");
+    url.searchParams.set("personFields", "names,emailAddresses,phoneNumbers,addresses");
+    url.searchParams.set("pageSize", "100");
+    if (pageToken) url.searchParams.set("pageToken", pageToken);
+
+    const resp = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${tokenInfo.token}` },
     });
 
-    const results = resp.data.results ?? [];
-    const contacts = results
-      .map((r) => {
-        const person = r.person;
-        if (!person) return null;
-        return {
-          name: person.names?.[0]?.displayName ?? "",
-          email: person.emailAddresses?.[0]?.value,
-          phone: person.phoneNumbers?.[0]?.value,
-        };
-      })
-      .filter((c): c is Contact => c !== null && c.name.length > 0);
+    if (!resp.ok) {
+      const errBody = await resp.json().catch(() => ({})) as Record<string, unknown>;
+      const errMsg = (errBody as { error?: { message?: string } }).error?.message ?? resp.statusText;
+      if (resp.status === 401 || resp.status === 403) {
+        logger.warn(`[CONTACTS] API returned ${resp.status} — scope missing or token invalid. Message: ${errMsg}`);
+        return -1;
+      }
+      logger.error(`[CONTACTS] people.me.connections HTTP ${resp.status}: ${errMsg}`);
+      return 0;
+    }
 
-    logger.info({ query: searchQuery, found: contacts.length }, "[CONTACTS] Search complete");
+    const data = await resp.json() as {
+      connections?: Array<{
+        resourceName?: string;
+        names?: Array<{ displayName?: string }>;
+        emailAddresses?: Array<{ value?: string }>;
+        phoneNumbers?: Array<{ value?: string }>;
+        addresses?: Array<{ formattedValue?: string }>;
+      }>;
+      nextPageToken?: string;
+      totalItems?: number;
+    };
+
+    const connections = data.connections ?? [];
+    for (const person of connections) {
+      const displayName = person.names?.[0]?.displayName;
+      if (!displayName) continue;
+      allContacts.push({
+        name: displayName,
+        email: person.emailAddresses?.[0]?.value,
+        phone: person.phoneNumbers?.[0]?.value,
+        address: person.addresses?.[0]?.formattedValue,
+      });
+    }
+
+    pageToken = data.nextPageToken;
+  } while (pageToken);
+
+  console.log(`[CONTACTS] found ${allContacts.length} connections`);
+
+  if (allContacts.length === 0) return 0;
+
+  // Replace cache: delete old entries then insert fresh batch
+  await query(`DELETE FROM google_contacts WHERE user_name = $1`, [userName]);
+
+  for (const c of allContacts) {
+    await query(
+      `INSERT INTO google_contacts (user_name, display_name, email, phone, address, cached_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())`,
+      [userName, c.name, c.email ?? null, c.phone ?? null, c.address ?? null]
+    );
+  }
+
+  logger.info({ count: allContacts.length }, "[CONTACTS] Cache synced to google_contacts table");
+  return allContacts.length;
+}
+
+// ── Search from cache ─────────────────────────────────────────────────────────
+
+async function isCacheStale(userName = "David"): Promise<boolean> {
+  const { rows } = await query<{ cached_at: Date; count: string }>(
+    `SELECT MAX(cached_at) as cached_at, COUNT(*) as count FROM google_contacts WHERE user_name = $1`,
+    [userName]
+  );
+  if (!rows.length || rows[0].count === "0") return true; // empty = stale
+  const maxAge = 24 * 60 * 60 * 1000; // 24 hours
+  return Date.now() - new Date(rows[0].cached_at).getTime() > maxAge;
+}
+
+async function searchCachedContacts(searchName: string, userName = "David"): Promise<Contact[]> {
+  const term = `%${searchName.toLowerCase()}%`;
+  const { rows } = await query<{
+    display_name: string;
+    email: string | null;
+    phone: string | null;
+    address: string | null;
+  }>(
+    `SELECT display_name, email, phone, address
+     FROM google_contacts
+     WHERE user_name = $1 AND LOWER(display_name) LIKE $2
+     ORDER BY display_name
+     LIMIT 5`,
+    [userName, term]
+  );
+  return rows.map((r) => ({
+    name: r.display_name,
+    email: r.email ?? undefined,
+    phone: r.phone ?? undefined,
+    address: r.address ?? undefined,
+  }));
+}
+
+// ── Public search API ─────────────────────────────────────────────────────────
+
+export async function searchContacts(searchQuery: string): Promise<ContactSearchResult> {
+  try {
+    console.log(`[CONTACTS] searching for name: "${searchQuery}"`);
+
+    // If cache is stale or empty, refresh it first
+    if (await isCacheStale()) {
+      console.log("[CONTACTS] cache is empty or stale — syncing from Google");
+      const synced = await syncContactsToCache();
+      if (synced === -1) {
+        // needs reauth
+        return { contacts: [], needsReauth: true };
+      }
+    }
+
+    // Search the local cache
+    const contacts = await searchCachedContacts(searchQuery);
+
+    if (contacts.length > 0) {
+      console.log(`[CONTACTS] found match: ${contacts.map((c) => c.name).join(", ")}`);
+    } else {
+      console.log(`[CONTACTS] no match found for "${searchQuery}"`);
+    }
+
     return { contacts, needsReauth: false };
   } catch (err: unknown) {
-    const status = (err as Record<string, unknown>)?.code;
-    if (status === 403 || status === 401) {
-      logger.warn("[CONTACTS] API returned 403/401 — contacts scope not active on this token");
-      return { contacts: [], needsReauth: true };
-    }
-    logger.error({ err }, "[CONTACTS] Search failed");
+    logger.error({ err }, "[CONTACTS] searchContacts failed");
     return { contacts: [], needsReauth: false };
   }
 }
+
+// ── Format for Claude prompt ──────────────────────────────────────────────────
 
 export function formatContactsForPrompt(result: ContactSearchResult, query: string): string {
   if (result.needsReauth) {
@@ -80,7 +266,8 @@ export function formatContactsForPrompt(result: ContactSearchResult, query: stri
     return (
       `\n\n[Google Contacts — Search: "${query}"]\n` +
       `No contacts found matching "${query}". ` +
-      `Tell David no one by that name was found in his Google contacts, and ask if he'd like to try a different spelling.`
+      `Tell David exactly: "I searched your Google Contacts but couldn't find anyone named ${query}. Do you want to add them manually?" ` +
+      `Do not ask about spelling — offer the manual add option directly.`
     );
   }
 
@@ -88,6 +275,7 @@ export function formatContactsForPrompt(result: ContactSearchResult, query: stri
     const details: string[] = [];
     if (c.email) details.push(`email: ${c.email}`);
     if (c.phone) details.push(`phone: ${c.phone}`);
+    if (c.address) details.push(`address: ${c.address}`);
     return `• ${c.name}${details.length ? " — " + details.join(" | ") : ""}`;
   });
 
@@ -95,6 +283,30 @@ export function formatContactsForPrompt(result: ContactSearchResult, query: stri
     `\n\n[Google Contacts — Search: "${query}"]\n` +
     `${lines.join("\n")}\n` +
     `Read the contact's name, phone, and email naturally. ` +
-    `If David asks to save this person to his Winston profile, confirm before saving.`
+    `Ask David to confirm before saving anything to his Winston profile.`
   );
+}
+
+// ── Daily refresh scheduler ───────────────────────────────────────────────────
+
+export function startContactsSyncScheduler(): void {
+  const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
+
+  // Initial sync on startup (non-blocking, after 10 seconds to let server settle)
+  setTimeout(() => {
+    syncContactsToCache().then((count) => {
+      if (count > 0) logger.info({ count }, "[CONTACTS] Initial contacts cache sync complete");
+      else if (count === -1) logger.warn("[CONTACTS] Initial sync skipped — contacts.readonly scope not in token");
+      else logger.info("[CONTACTS] Initial sync: 0 contacts (empty Google Contacts or token issue)");
+    }).catch((err) => logger.warn({ err }, "[CONTACTS] Initial sync failed"));
+  }, 10_000);
+
+  // Daily refresh
+  setInterval(() => {
+    syncContactsToCache().then((count) => {
+      if (count > 0) logger.info({ count }, "[CONTACTS] Daily contacts cache refresh complete");
+    }).catch((err) => logger.warn({ err }, "[CONTACTS] Daily sync failed"));
+  }, TWENTY_FOUR_HOURS);
+
+  logger.info("[CONTACTS] Contacts sync scheduler started (daily refresh + immediate sync on startup)");
 }

@@ -23,6 +23,7 @@ import { initDallasContentTable } from "./morning/dallasContent";
 import { startDallasProactiveScheduler } from "./morning/dallasProactiveScheduler";
 import { initConcertsTable, startVenueMonitorScheduler } from "./morning/venueMonitor";
 import { addProfileItem } from "./profile/profileManager";
+import { ensureContactsTable, startContactsSyncScheduler } from "./google/contacts";
 
 const rawPort = process.env["PORT"];
 
@@ -70,6 +71,12 @@ app.listen(port, async (err) => {
     logger.warn({ e }, "Concerts table initialization warning");
   }
 
+  try {
+    await ensureContactsTable();
+  } catch (e) {
+    logger.warn({ e }, "Contacts table initialization warning");
+  }
+
   startScheduler();
   startWinddownScheduler();
   startMedicationScheduler();
@@ -84,6 +91,7 @@ app.listen(port, async (err) => {
   startConversationStarterScheduler();
   startDallasProactiveScheduler();
   startVenueMonitorScheduler();
+  startContactsSyncScheduler();
 
   // Seed David's music preferences into profile_items so they persist and
   // can be referenced in any conversation naturally.
