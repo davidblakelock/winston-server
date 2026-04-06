@@ -379,7 +379,8 @@ const TV_REMOVE_PATTERN = /\b(i\s+finished\s+watching|i\s+finished|i\s+stopped\s
 const TV_TONIGHT_PATTERN = /\b(what'?s\s+on\s+tonight|anything\s+(good\s+)?on\s+tonight|what\s+should\s+i\s+watch\s+tonight|what'?s\s+on\s+tv|any\s+shows?\s+tonight)\b/i;
 const TV_RECOMMEND_PATTERN = /\b(recommend\s+(me\s+)?a?\s*show|what\s+should\s+i\s+watch|suggest\s+(me\s+)?a?\s*show|shows?\s+like\s+|anything\s+similar|similar\s+to\s+.+\s+show|what\s+else\s+should\s+i\s+watch|find\s+me\s+a\s+show)\b/i;
 const TV_LIST_PATTERN = /\b(what\s+shows?\s+(am\s+i|are\s+we|do\s+i)\s+(watching|following)|my\s+(shows?|watch\s+list)|list\s+(my\s+)?shows?|what('?s|\s+is)\s+on\s+my\s+watch\s+list)\b/i;
-const CONTACT_PATTERN = /\b(find|look\s+up|search|get|what'?s?|pull\s+up|add)\b.{0,60}\b(contact|phone|number|email|info)\b|\b(contact|phone|number|email|info)\b.{0,40}\bfor\b|\b(in\s+my\s+contacts?|from\s+my\s+contacts?|my\s+contacts?)\b/i;
+// Matches explicit contact/phone/email requests AND direct name lookups ("find Eric Blackstone", "look up Susan Smart")
+const CONTACT_PATTERN = /\b(find|look\s+up|search|get|what'?s?|pull\s+up|add)\b.{0,60}\b(contact|phone|number|email|info)\b|\b(contact|phone|number|email|info)\b.{0,40}\bfor\b|\b(in\s+my\s+contacts?|from\s+my\s+contacts?|my\s+contacts?)\b|\b(find|look\s+up|search\s+for|pull\s+up)\b\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)/;
 const WINDDOWN_NOTE_PATTERN = /\b(remember\s+(to|that)|note\s+(for\s+tomorrow|this\s+down)|write\s+(this|that)\s+down|add\s+(this\s+)?to\s+(my\s+)?morning\s+briefing|don'?t\s+let\s+me\s+forget\s+(to|that)|make\s+sure\s+i\s+(remember|know)|for\s+tomorrow\s+(i\s+need\s+to|remind\s+me))\b/i;
 const SPORTS_PATTERN = /\b(rangers|cowboys|score|scores|how\s+did\s+(they|the\s+(rangers|cowboys))\s+do|did\s+(they|the\s+(rangers|cowboys))\s+(win|lose|play)|last\s+night'?s?\s+(game|score)|(rangers|cowboys)\s+(score|win|lose|lost|beat|game|result|update)|check\s+(the\s+)?(rangers|cowboys)|what('?s|\s+is)\s+the\s+(rangers|cowboys|score|game)|any\s+(rangers|cowboys)\s+(news|game|score))\b/i;
 const BILL_ADD_PATTERN = /\b(my\s+\w.{1,40}(bill|payment|insurance|premium|subscription|rent|mortgage|registration|fee|taxes?)\s+is\s+due|add\s+(a\s+)?(bill|payment|financial\s+obligation|reminder\s+for)|track\s+(my\s+)?(bill|payment|insurance|rent|subscription)|remind\s+me\s+(about|when|before)\s+(my\s+)?\w.{1,30}(bill|payment|due|insurance|premium|subscription|rent|mortgage|registration|fee|taxes?)|(is\s+due|renews?)\s+(on|every|each|the)\s+(the\s+)?\d{1,2}(st|nd|rd|th)?|quarterly\s+taxes?\s+are?\s+due|due\s+(on\s+)?(the\s+)?\d{1,2}(st|nd|rd|th)?\b|(rent|mortgage|insurance|premium|subscription)\s+is?\s*(due|paid|owed))\b/i;
@@ -571,6 +572,13 @@ You only know what has been explicitly given to you in this conversation's conte
 • Stock prices, weather, calendar events: same rule — only report what is explicitly provided in a context block.
 • If you are uncertain about any fact, say so. "I'm not sure about that one" is always better than a confident guess that turns out to be wrong.
 • NEVER fabricate scores, statistics, game outcomes, news stories, or any factual information. If David catches you making something up, it destroys trust — and that matters more than sounding confident.
+
+CONTACT INFORMATION — ABSOLUTE RULE (NO EXCEPTIONS):
+NEVER generate, invent, infer, or guess any contact information (names, phone numbers, email addresses, addresses). Contact data MUST come ONLY from a [Google Contacts] block explicitly present in this system prompt. This rule has zero exceptions — not even if you "remember" a name from conversation, not even if you think you know someone's phone number from training data.
+• If a [Google Contacts — Search] block is present and contains results → read those results back to David exactly as given.
+• If a [Google Contacts] block says "No contacts found" → say exactly: "I searched your Google Contacts and couldn't find anyone named [name]. Do you want to add them manually?" Do NOT add a phone number, email, or any other detail.
+• If no [Google Contacts] block is present in the context at all → do NOT attempt to look up or provide any contact information. Say: "I wasn't able to search your contacts for that — try asking again."
+• Fabricating a phone number or email address that does not exist is dangerous and unacceptable. It is always better to say "not found" than to invent a plausible-sounding contact.
 
 Here is everything you know about David:
 
@@ -1755,9 +1763,11 @@ router.post("/chat", async (req, res) => {
     try {
       // Extract the name/subject of the contact search from the message
       const contactNameMatch = message.match(
-        /(?:find|look\s+up|search\s+for?|get|what'?s?\s+\w+'?s?)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)|([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)'?s?\s+(?:phone|number|email|contact|info)/i
+        /(?:find|look\s+up|search\s+for?|get|pull\s+up|what'?s?\s+\w+'?s?)\s+([\w]+(?:\s+[\w]+){1,3})(?:'?s?\s+(?:phone|number|email|contact|info|address))?|^([\w]+(?:\s+[\w]+){1,3})'?s?\s+(?:phone|number|email|contact|info|address)/i
       );
-      const searchQuery = contactNameMatch?.[1] || contactNameMatch?.[2] || message.replace(/\b(find|look up|search|get|my contacts?|in my contacts?|from my contacts?)\b/gi, "").trim().slice(0, 50);
+      const rawQuery = contactNameMatch?.[1] || contactNameMatch?.[2] ||
+        message.replace(/\b(find|look\s+up|search(\s+for)?|get|pull\s+up|in\s+my\s+contacts?|from\s+my\s+contacts?|my\s+contacts?|their?\s+(phone|email|number|contact)|please|for\s+me)\b/gi, "").trim();
+      const searchQuery = rawQuery.slice(0, 60).trim();
       if (searchQuery.length > 1) {
         const result = await searchContacts(searchQuery).catch(() => ({ contacts: [], needsReauth: false }));
         systemPrompt += formatContactsForPrompt(result, searchQuery);

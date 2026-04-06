@@ -148,21 +148,23 @@ export async function syncContactsToCache(userName = "David"): Promise<number> {
     };
 
     const connections = data.connections ?? [];
+    console.log(`[CONTACTS] returning result from Google API — page has ${connections.length} records, totalItems=${data.totalItems ?? "unknown"}, raw sample: ${JSON.stringify(connections.slice(0, 2))}`);
+
     for (const person of connections) {
       const displayName = person.names?.[0]?.displayName;
       if (!displayName) continue;
-      allContacts.push({
-        name: displayName,
-        email: person.emailAddresses?.[0]?.value,
-        phone: person.phoneNumbers?.[0]?.value,
-        address: person.addresses?.[0]?.formattedValue,
-      });
+      // Only add contacts with a valid display name directly from the API — never inferred
+      const contact: Contact = { name: displayName };
+      if (person.emailAddresses?.[0]?.value) contact.email = person.emailAddresses[0].value;
+      if (person.phoneNumbers?.[0]?.value) contact.phone = person.phoneNumbers[0].value;
+      if (person.addresses?.[0]?.formattedValue) contact.address = person.addresses[0].formattedValue;
+      allContacts.push(contact);
     }
 
     pageToken = data.nextPageToken;
   } while (pageToken);
 
-  console.log(`[CONTACTS] found ${allContacts.length} connections`);
+  console.log(`[CONTACTS] found ${allContacts.length} connections total from Google People API`);
 
   if (allContacts.length === 0) return 0;
 
@@ -275,9 +277,14 @@ export async function searchContacts(searchQuery: string): Promise<ContactSearch
     const contacts = await searchCachedContacts(searchQuery);
 
     if (contacts.length > 0) {
-      console.log(`[CONTACTS] found match: ${contacts.map((c) => c.name).join(", ")}`);
+      // Log each returned contact with ALL fields for verification — these came from the DB cache
+      // which was populated exclusively from the Google People API. Never inferred.
+      console.log(`[CONTACTS] returning ${contacts.length} result(s) from Google API cache for "${searchQuery}":`);
+      contacts.forEach((c, i) => {
+        console.log(`[CONTACTS]   [${i + 1}] name="${c.name}" phone=${c.phone ?? "null"} email=${c.email ?? "null"} address=${c.address ?? "null"}`);
+      });
     } else {
-      console.log(`[CONTACTS] no match found for "${searchQuery}"`);
+      console.log(`[CONTACTS] no results found for "${searchQuery}" — cache size checked, 0 matches`);
     }
 
     return { contacts, needsReauth: false };
@@ -303,10 +310,13 @@ export function formatContactsForPrompt(result: ContactSearchResult, query: stri
 
   if (result.contacts.length === 0) {
     return (
-      `\n\n[Google Contacts — Search: "${query}"]\n` +
-      `No contacts found matching "${query}". ` +
-      `Tell David exactly: "I searched your Google Contacts but couldn't find anyone named ${query}. Do you want to add them manually?" ` +
-      `Do not ask about spelling — offer the manual add option directly.`
+      `\n\n[Google Contacts — Search: "${query}" — NO RESULTS]\n` +
+      `CRITICAL: The Google Contacts API was searched and returned ZERO results for "${query}". ` +
+      `There is NO contact with this name in David's Google Contacts. ` +
+      `You MUST NOT generate, invent, guess, or infer any phone number, email address, or other contact detail. ` +
+      `DO NOT present any contact information. ` +
+      `Say EXACTLY this, with no additions: "I searched your Google Contacts and couldn't find anyone named ${query}. Do you want to add them manually?" ` +
+      `Any phone number or email you might produce would be fabricated and wrong — DO NOT do it.`
     );
   }
 
