@@ -2,7 +2,7 @@ import cron from "node-cron";
 import { broadcastToUser } from "../reminders/sseStore.js";
 import { sendPushToAll } from "../push/pushManager.js";
 import { logger } from "../lib/logger.js";
-import { fetchTodayEvents, type CalendarEvent } from "../google/calendar.js";
+import { fetchTodayEvents, toChicagoTime, type CalendarEvent } from "../google/calendar.js";
 import { query } from "../db.js";
 
 const TZ = "America/Chicago";
@@ -54,15 +54,20 @@ async function runCalendarAlertCheck(): Promise<void> {
     if (!event.id || !event.startIso || event.allDay) continue;
 
     const eventStart = new Date(event.startIso);
+    // Use CT-converted times for comparison to correctly handle DST boundaries
+    const eventStartCT = toChicagoTime(eventStart);
+    const nowCT = toChicagoTime(now);
+    const twoHoursFromNowCT = toChicagoTime(twoHoursFromNow);
 
-    // Only alert for events starting within the next 2 hours that haven't started
-    if (eventStart <= now || eventStart > twoHoursFromNow) continue;
+    // Only alert for events starting within the next 2 hours that haven't started yet
+    if (eventStartCT.getTime() <= nowCT.getTime() || eventStartCT.getTime() > twoHoursFromNowCT.getTime()) continue;
 
     const alreadySent = await hasAlertBeenSent(event.id, today);
     if (alreadySent) continue;
 
     await markAlertSent(event.id, today);
 
+    // Format time in CT 12-hour format for display to David
     const eventTimeStr = eventStart.toLocaleTimeString("en-US", {
       timeZone: TZ,
       hour: "numeric",
@@ -70,7 +75,8 @@ async function runCalendarAlertCheck(): Promise<void> {
       hour12: true,
     });
 
-    const minutesAway = Math.round((eventStart.getTime() - now.getTime()) / 60000);
+    // Minutes until event calculated from CT-aware timestamps
+    const minutesAway = Math.round((eventStartCT.getTime() - nowCT.getTime()) / 60000);
     const timeContext = minutesAway <= 30
       ? `in ${minutesAway} minutes`
       : `at ${eventTimeStr}`;

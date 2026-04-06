@@ -1337,25 +1337,61 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         }
       });
 
-      // Speak sync — all connected devices for this user should speak each response.
-      // The originating device ignores this because its messageId is already in
-      // ownedMessageIds (registered in onComplete before speak_sync arrives).
+      // Speak sync — Rule 1: user-initiated conversation.
+      // speak_on_all=false → only the originating device speaks (it already did
+      // during streaming). Other devices display text via chat_sync but skip TTS.
+      // speak_on_all=true → every device speaks (system-initiated messages).
       source.addEventListener("speak_sync", (e) => {
         try {
           const data = JSON.parse(e.data) as {
             text: string;
             messageId: string;
             senderDeviceId: string | null;
+            speak_on_all?: boolean;
           };
+
+          // Originating device already spoke during streaming — skip always.
           if (data.messageId && ownedMessageIds.current.has(data.messageId)) {
             console.log("[SPEAK SYNC] Already spoke locally — skipping:", data.messageId);
             return;
           }
+
+          // Rule 1: if speak_on_all is false (conversation response), other
+          // devices must NOT speak. Text is already shown via chat_sync.
+          if (data.speak_on_all === false) {
+            console.log("[SPEAK SYNC] speak_on_all=false — suppressing TTS on non-originating device");
+            return;
+          }
+
           const msgId = `speak-sync-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-          console.log("[SPEAK SYNC] Speaking synced reply from other device");
+          console.log("[SPEAK SYNC] speak_on_all=true — speaking on all devices");
           speakReplyRef.current(msgId, data.text);
         } catch (err) {
           console.error("[SPEAK SYNC] Error:", err);
+        }
+      });
+
+      // Proactive messages — Rule 3: system-initiated messages speak on ALL devices.
+      // These include morning briefings pushed by server, conversation starters,
+      // Dallas content alerts, concert alerts, and other ambient check-ins.
+      source.addEventListener("proactive", (e) => {
+        try {
+          const data = JSON.parse(e.data) as {
+            message: string;
+            type?: string;
+          };
+          if (!data.message) return;
+          const msgId = `proactive-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+          console.log("[PROACTIVE] System-initiated message — speaking on all devices, type:", data.type ?? "unknown");
+          setMessages((prev) => {
+            // Dedup: skip if identical content was just added
+            const recent = prev.slice(-5);
+            if (recent.some((m) => m.role === "assistant" && m.content === data.message)) return prev;
+            return [...prev, { id: msgId, role: "assistant" as const, content: data.message }];
+          });
+          speakReplyRef.current(msgId, data.message);
+        } catch (err) {
+          console.error("[PROACTIVE] Error handling proactive event:", err);
         }
       });
 

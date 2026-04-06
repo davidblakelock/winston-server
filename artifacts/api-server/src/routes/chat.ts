@@ -1773,13 +1773,16 @@ router.post("/chat", async (req, res) => {
       senderDeviceId: deviceId ?? null,
     });
 
-    // ── Speak sync: all connected devices should speak the reply simultaneously ──
-    // The originating device already spoke via the direct API response; it will
-    // ignore this event because messageId is in its ownedMessageIds set.
+    // ── Speak sync — Rule 1: user-initiated conversation ─────────────────────
+    // speak_on_all=false means other devices display the text (via chat_sync)
+    // but do NOT speak it. Only the device that sent the message speaks.
+    // The originating device already streamed the response and spoke it live;
+    // it ignores this event because messageId is in its ownedMessageIds set.
     broadcastToUser(sessionUserName, "speak_sync", {
       text: reply,
       messageId,
       senderDeviceId: deviceId ?? null,
+      speak_on_all: false,
     });
 
     // ── Post-response: cache the morning briefing so next call is instant ──

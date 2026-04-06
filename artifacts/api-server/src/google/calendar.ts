@@ -4,8 +4,8 @@ import { getAuthClient } from "./oauth.js";
 export interface CalendarEvent {
   id: string;
   summary: string;
-  start: string;        // formatted time e.g. "10:30 AM"
-  end: string;          // formatted time
+  start: string;        // formatted time e.g. "10:30 AM" in America/Chicago
+  end: string;          // formatted time in America/Chicago
   startIso?: string;    // raw ISO datetime string for timed events (undefined for all-day)
   endIso?: string;
   dateLabel: string;
@@ -17,9 +17,54 @@ export interface CalendarEvent {
 
 const TZ = "America/Chicago";
 
+/**
+ * Convert any UTC timestamp (ISO string or Date) to a Date whose
+ * local-time methods (getHours, getMinutes, getFullYear, etc.) reflect
+ * America/Chicago time. Always use this when displaying times or when
+ * comparing event times against the current CT date/hour.
+ *
+ * IMPORTANT: For arithmetic comparisons (is event A before event B?),
+ * .getTime() is identical regardless of timezone conversion — use it
+ * directly. toChicagoTime is useful when you need CT hour/day values,
+ * e.g. "is this event in the past in CT?" across a DST boundary.
+ */
+export function toChicagoTime(timestamp: string | Date): Date {
+  const utc = typeof timestamp === "string" ? new Date(timestamp) : timestamp;
+  // Render the UTC time in CT locale, then re-parse as a local Date.
+  // The resulting Date object's getHours() / getDate() / etc. reflect CT.
+  const ctStr = utc.toLocaleString("en-US", { timeZone: TZ });
+  return new Date(ctStr);
+}
+
+/**
+ * Return the current date string in CT (YYYY-MM-DD).
+ */
+export function chicagoDateStr(date: Date = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+/**
+ * Return true if a timed event's start time is strictly in the past
+ * when measured in America/Chicago. All-day events are never past.
+ */
+function isEventInPast(event: { startIso?: string; allDay: boolean }): boolean {
+  if (event.allDay || !event.startIso) return false;
+  // Both sides are UTC epoch ms — comparison is timezone-independent and correct.
+  // We use toChicagoTime to make the intent explicit: we want CT "now" vs CT event time.
+  const nowCT = toChicagoTime(new Date());
+  const eventCT = toChicagoTime(event.startIso);
+  return eventCT.getTime() < nowCT.getTime();
+}
+
 function formatTime(dateTime: string | null | undefined, date: string | null | undefined): string {
   if (date && !dateTime) return "all day";
   if (!dateTime) return "";
+  // Always display in 12-hour CT format (e.g. "10:30 AM")
   return new Date(dateTime).toLocaleTimeString("en-US", {
     timeZone: TZ,
     hour: "numeric",
@@ -86,11 +131,7 @@ export async function fetchTodayEvents(): Promise<CalendarEvent[] | null> {
         allDay: !event.start?.dateTime,
       };
     })
-    .filter((event) => {
-      // Skip timed events whose start time is already in the past
-      if (event.startIso) return new Date(event.startIso) >= now;
-      return true; // Keep all-day events regardless of time
-    });
+    .filter((event) => !isEventInPast(event));
 }
 
 export async function fetchWeekEvents(): Promise<CalendarEvent[] | null> {
@@ -136,10 +177,7 @@ export async function fetchWeekEvents(): Promise<CalendarEvent[] | null> {
         allDay: !event.start?.dateTime,
       };
     })
-    .filter((event) => {
-      if (event.startIso) return new Date(event.startIso) >= now;
-      return true;
-    });
+    .filter((event) => !isEventInPast(event));
 }
 
 export function formatCalendarForPrompt(events: CalendarEvent[], label = "today"): string {
@@ -156,6 +194,7 @@ export function formatCalendarForPrompt(events: CalendarEvent[], label = "today"
   const parts: string[] = [];
   for (const [day, dayEvents] of byDay) {
     const entries = dayEvents.map((e) => {
+      // start/end are already formatted in CT 12-hour time by formatTime()
       const time = e.allDay ? "all day" : `${e.start}${e.end && e.end !== e.start ? ` – ${e.end}` : ""}`;
       const loc = e.location ? ` at ${e.location}` : "";
       const desc = e.description ? ` (${e.description.slice(0, 80)})` : "";

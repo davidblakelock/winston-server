@@ -57,6 +57,28 @@ export function broadcastToUser(userName: string, event: string, data: unknown):
   console.log(`SSE: broadcastToUser user="${userName}" event="${event}" — sent to ${sent} clients`);
 }
 
+/**
+ * Send an SSE event to a single specific device (by deviceId / clientId).
+ * Used when only the originating device should receive a message.
+ */
+export function sendToDevice(deviceId: string, event: string, data: unknown): void {
+  const res = clients.get(deviceId);
+  if (!res) {
+    console.log(`SSE: sendToDevice — no client found for deviceId=${deviceId}`);
+    return;
+  }
+  const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  try {
+    res.write(payload);
+    (res as unknown as { flush?: () => void }).flush?.();
+    console.log(`SSE: sendToDevice event="${event}" deviceId=${deviceId} — sent`);
+  } catch {
+    console.warn(`SSE: sendToDevice write failed for deviceId=${deviceId} — removing stale`);
+    clients.delete(deviceId);
+    clientUsers.delete(deviceId);
+  }
+}
+
 export function clientCount(): number {
   return clients.size;
 }

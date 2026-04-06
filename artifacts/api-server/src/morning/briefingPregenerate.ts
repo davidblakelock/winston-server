@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { fetchAndSummarizeEmails, formatEmailsForPrompt, buildScamWarningInstruction } from "../google/gmail.js";
-import { fetchWeekEvents, formatCalendarForPrompt, type CalendarEvent } from "../google/calendar.js";
+import { fetchWeekEvents, formatCalendarForPrompt, toChicagoTime, type CalendarEvent } from "../google/calendar.js";
 import { estimateDriveTime, extractEventLocation } from "../departure/departureManager.js";
 import { populateCalendarSyncState } from "../departure/calendarSyncScheduler.js";
 import { getMedications, hasTakenMedicationsToday, buildMedReminderText } from "../medications/medicationManager.js";
@@ -43,7 +43,8 @@ async function buildCalendarDepartureTimes(events: CalendarEvent[]): Promise<str
       if (event.allDay || !event.startIso) return;
 
       const eventStart = new Date(event.startIso);
-      if (eventStart.getTime() < now.getTime()) return; // already passed
+      // Use CT-aware comparison so DST boundary edge cases are handled correctly
+      if (toChicagoTime(eventStart).getTime() < toChicagoTime(now).getTime()) return; // already passed in CT
 
       const location = extractEventLocation({
         summary: event.summary,
