@@ -38,62 +38,86 @@ export async function ensureContactsTable(): Promise<void> {
 // ── Token helper ──────────────────────────────────────────────────────────────
 
 interface GoogleAuthRow {
+  user_name: string;
   access_token: string | null;
   refresh_token: string | null;
   token_expiry: Date | null;
   scope: string | null;
+  email: string | null;
 }
 
-async function getAccessToken(): Promise<{ token: string; hasContactsScope: boolean } | null> {
+// Finds the best available Google OAuth token for contacts access.
+// Prefers personal accounts (non-winston emails) over app service accounts,
+// since contacts typically live in the user's personal Google account.
+async function getAccessToken(): Promise<{ token: string; hasContactsScope: boolean; userName: string } | null> {
   const { rows } = await query<GoogleAuthRow>(
-    `SELECT access_token, refresh_token, token_expiry, scope
-     FROM google_auth WHERE user_name = 'David' LIMIT 1`
+    `SELECT user_name, access_token, refresh_token, token_expiry, scope, email
+     FROM google_auth
+     ORDER BY
+       -- Prefer personal (non-winston) accounts which have real contacts
+       CASE WHEN email NOT LIKE '%winston%' THEN 0 ELSE 1 END,
+       -- Then prefer most recently updated
+       updated_at DESC NULLS LAST
+     LIMIT 5`
   );
-  if (!rows.length || !rows[0].access_token) return null;
+  if (!rows.length) return null;
 
-  const row = rows[0];
-  const scope = row.scope ?? "";
-  const hasContactsScope =
-    scope.includes("contacts.readonly") ||
-    scope.includes("contacts") ||
-    scope.includes("directory.readonly");
+  // Try each row in preference order; return the first one with a usable token
+  for (const row of rows) {
+    if (!row.access_token && !row.refresh_token) continue;
 
-  // Check if token is expired (with 60s buffer)
-  const expiry = row.token_expiry ? new Date(row.token_expiry).getTime() : 0;
-  const isExpired = expiry > 0 && Date.now() > expiry - 60000;
+    const scope = row.scope ?? "";
+    const hasContactsScope =
+      scope.includes("contacts.readonly") ||
+      scope.includes("contacts") ||
+      scope.includes("directory.readonly");
 
-  if (isExpired && row.refresh_token) {
-    // Refresh the token
-    try {
-      const refreshResp = await fetch("https://oauth2.googleapis.com/token", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          client_id: process.env.GOOGLE_CLIENT_ID ?? "",
-          client_secret: process.env.GOOGLE_CLIENT_SECRET ?? "",
-          refresh_token: row.refresh_token,
-          grant_type: "refresh_token",
-        }),
-      });
-      const refreshData = (await refreshResp.json()) as {
-        access_token?: string;
-        expires_in?: number;
-        error?: string;
-      };
-      if (refreshData.access_token) {
-        const newExpiry = new Date(Date.now() + (refreshData.expires_in ?? 3600) * 1000);
-        await query(
-          `UPDATE google_auth SET access_token = $1, token_expiry = $2, updated_at = NOW() WHERE user_name = 'David'`,
-          [refreshData.access_token, newExpiry]
-        );
-        return { token: refreshData.access_token, hasContactsScope };
+    // Check if token is expired (with 60s buffer)
+    const expiry = row.token_expiry ? new Date(row.token_expiry).getTime() : 0;
+    const isExpired = expiry > 0 && Date.now() > expiry - 60_000;
+
+    if (isExpired && row.refresh_token) {
+      try {
+        const refreshResp = await fetch("https://oauth2.googleapis.com/token", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            client_id: process.env.GOOGLE_CLIENT_ID ?? "",
+            client_secret: process.env.GOOGLE_CLIENT_SECRET ?? "",
+            refresh_token: row.refresh_token,
+            grant_type: "refresh_token",
+          }),
+        });
+        const refreshData = (await refreshResp.json()) as {
+          access_token?: string;
+          expires_in?: number;
+          error?: string;
+        };
+        if (refreshData.access_token) {
+          const newExpiry = new Date(Date.now() + (refreshData.expires_in ?? 3600) * 1000);
+          await query(
+            `UPDATE google_auth SET access_token = $1, token_expiry = $2, updated_at = NOW() WHERE user_name = $3`,
+            [refreshData.access_token, newExpiry, row.user_name]
+          );
+          logger.info(`[CONTACTS] Token refreshed for ${row.email ?? row.user_name}`);
+          return { token: refreshData.access_token, hasContactsScope, userName: row.user_name };
+        }
+        logger.warn(`[CONTACTS] Token refresh failed for ${row.user_name}: ${refreshData.error ?? "unknown"}`);
+        continue; // Try next account
+      } catch (err) {
+        logger.warn({ err }, `[CONTACTS] Token refresh exception for ${row.user_name}`);
+        continue;
       }
-    } catch (err) {
-      logger.warn({ err }, "[CONTACTS] Token refresh failed — using possibly-expired token");
+    }
+
+    if (row.access_token) {
+      logger.info(`[CONTACTS] Using token for ${row.email ?? row.user_name} (expired=${isExpired})`);
+      return { token: row.access_token, hasContactsScope, userName: row.user_name };
     }
   }
 
-  return { token: row.access_token, hasContactsScope };
+  logger.warn("[CONTACTS] No usable token found in any google_auth row");
+  return null;
 }
 
 // ── Fetch contacts from Google and cache them ─────────────────────────────────
