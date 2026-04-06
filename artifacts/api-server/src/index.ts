@@ -54,9 +54,16 @@ app.listen(port, async (err) => {
     await ensureOnboardingTable();
     await ensureRelationshipTable();
     await ensureCalendarSyncTable();
-    await ensureProactiveMessageLogTable();
   } catch (e) {
     logger.warn({ e }, "Table initialization warning");
+  }
+
+  // Isolated block so a failure above never skips this critical table
+  try {
+    await ensureProactiveMessageLogTable();
+    logger.info("[startup] proactive_message_log table ready");
+  } catch (e) {
+    logger.warn({ e }, "proactive_message_log table initialization warning");
   }
 
   try {

@@ -32,6 +32,12 @@ export async function ensureContactsTable(): Promise<void> {
     CREATE INDEX IF NOT EXISTS google_contacts_user_name_idx
     ON google_contacts(user_name)
   `);
+  // Unique index on (user_name, resource_name) enables fast UPSERT — cache is never wiped mid-sync
+  await query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS google_contacts_user_resource_idx
+    ON google_contacts(user_name, resource_name)
+    WHERE resource_name IS NOT NULL
+  `);
   logger.info("[CONTACTS] google_contacts table ready");
 }
 
@@ -122,6 +128,10 @@ async function getAccessToken(): Promise<{ token: string; hasContactsScope: bool
 
 // ── Fetch contacts from Google and cache them ─────────────────────────────────
 
+interface ContactWithResourceName extends Contact {
+  resourceName: string;
+}
+
 export async function syncContactsToCache(userName = "David"): Promise<number> {
   console.log("[CONTACTS] fetching Google contacts");
 
@@ -135,7 +145,7 @@ export async function syncContactsToCache(userName = "David"): Promise<number> {
     return -1; // signal: needs reauth
   }
 
-  const allContacts: Contact[] = [];
+  const allContacts: ContactWithResourceName[] = [];
   let pageToken: string | undefined;
 
   do {
@@ -172,13 +182,12 @@ export async function syncContactsToCache(userName = "David"): Promise<number> {
     };
 
     const connections = data.connections ?? [];
-    console.log(`[CONTACTS] returning result from Google API — page has ${connections.length} records, totalItems=${data.totalItems ?? "unknown"}, raw sample: ${JSON.stringify(connections.slice(0, 2))}`);
+    console.log(`[CONTACTS] page fetched — ${connections.length} records (totalItems=${data.totalItems ?? "unknown"})`);
 
     for (const person of connections) {
       const displayName = person.names?.[0]?.displayName;
-      if (!displayName) continue;
-      // Only add contacts with a valid display name directly from the API — never inferred
-      const contact: Contact = { name: displayName };
+      if (!displayName || !person.resourceName) continue;
+      const contact: ContactWithResourceName = { name: displayName, resourceName: person.resourceName };
       if (person.emailAddresses?.[0]?.value) contact.email = person.emailAddresses[0].value;
       if (person.phoneNumbers?.[0]?.value) contact.phone = person.phoneNumbers[0].value;
       if (person.addresses?.[0]?.formattedValue) contact.address = person.addresses[0].formattedValue;
@@ -192,17 +201,42 @@ export async function syncContactsToCache(userName = "David"): Promise<number> {
 
   if (allContacts.length === 0) return 0;
 
-  // Replace cache: delete old entries then insert fresh batch
-  await query(`DELETE FROM google_contacts WHERE user_name = $1 RETURNING id`, [userName]);
+  // Batch UPSERT — 50 contacts per INSERT statement (vs. 628 individual INSERTs = 95+ seconds)
+  // Uses ON CONFLICT DO UPDATE so the cache is never wiped mid-sync — zero downtime
+  const BATCH_SIZE = 50;
+  for (let i = 0; i < allContacts.length; i += BATCH_SIZE) {
+    const batch = allContacts.slice(i, i + BATCH_SIZE);
+    const valueParts: string[] = [];
+    const params: unknown[] = [];
 
-  for (const c of allContacts) {
+    for (let j = 0; j < batch.length; j++) {
+      const c = batch[j];
+      const base = j * 6;
+      valueParts.push(`($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, NOW())`);
+      params.push(userName, c.resourceName, c.name, c.email ?? null, c.phone ?? null, c.address ?? null);
+    }
+
     await query(
-      `INSERT INTO google_contacts (user_name, display_name, email, phone, address, cached_at)
-       VALUES ($1, $2, $3, $4, $5, NOW())
+      `INSERT INTO google_contacts (user_name, resource_name, display_name, email, phone, address, cached_at)
+       VALUES ${valueParts.join(", ")}
+       ON CONFLICT (user_name, resource_name) WHERE resource_name IS NOT NULL DO UPDATE SET
+         display_name = EXCLUDED.display_name,
+         email        = EXCLUDED.email,
+         phone        = EXCLUDED.phone,
+         address      = EXCLUDED.address,
+         cached_at    = EXCLUDED.cached_at
        RETURNING id`,
-      [userName, c.name, c.email ?? null, c.phone ?? null, c.address ?? null]
+      params
     );
   }
+
+  // Remove contacts that are no longer in Google (deleted by David since last sync)
+  const resourceNames = allContacts.map((c) => c.resourceName);
+  const placeholders = resourceNames.map((_, i) => `$${i + 2}`).join(", ");
+  await query(
+    `DELETE FROM google_contacts WHERE user_name = $1 AND (resource_name IS NULL OR resource_name NOT IN (${placeholders})) RETURNING id`,
+    [userName, ...resourceNames]
+  );
 
   logger.info({ count: allContacts.length }, "[CONTACTS] Cache synced to google_contacts table");
   return allContacts.length;
@@ -283,20 +317,20 @@ async function searchCachedContacts(searchName: string, userName = "David"): Pro
 
 // ── Public search API ─────────────────────────────────────────────────────────
 
-export async function searchContacts(searchQuery: string, forceRefresh = true): Promise<ContactSearchResult> {
+export async function searchContacts(searchQuery: string, forceRefresh = false): Promise<ContactSearchResult> {
   try {
     console.log(`[CONTACTS] searching for name: "${searchQuery}" (forceRefresh=${forceRefresh})`);
 
-    // Always do a live API sync before searching — never serve stale or cached contact data
-    // forceRefresh=true (default) means we always hit the Google People API fresh
+    // Only re-sync when the cache is stale (>24h old) or explicitly forced.
+    // The startup scheduler pre-populates the cache — don't re-sync on every query.
     if (forceRefresh || await isCacheStale()) {
-      console.log("[CONTACTS] syncing from Google People API (live) before search");
+      console.log("[CONTACTS] cache is stale or forceRefresh set — syncing from Google People API");
       const synced = await syncContactsToCache();
       if (synced === -1) {
         // needs reauth
         return { contacts: [], needsReauth: true };
       }
-      console.log(`[CONTACTS] live sync complete — ${synced} contacts in cache`);
+      console.log(`[CONTACTS] sync complete — ${synced} contacts in cache`);
     }
 
     // Search the local cache
