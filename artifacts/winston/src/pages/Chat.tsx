@@ -1101,23 +1101,21 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
       console.log("[REMINDER] Calling speakReply with:", speakText);
       speakReply(msgId, speakText);
 
-      // Acknowledge after 60 s — gives all devices (phone, laptop) a full minute
-      // to receive the push / SSE event and speak the reminder before the server
-      // marks it completed and removes it from /api/reminders/due polling results.
+      // Acknowledge immediately — the SSE already broadcasts to all connected devices
+      // simultaneously, so there is no need to wait. Delaying acknowledgment was causing
+      // the polling fallback on other devices to re-fire the same reminder.
       const ackId = event.id;
-      setTimeout(() => {
-        console.log(`[ACKNOWLEDGE] 60 s elapsed — acknowledging id=${ackId}`);
-        fetch(`${CHAT_BASE}/api/reminders/${ackId}/acknowledge`, { method: "POST" })
-          .then(async (r) => {
-            if (!r.ok) {
-              const body = await r.text().catch(() => "");
-              console.error(`[ACKNOWLEDGE] Server error for id=${ackId} status=${r.status}:`, body);
-            } else {
-              console.log(`[ACKNOWLEDGE] id=${ackId} acknowledged OK`);
-            }
-          })
-          .catch((err) => console.error(`[ACKNOWLEDGE] Network error for id=${ackId}:`, err));
-      }, 60_000);
+      console.log(`[ACKNOWLEDGE] Acknowledging id=${ackId}`);
+      fetch(`${CHAT_BASE}/api/reminders/${ackId}/acknowledge`, { method: "POST" })
+        .then(async (r) => {
+          if (!r.ok) {
+            const body = await r.text().catch(() => "");
+            console.error(`[ACKNOWLEDGE] Server error for id=${ackId} status=${r.status}:`, body);
+          } else {
+            console.log(`[ACKNOWLEDGE] id=${ackId} acknowledged OK`);
+          }
+        })
+        .catch((err) => console.error(`[ACKNOWLEDGE] Network error for id=${ackId}:`, err));
     },
     [speakReply]
   );

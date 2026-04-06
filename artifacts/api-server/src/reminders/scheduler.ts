@@ -1,6 +1,6 @@
 import cron from "node-cron";
 import { query } from "../db.js";
-import { broadcast } from "./sseStore.js";
+import { broadcastToUser } from "./sseStore.js";
 import { sendPushToAll } from "../push/pushManager.js";
 import { getAppUrl } from "../auth/sessionAuth.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
@@ -77,9 +77,11 @@ export function startScheduler(): void {
 
         const speakText = `Hey ${reminder.user_name}, your reminder: ${reminder.reminder_text}.`;
 
-        // ── 2. Broadcast via SSE to any open browser tabs ──
+        // ── 2. Broadcast via SSE to EVERY connected device for this user ──
+        // broadcastToUser loops all SSE connections mapped to this user so all
+        // open browser tabs / devices receive the event simultaneously.
         console.log("SCHEDULER: firing reminder id", reminder.id, "text:", reminder.reminder_text);
-        broadcast("reminder", {
+        broadcastToUser(reminder.user_name, "reminder", {
           id: reminder.id,
           userName: reminder.user_name,
           reminderText: reminder.reminder_text,
@@ -87,7 +89,7 @@ export function startScheduler(): void {
         });
 
         // Also sync all panels to remove this reminder immediately
-        broadcast("reminder_sync", { action: "fired", id: reminder.id });
+        broadcastToUser(reminder.user_name, "reminder_sync", { action: "fired", id: reminder.id });
 
         // ── 3. Send push notification to all registered devices ──
         // Look up companion_name dynamically so the notification always uses the current name
