@@ -84,7 +84,8 @@ export async function saveMemory(
      DO UPDATE SET
        summary = EXCLUDED.summary,
        message_count = EXCLUDED.message_count,
-       updated_at = NOW()`,
+       updated_at = NOW()
+     RETURNING id`,
     [today, summary, history.length]
   );
 

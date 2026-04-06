@@ -89,6 +89,90 @@ function getLocalYMD(date: Date): string {
   }).format(date);
 }
 
+/**
+ * Fetch the list of all calendar IDs the user has access to.
+ * Returns ["primary"] as fallback if the calendarList call fails.
+ */
+async function getAllCalendarIds(
+  calendar: ReturnType<typeof google.calendar>
+): Promise<string[]> {
+  try {
+    const listResp = await calendar.calendarList.list({ maxResults: 50 });
+    const ids = (listResp.data.items ?? [])
+      .map((cal) => cal.id)
+      .filter((id): id is string => Boolean(id));
+    return ids.length > 0 ? ids : ["primary"];
+  } catch {
+    return ["primary"];
+  }
+}
+
+/**
+ * Fetch events from ALL calendars the user has access to for a given time window.
+ * Deduplicates by event ID and sorts by start time ascending.
+ */
+async function fetchEventsFromAllCalendars(
+  calendar: ReturnType<typeof google.calendar>,
+  timeMin: string,
+  timeMax: string,
+  todayStr: string,
+  tomorrowStr: string,
+  maxPerCalendar = 50
+): Promise<CalendarEvent[]> {
+  const calendarIds = await getAllCalendarIds(calendar);
+
+  const seen = new Set<string>();
+  const allEvents: CalendarEvent[] = [];
+
+  await Promise.all(
+    calendarIds.map(async (calendarId) => {
+      try {
+        const response = await calendar.events.list({
+          calendarId,
+          timeMin,
+          timeMax,
+          singleEvents: true,
+          orderBy: "startTime",
+          maxResults: maxPerCalendar,
+        });
+        for (const event of response.data.items ?? []) {
+          const id = event.id ?? "";
+          if (!id || seen.has(id)) continue;
+          seen.add(id);
+          // Skip declined events (attendee status = declined for David's own entry)
+          const selfAttendee = (event.attendees ?? []).find((a) => a.self);
+          if (selfAttendee?.responseStatus === "declined") continue;
+          const isoDate = event.start?.date ?? event.start?.dateTime?.slice(0, 10) ?? todayStr;
+          allEvents.push({
+            id,
+            summary: event.summary ?? "(no title)",
+            start: formatTime(event.start?.dateTime, event.start?.date),
+            end: formatTime(event.end?.dateTime, event.end?.date),
+            startIso: event.start?.dateTime ?? undefined,
+            endIso: event.end?.dateTime ?? undefined,
+            dateLabel: getDayLabel(isoDate, todayStr, tomorrowStr),
+            isoDate,
+            location: event.location ?? undefined,
+            description: event.description ?? undefined,
+            allDay: !event.start?.dateTime,
+          });
+        }
+      } catch {
+        // Skip inaccessible calendars silently
+      }
+    })
+  );
+
+  // Sort merged events by start time
+  allEvents.sort((a, b) => {
+    const aT = a.startIso ? new Date(a.startIso).getTime() : new Date(a.isoDate).getTime();
+    const bT = b.startIso ? new Date(b.startIso).getTime() : new Date(b.isoDate).getTime();
+    return aT - bT;
+  });
+
+  return allEvents;
+}
+
 export async function fetchTodayEvents(): Promise<CalendarEvent[] | null> {
   const auth = await getAuthClient();
   if (!auth) return null;
@@ -105,33 +189,8 @@ export async function fetchTodayEvents(): Promise<CalendarEvent[] | null> {
   const timeMin = new Date(localMidnight.getTime() + offsetMs).toISOString();
   const timeMax = new Date(localMidnight.getTime() + offsetMs + 86399999).toISOString();
 
-  const response = await calendar.events.list({
-    calendarId: "primary",
-    timeMin,
-    timeMax,
-    singleEvents: true,
-    orderBy: "startTime",
-    maxResults: 20,
-  });
-
-  return (response.data.items ?? [])
-    .map((event) => {
-      const isoDate = event.start?.date ?? event.start?.dateTime?.slice(0, 10) ?? todayStr;
-      return {
-        id: event.id ?? "",
-        summary: event.summary ?? "(no title)",
-        start: formatTime(event.start?.dateTime, event.start?.date),
-        end: formatTime(event.end?.dateTime, event.end?.date),
-        startIso: event.start?.dateTime ?? undefined,
-        endIso: event.end?.dateTime ?? undefined,
-        dateLabel: getDayLabel(isoDate, todayStr, tomorrowStr),
-        isoDate,
-        location: event.location ?? undefined,
-        description: event.description ?? undefined,
-        allDay: !event.start?.dateTime,
-      };
-    })
-    .filter((event) => !isEventInPast(event));
+  const events = await fetchEventsFromAllCalendars(calendar, timeMin, timeMax, todayStr, tomorrowStr, 20);
+  return events.filter((event) => !isEventInPast(event));
 }
 
 export async function fetchTomorrowEvents(): Promise<CalendarEvent[] | null> {
@@ -152,32 +211,7 @@ export async function fetchTomorrowEvents(): Promise<CalendarEvent[] | null> {
   const timeMin = new Date(localMidnightTomorrow.getTime() + offsetMs).toISOString();
   const timeMax = new Date(localMidnightTomorrow.getTime() + offsetMs + 86399999).toISOString();
 
-  const response = await calendar.events.list({
-    calendarId: "primary",
-    timeMin,
-    timeMax,
-    singleEvents: true,
-    orderBy: "startTime",
-    maxResults: 20,
-  });
-
-  return (response.data.items ?? [])
-    .map((event) => {
-      const isoDate = event.start?.date ?? event.start?.dateTime?.slice(0, 10) ?? tomorrowStr;
-      return {
-        id: event.id ?? "",
-        summary: event.summary ?? "(no title)",
-        start: formatTime(event.start?.dateTime, event.start?.date),
-        end: formatTime(event.end?.dateTime, event.end?.date),
-        startIso: event.start?.dateTime ?? undefined,
-        endIso: event.end?.dateTime ?? undefined,
-        dateLabel: getDayLabel(isoDate, todayStr, tomorrowStr),
-        isoDate,
-        location: event.location ?? undefined,
-        description: event.description ?? undefined,
-        allDay: !event.start?.dateTime,
-      };
-    });
+  return fetchEventsFromAllCalendars(calendar, timeMin, timeMax, todayStr, tomorrowStr, 20);
   // Note: do NOT filter with isEventInPast — all tomorrow events are future events
 }
 
@@ -198,33 +232,8 @@ export async function fetchWeekEvents(): Promise<CalendarEvent[] | null> {
   const timeMin = new Date(localMidnight.getTime() + offsetMs).toISOString();
   const timeMax = new Date(localMidnight.getTime() + offsetMs + 7 * 86400000).toISOString();
 
-  const response = await calendar.events.list({
-    calendarId: "primary",
-    timeMin,
-    timeMax,
-    singleEvents: true,
-    orderBy: "startTime",
-    maxResults: 50,
-  });
-
-  return (response.data.items ?? [])
-    .map((event) => {
-      const isoDate = event.start?.date ?? event.start?.dateTime?.slice(0, 10) ?? todayStr;
-      return {
-        id: event.id ?? "",
-        summary: event.summary ?? "(no title)",
-        start: formatTime(event.start?.dateTime, event.start?.date),
-        end: formatTime(event.end?.dateTime, event.end?.date),
-        startIso: event.start?.dateTime ?? undefined,
-        endIso: event.end?.dateTime ?? undefined,
-        dateLabel: getDayLabel(isoDate, todayStr, tomorrowStr),
-        isoDate,
-        location: event.location ?? undefined,
-        description: event.description ?? undefined,
-        allDay: !event.start?.dateTime,
-      };
-    })
-    .filter((event) => !isEventInPast(event));
+  const events = await fetchEventsFromAllCalendars(calendar, timeMin, timeMax, todayStr, tomorrowStr, 50);
+  return events.filter((event) => !isEventInPast(event));
 }
 
 export function formatCalendarForPrompt(events: CalendarEvent[], label = "today"): string {

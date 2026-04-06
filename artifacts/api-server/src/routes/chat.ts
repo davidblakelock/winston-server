@@ -1172,8 +1172,18 @@ router.post("/chat", async (req, res) => {
               location: parsed.location,
               allDay: parsed.allDay,
             });
-            systemPrompt +=
-              `\n\n[Calendar Event Created]\n"${confirmation}" has been added to David's Google Calendar.\nConfirm warmly and specifically — read it back exactly: "I've added ${confirmation}." Then ask if he'd also like a reminder for it.`;
+            let calendarCreateMsg =
+              `\n\n[Calendar Event Created]\n"${confirmation}" has been added to David's Google Calendar.\nConfirm warmly and specifically — read it back exactly: "I've added ${confirmation}."`;
+            if (parsed.location) {
+              calendarCreateMsg +=
+                `\n\nThis event has a location: "${parsed.location}". After confirming the event was added, automatically offer TWO things (both in the same message, not separately):\n` +
+                `1. DEPARTURE ALERT: "Want me to set a departure alert? I can calculate the drive time from home and remind you when to leave." If David says yes, calculate approximate drive time from David's home in Dallas, TX and set a reminder to leave in time.\n` +
+                `2. SAVED PLACE: "Want me to save ${parsed.location} to your saved places so you don't need the address next time?" If David says yes, save the location name and address to his Winston profile.\n` +
+                `Offer BOTH options in a single natural sentence, e.g. "Want me to set a departure alert and save ${parsed.location.split(",")[0]} to your saved places?"`;
+            } else {
+              calendarCreateMsg += ` Then ask if he'd also like a reminder for it.`;
+            }
+            systemPrompt += calendarCreateMsg;
             req.log.info({ title: parsed.title, date: parsed.date }, "Calendar event created");
           } else {
             systemPrompt += `\n\n[Calendar Create Failed]\nTell David the event couldn't be created and suggest he check Google Calendar or try again.`;

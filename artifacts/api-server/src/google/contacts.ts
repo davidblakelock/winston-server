@@ -167,12 +167,13 @@ export async function syncContactsToCache(userName = "David"): Promise<number> {
   if (allContacts.length === 0) return 0;
 
   // Replace cache: delete old entries then insert fresh batch
-  await query(`DELETE FROM google_contacts WHERE user_name = $1`, [userName]);
+  await query(`DELETE FROM google_contacts WHERE user_name = $1 RETURNING id`, [userName]);
 
   for (const c of allContacts) {
     await query(
       `INSERT INTO google_contacts (user_name, display_name, email, phone, address, cached_at)
-       VALUES ($1, $2, $3, $4, $5, NOW())`,
+       VALUES ($1, $2, $3, $4, $5, NOW())
+       RETURNING id`,
       [userName, c.name, c.email ?? null, c.phone ?? null, c.address ?? null]
     );
   }
@@ -194,21 +195,59 @@ async function isCacheStale(userName = "David"): Promise<boolean> {
 }
 
 async function searchCachedContacts(searchName: string, userName = "David"): Promise<Contact[]> {
-  const term = `%${searchName.toLowerCase()}%`;
-  const { rows } = await query<{
-    display_name: string;
-    email: string | null;
-    phone: string | null;
-    address: string | null;
-  }>(
+  const nameLower = searchName.toLowerCase().trim();
+
+  type ContactRow = { display_name: string; email: string | null; phone: string | null; address: string | null };
+
+  // 1. Exact full-name match (case-insensitive)
+  const { rows: exactRows } = await query<ContactRow>(
+    `SELECT display_name, email, phone, address
+     FROM google_contacts
+     WHERE user_name = $1 AND LOWER(display_name) = $2
+     ORDER BY display_name`,
+    [userName, nameLower]
+  );
+  if (exactRows.length === 1) {
+    const r = exactRows[0];
+    return [{ name: r.display_name, email: r.email ?? undefined, phone: r.phone ?? undefined, address: r.address ?? undefined }];
+  }
+
+  // 2. All search words appear as whole words in the display name
+  //    e.g. "Eric Blackstone" only matches contacts where BOTH words appear
+  const words = nameLower.split(/\s+/).filter(Boolean);
+  if (words.length > 1) {
+    const wordConditions = words.map((w, i) => `LOWER(display_name) LIKE $${i + 3}`).join(" AND ");
+    const wordParams = words.map((w) => `%${w}%`);
+    const { rows: wordRows } = await query<ContactRow>(
+      `SELECT display_name, email, phone, address
+       FROM google_contacts
+       WHERE user_name = $1 AND LOWER(display_name) != $2 AND ${wordConditions}
+       ORDER BY display_name
+       LIMIT 10`,
+      [userName, nameLower, ...wordParams]
+    );
+    const combined = [...exactRows, ...wordRows];
+    if (combined.length > 0) {
+      return combined.map((r) => ({
+        name: r.display_name,
+        email: r.email ?? undefined,
+        phone: r.phone ?? undefined,
+        address: r.address ?? undefined,
+      }));
+    }
+  }
+
+  // 3. Fallback: substring match on full display name (catches partial queries)
+  const fallbackTerm = `%${nameLower}%`;
+  const { rows: fallbackRows } = await query<ContactRow>(
     `SELECT display_name, email, phone, address
      FROM google_contacts
      WHERE user_name = $1 AND LOWER(display_name) LIKE $2
      ORDER BY display_name
-     LIMIT 5`,
-    [userName, term]
+     LIMIT 10`,
+    [userName, fallbackTerm]
   );
-  return rows.map((r) => ({
+  return fallbackRows.map((r) => ({
     name: r.display_name,
     email: r.email ?? undefined,
     phone: r.phone ?? undefined,
@@ -279,11 +318,23 @@ export function formatContactsForPrompt(result: ContactSearchResult, query: stri
     return `• ${c.name}${details.length ? " — " + details.join(" | ") : ""}`;
   });
 
+  if (result.contacts.length === 1) {
+    return (
+      `\n\n[Google Contacts — Search: "${query}"]\n` +
+      `${lines[0]}\n` +
+      `Read the contact's name, phone, and email naturally. ` +
+      `Ask David to confirm before saving anything to his Winston profile.`
+    );
+  }
+
+  // Multiple matches — ask David which one he means
   return (
-    `\n\n[Google Contacts — Search: "${query}"]\n` +
+    `\n\n[Google Contacts — Multiple Matches for "${query}"]\n` +
     `${lines.join("\n")}\n` +
-    `Read the contact's name, phone, and email naturally. ` +
-    `Ask David to confirm before saving anything to his Winston profile.`
+    `I found ${result.contacts.length} people matching "${query}". ` +
+    `Ask David which one he means — list their names and ask him to pick: ` +
+    `"I found a few people named ${query.split(" ")[0]} — which one did you mean?" ` +
+    `Then list each name concisely. Do NOT share phone or email until David confirms which person.`
   );
 }
 
