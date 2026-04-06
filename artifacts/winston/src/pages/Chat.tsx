@@ -1132,8 +1132,10 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
   // Stable refs so the SSE effect never needs to re-run when callbacks change
   const fireReminderAlertRef = useRef(fireReminderAlert);
   const fireWinddownStartRef = useRef(fireWinddownStart);
+  const speakReplyRef = useRef(speakReply);
   useEffect(() => { fireReminderAlertRef.current = fireReminderAlert; }, [fireReminderAlert]);
   useEffect(() => { fireWinddownStartRef.current = fireWinddownStart; }, [fireWinddownStart]);
+  useEffect(() => { speakReplyRef.current = speakReply; }, [speakReply]);
 
   // ── Fix 2: Service worker REMINDER_PUSH listener ───────────────────────────
   // When the service worker receives a push notification it posts REMINDER_PUSH
@@ -1320,6 +1322,28 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
           });
         } catch (err) {
           console.error("[CHAT SYNC] Error handling chat_sync event:", err);
+        }
+      });
+
+      // Speak sync — all connected devices for this user should speak each response.
+      // The originating device ignores this because its messageId is already in
+      // ownedMessageIds (registered in onComplete before speak_sync arrives).
+      source.addEventListener("speak_sync", (e) => {
+        try {
+          const data = JSON.parse(e.data) as {
+            text: string;
+            messageId: string;
+            senderDeviceId: string | null;
+          };
+          if (data.messageId && ownedMessageIds.current.has(data.messageId)) {
+            console.log("[SPEAK SYNC] Already spoke locally — skipping:", data.messageId);
+            return;
+          }
+          const msgId = `speak-sync-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+          console.log("[SPEAK SYNC] Speaking synced reply from other device");
+          speakReplyRef.current(msgId, data.text);
+        } catch (err) {
+          console.error("[SPEAK SYNC] Error:", err);
         }
       });
 

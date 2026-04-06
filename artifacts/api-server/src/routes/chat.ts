@@ -1771,6 +1771,15 @@ router.post("/chat", async (req, res) => {
       senderDeviceId: deviceId ?? null,
     });
 
+    // ── Speak sync: all connected devices should speak the reply simultaneously ──
+    // The originating device already spoke via the direct API response; it will
+    // ignore this event because messageId is in its ownedMessageIds set.
+    broadcastToUser(sessionUserName, "speak_sync", {
+      text: reply,
+      messageId,
+      senderDeviceId: deviceId ?? null,
+    });
+
     // ── Post-response: cache the morning briefing so next call is instant ──
     if (isMorningGreeting) {
       setCachedBriefing(sessionUserName, reply);
