@@ -19,6 +19,8 @@ import { startCalendarAlertScheduler } from "./departure/calendarAlertScheduler"
 import { startPickleballScheduler, ensureProactiveMessageLogTable } from "./pickleball/pickleballScheduler";
 import { startConversationStarterScheduler } from "./push/conversationStarterScheduler";
 import { ensureRelationshipTable } from "./relationships/relationshipManager";
+import { initDallasContentTable } from "./morning/dallasContent";
+import { startDallasProactiveScheduler } from "./morning/dallasProactiveScheduler";
 
 const rawPort = process.env["PORT"];
 
@@ -54,6 +56,12 @@ app.listen(port, async (err) => {
     logger.warn({ e }, "Table initialization warning");
   }
 
+  try {
+    await initDallasContentTable();
+  } catch (e) {
+    logger.warn({ e }, "Dallas content table initialization warning");
+  }
+
   startScheduler();
   startWinddownScheduler();
   startMedicationScheduler();
@@ -66,6 +74,7 @@ app.listen(port, async (err) => {
   startCalendarAlertScheduler();
   startPickleballScheduler();
   startConversationStarterScheduler();
+  startDallasProactiveScheduler();
 
   try {
     await seedDefaultMedications();

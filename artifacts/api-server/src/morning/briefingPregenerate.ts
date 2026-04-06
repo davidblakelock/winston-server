@@ -21,6 +21,7 @@ import { collectSundayData, buildSundaySummaryBlock } from "../sundaySummary/sun
 import { getJournalCountThisWeek, getRecentJournalEntries } from "../journal/journalManager.js";
 import { getStoryCount } from "../stories/storyManager.js";
 import { setCachedBriefing } from "./briefingCache.js";
+import { fetchDallasContent } from "./dallasContent.js";
 import { logger } from "../lib/logger.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -81,37 +82,8 @@ async function buildCalendarDepartureTimes(events: CalendarEvent[]): Promise<str
   );
 }
 
-// ── Dallas local events (weekly cache, refreshed once daily) ─────────────────
-let _dallasEventsCache: { content: string; fetchedAt: Date } | null = null;
-
-async function fetchDallasLocalEvents(): Promise<string> {
-  if (_dallasEventsCache && Date.now() - _dallasEventsCache.fetchedAt.getTime() < 12 * 60 * 60 * 1000) {
-    return _dallasEventsCache.content;
-  }
-  try {
-    const now = new Date();
-    const weekLabel = now.toLocaleDateString("en-US", { timeZone: "America/Chicago", month: "long", day: "numeric", year: "numeric" });
-    const result = await anthropic.messages.create({
-      model: "claude-opus-4-5",
-      max_tokens: 256,
-      tools: [{ type: "web_search_20250305" as "web_search_20250305", name: "web_search", max_uses: 2 }],
-      system: `You are a Dallas local events researcher. Find ONE compelling event happening this week (${weekLabel}) in Dallas, TX that would interest David Blakelock — a 60-something man who enjoys music, food, sports, culture, and outdoor activities. Focus on: food festivals, live music, art exhibitions, sports events, farmers markets, restaurant openings, outdoor events, concerts. Return ONLY a single sentence describing the event — venue, date, and what it is. Example: "The Deep Ellum Blues Festival runs this Saturday at Main Street Garden Park, featuring 30 local and national blues acts from noon to midnight." If nothing compelling this week, return an empty string.`,
-      messages: [{ role: "user", content: `Find one compelling Dallas local event this week (week of ${weekLabel}).` }],
-    });
-    let eventText = "";
-    for (const block of result.content) {
-      if (block.type === "text" && block.text.trim().length > 20) {
-        eventText = block.text.trim();
-        break;
-      }
-    }
-    _dallasEventsCache = { content: eventText, fetchedAt: now };
-    return eventText;
-  } catch (err) {
-    logger.warn({ err }, "Dallas local events fetch failed");
-    return "";
-  }
-}
+// Dallas local content is now handled by dallasContent.ts (RSS feeds + web search fallback).
+// Imported below alongside other module imports.
 
 const TOMORROW_CONDITIONS: Record<number, string> = {
   1000: "clear skies", 1001: "cloudy", 1100: "mostly clear", 1101: "partly cloudy",
@@ -411,7 +383,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       isSunday ? collectSundayData().catch(() => null) : Promise.resolve(null),
       getPendingFollowUps(2, 14).catch(() => []),
       hasRecentKneeIssue(14).catch(() => false),
-      fetchDallasLocalEvents().catch(() => ""),
+      fetchDallasContent().catch(() => ""),
       getJournalCountThisWeek().catch(() => 0),
       getRecentJournalEntries(3).catch(() => []),
       getStoryCount().catch(() => 0),
@@ -489,9 +461,9 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       ? `\n\n[Health Note]\nDavid mentioned knee issues recently from pickleball.`
       : "";
 
-    const dallasEventsBlock = dallasEvents
-      ? `\n\n[Local Dallas Event This Week]\n${dallasEvents}`
-      : "";
+    // dallasEvents is already a fully-formatted block from dallasContent.ts
+    // (includes header, source attributions, and Claude instructions).
+    const dallasEventsBlock = dallasEvents ?? "";
 
     const motivationContextBlock = (() => {
       const tz = "America/Chicago";
