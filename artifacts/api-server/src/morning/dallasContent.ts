@@ -43,8 +43,10 @@ const DALLAS_FEEDS: FeedConfig[] = [
   { name: "Dallas Observer", url: "https://www.dallasobserver.com/feed/" },
   // D Magazine — /feed/ returns 200
   { name: "D Magazine",      url: "https://www.dmagazine.com/feed/" },
-  // Google News RSS — reliable source of recent Dallas local stories
+  // Google News RSS — general Dallas events, food, arts
   { name: "Dallas News",     url: "https://news.google.com/rss/search?q=dallas+restaurant+opening+events+food+arts&hl=en-US&gl=US&ceid=US:en" },
+  // Google News RSS — Dallas music events specifically (jazz, concerts, live music)
+  { name: "Dallas Music News", url: "https://news.google.com/rss/search?q=dallas+jazz+concert+live+music+kessler+granada+meyerson+outdoor+concert&hl=en-US&gl=US&ceid=US:en" },
   // CultureMap Dallas — RSS endpoint unstable; kept for when they restore it
   { name: "CultureMap Dallas", url: "https://dallas.culturemap.com/rss.xml" },
 ];
@@ -55,16 +57,29 @@ const EXCLUDE_PATTERNS: RegExp[] = [
   /sponsored|advertisement|advertorial|promoted content/i,
 ];
 
-// High: new restaurants in David's neighborhoods + Rangers/Cowboys
+// High: new restaurants in David's neighborhoods + Rangers/Cowboys + his music artists/venues
 const HIGH_PRIORITY_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
   { pattern: /new restaurant|just opened|opening|grand opening|now open/i,         label: "restaurant opening" },
   { pattern: /knox.?henderson|uptown dallas|deep ellum|bishop arts|downtown dallas/i, label: "preferred neighborhood" },
   { pattern: /rangers|cowboys|mavericks|dallas stars|fc dallas/i,                  label: "dallas sports" },
+  // David's specific music artists
+  { pattern: /jimmy buffett|margaritaville/i,                                      label: "Jimmy Buffett" },
+  { pattern: /bonnie raitt/i,                                                      label: "Bonnie Raitt" },
+  { pattern: /jackson browne/i,                                                    label: "Jackson Browne" },
+  { pattern: /rolling stones|stones tribute/i,                                     label: "Rolling Stones" },
+  { pattern: /gordon lightfoot/i,                                                  label: "Gordon Lightfoot" },
+  { pattern: /van morrison/i,                                                      label: "Van Morrison" },
+  // David's favorite venues
+  { pattern: /kessler theater|granada theater|dos equis pavilion|meyerson|klyde warren/i, label: "favorite venue" },
+  { pattern: /music under the stars|dallas arboretum.*concert|arboretum.*music/i, label: "Dallas Arboretum concert" },
 ];
 
-// Medium: arts, food, outdoor, culture broadly
+// Medium: arts, food, outdoor, culture broadly + music genres David loves
 const MEDIUM_PRIORITY_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
   { pattern: /restaurant|dining|chef|food festival|cocktail bar|brunch|new bar/i,  label: "food & dining" },
+  { pattern: /jazz|bebop|big band|classic rock|blues/i,                            label: "jazz/classic rock" },
+  { pattern: /outdoor concert|amphitheater|summer concert|concert series/i,        label: "outdoor concert" },
+  { pattern: /tribute band|tribute act/i,                                          label: "tribute" },
   { pattern: /arts|concert|music|festival|exhibition|gallery|show|performance/i,   label: "arts & culture" },
   { pattern: /outdoor|park|trail|farmers market|hike/i,                            label: "outdoor" },
   { pattern: /dallas|dfw|north texas/i,                                            label: "dallas general" },
@@ -221,6 +236,47 @@ function deduplicate(items: LocalContentItem[]): LocalContentItem[] {
   });
 }
 
+// ── Music-specific web search (always runs, not just fallback) ────────────────
+
+async function musicWebSearch(): Promise<LocalContentItem[]> {
+  logger.info("[Dallas] Running music events web search supplement");
+  try {
+    const result = await anthropic.messages.create({
+      model: "claude-opus-4-5",
+      max_tokens: 600,
+      tools: [{ type: "web_search_20250305" as "web_search_20250305", name: "web_search", max_uses: 2 }],
+      system: `You are a Dallas music events researcher. Search for jazz venues, outdoor concerts, and live music events in Dallas this week and next week. Focus on: Kessler Theater, Granada Theater, Dos Equis Pavilion, Jazz at the Meyerson, Klyde Warren Park, Dallas Arboretum, and any classic rock or jazz tribute bands. Return ONLY a JSON array (no markdown, no explanation) with up to 4 objects, each having: headline (string), summary (1–2 sentence string), url (string), source (string).`,
+      messages: [{
+        role: "user",
+        content: "Search: Dallas jazz venues outdoor concerts music under the stars this week. Also: Kessler Theater Dallas events Granada Theater Dallas concerts upcoming.",
+      }],
+    });
+
+    for (const block of result.content) {
+      if (block.type !== "text") continue;
+      const jsonMatch = /\[[\s\S]*\]/.exec(block.text);
+      if (!jsonMatch) continue;
+      const parsed = JSON.parse(jsonMatch[0]) as Array<{
+        headline?: string; summary?: string; url?: string; source?: string;
+      }>;
+      return parsed
+        .filter((p) => p.headline)
+        .map((p) => ({
+          source: p.source ?? "Dallas Music Search",
+          headline: p.headline ?? "",
+          summary: p.summary ?? "",
+          url: p.url ?? "",
+          publishedAt: new Date(),
+          priority: "high" as const,
+          keywordsMatched: ["music_web_search"],
+        }));
+    }
+  } catch (err) {
+    logger.warn({ err }, "[Dallas] Music web search failed");
+  }
+  return [];
+}
+
 // ── Web search fallback ───────────────────────────────────────────────────────
 
 async function webSearchFallback(): Promise<LocalContentItem[]> {
@@ -373,7 +429,12 @@ export async function fetchDallasContent(): Promise<string> {
   const allItems: LocalContentItem[] = [];
   let successCount = 0;
 
-  const feedResults = await Promise.allSettled(DALLAS_FEEDS.map((f) => fetchFeed(f)));
+  // Run RSS feeds + dedicated music web search in parallel
+  const [feedResults, musicItems] = await Promise.all([
+    Promise.allSettled(DALLAS_FEEDS.map((f) => fetchFeed(f))),
+    musicWebSearch(),
+  ]);
+
   feedResults.forEach((result, i) => {
     const name = DALLAS_FEEDS[i].name;
     if (result.status === "fulfilled") {
@@ -384,6 +445,8 @@ export async function fetchDallasContent(): Promise<string> {
       logger.warn(`[Dallas] ${name}: feed failed — ${String(result.reason)}`);
     }
   });
+  allItems.push(...musicItems);
+  logger.info(`[Dallas] Music web search: ${musicItems.length} items`);
 
   let finalItems = deduplicate(allItems);
 

@@ -21,6 +21,8 @@ import { startConversationStarterScheduler } from "./push/conversationStarterSch
 import { ensureRelationshipTable } from "./relationships/relationshipManager";
 import { initDallasContentTable } from "./morning/dallasContent";
 import { startDallasProactiveScheduler } from "./morning/dallasProactiveScheduler";
+import { initConcertsTable, startVenueMonitorScheduler } from "./morning/venueMonitor";
+import { addProfileItem } from "./profile/profileManager";
 
 const rawPort = process.env["PORT"];
 
@@ -62,6 +64,12 @@ app.listen(port, async (err) => {
     logger.warn({ e }, "Dallas content table initialization warning");
   }
 
+  try {
+    await initConcertsTable();
+  } catch (e) {
+    logger.warn({ e }, "Concerts table initialization warning");
+  }
+
   startScheduler();
   startWinddownScheduler();
   startMedicationScheduler();
@@ -75,6 +83,40 @@ app.listen(port, async (err) => {
   startPickleballScheduler();
   startConversationStarterScheduler();
   startDallasProactiveScheduler();
+  startVenueMonitorScheduler();
+
+  // Seed David's music preferences into profile_items so they persist and
+  // can be referenced in any conversation naturally.
+  try {
+    const musicPrefs: Array<{ name: string; detail: string }> = [
+      { name: "Jimmy Buffett",     detail: "Favorite artist — loves his laid-back tropical rock style" },
+      { name: "Bonnie Raitt",      detail: "Favorite artist — appreciates her blues-infused sound and slide guitar" },
+      { name: "Jackson Browne",    detail: "Favorite artist — classic 70s rock/folk songwriting" },
+      { name: "The Rolling Stones",detail: "Favorite band — classic rock 60s/70s" },
+      { name: "Gordon Lightfoot",  detail: "Favorite artist — Canadian folk/rock legend" },
+      { name: "Van Morrison",      detail: "Favorite artist — classic rock, Van Morrison's soulful style" },
+      { name: "Classic Rock",      detail: "Primary genre preference — 1960s and 1970s rock" },
+      { name: "Classic Jazz",      detail: "Loves classic jazz — bebop, big band, standards" },
+    ];
+    for (const pref of musicPrefs) {
+      await addProfileItem("music", pref.name, pref.detail).catch(() => {});
+    }
+    const favoriteVenues: Array<{ name: string; detail: string }> = [
+      { name: "Kessler Theater",               detail: "Favorite Dallas music venue — intimate, eclectic bookings" },
+      { name: "Granada Theater",               detail: "Favorite Dallas music venue — mid-size, great sound" },
+      { name: "Dos Equis Pavilion",            detail: "Favorite Dallas outdoor amphitheater" },
+      { name: "AT&T Performing Arts Center",   detail: "Favorite Dallas performing arts venue" },
+      { name: "Klyde Warren Park",             detail: "Favorite Dallas outdoor concert/event space" },
+      { name: "Dallas Arboretum",              detail: "Loves Music Under the Stars concert series here" },
+      { name: "Jazz at the Meyerson",          detail: "Favorite jazz venue — Meyerson Symphony Center" },
+    ];
+    for (const venue of favoriteVenues) {
+      await addProfileItem("favorite_venues", venue.name, venue.detail).catch(() => {});
+    }
+    logger.info("Music preferences and favorite venues seeded to profile_items");
+  } catch (e) {
+    logger.warn({ e }, "Music preference seeding warning");
+  }
 
   try {
     await seedDefaultMedications();

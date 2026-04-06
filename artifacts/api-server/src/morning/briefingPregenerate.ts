@@ -22,6 +22,7 @@ import { getJournalCountThisWeek, getRecentJournalEntries } from "../journal/jou
 import { getStoryCount } from "../stories/storyManager.js";
 import { setCachedBriefing } from "./briefingCache.js";
 import { fetchDallasContent } from "./dallasContent.js";
+import { runVenueScan } from "./venueMonitor.js";
 import { logger } from "../lib/logger.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -365,7 +366,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
         ? buildSystemPromptFromProfile(userProfile, userProfile.rawData as CollectedData)
         : BASE_SYSTEM_PROMPT;
 
-    const [dallas, knoxville, emails, events, lastNightNotes, newsBlock, yesterdayEps, todayEps, morningMeds, medsAlreadyTaken, sportsScores, upcomingBills, marketsData, upcomingDates, sundayData, pendingFollowUps, kneeIssueRecent, dallasEvents, journalCountWeek, recentJournals, totalStories, pollenData] = await Promise.all([
+    const [dallas, knoxville, emails, events, lastNightNotes, newsBlock, yesterdayEps, todayEps, morningMeds, medsAlreadyTaken, sportsScores, upcomingBills, marketsData, upcomingDates, sundayData, pendingFollowUps, kneeIssueRecent, dallasEvents, journalCountWeek, recentJournals, totalStories, pollenData, venueConcertsBlock] = await Promise.all([
       fetchCityWeather("Dallas", 32.7767, -96.7970).catch(() => null),
       fetchCityWeather("Knoxville", 35.9606, -83.9207).catch(() => null),
       fetchAndSummarizeEmails(15).catch(() => null),
@@ -388,6 +389,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       getRecentJournalEntries(3).catch(() => []),
       getStoryCount().catch(() => 0),
       fetchDallasPollenData().catch(() => null),
+      runVenueScan().catch(() => ""),
     ]);
 
     const pollenBlock = pollenData
@@ -485,7 +487,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       notesBlock + weatherBlock + gmailBlock + calendarBlock + tvMorningBlock + medMorningBlock +
       sportsBlock + billsMorningBlock + marketsBlock + datesBlock + sundaySummaryBlock +
       pickleballMorningBlock + kneeCheckBlock + recFollowUpBlock + motivationContextBlock +
-      dallasEventsBlock + newsBlock + MASTER_BRIEFING_INSTRUCTION;
+      dallasEventsBlock + venueConcertsBlock + newsBlock + MASTER_BRIEFING_INSTRUCTION;
 
     logger.info({ userName, newsChars: newsBlock.length }, "Pre-generate: calling Claude for briefing");
 
