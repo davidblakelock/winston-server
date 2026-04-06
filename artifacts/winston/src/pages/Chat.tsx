@@ -504,7 +504,11 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
           "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ message, history }),
+        body: JSON.stringify({
+          message,
+          history,
+          deviceId: localStorage.getItem("winston_device_id"),
+        }),
       });
 
       if (!response.ok || !response.body) {
@@ -1278,15 +1282,27 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
             createdAt: string;
             senderDeviceId: string | null;
           };
-          // Skip messages that originated from this device (we already show them)
+          // Skip messages that originated from this device (deviceId match).
+          // senderDeviceId is now always set because streamChat includes deviceId in the
+          // request body — but we keep this as the primary guard and add content-based
+          // dedup below as a belt-and-suspenders safety net.
           const myDeviceId = localStorage.getItem("winston_device_id");
           if (myDeviceId && data.senderDeviceId === myDeviceId) return;
+
           const msgId = `sync-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
           console.log("[CHAT SYNC] Received message from other device:", data.role, data.senderDeviceId);
-          setMessages((prev) => [
-            ...prev,
-            { id: msgId, role: data.role as "user" | "assistant", content: data.content },
-          ]);
+
+          setMessages((prev) => {
+            // Content dedup: if the same role+content already appears in the last 10
+            // messages it means this device already showed it (e.g., via streaming).
+            // Prevents duplicate confirmation bubbles when deviceId matching alone fails.
+            const recent = prev.slice(-10);
+            if (recent.some((m) => m.role === data.role && m.content === data.content)) {
+              console.log("[CHAT SYNC] Duplicate content detected — skipping:", data.role, data.content.slice(0, 60));
+              return prev;
+            }
+            return [...prev, { id: msgId, role: data.role as "user" | "assistant", content: data.content }];
+          });
         } catch (err) {
           console.error("[CHAT SYNC] Error handling chat_sync event:", err);
         }
