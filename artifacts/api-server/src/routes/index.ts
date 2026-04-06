@@ -13,6 +13,7 @@ import oliviaRouter from "./olivia";
 import demoRouter from "./demo";
 import legalRouter from "./legal";
 import settingsRouter from "./settings";
+import contactsRouter from "./contacts";
 
 const router: IRouter = Router();
 
@@ -30,5 +31,6 @@ router.use(messagesRouter);
 router.use(pushRouter);
 router.use(oliviaRouter);
 router.use(settingsRouter);
+router.use(contactsRouter);
 
 export default router;
