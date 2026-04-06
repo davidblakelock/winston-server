@@ -123,10 +123,19 @@ const TOMORROW_CONDITIONS: Record<number, string> = {
   8000: "thunderstorms",
 };
 
+interface ForecastDay {
+  dayName: string;
+  high: number;
+  low: number;
+  precipChance: number;
+  conditionCode?: number;
+}
+
 interface WeatherResult {
   city: string; temp: number; feelsLike: number; high: number; low: number;
   condition: string; precipChance: number; humidity: number; windSpeed: number;
   uvIndex: number; uvIndexMax: number;
+  forecastDays: ForecastDay[];
 }
 
 async function fetchCityWeather(city: string, lat: number, lon: number): Promise<WeatherResult> {
@@ -146,10 +155,24 @@ async function fetchCityWeather(city: string, lat: number, lon: number): Promise
   if (!forecastResp.ok) throw new Error(`Tomorrow.io forecast error for ${city}: ${forecastResp.status}`);
   const [realtime, forecast] = await Promise.all([
     realtimeResp.json() as Promise<{ data: { values: { temperature: number; temperatureApparent: number; humidity: number; windSpeed: number; precipitationProbability: number; uvIndex: number; weatherCode: number } } }>,
-    forecastResp.json() as Promise<{ timelines: { daily: Array<{ values: { temperatureMax: number; temperatureMin: number; precipitationProbabilityMax: number; uvIndexMax: number } }> } }>,
+    forecastResp.json() as Promise<{ timelines: { daily: Array<{ time: string; values: { temperatureMax: number; temperatureMin: number; precipitationProbabilityMax: number; uvIndexMax: number; weatherCodeDay?: number } }> } }>,
   ]);
   const current = realtime.data.values;
   const today = forecast.timelines.daily[0]?.values;
+
+  // Build 5-day forecast (days 1–5, skipping today)
+  const forecastDays: ForecastDay[] = forecast.timelines.daily.slice(1, 6).map((day) => {
+    const date = new Date(day.time);
+    const dayName = date.toLocaleDateString("en-US", { timeZone: "America/Chicago", weekday: "short" });
+    return {
+      dayName,
+      high: Math.round(day.values.temperatureMax),
+      low: Math.round(day.values.temperatureMin),
+      precipChance: Math.round(day.values.precipitationProbabilityMax),
+      conditionCode: day.values.weatherCodeDay,
+    };
+  });
+
   return {
     city, temp: Math.round(current.temperature), feelsLike: Math.round(current.temperatureApparent),
     high: Math.round(today?.temperatureMax ?? current.temperature), low: Math.round(today?.temperatureMin ?? current.temperature),
@@ -157,7 +180,41 @@ async function fetchCityWeather(city: string, lat: number, lon: number): Promise
     precipChance: Math.round(today?.precipitationProbabilityMax ?? current.precipitationProbability),
     humidity: Math.round(current.humidity), windSpeed: Math.round(current.windSpeed),
     uvIndex: Math.round(current.uvIndex), uvIndexMax: Math.round(today?.uvIndexMax ?? current.uvIndex),
+    forecastDays,
   };
+}
+
+// ── Dallas pollen data via Open-Meteo Air Quality API ─────────────────────────
+
+interface PollenResult {
+  grassMax: number;
+  ragweedMax: number;
+  treeMax: number;
+}
+
+function pollenLevel(value: number): string {
+  if (value <= 0) return "none";
+  if (value < 10) return "low";
+  if (value < 30) return "moderate";
+  if (value < 100) return "high";
+  return "very high";
+}
+
+async function fetchDallasPollenData(): Promise<PollenResult | null> {
+  try {
+    const resp = await fetch(
+      "https://air-quality-api.open-meteo.com/v1/air-quality?latitude=32.7767&longitude=-96.7970&hourly=grass_pollen,ragweed_pollen,alder_pollen&timezone=America%2FChicago&forecast_days=1",
+      { signal: AbortSignal.timeout(8000) }
+    );
+    if (!resp.ok) return null;
+    const data = await resp.json() as { hourly: { grass_pollen: number[]; ragweed_pollen: number[]; alder_pollen: number[] } };
+    const grassMax = Math.round(Math.max(...(data.hourly.grass_pollen ?? [0]).filter((v) => v != null)));
+    const ragweedMax = Math.round(Math.max(...(data.hourly.ragweed_pollen ?? [0]).filter((v) => v != null)));
+    const treeMax = Math.round(Math.max(...(data.hourly.alder_pollen ?? [0]).filter((v) => v != null)));
+    return { grassMax, ragweedMax, treeMax };
+  } catch {
+    return null;
+  }
 }
 
 function formatWeatherBlock(w: WeatherResult): string {
@@ -201,14 +258,38 @@ function buildContextualWeatherBlock(dallas: WeatherResult, knoxville: WeatherRe
   if (!isStormy && !isRainy && uvMax >= 8) signals.push(`UV peaks at ${uvMax} (${uvLabel}) — sunscreen is non-negotiable outdoors`);
   else if (!isStormy && !isRainy && uvMax >= 6) signals.push(`UV peaks at ${uvMax} (${uvLabel}) — sunscreen before heading out`);
   if (isPerfect) signals.push(`PERFECT conditions for ${activityLabel} — lead with this${uvMax >= 6 ? `, mention sunscreen (UV ${uvMax})` : ""}`);
+
+  // Activity-aware alerts for upcoming pickleball days in the 5-day forecast
+  const pickleballShortNames = ["Mon", "Wed", "Fri", "Sat"];
+  for (const day of dallas.forecastDays) {
+    if (pickleballShortNames.includes(day.dayName)) {
+      if (day.precipChance >= 60) {
+        signals.push(`⚠ ${day.dayName} pickleball: rain likely (${day.precipChance}%) — may need to reschedule`);
+      } else if (day.high >= 98) {
+        signals.push(`⚠ ${day.dayName} pickleball: extreme heat (${day.high}°F) — go very early or consider indoor`);
+      }
+    }
+  }
+
   const signalLines = signals.length > 0
     ? `\nKey signals for briefing:\n${signals.map((s) => `• ${s}`).join("\n")}`
     : `\n• Conditions are unremarkable — weave in naturally`;
+
+  // 5-day forecast block (days 1–5 after today)
+  const fiveDayLines = dallas.forecastDays.length > 0
+    ? dallas.forecastDays.map((d) => {
+        const condNote = d.conditionCode ? (TOMORROW_CONDITIONS[d.conditionCode] ? ` — ${TOMORROW_CONDITIONS[d.conditionCode]}` : "") : "";
+        const rainNote = d.precipChance >= 60 ? ` ☔ ${d.precipChance}%` : d.precipChance >= 35 ? ` 🌦 ${d.precipChance}%` : "";
+        return `${d.dayName}: ${d.high}°↑ / ${d.low}°↓${condNote}${rainNote}`;
+      }).join(" | ")
+    : "";
+
   return (
     `\n\n[Live Weather Data — Dallas, via Tomorrow.io, fetched now]\n` +
     `Current: ${dallas.temp}°F (feels like ${dallas.feelsLike}°F), ${dallas.condition}\n` +
     `Today: low ${dallas.low}°F → high ${dallas.high}°F | Rain: ${dallas.precipChance}% | Humidity: ${dallas.humidity}% | Wind: ${dallas.windSpeed} mph\n` +
     `UV now: ${dallas.uvIndex} | UV peak today: ${dallas.uvIndexMax} (${uvLabel})\n` +
+    (fiveDayLines ? `5-Day: ${fiveDayLines}\n` : "") +
     `\n[Knoxville (Olivia's weather)]\n${formatWeatherBlock(knoxville)}\n` +
     `\nToday is ${dayName}. David's morning activity: ${activityLabel}.` +
     signalLines
@@ -312,7 +393,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
         ? buildSystemPromptFromProfile(userProfile, userProfile.rawData as CollectedData)
         : BASE_SYSTEM_PROMPT;
 
-    const [dallas, knoxville, emails, events, lastNightNotes, newsBlock, yesterdayEps, todayEps, morningMeds, medsAlreadyTaken, sportsScores, upcomingBills, marketsData, upcomingDates, sundayData, pendingFollowUps, kneeIssueRecent, dallasEvents, journalCountWeek, recentJournals, totalStories] = await Promise.all([
+    const [dallas, knoxville, emails, events, lastNightNotes, newsBlock, yesterdayEps, todayEps, morningMeds, medsAlreadyTaken, sportsScores, upcomingBills, marketsData, upcomingDates, sundayData, pendingFollowUps, kneeIssueRecent, dallasEvents, journalCountWeek, recentJournals, totalStories, pollenData] = await Promise.all([
       fetchCityWeather("Dallas", 32.7767, -96.7970).catch(() => null),
       fetchCityWeather("Knoxville", 35.9606, -83.9207).catch(() => null),
       fetchAndSummarizeEmails(15).catch(() => null),
@@ -334,11 +415,22 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       getJournalCountThisWeek().catch(() => 0),
       getRecentJournalEntries(3).catch(() => []),
       getStoryCount().catch(() => 0),
+      fetchDallasPollenData().catch(() => null),
     ]);
 
+    const pollenBlock = pollenData
+      ? (() => {
+          const parts: string[] = [];
+          if (pollenData.grassMax > 0) parts.push(`Grass: ${pollenLevel(pollenData.grassMax)} (${pollenData.grassMax} gr/m³)`);
+          if (pollenData.ragweedMax > 0) parts.push(`Ragweed: ${pollenLevel(pollenData.ragweedMax)} (${pollenData.ragweedMax} gr/m³)`);
+          if (pollenData.treeMax > 0) parts.push(`Tree/Alder: ${pollenLevel(pollenData.treeMax)} (${pollenData.treeMax} gr/m³)`);
+          return parts.length > 0 ? `\nPollen today — ${parts.join(" | ")}` : "";
+        })()
+      : "";
+
     const weatherBlock = dallas && knoxville
-      ? buildContextualWeatherBlock(dallas, knoxville, now)
-      : (dallas ? `\n\n[Dallas Weather]\n${formatWeatherBlock(dallas)}` : "");
+      ? buildContextualWeatherBlock(dallas, knoxville, now) + pollenBlock
+      : (dallas ? `\n\n[Dallas Weather]\n${formatWeatherBlock(dallas)}` + pollenBlock : "");
 
     const gmailBlock = emails !== null
       ? `\n\n[Gmail — unread inbox (fetched just now)]\n${formatEmailsForPrompt(emails)}` +

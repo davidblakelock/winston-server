@@ -468,6 +468,8 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const greetedRef = useRef(false);
   const savedPlacesRef = useRef<SavedPlace[]>(DEFAULT_PLACES);
+  const ownedMessageIds = useRef<Set<string>>(new Set());
+  const pendingSyncQueue = useRef<Array<{ id: string; role: "user" | "assistant"; content: string }>>([]);
 
   const ttsMutation = useTextToSpeech();
   const browserTTS = useBrowserTTS();
@@ -491,7 +493,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
     message: string,
     history: { role: string; content: string }[],
     targetMsgId: string,
-    onComplete: (fullText: string, navigationUrl?: string) => void,
+    onComplete: (fullText: string, navigationUrl?: string, serverMsgId?: string) => void,
     onError: (errReply?: string) => void,
   ) => {
     const token = localStorage.getItem("winston_session_token");
@@ -521,6 +523,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
       let buf = "";
       let fullText = "";
       let navUrl: string | undefined;
+      let serverMsgId: string | undefined;
       let finished = false;
 
       while (true) {
@@ -545,6 +548,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
           }
           if (data.done) {
             navUrl = data.navigationUrl as string | undefined;
+            serverMsgId = data.messageId as string | undefined;
             finished = true;
           }
           if (data.error) {
@@ -556,7 +560,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
       }
 
       if (finished || fullText) {
-        onComplete(fullText, navUrl);
+        onComplete(fullText, navUrl, serverMsgId);
       } else {
         onError();
       }
@@ -875,7 +879,8 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
       // retries automatically once. Second failure shows a final message.
       let chatRetried = false;
 
-      const onComplete = (reply: string, navUrl?: string) => {
+      const onComplete = (reply: string, navUrl?: string, serverMsgId?: string) => {
+        if (serverMsgId) ownedMessageIds.current.add(serverMsgId);
         speakReply(assistantMsgId, reply);
         const resolvedNavUrl = navUrl ?? immediateNavUrl ?? undefined;
         if (resolvedNavUrl) {
@@ -1279,26 +1284,36 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
           const data = JSON.parse(e.data) as {
             role: string;
             content: string;
+            messageId?: string;
             createdAt: string;
             senderDeviceId: string | null;
           };
-          // Skip messages that originated from this device (deviceId match).
-          // senderDeviceId is now always set because streamChat includes deviceId in the
-          // request body — but we keep this as the primary guard and add content-based
-          // dedup below as a belt-and-suspenders safety net.
+
+          // Guard 1: skip messages sent from this device
           const myDeviceId = localStorage.getItem("winston_device_id");
           if (myDeviceId && data.senderDeviceId === myDeviceId) return;
+
+          // Guard 2: skip if this device already streamed this response (messageId match)
+          if (data.messageId && ownedMessageIds.current.has(data.messageId)) {
+            console.log("[CHAT SYNC] Duplicate messageId — skipping:", data.messageId);
+            return;
+          }
 
           const msgId = `sync-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
           console.log("[CHAT SYNC] Received message from other device:", data.role, data.senderDeviceId);
 
+          // Guard 3: if app is in background, queue for when it comes to foreground
+          if (document.hidden) {
+            pendingSyncQueue.current.push({ id: msgId, role: data.role as "user" | "assistant", content: data.content });
+            console.log("[CHAT SYNC] App in background — queued:", msgId);
+            return;
+          }
+
           setMessages((prev) => {
-            // Content dedup: if the same role+content already appears in the last 10
-            // messages it means this device already showed it (e.g., via streaming).
-            // Prevents duplicate confirmation bubbles when deviceId matching alone fails.
+            // Guard 4: content dedup as final fallback
             const recent = prev.slice(-10);
             if (recent.some((m) => m.role === data.role && m.content === data.content)) {
-              console.log("[CHAT SYNC] Duplicate content detected — skipping:", data.role, data.content.slice(0, 60));
+              console.log("[CHAT SYNC] Duplicate content — skipping:", data.content.slice(0, 60));
               return prev;
             }
             return [...prev, { id: msgId, role: data.role as "user" | "assistant", content: data.content }];
@@ -1342,10 +1357,30 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
     es = new EventSource(sseUrl);
     attach(es);
 
+    // Fix 2: When app comes to foreground, flush any messages that arrived while hidden
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible" && pendingSyncQueue.current.length > 0) {
+        const pending = pendingSyncQueue.current.splice(0);
+        console.log("[CHAT SYNC] App foregrounded — applying", pending.length, "queued message(s)");
+        setMessages((prev) => {
+          let updated = [...prev];
+          for (const msg of pending) {
+            const recent = updated.slice(-10);
+            if (!recent.some((m) => m.role === msg.role && m.content === msg.content)) {
+              updated = [...updated, msg];
+            }
+          }
+          return updated;
+        });
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+
     return () => {
       destroyed = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       es?.close();
+      document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, []); // empty deps — created once, refs always stay current
 

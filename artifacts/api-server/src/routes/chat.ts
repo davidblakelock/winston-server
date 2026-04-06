@@ -1,4 +1,5 @@
 import { Router, type IRouter } from "express";
+import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { extractListOp, executeListOp, buildListContext } from "../lists/listManager.js";
@@ -23,6 +24,7 @@ import {
   type ParsedDeleteEvent,
 } from "../google/calendarWriter.js";
 import { hasCalendarWriteScope } from "../google/oauth.js";
+import { searchContacts, formatContactsForPrompt } from "../google/contacts.js";
 import {
   getMedications,
   hasTakenMedicationsToday,
@@ -371,6 +373,7 @@ const TV_REMOVE_PATTERN = /\b(i\s+finished\s+watching|i\s+finished|i\s+stopped\s
 const TV_TONIGHT_PATTERN = /\b(what'?s\s+on\s+tonight|anything\s+(good\s+)?on\s+tonight|what\s+should\s+i\s+watch\s+tonight|what'?s\s+on\s+tv|any\s+shows?\s+tonight)\b/i;
 const TV_RECOMMEND_PATTERN = /\b(recommend\s+(me\s+)?a?\s*show|what\s+should\s+i\s+watch|suggest\s+(me\s+)?a?\s*show|shows?\s+like\s+|anything\s+similar|similar\s+to\s+.+\s+show|what\s+else\s+should\s+i\s+watch|find\s+me\s+a\s+show)\b/i;
 const TV_LIST_PATTERN = /\b(what\s+shows?\s+(am\s+i|are\s+we|do\s+i)\s+(watching|following)|my\s+(shows?|watch\s+list)|list\s+(my\s+)?shows?|what('?s|\s+is)\s+on\s+my\s+watch\s+list)\b/i;
+const CONTACT_PATTERN = /\b(find|look\s+up|search|get|what'?s?|pull\s+up)\b.{0,40}\b(contact|phone|number|email|info)\b|\b(contact|phone|number|email|info)\b.{0,40}\bfor\b|\b(in\s+my\s+contacts?|from\s+my\s+contacts?|my\s+contacts?)\b/i;
 const WINDDOWN_NOTE_PATTERN = /\b(remember\s+(to|that)|note\s+(for\s+tomorrow|this\s+down)|write\s+(this|that)\s+down|add\s+(this\s+)?to\s+(my\s+)?morning\s+briefing|don'?t\s+let\s+me\s+forget\s+(to|that)|make\s+sure\s+i\s+(remember|know)|for\s+tomorrow\s+(i\s+need\s+to|remind\s+me))\b/i;
 const SPORTS_PATTERN = /\b(rangers|cowboys|score|scores|how\s+did\s+(they|the\s+(rangers|cowboys))\s+do|did\s+(they|the\s+(rangers|cowboys))\s+(win|lose|play)|last\s+night'?s?\s+(game|score)|(rangers|cowboys)\s+(score|win|lose|lost|beat|game|result|update)|check\s+(the\s+)?(rangers|cowboys)|what('?s|\s+is)\s+the\s+(rangers|cowboys|score|game)|any\s+(rangers|cowboys)\s+(news|game|score))\b/i;
 const BILL_ADD_PATTERN = /\b(my\s+\w.{1,40}(bill|payment|insurance|premium|subscription|rent|mortgage|registration|fee|taxes?)\s+is\s+due|add\s+(a\s+)?(bill|payment|financial\s+obligation|reminder\s+for)|track\s+(my\s+)?(bill|payment|insurance|rent|subscription)|remind\s+me\s+(about|when|before)\s+(my\s+)?\w.{1,30}(bill|payment|due|insurance|premium|subscription|rent|mortgage|registration|fee|taxes?)|(is\s+due|renews?)\s+(on|every|each|the)\s+(the\s+)?\d{1,2}(st|nd|rd|th)?|quarterly\s+taxes?\s+are?\s+due|due\s+(on\s+)?(the\s+)?\d{1,2}(st|nd|rd|th)?\b|(rent|mortgage|insurance|premium|subscription)\s+is?\s*(due|paid|owed))\b/i;
@@ -725,6 +728,7 @@ router.post("/chat", async (req, res) => {
   const isListRequest = LIST_PATTERN.test(message);
   const isEmailRequest = !isMorningGreeting && EMAIL_PATTERN.test(message);
   const isCalendarRequest = !isMorningGreeting && CALENDAR_PATTERN.test(message);
+  const isContactRequest = CONTACT_PATTERN.test(message);
   const isStoryRead = STORY_READ_PATTERN.test(message);
   const isStoryCount = STORY_COUNT_PATTERN.test(message);
   const isProfileRequest = PROFILE_PATTERN.test(message);
@@ -1665,6 +1669,24 @@ router.post("/chat", async (req, res) => {
     }
   }
 
+  // ── Google Contacts search ────────────────────────────────────────────────
+  if (isContactRequest) {
+    try {
+      // Extract the name/subject of the contact search from the message
+      const contactNameMatch = message.match(
+        /(?:find|look\s+up|search\s+for?|get|what'?s?\s+\w+'?s?)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)|([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)'?s?\s+(?:phone|number|email|contact|info)/i
+      );
+      const searchQuery = contactNameMatch?.[1] || contactNameMatch?.[2] || message.replace(/\b(find|look up|search|get|my contacts?|in my contacts?|from my contacts?)\b/gi, "").trim().slice(0, 50);
+      if (searchQuery.length > 1) {
+        const contacts = await searchContacts(searchQuery).catch(() => []);
+        systemPrompt += formatContactsForPrompt(contacts, searchQuery);
+        req.log.info({ query: searchQuery, found: contacts.length }, "[CONTACTS] Search complete");
+      }
+    } catch (err) {
+      req.log.warn({ err }, "[CONTACTS] Search failed, continuing without");
+    }
+  }
+
   let navigationUrl: string | undefined;
   const navLocation = detectNavigation(message, profilePlaces);
   if (navLocation) {
@@ -1697,6 +1719,8 @@ router.post("/chat", async (req, res) => {
   const sendSSE = (data: Record<string, unknown>) =>
     res.write(`data: ${JSON.stringify(data)}\n\n`);
 
+  const messageId = randomUUID();
+
   let reply = "";
   let streamError = false;
 
@@ -1720,7 +1744,7 @@ router.post("/chat", async (req, res) => {
       }
     }
 
-    sendSSE({ done: true, ...(navigationUrl ? { navigationUrl } : {}) });
+    sendSSE({ done: true, messageId, ...(navigationUrl ? { navigationUrl } : {}) });
   } catch (err: unknown) {
     streamError = true;
     const errStatus = (err as Record<string, unknown>)?.status as number | undefined;
@@ -1742,6 +1766,7 @@ router.post("/chat", async (req, res) => {
     broadcastToUser(sessionUserName, "chat_sync", {
       role: "assistant",
       content: reply,
+      messageId,
       createdAt: new Date().toISOString(),
       senderDeviceId: deviceId ?? null,
     });

@@ -15,6 +15,7 @@ import { startBillScheduler } from "./bills/billScheduler";
 import { startDatesScheduler } from "./dates/datesScheduler";
 import { startDepartureScheduler } from "./departure/departureScheduler";
 import { startCalendarSyncScheduler, ensureCalendarSyncTable } from "./departure/calendarSyncScheduler";
+import { startCalendarAlertScheduler } from "./departure/calendarAlertScheduler";
 import { startPickleballScheduler, ensureProactiveMessageLogTable } from "./pickleball/pickleballScheduler";
 import { startConversationStarterScheduler } from "./push/conversationStarterScheduler";
 import { ensureRelationshipTable } from "./relationships/relationshipManager";
@@ -62,6 +63,7 @@ app.listen(port, async (err) => {
   await startDatesScheduler();
   startDepartureScheduler();
   startCalendarSyncScheduler();
+  startCalendarAlertScheduler();
   startPickleballScheduler();
   startConversationStarterScheduler();
 
