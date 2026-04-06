@@ -380,7 +380,8 @@ const TV_TONIGHT_PATTERN = /\b(what'?s\s+on\s+tonight|anything\s+(good\s+)?on\s+
 const TV_RECOMMEND_PATTERN = /\b(recommend\s+(me\s+)?a?\s*show|what\s+should\s+i\s+watch|suggest\s+(me\s+)?a?\s*show|shows?\s+like\s+|anything\s+similar|similar\s+to\s+.+\s+show|what\s+else\s+should\s+i\s+watch|find\s+me\s+a\s+show)\b/i;
 const TV_LIST_PATTERN = /\b(what\s+shows?\s+(am\s+i|are\s+we|do\s+i)\s+(watching|following)|my\s+(shows?|watch\s+list)|list\s+(my\s+)?shows?|what('?s|\s+is)\s+on\s+my\s+watch\s+list)\b/i;
 // Matches explicit contact/phone/email requests AND direct name lookups ("find Eric Blackstone", "look up Susan Smart")
-const CONTACT_PATTERN = /\b(find|look\s+up|search|get|what'?s?|pull\s+up|add)\b.{0,60}\b(contact|phone|number|email|info)\b|\b(contact|phone|number|email|info)\b.{0,40}\bfor\b|\b(in\s+my\s+contacts?|from\s+my\s+contacts?|my\s+contacts?)\b|\b(find|look\s+up|search\s+for|pull\s+up)\b\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)/;
+// NOTE: i flag is required — messages start with capital letters ("Find", "What's", "Look up")
+const CONTACT_PATTERN = /\b(find|look\s+up|search|get|what(?:'?s)?|pull\s+up|add)\b.{0,60}\b(contact|phone|number|email|info)\b|\b(contact|phone|number|email|info)\b.{0,40}\bfor\b|\b(in\s+my\s+contacts?|from\s+my\s+contacts?|my\s+contacts?)\b|\b(find|look\s+up|search\s+for|pull\s+up)\b\s+(\w+(?:\s+\w+)+)/i;
 const WINDDOWN_NOTE_PATTERN = /\b(remember\s+(to|that)|note\s+(for\s+tomorrow|this\s+down)|write\s+(this|that)\s+down|add\s+(this\s+)?to\s+(my\s+)?morning\s+briefing|don'?t\s+let\s+me\s+forget\s+(to|that)|make\s+sure\s+i\s+(remember|know)|for\s+tomorrow\s+(i\s+need\s+to|remind\s+me))\b/i;
 const SPORTS_PATTERN = /\b(rangers|cowboys|score|scores|how\s+did\s+(they|the\s+(rangers|cowboys))\s+do|did\s+(they|the\s+(rangers|cowboys))\s+(win|lose|play)|last\s+night'?s?\s+(game|score)|(rangers|cowboys)\s+(score|win|lose|lost|beat|game|result|update)|check\s+(the\s+)?(rangers|cowboys)|what('?s|\s+is)\s+the\s+(rangers|cowboys|score|game)|any\s+(rangers|cowboys)\s+(news|game|score))\b/i;
 const BILL_ADD_PATTERN = /\b(my\s+\w.{1,40}(bill|payment|insurance|premium|subscription|rent|mortgage|registration|fee|taxes?)\s+is\s+due|add\s+(a\s+)?(bill|payment|financial\s+obligation|reminder\s+for)|track\s+(my\s+)?(bill|payment|insurance|rent|subscription)|remind\s+me\s+(about|when|before)\s+(my\s+)?\w.{1,30}(bill|payment|due|insurance|premium|subscription|rent|mortgage|registration|fee|taxes?)|(is\s+due|renews?)\s+(on|every|each|the)\s+(the\s+)?\d{1,2}(st|nd|rd|th)?|quarterly\s+taxes?\s+are?\s+due|due\s+(on\s+)?(the\s+)?\d{1,2}(st|nd|rd|th)?\b|(rent|mortgage|insurance|premium|subscription)\s+is?\s*(due|paid|owed))\b/i;
@@ -1761,12 +1762,20 @@ router.post("/chat", async (req, res) => {
   // ── Google Contacts search ────────────────────────────────────────────────
   if (isContactRequest) {
     try {
-      // Extract the name/subject of the contact search from the message
-      const contactNameMatch = message.match(
-        /(?:find|look\s+up|search\s+for?|get|pull\s+up|what'?s?\s+\w+'?s?)\s+([\w]+(?:\s+[\w]+){1,3})(?:'?s?\s+(?:phone|number|email|contact|info|address))?|^([\w]+(?:\s+[\w]+){1,3})'?s?\s+(?:phone|number|email|contact|info|address)/i
-      );
-      const rawQuery = contactNameMatch?.[1] || contactNameMatch?.[2] ||
-        message.replace(/\b(find|look\s+up|search(\s+for)?|get|pull\s+up|in\s+my\s+contacts?|from\s+my\s+contacts?|my\s+contacts?|their?\s+(phone|email|number|contact)|please|for\s+me)\b/gi, "").trim();
+      // Four patterns tried in priority order. All case-insensitive.
+      // P1: "What's / What is [Name]'s phone/email" — possessive question
+      // P2: "find/look up [Name]'s phone" — action verb + possessive
+      // P3: "find/look up [Name]" — action verb + plain name (stops at end of string)
+      // P4: "[Name]'s phone" at the very start of the message
+      const nameMatch =
+        message.match(/what(?:['']s?|\s+is)\s+((?:\w+\s+){0,3}\w+)['']s\s+(?:phone|number|email|contact|info|address)/i) ??
+        message.match(/(?:find|look\s+up|search(?:\s+for)?|get|pull\s+up)\s+((?:\w+\s+){0,3}\w+)['']s\s+(?:phone|number|email|contact|info|address)/i) ??
+        message.match(/(?:find|look\s+up|search(?:\s+for)?|get|pull\s+up)\s+((?:\w+\s+){0,2}\w+)\s*$/i) ??
+        message.match(/^((?:\w+\s+){0,3}\w+?)['']s\s+(?:phone|number|email|contact|info|address)/i);
+      const rawQuery = (
+        (nameMatch?.[1])?.trim() ??
+        message.replace(/\b(find|look\s+up|search(\s+for)?|get|pull\s+up|in\s+my\s+contacts?|from\s+my\s+contacts?|my\s+contacts?|their?\s+(phone|email|number|contact)|please|for\s+me)\b/gi, "").trim()
+      ).replace(/\b(please|for\s+me|thanks?|thank\s+you|can\s+you|could\s+you)\b/gi, "").replace(/\s+/g, " ").trim();
       const searchQuery = rawQuery.slice(0, 60).trim();
       if (searchQuery.length > 1) {
         const result = await searchContacts(searchQuery).catch(() => ({ contacts: [], needsReauth: false }));
