@@ -1133,9 +1133,15 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
   const fireReminderAlertRef = useRef(fireReminderAlert);
   const fireWinddownStartRef = useRef(fireWinddownStart);
   const speakReplyRef = useRef(speakReply);
+  // notifResubscribeRef — used by the SSE reconnect path to re-register push
+  // after a full server restart (session may have been cleared).
+  const notifResubscribeRef = useRef<(() => Promise<boolean | void>) | null>(null);
   useEffect(() => { fireReminderAlertRef.current = fireReminderAlert; }, [fireReminderAlert]);
   useEffect(() => { fireWinddownStartRef.current = fireWinddownStart; }, [fireWinddownStart]);
   useEffect(() => { speakReplyRef.current = speakReply; }, [speakReply]);
+  useEffect(() => {
+    notifResubscribeRef.current = notif.isSubscribed ? null : notif.resubscribe ?? null;
+  }, [notif.isSubscribed, notif.resubscribe]);
 
   // ── Fix 2: Service worker REMINDER_PUSH listener ───────────────────────────
   // When the service worker receives a push notification it posts REMINDER_PUSH
@@ -1301,8 +1307,14 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
             return;
           }
 
+          // Guard 2b: warn and skip if content is null or empty
+          if (!data.content) {
+            console.warn("[CHAT SYNC] Received message with null/empty content — skipping. role:", data.role, "messageId:", data.messageId ?? "n/a");
+            return;
+          }
+
           const msgId = `sync-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-          console.log("[CHAT SYNC] Received message from other device:", data.role, data.senderDeviceId);
+          console.log("[CHAT SYNC] Received message from other device — role:", data.role, "chars:", data.content.length, "messageId:", data.messageId ?? "n/a");
 
           // Guard 3: if app is in background, queue for when it comes to foreground
           if (document.hidden) {
@@ -1350,11 +1362,19 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
       source.onopen = () => {
         backoffMs = 1_000; // reset backoff on successful connect
         console.log("SSE CONNECTED — readyState:", source.readyState);
+        // ── Fix 9: restore ONLINE indicator and re-register push after recovery ──
+        setConnectionStatus("online");
         if (hasConnectedOnce) {
           // SSE reconnected after a drop — immediately check for any reminders
           // that fired while the connection was down (screen lock, background tab, etc.)
           console.log("[REMINDER] SSE reconnected — polling for missed reminders");
           void pollMissedReminders();
+          // Re-register push subscription if it got cleared during a server restart
+          const resubscribe = notifResubscribeRef.current;
+          if (resubscribe) {
+            console.log("[PUSH] SSE reconnected — re-registering push subscription");
+            void resubscribe();
+          }
         }
         hasConnectedOnce = true;
       };
@@ -1363,18 +1383,44 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         // Log the error — on mobile Chrome this often fires for QUIC protocol
         // errors or ECONNRESET which look identical to normal reconnects.
         const errType = (e as Event & { type?: string })?.type ?? "unknown";
-        const delay = backoffMs;
-        // Double the backoff for next failure, capped at 30 s
-        backoffMs = Math.min(backoffMs * 2, 30_000);
-        console.log(`SSE ERROR: ${errType} — readyState: ${source.readyState} — reconnecting in ${delay}ms`);
+        console.log(`SSE ERROR: ${errType} — readyState: ${source.readyState}`);
         source.close();
         if (destroyed) return;
-        reconnectTimer = setTimeout(() => {
-          if (destroyed) return;
-          console.log("SSE RECONNECTING — creating new EventSource");
-          es = new EventSource(sseUrl);
-          attach(es);
-        }, delay);
+
+        // ── Fix 9: show RECONNECTING and probe health to detect full server restart ──
+        setConnectionStatus("reconnecting");
+
+        const baseUrl = (import.meta.env.BASE_URL as string).replace(/\/$/, "");
+        const scheduleReconnect = (delay: number) => {
+          reconnectTimer = setTimeout(() => {
+            if (destroyed) return;
+            console.log(`SSE RECONNECTING after ${delay}ms — creating new EventSource`);
+            es = new EventSource(sseUrl);
+            attach(es);
+          }, delay);
+        };
+
+        // Probe health: if server is fully down, wait 5 s before retrying so we
+        // don't hammer a restarting server with instant reconnect attempts.
+        const delay = backoffMs;
+        backoffMs = Math.min(backoffMs * 2, 30_000);
+        void fetch(`${baseUrl}/api/health`, { cache: "no-store" })
+          .then((r) => {
+            if (r.ok) {
+              // Server is up — SSE just dropped (network blip / QUIC error)
+              console.log(`SSE health OK — reconnecting in ${delay}ms`);
+              scheduleReconnect(delay);
+            } else {
+              // Server returned an error — wait 5 s then retry
+              console.log("SSE health returned error — waiting 5 s before reconnect");
+              scheduleReconnect(5_000);
+            }
+          })
+          .catch(() => {
+            // Server unreachable (restarting or network loss) — wait 5 s then retry
+            console.log("SSE health unreachable — server may be restarting, waiting 5 s");
+            scheduleReconnect(5_000);
+          });
       };
     };
 
