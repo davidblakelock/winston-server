@@ -27,6 +27,14 @@ app.use(
   }),
 );
 app.use(cors());
+
+// Allow Google OAuth popups to communicate with the parent window.
+// Without this, COOP blocks cross-origin postMessage from the popup.
+app.use((_req, res, next) => {
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin-allow-popups");
+  next();
+});
+
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ limit: "10mb", extended: true }));
 

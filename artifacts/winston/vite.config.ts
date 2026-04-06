@@ -62,6 +62,9 @@ export default defineConfig({
     port,
     host: "0.0.0.0",
     allowedHosts: true,
+    headers: {
+      "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
+    },
     fs: {
       strict: true,
       deny: ["**/.*"],
@@ -71,5 +74,8 @@ export default defineConfig({
     port,
     host: "0.0.0.0",
     allowedHosts: true,
+    headers: {
+      "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
+    },
   },
 });
