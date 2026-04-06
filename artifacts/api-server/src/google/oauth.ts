@@ -20,6 +20,16 @@ export async function hasCalendarWriteScope(): Promise<boolean> {
     .some((s) => s === "https://www.googleapis.com/auth/calendar");
 }
 
+export async function hasContactsScope(): Promise<boolean> {
+  const { rows } = await query<{ scope: string | null }>(
+    "SELECT scope FROM google_auth WHERE user_name = 'David' LIMIT 1"
+  );
+  if (!rows.length || !rows[0].scope) return false;
+  return rows[0].scope
+    .split(" ")
+    .some((s) => s === "https://www.googleapis.com/auth/contacts.readonly");
+}
+
 export function getRedirectUri(): string {
   // Allow an explicit override (needed for production deployments)
   if (process.env.GOOGLE_REDIRECT_URI) {

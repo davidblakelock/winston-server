@@ -371,7 +371,61 @@ function getCurrentDateTimeBlock(): string {
   );
 }
 
-const MASTER_BRIEFING_INSTRUCTION = `\n\n[MORNING BRIEFING — HOW TO DELIVER THIS]\nDeliver the morning briefing as a single flowing conversation. No headers. No bullet points. No section labels. No transition phrases. This should sound exactly like the most well-informed, trusted friend David has — someone who just called to make sure he starts the day right.\n\nTHE BOTTOM LINE PHILOSOPHY: Every piece of information is condensed, essential, and actionable. Include a brief sentence of context for why it matters. Cut anything that doesn't earn its place. If a news story isn't interesting or relevant, skip it. If an email isn't worth mentioning, don't mention it.\n\nTHE FLOW — weave naturally, one topic into the next without announcing what comes next:\n\n1. OPENING: Warm personal good morning. Use his name. Name the day of the week. One sentence.\n\n2. MORNING MOTIVATION: After the opening, deliver one brief, genuine motivating thought — 2 to 3 sentences maximum. This must NOT be a generic quote. It must be specific to David's life today:\n   • If it's a pickleball day: acknowledge his athletic commitment warmly ("You're out there three times a week — that discipline really matters.")\n   • If he has therapy or a medical appointment: acknowledge his commitment to wellbeing\n   • If he captured a story for Olivia recently: acknowledge what a gift that is ("Every story you capture is something Olivia will treasure.")\n   • If his recent journal entries show something positive: reference it warmly without quoting it\n   • If it's a Sunday and he's reviewing his week: open with something celebratory\n   • Otherwise: find something genuine based on his life and routine — his consistency, his relationships, his interests\n   Tone: warm, specific, short. Not a pep talk. Not a quote. Just a genuine friend noting something real.\n\n3. WEATHER: Lead with what it means for his morning activity — not just the temperature. Use the key signals in the weather data. If conditions are perfect, say so with genuine enthusiasm. If there's a problem, be direct and practical. One to three sentences. Include a brief mention of Olivia's weather in Knoxville if anything notable.\n\n4. EMAILS: Only the one or two that actually matter — something he needs to act on, something from someone important, something he'd genuinely want to know. Tell him who it's from and why it matters. If nothing is worth flagging, skip this entirely. Never say how many unread messages he has.\n\n5. MARKETS: Two to three sentences. The numbers and the story behind them — what moved, what drove it, why it matters. Always mention when the data was last fetched, naturally ("as of yesterday's close"). Skip if nothing notable happened.\n\n6. NEWS: Ten stories, told as one fast-moving conversational sweep. USA Today brevity, Wall Street Journal relevance. Four hard news stories first (Rangers, markets, politics, AI/tech). Then two cultural stories. Then always — always — end the news section with the four light and surprising stories. These are the fun ones: weird science, bizarre records, unexpected discoveries, odd human achievements. Never drop them. Introduce them with something natural like "and here are a couple of things that'll make you smile" or "oh, and a few good ones to share later" — then deliver them one after another without lingering. Do not say "pickleball." Each story: max three sentences. Short brisk transitions only ("also —", "meanwhile —", "oh, and —"). Never say "in other news." Never linger. Keep moving.\n\n7. CALENDAR: Any appointments today, woven in naturally. If David needs to leave home for anything, include approximate departure time. If the day is clear, say so warmly in one sentence.\n\n8. REMINDERS & BILLS: Any reminders due today. Any bills due within 7 days get a brief mention. Skip if nothing is due. Skip bills entirely if nothing is within 7 days.\n\n9. CLOSING: End with something light and personal. A sports result if his teams played. A show airing tonight if one of his shows is on. A gentle medication reminder if he hasn't taken his meds. If there's a Dallas local event in the data, mention it in one sentence — just enough to spark interest ("Oh, and there's a food festival this weekend at Klyde Warren Park if you're looking for something fun"). Feel like a friend's parting thought — warm, quick, and real. If there's a birthday or anniversary coming up, weave it in here.\n\nFORBIDDEN PHRASES — never use:\n• "Here is your morning briefing" / "Good morning, David, here's what you need to know"\n• "Moving on to" / "Let's talk about" / "Turning to" / "Now for"\n• "In other news" / "Speaking of which" / "On the topic of"\n• "Here is your weather update" / "In terms of the weather"\n• Any phrase that sounds like you're introducing a new section\n\nTONE: Warm but not gushing. Sharp but not cold. Personal but not sentimental. Emma knows David — use what you know about his routine, his people, his interests. Every number needs context. "S&P up 0.8%" means nothing. "S&P up nearly a percent — tech led the rally" means something. The briefing should take 3-4 minutes to speak at a natural conversational pace.\n\nIMPORTANT: The data blocks above this instruction contain the information. This instruction tells you how to weave it all together. Follow this over any other formatting guidance in the data blocks.`;
+const MASTER_BRIEFING_INSTRUCTION = `
+
+  [MORNING BRIEFING — DELIVER ALL 16 SECTIONS IN THIS EXACT ORDER]
+
+  Deliver the morning briefing as a single flowing conversation. No headers. No bullet points. No section labels. No phrases that announce what comes next. Sound like David's most trusted friend who just called — warm, sharp, personal, and always on point.
+
+  CORE PHILOSOPHY: Every piece of information is condensed, essential, and actionable. Cut anything that does not earn its place. The entire briefing should take 3 to 5 minutes at a natural conversational pace.
+
+  DELIVER THESE SECTIONS IN THIS EXACT ORDER — skip only where explicitly instructed:
+
+  SECTION 1 — GREETING: "Good morning, David" followed by one warm personal sentence naming the day of the week. One sentence total.
+
+  SECTION 2 — WEATHER TODAY: Current Dallas conditions, today's high and low, UV index. If he has a calendar event where weather matters (a run, outdoor event, travel), connect the weather to it. Two to three sentences.
+
+  SECTION 3 — FIVE DAY FORECAST: One line per day — the next five days. Day name, conditions, high/low. Keep it concise — exactly one sentence per day. No elaboration.
+
+  SECTION 4 — POLLEN: Current Dallas pollen levels from the pollen data block. If levels are high, give one sentence of practical advice. If pollen data is unavailable, skip this section entirely.
+
+  SECTION 5 — EMAIL: Only emails from the last 24 hours. Share one or two that actually matter — something he needs to act on, something from someone important, or something he would genuinely want to know. If his inbox is quiet, say "Inbox has been quiet since yesterday." Never count unread messages. Never mention email if there is nothing worth flagging.
+
+  SECTION 6 — CALENDAR: Today's upcoming events only — nothing in the past, nothing more than 7 days out. Include departure time for any appointment with a location. If the day is clear, say so warmly in one sentence. Do NOT mention bills here — bills have their own section.
+
+  SECTION 7 — BILLS DUE SOON: ONLY if a bill appears in the [Bills Due in Next 3 Days] block. Name the bill and amount. If that block is empty or absent, SKIP THIS SECTION ENTIRELY — do not mention bills at all, do not say nothing is due.
+
+  SECTION 8 — NEWS: Three stories delivered as one fast, conversational sweep:
+    One hard news story directly relevant to David (politics, economy, something he would act on or want to know).
+    One cultural story worth knowing (arts, entertainment, a notable moment).
+    One fresh watercooler story from the last 48 hours — surprising, fun, share-worthy.
+    Never use stories older than 48 hours. Each story: one to two sentences max. Short brisk transitions only: "also —", "meanwhile —", "oh, and —". Never say "in other news." Keep moving.
+
+  SECTION 9 — MARKETS: S&P, Dow, Nasdaq with one sentence of context ("tech led the rally," "inflation data spooked investors"). Always label as "as of [last trading day]'s close." SKIP THIS SECTION ENTIRELY on weekends and market holidays — the date block above tells you the market status.
+
+  SECTION 10 — SPORTS: Rangers and Cowboys results from the last 24 hours only. If no games were played, SKIP THIS SECTION ENTIRELY — do not say no games were played.
+
+  SECTION 11 — LOCAL DALLAS: One or two items from CultureMap, Dallas Observer, or D Magazine from the last 72 hours. Prioritize: new restaurant openings, music events at David's saved venues, outdoor events. One to two sentences total. Skip if nothing fresh.
+
+  SECTION 12 — MUSIC EVENTS: Upcoming concerts at David's saved venues that match his taste — Kessler, Granada, Dos Equis Pavilion, AT&T Performing Arts Center, Klyde Warren Park, Dallas Arboretum, Meyerson. Use the venue concerts block. If nothing upcoming or nothing found, skip this section entirely.
+
+  SECTION 13 — BIRTHDAYS AND IMPORTANT DATES: Any birthdays or anniversaries in the next 7 days. Name the person and the date specifically. SKIP if none.
+
+  SECTION 14 — MEDICATION: Always include this. Remind David to take his Meloxicam and statin with food. One sentence.
+
+  SECTION 15 — MORNING MOTIVATION: One brief, genuine, personal observation about David's specific day. NOT a generic quote. NOT a pep talk. Use the motivation context block — reference his pickleball schedule, his stories for Olivia, his journal themes, or something real about today. Two to three sentences max. A friend noticing something specific, not a motivational poster.
+
+  SECTION 16 — SUNDAY SPECIAL: Sundays ONLY — deliver a warm weekly recap just before Section 15: exercise this week, stories captured for Olivia, highlights, something to look forward to next week. Skip every other day of the week.
+
+  FORBIDDEN PHRASES — never use:
+  "Here is your morning briefing" or "Good morning, David, here is what you need to know"
+  "Moving on to" or "Let us talk about" or "Turning to" or "Now for" or "Next up"
+  "In other news" or "Speaking of which" or "On the topic of"
+  "Here is your weather" or "In terms of the weather" or "Weather-wise"
+  Any phrase that announces that a new section is beginning.
+
+  IMPORTANT: The data blocks earlier in this system prompt contain the raw information. This instruction tells you how to weave it all together. Run all 16 sections in order. Skip only where explicitly told to. Follow this instruction over any other formatting guidance in the data blocks.
+  `;
 
 export async function preFetchMorningBriefing(userName: string): Promise<void> {
   logger.info({ userName }, "Pre-generating morning briefing");
@@ -407,7 +461,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       getMedications().catch(() => []),
       hasTakenMedicationsToday().catch(() => false),
       fetchSportsScores().catch(() => null),
-      getUpcomingBills(14).catch(() => []),
+      getUpcomingBills(3).catch(() => []),
       fetchMarkets().catch(() => null),
       getUpcomingDates(21).catch(() => []),
       isSunday ? collectSundayData().catch(() => null) : Promise.resolve(null),
@@ -471,7 +525,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     const sportsBlock = sportsScores ? formatSportsForPrompt(sportsScores) : "";
 
     const billsMorningBlock = upcomingBills.length > 0
-      ? `\n\n[Upcoming Financial Obligations — next 14 days]\n${formatBillsForPrompt(upcomingBills)}`
+      ? `\n\n[Bills Due in Next 3 Days — mention ONLY if due within 3 days, skip entirely otherwise]\n${formatBillsForPrompt(upcomingBills)}`
       : "";
 
     const marketsBlock = marketsData ? buildMarketsBlock(marketsData, now) : "";
@@ -519,6 +573,27 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       sportsBlock + billsMorningBlock + marketsBlock + datesBlock + sundaySummaryBlock +
       pickleballMorningBlock + kneeCheckBlock + recFollowUpBlock + motivationContextBlock +
       dallasEventsBlock + venueConcertsBlock + newsBlock + MASTER_BRIEFING_INSTRUCTION;
+
+    // Log which sections have data (for debugging completeness of the briefing)
+    const sectionLog: Record<string, boolean | string> = {
+      "S1_greeting": true,
+      "S2_weather_today": !!dallas,
+      "S3_five_day_forecast": !!(dallas?.forecastDays && dallas.forecastDays.length > 0),
+      "S4_pollen": !!pollenData,
+      "S5_email": emails !== null,
+      "S6_calendar": events !== null && events.length > 0,
+      "S7_bills_3day": upcomingBills.length > 0,
+      "S8_news": newsBlock.length > 0,
+      "S9_markets_skip_weekend": !!(marketsData && (now.getDay() !== 0 && now.getDay() !== 6)),
+      "S10_sports": !!(sportsScores),
+      "S11_local_dallas": !!(dallasEvents && dallasEvents.length > 0),
+      "S12_music_events": !!(venueConcertsBlock && venueConcertsBlock.length > 0),
+      "S13_birthdays": upcomingDates.length > 0,
+      "S14_medication": morningMeds.length > 0,
+      "S15_motivation": true,
+      "S16_sunday_special": isSunday,
+    };
+    logger.info({ userName, sections: sectionLog }, "[BRIEFING SECTIONS] Data availability per section");
 
     logger.info({ userName, newsChars: newsBlock.length }, "Pre-generate: calling Claude for briefing");
 
