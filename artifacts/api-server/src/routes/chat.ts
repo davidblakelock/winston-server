@@ -153,6 +153,7 @@ import { validateSession } from "../auth/sessionAuth.js";
 import { getCachedBriefing, setCachedBriefing } from "../morning/briefingCache.js";
 import { preFetchMorningBriefing } from "../morning/briefingPregenerate.js";
 import { createReminder } from "../reminders/reminderManager.js";
+import { broadcastToUser } from "../reminders/sseStore.js";
 
 const router: IRouter = Router();
 
@@ -676,7 +677,7 @@ router.post("/chat", async (req, res) => {
   }
 
   // ── Auto-greeting: derive time-appropriate message ────────────────────────
-  const { message: rawMessage, history = [], isAutoGreeting = false } = req.body;
+  const { message: rawMessage, history = [], isAutoGreeting = false, deviceId = null } = req.body;
 
   let message: string;
   if (isAutoGreeting) {
@@ -1736,6 +1737,15 @@ router.post("/chat", async (req, res) => {
   res.end();
 
   if (reply && !streamError) {
+    // ── Cross-device chat sync: broadcast the assistant reply to all other ──
+    // clients for this user so it appears on their other devices immediately.
+    broadcastToUser(sessionUserName, "chat_sync", {
+      role: "assistant",
+      content: reply,
+      createdAt: new Date().toISOString(),
+      senderDeviceId: deviceId ?? null,
+    });
+
     // ── Post-response: cache the morning briefing so next call is instant ──
     if (isMorningGreeting) {
       setCachedBriefing(sessionUserName, reply);

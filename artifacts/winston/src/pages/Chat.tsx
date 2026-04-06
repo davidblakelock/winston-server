@@ -740,36 +740,31 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
       }, 30_000);
     };
 
+    // Single combined ping — checks connectivity AND logs health in one request
     const runPing = async () => {
-      const ok = await ping();
-      if (!ok) {
-        setConnectionStatus("reconnecting");
-        startReconnecting();
-      } else {
-        setConnectionStatus("online");
-      }
-    };
-
-    // Ping every 5 minutes
-    keepAliveTimer = setInterval(() => { void runPing(); }, 5 * 60_000);
-
-    // Log system health every 5 min in console (for diagnostics)
-    const logHealth = async () => {
       try {
         const r = await fetch(`${baseUrl}/api/health`, { cache: "no-store" });
         if (r.ok) {
           const data = await r.json() as { db: string; uptime: number; dbLatencyMs: number };
           console.log(`[HEALTH] db=${data.db} uptime=${data.uptime}s dbLatency=${data.dbLatencyMs}ms`);
+          setConnectionStatus("online");
+        } else {
+          setConnectionStatus("reconnecting");
+          startReconnecting();
         }
-      } catch {}
+      } catch {
+        setConnectionStatus("reconnecting");
+        startReconnecting();
+      }
     };
-    void logHealth();
-    const healthLogTimer = setInterval(() => { void logHealth(); }, 5 * 60_000);
+
+    // Ping once on mount, then every 5 minutes
+    void runPing();
+    keepAliveTimer = setInterval(() => { void runPing(); }, 5 * 60_000);
 
     return () => {
       if (keepAliveTimer) clearInterval(keepAliveTimer);
       if (reconnectTimer) clearInterval(reconnectTimer);
-      clearInterval(healthLogTimer);
     };
   }, []);
 
@@ -1200,7 +1195,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
   useEffect(() => {
     let es: EventSource | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    let backoffMs = 2_000;
+    let backoffMs = 1_000;
     let destroyed = false;
 
     let hasConnectedOnce = false;
@@ -1300,7 +1295,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
       });
 
       source.onopen = () => {
-        backoffMs = 2_000; // reset backoff on successful connect
+        backoffMs = 1_000; // reset backoff on successful connect
         console.log("SSE CONNECTED — readyState:", source.readyState);
         if (hasConnectedOnce) {
           // SSE reconnected after a drop — immediately check for any reminders
@@ -1312,22 +1307,21 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
       };
 
       source.onerror = (e) => {
-        // Log the error with as much detail as possible — on mobile Chrome this
-        // often fires for QUIC protocol errors or ECONNRESET which look identical
-        // to normal reconnects from the EventSource API's perspective.
+        // Log the error — on mobile Chrome this often fires for QUIC protocol
+        // errors or ECONNRESET which look identical to normal reconnects.
         const errType = (e as Event & { type?: string })?.type ?? "unknown";
-        console.log(`SSE ERROR: ${errType} — readyState: ${source.readyState} — reconnecting in 1 s`);
+        const delay = backoffMs;
+        // Double the backoff for next failure, capped at 30 s
+        backoffMs = Math.min(backoffMs * 2, 30_000);
+        console.log(`SSE ERROR: ${errType} — readyState: ${source.readyState} — reconnecting in ${delay}ms`);
         source.close();
         if (destroyed) return;
-        // Always reconnect after exactly 1 second regardless of error type.
-        // QUIC errors and proxy timeouts both resolve quickly, so a fixed 1 s
-        // delay beats exponential backoff for mobile reliability.
         reconnectTimer = setTimeout(() => {
           if (destroyed) return;
           console.log("SSE RECONNECTING — creating new EventSource");
           es = new EventSource(sseUrl);
           attach(es);
-        }, 1_000);
+        }, delay);
       };
     };
 
@@ -1379,10 +1373,10 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
       }
     };
 
-    // First poll after 5 s (give SSE a chance to connect and fire first)
-    const initial = setTimeout(poll, 5_000);
-    // Then every 20 s — fast enough to catch a missed reminder quickly on mobile
-    const interval = setInterval(poll, 20_000);
+    // First poll after 10 s (give SSE a chance to connect and fire first)
+    const initial = setTimeout(poll, 10_000);
+    // Then every 60 s — SSE is the real-time path; polling is only a fallback
+    const interval = setInterval(poll, 60_000);
     return () => { clearTimeout(initial); clearInterval(interval); };
   }, []); // empty deps — refs and fetch are stable
 

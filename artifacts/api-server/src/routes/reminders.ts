@@ -7,6 +7,12 @@ import { validateSession } from "../auth/sessionAuth.js";
 
 const router: IRouter = Router();
 
+// ── In-memory deduplication cache for /reminders/due ─────────────────────────
+// Multiple devices polling the same endpoint within a short window return the
+// cached result so only one real DB query fires per 10-second window.
+let dueCache: { data: unknown[]; expiry: number } | null = null;
+const DUE_CACHE_TTL_MS = 10_000;
+
 // ── SSE stream ────────────────────────────────────────────────────────────────
 router.get("/reminders/stream", async (req: Request, res: Response) => {
   const clientId = randomUUID();
@@ -82,6 +88,15 @@ router.get("/reminders/due", async (_req: Request, res: Response) => {
   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   res.setHeader("Pragma", "no-cache");
   res.setHeader("Expires", "0");
+
+  // Return cached result if a query fired within the last 10 seconds.
+  // This prevents multiple devices polling simultaneously from each
+  // triggering a separate DB round-trip.
+  if (dueCache && Date.now() < dueCache.expiry) {
+    res.json(dueCache.data);
+    return;
+  }
+
   const { rows } = await query(
     `SELECT id, user_name, reminder_text, fire_at, status, last_fired_at
        FROM reminders
@@ -89,6 +104,7 @@ router.get("/reminders/due", async (_req: Request, res: Response) => {
         AND last_fired_at > NOW() - INTERVAL '10 minutes'
       ORDER BY last_fired_at DESC`
   );
+  dueCache = { data: rows, expiry: Date.now() + DUE_CACHE_TTL_MS };
   res.json(rows);
 });
 

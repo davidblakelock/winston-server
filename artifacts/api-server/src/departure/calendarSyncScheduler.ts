@@ -135,9 +135,21 @@ async function sendNewEventAlert(event: CalendarEvent): Promise<void> {
   logger.info({ event: eventName, time: eventTimeStr }, "Calendar sync: new event alert sent");
 }
 
+// ── Throttle: track last successful sync time (module-level) ──────────────────
+let lastSyncAt: number | null = null;
+
 // ── Main sync check ────────────────────────────────────────────────────────────
 
 async function runCalendarSync(): Promise<void> {
+  const now = Date.now();
+  if (lastSyncAt !== null && now - lastSyncAt < 55 * 60 * 1000) {
+    logger.info(
+      { minsAgo: Math.floor((now - lastSyncAt) / 60_000) },
+      "Calendar sync: skipped — last sync was less than 55 minutes ago"
+    );
+    return;
+  }
+  lastSyncAt = now;
   let events: CalendarEvent[] | null;
   try {
     events = await fetchTodayEvents();
@@ -190,11 +202,11 @@ export async function populateCalendarSyncState(events: CalendarEvent[]): Promis
   logger.info({ count: events.length }, "Calendar sync state: pre-populated from morning briefing");
 }
 
-// ── Scheduler: every 30 minutes, 8am–9pm CT ───────────────────────────────────
+// ── Scheduler: every 60 minutes, 8am–9pm CT ───────────────────────────────────
 
 export function startCalendarSyncScheduler(): void {
   cron.schedule(
-    "0,30 8-21 * * *",
+    "0 8-21 * * *",
     async () => {
       try {
         await runCalendarSync();
