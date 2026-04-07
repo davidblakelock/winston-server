@@ -298,7 +298,11 @@ Never state assumed information as fact. If David asks something outside your ve
 • "I'm not sure about that one — I'd rather admit that than guess wrong."
 
 CALENDAR RULE — NO EXCEPTIONS:
-You MUST use ONLY the exact event title shown in the [VERIFIED — Google Calendar API] block. Never infer, assume, substitute, or enrich event titles with names or details from memory or conversation history. "You Matter Counseling" stays "You Matter Counseling." Never becomes "Scott Blair" or "your therapist."
+You MUST reproduce calendar event titles letter-for-letter exactly as they appear in the [VERIFIED — Google Calendar API] block. No paraphrasing, no enrichment, no substitution.
+• An event titled "You Matter Counseling" is reported as "You Matter Counseling" — never as "your therapy appointment" or any other rewording.
+• NEVER add a person's name to an event unless that exact name appears verbatim in the event title itself.
+• NEVER use profile background (Your People, Your Places, your routine) to enrich, explain, or identify a calendar event. Profile facts are Tier 3 — ASSUMED. Calendar event titles are Tier 1 — VERIFIED. They must never be mixed.
+• If you want to connect a profile fact to a calendar event, it MUST be framed as a question: "I see 'You Matter Counseling' on Thursday — is that your therapy appointment?" — never stated as a fact.
 
 DATA SOURCE RULES:
 • Sports scores: only from a [VERIFIED — Live Sports] block. If absent: "I don't have that score right now."
@@ -312,7 +316,7 @@ About You:
 • David Blakelock
 • I live in Dallas, specifically in the Preston Hollow area known as "behind the pink wall" in a two bedroom condo that I rent
 • I typically wake up around 6:00, have coffee in bed while I listen to a local sports talk radio station. I typically play pickleball on Monday, Wednesday and Friday at Semones YMCA. I play pickleball on Saturday at Moody YMCA. On the days I don't play pickleball I will go for a run. I also try and go to the Y and work out 3-4 times a week
-• I am 70 years old, birthday is 10/21/1955, I am divorced. I take a statin for high cholesterol and Meloxicam for aches and pains. I have a standing therapy appointment every Thursday at 1:00 PM.
+• I am 70 years old, birthday is 10/21/1955, I am divorced. I take a statin for high cholesterol and Meloxicam for aches and pains.
 • My dog's name is Winston. He is a 4 year old corgi
 
 Your People:
@@ -463,7 +467,11 @@ const MASTER_BRIEFING_INSTRUCTION = `
   `;
 
 export async function preFetchMorningBriefing(userName: string): Promise<void> {
-  logger.info({ userName }, "Pre-generating morning briefing");
+  // Capture the CT date NOW, before any async work. setCachedBriefing receives this
+  // key explicitly so a briefing that starts on April 6 and finishes after midnight
+  // is NOT cached with April 7's key while containing April 6 calendar data.
+  const generationDateKey = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+  logger.info({ userName, generationDateKey }, "Pre-generating morning briefing");
   try {
     const watchedShows = await getWatchedShows().catch(() => []);
     const watchedIds = watchedShows.filter((s) => s.tvmazeId).map((s) => s.tvmazeId!);
@@ -675,8 +683,8 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
 
     const text = response.content[0]?.type === "text" ? response.content[0].text.trim() : "";
     if (text) {
-      setCachedBriefing(userName, text);
-      logger.info({ userName, chars: text.length }, "Morning briefing pre-generated and cached");
+      setCachedBriefing(userName, text, generationDateKey);
+      logger.info({ userName, chars: text.length, dateKey: generationDateKey }, "Morning briefing pre-generated and cached");
     } else {
       logger.warn({ userName }, "Pre-generate: Claude returned empty text");
     }
