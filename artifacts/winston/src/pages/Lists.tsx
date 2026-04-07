@@ -121,7 +121,7 @@ export default function Lists() {
         {loading ? (
           <p className="text-sm text-muted-foreground text-center pt-12">Loading…</p>
         ) : items.length === 0 ? (
-          <p className="text-sm text-muted-foreground text-center pt-12">Nothing on this list yet.</p>
+          <p className="text-sm text-muted-foreground text-center pt-12">Nothing here yet.</p>
         ) : (
           <ul className="space-y-1">
             {items.map((item) => (
