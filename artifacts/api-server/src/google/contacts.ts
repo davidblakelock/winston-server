@@ -165,26 +165,28 @@ async function searchContactsLive(searchName: string, token: string): Promise<Co
     contacts.push(c);
   }
 
-  // ── Name filter ────────────────────────────────────────────────────────────
-  // The People API searches ALL fields (notes, emails, phone, tags) so results
-  // can include contacts that merely mention the search name in a note.
-  // Keep only contacts whose displayName actually contains the search words.
-  // Rule: at least half the search words must appear in the displayName.
+  // ── Best-match name filter ─────────────────────────────────────────────────
+  // The People API searches ALL contact fields (notes, tags, email, phone)
+  // so results can include people who merely mention the search name in a note.
+  // Strategy: score every result by how many search words appear in displayName,
+  // then keep ONLY those that tied for the highest score.
+  // If the top score is 0 (no result's name contains any search word) → return []
+  // so the caller treats it as "not found" and Claude says so honestly.
   const searchWords = searchName.toLowerCase().split(/\s+/).filter((w) => w.length > 1);
-  if (searchWords.length > 0) {
-    const filtered = contacts.filter((c) => {
-      const nameLower = c.name.toLowerCase();
-      const matchCount = searchWords.filter((w) => nameLower.includes(w)).length;
-      return matchCount >= Math.ceil(searchWords.length / 2);
-    });
-    // Only apply the filter if it keeps at least one result.
-    // If the filter removes everything, return raw results so the
-    // "not found" path can fire correctly in the caller.
-    if (filtered.length > 0) return filtered;
-    return []; // name filter removed all — treat as no match
-  }
+  if (searchWords.length === 0) return contacts;
 
-  return contacts;
+  const scored = contacts.map((c) => ({
+    contact: c,
+    score: searchWords.filter((w) => c.name.toLowerCase().includes(w)).length,
+  }));
+
+  const maxScore = Math.max(...scored.map((s) => s.score), 0);
+  if (maxScore === 0) return []; // no name overlap at all — treat as no match
+
+  // Return all contacts that tied for the best score.
+  // If only one wins (typical for a full "First Last" search), caller gets one result.
+  // If multiple tie (e.g. two people named "Susan"), caller shows "which one?" prompt.
+  return scored.filter((s) => s.score === maxScore).map((s) => s.contact);
 }
 
 // ── Curated contact management ────────────────────────────────────────────────

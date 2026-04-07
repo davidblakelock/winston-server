@@ -154,6 +154,7 @@ import {
   buildSundaySummaryBlock,
 } from "../sundaySummary/sundaySummaryManager.js";
 import { validateSession } from "../auth/sessionAuth.js";
+import { normalizeTtsText } from "../lib/ttsNormalize.js";
 import { getCachedBriefing, setCachedBriefing } from "../morning/briefingCache.js";
 import { preFetchMorningBriefing } from "../morning/briefingPregenerate.js";
 import { createReminder } from "../reminders/reminderManager.js";
@@ -2125,6 +2126,8 @@ router.post("/speak", async (req, res) => {
     return;
   }
 
+  const speakableText = normalizeTtsText(text);
+
   const elevenResponse = await fetch(
     `https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}`,
     {
@@ -2135,7 +2138,7 @@ router.post("/speak", async (req, res) => {
         Accept: "audio/mpeg",
       },
       body: JSON.stringify({
-        text,
+        text: speakableText,
         model_id: "eleven_turbo_v2_5",
         voice_settings: {
           stability: 0.5,
