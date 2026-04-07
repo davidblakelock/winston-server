@@ -225,6 +225,7 @@ function AppShell({ onSignOut, userPicture, userName, userFullName }: AppShellPr
 
   return (
     <Switch>
+      <Route path="/lists">{() => <Lists />}</Route>
       <Route path="/">{() => <Chat onSignOut={onSignOut} companionName={profile?.companionName ?? null} voiceId={profile?.voiceId ?? null} photoUrl={profile?.photoUrl ?? null} avatarBase64={profile?.avatarBase64 ?? null} userPicture={userPicture} userName={userName} userFullName={userFullName} />}</Route>
       <Route component={NotFound} />
     </Switch>
@@ -341,11 +342,6 @@ function AppWithAuth() {
   // Olivia archive — always public
   if (location === "/olivia") {
     return <OliviaArchive />;
-  }
-
-  // Lists screen
-  if (location === "/lists") {
-    return <Lists />;
   }
 
   // Demo — always public, no sign-in required

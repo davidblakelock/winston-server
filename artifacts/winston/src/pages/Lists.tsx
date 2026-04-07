@@ -68,15 +68,15 @@ export default function Lists() {
     }
   }
 
-  async function handleDelete(id: number) {
+  async function handleDelete(listName: Tab, id: number) {
     setItems((prev) => prev.filter((i) => i.id !== id));
     try {
-      await fetch(`${API}/api/lists/${encodeURIComponent(activeTab)}/${id}`, {
+      await fetch(`${API}/api/lists/${encodeURIComponent(listName)}/${id}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` },
       });
     } catch {
-      void fetchItems(activeTab);
+      void fetchItems(listName);
     }
   }
 
@@ -133,12 +133,12 @@ export default function Lists() {
                 <input
                   type="checkbox"
                   className="h-4 w-4 rounded border border-white/20 bg-transparent accent-amber-500 cursor-pointer flex-shrink-0"
-                  onChange={() => void handleDelete(item.id)}
+                  onChange={() => void handleDelete(activeTab, item.id)}
                 />
                 <span className="flex-1 text-sm text-foreground/90">{item.item_text}</span>
                 {/* Explicit delete button */}
                 <button
-                  onClick={() => void handleDelete(item.id)}
+                  onClick={() => void handleDelete(activeTab, item.id)}
                   className="opacity-0 group-hover:opacity-100 text-muted-foreground/40 hover:text-red-400 transition-all p-1 rounded"
                   title="Remove"
                 >
