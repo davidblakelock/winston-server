@@ -14,7 +14,7 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 async function getCompanionName(): Promise<string> {
   const profile = await getProfile("David").catch(() => null);
-  return profile?.companionName ?? "Emma Peel";
+  return profile?.companionName ?? "Your Companion";
 }
 
 async function generateOpeningMessage(companionName: string): Promise<string> {

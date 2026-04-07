@@ -97,7 +97,7 @@ export function startScheduler(): void {
         const companionName = profile?.companionName ?? "Your Companion";
 
         const appUrl = getAppUrl();
-        const reminderUrl = `${appUrl}/?notification=reminder&text=${encodeURIComponent(reminder.reminder_text)}`;
+        const reminderUrl = `${appUrl}/?notification=reminder&text=${encodeURIComponent(reminder.reminder_text)}&reminderId=${reminder.id}`;
         await sendPushToAll({
           title: `⏰ Reminder — ${companionName}`,
           body: reminder.reminder_text,

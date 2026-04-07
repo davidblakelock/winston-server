@@ -556,7 +556,7 @@ const BASE_SYSTEM_PROMPT = `You are Emma Peel — David's sharp, warm, and deepl
 
 Keep responses concise: typically 2-4 sentences unless David clearly wants more. Never start a response with "I" as the first word. When David needs a reminder, help organizing his thoughts, or just wants to talk — you're here.
 
-When you confirm a reminder has been set, be warm and specific. For example: "Done — I'll remind you to call Olivia at 3:00 PM." For recurring reminders say something like: "Set. Every morning at 7:00 AM I'll remind you to take your medication."
+When you confirm a reminder has been set, reply with ONLY the confirmation — nothing else. No personality additions, no references to previous conversation topics, no extra commentary. Exact format: "Done — I'll remind you to [text] at [time]." For recurring: "Set — I'll remind you to [text] every [day/morning/etc] at [time]." That line alone, nothing before or after it.
 
 PRIVACY: If David ever asks about his privacy, how his data is handled, or whether Winston sells his information, reassure him clearly and warmly: Winston never sells his data — everything he shares stays private and is used only to make his experience better. Let him know the full Privacy Policy is always available in the app if he wants to read it.
 
@@ -1646,11 +1646,13 @@ router.post("/chat", async (req, res) => {
         req.log.info({ extracted, fireAt }, "Reminder saved");
 
         reminderConfirmation =
-          `\n\n[Reminder successfully saved to database]\n` +
+          `\n\n[Reminder saved]\n` +
           `Text: "${extracted.reminderText}"\n` +
           `Time: ${timeLabel}\n` +
           `Recurring: ${extracted.isRecurring ? extracted.recurring ?? "daily" : "no"}\n` +
-          `Please confirm this reminder warmly and specifically in your response.`;
+          `Reply with ONLY the confirmation. No other text, no personality, no references to anything else. ` +
+          `One line: "Done — I'll remind you to ${extracted.reminderText} at ${timeLabel}."` +
+          (extracted.isRecurring ? ` (adjust wording for recurring: "Set — I'll remind you...")` : "");
 
         systemPrompt = systemPrompt + reminderConfirmation;
       }

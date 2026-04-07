@@ -432,11 +432,16 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [messagesLoaded, setMessagesLoaded] = useState(false);
-  const [pendingNotification, setPendingNotification] = useState<{ type: "morning" | "reminder"; text?: string } | null>(() => {
+  const [pendingNotification, setPendingNotification] = useState<{ type: "morning" | "reminder"; text?: string; id?: number } | null>(() => {
     const params = new URLSearchParams(window.location.search);
     const type = params.get("notification");
     if (type === "morning") return { type: "morning" };
-    if (type === "reminder") { const text = params.get("text"); return text ? { type: "reminder", text } : null; }
+    if (type === "reminder") {
+      const text = params.get("text");
+      const rawId = params.get("reminderId");
+      const id = rawId ? parseInt(rawId, 10) : undefined;
+      return text ? { type: "reminder", text, id: id && !isNaN(id) ? id : undefined } : null;
+    }
     return null;
   });
   const [input, setInput] = useState("");
@@ -968,7 +973,12 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
       // Auto-trigger "good morning" so Emma delivers the full briefing
       setTimeout(() => submitText("good morning"), 600);
     } else if (notif.type === "reminder" && notif.text) {
-      // Show the reminder as an assistant message so David sees it immediately
+      // Dedup: if SSE or push already fired this reminder, don't show it twice
+      if (notif.id != null && spokenReminderIds.current.has(notif.id)) {
+        console.log("[REMINDER] pendingNotification: already shown via SSE/push — skipping id:", notif.id);
+        return;
+      }
+      if (notif.id != null) spokenReminderIds.current.add(notif.id);
       const msgId = `notif-reminder-${Date.now()}`;
       setMessages((prev) => [
         ...prev,
@@ -998,7 +1008,9 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
           setPendingNotification({ type: "morning" });
         } else if (type === "reminder") {
           const text = params.get("text");
-          if (text) setPendingNotification({ type: "reminder", text });
+          const rawId = params.get("reminderId");
+          const id = rawId ? parseInt(rawId, 10) : undefined;
+          if (text) setPendingNotification({ type: "reminder", text, id: id && !isNaN(id) ? id : undefined });
         }
       } catch { /* ignore malformed URLs */ }
     };
