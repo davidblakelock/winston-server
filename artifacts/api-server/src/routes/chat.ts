@@ -417,7 +417,7 @@ const MED_TAKEN_PATTERN = /\b(taken|took\s+(my\s+)?(meds?|medications?|pills?|th
 const MED_ADD_PATTERN = /\b(add\s+(a\s+)?(?:new\s+)?medication\s+(?:called\s+)?|new\s+medication\s+(?:called\s+)?|start\s+taking\s+(?:a\s+)?(?:new\s+)?medication|add\s+.{2,40}\s+to\s+my\s+medications?)\b/i;
 const MED_LIST_PATTERN = /\b(what\s+medications?\s+(do\s+i\s+take|am\s+i\s+(on|taking)|are\s+mine)|my\s+medications?|medication\s+list|what\s+(meds?|pills?)\s+(do\s+i|am\s+i)|list\s+(my\s+)?meds?|what\s+do\s+i\s+take)\b/i;
 const MED_REMOVE_PATTERN = /\b(stop\s+taking|remove\s+.+\s+from\s+my\s+medications?|no\s+longer\s+taking|discontinued?)\b/i;
-const PROFILE_PATTERN = /\b(ms\.?\s*peel\s+)?(add\s+a?\s*(new\s+)?(place|show|restaurant|person|interest|favorite)|i\s+(am|'m|am\s+currently|'m\s+currently)\s+(watching|reading)|add\s+.{1,60}\s+as\s+(a|one\s+of\s+my)\s+(favorite\s+)?(place|show|restaurant|restaurant\s+to|person|interest)|remove\s+.{1,60}\s+from\s+my\s+(places|shows|restaurants|people|interests|favorites|list|profile)|what\s+(places|shows|restaurants|people|interests)\s+(do\s+i\s+(have|have\s+saved)|am\s+i)|show\s+me\s+my\s+(places|shows|restaurants|people|interests)|what('?s|\s+is)\s+(in|on)\s+my\s+(profile|saved\s+places|watch\s+list))\b/i;
+const PROFILE_PATTERN = /\b(ms\.?\s*peel\s+)?(add\s+a?\s*(new\s+)?(place|show|restaurant|person|interest|favorite)|i\s+(am|'m|am\s+currently|'m\s+currently)\s+(watching|reading)|add\s+.{1,60}\s+as\s+(a|one\s+of\s+my)\s+(favorite\s+)?(place|show|restaurant|restaurant\s+to|person|interest)|remove\s+.{1,60}\s+from\s+my\s+(places|shows|restaurants|people|interests|favorites|list|profile)|what\s+(places|shows|restaurants|people|interests)\s+(do\s+i\s+(have|have\s+saved)|am\s+i)|show\s+me\s+my\s+(places|shows|restaurants|people|interests)|what('?s|\s+is)\s+(in|on)\s+my\s+(profile|saved\s+places|watch\s+list)|(add|save|remember)\s+(my\s+)?(new\s+)?(doctor|dentist|vet|therapist|therapist|trainer|coach|lawyer|attorney|accountant|financial\s+advisor|pharmacist|specialist|provider|chiropractor|optometrist|ophthalmologist|dermatologist|cardiologist|surgeon|podiatrist|psychiatrist|psychologist|stylist|barber|mechanic|plumber|contractor|electrician|realtor|agent|banker|broker|notary|tutor|instructor|nutritionist|dietitian|personal\s+trainer)\b)\b/i;
 
 interface SavedLocation {
   name: string;
@@ -887,13 +887,18 @@ router.post("/chat", async (req, res) => {
 
   // ── Bill tracking ────────────────────────────────────────────────────────────
   if (isBillAdd) {
+    console.log(`[BILL INTENT DETECTED] message="${message}" sessionUserName="${sessionUserName}"`);
     try {
       req.log.info({ message }, "Bill add detected — extracting");
+      console.log(`[BILL PARSING] Sending to Claude for extraction: "${message}"`);
       const extracted = await extractBillFromMessage(message);
+      console.log(`[BILL PARSING] Extracted fields: ${JSON.stringify(extracted)}`);
       req.log.info({ extracted }, "Bill extraction result");
       if (!extracted) {
+        console.log(`[BILL PARSING] Claude returned null — could not parse bill from message`);
         systemPrompt += `\n\n[Bill Add — Parse Failed]\nTell David you understood he wants to track a bill but you need a bit more info. Ask him to say the bill name and due date clearly — like "My Amex is due on the 15th every month" or "My rent is $2950 due on the 1st."`;
       } else {
+        console.log(`[BILL SAVE] Attempting INSERT — name="${extracted.name}" category="${extracted.category}" freq="${extracted.frequency}" dueDay=${extracted.dueDay} user="${sessionUserName}"`);
         const result = await addBill(
           extracted.name,
           extracted.category,
@@ -905,16 +910,26 @@ router.post("/chat", async (req, res) => {
           sessionUserName
         );
         if (result.alreadyExists) {
+          console.log(`[BILL SAVE] Already exists — skipping INSERT for "${extracted.name}"`);
           systemPrompt += `\n\n[Bill Add — Already Exists]\nTell David you already have "${extracted.name}" tracked. If he wants to update it, he can remove it first and re-add it.`;
         } else if (result.bill) {
+          console.log(`[BILL SAVE] SUCCESS — id=${result.bill.id} name="${result.bill.name}" dueDay=${result.bill.dueDay}`);
           const confirmation = confirmBillAdded(result.bill);
           systemPrompt += `\n\n[Bill Added Successfully]\n${confirmation}\nTell David exactly this confirmation. Be warm and brief.`;
           req.log.info({ name: result.bill.name, frequency: result.bill.frequency, dueDay: result.bill.dueDay }, "Bill added to DB");
+        } else {
+          console.log(`[BILL SAVE] ERROR — addBill returned neither alreadyExists nor bill object`);
         }
       }
     } catch (err) {
+      console.log(`[BILL SAVE] EXCEPTION — ${err instanceof Error ? err.message : String(err)}`);
       req.log.warn({ err }, "Bill add failed");
       systemPrompt += `\n\n[Bill Add — Error]\nTell David you had trouble adding that obligation and ask him to try again.`;
+    }
+  } else if (!isMorningGreeting) {
+    // Only log misses for debugging when the message looks bill-like
+    if (/\b(bill|due|payment|insurance)\b/i.test(message)) {
+      console.log(`[BILL INTENT] Pattern did NOT match — message="${message}"`);
     }
   }
 
@@ -1625,13 +1640,18 @@ router.post("/chat", async (req, res) => {
 
   // ── Profile management: add, remove, or read profile items ──
   if (isProfileRequest) {
+    console.log(`[PROFILE INTENT DETECTED] message="${message}" sessionUserName="${sessionUserName}"`);
     try {
+      console.log(`[PROFILE PARSING] Sending to Claude for operation extraction`);
       const op = await extractProfileOperation(message);
+      console.log(`[PROFILE PARSING] Extracted operation: ${JSON.stringify(op)}`);
       if (op) {
         let resultContext = "";
 
         if (op.operation === "add" && op.name) {
+          console.log(`[PROFILE SAVE] Attempting INSERT — category="${op.category}" name="${op.name}" detail="${op.detail ?? "null"}" user="${sessionUserName}"`);
           const added = await addProfileItem(op.category, op.name, op.detail ?? null, sessionUserName);
+          console.log(`[PROFILE SAVE] Result: ${JSON.stringify(added)}`);
           const updatedItems = await getProfileItems(op.category, sessionUserName).catch(() => []);
           resultContext = buildProfileResultContext(op, updatedItems, false, added);
           req.log.info({ op, added }, "Profile item added");
@@ -1811,6 +1831,7 @@ router.post("/chat", async (req, res) => {
 
   // ── Google Contacts search ────────────────────────────────────────────────
   if (isContactRequest) {
+    console.log(`[CONTACT INTENT DETECTED] message="${message}"`);
     try {
       // Four patterns tried in priority order. All case-insensitive.
       // P1: "What's / What is [Name]'s phone/email" — possessive question
@@ -1835,8 +1856,11 @@ router.post("/chat", async (req, res) => {
         message.replace(/\b(find|look\s+up|search(\s+for)?|get|pull\s+up|in\s+my\s+contacts?|from\s+my\s+contacts?|my\s+contacts?|their?\s+(phone|email|number|contact)|please|for\s+me)\b/gi, "").trim()
       ).replace(/\b(please|for\s+me|thanks?|thank\s+you|can\s+you|could\s+you)\b/gi, "").replace(/\s+/g, " ").trim();
       const searchQuery = rawQuery.slice(0, 60).trim();
+      console.log(`[CONTACT SEARCH] rawQuery="${rawQuery}" finalQuery="${searchQuery}"`);
       if (searchQuery.length > 1) {
+        console.log(`[CONTACT SEARCH] Calling Google People API live for: "${searchQuery}"`);
         const result = await searchContacts(searchQuery).catch(() => ({ contacts: [], needsReauth: false }));
+        console.log(`[CONTACT SEARCH] Returned ${(result as {contacts:unknown[]}).contacts?.length ?? 0} result(s) from People API`);
         systemPrompt += formatContactsForPrompt(result, searchQuery);
         req.log.info({ query: searchQuery, found: result.contacts.length, needsReauth: result.needsReauth }, "[CONTACTS] Search complete");
       }
