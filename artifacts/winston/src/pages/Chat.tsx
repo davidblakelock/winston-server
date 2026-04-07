@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback, KeyboardEvent, ChangeEvent } from "react";
-import { Send, Play, Loader2, Disc3, Mic, MicOff, MapPin, Mail, LogOut, Settings, X, Moon, Bell, BellOff, Clock, ChevronDown, ChevronUp, HelpCircle, Check } from "lucide-react";
+import { Send, Play, Loader2, Disc3, Mic, MicOff, MapPin, Mail, LogOut, Settings, X, Moon, Bell, BellOff, Clock, ChevronDown, ChevronUp, HelpCircle, Check, List } from "lucide-react";
+import { useLocation } from "wouter";
 import { useTextToSpeech } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -447,6 +448,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
   const [input, setInput] = useState("");
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [, setLocation] = useLocation();
   const [upcomingReminders, setUpcomingReminders] = useState<UpcomingReminder[]>([]);
   const [showRemindersPanel, setShowRemindersPanel] = useState(false);
   const notif = useNotifications();
@@ -1883,6 +1885,15 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
             )}
           </div>
         )}
+
+        {/* Lists */}
+        <button
+          onClick={() => setLocation("/lists")}
+          className="text-muted-foreground hover:text-foreground transition-colors p-1.5 rounded-full hover:bg-white/10 border border-white/10 hover:border-white/20"
+          title="Lists"
+        >
+          <List className="h-4 w-4" />
+        </button>
 
         {/* Help button */}
         <button

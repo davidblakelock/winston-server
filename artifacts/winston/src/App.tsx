@@ -7,6 +7,7 @@ import NotFound from "@/pages/not-found";
 import Chat from "@/pages/Chat";
 import Onboarding from "@/pages/Onboarding";
 import OliviaArchive from "@/pages/OliviaArchive";
+import Lists from "@/pages/Lists";
 import SignIn from "@/pages/SignIn";
 import Demo from "@/pages/Demo";
 import { useAuth } from "@/hooks/useAuth";
@@ -340,6 +341,11 @@ function AppWithAuth() {
   // Olivia archive — always public
   if (location === "/olivia") {
     return <OliviaArchive />;
+  }
+
+  // Lists screen
+  if (location === "/lists") {
+    return <Lists />;
   }
 
   // Demo — always public, no sign-in required

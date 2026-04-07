@@ -14,6 +14,7 @@ import demoRouter from "./demo";
 import legalRouter from "./legal";
 import settingsRouter from "./settings";
 import contactsRouter from "./contacts";
+import listsRouter from "./lists";
 
 const router: IRouter = Router();
 
@@ -32,5 +33,6 @@ router.use(pushRouter);
 router.use(oliviaRouter);
 router.use(settingsRouter);
 router.use(contactsRouter);
+router.use(listsRouter);
 
 export default router;
