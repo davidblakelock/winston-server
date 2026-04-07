@@ -92,7 +92,8 @@ router.patch("/settings/name", express.json({ limit: "1mb" }), async (req, res) 
   await updateProfileField(userName, { companionName: name });
 
   const profile = await getProfile(userName);
-  const voiceId = profile?.voiceId ?? VOICE_OPTIONS[7].id;
+  const envVoiceId = (process.env.EL_VOICE_ID ?? process.env.ELEVENLABS_VOICE_ID ?? "").trim();
+  const voiceId = profile?.voiceId ?? envVoiceId;
 
   const lowerName = name.toLowerCase();
   let confirmText: string;

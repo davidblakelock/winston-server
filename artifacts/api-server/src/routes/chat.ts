@@ -1638,9 +1638,14 @@ router.post("/chat", async (req, res) => {
         const listContext = buildListContext(result);
         systemPrompt = systemPrompt + listContext;
         req.log.info({ op, itemCount: result.currentItems.length }, "List operation executed");
+      } else {
+        systemPrompt = systemPrompt +
+          `\n\n[List Request — Could Not Parse]\nCould not determine which list or operation David is referring to. Ask him to clarify (e.g., "Which list — shopping or to do?"). Do NOT guess or invent any list items.`;
       }
     } catch (err) {
-      req.log.warn({ err }, "List operation failed, continuing normally");
+      req.log.warn({ err }, "List operation failed");
+      systemPrompt = systemPrompt +
+        `\n\n[List Request — Failed]\nThe list retrieval failed due to a system error. Tell David: "I couldn't retrieve your list right now — please try again in a moment." Do NOT invent or guess any list items.`;
     }
   }
 

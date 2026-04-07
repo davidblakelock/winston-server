@@ -685,21 +685,20 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
             playElevenLabsAudio(messageId, ttsData.audioBase64, ttsData.mimeType);
           },
           onError: (err) => {
-            console.warn("[SPEAK] TTS failed, falling back to browser TTS. Error:", err);
-            playBrowserTTS(messageId, text);
+            console.warn("[SPEAK] ElevenLabs TTS failed — no audio will play. Error:", err);
           },
         }
       );
     },
-    [ttsMutation, playElevenLabsAudio, playBrowserTTS]
+    [ttsMutation, playElevenLabsAudio]
   );
 
   const handlePlay = useCallback(
     (msg: Message) => {
       if (msg.audioBase64) playElevenLabsAudio(msg.id, msg.audioBase64, msg.mimeType);
-      else playBrowserTTS(msg.id, msg.content);
+      else speakReply(msg.id, msg.content);
     },
-    [playElevenLabsAudio, playBrowserTTS]
+    [playElevenLabsAudio, speakReply]
   );
 
   // ── Session validity check (Bug 6) ───────────────────────────────────────
