@@ -2114,8 +2114,8 @@ router.post("/speak", async (req, res) => {
     return;
   }
 
-  const ELEVENLABS_API_KEY = (process.env.EL_API_KEY ?? process.env.ELEVENLABS_API_KEY ?? "").trim();
-  const DEFAULT_VOICE_ID = (process.env.EL_VOICE_ID ?? process.env.ELEVENLABS_VOICE_ID ?? "").trim();
+  const ELEVENLABS_API_KEY = (process.env.EL_API_KEY ?? process.env.ELEVENLABS_API_KEY ?? process.env.elevenlabs_api_key ?? "").trim();
+  const DEFAULT_VOICE_ID = (process.env.EL_VOICE_ID?.trim() || process.env.ELEVENLABS_VOICE_ID?.trim() || "");
 
   if (!ELEVENLABS_API_KEY) {
     res.status(500).json({ error: "ElevenLabs API key not configured" });

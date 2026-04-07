@@ -10,7 +10,7 @@ import { getProfilePlaces } from "../profile/profileManager.js";
 
 const router: IRouter = Router();
 
-const EL_KEY = () => (process.env.EL_API_KEY ?? process.env.ELEVENLABS_API_KEY ?? "").trim();
+const EL_KEY = () => (process.env.EL_API_KEY ?? process.env.ELEVENLABS_API_KEY ?? process.env.elevenlabs_api_key ?? "").trim();
 
 async function generateTTS(voiceId: string, text: string): Promise<{ audioBase64: string; mimeType: string } | null> {
   const apiKey = EL_KEY();

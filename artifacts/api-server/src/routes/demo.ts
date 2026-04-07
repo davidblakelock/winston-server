@@ -16,7 +16,7 @@ router.post("/demo/speak", async (req: Request, res: Response) => {
     return;
   }
 
-  const apiKey = (process.env.EL_API_KEY ?? process.env.ELEVENLABS_API_KEY ?? "").trim();
+  const apiKey = (process.env.EL_API_KEY ?? process.env.ELEVENLABS_API_KEY ?? process.env.elevenlabs_api_key ?? "").trim();
 
   if (!apiKey) {
     res.status(503).json({ error: "TTS not configured" });
