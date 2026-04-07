@@ -186,14 +186,19 @@ export function buildListContext(result: ListResult): string {
         `The list is now empty. Confirm naturally.`
       );
     case "read": {
-      const content =
-        result.currentItems.length > 0
-          ? result.currentItems.map((i, n) => `${n + 1}. ${i}`).join("\n")
-          : "(empty — nothing on this list yet)";
+      if (result.currentItems.length === 0) {
+        return (
+          `\n\n[${displayName} — EMPTY OR UNREADABLE]\n` +
+          `The list returned no items — this may mean the list is empty or there was a retrieval issue.\n` +
+          `Tell David exactly: "I had trouble reading your list — try checking the list screen directly." ` +
+          `Do NOT say the list is empty. Do NOT invent any items.`
+        );
+      }
+      const content = result.currentItems.map((i, n) => `${n + 1}. ${i}`).join("\n");
       return (
         `\n\n[${displayName} — current contents]\n` +
         `${content}\n` +
-        `Read this list back to David naturally and conversationally. If it's empty, say so warmly.`
+        `Read this list back to David naturally and conversationally.`
       );
     }
   }
