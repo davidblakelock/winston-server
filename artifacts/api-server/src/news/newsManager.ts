@@ -130,34 +130,44 @@ async function fetchNewsFromClaude(): Promise<string> {
     timeZone: tz, weekday: "long", month: "long", day: "numeric",
   });
 
-  // ── Main headlines: 6-7 punchy one-sentence headlines ────────────────────
+  // ── Main headlines: 5-6 bold-title + one-sentence-summary headlines ──────
   const mainPrompt = `Today is ${todayStr}. Yesterday was ${yesterdayStr}.
 
-You are curating a morning news ticker for David Blakelock in Dallas, Texas. Use web search to find real, current news headlines. RECENCY IS CRITICAL — every headline must be from ${todayStr} or ${yesterdayStr} only. If a search returns old results, search again with "today" added to the query.
+You are curating a morning news briefing for David Blakelock in Dallas, Texas. Use web search to find real, current news. RECENCY IS CRITICAL — every story must be from ${todayStr} or ${yesterdayStr} only.
 
-FORMAT: Return 6 to 7 headlines. Each headline is ONE sentence only — punchy, specific, and scannable. Include the key fact (number, name, outcome). No second sentence. No elaboration. Think news ticker, not news article.
+FORMAT: Return 5 to 6 stories. Each story has TWO parts:
+1. A bold short title (3-7 words, bold using **asterisks**)
+2. One sentence of context on the next line — specific, factual, with key numbers or names
 
 David's interests: stock market, AI/tech, global politics, Texas Rangers, Dallas Cowboys, Dallas/Texas news, energy sector.
 
-Search for fresh headlines across these categories:
+Cover these categories:
 - US market performance ${yesterdayStr} — S&P 500 and Nasdaq with one key data point
-- Major US or global political development from the past 24 hours
-- Top AI or tech news from the past 48 hours (OpenAI, Anthropic, Google, Apple)
-- Texas Rangers game result ${yesterdayStr} — if no game, replace with another story
-- Dallas or Texas local news from the past 24 hours
-- Any other major breaking story from the past 24 hours
+- Major US or global political development
+- AI or tech news (OpenAI, Anthropic, Google, Apple)
+- Texas Rangers or Cowboys update — if no game, replace with another story
+- Dallas or Texas local news
+- One other major breaking story
 
-STALENESS RULE: Only include stories from ${todayStr} or ${yesterdayStr}. Verify recency before including.
+STALENESS RULE: Only include stories from ${todayStr} or ${yesterdayStr}.
 
-Output in EXACTLY this format — bullet points only, one sentence each, no other text:
+Output in EXACTLY this format — no other text:
 
 HEADLINES:
-• [one sentence headline with key fact]
-• [one sentence headline with key fact]
-• [one sentence headline with key fact]
-• [one sentence headline with key fact]
-• [one sentence headline with key fact]
-• [one sentence headline with key fact]
+**[Short Bold Title]**
+[One sentence with specific fact, number, or name.]
+
+**[Short Bold Title]**
+[One sentence with specific fact, number, or name.]
+
+**[Short Bold Title]**
+[One sentence with specific fact, number, or name.]
+
+**[Short Bold Title]**
+[One sentence with specific fact, number, or name.]
+
+**[Short Bold Title]**
+[One sentence with specific fact, number, or name.]
 
 Only report real stories you found and verified are current. Never invent or embellish.`;
 
@@ -266,7 +276,7 @@ function formatNewsBlock(rawText: string, fetchedAt: Date): string {
   });
 
   const sections: string[] = [];
-  if (headlines) sections.push(`[Morning Headlines — 6-7 punchy one-sentence stories]\n${headlines}`);
+  if (headlines) sections.push(`[Headlines — bold title + one sentence summary each]\n${headlines}`);
   if (entertainment && !/^none$/i.test(entertainment)) {
     sections.push(`[Entertainment & Pop Culture]\n${entertainment}`);
   }
@@ -275,13 +285,73 @@ function formatNewsBlock(rawText: string, fetchedAt: Date): string {
   const body = sections.length > 0 ? sections.join("\n\n") : rawText;
 
   return (
-    `\n\n[Morning News — web-searched at ${fetchedStr} CT, headlines from past 24-48 hours only]\n` +
-    body +
-    `\n\n[News delivery guidance for Emma]\n` +
-    `Deliver as a brisk news ticker — no headers, no tier labels, no "in other news". ` +
-    `Read the [Morning Headlines] as rapid-fire one-liners with short natural transitions ("also —", "meanwhile —", "and —"). ` +
-    `After the headlines, if [Entertainment & Pop Culture] has items, weave them in naturally. ` +
-    `End with the [Watercooler Story] using something like "oh, and here's one to share later —". ` +
-    `Never elaborate beyond what is written. Goal: David gets 6-7 punchy headlines in 60 seconds.`
+    `\n\n[Morning News — web-searched at ${fetchedStr} CT, stories from past 24-48 hours only]\n` +
+    body
   );
+}
+
+// ── Daily motivation / inspiration ────────────────────────────────────────────
+
+interface MotivationCache {
+  content: string;
+  fetchedAt: Date;
+}
+let _motivationCache: MotivationCache | null = null;
+
+async function fetchMotivationFromClaude(): Promise<string> {
+  const now = new Date();
+  const todayStr = now.toLocaleDateString("en-US", {
+    timeZone: "America/Chicago", weekday: "long", month: "long", day: "numeric", year: "numeric",
+  });
+
+  const prompt =
+    `Today is ${todayStr}. Search the web for something genuinely inspiring, thought-provoking, or fascinating ` +
+    `that is relevant to today. Look for things like: an inspiring story published today, a philosophical idea ` +
+    `trending right now, an unexpected scientific discovery, or a remarkable human achievement from the last 24-48 hours. ` +
+    `\n\nReturn ONE item only. Format:\n` +
+    `TITLE: [5-8 word bold title]\n` +
+    `CONTENT: [2-3 sentences — what it is, why it's striking, and one sentence that feels personal or applicable to everyday life]\n` +
+    `\nNo extra commentary. Only real, verified content — never fabricate.`;
+
+  console.log(`[API] Claude web_search (daily motivation) — starting at ${now.toISOString()}`);
+
+  const response = await anthropic.messages.create({
+    model: "claude-opus-4-5",
+    max_tokens: 300,
+    tools: [{ type: "web_search_20250305", name: "web_search" }],
+    messages: [{ role: "user", content: prompt }],
+  });
+
+  const text = response.content
+    .filter((block) => block.type === "text")
+    .map((block) => (block as { type: "text"; text: string }).text)
+    .join("\n").trim();
+
+  console.log(`[API] Claude web_search (daily motivation) — complete, ${text.length} chars`);
+  return text;
+}
+
+export async function preFetchDailyMotivation(): Promise<void> {
+  try {
+    logger.info("Starting daily motivation pre-fetch");
+    const content = await fetchMotivationFromClaude();
+    _motivationCache = { content, fetchedAt: new Date() };
+    logger.info({ chars: content.length }, "Daily motivation pre-fetched and cached");
+  } catch (err) {
+    logger.warn({ err }, "Daily motivation pre-fetch failed — will use context-based motivation");
+  }
+}
+
+export async function fetchDailyMotivation(): Promise<string> {
+  if (_motivationCache && Date.now() - _motivationCache.fetchedAt.getTime() < 6 * 60 * 60 * 1000) {
+    return _motivationCache.content;
+  }
+  try {
+    const content = await fetchMotivationFromClaude();
+    _motivationCache = { content, fetchedAt: new Date() };
+    return content;
+  } catch (err) {
+    logger.warn({ err }, "Daily motivation fetch failed — skipping");
+    return "";
+  }
 }

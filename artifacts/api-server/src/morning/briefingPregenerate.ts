@@ -6,7 +6,7 @@ import { populateCalendarSyncState } from "../departure/calendarSyncScheduler.js
 import { getMedications, hasTakenMedicationsToday, buildMedReminderText } from "../medications/medicationManager.js";
 import { getLastNightNotes, formatNotesForMorningBriefing } from "../winddown/winddownManager.js";
 import { getRecentMemories, formatMemoriesForContext } from "../memory/memoryManager.js";
-import { fetchMorningNews } from "../news/newsManager.js";
+import { fetchMorningNews, fetchDailyMotivation } from "../news/newsManager.js";
 import { getProfileItems, getProfilePlaces, formatProfileForContext } from "../profile/profileManager.js";
 import { getProfile, buildSystemPromptFromProfile, type CollectedData } from "../onboarding/onboardingManager.js";
 import { getWatchedShows } from "../tv/showManager.js";
@@ -389,23 +389,34 @@ const MASTER_BRIEFING_INSTRUCTION = `
 
   SECTION 1 — GREETING: "Good morning, David" followed by one warm personal sentence naming the day of the week. One sentence total.
 
-  SECTION 2 — WEATHER TODAY: Conversational, brief, and friendly — like a weather app in one or two sentences. Format: "Today in Dallas — [condition], [temp feel]. High [X], low [Y]." If there is a severe weather signal (THUNDERSTORMS, SNOW, extreme heat), add one clear warning sentence. If a morning activity signal is present AND [Morning activity window has passed] is NOT flagged, mention it in one sentence ("Great morning for pickleball" / "might want to bring an umbrella for your run"). If [Morning activity window has passed] IS in the data, do NOT suggest the activity. Then add one short line for family: "Olivia's weather in Knoxville: [X]° and [condition] today." Use the [Knoxville weather] data block.
+  SECTION 2 — WEATHER TODAY: STRICT FORMAT — no more than three sentences total, no extra commentary. Use this exact style:
+    Sentence 1: "Dallas is [temp]° and [condition] today — high [X], low [Y]." (Use current temp and condition from the data. Just numbers. No "feels like.")
+    Sentence 2 (only if pollen is high/severe): "[Tree/Grass] pollen is [high/severe] today." Weave this naturally. Skip entirely if pollen is low or moderate.
+    Sentence 3 (only if there is a dangerous weather signal — thunderstorms, extreme heat, snow): One clear warning sentence. Skip if conditions are normal.
+    Then: ONE sentence for Knoxville — "Olivia's weather in Knoxville — [temp]° and [condition], high [X]." Use the [Knoxville weather] data block.
+    If [Morning activity window has passed] is flagged — do NOT mention workouts, runs, pickleball, walks, or outdoor activity at all. Just weather.
+    If it is NOT flagged and an activity signal is present — one sentence about it only. Example: "Good morning for pickleball." or "Bring an umbrella for your run."
+    NOTHING ELSE. No UV index commentary. No elaboration. No extra sentences.
 
-  SECTION 3 — FIVE DAY FORECAST: One line per day — the next five days. Format: "Mon: 75/52, partly cloudy. Tue: 68/48, rainy." That style. Concise.
+  SECTION 3 — FIVE DAY FORECAST: Deliver as one compact line per day in this exact style: "Five day outlook: Wed 78/55 sunny, Thu 77/59 partly cloudy, Fri 76/64 cloudy, Sat 77/64 clear, Sun 73/69 chance of rain." All five days on connected lines — not separate bullet points. High/low only, one word condition. No elaboration.
 
-  SECTION 4 — POLLEN: ONLY if pollen levels are high or very high — weave one sentence into Section 2 naturally ("Tree pollen is severe today — heads up if you have allergies"). Skip this section entirely if pollen is low or moderate. Do NOT deliver as a separate section — it is part of Section 2.
+  SECTION 4 — POLLEN: DO NOT deliver as a separate section. Pollen is already handled inside Section 2. Skip entirely here.
 
-  SECTION 5 — EMAIL: Only emails from the last 24 hours. Share one or two that actually matter — something he needs to act on, something from someone important, or something he would genuinely want to know. If his inbox is quiet, say "Inbox has been quiet since yesterday." Never count unread messages. Never mention email if there is nothing worth flagging.
+  SECTION 5 — EMAIL: Only unread emails from the last 24 hours. Share one or two that actually matter — something requiring action, from someone important, or genuinely worth knowing. If the inbox is clear, say exactly: "Your inbox is clear — no new unread emails this morning." Never count unread messages. Never summarize read emails or confirmation emails David has already seen.
 
   SECTION 6 — CALENDAR: Today's upcoming events only — nothing in the past, nothing more than 7 days out. Include departure time for any appointment with a location. If the day is clear, say so warmly in one sentence. Do NOT mention bills here — bills have their own section.
 
   SECTION 7 — BILLS DUE SOON: ONLY if a bill appears in the [Bills Due in Next 3 Days] block. Name the bill and amount. If that block is empty or absent, SKIP THIS SECTION ENTIRELY — do not mention bills at all, do not say nothing is due.
 
-  SECTION 8 — NEWS: A three-part news sweep, delivered at a brisk conversational pace. The news data contains three clearly labeled blocks — use them in this order:
-    • From [Headlines]: Pick 4 to 6 of the most important headlines. Read each as a single brisk sentence. No elaboration. Rapid-fire. These are one-liners only.
-    • From [Entertainment & Pop Culture] (if present): Pick 1 notable item — celebrity news, upcoming release, or cultural moment. One sentence only.
-    • From [Watercooler Story] (if present): Read the story naturally. Introduce it warmly — something like "oh, and here's one worth sharing later —". Two sentences max.
-    Transitions between items: use only short words — "also," "meanwhile," "and," "oh, and." Never say "in other news" or "moving on." If a block is missing or empty, skip it and continue. Never use stories older than 48 hours. Keep the whole sweep punchy and fast.
+  SECTION 8 — NEWS: A structured news sweep using the data in [Morning News]. Deliver in this exact format — each story on its own lines:
+
+    From [Headlines — bold title + one sentence summary each]: Read each story EXACTLY as formatted — bold title on one line, then the summary sentence on the next line. Do not merge them. Do not change the format. Read all 5-6 headlines.
+
+    From [Entertainment & Pop Culture] (if present): One item only. Bold title on one line, summary sentence on the next. Skip if absent.
+
+    From [Watercooler Story] (if present): Introduce warmly — "oh, and here's one to share later —" then the story in two sentences max.
+
+    FORMATTING RULES: Each headline is on its own line, bold. Each summary sentence is on the next line. A blank line between stories. Never merge headlines and summaries. Never use "in other news" or "moving on." Short transitions between sections only: "also —", "and —", "meanwhile —".
 
   SECTION 9 — MARKETS: S&P, Dow, Nasdaq with one sentence of context ("tech led the rally," "inflation data spooked investors"). Always label as "as of [last trading day]'s close." SKIP THIS SECTION ENTIRELY on weekends and market holidays — the date block above tells you the market status.
 
@@ -419,7 +430,8 @@ const MASTER_BRIEFING_INSTRUCTION = `
 
   SECTION 14 — MEDICATION: Include ONLY if the [Medications — Not yet taken today] block is present. Remind David warmly in one sentence to take his morning meds with food. If the block says [Medications — Already confirmed today], skip this section entirely — do NOT mention medications or that you're skipping it. If the [Medications] block is absent entirely, include a brief reminder anyway ("Don't forget your morning meds with breakfast."). Never skip if medications have not been confirmed.
 
-  SECTION 15 — MORNING MOTIVATION: One brief, genuine, personal observation about David's specific day. NOT a generic quote. NOT a pep talk. NOT a reminder to do things tonight. Use the motivation context block — reference his pickleball schedule, journal themes, or something real and positive about today. Two to three sentences max. A friend noticing something specific, not a motivational poster. Do NOT suggest he record memories or do anything in the evening — that is for the wind-down, not the morning briefing.
+  SECTION 15 — MORNING MOTIVATION: Use the [Today's Inspiration] from the motivation context block if available. Lead with the inspiring thought or finding, then connect it personally to David's specific day — what he has ahead (a dinner, his pickleball game, a free afternoon). Keep it to 2-3 sentences. Warm and genuine — a friend sharing something interesting, not a motivational poster.
+    CRITICAL — Fix 5: If the [Morning Motivation Context] says "MORNING WORKOUT ALREADY DONE" — do NOT mention exercise, going for a walk, heading outside, or any outdoor activity. Reference only what is actually AHEAD in his day (upcoming dinner, free time, interesting event). Do NOT repeat anything that already happened this morning.
 
   SECTION 16 — SUNDAY SPECIAL: Sundays ONLY — deliver a warm weekly recap just before Section 15: exercise this week, family archive stories captured, highlights, something to look forward to next week. Skip every other day of the week.
 
@@ -455,7 +467,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
         ? buildSystemPromptFromProfile(userProfile, userProfile.rawData as CollectedData)
         : BASE_SYSTEM_PROMPT;
 
-    const [dallas, knoxville, emails, events, lastNightNotes, newsBlock, yesterdayEps, todayEps, morningMeds, medsAlreadyTaken, sportsScores, upcomingBills, marketsData, upcomingDates, sundayData, pendingFollowUps, kneeIssueRecent, dallasEvents, journalCountWeek, recentJournals, totalStories, pollenData, venueConcertsBlock] = await Promise.all([
+    const [dallas, knoxville, emails, events, lastNightNotes, newsBlock, yesterdayEps, todayEps, morningMeds, medsAlreadyTaken, sportsScores, upcomingBills, marketsData, upcomingDates, sundayData, pendingFollowUps, kneeIssueRecent, dallasEvents, journalCountWeek, recentJournals, totalStories, pollenData, venueConcertsBlock, dailyMotivation] = await Promise.all([
       fetchCityWeather("Dallas", 32.7767, -96.7970).catch(() => null),
       fetchCityWeather("Knoxville", 35.9606, -83.9207).catch(() => null),
       fetchAndSummarizeEmails(15).catch(() => null),
@@ -479,6 +491,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       getStoryCount().catch(() => 0),
       fetchDallasPollenData().catch(() => null),
       runVenueScan().catch(() => ""),
+      fetchDailyMotivation().catch(() => ""),
     ]);
 
     const pollenBlock = pollenData
@@ -565,6 +578,25 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     // (includes header, source attributions, and Claude instructions).
     const dallasEventsBlock = dallasEvents ?? "";
 
+    // Fix 5: Detect if David already had a morning workout on today's calendar
+    const morningWorkoutDone = (() => {
+      if (!events) return false;
+      const tz = "America/Chicago";
+      const nowMs = now.getTime();
+      const WORKOUT_KEYWORDS = /pickleball|run|jog|workout|gym|tennis|exercise|walk|hike|yoga|spinning|cycling|swim/i;
+      const todayIsoDate = now.toLocaleDateString("en-CA", { timeZone: tz }); // "YYYY-MM-DD"
+      return events.some((ev) => {
+        if (!ev.endIso) return false; // all-day or missing ISO, skip
+        const evEnd = new Date(ev.endIso);
+        // Must be today's date (compare using the event's isoDate field)
+        if (ev.isoDate !== todayIsoDate) return false;
+        // Must have already ended
+        if (evEnd.getTime() > nowMs) return false;
+        // Must match a workout keyword
+        return WORKOUT_KEYWORDS.test(ev.summary);
+      });
+    })();
+
     const motivationContextBlock = (() => {
       const tz = "America/Chicago";
       const dayName = now.toLocaleDateString("en-US", { timeZone: tz, weekday: "long" });
@@ -572,12 +604,19 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       const recentJournalSnippet = recentJournals.length > 0
         ? recentJournals.slice(0, 2).map(j => j.content.substring(0, 150)).join(" / ")
         : "";
-      let block = `\n\n[Morning Motivation Context — for Emma's personal touch]\n`;
+      let block = `\n\n[Morning Motivation Context]\n`;
       block += `• Today is ${dayName}${isPickleballDay ? " — a pickleball day" : ""}\n`;
+      if (morningWorkoutDone) block += `• MORNING WORKOUT ALREADY DONE — do NOT suggest exercise, a walk, or outdoor activity in the closing. Reference what is ahead instead.\n`;
       block += `• Journal entries this week: ${journalCountWeek}\n`;
-      if (recentJournalSnippet) block += `• Recent journal themes (brief snippets, handle with care): "${recentJournalSnippet}"\n`;
+      if (recentJournalSnippet) block += `• Recent journal themes: "${recentJournalSnippet}"\n`;
       block += `• Total family archive stories captured: ${totalStories}\n`;
-      block += `Use this to craft a specific, warm 2-3 sentence motivating thought — not generic, not a quote, just Emma noticing something real and positive about David's day ahead. Morning only — do NOT suggest evening activities or memory recording.`;
+
+      if (dailyMotivation) {
+        block += `\n[Today's Inspiration — from web search]\n${dailyMotivation}\n`;
+        block += `Use the above inspiration as the foundation for Section 15. Personalize it with something specific to David's day — his pickleball, upcoming dinner, the people in his life. Keep it to 2-3 sentences. Warm, genuine, not preachy.`;
+      } else {
+        block += `Use this context to craft a specific, warm 2-3 sentence motivating thought — reference his pickleball schedule, upcoming events, or journal themes. Morning only — do NOT suggest evening activities or memory recording.`;
+      }
       return block;
     })();
 

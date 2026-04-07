@@ -3,7 +3,7 @@ import { sendPushToAll } from "./pushManager.js";
 import { logger } from "../lib/logger.js";
 import { getWatchedShows } from "../tv/showManager.js";
 import { fetchEpisodesForDate } from "../tv/tvmaze.js";
-import { preFetchMorningNews } from "../news/newsManager.js";
+import { preFetchMorningNews, preFetchDailyMotivation } from "../news/newsManager.js";
 import { preFetchMorningBriefing } from "../morning/briefingPregenerate.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
 
@@ -70,11 +70,14 @@ export function startMorningPushScheduler(): void {
       const localTime = getCurrentLocalTime();
       const today = getLocalDateString();
 
-      // 5:50 AM — pre-fetch news AND pre-generate the full briefing
+      // 5:50 AM — pre-fetch news + daily motivation in parallel
       if (localTime === "05:50" && _newsPrefetchDate !== today) {
         _newsPrefetchDate = today;
         preFetchMorningNews().catch((err) =>
           logger.warn({ err }, "Background news pre-fetch error")
+        );
+        preFetchDailyMotivation().catch((err) =>
+          logger.warn({ err }, "Background motivation pre-fetch error")
         );
       }
 

@@ -280,14 +280,15 @@ export async function fetchAndSummarizeEmails(maxResults = 15, since?: Date): Pr
   // Build query: explicitly exclude trash and spam.
   // When `since` is provided (manual check), only return emails after that timestamp.
   // For the morning briefing (no `since`), fetch the last 24 hours only.
-  let gmailQuery = "in:inbox -in:trash -in:spam";
+  // Fix 2: Only surface unread emails — no more summarizing things David already read.
+  let gmailQuery = "in:inbox -in:trash -in:spam is:unread";
   if (since) {
-    // On-demand check: only emails since the last check
+    // On-demand check: only unread emails since the last check
     const epochSeconds = Math.floor(since.getTime() / 1000);
     gmailQuery += ` after:${epochSeconds}`;
-    console.log(`[Gmail] since mode — fetching emails after ${since.toISOString()} (epoch ${epochSeconds})`);
+    console.log(`[Gmail] since mode — fetching unread emails after ${since.toISOString()} (epoch ${epochSeconds})`);
   } else {
-    // Morning briefing default: last 24 hours only
+    // Morning briefing default: unread in last 24 hours only
     gmailQuery += " newer_than:1d";
   }
 
