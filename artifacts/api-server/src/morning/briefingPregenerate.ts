@@ -395,11 +395,11 @@ const MASTER_BRIEFING_INSTRUCTION = `
 
   SECTION 7 — BILLS DUE SOON: ONLY if a bill appears in the [Bills Due in Next 3 Days] block. Name the bill and amount. If that block is empty or absent, SKIP THIS SECTION ENTIRELY — do not mention bills at all, do not say nothing is due.
 
-  SECTION 8 — NEWS: Three stories delivered as one fast, conversational sweep:
-    One hard news story directly relevant to David (politics, economy, something he would act on or want to know).
-    One cultural story worth knowing (arts, entertainment, a notable moment).
-    One fresh watercooler story from the last 48 hours — surprising, fun, share-worthy.
-    Never use stories older than 48 hours. Each story: one to two sentences max. Short brisk transitions only: "also —", "meanwhile —", "oh, and —". Never say "in other news." Keep moving.
+  SECTION 8 — NEWS: Exactly three stories, delivered as one fast, conversational sweep. Map one story from each of these three blocks in the news data:
+    • From [Main Stories]: Pick the single most relevant story to David — politics, economy, markets, AI/tech, or his teams.
+    • From [Also Worth Knowing]: Pick the one most notable cultural, business, or entertainment story.
+    • From [Light & Surprising Stories]: Pick the best single watercooler story — something fun, surprising, or share-worthy. ALWAYS include this third story — never skip it, even if it seems light. Introduce it with something like "oh, and one that'll make you smile —" or "and here's one worth sharing later —".
+    Never use stories older than 48 hours. Each story: one to two sentences max. Short brisk transitions only: "also —", "meanwhile —", "oh, and —". Never say "in other news." If any tier block is missing or empty, skip that tier only and still deliver the others. Keep moving.
 
   SECTION 9 — MARKETS: S&P, Dow, Nasdaq with one sentence of context ("tech led the rally," "inflation data spooked investors"). Always label as "as of [last trading day]'s close." SKIP THIS SECTION ENTIRELY on weekends and market holidays — the date block above tells you the market status.
 
@@ -411,11 +411,11 @@ const MASTER_BRIEFING_INSTRUCTION = `
 
   SECTION 13 — BIRTHDAYS AND IMPORTANT DATES: Any birthdays or anniversaries in the next 7 days. Name the person and the date specifically. SKIP if none.
 
-  SECTION 14 — MEDICATION: Always include this. Remind David to take his Meloxicam and statin with food. One sentence.
+  SECTION 14 — MEDICATION: Always include this — even if the [Medications] block is absent. David takes a statin and Meloxicam every morning with food. Remind him in one sentence. Never skip this section.
 
-  SECTION 15 — MORNING MOTIVATION: One brief, genuine, personal observation about David's specific day. NOT a generic quote. NOT a pep talk. Use the motivation context block — reference his pickleball schedule, his stories for Olivia, his journal themes, or something real about today. Two to three sentences max. A friend noticing something specific, not a motivational poster.
+  SECTION 15 — MORNING MOTIVATION: One brief, genuine, personal observation about David's specific day. NOT a generic quote. NOT a pep talk. NOT a reminder to do things tonight. Use the motivation context block — reference his pickleball schedule, journal themes, or something real and positive about today. Two to three sentences max. A friend noticing something specific, not a motivational poster. Do NOT suggest he record memories or do anything in the evening — that is for the wind-down, not the morning briefing.
 
-  SECTION 16 — SUNDAY SPECIAL: Sundays ONLY — deliver a warm weekly recap just before Section 15: exercise this week, stories captured for Olivia, highlights, something to look forward to next week. Skip every other day of the week.
+  SECTION 16 — SUNDAY SPECIAL: Sundays ONLY — deliver a warm weekly recap just before Section 15: exercise this week, family archive stories captured, highlights, something to look forward to next week. Skip every other day of the week.
 
   FORBIDDEN PHRASES — never use:
   "Here is your morning briefing" or "Good morning, David, here is what you need to know"
@@ -563,8 +563,8 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       block += `• Today is ${dayName}${isPickleballDay ? " — a pickleball day" : ""}\n`;
       block += `• Journal entries this week: ${journalCountWeek}\n`;
       if (recentJournalSnippet) block += `• Recent journal themes (brief snippets, handle with care): "${recentJournalSnippet}"\n`;
-      block += `• Total stories captured for Olivia: ${totalStories}\n`;
-      block += `Use this to craft a specific, warm 2-3 sentence motivating thought in the opening — not generic, not a quote, just Emma noticing something real about David's life.`;
+      block += `• Total family archive stories captured: ${totalStories}\n`;
+      block += `Use this to craft a specific, warm 2-3 sentence motivating thought — not generic, not a quote, just Emma noticing something real and positive about David's day ahead. Morning only — do NOT suggest evening activities or memory recording.`;
       return block;
     })();
 

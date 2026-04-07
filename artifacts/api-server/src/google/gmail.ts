@@ -243,11 +243,11 @@ export async function fetchAndSummarizeEmails(maxResults = 15): Promise<EmailSum
 
   const gmail = google.gmail({ version: "v1", auth });
 
-  // Fetch emails received in the last 24 hours only — prevents stale emails in briefing
+  // Fetch inbox emails from last 7 days — explicitly exclude trash and spam
   const list = await gmail.users.messages.list({
     userId: "me",
     maxResults,
-    q: "in:inbox newer_than:1d",
+    q: "in:inbox -in:trash -in:spam newer_than:7d",
   });
 
   const messages = list.data.messages ?? [];
@@ -290,10 +290,10 @@ export async function fetchAndSummarizeEmails(maxResults = 15): Promise<EmailSum
   }
 
   const fetchDurationMs = Date.now() - fetchStart.getTime();
-  const mostRecentDate = emails.length > 0 ? emails[0].date : "(none in last 24h)";
+  const mostRecentDate = emails.length > 0 ? emails[0].date : "(none in last 7d)";
   console.log(`[Gmail] fetchAndSummarizeEmails: most recent email date = ${mostRecentDate}`);
   console.log(
-    `[Gmail] fetchAndSummarizeEmails complete — ${emails.length} emails (last 24h) in ${fetchDurationMs}ms` +
+    `[Gmail] fetchAndSummarizeEmails complete — ${emails.length} inbox emails (last 7d, no trash/spam) in ${fetchDurationMs}ms` +
     ` — most recent: ${mostRecentDate}`
   );
 
