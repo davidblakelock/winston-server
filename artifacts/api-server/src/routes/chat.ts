@@ -1159,30 +1159,22 @@ router.post("/chat", async (req, res) => {
 
   if (isEmailRequest || isCalendarRequest) {
     try {
-      // Get last-checked timestamp before fetching — used to show only NEW emails
-      const emailLastChecked = isEmailRequest ? await getEmailLastChecked().catch(() => null) : null;
-
       const [emails, events] = await Promise.all([
-        isEmailRequest ? fetchAndSummarizeEmails(15, emailLastChecked ?? undefined).catch(() => null) : Promise.resolve(undefined),
+        // User-initiated check: no timestamp filter — always return the last 15 unread emails.
+        // The delta filter (emailLastChecked) is for background sync only, not conversational queries.
+        isEmailRequest ? fetchAndSummarizeEmails(15, undefined).catch(() => null) : Promise.resolve(undefined),
         isCalendarRequest ? fetchWeekEvents().catch(() => null) : Promise.resolve(undefined),
       ]);
 
-      // Update the last-checked timestamp immediately after a successful fetch
+      // Stamp last-checked so background sync knows when the user last looked
       if (isEmailRequest && emails !== null) {
         updateEmailLastChecked().catch(() => {});
       }
 
-      // Build a human-readable "last checked at" string for the context block
-      const lastCheckedStr = emailLastChecked
-        ? emailLastChecked.toLocaleTimeString("en-US", {
-            timeZone: "America/Chicago", hour: "numeric", minute: "2-digit", hour12: true,
-          })
-        : null;
-
       const gmailBlock = emails !== undefined && emails !== null
         ? (emails.length === 0
-            ? `\n\n[VERIFIED — Gmail API — no new unread emails since ${lastCheckedStr ? `you last checked at ${lastCheckedStr}` : "yesterday"}]\nTell David warmly: "No new emails since ${lastCheckedStr ? `you last checked at ${lastCheckedStr}` : "yesterday"}." Do not elaborate.`
-            : `\n\n[VERIFIED — Gmail API — new unread emails since ${lastCheckedStr ? `your last check at ${lastCheckedStr}` : "yesterday"}]\n${formatEmailsForPrompt(emails)}\nThis is VERIFIED data. State email senders, subjects, and content as fact exactly as shown. Do not add context not present in the email data. Tell David only about these NEW emails.`) +
+            ? `\n\n[VERIFIED — Gmail API — no unread emails in inbox]\nTell David warmly: "Your inbox is clear — no unread emails right now." Do not elaborate.`
+            : `\n\n[VERIFIED — Gmail API — recent unread emails (live fetch)]\n${formatEmailsForPrompt(emails)}\nThis is VERIFIED data. State email senders, subjects, and content as fact exactly as shown. Do not add context not present in the email data.`) +
           buildScamWarningInstruction(emails)
         : emails === null
           ? "\n\n[Gmail — not connected. Let David know he can connect Google in the app header.]"
