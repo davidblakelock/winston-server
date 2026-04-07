@@ -92,7 +92,9 @@ app.listen(port, async (err) => {
   startMorningPushScheduler();
   startWeatherAlertScheduler();
   startBillScheduler();
-  await startDatesScheduler();
+  await startDatesScheduler().catch((err: unknown) => {
+    logger.warn({ err }, "Dates scheduler startup failed — server continues normally");
+  });
   startDepartureScheduler();
   startCalendarSyncScheduler();
   startCalendarAlertScheduler();

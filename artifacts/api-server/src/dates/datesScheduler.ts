@@ -117,7 +117,9 @@ async function checkDateReminders(): Promise<void> {
 }
 
 export async function startDatesScheduler(): Promise<void> {
-  await ensureLogTable();
+  await ensureLogTable().catch((err: unknown) => {
+    logger.warn({ err }, "Dates scheduler — ensureLogTable failed on startup, will retry next run");
+  });
 
   cron.schedule("* * * * *", async () => {
     try {
