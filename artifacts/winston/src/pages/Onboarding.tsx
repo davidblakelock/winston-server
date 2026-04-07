@@ -35,12 +35,14 @@ interface VoiceOption {
 }
 
 interface CollectedData {
+  companionName?: string;
   name?: string;
   city?: string;
   wakeTime?: string;
   voiceId?: string;
   voiceName?: string;
   healthNotes?: string;
+  wantsStoryArchive?: boolean;
   people?: Array<{ name: string; relationship: string; city?: string }>;
   places?: Array<{ name: string; address?: string }>;
   shows?: string[];
@@ -156,15 +158,18 @@ function useVoiceRecorder(onTranscript: (text: string) => void) {
 }
 
 // ─── Scene labels ────────────────────────────────────────────────────────────
+// Scene 1: Welcome, Scene 2: Voice Selection, Scene 3: Companion Naming,
+// Scene 4: About You, Scene 5: Your People, Scene 6: Wellbeing,
+// Scene 7: Your Places, Scene 8: What You Love, Scene 9: First Briefing
 const SCENE_LABELS = [
-  "Your Companion",
+  "Welcome",
   "Your Voice",
+  "Your Companion",
   "About You",
   "Your People",
   "Wellbeing",
   "Your Places",
   "What You Love",
-  "Evening Memories",
   "First Briefing",
 ];
 

@@ -221,9 +221,10 @@ router.post("/onboarding/chat", async (req, res) => {
     // ── Generate TTS audio ──
     let audioBase64: string | undefined;
     let mimeType: string | undefined;
-    const voiceId =
-      updatedData.voiceId ??
-      (process.env.EL_VOICE_ID ?? process.env.ELEVENLABS_VOICE_ID ?? "").trim();
+    // Default to "Emma" (Friendly American Female) for new users who haven't selected a voice yet.
+    // Never fall back to the env ELEVENLABS_VOICE_ID — that is David's personal voice.
+    const ONBOARDING_DEFAULT_VOICE_ID = "56bWURjYFHyYyVf490Dp"; // Emma — Friendly American Female
+    const voiceId = updatedData.voiceId ?? ONBOARDING_DEFAULT_VOICE_ID;
 
     if (voiceId && EL_KEY()) {
       try {
@@ -324,11 +325,22 @@ async function extractOnboardingData(
     system: `You extract structured profile data from a user message in an onboarding conversation.
 Current scene: ${scene}. Already collected: ${JSON.stringify(current)}.
 
+SCENE STRUCTURE:
+- Scene 1: Welcome only — no data to extract. readyForNextScene=true immediately (welcome is self-contained).
+- Scene 2: Voice selection — extract voiceId and voiceName when user picks a voice. readyForNextScene=true once voiceId captured.
+- Scene 3: Companion naming — extract companionName (what the user names their AI). readyForNextScene=true once companionName captured.
+- Scene 4: User's own name, city, wakeTime. readyForNextScene=true once all three are collected.
+- Scene 5: People in their life. readyForNextScene=true on completion signals.
+- Scene 6: Health notes. readyForNextScene=true on completion signals.
+- Scene 7: Places. readyForNextScene=true on completion signals.
+- Scene 8: Interests + story archive. readyForNextScene=true on completion signals.
+- Scene 9: First briefing — final scene.
+
 Return ONLY valid JSON:
 {
   "data": {
-    "companionName": string or null (the name the user gives to their AI companion),
-    "name": string or null (the user's own name),
+    "companionName": string or null (the name the user gives to their AI companion — extract ONLY in scene 3),
+    "name": string or null (the user's own name — extract ONLY in scene 4+),
     "city": string or null,
     "wakeTime": "HH:MM" format or null (e.g. "07:00" for 7am, "06:30" for 6:30am),
     "healthNotes": string or null (brief summary of any health info shared),
@@ -340,23 +352,27 @@ Return ONLY valid JSON:
     "music": [string] or null,
     "interests": [string] or null,
     "voiceId": string or null,
-    "voiceName": string or null
+    "voiceName": string or null,
+    "wantsStoryArchive": boolean or null
   },
   "readyForNextScene": boolean
 }
 
 Rules:
 - Only include fields that are NEW in this message (don't re-extract already collected data)
-- companionName: extract ONLY from scene 1 when the user is naming their AI companion (e.g. "Call me Emma" or "Let's go with Alex" → "Emma" or "Alex"). Never confuse with the user's own name.
+- companionName: extract ONLY in scene 3 when user names their AI (e.g. "Call me Emma" or "Winston" → companionName). Never confuse with the user's own name.
+- name (user's own name): extract ONLY in scene 4+ when user gives THEIR OWN name. Never extract a companionName as the user's name.
 - Merge arrays: if user says "I also like..." add to existing, don't replace
 - For wakeTime: "I wake up at 6" → "06:00", "around 7:30" → "07:30"
 - For people: "My daughter Olivia lives in Knoxville" → {name:"Olivia",relationship:"daughter",city:"Knoxville"}
-- For voiceId: if user says "I'll take option 1" or "Tom" or "number 3" → extract the voiceId
-  Voice options: 1=DYkrAHD8iwork3YSUBbs(Tom/American Male), 2=56bWURjYFHyYyVf490Dp(Emma/British Female), 3=hGQkZQUA5RiOXIw7P9iO(Kiora/New Zealand Female), 4=sB7vwSCyX0tQmU24cW2C(Jon/American Male), 5=Fahco4VZzobUeiPqni1S(Archer/American Male), 6=aj0fZfXTBc7E3By4X8L2(Best Female Friend/American Female), 7=UizRZo250FhTtKlJa6mo(Diana/American Female), 8=Ky9j3wxFbp3dSAdrkOEv(Bex/British Female)
+- For voiceId: if user says "I'll take option 1" or "Tom" or "number 3" → extract the voiceId AND voiceName
+  Voice options: 1=DYkrAHD8iwork3YSUBbs(Tom/British-American Male), 2=56bWURjYFHyYyVf490Dp(Emma/Friendly American Female), 3=hGQkZQUA5RiOXIw7P9iO(Kiora/Warm New Zealand Female), 4=sB7vwSCyX0tQmU24cW2C(Jon/Deep Authoritative American Male), 5=Fahco4VZzobUeiPqni1S(Archer/Charming Young British Male), 6=aj0fZfXTBc7E3By4X8L2(Best Female Friend/Warm Casual American Female), 7=UizRZo250FhTtKlJa6mo(Diana/Elegant American Female), 8=Ky9j3wxFbp3dSAdrkOEv(Bex/Expressive British Female)
+- wantsStoryArchive: true if user says yes to the evening story archive offer in scene 8, false if they decline
 - readyForNextScene: true if user has finished sharing for this scene topic
-  (e.g. "that's everyone", "that's all", "I think that covers it", "ok let's move on", natural completion signals)
-  For scene 1: true once companionName is captured and user is ready to proceed
-  For scene 2: true once voiceId is selected`,
+  (e.g. "that's everyone", "that's all", "ok let's move on", natural completion signals)
+  Scene 1: always true (self-contained welcome)
+  Scene 2: true once voiceId captured
+  Scene 3: true once companionName captured`,
     messages: [
       {
         role: "user",
@@ -406,26 +422,30 @@ function computeNextScene(
 ): number {
   switch (current) {
     case 1:
-      // Companion naming — advance once companion name is captured
-      if (data.companionName || readyForNextScene) return 2;
-      return 1;
+      // Welcome — always advance immediately (self-contained)
+      return 2;
 
     case 2:
-      // Voice selection — auto-advance once voice is selected
+      // Voice selection — advance once voice is selected
       if (data.voiceId) return 3;
       return 2;
 
     case 3:
-      // Must have user name + city + wakeTime before advancing
-      if (data.name && data.city && data.wakeTime) return 4;
+      // Companion naming — advance once companion name is captured
+      if (data.companionName || readyForNextScene) return 4;
       return 3;
+
+    case 4:
+      // User info — must have name + city + wakeTime before advancing
+      if (data.name && data.city && data.wakeTime) return 5;
+      return 4;
 
     case 9:
       // Scene 9 stays at 9; isComplete logic handles completion
       return 9;
 
     default:
-      // Scenes 4-8: advance on explicit readyForNextScene signal
+      // Scenes 5-8: advance on explicit readyForNextScene signal
       return readyForNextScene && current < 9 ? current + 1 : current;
   }
 }
