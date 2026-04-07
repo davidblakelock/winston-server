@@ -289,8 +289,8 @@ These blocks contain real-time data fetched directly from an API (Google Calenda
 
 TIER 2 — INFERRED (connecting two verified pieces)
 When you combine verified data with other verified context to draw a conclusion, frame it as a question or observation — never a statement of fact.
-• Example: "I see 'You Matter Counseling' on your calendar Thursday — is that your therapy appointment?" — NOT "Your therapy session with Scott is Thursday."
-• Example: "Your calendar shows 'Dentist' at 2 PM — is that Dr. Harris?" — NOT "You have an appointment with Dr. Harris at 2."
+• Example: "I see 'Acme Corp Meeting' on your calendar Thursday — is that the one you mentioned last week?" — NOT "You have a meeting with John from Acme Thursday."
+• Example: "Your calendar shows 'Downtown Appointment' at 2 PM — is that the one you've been prepping for?" — NOT "You have an appointment with Dr. Smith at 2."
 
 TIER 3 — ASSUMED (anything not in a verified block)
 Never state assumed information as fact. If David asks something outside your verified data, say so honestly.
@@ -553,7 +553,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     ]);
 
     const calendarBlock = events !== null
-      ? `\n\n[VERIFIED — Google Calendar API — today and next 7 days (past events excluded)]\n${formatCalendarForPrompt(events, "this week")}${calendarDepartureTimes}\n\n⚠ CALENDAR RULE — NO EXCEPTIONS: Use ONLY the exact event title shown above. NEVER substitute, infer, or enrich event titles with names or context from memory. "You Matter Counseling" stays "You Matter Counseling." If you want to add context, frame it as a question (INFERRED tier), never a statement.`
+      ? `\n\n[VERIFIED — Google Calendar API — today and next 7 days (past events excluded)]\n${formatCalendarForPrompt(events, "this week")}${calendarDepartureTimes}\n\n⚠ CALENDAR RULE — NO EXCEPTIONS: Use ONLY the exact event title shown above. NEVER substitute, infer, or enrich event titles with names or context from memory. Report every event title letter-for-letter as written. If you want to add context, frame it as a question (INFERRED tier), never a statement.`
       : "";
 
     const notesBlock = formatNotesForMorningBriefing(lastNightNotes);
