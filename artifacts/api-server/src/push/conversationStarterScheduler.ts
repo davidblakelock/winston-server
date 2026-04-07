@@ -4,7 +4,6 @@ import { query } from "../db.js";
 import { sendPushToAll } from "./pushManager.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
 import { logger } from "../lib/logger.js";
-import { getSessionCount as getPickleballSessionCount } from "../pickleball/pickleballManager.js";
 import { getDaysSinceLastOliviaContact } from "../olivia/oliviaTracker.js";
 import { getJournalCountThisWeek } from "../journal/journalManager.js";
 
@@ -49,18 +48,13 @@ async function generateStarter(): Promise<string | null> {
   const day = getDayNameInChicago();
   const hour = getHourInChicago();
   const timeOfDay = hour < 12 ? "morning" : hour < 17 ? "afternoon" : "evening";
-  const isPickleballDay = ["Monday", "Wednesday", "Friday", "Saturday"].includes(day);
-
   let context = `Today is ${day} ${timeOfDay}.`;
-  if (isPickleballDay && timeOfDay === "afternoon") context += " David likely played pickleball this morning.";
 
   try {
-    const [pickleballSessions, daysSinceOlivia, journalCount] = await Promise.all([
-      getPickleballSessionCount(7).catch(() => 0),
+    const [daysSinceOlivia, journalCount] = await Promise.all([
       getDaysSinceLastOliviaContact().catch(() => null),
       getJournalCountThisWeek().catch(() => 0),
     ]);
-    if (pickleballSessions > 0) context += ` He's played pickleball ${pickleballSessions} time(s) this week.`;
     if (daysSinceOlivia !== null && daysSinceOlivia > 2) context += ` He hasn't mentioned Olivia in ${daysSinceOlivia} days.`;
     if (journalCount > 0) context += ` He's made ${journalCount} journal entries this week.`;
   } catch {}

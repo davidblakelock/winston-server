@@ -131,11 +131,6 @@ import {
 } from "../dates/datesManager.js";
 import {
   isTodayPickleballDay,
-  getTodaySession,
-  logSession as logPickleballSession,
-  extractPickleballResult,
-  hasRecentKneeIssue,
-  getRecentSessions as getRecentPickleballSessions,
 } from "../pickleball/pickleballManager.js";
 import {
   fetchMarkets,
@@ -412,8 +407,6 @@ const JOURNAL_REVIEW_PATTERN = /\b(read\s+(me\s+)?my\s+journal|show\s+(me\s+)?my
 const OLIVIA_CALL_PATTERN = /\b(called?\s+olivia|talked?\s+(to\s+)?olivia|spoke\s+(with\s+)?olivia|olivia\s+and\s+i\s+(talked?|chatted?|spoke|called?)|just\s+(talked?|spoke|called?)\s+(to\s+|with\s+)?olivia|facetime(d)?\s+olivia|olivia\s+call)\b/i;
 const OLIVIA_MENTION_PATTERN = /\bolivia\b/i;
 
-// Pickleball
-const PICKLEBALL_LOG_PATTERN = /\b(pickleball\s+(was|went|this\s+morning|today|done|finished|over)|we\s+(won|lost)\s+(today|at\s+pickleball|this\s+morning|the\s+game)|how\s+(was|did)\s+(pickleball|the\s+game|this\s+morning)|just\s+got\s+(back\s+from|done\s+with)\s+pickleball|finished\s+pickleball|played\s+pickleball)\b/i;
 
 // Susan coordination — detecting Susan-related tasks
 const SUSAN_PATTERN = /\bsusan\b/i;
@@ -814,7 +807,6 @@ router.post("/chat", async (req, res) => {
   const isDateList = !isMorningGreeting && DATE_LIST_PATTERN.test(message);
   const isDateRemove = !isMorningGreeting && DATE_REMOVE_PATTERN.test(message);
   const isEmergency = EMERGENCY_PATTERN.test(message);
-  const isPickleballLog = !isMorningGreeting && PICKLEBALL_LOG_PATTERN.test(message);
   const isSusanRelated = !isMorningGreeting && SUSAN_PATTERN.test(message);
   const isJournalReview = !isMorningGreeting && JOURNAL_REVIEW_PATTERN.test(message);
   const isOliviaCall = !isMorningGreeting && OLIVIA_CALL_PATTERN.test(message);
@@ -1057,31 +1049,6 @@ router.post("/chat", async (req, res) => {
     }
   }
 
-  // ── Pickleball logging ────────────────────────────────────────────────────
-  if (isPickleballLog) {
-    try {
-      const pickResult = extractPickleballResult(message);
-      const { updated, session } = await logPickleballSession(
-        pickResult.won ?? null,
-        pickResult.location,
-        pickResult.notes ?? message,
-        pickResult.kneeOk ?? null
-      );
-
-      const wonStr = session.won === true ? "win" : session.won === false ? "loss" : "session";
-      const kneeStr = session.kneeOk === false ? " Keep an eye on that knee." : "";
-      const action = updated ? "updated" : "logged";
-
-      systemPrompt += `\n\n[Pickleball Session ${action}]\nDavid's pickleball session today has been recorded (${wonStr}).${kneeStr}\n\nAcknowledge warmly and follow up naturally — ask about the game, any highlights, or how he's feeling. If it was a win, celebrate it. If it was a loss, be encouraging. Keep it conversational and brief.`;
-      if (pickResult.kneeOk === false) {
-        systemPrompt += ` His knee was bothering him — express genuine concern and ask how it feels now.`;
-      }
-      req.log.info({ won: session.won, kneeOk: session.kneeOk }, "Pickleball session logged");
-    } catch (err) {
-      req.log.warn({ err }, "Pickleball log failed");
-    }
-  }
-
   // ── Upcoming dates context (non-morning) ─────────────────────────────────
   if (!isMorningGreeting && !isDateAdd && !isDateList && !isDateRemove) {
     try {
@@ -1096,7 +1063,7 @@ router.post("/chat", async (req, res) => {
   if (!isMorningGreeting) {
     try {
       const followUps = await getPendingFollowUps(3, 14, sessionUserName);
-      if (followUps.length > 0 && !isPickleballLog && !isDateAdd && !isEmergency) {
+      if (followUps.length > 0 && !isDateAdd && !isEmergency) {
         systemPrompt += buildRecommendationFollowUpBlock(followUps);
       }
       // Detect if user is responding to a follow-up
@@ -1157,7 +1124,7 @@ router.post("/chat", async (req, res) => {
 
   // ── Sleep reminder ─────────────────────────────────────────────────────────
   if (sleepReminderFired) {
-    systemPrompt += `\n\n[Sleep Reminder — One Time Tonight]\nIt's past 11pm. David is still up and chatting. At the right moment in your response — gently, warmly, and briefly note the time. Something like "David, it's getting late — you might want to think about winding down soon." Check if he has pickleball tomorrow. Keep it to one sentence. Never preachy. Don't repeat this if he continues talking.`;
+    systemPrompt += `\n\n[Sleep Reminder — One Time Tonight]\nIt's past 11pm. David is still up and chatting. At the right moment in your response — gently, warmly, and briefly note the time. Something like "David, it's getting late — you might want to think about winding down soon." Keep it to one sentence. Never preachy. Don't repeat this if he continues talking.`;
   }
 
   if (isEmailRequest || isCalendarRequest) {

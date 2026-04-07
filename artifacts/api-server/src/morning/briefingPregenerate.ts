@@ -14,7 +14,7 @@ import { fetchEpisodesForDate, formatEpisodeForPrompt } from "../tv/tvmaze.js";
 import { fetchSportsScores, formatSportsForPrompt } from "../sports/sportsManager.js";
 import { getUpcomingBills, formatBillsForPrompt } from "../bills/billManager.js";
 import { getUpcomingDates, formatDatesForPrompt } from "../dates/datesManager.js";
-import { isTodayPickleballDay, hasRecentKneeIssue } from "../pickleball/pickleballManager.js";
+import { isTodayPickleballDay } from "../pickleball/pickleballManager.js";
 import { fetchMarkets, buildMarketsBlock } from "../markets/marketsManager.js";
 import { getPendingFollowUps, buildRecommendationFollowUpBlock } from "../recommendations/recommendationsManager.js";
 import { collectSundayData, buildSundaySummaryBlock } from "../sundaySummary/sundaySummaryManager.js";
@@ -492,7 +492,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
         ? buildSystemPromptFromProfile(userProfile, userProfile.rawData as CollectedData)
         : BASE_SYSTEM_PROMPT;
 
-    const [dallas, knoxville, emails, events, lastNightNotes, newsBlock, yesterdayEps, todayEps, morningMeds, medsAlreadyTaken, sportsScores, upcomingBills, marketsData, upcomingDates, sundayData, pendingFollowUps, kneeIssueRecent, dallasEvents, journalCountWeek, recentJournals, totalStories, pollenData, venueConcertsBlock, dailyMotivation] = await Promise.all([
+    const [dallas, knoxville, emails, events, lastNightNotes, newsBlock, yesterdayEps, todayEps, morningMeds, medsAlreadyTaken, sportsScores, upcomingBills, marketsData, upcomingDates, sundayData, pendingFollowUps, dallasEvents, journalCountWeek, recentJournals, totalStories, pollenData, venueConcertsBlock, dailyMotivation] = await Promise.all([
       fetchCityWeather("Dallas", 32.7767, -96.7970).catch(() => null),
       fetchCityWeather("Knoxville", 35.9606, -83.9207).catch(() => null),
       fetchAndSummarizeEmails(15).catch(() => null),
@@ -509,7 +509,6 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       getUpcomingDates(21, userName).catch(() => []),
       isSunday ? collectSundayData().catch(() => null) : Promise.resolve(null),
       getPendingFollowUps(2, 14).catch(() => []),
-      hasRecentKneeIssue(5).catch(() => false),
       fetchDallasContent().catch(() => ""),
       getJournalCountThisWeek().catch(() => 0),
       getRecentJournalEntries(3).catch(() => []),
@@ -595,10 +594,6 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       ? buildRecommendationFollowUpBlock(pendingFollowUps)
       : "";
 
-    const kneeCheckBlock = kneeIssueRecent
-      ? `\n\n[Health Note]\nDavid mentioned knee issues recently from pickleball.`
-      : "";
-
     // dallasEvents is already a fully-formatted block from dallasContent.ts
     // (includes header, source attributions, and Claude instructions).
     const dallasEventsBlock = dallasEvents ?? "";
@@ -638,9 +633,9 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
 
       if (dailyMotivation) {
         block += `\n[VERIFIED — Web Search — Today's Inspiration]\n${dailyMotivation}\n`;
-        block += `Use the above inspiration as the foundation for Section 15. Personalize it with something specific to David's day — his pickleball, upcoming dinner, the people in his life. Keep it to 2-3 sentences. Warm, genuine, not preachy.`;
+        block += `Use the above inspiration as the foundation for Section 15. Personalize it with something specific to David's day — upcoming events, the people in his life. Keep it to 2-3 sentences. Warm, genuine, not preachy.`;
       } else {
-        block += `Use this context to craft a specific, warm 2-3 sentence motivating thought — reference his pickleball schedule, upcoming events, or journal themes. Morning only — do NOT suggest evening activities or memory recording.`;
+        block += `Use this context to craft a specific, warm 2-3 sentence motivating thought — reference upcoming events or journal themes. Morning only — do NOT suggest evening activities or memory recording.`;
       }
       return block;
     })();
@@ -648,7 +643,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     const systemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + memoryBlock + dynamicProfileBlock +
       notesBlock + weatherBlock + gmailBlock + calendarBlock + tvMorningBlock + medMorningBlock +
       sportsBlock + billsMorningBlock + marketsBlock + datesBlock + sundaySummaryBlock +
-      pickleballMorningBlock + kneeCheckBlock + recFollowUpBlock + motivationContextBlock +
+      pickleballMorningBlock + recFollowUpBlock + motivationContextBlock +
       dallasEventsBlock + venueConcertsBlock + newsBlock + MASTER_BRIEFING_INSTRUCTION;
 
     // Log which sections have data (for debugging completeness of the briefing)
