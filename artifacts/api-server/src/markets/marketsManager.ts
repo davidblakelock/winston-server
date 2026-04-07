@@ -216,7 +216,7 @@ export function formatMarketsForPrompt(snapshot: MarketSnapshot): string {
 
   const fetchedStr = formatFetchTime(snapshot.fetchedAt);
 
-  return `[Financial Markets — Last trading day close, as of ${fetchedStr} CT]\n${trend}.\n${lines.join("\n")}`;
+  return `[VERIFIED — Alpha Vantage Markets API — Last trading day close, as of ${fetchedStr} CT]\n${trend}.\n${lines.join("\n")}`;
 }
 
 // US federal holidays (month is 0-based, day is date)
@@ -270,13 +270,13 @@ export function buildMarketsBlock(snapshot: MarketSnapshot, now?: Date): string 
   // On weekends: markets are closed — skip the data entirely
   if (isWeekend) {
     const nextOpen = dow === 6 ? "Monday" : "Monday"; // both Sat and Sun → Monday
-    return `\n\n[Financial Markets]\nMarkets are closed this weekend. They reopen ${nextOpen}. Do not report market data today.`;
+    return `\n\n[VERIFIED — Financial Markets]\nMarkets are closed this weekend. They reopen ${nextOpen}. Do not report market data today.`;
   }
 
   // Check if today is a holiday
   const todayHoliday = isFederalHoliday(ct);
   if (todayHoliday) {
-    return `\n\n[Financial Markets]\nMarkets are closed today for ${todayHoliday}. Skip market data in the briefing.`;
+    return `\n\n[VERIFIED — Financial Markets]\nMarkets are closed today for ${todayHoliday}. Skip market data in the briefing.`;
   }
 
   const formatted = formatMarketsForPrompt(snapshot);

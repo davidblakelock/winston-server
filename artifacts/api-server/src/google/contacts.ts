@@ -370,13 +370,11 @@ export function formatContactsForPrompt(result: ContactSearchResult, query: stri
 
   if (result.contacts.length === 0) {
     return (
-      `\n\n[Google Contacts — Search: "${query}" — NO RESULTS]\n` +
-      `CRITICAL: The Google Contacts API was searched and returned ZERO results for "${query}". ` +
-      `There is NO contact with this name in David's Google Contacts. ` +
+      `\n\n[VERIFIED — Google Contacts API — Search: "${query}" — NO RESULTS]\n` +
+      `The Google Contacts API was searched and returned ZERO results for "${query}". ` +
+      `There is NO contact with this name. This is VERIFIED. ` +
       `You MUST NOT generate, invent, guess, or infer any phone number, email address, or other contact detail. ` +
-      `DO NOT present any contact information. ` +
-      `Say EXACTLY this, with no additions: "I searched your Google Contacts and couldn't find anyone named ${query}. Do you want to add them manually?" ` +
-      `Any phone number or email you might produce would be fabricated and wrong — DO NOT do it.`
+      `Say EXACTLY: "I searched your Google Contacts and couldn't find anyone named ${query}. Do you want to add them manually?"`
     );
   }
 
@@ -390,21 +388,19 @@ export function formatContactsForPrompt(result: ContactSearchResult, query: stri
 
   if (result.contacts.length === 1) {
     return (
-      `\n\n[Google Contacts — Search: "${query}"]\n` +
+      `\n\n[VERIFIED — Google Contacts API — Search: "${query}"]\n` +
       `${lines[0]}\n` +
-      `Read the contact's name, phone, and email naturally. ` +
-      `Ask David to confirm before saving anything to his Winston profile.`
+      `This is VERIFIED data — state the contact's name, phone, and email exactly as shown above. Do not add, modify, or infer any details not present here.`
     );
   }
 
   // Multiple matches — ask David which one he means
   return (
-    `\n\n[Google Contacts — Multiple Matches for "${query}"]\n` +
+    `\n\n[VERIFIED — Google Contacts API — Multiple Matches for "${query}"]\n` +
     `${lines.join("\n")}\n` +
-    `I found ${result.contacts.length} people matching "${query}". ` +
-    `Ask David which one he means — list their names and ask him to pick: ` +
+    `This is VERIFIED data. Ask David which one he means — list their names and ask him to pick: ` +
     `"I found a few people named ${query.split(" ")[0]} — which one did you mean?" ` +
-    `Then list each name concisely. Do NOT share phone or email until David confirms which person.`
+    `Do NOT share phone or email until David confirms which person.`
   );
 }
 

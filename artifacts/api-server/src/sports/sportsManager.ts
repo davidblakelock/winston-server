@@ -303,10 +303,10 @@ export function formatSportsForPrompt(scores: SportsScores): string {
   const cowboysLine = describeResult(scores.cowboys, "Cowboys");
 
   return (
-    `\n\n[Live Sports Scores — fetched just now]\n` +
+    `\n\n[VERIFIED — Sports API — Live Scores, fetched just now]\n` +
     `• Texas Rangers (MLB): ${rangersLine}\n` +
     `• Dallas Cowboys (NFL): ${cowboysLine}\n` +
-    `\nIMPORTANT: Use ONLY these exact scores. Do NOT add, invent, or recall any other scores. ` +
+    `\nThis is VERIFIED data. Use ONLY these exact scores. Do NOT add, invent, or recall any other scores. ` +
     `Report exactly what the data says — final score and result, or the exact start time if scheduled. ` +
     `Mention them naturally if David's briefing or question calls for it — e.g. "Rangers lost to Baltimore 8–3 this afternoon" or "Cowboys are in the off-season."`
   );

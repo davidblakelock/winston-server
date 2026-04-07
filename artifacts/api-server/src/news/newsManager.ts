@@ -285,7 +285,7 @@ function formatNewsBlock(rawText: string, fetchedAt: Date): string {
   const body = sections.length > 0 ? sections.join("\n\n") : rawText;
 
   return (
-    `\n\n[Morning News — web-searched at ${fetchedStr} CT, stories from past 24-48 hours only]\n` +
+    `\n\n[VERIFIED — Web Search News — fetched at ${fetchedStr} CT, stories from past 24-48 hours only]\n` +
     body
   );
 }

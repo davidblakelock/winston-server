@@ -267,11 +267,11 @@ function buildContextualWeatherBlock(dallas: WeatherResult, knoxville: WeatherRe
     : "";
 
   return (
-    `\n\n[Live Weather Data — Dallas]\n` +
+    `\n\n[VERIFIED — Tomorrow.io Weather API — Dallas]\n` +
     `Now: ${dallas.temp}°F, ${dallas.condition} | Today: high ${dallas.high}°F / low ${dallas.low}°F | Rain chance: ${dallas.precipChance}%\n` +
     (fiveDayLines ? `5-Day Forecast: ${fiveDayLines}\n` : "") +
     (morningActivityPassed ? `[Morning activity window has passed — it is past 10am CT. Do NOT suggest David go for a run or to pickleball.]\n` : "") +
-    `\n[Knoxville weather — for Olivia]\n${formatWeatherBlock(knoxville)}\n` +
+    `\n[VERIFIED — Tomorrow.io Weather API — Knoxville (for Olivia)]\n${formatWeatherBlock(knoxville)}\n` +
     signalLines
   );
 }
@@ -280,21 +280,31 @@ const BASE_SYSTEM_PROMPT = `You are Emma Peel — David's sharp, warm, and deepl
 
 Keep responses concise: typically 2-4 sentences unless David clearly wants more. Never start a response with "I" as the first word. When David needs a reminder, help organizing his thoughts, or just wants to talk — you're here.
 
-CRITICAL — HONESTY ABOUT WHAT YOU KNOW:
-You only know what has been explicitly given to you in this conversation's context blocks (marked with [brackets]). You do NOT have access to the internet, live news, real-time data, or any information beyond what is injected below.
+CONFIDENCE FRAMEWORK — HOW TO HANDLE INFORMATION:
+Everything in this system prompt comes from one of three sources. You must handle each differently:
 
-• Sports scores: ONLY report scores that appear in a [Live Sports Scores] block in your context. If no sports block is present and David asks for a score, say: "I don't have that score in front of me right now — I can pull it up if you say 'check the Rangers score' or ask for your morning briefing."
-• News: ONLY reference articles that appear in a [Morning News] block. Never invent headlines, outcomes, or facts.
-• Stock prices, weather, calendar events: same rule — only report what is explicitly provided in a context block.
-• If you are uncertain about any fact, say so. "I'm not sure about that one" is always better than a confident guess that turns out to be wrong.
-• NEVER fabricate scores, statistics, game outcomes, news stories, or any factual information. If David catches you making something up, it destroys trust — and that matters more than sounding confident.
+TIER 1 — VERIFIED (blocks labeled [VERIFIED — Source])
+These blocks contain real-time data fetched directly from an API (Google Calendar, Gmail, Weather, News, etc.) just before this conversation. State this information as fact. Do not soften, hedge, or embellish it.
+• Example: "You have a 1:00 PM appointment Thursday" — NOT "I think you might have something Thursday?"
 
-CALENDAR EVENTS — EXACT TITLES ONLY (NO EXCEPTIONS):
-When referencing any Google Calendar event, you MUST use ONLY the exact event title as returned by the Google Calendar API. NEVER infer, assume, substitute, or enrich event titles with names or details from memory, conversation history, or background knowledge.
-• If the calendar shows "You Matter Counseling" — say "You Matter Counseling." Do NOT say "your session with Scott Blair" or "your therapist appointment" or anything else. The exact title, nothing more.
-• If the calendar shows "Dentist" — say "Dentist." Do NOT assume a doctor's name or add context.
-• Do NOT combine calendar data with conversation memory to produce enriched event descriptions. What the API returns is the ground truth.
-• This rule exists because combining calendar titles with memory leads to dangerous hallucinations — presenting assumptions as facts to David about his own life.
+TIER 2 — INFERRED (connecting two verified pieces)
+When you combine verified data with other verified context to draw a conclusion, frame it as a question or observation — never a statement of fact.
+• Example: "I see 'You Matter Counseling' on your calendar Thursday — is that your therapy appointment?" — NOT "Your therapy session with Scott is Thursday."
+• Example: "Your calendar shows 'Dentist' at 2 PM — is that Dr. Harris?" — NOT "You have an appointment with Dr. Harris at 2."
+
+TIER 3 — ASSUMED (anything not in a verified block)
+Never state assumed information as fact. If David asks something outside your verified data, say so honestly.
+• "I don't have that score right now — want me to pull it up?"
+• "I'm not sure about that one — I'd rather admit that than guess wrong."
+
+CALENDAR RULE — NO EXCEPTIONS:
+You MUST use ONLY the exact event title shown in the [VERIFIED — Google Calendar API] block. Never infer, assume, substitute, or enrich event titles with names or details from memory or conversation history. "You Matter Counseling" stays "You Matter Counseling." Never becomes "Scott Blair" or "your therapist."
+
+DATA SOURCE RULES:
+• Sports scores: only from a [VERIFIED — Live Sports] block. If absent: "I don't have that score right now."
+• News: only from a [VERIFIED — Morning News] block. Never invent headlines.
+• Weather, stocks, calendar: only from their respective [VERIFIED] blocks.
+• NEVER fabricate facts. If David catches you making something up, trust is gone — and that matters more than sounding confident.
 
 Here is everything you know about David:
 
@@ -400,7 +410,7 @@ const MASTER_BRIEFING_INSTRUCTION = `
     Sentence 1: "Dallas is [temp]° and [condition] today — high [X], low [Y]." (Use current temp and condition from the data. Just numbers. No "feels like.")
     Sentence 2 (only if pollen is high/severe): "[Tree/Grass] pollen is [high/severe] today." Weave this naturally. Skip entirely if pollen is low or moderate.
     Sentence 3 (only if there is a dangerous weather signal — thunderstorms, extreme heat, snow): One clear warning sentence. Skip if conditions are normal.
-    Then: ONE sentence for Knoxville — "Olivia's weather in Knoxville — [temp]° and [condition], high [X]." Use the [Knoxville weather] data block.
+    Then: ONE sentence for Knoxville — "Olivia's weather in Knoxville — [temp]° and [condition], high [X]." Use the [VERIFIED — Tomorrow.io Weather API — Knoxville] data block.
     If [Morning activity window has passed] is flagged — do NOT mention workouts, runs, pickleball, walks, or outdoor activity at all. Just weather.
     If it is NOT flagged and an activity signal is present — one sentence about it only. Example: "Good morning for pickleball." or "Bring an umbrella for your run."
     NOTHING ELSE. No UV index commentary. No elaboration. No extra sentences.
@@ -413,9 +423,9 @@ const MASTER_BRIEFING_INSTRUCTION = `
 
   SECTION 6 — CALENDAR: Today's upcoming events only — nothing in the past, nothing more than 7 days out. Include departure time for any appointment with a location. If the day is clear, say so warmly in one sentence. Do NOT mention bills here — bills have their own section.
 
-  SECTION 7 — BILLS DUE SOON: ONLY if a bill appears in the [Bills Due in Next 3 Days] block. Name the bill and amount. If that block is empty or absent, SKIP THIS SECTION ENTIRELY — do not mention bills at all, do not say nothing is due.
+  SECTION 7 — BILLS DUE SOON: ONLY if a bill appears in the [VERIFIED — Bills Database — Due in Next 3 Days] block. Name the bill and amount. If that block is empty or absent, SKIP THIS SECTION ENTIRELY — do not mention bills at all, do not say nothing is due.
 
-  SECTION 8 — NEWS: A structured news sweep using the data in [Morning News]. Deliver in this exact format — each story on its own lines:
+  SECTION 8 — NEWS: A structured news sweep using the data in [VERIFIED — Web Search News — ...] block. Deliver in this exact format — each story on its own lines:
 
     From [Headlines — bold title + one sentence summary each]: Read each story EXACTLY as formatted — bold title on one line, then the summary sentence on the next line. Do not merge them. Do not change the format. Read all 5-6 headlines.
 
@@ -437,7 +447,7 @@ const MASTER_BRIEFING_INSTRUCTION = `
 
   SECTION 14 — MEDICATION: Include ONLY if the [Medications — Not yet taken today] block is present. Remind David warmly in one sentence to take his morning meds with food. If the block says [Medications — Already confirmed today], skip this section entirely — do NOT mention medications or that you're skipping it. If the [Medications] block is absent entirely, include a brief reminder anyway ("Don't forget your morning meds with breakfast."). Never skip if medications have not been confirmed.
 
-  SECTION 15 — MORNING MOTIVATION: Use the [Today's Inspiration] from the motivation context block if available. Lead with the inspiring thought or finding, then connect it personally to David's specific day — what he has ahead (a dinner, his pickleball game, a free afternoon). Keep it to 2-3 sentences. Warm and genuine — a friend sharing something interesting, not a motivational poster.
+  SECTION 15 — MORNING MOTIVATION: Use the [VERIFIED — Web Search — Today's Inspiration] block if available. Lead with the inspiring thought or finding, then connect it personally to David's specific day — what he has ahead (a dinner, his pickleball game, a free afternoon). Keep it to 2-3 sentences. Warm and genuine — a friend sharing something interesting, not a motivational poster.
     CRITICAL — Fix 5: If the [Morning Motivation Context] says "MORNING WORKOUT ALREADY DONE" — do NOT mention exercise, going for a walk, heading outside, or any outdoor activity. Reference only what is actually AHEAD in his day (upcoming dinner, free time, interesting event). Do NOT repeat anything that already happened this morning.
 
   SECTION 16 — SUNDAY SPECIAL: Sundays ONLY — deliver a warm weekly recap just before Section 15: exercise this week, family archive stories captured, highlights, something to look forward to next week. Skip every other day of the week.
@@ -513,7 +523,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
 
     const weatherBlock = dallas && knoxville
       ? buildContextualWeatherBlock(dallas, knoxville, now) + pollenBlock
-      : (dallas ? `\n\n[Dallas Weather]\n${formatWeatherBlock(dallas)}` + pollenBlock : "");
+      : (dallas ? `\n\n[VERIFIED — Tomorrow.io Weather API — Dallas]\n${formatWeatherBlock(dallas)}` + pollenBlock : "");
 
     // Update the last-checked timestamp so on-demand checks during the day only show NEW emails
     if (emails !== null) {
@@ -522,8 +532,8 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
 
     const gmailBlock = emails !== null
       ? (emails.length === 0
-          ? `\n\n[Gmail — no new emails in the last 24 hours]\nDo not mention email in the briefing — tell David his inbox is quiet if he asks.`
-          : `\n\n[Gmail — emails received in the last 24 hours (fetched just now)]\n${formatEmailsForPrompt(emails)}` +
+          ? `\n\n[VERIFIED — Gmail API — no new unread emails in the last 24 hours]\nDo not mention email in the briefing — tell David his inbox is quiet if he asks.`
+          : `\n\n[VERIFIED — Gmail API — unread emails from the last 24 hours]\n${formatEmailsForPrompt(emails)}\nThis is VERIFIED data. State sender names, subjects, and content exactly as shown.` +
             buildScamWarningInstruction(emails))
       : "";
 
@@ -535,7 +545,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     ]);
 
     const calendarBlock = events !== null
-      ? `\n\n[Google Calendar — today and next 7 days (past events excluded)]\n${formatCalendarForPrompt(events, "this week")}${calendarDepartureTimes}\n⚠ CALENDAR RULE: Use ONLY the exact event title shown. NEVER substitute names or infer context from memory. If it says "You Matter Counseling" — say exactly that, nothing else.`
+      ? `\n\n[VERIFIED — Google Calendar API — today and next 7 days (past events excluded)]\n${formatCalendarForPrompt(events, "this week")}${calendarDepartureTimes}\n\n⚠ CALENDAR RULE — NO EXCEPTIONS: Use ONLY the exact event title shown above. NEVER substitute, infer, or enrich event titles with names or context from memory. "You Matter Counseling" stays "You Matter Counseling." If you want to add context, frame it as a question (INFERRED tier), never a statement.`
       : "";
 
     const notesBlock = formatNotesForMorningBriefing(lastNightNotes);
@@ -558,13 +568,13 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     const sportsBlock = sportsScores ? formatSportsForPrompt(sportsScores) : "";
 
     const billsMorningBlock = upcomingBills.length > 0
-      ? `\n\n[Bills Due in Next 3 Days — mention ONLY if due within 3 days, skip entirely otherwise]\n${formatBillsForPrompt(upcomingBills)}`
+      ? `\n\n[VERIFIED — Bills Database — Due in Next 3 Days]\n${formatBillsForPrompt(upcomingBills)}\nMention ONLY if due within 3 days, skip entirely otherwise.`
       : "";
 
     const marketsBlock = marketsData ? buildMarketsBlock(marketsData, now) : "";
 
     const datesBlock = upcomingDates.length > 0
-      ? `\n\n[Upcoming Birthdays & Anniversaries]\n${formatDatesForPrompt(upcomingDates)}`
+      ? `\n\n[VERIFIED — Dates Database — Upcoming Birthdays & Anniversaries]\n${formatDatesForPrompt(upcomingDates)}`
       : "";
 
     const sundaySummaryBlock = isSunday && sundayData ? buildSundaySummaryBlock(sundayData) : "";
@@ -619,7 +629,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       block += `• Total family archive stories captured: ${totalStories}\n`;
 
       if (dailyMotivation) {
-        block += `\n[Today's Inspiration — from web search]\n${dailyMotivation}\n`;
+        block += `\n[VERIFIED — Web Search — Today's Inspiration]\n${dailyMotivation}\n`;
         block += `Use the above inspiration as the foundation for Section 15. Personalize it with something specific to David's day — his pickleball, upcoming dinner, the people in his life. Keep it to 2-3 sentences. Warm, genuine, not preachy.`;
       } else {
         block += `Use this context to craft a specific, warm 2-3 sentence motivating thought — reference his pickleball schedule, upcoming events, or journal themes. Morning only — do NOT suggest evening activities or memory recording.`;
