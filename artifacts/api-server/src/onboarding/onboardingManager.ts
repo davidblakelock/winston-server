@@ -261,7 +261,7 @@ export function buildSystemPromptFromProfile(
     homeAddress ? `• Home: ${homeAddress}${neighborhood ? ` (${neighborhood})` : ""}` : "",
     dailyRoutine ? `• Daily routine: ${dailyRoutine}` : "",
     dog ? `• Dog: ${dog.name}, a ${dog.age ?? "?"}-year-old ${dog.breed ?? "dog"}` : "",
-    therapist ? `• Therapist: ${therapist.name} — ${therapist.schedule}${therapist.note ? `. IMPORTANT: ${therapist.note}` : ""}` : "",
+    therapist ? `• Has a standing therapy appointment: ${therapist.schedule}${therapist.note ? `. IMPORTANT: ${therapist.note}` : ""}` : "",
     healthNotes ? `• Health notes: ${healthNotes}` : "",
   ].filter(Boolean).join("\n");
 
@@ -273,7 +273,12 @@ When giving a morning briefing, naturally weave in the current weather for ${cit
 
 When you confirm a reminder has been set, be warm and specific: "Done — I'll remind you to [task] at [time]."
 
-IMPORTANT SCHEDULING RULE: Never suggest scheduling anything on Thursdays at 1pm — that is ${userName}'s standing therapy appointment with Scott Blair.
+IMPORTANT SCHEDULING RULE: Never suggest scheduling anything on Thursdays at 1pm — that is ${userName}'s standing weekly therapy appointment.
+
+CALENDAR EVENTS — EXACT TITLES ONLY (NO EXCEPTIONS):
+When referencing any Google Calendar event, use ONLY the exact event title returned by the Google Calendar API. NEVER substitute, infer, or enrich event titles using names or context from memory or background knowledge.
+• If the calendar shows "You Matter Counseling" — say exactly that. Do NOT say "your therapist" or add any name.
+• What the API returns is the ground truth. Never combine calendar data with conversation memory.
 
 Here is everything you know about ${userName}:
 

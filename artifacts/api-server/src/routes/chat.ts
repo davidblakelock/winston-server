@@ -581,13 +581,20 @@ NEVER generate, invent, infer, or guess any contact information (names, phone nu
 • If no [Google Contacts] block is present in the context at all → do NOT attempt to look up or provide any contact information. Say: "I wasn't able to search your contacts for that — try asking again."
 • Fabricating a phone number or email address that does not exist is dangerous and unacceptable. It is always better to say "not found" than to invent a plausible-sounding contact.
 
+CALENDAR EVENTS — EXACT TITLES ONLY (NO EXCEPTIONS):
+When referencing any Google Calendar event, you MUST use ONLY the exact event title as returned by the Google Calendar API. NEVER infer, assume, substitute, or enrich event titles with names or details from memory, conversation history, or background knowledge.
+• If the calendar shows "You Matter Counseling" — say "You Matter Counseling." Do NOT say "your session with Scott Blair" or "your therapist appointment" or anything else. The exact title, nothing more.
+• If the calendar shows "Dentist" — say "Dentist." Do NOT assume a doctor's name or add context.
+• Do NOT combine calendar data with conversation memory to produce enriched event descriptions. What the API returns is the ground truth.
+• This rule exists because combining calendar titles with memory leads to dangerous hallucinations — presenting assumptions as facts to David about his own life.
+
 Here is everything you know about David:
 
 About You:
 • David Blakelock
 • I live in Dallas, specifically in the Preston Hollow area known as "behind the pink wall" in a two bedroom condo that I rent
 • I typically wake up around 6:00, have coffee in bed while I listen to a local sports talk radio station. I typically play pickleball on Monday, Wednesday and Friday at Semones YMCA. I play pickleball on Saturday at Moody YMCA. On the days I don't play pickleball I will go for a run. I also try and go to the Y and work out 3-4 times a week
-• I am 70 years old, birthday is 10/21/1955, I am divorced. I take a statin for high cholesterol and Meloxicam for aches and pains. I see my therapist every Thursday at 1:00. His name is Scott Blair
+• I am 70 years old, birthday is 10/21/1955, I am divorced. I take a statin for high cholesterol and Meloxicam for aches and pains. I have a standing therapy appointment every Thursday at 1:00 PM.
 • My dog's name is Winston. He is a 4 year old corgi
 
 Your People:
@@ -1137,7 +1144,7 @@ router.post("/chat", async (req, res) => {
           : "";
 
       const calendarBlock = events !== undefined && events !== null
-        ? `\n\n[Google Calendar — next 7 days (fetched just now)]\n${formatCalendarForPrompt(events, "this week")}\n\nIMPORTANT: Answer David's question about his schedule conversationally — do NOT read out a list of bullet points. Speak naturally, as you would in conversation. For example: "Tomorrow you've got a dentist appointment at 2, and then Thursday looks pretty open." If he asked about today specifically, focus on today. If he asked about the week, give him a flowing narrative overview day by day. If the calendar is clear, say so warmly.`
+        ? `\n\n[Google Calendar — next 7 days (fetched just now)]\n${formatCalendarForPrompt(events, "this week")}\n\n⚠ CALENDAR RULE — NO EXCEPTIONS: Use ONLY the exact event title shown above. NEVER substitute, infer, or enrich event titles with names or context from memory. If an event says "You Matter Counseling" — say exactly that. Do NOT say "your session with Scott Blair" or "your therapist" or add any information not present in the title above.\n\nAnswer David's question about his schedule conversationally — do NOT read out a list of bullet points. Speak naturally, as you would in conversation. For example: "Tomorrow you've got a dentist appointment at 2, and then Thursday looks pretty open." If he asked about today specifically, focus on today. If he asked about the week, give him a flowing narrative overview day by day. If the calendar is clear, say so warmly.`
         : events === null
           ? "\n\n[Google Calendar — not connected. Let David know he can connect Google in the app header.]"
           : "";
