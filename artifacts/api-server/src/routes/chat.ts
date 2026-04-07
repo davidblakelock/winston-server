@@ -1831,6 +1831,10 @@ router.post("/chat", async (req, res) => {
     try {
       // Name extraction — tried in priority order (most specific → most general)
       const nameMatch =
+        // P0a (compound find+save without "in my contacts"):
+        //   "Find [Name] and add/save him/her to my profile/contacts/Winston"
+        //   Must come before P0 so it wins when there's no "in my contacts" phrase
+        message.match(/(?:find|look\s+up|search(?:\s+for)?|get|pull\s+up)\s+((?:[A-Za-z'.]+\s+){0,3}[A-Za-z'.]+?)\s+and\s+(?:add|save|put)\s+(?:him|her|them)\b/i) ??
         // P0 (compound): "Find [Name] in my contacts and add him to my profile"
         //   → extract the name that comes between the action verb and "in/from my contacts"
         //   Allows periods so "Dr. John Smith", "Mr. Jones" etc. are captured correctly

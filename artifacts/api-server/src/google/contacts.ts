@@ -165,6 +165,25 @@ async function searchContactsLive(searchName: string, token: string): Promise<Co
     contacts.push(c);
   }
 
+  // ── Name filter ────────────────────────────────────────────────────────────
+  // The People API searches ALL fields (notes, emails, phone, tags) so results
+  // can include contacts that merely mention the search name in a note.
+  // Keep only contacts whose displayName actually contains the search words.
+  // Rule: at least half the search words must appear in the displayName.
+  const searchWords = searchName.toLowerCase().split(/\s+/).filter((w) => w.length > 1);
+  if (searchWords.length > 0) {
+    const filtered = contacts.filter((c) => {
+      const nameLower = c.name.toLowerCase();
+      const matchCount = searchWords.filter((w) => nameLower.includes(w)).length;
+      return matchCount >= Math.ceil(searchWords.length / 2);
+    });
+    // Only apply the filter if it keeps at least one result.
+    // If the filter removes everything, return raw results so the
+    // "not found" path can fire correctly in the caller.
+    if (filtered.length > 0) return filtered;
+    return []; // name filter removed all — treat as no match
+  }
+
   return contacts;
 }
 

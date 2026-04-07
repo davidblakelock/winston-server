@@ -49,6 +49,30 @@ export function chicagoDateStr(date: Date = new Date()): string {
 }
 
 /**
+ * Return the UTC equivalent of midnight (00:00:00) in America/Chicago
+ * for the CT calendar day that contains `date`.
+ *
+ * This is safe across DST transitions because it:
+ *   1. Reads the CT date string via Intl (always correct).
+ *   2. Reads the current CT UTC offset via Intl (e.g. "GMT-5" CDT / "GMT-6" CST).
+ *   3. Constructs the exact UTC ISO string for CT midnight — no arithmetic tricks.
+ */
+function ctMidnightOf(date: Date): Date {
+  const ctDateStr = chicagoDateStr(date); // "YYYY-MM-DD" in CT
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: TZ,
+    timeZoneName: "shortOffset",
+  }).formatToParts(date);
+  const offsetStr = parts.find((p) => p.type === "timeZoneName")?.value ?? "GMT-5";
+  // offsetStr = "GMT-5" (CDT) or "GMT-6" (CST)
+  const offsetHours = parseInt(offsetStr.replace("GMT", "") || "-5", 10); // -5 or -6
+  // CT midnight in UTC = ctDateStr at (-offsetHours):00:00Z
+  // e.g. CDT: "2026-04-07T05:00:00.000Z" = midnight April 7 CDT
+  const utcHour = String(-offsetHours).padStart(2, "0");
+  return new Date(`${ctDateStr}T${utcHour}:00:00.000Z`);
+}
+
+/**
  * Return true if a timed event's start time is strictly in the past
  * when measured in America/Chicago. All-day events are never past.
  */
@@ -183,11 +207,9 @@ export async function fetchTodayEvents(): Promise<CalendarEvent[] | null> {
   const todayStr = getLocalYMD(now);
   const tomorrowStr = getLocalYMD(new Date(now.getTime() + 86400000));
 
-  const localMidnight = new Date(now.toLocaleString("en-US", { timeZone: TZ }));
-  localMidnight.setHours(0, 0, 0, 0);
-  const offsetMs = now.getTime() - new Date(now.toLocaleString("en-US", { timeZone: TZ })).getTime();
-  const timeMin = new Date(localMidnight.getTime() + offsetMs).toISOString();
-  const timeMax = new Date(localMidnight.getTime() + offsetMs + 86399999).toISOString();
+  const midnight = ctMidnightOf(now);
+  const timeMin = midnight.toISOString();
+  const timeMax = new Date(midnight.getTime() + 86399999).toISOString();
 
   const events = await fetchEventsFromAllCalendars(calendar, timeMin, timeMax, todayStr, tomorrowStr, 20);
   return events.filter((event) => !isEventInPast(event));
@@ -205,11 +227,9 @@ export async function fetchTomorrowEvents(): Promise<CalendarEvent[] | null> {
   const tomorrowDate = new Date(now.getTime() + 86400000);
   const tomorrowStr = getLocalYMD(tomorrowDate);
 
-  const localMidnightTomorrow = new Date(tomorrowDate.toLocaleString("en-US", { timeZone: TZ }));
-  localMidnightTomorrow.setHours(0, 0, 0, 0);
-  const offsetMs = tomorrowDate.getTime() - new Date(tomorrowDate.toLocaleString("en-US", { timeZone: TZ })).getTime();
-  const timeMin = new Date(localMidnightTomorrow.getTime() + offsetMs).toISOString();
-  const timeMax = new Date(localMidnightTomorrow.getTime() + offsetMs + 86399999).toISOString();
+  const midnightTomorrow = ctMidnightOf(tomorrowDate);
+  const timeMin = midnightTomorrow.toISOString();
+  const timeMax = new Date(midnightTomorrow.getTime() + 86399999).toISOString();
 
   return fetchEventsFromAllCalendars(calendar, timeMin, timeMax, todayStr, tomorrowStr, 20);
   // Note: do NOT filter with isEventInPast — all tomorrow events are future events
@@ -225,12 +245,9 @@ export async function fetchWeekEvents(): Promise<CalendarEvent[] | null> {
   const todayStr = getLocalYMD(now);
   const tomorrowStr = getLocalYMD(new Date(now.getTime() + 86400000));
 
-  const localMidnight = new Date(now.toLocaleString("en-US", { timeZone: TZ }));
-  localMidnight.setHours(0, 0, 0, 0);
-  const offsetMs = now.getTime() - new Date(now.toLocaleString("en-US", { timeZone: TZ })).getTime();
-
-  const timeMin = new Date(localMidnight.getTime() + offsetMs).toISOString();
-  const timeMax = new Date(localMidnight.getTime() + offsetMs + 7 * 86400000).toISOString();
+  const midnight = ctMidnightOf(now);
+  const timeMin = midnight.toISOString();
+  const timeMax = new Date(midnight.getTime() + 7 * 86400000).toISOString();
 
   const events = await fetchEventsFromAllCalendars(calendar, timeMin, timeMax, todayStr, tomorrowStr, 50);
   return events.filter((event) => !isEventInPast(event));
