@@ -636,7 +636,7 @@ Your Places:
 Your Interests:
 • Shows you're watching right now – Shrinking, Friends & Neighbors, Lincoln Lawyer
 • Sports teams you follow – The Rangers, Cowboys
-• Music you like – classic rock from the 60's and 70's, classic Jazz
+• Music you like – classic rock from the 60's and 70's, classic Jazz. David uses YouTube Music exclusively — NEVER suggest Spotify or Apple Music. When recommending music, say "search this on YouTube Music" and name the artist or genre only, never a specific album.
 • Hobbies — play pickleball at least 4 times a week, woodworking, tinkering on old cars, boats, running, cooking
 • News topics you actually care about – stock market, global politics, technology
 • Types of restaurants you love – sushi, steak, dive bars, pizza, Italian, Indian, seafood. Love all restaurants, but really like either a great dive bar with good food, or a classic dark place where the drinks are strong and the food is great
@@ -1354,6 +1354,34 @@ router.post("/chat", async (req, res) => {
       ? `\n• Tomorrow is a pickleball day — mention it as part of the tomorrow preview.`
       : "";
 
+    // ── Fetch tomorrow's weather for Dallas (top of wind-down) ──────────────
+    let tomorrowWeatherBlock = "";
+    try {
+      const apiKey = process.env.TOMORROW_IO_API_KEY;
+      if (apiKey) {
+        const forecastResp = await fetch(
+          `https://api.tomorrow.io/v4/weather/forecast?location=32.7767,-96.7970&units=imperial&timesteps=1d&apikey=${apiKey}`,
+          { signal: AbortSignal.timeout(6000) }
+        );
+        if (forecastResp.ok) {
+          const forecastData = await forecastResp.json() as {
+            timelines?: { daily?: Array<{ values?: { temperatureMax?: number; temperatureMin?: number; weatherCode?: number; precipitationProbabilityMax?: number } }> }
+          };
+          const tomorrowForecast = forecastData.timelines?.daily?.[1]?.values;
+          if (tomorrowForecast) {
+            const high = Math.round(tomorrowForecast.temperatureMax ?? 0);
+            const low = Math.round(tomorrowForecast.temperatureMin ?? 0);
+            const condition = TOMORROW_CONDITIONS[tomorrowForecast.weatherCode ?? 0] ?? "conditions unknown";
+            const precip = Math.round(tomorrowForecast.precipitationProbabilityMax ?? 0);
+            tomorrowWeatherBlock =
+              `\n\n[Tomorrow's Weather — Dallas]\n` +
+              `High ${high}°F / Low ${low}°F, ${condition}${precip > 30 ? `, ${precip}% chance of rain` : ""}.\n` +
+              `Mention this naturally at the top of the wind-down — two sentences max, temperature and conditions only.`;
+          }
+        }
+      }
+    } catch { /* non-fatal — skip weather if API unavailable */ }
+
     // ── Fetch tomorrow's calendar events for wind-down preview ──────────────
     let tomorrowCalendarBlock = "";
     try {
@@ -1376,50 +1404,60 @@ router.post("/chat", async (req, res) => {
       }
     } catch { /* non-fatal */ }
 
-    // ── Check TV for episodes aired in the last 48 hours only (staleness guard) ──
+    // ── Check TV for episodes aired in the last 72 hours only ───────────────
+    // If airedAt is missing/null, do NOT suggest the show — stale data risk.
     let tvEveningNote = "";
     try {
       const watchedShowsEvening = await getWatchedShows();
       const watchedIdsEvening = watchedShowsEvening.filter((s) => s.tvmazeId).map((s) => s.tvmazeId!);
       const tonightEps = await fetchEpisodesForDate(now, watchedIdsEvening);
-      // Only suggest episodes that aired within the last 48 hours
-      const STALE_MS = 48 * 60 * 60 * 1000;
+      const STALE_MS = 72 * 60 * 60 * 1000; // 3 days — skip if episode is older
       const freshEps = tonightEps.filter((ep) => {
-        if (!ep.airedAt) return true; // no timestamp — assume fresh (broadcast tonight)
+        if (!ep.airedAt) return false; // no timestamp — skip rather than assume fresh
         const ageMs = Date.now() - new Date(ep.airedAt).getTime();
         return ageMs <= STALE_MS;
       });
       if (freshEps.length > 0) {
         tvEveningNote =
-          `\n\n[TV Tonight — New in Last 48 Hours]\n` +
+          `\n\n[TV — New Episodes in Last 3 Days]\n` +
           freshEps.map((ep) => `• ${formatEpisodeForPrompt(ep)}`).join("\n") +
-          `\nIf the moment feels right in Step 3, mention one briefly — e.g. "New Shrinking tonight if you want something good." Only mention if it fits naturally.`;
+          `\nIf the moment feels right in Step 3, mention one briefly and naturally. ` +
+          `ONLY mention shows listed above — never suggest a show not in this list.`;
       }
     } catch { /* non-fatal */ }
 
     systemPrompt +=
       `\n\n[Evening Wind-Down Session — ACTIVE]\n` +
-      `Follow this exact structure — take it one step at a time, let it breathe:\n\n` +
+      `Follow this exact structure — one step at a time, let each breathe:\n\n` +
+      `STEP 0 — WEATHER PREVIEW (if [Tomorrow's Weather] block is present): Open with one warm sentence ` +
+      `about tomorrow's weather in Dallas — temperature and conditions only. Keep it brief and natural, ` +
+      `e.g. "Tomorrow's looking like a cool one — high of 62 and partly cloudy." Never more than two sentences.\n\n` +
       `STEP 1 — WARM CHECK-IN: Ask how his day went. Reference one or two specific things from today ` +
       `if you can (from calendar context or recent conversation). Keep it warm and genuine.\n\n` +
       `STEP 2 — TOMORROW PREVIEW: After the check-in, briefly preview what's on tomorrow from the ` +
       `[Tomorrow's Calendar] block. Include times. If the calendar is clear, say so warmly. ` +
-      `If he mentions wanting to remember something for tomorrow, save it (he knows you capture those notes).` +
+      `If he mentions wanting to remember something for tomorrow, save it.` +
       tomorrowPickleballNote + `\n\n` +
-      `STEP 3 — OPTIONAL ENTERTAINMENT NOTE: If something relevant is in [TV Tonight], mention it ` +
-      `briefly and naturally. Skip entirely if nothing is listed or it doesn't fit the moment.\n\n` +
-      `STEP 4 — STORY CAPTURE (MANDATORY — always include): This is one of Winston's most important ` +
-      `features. After the check-in and tomorrow preview, ALWAYS ask the memory question for Olivia's book. ` +
-      `Do not skip it even if David seems tired or brief. Frame it warmly: ` +
-      `"Before we say goodnight, I'd love to capture something for Olivia..." then ask the question ` +
-      `from the [Tonight's Memory Question] block. One question only, never more.\n\n` +
-      `STEP 5 — JOURNAL PROMPT: After the story question is asked (or answered), ALWAYS offer a journal entry: ` +
+      `STEP 3 — OPTIONAL ENTERTAINMENT: If something relevant is in [TV — New Episodes in Last 3 Days], ` +
+      `mention it briefly and naturally. Skip entirely if nothing is listed. ` +
+      `NEVER suggest Spotify or Apple Music. If suggesting music, say: "You might search [artist/genre] ` +
+      `on YouTube Music" — artist or genre only, never a specific album. ` +
+      `NEVER suggest decaf, herbal tea, or any specific drink.\n\n` +
+      `STEP 4 — OLIVIA ARCHIVE (MANDATORY): Ask specifically: "Want to capture something from today ` +
+      `for Olivia's archive?" Keep this framing — light, warm, specific to today. ` +
+      `This is a quick daily capture moment, distinct from the deeper memory question below.\n\n` +
+      `STEP 5 — JOURNAL PROMPT (MANDATORY): After the archive offer, always ask: ` +
       `"Would you like to add anything to your journal tonight? Just a few thoughts about your day — ` +
-      `completely optional." If David says no or not tonight, move straight to goodnight.\n\n` +
-      `STEP 6 — GOODNIGHT: End warmly. If David hasn't taken his medications, remind him gently. ` +
-      `Mention Winston the corgi. Wish him well for tomorrow specifically (reference pickleball or any event). ` +
-      `Keep it warm, personal, brief.\n\n` +
-      `RULE: Never rush through multiple steps in one message. One step at a time.` +
+      `completely optional." If he says no, move on.\n\n` +
+      `STEP 6 — MEMORY QUESTION (MANDATORY): Ask the deeper memory question from ` +
+      `[Tonight's Memory Question] block. Frame it warmly: ` +
+      `"I'd love to dig a little deeper tonight — [question]." One question only, never more.\n\n` +
+      `STEP 7 — GOODNIGHT: End warmly. If David hasn't taken his medications, remind him gently. ` +
+      `Mention Winston the corgi. Wish him well for tomorrow specifically. Keep it warm and brief.\n\n` +
+      `RULE: Never rush through multiple steps in one message. One step at a time. ` +
+      `RULE: Never suggest decaf, herbal tea, or sleep aids — that's condescending. ` +
+      `RULE: Never mention a TV show not listed in [TV — New Episodes in Last 3 Days].` +
+      tomorrowWeatherBlock +
       tomorrowCalendarBlock +
       tvEveningNote;
   }
