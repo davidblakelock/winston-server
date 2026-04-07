@@ -151,21 +151,8 @@ app.listen(port, async (err) => {
     logger.warn({ e }, "Startup migration warning: push_subscriptions device_id");
   }
 
-  // One-time data migration: set companion_name for David if it was never saved during onboarding.
-  // Safe to run every startup — WHERE condition makes it a no-op once the name is set.
-  try {
-    await query(
-      `UPDATE user_profiles up
-       SET companion_name = 'Emma Peel'
-       FROM app_sessions s
-       WHERE up.user_name = s.user_name
-         AND s.google_id = '105826305820216987064'
-         AND (up.companion_name IS NULL OR up.companion_name = '')
-         AND up.onboarding_completed = true`,
-      []
-    );
-    logger.info("Startup migration: companion_name check complete");
-  } catch (e) {
-    logger.warn({ e }, "Startup migration warning: companion_name");
-  }
+  // companion_name migration removed — it used UPDATE...FROM (cross-table join) which
+  // the Supabase exec_sql client silently ignores, stripping the WHERE guard and
+  // unconditionally overwriting user-chosen companion names with 'Emma Peel' on every restart.
+  logger.info("Startup migration: companion_name check complete (migration removed)");
 });

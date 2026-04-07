@@ -160,9 +160,9 @@ export async function upsertProfile(data: Partial<CollectedData>, userName = "Da
         longitude = COALESCE($4, longitude),
         timezone = COALESCE($5, timezone),
         wake_time = COALESCE($6, wake_time),
-        voice_id = COALESCE($7, voice_id),
+        voice_id = COALESCE(voice_id, $7),
         health_notes = COALESCE($8, health_notes),
-        companion_name = COALESCE($9, companion_name),
+        companion_name = COALESCE(companion_name, $9),
         raw_data = $10
        WHERE user_name = $11`,
       [
