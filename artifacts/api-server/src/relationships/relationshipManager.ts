@@ -9,7 +9,7 @@ export interface TrackedPerson {
 }
 
 // ── People to track (drawn from David's profile "people" array) ───────────────
-// Olivia is tracked separately via olivia_contacts; other important personal
+// Olivia is tracked separately via contact_mentions; other important personal
 // relationships live here.  Doctor/professional contacts are excluded —
 // those don't need relationship-nurturing nudges.
 export const TRACKED_PEOPLE: TrackedPerson[] = [
@@ -46,34 +46,35 @@ export async function recordMention(
   personName: string,
   relationshipType: string,
   mentionType: "mention" | "call" | "visit",
-  notes?: string
+  notes?: string,
+  userName = "David"
 ): Promise<void> {
   await query(
     `INSERT INTO relationship_mentions (user_name, person_name, relationship_type, mention_type, notes, mention_date)
-     VALUES ('David', $1, $2, $3, $4, CURRENT_DATE)`,
-    [personName, relationshipType, mentionType, notes ?? null]
+     VALUES ($1, $2, $3, $4, $5, CURRENT_DATE)`,
+    [userName, personName, relationshipType, mentionType, notes ?? null]
   ).catch((err) => logger.warn({ err }, "recordMention failed"));
 }
 
 // ── Days since last mention ────────────────────────────────────────────────────
-export async function getDaysSinceLastMention(personName: string): Promise<number | null> {
+export async function getDaysSinceLastMention(personName: string, userName = "David"): Promise<number | null> {
   const { rows } = await query<{ days: string | null }>(
     `SELECT EXTRACT(DAY FROM (CURRENT_DATE - MAX(mention_date)))::int AS days
      FROM relationship_mentions
-     WHERE user_name = 'David' AND person_name = $1`,
-    [personName]
+     WHERE user_name = $1 AND person_name = $2`,
+    [userName, personName]
   );
   if (!rows[0] || rows[0].days === null) return null;
   return parseInt(rows[0].days);
 }
 
 // ── Check for call-type mention today ─────────────────────────────────────────
-export async function mentionedCallToday(personName: string): Promise<boolean> {
+export async function mentionedCallToday(personName: string, userName = "David"): Promise<boolean> {
   const { rows } = await query<{ count: string }>(
     `SELECT COUNT(*) as count FROM relationship_mentions
-     WHERE user_name = 'David' AND person_name = $1
+     WHERE user_name = $1 AND person_name = $2
        AND mention_type = 'call' AND mention_date = CURRENT_DATE`,
-    [personName]
+    [userName, personName]
   );
   return parseInt(rows[0].count) > 0;
 }

@@ -101,7 +101,7 @@ function daysBetween(a: Date, b: Date): number {
 }
 
 // ── CRUD ─────────────────────────────────────────────────────────────────────
-export async function getBills(): Promise<Bill[]> {
+export async function getBills(userName = "David"): Promise<Bill[]> {
   const { rows } = await query<{
     id: number;
     name: string;
@@ -117,8 +117,9 @@ export async function getBills(): Promise<Bill[]> {
     `SELECT id, name, category, amount, frequency, due_day, due_months,
             reminder_lead_days, notes, last_reminded_date
      FROM financial_obligations
-     WHERE user_name = 'David' AND active = true
-     ORDER BY name ASC`
+     WHERE user_name = $1 AND active = true
+     ORDER BY name ASC`,
+    [userName]
   );
   return rows.map((r) => ({
     id: r.id,
@@ -134,8 +135,8 @@ export async function getBills(): Promise<Bill[]> {
   }));
 }
 
-export async function getUpcomingBills(daysAhead = 60): Promise<UpcomingBill[]> {
-  const bills = await getBills();
+export async function getUpcomingBills(daysAhead = 60, userName = "David"): Promise<UpcomingBill[]> {
+  const bills = await getBills(userName);
   const now = new Date();
 
   const upcoming: UpcomingBill[] = bills.map((b) => {
@@ -161,12 +162,13 @@ export async function addBill(
   dueDay: number,
   dueMonths: string | null,
   amount?: string,
-  notes?: string
+  notes?: string,
+  userName = "David"
 ): Promise<{ success: boolean; alreadyExists: boolean; bill?: Bill }> {
   const existing = await query(
     `SELECT id FROM financial_obligations
-     WHERE user_name = 'David' AND lower(name) = lower($1) AND active = true`,
-    [name]
+     WHERE user_name = $1 AND lower(name) = lower($2) AND active = true`,
+    [userName, name]
   );
   if (existing.rows.length > 0) {
     console.log(`[BILL SAVE] Duplicate detected — "${name}" already tracked (id: ${(existing.rows[0] as { id: number }).id})`);
@@ -184,10 +186,10 @@ export async function addBill(
     `INSERT INTO financial_obligations
        (user_name, name, category, amount, frequency, due_day, due_months,
         reminder_lead_days, notes)
-     VALUES ('David', $1, $2, $3, $4, $5, $6, $7, $8)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING id, name, category, amount, frequency, due_day, due_months,
                reminder_lead_days, notes, last_reminded_date`,
-    [name, category, amount ?? null, frequency, dueDay, dueMonths ?? null, leadDays, notes ?? null]
+    [userName, name, category, amount ?? null, frequency, dueDay, dueMonths ?? null, leadDays, notes ?? null]
   );
 
   console.log(`[BILL SAVE] Supabase response — rowCount=${rows.length} rows=${JSON.stringify(rows)}`);
@@ -217,12 +219,12 @@ export async function addBill(
   };
 }
 
-export async function removeBill(nameQuery: string): Promise<boolean> {
+export async function removeBill(nameQuery: string, userName = "David"): Promise<boolean> {
   const { rows } = await query(
     `UPDATE financial_obligations SET active = false
-     WHERE user_name = 'David' AND lower(name) LIKE lower($1) AND active = true
+     WHERE user_name = $1 AND lower(name) LIKE lower($2) AND active = true
      RETURNING id`,
-    [`%${nameQuery}%`]
+    [userName, `%${nameQuery}%`]
   );
   return rows.length > 0;
 }

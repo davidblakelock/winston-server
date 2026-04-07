@@ -817,11 +817,12 @@ router.post("/chat", async (req, res) => {
   if (currentHourCT >= 23 || currentHourCT === 0) {
     try {
       const { rows: sleepRows } = await query<{ count: string }>(
-        `SELECT COUNT(*) as count FROM sleep_reminder_log WHERE user_name = 'David' AND reminder_date = CURRENT_DATE`
+        `SELECT COUNT(*) as count FROM sleep_reminder_log WHERE user_name = $1 AND reminder_date = CURRENT_DATE`,
+        [sessionUserName]
       );
       if (parseInt(sleepRows[0].count) === 0) {
         sleepReminderFired = true;
-        await query(`INSERT INTO sleep_reminder_log (user_name) VALUES ('David') ON CONFLICT (user_name, reminder_date) DO NOTHING`);
+        await query(`INSERT INTO sleep_reminder_log (user_name) VALUES ($1) ON CONFLICT (user_name, reminder_date) DO NOTHING`, [sessionUserName]);
       }
     } catch { /* non-fatal */ }
   }
@@ -897,7 +898,8 @@ router.post("/chat", async (req, res) => {
           extracted.dueDay,
           extracted.dueMonths ?? null,
           extracted.amount ?? undefined,
-          extracted.notes ?? undefined
+          extracted.notes ?? undefined,
+          sessionUserName
         );
         if (result.alreadyExists) {
           systemPrompt += `\n\n[Bill Add — Already Exists]\nTell David you already have "${extracted.name}" tracked. If he wants to update it, he can remove it first and re-add it.`;
@@ -915,8 +917,8 @@ router.post("/chat", async (req, res) => {
 
   if (isBillList) {
     try {
-      const upcoming = await getUpcomingBills(60);
-      const allBills = await getBills();
+      const upcoming = await getUpcomingBills(60, sessionUserName);
+      const allBills = await getBills(sessionUserName);
       if (!allBills.length) {
         systemPrompt += `\n\n[Financial Obligations — None tracked yet]\nTell David he doesn't have any bills tracked yet. Let him know he can add them naturally — e.g. "My Amex bill is due on the 15th of every month."`;
       } else {
@@ -945,7 +947,7 @@ router.post("/chat", async (req, res) => {
       if (!nameQuery) {
         systemPrompt += `\n\n[Bill Remove — Unclear]\nAsk David which bill he'd like to remove. He can say "Remove my Amex reminder."`;
       } else {
-        const removed = await removeBill(nameQuery);
+        const removed = await removeBill(nameQuery, sessionUserName);
         if (removed) {
           systemPrompt += `\n\n[Bill Removed]\nTell David that "${nameQuery}" has been removed from his bill tracking. Keep it brief and warm.`;
           req.log.info({ nameQuery }, "Bill removed");
@@ -976,7 +978,9 @@ router.post("/chat", async (req, res) => {
           extracted.month,
           extracted.day,
           extracted.relationship ?? undefined,
-          extracted.year ?? undefined
+          extracted.year ?? undefined,
+          undefined,
+          sessionUserName
         );
         if (result.alreadyExists) {
           systemPrompt += `\n\n[Date Add — Already Exists]\nTell David you already have ${extracted.personName}'s ${extracted.eventType} saved.`;
@@ -993,11 +997,11 @@ router.post("/chat", async (req, res) => {
 
   if (isDateList) {
     try {
-      const allDates = await getDates();
+      const allDates = await getDates(sessionUserName);
       if (!allDates.length) {
         systemPrompt += `\n\n[Important Dates — None yet]\nTell David he doesn't have any birthdays or anniversaries saved yet. He can add them naturally — e.g. "Olivia's birthday is October 15th."`;
       } else {
-        const upcoming = await getUpcomingDates(90);
+        const upcoming = await getUpcomingDates(90, sessionUserName);
         const formattedList = upcoming.length
           ? formatDatesForPrompt(upcoming)
           : allDates.map((d) => `• ${d.personName}: ${d.eventType} on ${d.month}/${d.day}`).join("\n");
@@ -1015,7 +1019,7 @@ router.post("/chat", async (req, res) => {
       if (!nameQuery) {
         systemPrompt += `\n\n[Date Remove — Unclear]\nAsk David which person's birthday or anniversary to remove.`;
       } else {
-        const removed = await removeDate(nameQuery);
+        const removed = await removeDate(nameQuery, undefined, sessionUserName);
         if (removed) {
           systemPrompt += `\n\n[Date Removed]\nTell David you've removed "${nameQuery}" from the important dates list.`;
           req.log.info({ nameQuery }, "Date removed");
@@ -1056,7 +1060,7 @@ router.post("/chat", async (req, res) => {
   // ── Upcoming dates context (non-morning) ─────────────────────────────────
   if (!isMorningGreeting && !isDateAdd && !isDateList && !isDateRemove) {
     try {
-      const nearDates = await getUpcomingDates(7);
+      const nearDates = await getUpcomingDates(7, sessionUserName);
       if (nearDates.length > 0) {
         systemPrompt += `\n\n[Upcoming Important Dates — next 7 days]\n${formatDatesForPrompt(nearDates)}\nIf this is relevant to the conversation, mention it warmly. Otherwise don't bring it up.`;
       }
@@ -1088,14 +1092,14 @@ router.post("/chat", async (req, res) => {
     if (detected && !isMorningGreeting) {
       const { person, isCall } = detected;
       const mentionType = isCall ? "call" : "mention";
-      recordMention(person.name, person.relationship, mentionType, message.substring(0, 150)).catch(() => {});
+      recordMention(person.name, person.relationship, mentionType, message.substring(0, 150), sessionUserName).catch(() => {});
     }
 
     // If Susan hasn't been mentioned in 3+ days and this isn't a Susan message or morning greeting,
     // give Emma a gentle opportunity to ask about her
     if (!isSusanRelated && !isMorningGreeting) {
       try {
-        const daysSinceSusan = await getDaysSinceLastMention("Susan");
+        const daysSinceSusan = await getDaysSinceLastMention("Susan", sessionUserName);
         if (daysSinceSusan !== null && daysSinceSusan >= 3) {
           systemPrompt += `\n\n[Susan — Gentle Check-In Opportunity]\nIt's been ${daysSinceSusan} days since David last mentioned Susan. If the moment feels natural, gently ask how she's doing — "How is Susan? Have you two been able to get together?" Don't force it if the conversation is urgent or unrelated.`;
         } else if (daysSinceSusan === null) {
@@ -1108,15 +1112,15 @@ router.post("/chat", async (req, res) => {
 
   // ── Olivia relationship tracking ───────────────────────────────────────────
   if (isOliviaCall) {
-    recordOliviaContact("call", message.substring(0, 200)).catch(() => {});
+    recordOliviaContact("call", message.substring(0, 200), sessionUserName).catch(() => {});
     systemPrompt += `\n\n[Olivia Contact Logged]\nDavid mentioned talking to or calling Olivia. This has been noted. Be warm and curious — ask how she's doing, what they talked about, how she seems. Express genuine delight that they connected.`;
   } else if (isOliviaMention && !isOliviaCall) {
-    recordOliviaContact("mention", message.substring(0, 100)).catch(() => {});
+    recordOliviaContact("mention", message.substring(0, 100), sessionUserName).catch(() => {});
   }
 
   if (!isMorningGreeting && !isOliviaCall) {
     try {
-      const daysSinceCall = await getDaysSinceLastCall();
+      const daysSinceCall = await getDaysSinceLastCall(sessionUserName);
       if (daysSinceCall !== null && daysSinceCall >= 3) {
         systemPrompt += `\n\n[Olivia — Gentle Check-In Opportunity]\nIt's been ${daysSinceCall} days since David last mentioned calling Olivia. If the moment feels natural in this conversation, gently note it: "David, it's been a few days since you mentioned talking to Olivia — how is she doing?" Don't force it if the conversation is about something urgent or completely unrelated.`;
       }
@@ -1624,17 +1628,17 @@ router.post("/chat", async (req, res) => {
         let resultContext = "";
 
         if (op.operation === "add" && op.name) {
-          const added = await addProfileItem(op.category, op.name, op.detail ?? null);
-          const updatedItems = await getProfileItems(op.category).catch(() => []);
+          const added = await addProfileItem(op.category, op.name, op.detail ?? null, sessionUserName);
+          const updatedItems = await getProfileItems(op.category, sessionUserName).catch(() => []);
           resultContext = buildProfileResultContext(op, updatedItems, false, added);
           req.log.info({ op, added }, "Profile item added");
         } else if (op.operation === "remove" && op.name) {
-          const removed = await removeProfileItem(op.category, op.name);
-          const updatedItems = await getProfileItems(op.category).catch(() => []);
+          const removed = await removeProfileItem(op.category, op.name, sessionUserName);
+          const updatedItems = await getProfileItems(op.category, sessionUserName).catch(() => []);
           resultContext = buildProfileResultContext(op, updatedItems, removed);
           req.log.info({ op, removed }, "Profile item removed");
         } else if (op.operation === "read") {
-          const items = await getProfileItems(op.category).catch(() => []);
+          const items = await getProfileItems(op.category, sessionUserName).catch(() => []);
           resultContext = buildProfileResultContext(op, items, false);
           req.log.info({ op, count: items.length }, "Profile items read");
         }
@@ -1722,13 +1726,13 @@ router.post("/chat", async (req, res) => {
   // ── Medications: confirm taken ──
   if (isMedTaken) {
     try {
-      const alreadyTaken = await hasTakenMedicationsToday();
+      const alreadyTaken = await hasTakenMedicationsToday(sessionUserName);
       if (alreadyTaken) {
         systemPrompt += `\n\n[Medications — Already Confirmed Today]\nDavid already confirmed he took his medications today. Acknowledge warmly — maybe "Got it, already logged — you're all set."`;
       } else {
-        const meds = await getMedications();
+        const meds = await getMedications(sessionUserName);
         if (meds.length > 0) {
-          await logMedicationsTaken(meds);
+          await logMedicationsTaken(meds, sessionUserName);
           const medText = buildMedReminderText(meds);
           systemPrompt += `\n\n[Medications — Confirmed Taken]\nDavid has confirmed he took ${medText} today. It's been logged. Respond with brief warm acknowledgment — something like "Logged! ${meds.length === 1 ? "That's" : "Both are"} done for today." Keep it short and natural.`;
           req.log.info({ meds: meds.map((m) => m.name) }, "Medications confirmed taken");
@@ -1746,7 +1750,7 @@ router.post("/chat", async (req, res) => {
     try {
       const extracted = extractMedicationFromMessage(message);
       if (extracted) {
-        const result = await addMedication(extracted.name, extracted.dosage, extracted.reminderTime);
+        const result = await addMedication(extracted.name, extracted.dosage, extracted.reminderTime, sessionUserName);
         if (result.alreadyExists) {
           systemPrompt += `\n\n[Medications — Already Listed]\n"${extracted.name}" is already on David's medication list. Let him know gently.`;
         } else if (result.medication) {
@@ -1766,8 +1770,8 @@ router.post("/chat", async (req, res) => {
   // ── Medications: list current medications ──
   if (isMedList && !isMedTaken) {
     try {
-      const meds = await getMedications();
-      const taken = await hasTakenMedicationsToday();
+      const meds = await getMedications(sessionUserName);
+      const taken = await hasTakenMedicationsToday(sessionUserName);
       if (meds.length === 0) {
         systemPrompt += `\n\n[Medications — None Set Up]\nDavid has no medications configured yet. Let him know and offer to add one.`;
       } else {
@@ -1789,7 +1793,7 @@ router.post("/chat", async (req, res) => {
         message.match(/discontinued?\s+([\w\s\-]+?)(?:\s*[.,!]|$)/i);
       if (removeMatch) {
         const { removeMedication } = await import("../medications/medicationManager.js");
-        const removed = await removeMedication(removeMatch[1].trim());
+        const removed = await removeMedication(removeMatch[1].trim(), sessionUserName);
         if (removed) {
           systemPrompt += `\n\n[Medications — Removed]\n"${removeMatch[1].trim()}" has been removed from David's medication reminders. Confirm naturally.`;
         } else {

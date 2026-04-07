@@ -53,15 +53,16 @@ export function nextOccurrence(month: number, day: number, from: Date = new Date
   return thisYearStr >= todayStr ? thisYear : candidate(todayY + 1);
 }
 
-export async function getDates(): Promise<ImportantDate[]> {
+export async function getDates(userName = "David"): Promise<ImportantDate[]> {
   const { rows } = await query<{
     id: number; person_name: string; relationship: string | null;
     event_type: string; month: number; day: number; year: number | null; notes: string | null;
   }>(
     `SELECT id, person_name, relationship, event_type, month, day, year, notes
      FROM important_dates
-     WHERE user_name = 'David' AND active = true
-     ORDER BY month ASC, day ASC`
+     WHERE user_name = $1 AND active = true
+     ORDER BY month ASC, day ASC`,
+    [userName]
   );
   return rows.map((r) => ({
     id: r.id,
@@ -75,8 +76,8 @@ export async function getDates(): Promise<ImportantDate[]> {
   }));
 }
 
-export async function getUpcomingDates(daysAhead = 21): Promise<UpcomingDate[]> {
-  const dates = await getDates();
+export async function getUpcomingDates(daysAhead = 21, userName = "David"): Promise<UpcomingDate[]> {
+  const dates = await getDates(userName);
   const now = new Date();
 
   const result: UpcomingDate[] = dates.map((d) => {
@@ -100,13 +101,14 @@ export async function addDate(
   day: number,
   relationship?: string,
   year?: number,
-  notes?: string
+  notes?: string,
+  userName = "David"
 ): Promise<{ success: boolean; alreadyExists: boolean; date?: ImportantDate }> {
   const existing = await query(
     `SELECT id FROM important_dates
-     WHERE user_name = 'David' AND lower(person_name) = lower($1)
-       AND event_type = $2 AND active = true`,
-    [personName, eventType]
+     WHERE user_name = $1 AND lower(person_name) = lower($2)
+       AND event_type = $3 AND active = true`,
+    [userName, personName, eventType]
   );
   if (existing.rows.length > 0) return { success: false, alreadyExists: true };
 
@@ -115,9 +117,9 @@ export async function addDate(
     event_type: string; month: number; day: number; year: number | null; notes: string | null;
   }>(
     `INSERT INTO important_dates (user_name, person_name, relationship, event_type, month, day, year, notes)
-     VALUES ('David', $1, $2, $3, $4, $5, $6, $7)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING id, person_name, relationship, event_type, month, day, year, notes`,
-    [personName, relationship ?? null, eventType, month, day, year ?? null, notes ?? null]
+    [userName, personName, relationship ?? null, eventType, month, day, year ?? null, notes ?? null]
   );
   return {
     success: true,
@@ -135,13 +137,13 @@ export async function addDate(
   };
 }
 
-export async function removeDate(nameQuery: string, eventType?: string): Promise<boolean> {
+export async function removeDate(nameQuery: string, eventType?: string, userName = "David"): Promise<boolean> {
   const typeClause = eventType ? `AND event_type = '${eventType}'` : "";
   const { rows } = await query(
     `UPDATE important_dates SET active = false
-     WHERE user_name = 'David' AND lower(person_name) LIKE lower($1) ${typeClause} AND active = true
+     WHERE user_name = $1 AND lower(person_name) LIKE lower($2) ${typeClause} AND active = true
      RETURNING id`,
-    [`%${nameQuery}%`]
+    [userName, `%${nameQuery}%`]
   );
   return rows.length > 0;
 }

@@ -39,7 +39,7 @@ async function checkBillReminders(): Promise<void> {
   if (_lastCheckedDate === today) return;
   _lastCheckedDate = today;
 
-  const bills = await getBills();
+  const bills = await getBills("David2");
   if (!bills.length) return;
 
   const now = new Date();

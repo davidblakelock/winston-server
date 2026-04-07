@@ -8,7 +8,7 @@ export interface Medication {
   active: boolean;
 }
 
-export async function getMedications(): Promise<Medication[]> {
+export async function getMedications(userName = "David"): Promise<Medication[]> {
   const { rows } = await query<{
     id: number;
     name: string;
@@ -18,8 +18,9 @@ export async function getMedications(): Promise<Medication[]> {
   }>(
     `SELECT id, name, dosage, reminder_time, active
      FROM medications
-     WHERE user_name = 'David' AND active = true
-     ORDER BY reminder_time ASC, name ASC`
+     WHERE user_name = $1 AND active = true
+     ORDER BY reminder_time ASC, name ASC`,
+    [userName]
   );
   return rows.map((r) => ({
     id: r.id,
@@ -33,11 +34,12 @@ export async function getMedications(): Promise<Medication[]> {
 export async function addMedication(
   name: string,
   dosage?: string,
-  reminderTime = "08:00"
+  reminderTime = "08:00",
+  userName = "David"
 ): Promise<{ success: boolean; alreadyExists: boolean; medication?: Medication }> {
   const existing = await query(
-    `SELECT id FROM medications WHERE user_name = 'David' AND lower(name) = lower($1) AND active = true`,
-    [name]
+    `SELECT id FROM medications WHERE user_name = $1 AND lower(name) = lower($2) AND active = true`,
+    [userName, name]
   );
   if (existing.rows.length > 0) {
     return { success: false, alreadyExists: true };
@@ -45,9 +47,9 @@ export async function addMedication(
 
   const { rows } = await query<{ id: number; name: string; dosage: string | null; reminder_time: string; active: boolean }>(
     `INSERT INTO medications (user_name, name, dosage, reminder_time)
-     VALUES ('David', $1, $2, $3)
+     VALUES ($1, $2, $3, $4)
      RETURNING id, name, dosage, reminder_time, active`,
-    [name, dosage ?? null, reminderTime]
+    [userName, name, dosage ?? null, reminderTime]
   );
 
   return {
@@ -63,33 +65,34 @@ export async function addMedication(
   };
 }
 
-export async function removeMedication(name: string): Promise<boolean> {
+export async function removeMedication(name: string, userName = "David"): Promise<boolean> {
   const { rows } = await query(
     `UPDATE medications SET active = false
-     WHERE user_name = 'David' AND lower(name) LIKE lower($1) AND active = true
+     WHERE user_name = $1 AND lower(name) LIKE lower($2) AND active = true
      RETURNING id`,
-    [`%${name}%`]
+    [userName, `%${name}%`]
   );
   return rows.length > 0;
 }
 
-export async function hasTakenMedicationsToday(): Promise<boolean> {
+export async function hasTakenMedicationsToday(userName = "David"): Promise<boolean> {
   const { rows } = await query(
     `SELECT 1 FROM medication_logs
-     WHERE user_name = 'David' AND log_date = CURRENT_DATE`
+     WHERE user_name = $1 AND log_date = CURRENT_DATE`,
+    [userName]
   );
   return rows.length > 0;
 }
 
-export async function logMedicationsTaken(meds: Medication[]): Promise<void> {
+export async function logMedicationsTaken(meds: Medication[], userName = "David"): Promise<void> {
   const names = meds.map((m) => m.name).join(", ");
   await query(
     `INSERT INTO medication_logs (user_name, log_date, medication_names)
-     VALUES ('David', CURRENT_DATE, $1)
+     VALUES ($1, CURRENT_DATE, $2)
      ON CONFLICT (user_name, log_date) DO UPDATE SET
        confirmed_at = NOW(),
        medication_names = EXCLUDED.medication_names`,
-    [names]
+    [userName, names]
   );
 }
 
@@ -101,7 +104,7 @@ export async function seedDefaultMedications(): Promise<void> {
   for (const med of defaults) {
     await query(
       `INSERT INTO medications (user_name, name, dosage, reminder_time)
-       VALUES ('David', $1, $2, $3)
+       VALUES ('David2', $1, $2, $3)
        ON CONFLICT (user_name, name) DO NOTHING`,
       [med.name, med.dosage, med.reminderTime]
     );

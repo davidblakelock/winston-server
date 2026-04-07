@@ -31,16 +31,25 @@ export async function ensureProfileTable(): Promise<void> {
   await query(`
     CREATE TABLE IF NOT EXISTS profile_items (
       id serial PRIMARY KEY,
+      user_name text NOT NULL DEFAULT 'David',
       category varchar(50) NOT NULL,
       name text NOT NULL,
       detail text,
       created_at timestamptz NOT NULL DEFAULT NOW()
     )
   `);
+  // Add user_name column to existing tables that were created without it (idempotent via catch)
+  await query(`
+    ALTER TABLE profile_items ADD COLUMN user_name text NOT NULL DEFAULT 'David'
+  `).catch(() => {});
   await query(`
     CREATE INDEX IF NOT EXISTS profile_items_category_idx
     ON profile_items (category)
   `);
+  await query(`
+    CREATE INDEX IF NOT EXISTS profile_items_user_idx
+    ON profile_items (user_name, category)
+  `).catch(() => {});
 }
 
 // Use Claude to extract structured profile operation from natural language
@@ -102,12 +111,13 @@ For restaurants without an address (just adding as favorite), use "restaurants".
 export async function addProfileItem(
   category: ProfileCategory,
   name: string,
-  detail: string | null
+  detail: string | null,
+  userName = "David"
 ): Promise<ProfileItem> {
-  // Check for duplicates (case-insensitive)
+  // Check for duplicates (case-insensitive, scoped to user)
   const existing = await query<{ id: number }>(
-    `SELECT id FROM profile_items WHERE category = $1 AND LOWER(name) = LOWER($2)`,
-    [category, name]
+    `SELECT id FROM profile_items WHERE user_name = $1 AND category = $2 AND LOWER(name) = LOWER($3)`,
+    [userName, category, name]
   );
 
   if (existing.rows.length > 0) {
@@ -138,27 +148,29 @@ export async function addProfileItem(
     detail: string | null;
     created_at: Date;
   }>(
-    `INSERT INTO profile_items (category, name, detail)
-     VALUES ($1, $2, $3)
+    `INSERT INTO profile_items (user_name, category, name, detail)
+     VALUES ($1, $2, $3, $4)
      RETURNING id, category, name, detail, created_at`,
-    [category, name, detail ?? null]
+    [userName, category, name, detail ?? null]
   );
   return mapRow(rows[0]);
 }
 
 export async function removeProfileItem(
   category: ProfileCategory,
-  name: string
+  name: string,
+  userName = "David"
 ): Promise<boolean> {
   const { rowCount } = await query(
-    `DELETE FROM profile_items WHERE category = $1 AND LOWER(name) = LOWER($2)`,
-    [category, name]
+    `DELETE FROM profile_items WHERE user_name = $1 AND category = $2 AND LOWER(name) = LOWER($3)`,
+    [userName, category, name]
   );
   return (rowCount ?? 0) > 0;
 }
 
 export async function getProfileItems(
-  category?: ProfileCategory
+  category?: ProfileCategory,
+  userName = "David"
 ): Promise<ProfileItem[]> {
   const { rows } = category
     ? await query<{
@@ -169,9 +181,9 @@ export async function getProfileItems(
         created_at: Date;
       }>(
         `SELECT id, category, name, detail, created_at
-         FROM profile_items WHERE category = $1
+         FROM profile_items WHERE user_name = $1 AND category = $2
          ORDER BY created_at ASC`,
-        [category]
+        [userName, category]
       )
     : await query<{
         id: number;
@@ -181,7 +193,9 @@ export async function getProfileItems(
         created_at: Date;
       }>(
         `SELECT id, category, name, detail, created_at
-         FROM profile_items ORDER BY category, created_at ASC`
+         FROM profile_items WHERE user_name = $1
+         ORDER BY category, created_at ASC`,
+        [userName]
       );
 
   return rows.map(mapRow);
@@ -305,12 +319,13 @@ function getCategoryLabel(category: ProfileCategory): string {
 }
 
 // Get places with addresses for navigation lookup
-export async function getProfilePlaces(): Promise<
+export async function getProfilePlaces(userName = "David"): Promise<
   Array<{ name: string; address: string }>
 > {
   const { rows } = await query<{ name: string; detail: string }>(
     `SELECT name, detail FROM profile_items
-     WHERE category = 'places' AND detail IS NOT NULL AND detail != ''`
+     WHERE user_name = $1 AND category = 'places' AND detail IS NOT NULL AND detail != ''`,
+    [userName]
   );
   return rows.map((r) => ({ name: r.name, address: r.detail }));
 }

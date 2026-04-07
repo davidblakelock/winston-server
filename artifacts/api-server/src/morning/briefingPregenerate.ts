@@ -474,7 +474,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
 
     const [recentMemories, allProfileItems, userProfile] = await Promise.all([
       getRecentMemories(7).catch(() => []),
-      getProfileItems().catch(() => []),
+      getProfileItems(undefined, userName).catch(() => []),
       getProfile(userName).catch(() => null),
     ]);
     const memoryBlock = formatMemoriesForContext(recentMemories);
@@ -493,12 +493,12 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       fetchMorningNews().catch(() => ""),
       fetchEpisodesForDate(yesterday, watchedIds).catch(() => []),
       fetchEpisodesForDate(now, watchedIds).catch(() => []),
-      getMedications().catch(() => []),
-      hasTakenMedicationsToday().catch(() => false),
+      getMedications(userName).catch(() => []),
+      hasTakenMedicationsToday(userName).catch(() => false),
       fetchSportsScores().catch(() => null),
-      getUpcomingBills(3).catch(() => []),
+      getUpcomingBills(3, userName).catch(() => []),
       fetchMarkets().catch(() => null),
-      getUpcomingDates(21).catch(() => []),
+      getUpcomingDates(21, userName).catch(() => []),
       isSunday ? collectSundayData().catch(() => null) : Promise.resolve(null),
       getPendingFollowUps(2, 14).catch(() => []),
       hasRecentKneeIssue(5).catch(() => false),
