@@ -382,6 +382,9 @@ const TV_LIST_PATTERN = /\b(what\s+shows?\s+(am\s+i|are\s+we|do\s+i)\s+(watching
 // Matches explicit contact/phone/email requests AND direct name lookups ("find Eric Blackstone", "look up Susan Smart")
 // NOTE: i flag is required — messages start with capital letters ("Find", "What's", "Look up")
 const CONTACT_PATTERN = /\b(find|look\s+up|search|get|what(?:'?s)?|pull\s+up|add|do\s+you\s+have)\b.{0,60}\b(contact|phone|number|email|info(?:rmation)?)\b|\b(contact|phone|number|email|info(?:rmation)?)\b.{0,40}\bfor\b|\b(in\s+my\s+contacts?|from\s+my\s+contacts?|my\s+contacts?)\b|\b(find|look\s+up|search\s+for|pull\s+up)\b\s+(\w+(?:\s+\w+)+)/i;
+// Detects compound intent: "find X in my contacts AND add/save him/her to my profile/Winston"
+// These must be handled as a single sequential operation: lookup → save, never save-first.
+const COMPOUND_CONTACT_SAVE_PATTERN = /(?:find|look\s+up|search(?:\s+for)?|get)\s+.{1,60}\s+(?:in\s+(?:my\s+)?contacts?|from\s+(?:my\s+)?contacts?).{0,80}(?:add|save|put)\s+(?:him|her|them|it)\s+(?:to|in|into)\s+(?:my\s+)?(?:winston\s+)?(?:profile|contacts?|list)/i;
 // Detects when David explicitly wants to save a contact to his curated Winston list
 const SAVE_CONTACT_PATTERN = /\b(yes,?\s+)?(save|remember|add|keep)\s+(her|him|them|this\s+(contact|person))(\s+to\s+(my\s+)?(winston\s+)?(contacts?|list))?\b|\b(save|add)\s+((?:\w+\s+){1,3}\w+)\s+to\s+my\s+(winston\s+)?(contacts?|list)\b|\b(remember|save)\s+((?:\w+\s+){1,3}\w+)\s+in\s+my\s+(winston\s+)?(contacts?|list)\b/i;
 const WINDDOWN_NOTE_PATTERN = /\b(remember\s+(to|that)|note\s+(for\s+tomorrow|this\s+down)|write\s+(this|that)\s+down|add\s+(this\s+)?to\s+(my\s+)?morning\s+briefing|don'?t\s+let\s+me\s+forget\s+(to|that)|make\s+sure\s+i\s+(remember|know)|for\s+tomorrow\s+(i\s+need\s+to|remind\s+me))\b/i;
@@ -771,7 +774,8 @@ router.post("/chat", async (req, res) => {
   const isListRequest = LIST_PATTERN.test(message);
   const isEmailRequest = !isMorningGreeting && EMAIL_PATTERN.test(message);
   const isCalendarRequest = !isMorningGreeting && CALENDAR_PATTERN.test(message);
-  const isContactRequest = CONTACT_PATTERN.test(message);
+  const isCompoundContactAndSave = COMPOUND_CONTACT_SAVE_PATTERN.test(message);
+  const isContactRequest = isCompoundContactAndSave || CONTACT_PATTERN.test(message);
   const isSaveContactRequest = !isContactRequest && SAVE_CONTACT_PATTERN.test(message);
   const isStoryRead = STORY_READ_PATTERN.test(message);
   const isStoryCount = STORY_COUNT_PATTERN.test(message);
@@ -1831,25 +1835,25 @@ router.post("/chat", async (req, res) => {
 
   // ── Google Contacts search ────────────────────────────────────────────────
   if (isContactRequest) {
-    console.log(`[CONTACT INTENT DETECTED] message="${message}"`);
+    console.log(`[CONTACT INTENT DETECTED] message="${message}" compound=${isCompoundContactAndSave}`);
     try {
-      // Four patterns tried in priority order. All case-insensitive.
-      // P1: "What's / What is [Name]'s phone/email" — possessive question
-      // P2: "find/look up [Name]'s phone" — action verb + possessive
-      // P3: "find/look up [Name]" — action verb + plain name (stops at end of string)
-      // P4: "[Name]'s phone" at the very start of the message
+      // Name extraction — tried in priority order (most specific → most general)
       const nameMatch =
-        // "Do you have NAME's phone/email/number"
+        // P0 (compound): "Find [Name] in my contacts and add him to my profile"
+        //   → extract the name that comes between the action verb and "in/from my contacts"
+        //   Allows periods so "Dr. John Smith", "Mr. Jones" etc. are captured correctly
+        message.match(/(?:find|look\s+up|search(?:\s+for)?|get|pull\s+up)\s+((?:[A-Za-z'.]+\s+){0,3}[A-Za-z'.]+)\s+(?:in|from)\s+(?:my\s+)?contacts?/i) ??
+        // P1: "Do you have NAME's phone/email/number"
         message.match(/do\s+you\s+have\s+((?:\w+\s+){0,3}\w+)['']s\s+(?:phone|number|email|contact|info(?:rmation)?|address)/i) ??
-        // "Get me / Find me NAME's phone/email/information"
+        // P2: "Get me / Find me NAME's phone/email/information"
         message.match(/(?:get|find)\s+me\s+((?:\w+\s+){0,3}\w+)['']s\s+(?:phone|number|email|contact|info(?:rmation)?|address)/i) ??
-        // "What's / What is NAME's phone/email"
+        // P3: "What's / What is NAME's phone/email"
         message.match(/what(?:['']s?|\s+is)\s+((?:\w+\s+){0,3}\w+)['']s\s+(?:phone|number|email|contact|info(?:rmation)?|address)/i) ??
-        // "find/look up/get NAME's phone" — action verb + possessive
+        // P4: "find/look up/get NAME's phone" — action verb + possessive
         message.match(/(?:find|look\s+up|search(?:\s+for)?|get|pull\s+up)\s+((?:\w+\s+){0,3}\w+)['']s\s+(?:phone|number|email|contact|info(?:rmation)?|address)/i) ??
-        // "find/look up NAME" — action verb + plain name at end of message
+        // P5: "find/look up NAME" — action verb + plain name at end of message
         message.match(/(?:find|look\s+up|search(?:\s+for)?|get|pull\s+up)\s+((?:\w+\s+){0,2}\w+)\s*$/i) ??
-        // "NAME's phone" at the very start of the message
+        // P6: "NAME's phone" at the very start of the message
         message.match(/^((?:\w+\s+){0,3}\w+?)['']s\s+(?:phone|number|email|contact|info(?:rmation)?|address)/i);
       const rawQuery = (
         (nameMatch?.[1])?.trim() ??
@@ -1859,10 +1863,44 @@ router.post("/chat", async (req, res) => {
       console.log(`[CONTACT SEARCH] rawQuery="${rawQuery}" finalQuery="${searchQuery}"`);
       if (searchQuery.length > 1) {
         console.log(`[CONTACT SEARCH] Calling Google People API live for: "${searchQuery}"`);
-        const result = await searchContacts(searchQuery).catch(() => ({ contacts: [], needsReauth: false }));
+        const result = await searchContacts(searchQuery).catch(() => ({ contacts: [], needsReauth: false, source: "none" as const }));
         console.log(`[CONTACT SEARCH] Returned ${(result as {contacts:unknown[]}).contacts?.length ?? 0} result(s) from People API`);
-        systemPrompt += formatContactsForPrompt(result, searchQuery);
-        req.log.info({ query: searchQuery, found: result.contacts.length, needsReauth: result.needsReauth }, "[CONTACTS] Search complete");
+
+        // ── Compound intent: find AND save in one request ────────────────────
+        // If the user said "find X in my contacts and add him to my profile",
+        // we already have the contact data — save it now without a follow-up turn.
+        if (isCompoundContactAndSave && result.contacts && result.contacts.length === 1) {
+          const found = result.contacts[0];
+          await saveCuratedContact(found, sessionUserName);
+          // Also add to profile_items under "people" so it appears in David's profile
+          await addProfileItem("people", found.name, [found.phone, found.email, found.address].filter(Boolean).join(" | ") || null, sessionUserName)
+            .catch(() => { /* already exists — fine */ });
+          systemPrompt += (
+            `\n\n[Compound Contact Request — Lookup + Save Complete]\n` +
+            `Found in Google Contacts: ${found.name}` +
+            (found.phone ? ` | Phone: ${found.phone}` : "") +
+            (found.email ? ` | Email: ${found.email}` : "") +
+            (found.address ? ` | Address: ${found.address}` : "") + "\n" +
+            `Action taken: Saved to David's Winston curated contacts AND added to his profile.\n` +
+            `Respond with: "Found [Name] in your contacts — I've added them to your Winston profile. ` +
+            `[Share phone/email if present.] Just ask next time and I'll have the info ready."`
+          );
+          req.log.info({ name: found.name }, "[CONTACTS] Compound lookup+save complete");
+        } else if (isCompoundContactAndSave && (!result.contacts || result.contacts.length === 0)) {
+          // Compound intent but no contact found
+          systemPrompt += (
+            `\n\n[Compound Contact Request — Contact Not Found]\n` +
+            `Searched Google Contacts for "${searchQuery}" — no results.\n` +
+            `Tell David: "I searched your contacts but couldn't find anyone named ${searchQuery}. ` +
+            `Want me to add them manually? Just give me their name and any details you have."`
+          );
+          req.log.info({ query: searchQuery }, "[CONTACTS] Compound lookup — not found");
+        } else {
+          // Standard (non-compound) contact lookup
+          systemPrompt += formatContactsForPrompt(result, searchQuery);
+        }
+
+        req.log.info({ query: searchQuery, found: result.contacts?.length ?? 0, needsReauth: result.needsReauth, compound: isCompoundContactAndSave }, "[CONTACTS] Search complete");
       }
     } catch (err) {
       req.log.warn({ err }, "[CONTACTS] Search failed, continuing without");
