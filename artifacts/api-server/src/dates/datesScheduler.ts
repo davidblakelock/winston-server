@@ -72,7 +72,7 @@ async function checkDateReminders(): Promise<void> {
   if (_lastChecked === today) return;
   _lastChecked = today;
 
-  const dates = await getDates("David2");
+  const dates = await getDates("David");
   const now = new Date();
 
   for (const d of dates) {

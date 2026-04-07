@@ -13,7 +13,7 @@ export const SCOPES = [
 // ── Account preference SQL ─────────────────────────────────────────────────────
 // Prefer the real personal account (non-winston) over the app service account.
 // When David re-authenticated with davidblakelock01@gmail.com, it was stored as
-// user_name='David2'. This ordering ensures Gmail, Calendar, and scope checks
+// user_name='David'. This ordering ensures Gmail, Calendar, and scope checks
 // always resolve to his real account if it exists.
 const PREFERRED_ACCOUNT_ORDER = `
   ORDER BY

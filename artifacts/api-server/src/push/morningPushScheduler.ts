@@ -60,7 +60,7 @@ export function startMorningPushScheduler(): void {
     _briefingPrefetchDate = todayStr;
     _newsPrefetchDate = todayStr;
     logger.info("Server startup — pre-generating morning briefing in background");
-    preFetchMorningBriefing("David2").catch((err) =>
+    preFetchMorningBriefing("David").catch((err) =>
       logger.warn({ err }, "Startup briefing pre-generate error")
     );
   }
@@ -84,7 +84,7 @@ export function startMorningPushScheduler(): void {
       // 5:55 AM — pre-generate the full Claude briefing so "good morning" is instant
       if (localTime === "05:55" && _briefingPrefetchDate !== today) {
         _briefingPrefetchDate = today;
-        preFetchMorningBriefing("David2").catch((err) =>
+        preFetchMorningBriefing("David").catch((err) =>
           logger.warn({ err }, "Background briefing pre-generate error")
         );
       }

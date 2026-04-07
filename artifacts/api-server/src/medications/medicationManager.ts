@@ -104,7 +104,7 @@ export async function seedDefaultMedications(): Promise<void> {
   for (const med of defaults) {
     await query(
       `INSERT INTO medications (user_name, name, dosage, reminder_time)
-       VALUES ('David2', $1, $2, $3)
+       VALUES ('David', $1, $2, $3)
        ON CONFLICT (user_name, name) DO NOTHING`,
       [med.name, med.dosage, med.reminderTime]
     );

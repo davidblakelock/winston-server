@@ -10,7 +10,7 @@ import { getProfile } from "../onboarding/onboardingManager.js";
 import { logger } from "../lib/logger.js";
 
 async function getCompanionName(): Promise<string> {
-  const profile = await getProfile("David2").catch(() => null);
+  const profile = await getProfile("David").catch(() => null);
   return profile?.companionName ?? "Emma Peel";
 }
 
@@ -40,10 +40,10 @@ async function checkAndFireMedicationReminder(
   const localTime = getCurrentLocalTime();
   if (localTime !== targetTime) return;
 
-  const meds = await getMedications("David2");
+  const meds = await getMedications("David");
   if (!meds.length) return;
 
-  const taken = await hasTakenMedicationsToday("David2");
+  const taken = await hasTakenMedicationsToday("David");
   if (taken) return;
 
   const medText = buildMedReminderText(meds);
@@ -51,7 +51,7 @@ async function checkAndFireMedicationReminder(
 
   broadcast("reminder", {
     id: `med-${Date.now()}`,
-    userName: "David2",
+    userName: "David",
     reminderText: isFollowUp
       ? `Gentle nudge — have you taken ${medText} yet?`
       : `Don't forget to take ${medText} today. Take them with food if you can.`,
@@ -69,7 +69,7 @@ export function startMedicationScheduler(): void {
   cron.schedule("* * * * *", async () => {
     try {
       const today = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
-      const meds = await getMedications("David2").catch(() => []);
+      const meds = await getMedications("David").catch(() => []);
       if (!meds.length) return;
 
       // Collect unique reminder times; also check 9am follow-up
@@ -78,12 +78,12 @@ export function startMedicationScheduler(): void {
       for (const rt of reminderTimes) {
         const localTime = getCurrentLocalTime();
         if (localTime === rt && _initialFiredDate !== today) {
-          const taken = await hasTakenMedicationsToday("David2");
+          const taken = await hasTakenMedicationsToday("David");
           if (!taken) {
             const medText = buildMedReminderText(meds);
             broadcast("reminder", {
               id: `med-init-${Date.now()}`,
-              userName: "David2",
+              userName: "David",
               reminderText: `Don't forget to take ${medText} today. Take them with food if you can.`,
               speakText: buildInitialMessage(medText),
               isMedication: true,
@@ -109,12 +109,12 @@ export function startMedicationScheduler(): void {
       const localTime = getCurrentLocalTime();
 
       if (localTime === followUpTime && _followUpFiredDate !== today) {
-        const taken = await hasTakenMedicationsToday("David2");
+        const taken = await hasTakenMedicationsToday("David");
         if (!taken) {
           const medText = buildMedReminderText(meds);
           broadcast("reminder", {
             id: `med-followup-${Date.now()}`,
-            userName: "David2",
+            userName: "David",
             reminderText: `Gentle nudge — have you taken ${medText} yet?`,
             speakText: buildFollowUpMessage(medText),
             isMedication: true,
