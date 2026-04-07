@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { extractListOp, executeListOp, buildListContext } from "../lists/listManager.js";
-import { fetchAndSummarizeEmails, formatEmailsForPrompt, buildScamWarningInstruction } from "../google/gmail.js";
+import { fetchAndSummarizeEmails, formatEmailsForPrompt, buildScamWarningInstruction, getEmailLastChecked, updateEmailLastChecked } from "../google/gmail.js";
 import {
   fetchTodayEvents,
   fetchWeekEvents,
@@ -1107,13 +1107,30 @@ router.post("/chat", async (req, res) => {
 
   if (isEmailRequest || isCalendarRequest) {
     try {
+      // Get last-checked timestamp before fetching — used to show only NEW emails
+      const emailLastChecked = isEmailRequest ? await getEmailLastChecked().catch(() => null) : null;
+
       const [emails, events] = await Promise.all([
-        isEmailRequest ? fetchAndSummarizeEmails(15).catch(() => null) : Promise.resolve(undefined),
+        isEmailRequest ? fetchAndSummarizeEmails(15, emailLastChecked ?? undefined).catch(() => null) : Promise.resolve(undefined),
         isCalendarRequest ? fetchWeekEvents().catch(() => null) : Promise.resolve(undefined),
       ]);
 
+      // Update the last-checked timestamp immediately after a successful fetch
+      if (isEmailRequest && emails !== null) {
+        updateEmailLastChecked().catch(() => {});
+      }
+
+      // Build a human-readable "last checked at" string for the context block
+      const lastCheckedStr = emailLastChecked
+        ? emailLastChecked.toLocaleTimeString("en-US", {
+            timeZone: "America/Chicago", hour: "numeric", minute: "2-digit", hour12: true,
+          })
+        : null;
+
       const gmailBlock = emails !== undefined && emails !== null
-        ? `\n\n[Gmail — unread inbox (fetched just now)]\n${formatEmailsForPrompt(emails)}\nAnswer David's question about his emails using exactly this data.` +
+        ? (emails.length === 0
+            ? `\n\n[Gmail — no new emails since ${lastCheckedStr ? `you last checked at ${lastCheckedStr}` : "yesterday"}]\nTell David warmly: "No new emails since ${lastCheckedStr ? `you last checked at ${lastCheckedStr}` : "yesterday"}." Do not elaborate.`
+            : `\n\n[Gmail — new emails since ${lastCheckedStr ? `your last check at ${lastCheckedStr}` : "yesterday"} (fetched just now)]\n${formatEmailsForPrompt(emails)}\nTell David only about these NEW emails. Do not mention or imply there may be older ones.`) +
           buildScamWarningInstruction(emails)
         : emails === null
           ? "\n\n[Gmail — not connected. Let David know he can connect Google in the app header.]"

@@ -1,5 +1,6 @@
 import { google } from "googleapis";
 import { getAuthClient } from "./oauth.js";
+import { query } from "../db.js";
 
 export interface EmailSummary {
   from: string;
@@ -214,12 +215,45 @@ export function analyzeEmailForScam(email: {
   return { isSuspicious, riskLevel, flags, summary };
 }
 
+// ── Email last-checked tracking ───────────────────────────────────────────────
+
+/**
+ * Returns the last time David's emails were checked, or null if never tracked.
+ * Used to show only NEW emails since the last check on manual email requests.
+ */
+export async function getEmailLastChecked(): Promise<Date | null> {
+  try {
+    const { rows } = await query<{ last_checked_at: Date }>(
+      `SELECT last_checked_at FROM email_tracking WHERE user_name = 'David'`
+    );
+    return rows.length > 0 ? new Date(rows[0].last_checked_at) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Updates the last-checked timestamp to now. Call immediately after a successful
+ * on-demand email fetch so subsequent checks only show new messages.
+ */
+export async function updateEmailLastChecked(): Promise<void> {
+  try {
+    await query(
+      `INSERT INTO email_tracking (user_name, last_checked_at) VALUES ('David', NOW())
+       ON CONFLICT (user_name) DO UPDATE SET last_checked_at = NOW()`
+    );
+  } catch (err) {
+    console.warn("[Gmail] Failed to update email_tracking:", err);
+  }
+}
+
 /**
  * Unified email fetch used by BOTH the morning briefing and the manual email check.
  * Fetches the most recent inbox emails regardless of read status, sorted by date
  * descending (newest first). Both code paths use this so behaviour is identical.
+ * @param since  If provided, only return emails received after this timestamp.
  */
-export async function fetchAndSummarizeEmails(maxResults = 15): Promise<EmailSummary[] | null> {
+export async function fetchAndSummarizeEmails(maxResults = 15, since?: Date): Promise<EmailSummary[] | null> {
   const fetchStart = new Date();
   console.log(`[Gmail] fetchAndSummarizeEmails called at ${fetchStart.toISOString()} — maxResults=${maxResults}`);
 
@@ -243,11 +277,24 @@ export async function fetchAndSummarizeEmails(maxResults = 15): Promise<EmailSum
 
   const gmail = google.gmail({ version: "v1", auth });
 
-  // Fetch inbox emails from last 7 days — explicitly exclude trash and spam
+  // Build query: explicitly exclude trash and spam.
+  // When `since` is provided (manual check), only return emails after that timestamp.
+  // For the morning briefing (no `since`), fetch the last 24 hours only.
+  let gmailQuery = "in:inbox -in:trash -in:spam";
+  if (since) {
+    // On-demand check: only emails since the last check
+    const epochSeconds = Math.floor(since.getTime() / 1000);
+    gmailQuery += ` after:${epochSeconds}`;
+    console.log(`[Gmail] since mode — fetching emails after ${since.toISOString()} (epoch ${epochSeconds})`);
+  } else {
+    // Morning briefing default: last 24 hours only
+    gmailQuery += " newer_than:1d";
+  }
+
   const list = await gmail.users.messages.list({
     userId: "me",
     maxResults,
-    q: "in:inbox -in:trash -in:spam newer_than:7d",
+    q: gmailQuery,
   });
 
   const messages = list.data.messages ?? [];

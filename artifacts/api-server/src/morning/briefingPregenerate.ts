@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { fetchAndSummarizeEmails, formatEmailsForPrompt, buildScamWarningInstruction } from "../google/gmail.js";
+import { fetchAndSummarizeEmails, formatEmailsForPrompt, buildScamWarningInstruction, updateEmailLastChecked } from "../google/gmail.js";
 import { fetchWeekEvents, formatCalendarForPrompt, toChicagoTime, type CalendarEvent } from "../google/calendar.js";
 import { estimateDriveTime, extractEventLocation } from "../departure/departureManager.js";
 import { populateCalendarSyncState } from "../departure/calendarSyncScheduler.js";
@@ -201,6 +201,11 @@ function buildContextualWeatherBlock(dallas: WeatherResult, knoxville: WeatherRe
   const pickleballDays = ["Monday", "Wednesday", "Friday", "Saturday"];
   const isPickleballDay = pickleballDays.includes(dayName);
   const activityLabel = isPickleballDay ? "pickleball" : "a run";
+
+  // Fix 7: Time-aware activity suggestions — if it's past 10am CT, David's morning
+  // workout window has very likely passed. Don't suggest "go for a run" or "great for pickleball."
+  const ctHour = parseInt(now.toLocaleTimeString("en-US", { timeZone: tz, hour: "numeric", hour12: false }), 10);
+  const morningActivityPassed = ctHour >= 10;
   const uvMax = dallas.uvIndexMax;
   const uvLabel = uvMax <= 2 ? "low" : uvMax <= 5 ? "moderate" : uvMax <= 7 ? "high" : uvMax <= 10 ? "very high" : "extreme";
   const isStormy = /thunderstorm/.test(dallas.condition);
@@ -217,55 +222,56 @@ function buildContextualWeatherBlock(dallas: WeatherResult, knoxville: WeatherRe
   const isHighWind = dallas.windSpeed >= 20;
   const isPerfect = !isRainy && !likelyRain && !isStormy && dallas.temp >= 62 && dallas.high <= 87 && uvMax <= 7;
   const signals: string[] = [];
-  if (isStormy) signals.push(`THUNDERSTORMS — outdoor plans are off`);
-  else if (isSnowy) signals.push(`${dallas.condition} — unusual for Dallas, affects roads and outdoor plans`);
-  else if (isRainy && likelyRain) signals.push(`Rain likely (${dallas.precipChance}%) — treadmill/indoor court is the smart call for ${activityLabel}`);
-  else if (likelyRain) signals.push(`${dallas.precipChance}% rain chance — outdoor ${activityLabel} is risky, going early helps`);
-  else if (possibleRain) signals.push(`${dallas.precipChance}% rain chance — keep an eye on timing for ${activityLabel}`);
-  if (isFoggy) signals.push(`Morning fog — matters for running outside and early driving`);
-  if (isVeryHot) signals.push(`Extreme heat (high ${dallas.high}°F) — dangerous for prolonged outdoor activity, go very early and hydrate aggressively`);
-  else if (isHot) signals.push(`Hot day (high ${dallas.high}°F) — extra hydration needed for ${activityLabel}`);
-  else if (isWarm) signals.push(`Warm day building (high ${dallas.high}°F) — hydrate well for ${activityLabel}`);
-  if (isCold) signals.push(`Cold morning (${dallas.temp}°F, feels ${dallas.feelsLike}°F) — layers, proper warm-up before hard effort`);
-  else if (isCool) signals.push(`Cool morning (${dallas.temp}°F) — light jacket to start, great once moving`);
-  if (isHighWind) signals.push(`Winds at ${dallas.windSpeed} mph — gusty for outdoor play or a run`);
-  if (!isStormy && !isRainy && uvMax >= 8) signals.push(`UV peaks at ${uvMax} (${uvLabel}) — sunscreen is non-negotiable outdoors`);
-  else if (!isStormy && !isRainy && uvMax >= 6) signals.push(`UV peaks at ${uvMax} (${uvLabel}) — sunscreen before heading out`);
-  if (isPerfect) signals.push(`PERFECT conditions for ${activityLabel} — lead with this${uvMax >= 6 ? `, mention sunscreen (UV ${uvMax})` : ""}`);
+  // Severe weather always surfaces regardless of time
+  if (isStormy) signals.push(`SEVERE WEATHER — THUNDERSTORMS: mention this clearly`);
+  else if (isSnowy) signals.push(`${dallas.condition} — unusual for Dallas, affects roads`);
+
+  // Activity-specific signals only shown if morning window hasn't passed (before 10am CT)
+  if (!morningActivityPassed) {
+    if (isRainy && likelyRain) signals.push(`Rain likely (${dallas.precipChance}%) — treadmill/indoor court for ${activityLabel}`);
+    else if (likelyRain) signals.push(`${dallas.precipChance}% rain chance — ${activityLabel} timing may be tricky`);
+    else if (possibleRain) signals.push(`${dallas.precipChance}% rain chance — watch timing for ${activityLabel}`);
+    if (isFoggy) signals.push(`Morning fog — affects running and early driving`);
+    if (isVeryHot) signals.push(`Extreme heat (high ${dallas.high}°F) — dangerous for ${activityLabel}, go very early`);
+    else if (isHot) signals.push(`Hot day (high ${dallas.high}°F) — extra hydration for ${activityLabel}`);
+    else if (isWarm) signals.push(`Warm day (high ${dallas.high}°F) — hydrate for ${activityLabel}`);
+    if (isCold) signals.push(`Cold morning (${dallas.temp}°F feels ${dallas.feelsLike}°F) — dress in layers`);
+    else if (isCool) signals.push(`Cool morning (${dallas.temp}°F) — light jacket to start`);
+    if (isHighWind) signals.push(`Winds at ${dallas.windSpeed} mph — gusty for outdoor ${activityLabel}`);
+    if (isPerfect) signals.push(`PERFECT conditions for ${activityLabel}`);
+  }
+
+  // UV warning is always relevant regardless of time
+  if (!isStormy && !isRainy && uvMax >= 8) signals.push(`UV peak ${uvMax} (${uvLabel}) — sunscreen essential outdoors today`);
 
   // Activity-aware alerts for upcoming pickleball days in the 5-day forecast
   const pickleballShortNames = ["Mon", "Wed", "Fri", "Sat"];
   for (const day of dallas.forecastDays) {
     if (pickleballShortNames.includes(day.dayName)) {
-      if (day.precipChance >= 60) {
-        signals.push(`⚠ ${day.dayName} pickleball: rain likely (${day.precipChance}%) — may need to reschedule`);
-      } else if (day.high >= 98) {
-        signals.push(`⚠ ${day.dayName} pickleball: extreme heat (${day.high}°F) — go very early or consider indoor`);
-      }
+      if (day.precipChance >= 60) signals.push(`⚠ ${day.dayName} pickleball: rain likely (${day.precipChance}%)`);
+      else if (day.high >= 98) signals.push(`⚠ ${day.dayName} pickleball: extreme heat (${day.high}°F)`);
     }
   }
 
   const signalLines = signals.length > 0
-    ? `\nKey signals for briefing:\n${signals.map((s) => `• ${s}`).join("\n")}`
-    : `\n• Conditions are unremarkable — weave in naturally`;
+    ? `\nWeather signals:\n${signals.map((s) => `• ${s}`).join("\n")}`
+    : "";
 
   // 5-day forecast block (days 1–5 after today)
   const fiveDayLines = dallas.forecastDays.length > 0
     ? dallas.forecastDays.map((d) => {
-        const condNote = d.conditionCode ? (TOMORROW_CONDITIONS[d.conditionCode] ? ` — ${TOMORROW_CONDITIONS[d.conditionCode]}` : "") : "";
-        const rainNote = d.precipChance >= 60 ? ` ☔ ${d.precipChance}%` : d.precipChance >= 35 ? ` 🌦 ${d.precipChance}%` : "";
-        return `${d.dayName}: ${d.high}°↑ / ${d.low}°↓${condNote}${rainNote}`;
+        const condNote = d.conditionCode && TOMORROW_CONDITIONS[d.conditionCode] ? `, ${TOMORROW_CONDITIONS[d.conditionCode]}` : "";
+        const rainNote = d.precipChance >= 60 ? ` ☔${d.precipChance}%` : d.precipChance >= 35 ? ` 🌦${d.precipChance}%` : "";
+        return `${d.dayName}: ${d.high}°/${d.low}°${condNote}${rainNote}`;
       }).join(" | ")
     : "";
 
   return (
-    `\n\n[Live Weather Data — Dallas, via Tomorrow.io, fetched now]\n` +
-    `Current: ${dallas.temp}°F (feels like ${dallas.feelsLike}°F), ${dallas.condition}\n` +
-    `Today: low ${dallas.low}°F → high ${dallas.high}°F | Rain: ${dallas.precipChance}% | Humidity: ${dallas.humidity}% | Wind: ${dallas.windSpeed} mph\n` +
-    `UV now: ${dallas.uvIndex} | UV peak today: ${dallas.uvIndexMax} (${uvLabel})\n` +
-    (fiveDayLines ? `5-Day: ${fiveDayLines}\n` : "") +
-    `\n[Knoxville (Olivia's weather)]\n${formatWeatherBlock(knoxville)}\n` +
-    `\nToday is ${dayName}. David's morning activity: ${activityLabel}.` +
+    `\n\n[Live Weather Data — Dallas]\n` +
+    `Now: ${dallas.temp}°F, ${dallas.condition} | Today: high ${dallas.high}°F / low ${dallas.low}°F | Rain chance: ${dallas.precipChance}%\n` +
+    (fiveDayLines ? `5-Day Forecast: ${fiveDayLines}\n` : "") +
+    (morningActivityPassed ? `[Morning activity window has passed — it is past 10am CT. Do NOT suggest David go for a run or to pickleball.]\n` : "") +
+    `\n[Knoxville weather — for Olivia]\n${formatWeatherBlock(knoxville)}\n` +
     signalLines
   );
 }
@@ -383,11 +389,11 @@ const MASTER_BRIEFING_INSTRUCTION = `
 
   SECTION 1 — GREETING: "Good morning, David" followed by one warm personal sentence naming the day of the week. One sentence total.
 
-  SECTION 2 — WEATHER TODAY: Current Dallas conditions, today's high and low, UV index. If he has a calendar event where weather matters (a run, outdoor event, travel), connect the weather to it. Two to three sentences.
+  SECTION 2 — WEATHER TODAY: Conversational, brief, and friendly — like a weather app in one or two sentences. Format: "Today in Dallas — [condition], [temp feel]. High [X], low [Y]." If there is a severe weather signal (THUNDERSTORMS, SNOW, extreme heat), add one clear warning sentence. If a morning activity signal is present AND [Morning activity window has passed] is NOT flagged, mention it in one sentence ("Great morning for pickleball" / "might want to bring an umbrella for your run"). If [Morning activity window has passed] IS in the data, do NOT suggest the activity. Then add one short line for family: "Olivia's weather in Knoxville: [X]° and [condition] today." Use the [Knoxville weather] data block.
 
-  SECTION 3 — FIVE DAY FORECAST: One line per day — the next five days. Day name, conditions, high/low. Keep it concise — exactly one sentence per day. No elaboration.
+  SECTION 3 — FIVE DAY FORECAST: One line per day — the next five days. Format: "Mon: 75/52, partly cloudy. Tue: 68/48, rainy." That style. Concise.
 
-  SECTION 4 — POLLEN: Current Dallas pollen levels from the pollen data block. If levels are high, give one sentence of practical advice. If pollen data is unavailable, skip this section entirely.
+  SECTION 4 — POLLEN: ONLY if pollen levels are high or very high — weave one sentence into Section 2 naturally ("Tree pollen is severe today — heads up if you have allergies"). Skip this section entirely if pollen is low or moderate. Do NOT deliver as a separate section — it is part of Section 2.
 
   SECTION 5 — EMAIL: Only emails from the last 24 hours. Share one or two that actually matter — something he needs to act on, something from someone important, or something he would genuinely want to know. If his inbox is quiet, say "Inbox has been quiet since yesterday." Never count unread messages. Never mention email if there is nothing worth flagging.
 
@@ -395,11 +401,11 @@ const MASTER_BRIEFING_INSTRUCTION = `
 
   SECTION 7 — BILLS DUE SOON: ONLY if a bill appears in the [Bills Due in Next 3 Days] block. Name the bill and amount. If that block is empty or absent, SKIP THIS SECTION ENTIRELY — do not mention bills at all, do not say nothing is due.
 
-  SECTION 8 — NEWS: Exactly three stories, delivered as one fast, conversational sweep. Map one story from each of these three blocks in the news data:
-    • From [Main Stories]: Pick the single most relevant story to David — politics, economy, markets, AI/tech, or his teams.
-    • From [Also Worth Knowing]: Pick the one most notable cultural, business, or entertainment story.
-    • From [Light & Surprising Stories]: Pick the best single watercooler story — something fun, surprising, or share-worthy. ALWAYS include this third story — never skip it, even if it seems light. Introduce it with something like "oh, and one that'll make you smile —" or "and here's one worth sharing later —".
-    Never use stories older than 48 hours. Each story: one to two sentences max. Short brisk transitions only: "also —", "meanwhile —", "oh, and —". Never say "in other news." If any tier block is missing or empty, skip that tier only and still deliver the others. Keep moving.
+  SECTION 8 — NEWS: A three-part news sweep, delivered at a brisk conversational pace. The news data contains three clearly labeled blocks — use them in this order:
+    • From [Headlines]: Pick 4 to 6 of the most important headlines. Read each as a single brisk sentence. No elaboration. Rapid-fire. These are one-liners only.
+    • From [Entertainment & Pop Culture] (if present): Pick 1 notable item — celebrity news, upcoming release, or cultural moment. One sentence only.
+    • From [Watercooler Story] (if present): Read the story naturally. Introduce it warmly — something like "oh, and here's one worth sharing later —". Two sentences max.
+    Transitions between items: use only short words — "also," "meanwhile," "and," "oh, and." Never say "in other news" or "moving on." If a block is missing or empty, skip it and continue. Never use stories older than 48 hours. Keep the whole sweep punchy and fast.
 
   SECTION 9 — MARKETS: S&P, Dow, Nasdaq with one sentence of context ("tech led the rally," "inflation data spooked investors"). Always label as "as of [last trading day]'s close." SKIP THIS SECTION ENTIRELY on weekends and market holidays — the date block above tells you the market status.
 
@@ -411,7 +417,7 @@ const MASTER_BRIEFING_INSTRUCTION = `
 
   SECTION 13 — BIRTHDAYS AND IMPORTANT DATES: Any birthdays or anniversaries in the next 7 days. Name the person and the date specifically. SKIP if none.
 
-  SECTION 14 — MEDICATION: Always include this — even if the [Medications] block is absent. David takes a statin and Meloxicam every morning with food. Remind him in one sentence. Never skip this section.
+  SECTION 14 — MEDICATION: Include ONLY if the [Medications — Not yet taken today] block is present. Remind David warmly in one sentence to take his morning meds with food. If the block says [Medications — Already confirmed today], skip this section entirely — do NOT mention medications or that you're skipping it. If the [Medications] block is absent entirely, include a brief reminder anyway ("Don't forget your morning meds with breakfast."). Never skip if medications have not been confirmed.
 
   SECTION 15 — MORNING MOTIVATION: One brief, genuine, personal observation about David's specific day. NOT a generic quote. NOT a pep talk. NOT a reminder to do things tonight. Use the motivation context block — reference his pickleball schedule, journal themes, or something real and positive about today. Two to three sentences max. A friend noticing something specific, not a motivational poster. Do NOT suggest he record memories or do anything in the evening — that is for the wind-down, not the morning briefing.
 
@@ -489,6 +495,11 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       ? buildContextualWeatherBlock(dallas, knoxville, now) + pollenBlock
       : (dallas ? `\n\n[Dallas Weather]\n${formatWeatherBlock(dallas)}` + pollenBlock : "");
 
+    // Update the last-checked timestamp so on-demand checks during the day only show NEW emails
+    if (emails !== null) {
+      updateEmailLastChecked().catch(() => {});
+    }
+
     const gmailBlock = emails !== null
       ? (emails.length === 0
           ? `\n\n[Gmail — no new emails in the last 24 hours]\nDo not mention email in the briefing — tell David his inbox is quiet if he asks.`
@@ -518,8 +529,10 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
         newEps.map((ep) => `• ${formatEpisodeForPrompt(ep)} (${ep.when})`).join("\n")
       : "";
 
-    const medMorningBlock = morningMeds.length > 0 && !medsAlreadyTaken
-      ? `\n\n[Medications — Not yet taken today]\nDavid's medications: ${buildMedReminderText(morningMeds)}`
+    const medMorningBlock = morningMeds.length > 0
+      ? medsAlreadyTaken
+        ? `\n\n[Medications — Already confirmed today]\nDo NOT mention medications in the briefing.`
+        : `\n\n[Medications — Not yet taken today]\nDavid's medications: ${buildMedReminderText(morningMeds)}`
       : "";
 
     const sportsBlock = sportsScores ? formatSportsForPrompt(sportsScores) : "";
