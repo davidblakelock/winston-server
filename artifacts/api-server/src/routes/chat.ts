@@ -26,7 +26,7 @@ import {
   type ParsedDeleteEvent,
 } from "../google/calendarWriter.js";
 import { hasCalendarWriteScope } from "../google/oauth.js";
-import { searchContacts, formatContactsForPrompt } from "../google/contacts.js";
+import { searchContacts, formatContactsForPrompt, saveCuratedContact, getCuratedContacts, type Contact as GoogleContact } from "../google/contacts.js";
 import {
   getMedications,
   hasTakenMedicationsToday,
@@ -382,6 +382,8 @@ const TV_LIST_PATTERN = /\b(what\s+shows?\s+(am\s+i|are\s+we|do\s+i)\s+(watching
 // Matches explicit contact/phone/email requests AND direct name lookups ("find Eric Blackstone", "look up Susan Smart")
 // NOTE: i flag is required — messages start with capital letters ("Find", "What's", "Look up")
 const CONTACT_PATTERN = /\b(find|look\s+up|search|get|what(?:'?s)?|pull\s+up|add|do\s+you\s+have)\b.{0,60}\b(contact|phone|number|email|info(?:rmation)?)\b|\b(contact|phone|number|email|info(?:rmation)?)\b.{0,40}\bfor\b|\b(in\s+my\s+contacts?|from\s+my\s+contacts?|my\s+contacts?)\b|\b(find|look\s+up|search\s+for|pull\s+up)\b\s+(\w+(?:\s+\w+)+)/i;
+// Detects when David explicitly wants to save a contact to his curated Winston list
+const SAVE_CONTACT_PATTERN = /\b(yes,?\s+)?(save|remember|add|keep)\s+(her|him|them|this\s+(contact|person))(\s+to\s+(my\s+)?(winston\s+)?(contacts?|list))?\b|\b(save|add)\s+((?:\w+\s+){1,3}\w+)\s+to\s+my\s+(winston\s+)?(contacts?|list)\b|\b(remember|save)\s+((?:\w+\s+){1,3}\w+)\s+in\s+my\s+(winston\s+)?(contacts?|list)\b/i;
 const WINDDOWN_NOTE_PATTERN = /\b(remember\s+(to|that)|note\s+(for\s+tomorrow|this\s+down)|write\s+(this|that)\s+down|add\s+(this\s+)?to\s+(my\s+)?morning\s+briefing|don'?t\s+let\s+me\s+forget\s+(to|that)|make\s+sure\s+i\s+(remember|know)|for\s+tomorrow\s+(i\s+need\s+to|remind\s+me))\b/i;
 const SPORTS_PATTERN = /\b(rangers|cowboys|score|scores|how\s+did\s+(they|the\s+(rangers|cowboys))\s+do|did\s+(they|the\s+(rangers|cowboys))\s+(win|lose|play)|last\s+night'?s?\s+(game|score)|(rangers|cowboys)\s+(score|win|lose|lost|beat|game|result|update)|check\s+(the\s+)?(rangers|cowboys)|what('?s|\s+is)\s+the\s+(rangers|cowboys|score|game)|any\s+(rangers|cowboys)\s+(news|game|score))\b/i;
 const BILL_ADD_PATTERN = /\b(my\s+\w.{1,40}(bill|payment|insurance|premium|subscription|rent|mortgage|registration|fee|taxes?)\s+is\s+due|add\s+(a\s+)?(bill|payment|financial\s+obligation|reminder\s+for)|track\s+(my\s+)?(bill|payment|insurance|rent|subscription)|remind\s+me\s+(about|when|before)\s+(my\s+)?\w.{1,30}(bill|payment|due|insurance|premium|subscription|rent|mortgage|registration|fee|taxes?)|(is\s+due|renews?)\s+(on|every|each|the)\s+(the\s+)?\d{1,2}(st|nd|rd|th)?|quarterly\s+taxes?\s+are?\s+due|due\s+(on\s+)?(the\s+)?\d{1,2}(st|nd|rd|th)?\b|(rent|mortgage|insurance|premium|subscription)\s+is?\s*(due|paid|owed))\b/i;
@@ -770,6 +772,7 @@ router.post("/chat", async (req, res) => {
   const isEmailRequest = !isMorningGreeting && EMAIL_PATTERN.test(message);
   const isCalendarRequest = !isMorningGreeting && CALENDAR_PATTERN.test(message);
   const isContactRequest = CONTACT_PATTERN.test(message);
+  const isSaveContactRequest = !isContactRequest && SAVE_CONTACT_PATTERN.test(message);
   const isStoryRead = STORY_READ_PATTERN.test(message);
   const isStoryCount = STORY_COUNT_PATTERN.test(message);
   const isProfileRequest = PROFILE_PATTERN.test(message);
@@ -1839,6 +1842,48 @@ router.post("/chat", async (req, res) => {
       }
     } catch (err) {
       req.log.warn({ err }, "[CONTACTS] Search failed, continuing without");
+    }
+  }
+
+  // ── Save contact to curated Winston list ───────────────────────────────────
+  if (isSaveContactRequest) {
+    try {
+      // Try to extract an explicit name from the current message first
+      // e.g. "save Eric Blackstone to my contacts"
+      let contactToSave: GoogleContact | null = null;
+      const emptyContacts: GoogleContact[] = [];
+      const explicitNameMatch =
+        message.match(/\b(?:save|add|remember)\s+((?:[A-Z]\w*\s+){1,2}[A-Z]\w*)\s+(?:to|in)\s+my\s+(?:winston\s+)?contacts?\b/i) ??
+        message.match(/\b(?:save|add|remember)\s+((?:\w+\s+){1,3}\w+)\s+(?:to|in)\s+my\s+(?:winston\s+)?contacts?\b/i);
+
+      if (explicitNameMatch?.[1]) {
+        // Name was in the message — do a live lookup
+        const { contacts } = await searchContacts(explicitNameMatch[1].trim()).catch(() => ({ contacts: emptyContacts, needsReauth: false, source: "none" as const }));
+        if (contacts.length > 0) contactToSave = contacts[0];
+      } else {
+        // "Yes, save her/him/them" — extract name from last assistant message
+        const lastAssistant = [...history].reverse().find((m: { role: string; content: string }) => m.role === "assistant");
+        if (lastAssistant) {
+          // Look for bullet point: • Name — or inline name mention from contact result
+          const bulletMatch = lastAssistant.content.match(/•\s+([\w\s]+?)(?:\s+—|\n|$)/);
+          const verifiedMatch = lastAssistant.content.match(/(?:found|here(?:'s|\s+is))\s+([\w\s]+?)(?:'s|\s+in\s+your\s+contacts|\s+—|\.|,)/i);
+          const candidateName = (bulletMatch?.[1] ?? verifiedMatch?.[1] ?? "").trim();
+          if (candidateName.length > 2) {
+            const { contacts } = await searchContacts(candidateName).catch(() => ({ contacts: emptyContacts, needsReauth: false, source: "none" as const }));
+            if (contacts.length > 0) contactToSave = contacts[0];
+          }
+        }
+      }
+
+      if (contactToSave) {
+        await saveCuratedContact(contactToSave, sessionUserName);
+        systemPrompt += `\n\n[Contact Saved to Winston Curated List]\n"${contactToSave.name}" has been saved to David's Winston contacts.${contactToSave.phone ? ` Phone: ${contactToSave.phone}.` : ""}${contactToSave.email ? ` Email: ${contactToSave.email}.` : ""}\nConfirm naturally: "Got it — I've saved [Name] to your Winston contacts. I'll remember them for next time."`;
+        req.log.info({ name: contactToSave.name }, "[CONTACTS] Contact saved to curated list");
+      } else {
+        systemPrompt += `\n\n[Contact Save — Name Not Found]\nWas unable to identify which contact to save from this message. Ask David who specifically they'd like to save: "Who would you like me to add to your Winston contacts?"`;
+      }
+    } catch (err) {
+      req.log.warn({ err }, "[CONTACTS] Save contact failed");
     }
   }
 

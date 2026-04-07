@@ -24,7 +24,7 @@ import { initDallasContentTable } from "./morning/dallasContent";
 import { startDallasProactiveScheduler } from "./morning/dallasProactiveScheduler";
 import { initConcertsTable, startVenueMonitorScheduler } from "./morning/venueMonitor";
 import { addProfileItem } from "./profile/profileManager";
-import { ensureContactsTable, startContactsSyncScheduler } from "./google/contacts";
+import { ensureContactsTable } from "./google/contacts";
 
 const rawPort = process.env["PORT"];
 
@@ -100,7 +100,6 @@ app.listen(port, async (err) => {
   startConversationStarterScheduler();
   startDallasProactiveScheduler();
   startVenueMonitorScheduler();
-  startContactsSyncScheduler();
 
   // Seed David's music preferences into profile_items so they persist and
   // can be referenced in any conversation naturally.

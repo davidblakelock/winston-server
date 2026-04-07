@@ -6,42 +6,41 @@ export interface Contact {
   email?: string;
   phone?: string;
   address?: string;
+  resourceName?: string;
 }
 
 export interface ContactSearchResult {
   contacts: Contact[];
   needsReauth: boolean;
+  source: "live" | "curated" | "none";
 }
 
 // ── Table management ──────────────────────────────────────────────────────────
+// google_contacts now holds ONLY explicitly-saved curated contacts (~20-30 people).
+// It is NOT a bulk cache. The 650-person sync has been removed.
 
 export async function ensureContactsTable(): Promise<void> {
   await query(`
     CREATE TABLE IF NOT EXISTS google_contacts (
-      id           SERIAL PRIMARY KEY,
-      user_name    VARCHAR(100) NOT NULL,
+      id            SERIAL PRIMARY KEY,
+      user_name     VARCHAR(100) NOT NULL,
       resource_name VARCHAR(255),
       display_name  VARCHAR(255) NOT NULL,
-      email        VARCHAR(255),
-      phone        VARCHAR(100),
-      address      TEXT,
-      cached_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      email         VARCHAR(255),
+      phone         VARCHAR(100),
+      address       TEXT,
+      notes         TEXT,
+      saved_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
   await query(`
     CREATE INDEX IF NOT EXISTS google_contacts_user_name_idx
     ON google_contacts(user_name)
   `);
-  // Unique index on (user_name, resource_name) enables fast UPSERT — cache is never wiped mid-sync
-  await query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS google_contacts_user_resource_idx
-    ON google_contacts(user_name, resource_name)
-    WHERE resource_name IS NOT NULL
-  `);
   logger.info("[CONTACTS] google_contacts table ready");
 }
 
-// ── Token helper ──────────────────────────────────────────────────────────────
+// ── OAuth token helper ────────────────────────────────────────────────────────
 
 interface GoogleAuthRow {
   user_name: string;
@@ -52,23 +51,17 @@ interface GoogleAuthRow {
   email: string | null;
 }
 
-// Finds the best available Google OAuth token for contacts access.
-// Prefers personal accounts (non-winston emails) over app service accounts,
-// since contacts typically live in the user's personal Google account.
 async function getAccessToken(): Promise<{ token: string; hasContactsScope: boolean; userName: string } | null> {
   const { rows } = await query<GoogleAuthRow>(
     `SELECT user_name, access_token, refresh_token, token_expiry, scope, email
      FROM google_auth
      ORDER BY
-       -- Prefer personal (non-winston) accounts which have real contacts
        CASE WHEN email NOT LIKE '%winston%' THEN 0 ELSE 1 END,
-       -- Then prefer most recently updated
        updated_at DESC NULLS LAST
      LIMIT 5`
   );
   if (!rows.length) return null;
 
-  // Try each row in preference order; return the first one with a usable token
   for (const row of rows) {
     if (!row.access_token && !row.refresh_token) continue;
 
@@ -78,7 +71,6 @@ async function getAccessToken(): Promise<{ token: string; hasContactsScope: bool
       scope.includes("contacts") ||
       scope.includes("directory.readonly");
 
-    // Check if token is expired (with 60s buffer)
     const expiry = row.token_expiry ? new Date(row.token_expiry).getTime() : 0;
     const isExpired = expiry > 0 && Date.now() > expiry - 60_000;
 
@@ -109,7 +101,7 @@ async function getAccessToken(): Promise<{ token: string; hasContactsScope: bool
           return { token: refreshData.access_token, hasContactsScope, userName: row.user_name };
         }
         logger.warn(`[CONTACTS] Token refresh failed for ${row.user_name}: ${refreshData.error ?? "unknown"}`);
-        continue; // Try next account
+        continue;
       } catch (err) {
         logger.warn({ err }, `[CONTACTS] Token refresh exception for ${row.user_name}`);
         continue;
@@ -117,7 +109,6 @@ async function getAccessToken(): Promise<{ token: string; hasContactsScope: bool
     }
 
     if (row.access_token) {
-      logger.info(`[CONTACTS] Using token for ${row.email ?? row.user_name} (expired=${isExpired})`);
       return { token: row.access_token, hasContactsScope, userName: row.user_name };
     }
   }
@@ -126,242 +117,134 @@ async function getAccessToken(): Promise<{ token: string; hasContactsScope: bool
   return null;
 }
 
-// ── Fetch contacts from Google and cache them ─────────────────────────────────
+// ── Live search via Google People API ─────────────────────────────────────────
+// Uses people:searchContacts — searches by name in real time.
+// No local cache involved. Results come directly from Google.
 
-interface ContactWithResourceName extends Contact {
-  resourceName: string;
-}
+async function searchContactsLive(searchName: string, token: string): Promise<Contact[]> {
+  const url = new URL("https://people.googleapis.com/v1/people:searchContacts");
+  url.searchParams.set("query", searchName);
+  url.searchParams.set("readMask", "names,emailAddresses,phoneNumbers,addresses");
+  url.searchParams.set("pageSize", "10");
 
-export async function syncContactsToCache(userName = "David"): Promise<number> {
-  console.log("[CONTACTS] fetching Google contacts");
+  const resp = await fetch(url.toString(), {
+    headers: { Authorization: `Bearer ${token}` },
+  });
 
-  const tokenInfo = await getAccessToken();
-  if (!tokenInfo) {
-    logger.warn("[CONTACTS] syncContactsToCache — no auth token available");
-    return 0;
+  if (!resp.ok) {
+    const errBody = await resp.json().catch(() => ({})) as { error?: { message?: string } };
+    logger.warn(`[CONTACTS] people:searchContacts HTTP ${resp.status}: ${errBody.error?.message ?? resp.statusText}`);
+    return [];
   }
-  if (!tokenInfo.hasContactsScope) {
-    logger.warn("[CONTACTS] syncContactsToCache — contacts.readonly scope not in token — David needs to reconnect Google");
-    return -1; // signal: needs reauth
-  }
 
-  const allContacts: ContactWithResourceName[] = [];
-  let pageToken: string | undefined;
-
-  do {
-    const url = new URL("https://people.googleapis.com/v1/people/me/connections");
-    url.searchParams.set("personFields", "names,emailAddresses,phoneNumbers,addresses");
-    url.searchParams.set("pageSize", "100");
-    if (pageToken) url.searchParams.set("pageToken", pageToken);
-
-    const resp = await fetch(url.toString(), {
-      headers: { Authorization: `Bearer ${tokenInfo.token}` },
-    });
-
-    if (!resp.ok) {
-      const errBody = await resp.json().catch(() => ({})) as Record<string, unknown>;
-      const errMsg = (errBody as { error?: { message?: string } }).error?.message ?? resp.statusText;
-      if (resp.status === 401 || resp.status === 403) {
-        logger.warn(`[CONTACTS] API returned ${resp.status} — scope missing or token invalid. Message: ${errMsg}`);
-        return -1;
-      }
-      logger.error(`[CONTACTS] people.me.connections HTTP ${resp.status}: ${errMsg}`);
-      return 0;
-    }
-
-    const data = await resp.json() as {
-      connections?: Array<{
+  const data = await resp.json() as {
+    results?: Array<{
+      person?: {
         resourceName?: string;
         names?: Array<{ displayName?: string }>;
         emailAddresses?: Array<{ value?: string }>;
         phoneNumbers?: Array<{ value?: string }>;
         addresses?: Array<{ formattedValue?: string }>;
-      }>;
-      nextPageToken?: string;
-      totalItems?: number;
+      };
+    }>;
+  };
+
+  const contacts: Contact[] = [];
+  for (const result of data.results ?? []) {
+    const person = result.person;
+    if (!person) continue;
+    const displayName = person.names?.[0]?.displayName;
+    if (!displayName) continue;
+    const c: Contact = {
+      name: displayName,
+      resourceName: person.resourceName,
     };
-
-    const connections = data.connections ?? [];
-    console.log(`[CONTACTS] page fetched — ${connections.length} records (totalItems=${data.totalItems ?? "unknown"})`);
-
-    for (const person of connections) {
-      const displayName = person.names?.[0]?.displayName;
-      if (!displayName || !person.resourceName) continue;
-      const contact: ContactWithResourceName = { name: displayName, resourceName: person.resourceName };
-      if (person.emailAddresses?.[0]?.value) contact.email = person.emailAddresses[0].value;
-      if (person.phoneNumbers?.[0]?.value) contact.phone = person.phoneNumbers[0].value;
-      if (person.addresses?.[0]?.formattedValue) contact.address = person.addresses[0].formattedValue;
-      allContacts.push(contact);
-    }
-
-    pageToken = data.nextPageToken;
-  } while (pageToken);
-
-  console.log(`[CONTACTS] found ${allContacts.length} connections total from Google People API`);
-
-  if (allContacts.length === 0) return 0;
-
-  // Batch UPSERT — 50 contacts per INSERT statement (vs. 628 individual INSERTs = 95+ seconds)
-  // Uses ON CONFLICT DO UPDATE so the cache is never wiped mid-sync — zero downtime
-  const BATCH_SIZE = 50;
-  for (let i = 0; i < allContacts.length; i += BATCH_SIZE) {
-    const batch = allContacts.slice(i, i + BATCH_SIZE);
-    const valueParts: string[] = [];
-    const params: unknown[] = [];
-
-    for (let j = 0; j < batch.length; j++) {
-      const c = batch[j];
-      const base = j * 6;
-      valueParts.push(`($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, NOW())`);
-      params.push(userName, c.resourceName, c.name, c.email ?? null, c.phone ?? null, c.address ?? null);
-    }
-
-    await query(
-      `INSERT INTO google_contacts (user_name, resource_name, display_name, email, phone, address, cached_at)
-       VALUES ${valueParts.join(", ")}
-       ON CONFLICT (user_name, resource_name) WHERE resource_name IS NOT NULL DO UPDATE SET
-         display_name = EXCLUDED.display_name,
-         email        = EXCLUDED.email,
-         phone        = EXCLUDED.phone,
-         address      = EXCLUDED.address,
-         cached_at    = EXCLUDED.cached_at
-       RETURNING id`,
-      params
-    );
+    if (person.emailAddresses?.[0]?.value) c.email = person.emailAddresses[0].value;
+    if (person.phoneNumbers?.[0]?.value) c.phone = person.phoneNumbers[0].value;
+    if (person.addresses?.[0]?.formattedValue) c.address = person.addresses[0].formattedValue;
+    contacts.push(c);
   }
 
-  // Remove contacts that are no longer in Google (deleted by David since last sync)
-  const resourceNames = allContacts.map((c) => c.resourceName);
-  const placeholders = resourceNames.map((_, i) => `$${i + 2}`).join(", ");
-  await query(
-    `DELETE FROM google_contacts WHERE user_name = $1 AND (resource_name IS NULL OR resource_name NOT IN (${placeholders})) RETURNING id`,
-    [userName, ...resourceNames]
-  );
-
-  logger.info({ count: allContacts.length }, "[CONTACTS] Cache synced to google_contacts table");
-  return allContacts.length;
+  return contacts;
 }
 
-// ── Search from cache ─────────────────────────────────────────────────────────
+// ── Curated contact management ────────────────────────────────────────────────
+// The google_contacts table holds ONLY contacts David has explicitly asked to save.
+// Max ~30 people — his curated Winston contact list.
 
-async function isCacheStale(userName = "David"): Promise<boolean> {
-  const { rows } = await query<{ cached_at: Date; count: string }>(
-    `SELECT MAX(cached_at) as cached_at, COUNT(*) as count FROM google_contacts WHERE user_name = $1`,
+export async function saveCuratedContact(contact: Contact, userName: string): Promise<void> {
+  await query(
+    `INSERT INTO google_contacts (user_name, resource_name, display_name, email, phone, address)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT DO NOTHING`,
+    [userName, contact.resourceName ?? null, contact.name, contact.email ?? null, contact.phone ?? null, contact.address ?? null]
+  );
+  logger.info(`[CONTACTS] Curated contact saved: ${contact.name} for ${userName}`);
+}
+
+export async function getCuratedContacts(userName: string): Promise<Contact[]> {
+  type Row = { display_name: string; email: string | null; phone: string | null; address: string | null; resource_name: string | null };
+  const { rows } = await query<Row>(
+    `SELECT display_name, email, phone, address, resource_name
+     FROM google_contacts WHERE user_name = $1 ORDER BY display_name`,
     [userName]
   );
-  if (!rows.length || rows[0].count === "0") return true; // empty = stale
-  const maxAge = 24 * 60 * 60 * 1000; // 24 hours
-  return Date.now() - new Date(rows[0].cached_at).getTime() > maxAge;
-}
-
-async function searchCachedContacts(searchName: string, userName = "David"): Promise<Contact[]> {
-  const nameLower = searchName.toLowerCase().trim();
-
-  type ContactRow = { display_name: string; email: string | null; phone: string | null; address: string | null };
-
-  // 1. Exact full-name match (case-insensitive)
-  const { rows: exactRows } = await query<ContactRow>(
-    `SELECT display_name, email, phone, address
-     FROM google_contacts
-     WHERE user_name = $1 AND LOWER(display_name) = $2
-     ORDER BY display_name`,
-    [userName, nameLower]
-  );
-  if (exactRows.length === 1) {
-    const r = exactRows[0];
-    return [{ name: r.display_name, email: r.email ?? undefined, phone: r.phone ?? undefined, address: r.address ?? undefined }];
-  }
-
-  // 2. All search words appear as whole words in the display name
-  //    e.g. "Eric Blackstone" only matches contacts where BOTH words appear
-  const words = nameLower.split(/\s+/).filter(Boolean);
-  if (words.length > 1) {
-    const wordConditions = words.map((w, i) => `LOWER(display_name) LIKE $${i + 3}`).join(" AND ");
-    const wordParams = words.map((w) => `%${w}%`);
-    const { rows: wordRows } = await query<ContactRow>(
-      `SELECT display_name, email, phone, address
-       FROM google_contacts
-       WHERE user_name = $1 AND LOWER(display_name) != $2 AND ${wordConditions}
-       ORDER BY display_name
-       LIMIT 10`,
-      [userName, nameLower, ...wordParams]
-    );
-    const combined = [...exactRows, ...wordRows];
-    if (combined.length > 0) {
-      return combined.map((r) => ({
-        name: r.display_name,
-        email: r.email ?? undefined,
-        phone: r.phone ?? undefined,
-        address: r.address ?? undefined,
-      }));
-    }
-  }
-
-  // 3. Fallback: substring match on full display name (catches partial queries)
-  const fallbackTerm = `%${nameLower}%`;
-  const { rows: fallbackRows } = await query<ContactRow>(
-    `SELECT display_name, email, phone, address
-     FROM google_contacts
-     WHERE user_name = $1 AND LOWER(display_name) LIKE $2
-     ORDER BY display_name
-     LIMIT 10`,
-    [userName, fallbackTerm]
-  );
-  return fallbackRows.map((r) => ({
+  return rows.map((r) => ({
     name: r.display_name,
     email: r.email ?? undefined,
     phone: r.phone ?? undefined,
     address: r.address ?? undefined,
+    resourceName: r.resource_name ?? undefined,
   }));
 }
 
+export async function removeCuratedContact(name: string, userName: string): Promise<boolean> {
+  const { rows } = await query(
+    `DELETE FROM google_contacts WHERE user_name = $1 AND LOWER(display_name) = LOWER($2) RETURNING id`,
+    [userName, name]
+  );
+  return rows.length > 0;
+}
+
 // ── Public search API ─────────────────────────────────────────────────────────
+// Always performs a live Google People API lookup — no local cache.
 
-export async function searchContacts(searchQuery: string, forceRefresh = false): Promise<ContactSearchResult> {
+export async function searchContacts(searchQuery: string): Promise<ContactSearchResult> {
   try {
-    console.log(`[CONTACTS] searching for name: "${searchQuery}" (forceRefresh=${forceRefresh})`);
+    console.log(`[CONTACTS] Live search for: "${searchQuery}"`);
 
-    // Only re-sync when the cache is stale (>24h old) or explicitly forced.
-    // The startup scheduler pre-populates the cache — don't re-sync on every query.
-    if (forceRefresh || await isCacheStale()) {
-      console.log("[CONTACTS] cache is stale or forceRefresh set — syncing from Google People API");
-      const synced = await syncContactsToCache();
-      if (synced === -1) {
-        // needs reauth
-        return { contacts: [], needsReauth: true };
-      }
-      console.log(`[CONTACTS] sync complete — ${synced} contacts in cache`);
+    const tokenInfo = await getAccessToken();
+    if (!tokenInfo) {
+      logger.warn("[CONTACTS] searchContacts — no auth token available");
+      return { contacts: [], needsReauth: false, source: "none" };
     }
 
-    // Search the local cache
-    const contacts = await searchCachedContacts(searchQuery);
-
-    if (contacts.length > 0) {
-      // Log each returned contact with ALL fields for verification — these came from the DB cache
-      // which was populated exclusively from the Google People API. Never inferred.
-      console.log(`[CONTACTS] returning ${contacts.length} result(s) from Google API cache for "${searchQuery}":`);
-      contacts.forEach((c, i) => {
-        console.log(`[CONTACTS]   [${i + 1}] name="${c.name}" phone=${c.phone ?? "null"} email=${c.email ?? "null"} address=${c.address ?? "null"}`);
-      });
-    } else {
-      console.log(`[CONTACTS] no results found for "${searchQuery}" — cache size checked, 0 matches`);
+    if (!tokenInfo.hasContactsScope) {
+      logger.warn("[CONTACTS] contacts.readonly scope missing — David needs to reconnect Google");
+      return { contacts: [], needsReauth: true, source: "none" };
     }
 
-    return { contacts, needsReauth: false };
+    const contacts = await searchContactsLive(searchQuery, tokenInfo.token);
+
+    console.log(`[CONTACTS] Live search returned ${contacts.length} result(s) for "${searchQuery}":`);
+    contacts.forEach((c, i) => {
+      console.log(`[CONTACTS]   [${i + 1}] name="${c.name}" phone=${c.phone ?? "null"} email=${c.email ?? "null"}`);
+    });
+
+    return { contacts, needsReauth: false, source: contacts.length > 0 ? "live" : "none" };
   } catch (err: unknown) {
     logger.error({ err }, "[CONTACTS] searchContacts failed");
-    return { contacts: [], needsReauth: false };
+    return { contacts: [], needsReauth: false, source: "none" };
   }
 }
 
 // ── Format for Claude prompt ──────────────────────────────────────────────────
 
-export function formatContactsForPrompt(result: ContactSearchResult, query: string): string {
+export function formatContactsForPrompt(result: ContactSearchResult, searchName: string): string {
   if (result.needsReauth) {
     return (
       `\n\n[Google Contacts — Reconnection Required]\n` +
       `David's Google account does not currently include contacts permission. ` +
-      `This is because the contacts scope was added after his last sign-in. ` +
       `Tell David exactly this: "To look up contacts I'll need you to quickly reconnect your Google account — ` +
       `just go to Settings and tap Reconnect Google. It only takes a minute and you won't lose anything." ` +
       `Do NOT say you "don't have access" — frame it as a quick one-time reconnect that fixes it permanently.`
@@ -370,11 +253,11 @@ export function formatContactsForPrompt(result: ContactSearchResult, query: stri
 
   if (result.contacts.length === 0) {
     return (
-      `\n\n[VERIFIED — Google Contacts API — Search: "${query}" — NO RESULTS]\n` +
-      `The Google Contacts API was searched and returned ZERO results for "${query}". ` +
-      `There is NO contact with this name. This is VERIFIED. ` +
-      `You MUST NOT generate, invent, guess, or infer any phone number, email address, or other contact detail. ` +
-      `Say EXACTLY: "I searched your Google Contacts and couldn't find anyone named ${query}. Do you want to add them manually?"`
+      `\n\n[VERIFIED — Google Contacts Live Search: "${searchName}" — NO RESULTS]\n` +
+      `The Google Contacts API was searched live and returned ZERO results for "${searchName}". ` +
+      `There is NO contact with this name in David's Google Contacts. This is VERIFIED. ` +
+      `You MUST NOT generate, invent, guess, or infer any phone number, email, or contact detail. ` +
+      `Say: "I searched your Google Contacts and couldn't find anyone named ${searchName}. Want me to add them manually?"`
     );
   }
 
@@ -387,43 +270,22 @@ export function formatContactsForPrompt(result: ContactSearchResult, query: stri
   });
 
   if (result.contacts.length === 1) {
+    const c = result.contacts[0];
     return (
-      `\n\n[VERIFIED — Google Contacts API — Search: "${query}"]\n` +
+      `\n\n[VERIFIED — Google Contacts Live Search: "${searchName}"]\n` +
       `${lines[0]}\n` +
-      `This is VERIFIED data — state the contact's name, phone, and email exactly as shown above. Do not add, modify, or infer any details not present here.`
+      `Source: Google People API (live lookup — not cached). State the contact's name, phone, and email exactly as shown. ` +
+      `Do not add, modify, or infer any details not present here.\n` +
+      `After sharing this info, ask David: "Want me to remember ${c.name} in your Winston contacts for next time?"`
     );
   }
 
-  // Multiple matches — ask David which one he means
   return (
-    `\n\n[VERIFIED — Google Contacts API — Multiple Matches for "${query}"]\n` +
+    `\n\n[VERIFIED — Google Contacts Live Search — Multiple Matches for "${searchName}"]\n` +
     `${lines.join("\n")}\n` +
-    `This is VERIFIED data. Ask David which one he means — list their names and ask him to pick: ` +
-    `"I found a few people named ${query.split(" ")[0]} — which one did you mean?" ` +
-    `Do NOT share phone or email until David confirms which person.`
+    `Source: Google People API (live lookup). Ask David which one he means — ` +
+    `"I found a few people named ${searchName.split(" ")[0]} — which one did you mean?" ` +
+    `Do NOT share phone or email until David confirms which person. ` +
+    `Once he confirms, ask if he wants to save them to his Winston contacts.`
   );
-}
-
-// ── Daily refresh scheduler ───────────────────────────────────────────────────
-
-export function startContactsSyncScheduler(): void {
-  const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
-
-  // Initial sync on startup (non-blocking, after 10 seconds to let server settle)
-  setTimeout(() => {
-    syncContactsToCache().then((count) => {
-      if (count > 0) logger.info({ count }, "[CONTACTS] Initial contacts cache sync complete");
-      else if (count === -1) logger.warn("[CONTACTS] Initial sync skipped — contacts.readonly scope not in token");
-      else logger.info("[CONTACTS] Initial sync: 0 contacts (empty Google Contacts or token issue)");
-    }).catch((err) => logger.warn({ err }, "[CONTACTS] Initial sync failed"));
-  }, 10_000);
-
-  // Daily refresh
-  setInterval(() => {
-    syncContactsToCache().then((count) => {
-      if (count > 0) logger.info({ count }, "[CONTACTS] Daily contacts cache refresh complete");
-    }).catch((err) => logger.warn({ err }, "[CONTACTS] Daily sync failed"));
-  }, TWENTY_FOUR_HOURS);
-
-  logger.info("[CONTACTS] Contacts sync scheduler started (daily refresh + immediate sync on startup)");
 }
