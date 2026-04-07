@@ -115,7 +115,7 @@ app.listen(port, async (err) => {
       { name: "Classic Jazz",      detail: "Loves classic jazz — bebop, big band, standards" },
     ];
     for (const pref of musicPrefs) {
-      await addProfileItem("music", pref.name, pref.detail).catch(() => {});
+      await addProfileItem("music", pref.name, pref.detail, "David2").catch(() => {});
     }
     const favoriteVenues: Array<{ name: string; detail: string }> = [
       { name: "Kessler Theater",               detail: "Favorite Dallas music venue — intimate, eclectic bookings" },
@@ -127,8 +127,10 @@ app.listen(port, async (err) => {
       { name: "Jazz at the Meyerson",          detail: "Favorite jazz venue — Meyerson Symphony Center" },
     ];
     for (const venue of favoriteVenues) {
-      await addProfileItem("favorite_venues", venue.name, venue.detail).catch(() => {});
+      await addProfileItem("favorite_venues", venue.name, venue.detail, "David2").catch(() => {});
     }
+    // Clean up any stale 'David' rows left from before user_name was added
+    await query(`UPDATE profile_items SET user_name = 'David2' WHERE user_name = 'David'`).catch(() => {});
     logger.info("Music preferences and favorite venues seeded to profile_items");
   } catch (e) {
     logger.warn({ e }, "Music preference seeding warning");

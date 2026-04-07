@@ -1073,7 +1073,7 @@ router.post("/chat", async (req, res) => {
   // ── Recommendation follow-up context (non-morning) ───────────────────────
   if (!isMorningGreeting) {
     try {
-      const followUps = await getPendingFollowUps(3, 14);
+      const followUps = await getPendingFollowUps(3, 14, sessionUserName);
       if (followUps.length > 0 && !isPickleballLog && !isDateAdd && !isEmergency) {
         systemPrompt += buildRecommendationFollowUpBlock(followUps);
       }
@@ -2011,7 +2011,7 @@ router.post("/chat", async (req, res) => {
     extractRecommendationsFromResponse(reply)
       .then(async (recs) => {
         if (recs.length > 0) {
-          await saveRecommendations(recs);
+          await saveRecommendations(recs, sessionUserName);
           req.log.info({ count: recs.length, names: recs.map((r) => r.name) }, "Recommendations extracted and saved");
         }
       })
@@ -2019,7 +2019,7 @@ router.post("/chat", async (req, res) => {
 
     // ── Post-response: mark recommendation as followed up ─────────────────
     if (detectFollowUpAcknowledgment(message)) {
-      getPendingFollowUps(3, 14)
+      getPendingFollowUps(3, 14, sessionUserName)
         .then(async (followUps) => {
           if (followUps.length > 0) {
             await markFollowedUp(followUps[0].id);

@@ -16,20 +16,21 @@ export interface Recommendation {
   followedUpDate: string | null;
 }
 
-export async function getPendingFollowUps(minDays = 2, maxDays = 21): Promise<Recommendation[]> {
+export async function getPendingFollowUps(minDays = 2, maxDays = 21, userName = "David"): Promise<Recommendation[]> {
   const { rows } = await query<{
     id: number; type: string; name: string; context: string | null;
     date_recommended: string; followed_up: boolean; followed_up_date: string | null;
   }>(
     `SELECT id, type, name, context, date_recommended, followed_up, followed_up_date
      FROM recommendations
-     WHERE user_name = 'David'
+     WHERE user_name = $1
        AND followed_up = false
        AND dismissed = false
        AND date_recommended >= CURRENT_DATE - INTERVAL '${maxDays} days'
        AND date_recommended <= CURRENT_DATE - INTERVAL '${minDays} days'
      ORDER BY date_recommended ASC
-     LIMIT 3`
+     LIMIT 3`,
+    [userName]
   );
   return rows.map((r) => ({
     id: r.id,
@@ -53,14 +54,14 @@ export async function dismissRecommendation(id: number): Promise<void> {
   await query(`UPDATE recommendations SET dismissed = true WHERE id = $1`, [id]);
 }
 
-export async function saveRecommendations(recs: Array<{ type: RecommendationType; name: string; context: string }>): Promise<void> {
+export async function saveRecommendations(recs: Array<{ type: RecommendationType; name: string; context: string }>, userName = "David"): Promise<void> {
   if (!recs.length) return;
   for (const r of recs) {
     await query(
       `INSERT INTO recommendations (user_name, type, name, context)
-       VALUES ('David', $1, $2, $3)
+       VALUES ($1, $2, $3, $4)
        ON CONFLICT DO NOTHING`,
-      [r.type, r.name, r.context]
+      [userName, r.type, r.name, r.context]
     ).catch(() => {});
   }
 }

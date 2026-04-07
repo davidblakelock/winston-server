@@ -38,9 +38,17 @@ export async function ensureProfileTable(): Promise<void> {
       created_at timestamptz NOT NULL DEFAULT NOW()
     )
   `);
-  // Add user_name column to existing tables that were created without it (idempotent via catch)
+  // Add user_name column to existing tables that were created without it.
+  // Uses DO block so it works correctly in Supabase's exec_sql environment.
   await query(`
-    ALTER TABLE profile_items ADD COLUMN user_name text NOT NULL DEFAULT 'David'
+    DO $$ BEGIN
+      IF NOT EXISTS (
+        SELECT FROM information_schema.columns
+        WHERE table_name = 'profile_items' AND column_name = 'user_name'
+      ) THEN
+        ALTER TABLE profile_items ADD COLUMN user_name text NOT NULL DEFAULT 'David';
+      END IF;
+    END $$
   `).catch(() => {});
   await query(`
     CREATE INDEX IF NOT EXISTS profile_items_category_idx
