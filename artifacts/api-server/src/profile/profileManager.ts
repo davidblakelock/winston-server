@@ -122,18 +122,29 @@ export async function addProfileItem(
   detail: string | null,
   userName = "David"
 ): Promise<ProfileItem> {
-  // Check for duplicates (case-insensitive, scoped to user)
-  const existing = await query<{ id: number }>(
-    `SELECT id FROM profile_items WHERE user_name = $1 AND category = $2 AND LOWER(name) = LOWER($3)`,
-    [userName, category, name]
+  // Validation: name must be a non-empty string
+  const cleanName = name?.trim();
+  if (!cleanName) {
+    throw new Error(`addProfileItem: name is required (got "${name}")`);
+  }
+
+  // Normalise detail — treat the string "null" and empty string as SQL NULL
+  const cleanDetail = (!detail || detail.trim() === "" || detail.trim().toLowerCase() === "null")
+    ? null
+    : detail.trim();
+
+  // Deduplication: case-insensitive name match within same category and user
+  const existing = await query<{ id: number; detail: string | null }>(
+    `SELECT id, detail FROM profile_items WHERE user_name = $1 AND category = $2 AND LOWER(name) = LOWER($3)`,
+    [userName, category, cleanName]
   );
 
   if (existing.rows.length > 0) {
-    // Update detail if provided
-    if (detail) {
+    // Upsert: update detail only if caller provided a non-null value
+    if (cleanDetail !== null) {
       await query(
         `UPDATE profile_items SET detail = $1 WHERE id = $2`,
-        [detail, existing.rows[0].id]
+        [cleanDetail, existing.rows[0].id]
       );
     }
     const updated = await query<{
@@ -149,6 +160,7 @@ export async function addProfileItem(
     return mapRow(updated.rows[0]);
   }
 
+  // Insert new row
   const { rows } = await query<{
     id: number;
     category: string;
@@ -159,7 +171,7 @@ export async function addProfileItem(
     `INSERT INTO profile_items (user_name, category, name, detail)
      VALUES ($1, $2, $3, $4)
      RETURNING id, category, name, detail, created_at`,
-    [userName, category, name, detail ?? null]
+    [userName, category, cleanName, cleanDetail]
   );
   return mapRow(rows[0]);
 }
