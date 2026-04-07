@@ -30,7 +30,7 @@ router.get("/messages", async (req: Request, res: Response) => {
       `SELECT id, role, content, created_at
        FROM chat_messages
        WHERE user_name = $1
-       ORDER BY created_at DESC
+       ORDER BY created_at DESC, id DESC
        LIMIT $2`,
       [userName, limit]
     );
