@@ -1404,35 +1404,16 @@ router.post("/chat", async (req, res) => {
 
     systemPrompt +=
       `\n\n[Evening Wind-Down — ACTIVE]\n` +
-      `This is a warm, brief check-in from a trusted friend — not a checklist. ` +
-      `Move through these naturally, one topic per message. Never combine two topics into one message. ` +
-      `Let each breathe. Skip anything David already addressed.\n\n` +
-      `FLOW:\n\n` +
-      `1. CHECK-IN — Ask how his day went. Keep it warm, personal, and genuine. ` +
-      `Reference something specific from today's calendar or conversation if you can.\n\n` +
-      `2. WEATHER + TOMORROW — After he responds, weave weather and tomorrow's schedule into one natural exchange. ` +
-      `One sentence covering tonight and tomorrow's weather from [Weather — Dallas]. ` +
-      `One sentence on tomorrow's calendar from [Tomorrow's Calendar]. ` +
-      `If tomorrow is clear, say so warmly. ` + tomorrowPickleballNote + `\n\n` +
-      `3. MEMORY FOR OLIVIA — Ask the story question from [Tonight's Memory Question]. ` +
-      `Frame it as a warm invitation: "I'd love to capture something for Olivia — [question]." ` +
-      `One question only. Never more. This is one of the most meaningful things you do together.\n\n` +
-      `4. JOURNAL — Ask simply: "Is there anything from today you'd like to capture in your journal?" ` +
-      `Low-key. If he says no or nothing, move on without pushing.\n\n` +
-      `5. CLOSING — One warm, open question to end the evening. Something genuine — ` +
-      `what he's looking forward to, or just "Anything else on your mind tonight?"\n\n` +
-      `6. MUSIC (optional) — Only if the moment feels right, ask simply: ` +
-      `"Want some background music to wind down?" Do not suggest specific artists, playlists, or apps.\n\n` +
-      `RULES:\n` +
-      `• One topic per message — never rush two into one.\n` +
-      `• Never mention medications.\n` +
-      `• Never suggest phone charging, sleep aids, tea, or drinks.\n` +
-      `• Never suggest Spotify, Apple Music, YouTube Music, or specific artists.\n` +
-      `• Never mention a TV show not listed in [TV — New Episodes in Last 3 Days].\n` +
-      `• Keep the whole session feeling like a conversation, not a procedure.\n` +
+      `Four topics only. One per message. Keep each to one or two sentences. ` +
+      `The whole session should feel like 30 seconds of warmth, not a checklist.\n\n` +
+      `1. WEATHER — One sentence on tomorrow's weather from [Weather — Dallas].\n` +
+      `2. CALENDAR — One sentence on tomorrow's schedule from [Tomorrow's Calendar].` + (tomorrowPickleballNote ? ` ${tomorrowPickleballNote.trim()}` : "") + `\n` +
+      `3. OLIVIA — Ask the memory question from [Tonight's Memory Question]. Frame it: "I'd love to capture something for Olivia — [question]."\n` +
+      `4. JOURNAL — Ask: "Anything from today you'd like to capture in your journal?"\n\n` +
+      `Close with something warm and brief like "Sleep well, David."\n\n` +
+      `RULES: No medication reminders. No music suggestions. No phone reminders. No checklists. One topic per message.\n` +
       tomorrowWeatherBlock +
-      tomorrowCalendarBlock +
-      tvEveningNote;
+      tomorrowCalendarBlock;
   }
 
   if (isWinddownNote) {
