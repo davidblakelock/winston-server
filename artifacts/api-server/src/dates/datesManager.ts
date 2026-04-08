@@ -238,5 +238,5 @@ export function confirmDateAdded(d: ImportantDate): string {
   const type = d.eventType === "birthday" ? "birthday" : "anniversary";
   const timeStr = daysUntil === 0 ? "today" :
     daysUntil === 1 ? "tomorrow" : `in ${daysUntil} days`;
-  return `Got it — I have ${d.personName}'s ${type} on ${label}. That's ${timeStr}. I'll remind you two weeks out, one week out, three days before, and the day of.`;
+  return `Got it — I have ${d.personName}'s ${type} on ${label}. That's ${timeStr}. I'll remind you one week out, two days before, and the day of.`;
 }

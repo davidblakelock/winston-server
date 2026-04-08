@@ -13,7 +13,7 @@ import { query } from "../db.js";
 
 const TZ = "America/Chicago";
 
-const LEAD_DAYS = [14, 7, 3, 0]; // reminder thresholds in days before event
+const LEAD_DAYS = [7, 2, 0]; // reminder thresholds in days before event
 
 function localDateStr(): string {
   return new Date().toLocaleDateString("en-CA", { timeZone: TZ });
