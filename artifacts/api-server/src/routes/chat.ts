@@ -2144,6 +2144,11 @@ router.post("/speak", async (req, res) => {
 
   const speakableText = normalizeTtsText(text);
 
+  const maskedKey = ELEVENLABS_API_KEY.length > 8
+    ? `${ELEVENLABS_API_KEY.slice(0, 4)}...${ELEVENLABS_API_KEY.slice(-4)}`
+    : "[short-key]";
+  console.log(`[SPEAK] Calling ElevenLabs — voice_id: ${ELEVENLABS_VOICE_ID}, api_key: ${maskedKey}, text_len: ${speakableText.length}`);
+
   const elevenResponse = await fetch(
     `https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}`,
     {
@@ -2168,6 +2173,8 @@ router.post("/speak", async (req, res) => {
 
   if (!elevenResponse.ok) {
     const errText = await elevenResponse.text();
+    console.error(`[SPEAK] ElevenLabs ERROR — HTTP ${elevenResponse.status} for voice_id=${ELEVENLABS_VOICE_ID}`);
+    console.error(`[SPEAK] ElevenLabs error body: ${errText}`);
     req.log.error({ status: elevenResponse.status, errText }, "ElevenLabs TTS error");
     res.status(500).json({ error: "Failed to generate speech" });
     return;
