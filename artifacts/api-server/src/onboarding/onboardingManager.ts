@@ -16,6 +16,14 @@ export interface UserProfile {
   rawData: Record<string, unknown>;
   onboardingCompleted: boolean;
   createdAt: Date;
+  // Structured personal profile columns
+  age: number | null;
+  birthday: string | null;
+  neighborhood: string | null;
+  relationshipStatus: string | null;
+  homeAddress: string | null;
+  homeLatitude: number | null;
+  homeLongitude: number | null;
 }
 
 export interface CollectedData {
@@ -71,6 +79,13 @@ export async function ensureOnboardingTable(): Promise<void> {
   `);
   await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS photo_url text`);
   await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS avatar_base64 text`);
+  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS age integer`);
+  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS birthday date`);
+  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS neighborhood text`);
+  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS relationship_status text`);
+  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS home_address text`);
+  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS home_latitude numeric(10,7)`);
+  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS home_longitude numeric(10,7)`);
 }
 
 export async function getProfile(userName = "David"): Promise<UserProfile | null> {
@@ -90,6 +105,13 @@ export async function getProfile(userName = "David"): Promise<UserProfile | null
     raw_data: Record<string, unknown>;
     onboarding_completed: boolean;
     created_at: Date;
+    age: number | null;
+    birthday: string | null;
+    neighborhood: string | null;
+    relationship_status: string | null;
+    home_address: string | null;
+    home_latitude: number | null;
+    home_longitude: number | null;
   }>(`SELECT * FROM user_profiles WHERE user_name = $1 LIMIT 1`, [userName]);
 
   if (rows.length === 0) return null;
@@ -110,6 +132,13 @@ export async function getProfile(userName = "David"): Promise<UserProfile | null
     rawData: r.raw_data ?? {},
     onboardingCompleted: r.onboarding_completed,
     createdAt: r.created_at,
+    age: r.age ?? null,
+    birthday: r.birthday ?? null,
+    neighborhood: r.neighborhood ?? null,
+    relationshipStatus: r.relationship_status ?? null,
+    homeAddress: r.home_address ?? null,
+    homeLatitude: r.home_latitude ?? null,
+    homeLongitude: r.home_longitude ?? null,
   };
 }
 
@@ -191,79 +220,16 @@ export async function isOnboardingComplete(userName = "David"): Promise<boolean>
   return profile?.onboardingCompleted ?? false;
 }
 
-// Build the full system prompt from a dynamic user profile.
-// companionName defaults to "Emma Peel" for existing users (David) who haven't set one.
+// Build the persona/behavioral portion of the system prompt from a dynamic user profile.
+// Personal context (people, places, interests, etc.) is injected separately via buildProfileContext().
 export function buildSystemPromptFromProfile(
   profile: UserProfile,
   rawData: CollectedData
 ): string {
   const userName = profile.name ?? "friend";
   const companionName = profile.companionName ?? "your companion";
-  const wakeTime = profile.wakeTime
-    ? formatWakeTime(profile.wakeTime)
-    : "morning";
   const city = profile.city ?? "your city";
-
-  const people = rawData.people ?? [];
-  const places = rawData.places ?? [];
-  const shows = rawData.shows ?? [];
-  const restaurants = rawData.restaurants ?? [];
-  const interests = rawData.interests ?? [];
-  const sportsTeams = rawData.sportsTeams ?? [];
-  const music = rawData.music ?? [];
-  const foodPreferences = rawData.foodPreferences ?? [];
-  const healthNotes = profile.healthNotes ?? "";
-
-  // Personal details
-  const birthday = rawData.birthday ?? null;
-  const age = rawData.age ?? null;
-  const maritalStatus = rawData.maritalStatus ?? null;
-  const homeAddress = rawData.homeAddress ?? null;
-  const neighborhood = rawData.neighborhood ?? null;
-  const dailyRoutine = rawData.dailyRoutine ?? null;
-  const dog = rawData.dog ?? null;
-  const therapist = rawData.therapist ?? null;
-
-  const peopleBlock = people.length
-    ? people
-        .map((p) => {
-          let line = `• ${p.name} — ${p.relationship}`;
-          if (p.city) line += `, lives in ${p.city}`;
-          if (p.address) line += ` — ${p.address}`;
-          if (p.details) line += `. ${p.details}`;
-          return line;
-        })
-        .join("\n")
-    : "• None specified";
-
-  const placesBlock = places.length
-    ? places
-        .map((p) => {
-          let line = `• ${p.name}${p.address ? ` — ${p.address}` : ""}`;
-          if (p.notes) line += ` (${p.notes})`;
-          return line;
-        })
-        .join("\n")
-    : "• None specified";
-
-  const interestsList = [
-    ...(shows.length ? [`Shows: ${shows.join(", ")}`] : []),
-    ...(restaurants.length ? [`Favourite restaurants: ${restaurants.join(", ")}`] : []),
-    ...(foodPreferences.length ? [`Food preferences: ${foodPreferences.join(", ")}`] : []),
-    ...(sportsTeams.length ? [`Sports teams: ${sportsTeams.join(", ")}`] : []),
-    ...(music.length ? [`Music: ${music.join(", ")}`] : []),
-    ...(interests.length ? [`Other interests: ${interests.join(", ")}`] : []),
-  ].join("\n• ");
-
-  const personalDetails = [
-    age ? `• Age: ${age}${birthday ? ` (born ${birthday})` : ""}` : "",
-    maritalStatus ? `• Marital status: ${maritalStatus}` : "",
-    homeAddress ? `• Home: ${homeAddress}${neighborhood ? ` (${neighborhood})` : ""}` : "",
-    dailyRoutine ? `• Daily routine: ${dailyRoutine}` : "",
-    dog ? `• Dog: ${dog.name}, a ${dog.age ?? "?"}-year-old ${dog.breed ?? "dog"}` : "",
-    therapist ? `• Has a standing therapy appointment: ${therapist.schedule}${therapist.note ? `. IMPORTANT: ${therapist.note}` : ""}` : "",
-    healthNotes ? `• Health notes: ${healthNotes}` : "",
-  ].filter(Boolean).join("\n");
+  const people = (rawData.people ?? []) as Array<{ name: string; city?: string }>;
 
   return `You are ${companionName} — ${userName}'s warm, sharp, and deeply trusted personal AI companion. You know ${userName}'s life inside and out: his routines, his people, his places, and what matters most to him. You speak to him like a close friend who happens to know everything — conversational, direct, never stiff or overly formal. You remember context from the conversation and build on it naturally.
 
@@ -273,29 +239,10 @@ When giving a morning briefing, naturally weave in the current weather for ${cit
 
 When you confirm a reminder has been set, be warm and specific: "Done — I'll remind you to [task] at [time]."
 
-IMPORTANT SCHEDULING RULE: Never suggest scheduling anything on Thursdays at 1pm — that is ${userName}'s standing weekly therapy appointment.
-
 CALENDAR EVENTS — EXACT TITLES ONLY (NO EXCEPTIONS):
 When referencing any Google Calendar event, use ONLY the exact event title returned by the Google Calendar API. NEVER substitute, infer, or enrich event titles using names or context from memory or background knowledge.
 • If the calendar shows "You Matter Counseling" — say exactly that. Do NOT say "your therapist" or add any name.
 • What the API returns is the ground truth. Never combine calendar data with conversation memory.
-
-Here is everything you know about ${userName}:
-
-About ${userName}:
-• Name: ${userName}
-• Lives in: ${city}
-• Typically wakes up: ${wakeTime}
-${personalDetails}
-
-Your People:
-${peopleBlock}
-
-Your Places:
-${placesBlock}
-
-Your Interests:
-${interestsList ? `• ${interestsList}` : "• None specified yet"}
 
 You deeply care about ${userName}'s wellbeing and ask thoughtful follow-up questions. You track weather for ${city}${people.filter((p) => p.city).map((p) => ` and ${p.city}`).join("")}.`;
 }
@@ -305,6 +252,136 @@ function formatWakeTime(t: string): string {
   const ampm = h >= 12 ? "PM" : "AM";
   const hour = h % 12 || 12;
   return `${hour}:${String(m).padStart(2, "0")} ${ampm}`;
+}
+
+// Build the personal-context block from structured profile columns + rawData.
+// Call this in every system prompt, always, regardless of onboarding status.
+export function buildProfileContext(
+  profile: UserProfile | null,
+  rawData: CollectedData
+): string {
+  const userName = profile?.name ?? "the user";
+  const city = profile?.city ?? "";
+
+  // Structured columns with rawData fallbacks
+  const age: number | null = profile?.age ?? rawData.age ?? null;
+  const birthday: string | null = profile?.birthday ?? rawData.birthday ?? null;
+  const neighborhood: string | null = profile?.neighborhood ?? rawData.neighborhood ?? null;
+  const relationshipStatus: string | null = profile?.relationshipStatus ?? rawData.maritalStatus ?? null;
+  const homeAddress: string | null = profile?.homeAddress ?? rawData.homeAddress ?? null;
+  const wakeTime: string | null = profile?.wakeTime ?? rawData.wakeTime ?? null;
+
+  // rawData-only fields
+  const dog = rawData.dog as { name: string; breed?: string; age?: number } | undefined;
+  const therapist = rawData.therapist as { schedule: string; note?: string } | undefined;
+  const healthNotes = (profile?.healthNotes ?? rawData.healthNotes ?? "") as string;
+  const people = (rawData.people ?? []) as CollectedData["people"];
+  const places = (rawData.places ?? []) as CollectedData["places"];
+  const shows = (rawData.shows ?? []) as string[];
+  const restaurants = (rawData.restaurants ?? []) as string[];
+  const interests = (rawData.interests ?? []) as string[];
+  const sportsTeams = (rawData.sportsTeams ?? []) as string[];
+  const music = (rawData.music ?? []) as string[];
+
+  // ── About section ──────────────────────────────────────────────────────────
+  const aboutLines: string[] = [];
+  if (city) {
+    aboutLines.push(
+      neighborhood
+        ? `• Lives in ${city} — ${neighborhood}`
+        : `• Lives in ${city}`
+    );
+  }
+  if (homeAddress) aboutLines.push(`• Home: ${homeAddress}`);
+  if (wakeTime) aboutLines.push(`• Typically wakes up: ${formatWakeTime(wakeTime)}`);
+
+  if (age !== null || birthday !== null) {
+    const parts: string[] = [];
+    if (age !== null) parts.push(`${age} years old`);
+    if (birthday) {
+      const formatted = /^\d{4}-\d{2}-\d{2}$/.test(birthday)
+        ? (() => { const [y, m2, d] = birthday.split("-"); return `${m2}/${d}/${y}`; })()
+        : birthday;
+      parts.push(`born ${formatted}`);
+    }
+    if (relationshipStatus) parts.push(relationshipStatus);
+    aboutLines.push(`• ${parts.join(", ")}`);
+  } else if (relationshipStatus) {
+    aboutLines.push(`• Relationship status: ${relationshipStatus}`);
+  }
+
+  if (dog) {
+    aboutLines.push(
+      dog.breed
+        ? `• Dog: ${dog.name}, a${dog.age != null ? ` ${dog.age}-year-old` : ""} ${dog.breed}`
+        : `• Dog: ${dog.name}`
+    );
+  }
+  if (therapist) {
+    aboutLines.push(`• Standing appointment: ${therapist.schedule}`);
+  }
+  if (healthNotes) aboutLines.push(`• Health notes: ${healthNotes}`);
+
+  // ── People section ─────────────────────────────────────────────────────────
+  const peopleLines =
+    people && people.length > 0
+      ? people.map((p) => {
+          let line = `• ${p.name} — ${p.relationship}`;
+          if (p.city) line += `, lives in ${p.city}`;
+          if (p.address) line += ` (${p.address})`;
+          if (p.details) line += `. ${p.details}`;
+          return line;
+        }).join("\n")
+      : "• None recorded";
+
+  // ── Places section ─────────────────────────────────────────────────────────
+  const placesLines =
+    places && places.length > 0
+      ? places.map((p) => {
+          let line = `• ${p.name}`;
+          if (p.address) line += ` — ${p.address}`;
+          if (p.notes) line += ` (${p.notes})`;
+          return line;
+        }).join("\n")
+      : "• None recorded";
+
+  // ── Interests section ──────────────────────────────────────────────────────
+  const interestParts: string[] = [];
+  if (shows.length) interestParts.push(`• Shows: ${shows.join(", ")}`);
+  if (sportsTeams.length) interestParts.push(`• Sports: ${sportsTeams.join(", ")}`);
+  if (music.length) interestParts.push(`• Music: ${music.join(", ")}`);
+  if (restaurants.length) interestParts.push(`• Favourite restaurants: ${restaurants.join(", ")}`);
+  if (interests.length) interestParts.push(`• Hobbies & interests: ${interests.join(", ")}`);
+
+  // ── Scheduling rule ────────────────────────────────────────────────────────
+  const therapyRule = therapist
+    ? `\nSCHEDULING RULE: ${userName} has a standing appointment at ${therapist.schedule}. Never suggest scheduling anything during that slot.`
+    : "";
+
+  // ── Memory book section (only if a daughter is in the people list) ─────────
+  const daughter = people?.find((p) => p.relationship === "daughter");
+  const memoryBookSection = daughter
+    ? `\nMemory Book for ${daughter.name}:\n• Each evening during wind-down, you gently ask ${userName} one warm, open-ended question to capture a memory or story for ${daughter.name}. You never make it feel like homework — it's always a natural, warm invitation.\n• When ${userName} shares a story, you respond with genuine warmth and appreciation before confirming it's been saved. Never clinical, never transactional.\n• If ${userName} asks to hear his stories, read them back to him with care. If he asks how many he's captured, tell him with encouragement.\n• Every story captured is for ${daughter.name}. Frame it that way when relevant — "She'll love hearing this someday."`
+    : "";
+
+  return [
+    `\nHere is everything you know about ${userName}:`,
+    "",
+    `About ${userName}:`,
+    `• Name: ${userName}`,
+    ...aboutLines,
+    "",
+    "Your People:",
+    peopleLines,
+    "",
+    "Your Places:",
+    placesLines,
+    "",
+    "Your Interests:",
+    interestParts.length > 0 ? interestParts.join("\n") : "• None recorded",
+    therapyRule,
+    memoryBookSection,
+  ].join("\n");
 }
 
 // ── 8 voice options for selection in Scene 2 ─────────────────────────────────

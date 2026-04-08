@@ -7,7 +7,7 @@ import { getLastNightNotes, formatNotesForMorningBriefing } from "../winddown/wi
 import { getRecentMemories, formatMemoriesForContext } from "../memory/memoryManager.js";
 import { fetchMorningNews, fetchDailyMotivation } from "../news/newsManager.js";
 import { getProfileItems, getProfilePlaces, formatProfileForContext } from "../profile/profileManager.js";
-import { getProfile, buildSystemPromptFromProfile, type CollectedData } from "../onboarding/onboardingManager.js";
+import { getProfile, buildSystemPromptFromProfile, buildProfileContext, type CollectedData } from "../onboarding/onboardingManager.js";
 import { getWatchedShows } from "../tv/showManager.js";
 import { fetchEpisodesForDate, formatEpisodeForPrompt } from "../tv/tvmaze.js";
 import { fetchSportsScores, formatSportsForPrompt } from "../sports/sportsManager.js";
@@ -333,44 +333,7 @@ DATA SOURCE RULES:
 • Weather, stocks, calendar: only from their respective [VERIFIED] blocks.
 • NEVER fabricate facts. If David catches you making something up, trust is gone — and that matters more than sounding confident.
 
-Here is everything you know about David:
-
-About You:
-• David Blakelock
-• I live in Dallas, specifically in the Preston Hollow area known as "behind the pink wall" in a two bedroom condo that I rent
-• I typically wake up around 6:00, have coffee in bed while I listen to a local sports talk radio station. I typically play pickleball on Monday, Wednesday and Friday at Semones YMCA. I play pickleball on Saturday at Moody YMCA. On the days I don't play pickleball I will go for a run. I also try and go to the Y and work out 3-4 times a week
-• I am 70 years old, birthday is 10/21/1955, I am divorced. I take a statin for high cholesterol and Meloxicam for aches and pains.
-• My dog's name is Winston. He is a 4 year old corgi
-
-Your People:
-• My daughters name is Olivia. She goes to college at the University of Tennessee in Knoxville. When she is not at college she lives with her mom
-• My doctor is David Bonnet
-• Susan Smart is my girlfriend. She lives close to me and just bought her condo. She is always asking me to remind her of what she needs to do. Her dog's name is Lily. She is a toy poddle
-
-Your Places:
-• Home address 6345 Diamond Head Circle, Dallas Texas 75225
-• Doctor's name and address David Bonnet 403 W. Campbell Road Richardson Texas
-• Gym name and address Moody YMCA 6000 Preston Road Dallas Texas 75205, Semones YMCA 4332 Northaven Road Dallas Texas 75229
-• Favorite restaurants Louies, Chelsa Corner, The Mercury, Hillstone, Sensei, Rex's Seafood, The Lounge Here, Kellers Drive In
-
-Your Interests:
-• Shows you're watching right now – Shrinking, Friends & Neighbors, Lincoln Lawyer
-• Sports teams you follow – The Rangers, Cowboys
-• Music you like – classic rock from the 60's and 70's, classic Jazz
-• Hobbies — play pickleball at least 4 times a week, woodworking, tinkering on old cars, boats, running, cooking
-• News topics you actually care about – stock market, global politics, technology
-• Types of restaurants you love – sushi, steak, dive bars, pizza, Italian, Indian, seafood. Love all restaurants, but really like either a great dive bar with good food, or a classic dark place where the drinks are strong and the food is great
-
-Your Goals:
-• Capturing memories and stories for Olivia — this is one of the most meaningful things David uses this app for. Each story is saved and will eventually be compiled into a memory book for her.
-• Reminders you need daily
-• Shopping lists you maintain
-• Anything else Emma Peel should know
-
-Memory Book for Olivia:
-• Each evening during wind-down, you gently ask David one warm, open-ended question to capture a memory or story for Olivia. You never make it feel like homework — it's always a natural, warm invitation.
-• When David shares a story, you respond with genuine warmth and appreciation before confirming it's been saved. Never clinical, never transactional.
-• If David asks to hear his stories, read them back to him with care. If he asks how many he's captured, tell him with encouragement.`;
+`;
 
 function getCurrentDateTimeBlock(): string {
   const now = new Date();
@@ -518,7 +481,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     const primaryCity = userProfile?.city ?? "Dallas";
     const primaryLat = userProfile?.latitude ?? 32.7767;
     const primaryLon = userProfile?.longitude ?? -96.7970;
-    const homeAddress = ((userProfile?.rawData as CollectedData)?.homeAddress) ?? "";
+    const homeAddress = userProfile?.homeAddress ?? ((userProfile?.rawData as CollectedData)?.homeAddress) ?? "";
 
     // Geocode secondary cities from profile before the main Promise.all
     // Only include people in a different city than the user's home city
@@ -689,7 +652,12 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       return block;
     })();
 
-    const systemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + memoryBlock + dynamicProfileBlock +
+    const profileContextBlock = buildProfileContext(
+      userProfile ?? null,
+      (userProfile?.rawData ?? {}) as CollectedData
+    );
+
+    const systemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + profileContextBlock + memoryBlock + dynamicProfileBlock +
       notesBlock + weatherBlock + gmailBlock + calendarBlock + tvMorningBlock +
       sportsBlock + billsMorningBlock + marketsBlock + datesBlock + sundaySummaryBlock +
       pickleballMorningBlock + recFollowUpBlock + motivationContextBlock +
