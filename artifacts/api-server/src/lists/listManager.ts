@@ -229,17 +229,17 @@ export function buildListContext(result: ListResult): string {
     case "read": {
       if (result.currentItems.length === 0) {
         return (
-          `\n\n[${displayName} — EMPTY OR UNREADABLE]\n` +
-          `The list returned no items — this may mean the list is empty or there was a retrieval issue.\n` +
-          `Tell David exactly: "I had trouble reading your list — try checking the list screen directly." ` +
-          `Do NOT say the list is empty. Do NOT invent any items.`
+          `\n\n[${displayName} — AUTHORITATIVE CURRENT STATE FROM SUPABASE]\n` +
+          `The list is empty — it has zero items. This is a confirmed fresh read from the database.\n` +
+          `Tell David his ${displayName} is empty. Do NOT mention any previous items from this conversation. Do NOT invent any items.`
         );
       }
       const content = result.currentItems.map((i, n) => `${n + 1}. ${i}`).join("\n");
       return (
-        `\n\n[${displayName} — current contents]\n` +
+        `\n\n[${displayName} — AUTHORITATIVE CURRENT STATE FROM SUPABASE]\n` +
+        `This is the complete and current list — disregard any items mentioned earlier in this conversation:\n` +
         `${content}\n` +
-        `Read this list back to David naturally and conversationally.`
+        `Read ONLY these items back to David. Do not add or infer any items not listed above.`
       );
     }
   }

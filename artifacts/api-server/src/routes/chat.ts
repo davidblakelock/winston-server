@@ -1949,22 +1949,37 @@ router.post("/chat", async (req, res) => {
     req.log.info({ location: navLocation.name, url: navigationUrl }, "Navigation triggered");
   }
 
+  // ── Scrub stale list data from conversation history ───────────────────────
+  // When a list request is in progress, strip any previous assistant messages
+  // that contain list content. This prevents Claude from reading old list items
+  // from history after the list has been cleared or modified in Supabase.
+  const LIST_DATA_PATTERN = /\b\d+\.\s+\S|(?:shopping|to[\s\-]?do|grocery|errand|task)\s+list[\s:,]|on\s+(?:your|the)\s+(?:shopping|to[\s\-]?do|grocery|errand|task)\s+list\b/i;
+
   // ── Scrub contact data from conversation history ──────────────────────────
   // When a contacts query is in progress, strip any previous assistant messages
   // that contain contact-looking data (phone numbers, emails, "found X in contacts").
   // This prevents Claude from reusing fabricated or stale contact data from prior turns.
   const CONTACT_DATA_PATTERN = /\bPhone\s*:\s*[\d\s()+-]+|Email\s*:\s*\S+@\S+|\b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b|found\s+\w[\w\s]+in your contacts|@\w+\.(com|net|org|io)\b/i;
 
-  const filteredHistory = isContactRequest
+  const filteredHistory = isListRequest
     ? history.filter((msg: { role: string; content: string }) => {
-        if (msg.role !== "assistant") return true; // Always keep user messages
-        const hasContactData = CONTACT_DATA_PATTERN.test(msg.content);
-        if (hasContactData) {
-          req.log.info("[CONTACTS] Stripped prior assistant message with contact-like data from history to prevent hallucination reuse");
+        if (msg.role !== "assistant") return true;
+        const hasListData = LIST_DATA_PATTERN.test(msg.content);
+        if (hasListData) {
+          req.log.info("[LISTS] Stripped prior assistant message with list data from history to prevent stale data reuse");
         }
-        return !hasContactData;
+        return !hasListData;
       })
-    : history;
+    : isContactRequest
+      ? history.filter((msg: { role: string; content: string }) => {
+          if (msg.role !== "assistant") return true;
+          const hasContactData = CONTACT_DATA_PATTERN.test(msg.content);
+          if (hasContactData) {
+            req.log.info("[CONTACTS] Stripped prior assistant message with contact-like data from history to prevent hallucination reuse");
+          }
+          return !hasContactData;
+        })
+      : history;
 
   const messages: Anthropic.MessageParam[] = [
     ...filteredHistory.map((msg: { role: string; content: string }) => ({
