@@ -862,7 +862,7 @@ router.post("/chat", async (req, res) => {
       req.log.warn({ err }, 'Background morning briefing pre-generation failed')
     );
     sendMorningSSE({ text: `Your morning briefing isn't ready yet — I'm pulling everything together right now. Give me about 2 minutes and say good morning again. I'll have it all waiting for you.` });
-    sendMorningSSE({ done: true });
+    sendMorningSSE({ done: true, isMorningBriefing: true });
     res.end();
     return; // Morning greeting fully handled — skip generic handler below
   }

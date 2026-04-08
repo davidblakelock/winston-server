@@ -73,14 +73,12 @@ interface Message {
 // Detect morning briefing messages when loading from DB (flag is not persisted).
 // Morning briefings always start with "Good morning" and contain temperature data.
 function withMorningFlag(msg: Message): Message {
-  if (
-    msg.role === "assistant" &&
-    !msg.isMorningBriefing &&
-    msg.content.length > 400 &&
-    msg.content.toLowerCase().startsWith("good morning") &&
-    msg.content.includes("°")
-  ) {
-    return { ...msg, isMorningBriefing: true };
+  if (msg.role === "assistant" && !msg.isMorningBriefing) {
+    const lower = msg.content.toLowerCase();
+    const isBriefing =
+      (lower.startsWith("good morning") && msg.content.includes("°") && msg.content.length > 400) ||
+      lower.startsWith("your morning briefing isn't ready yet");
+    if (isBriefing) return { ...msg, isMorningBriefing: true };
   }
   return msg;
 }
