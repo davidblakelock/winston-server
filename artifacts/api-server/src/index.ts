@@ -8,7 +8,6 @@ import { ensureMemoryTable } from "./memory/memoryManager";
 import { ensureProfileTable } from "./profile/profileManager";
 import { ensureOnboardingTable } from "./onboarding/onboardingManager";
 import { startMedicationScheduler } from "./medications/medicationScheduler";
-import { seedDefaultMedications } from "./medications/medicationManager";
 import { startMorningPushScheduler } from "./push/morningPushScheduler";
 import { startWeatherAlertScheduler } from "./push/weatherAlertScheduler";
 import { startBillScheduler } from "./bills/billScheduler";
@@ -135,12 +134,6 @@ app.listen(port, async (err) => {
     logger.info("Music preferences and favorite venues seeded to profile_items");
   } catch (e) {
     logger.warn({ e }, "Music preference seeding warning");
-  }
-
-  try {
-    await seedDefaultMedications();
-  } catch (e) {
-    logger.warn({ e }, "Medication seed warning");
   }
 
   // Add device_id column to push_subscriptions for multi-device notification routing.

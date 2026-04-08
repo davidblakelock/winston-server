@@ -96,20 +96,6 @@ export async function logMedicationsTaken(meds: Medication[], userName = "David"
   );
 }
 
-export async function seedDefaultMedications(): Promise<void> {
-  const defaults = [
-    { name: "statin", dosage: null, reminderTime: "08:00" },
-    { name: "Meloxicam", dosage: null, reminderTime: "08:00" },
-  ];
-  for (const med of defaults) {
-    await query(
-      `INSERT INTO medications (user_name, name, dosage, reminder_time)
-       VALUES ('David', $1, $2, $3)
-       ON CONFLICT (user_name, name) DO NOTHING`,
-      [med.name, med.dosage, med.reminderTime]
-    );
-  }
-}
 
 export function buildMedReminderText(meds: Medication[]): string {
   if (!meds.length) return "";
