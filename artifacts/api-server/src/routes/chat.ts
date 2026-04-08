@@ -78,6 +78,8 @@ import {
 import {
   getRecentMemories,
   formatMemoriesForContext,
+  searchTranscripts,
+  extractAndSaveConversationFacts,
 } from "../memory/memoryManager.js";
 import {
   fetchMorningNews,
@@ -411,6 +413,21 @@ const DATE_ADD_PATTERN = /\b(('s\s+birthday|birthday\s+is|my\s+anniversary\s+wit
 const DATE_LIST_PATTERN = /\b(what\s+birthdays?|any\s+(upcoming\s+)?(birthdays?|anniversaries?)|my\s+(upcoming\s+)?(birthdays?|anniversaries?|important\s+dates?)|show\s+(me\s+)?((my\s+)?(birthdays?|anniversaries?|important\s+dates?))|list\s+(my\s+)?(birthdays?|anniversaries?|important\s+dates?))\b/i;
 const DATE_REMOVE_PATTERN = /\b(remove\s+.{2,40}(birthday|anniversary)|forget\s+.{2,40}(birthday|anniversary)|delete\s+.{2,40}(birthday|anniversary))\b/i;
 
+// Layer 2 transcript search — "what did I say about X last week?"
+const TRANSCRIPT_SEARCH_PATTERN =
+  /\b(?:what did (?:I|we) (?:say|talk about|discuss|mention|tell you)(?: about| regarding| on)?|remind me (?:what|when|where|who) I (?:said|talked|mentioned|told you)(?: about)?|(?:do you remember|can you recall) what I (?:said|told you)(?: about)?)\b/i;
+
+function extractTranscriptSearchTerm(msg: string): string {
+  return msg
+    .replace(/\b(?:what did (?:I|we) (?:say|talk about|discuss|mention|tell you)(?: about| regarding| on)?|remind me (?:what|when|where|who) I (?:said|talked|mentioned|told you)(?: about)?|(?:do you remember|can you recall) what I (?:said|told you)(?: about)?)\b/gi, "")
+    .replace(/\b(?:last week|last month|last year|yesterday|recently|the other day|a while back|a few days ago|a few weeks ago)\b/gi, "")
+    .replace(/[?!.,]+$/, "")
+    .replace(/\s{2,}/g, " ")
+    .trim()
+    .slice(0, 100);
+}
+
+
 // Emergency protocol
 const EMERGENCY_PATTERN = /\b(ms\.?\s*peel\s+(i\s+(need|am|have|fell|can.t|cannot)|call\s+911|help\s+me)|call\s+911|i.ve\s+fallen|i\s+fell\s+(down|and)|i.m\s+not\s+(feeling|ok)|i\s+think\s+i.m\s+(having|going)|chest\s+pain|can.t\s+breathe|emergency|i\s+need\s+(help|an?\s+ambulance)|heart\s+attack|stroke|i.ve\s+been\s+(hurt|injured))\b/i;
 
@@ -693,7 +710,16 @@ router.post("/chat", async (req, res) => {
   }
 
   // ── Auto-greeting: derive time-appropriate message ────────────────────────
-  const { message: rawMessage, history = [], isAutoGreeting = false, deviceId = null } = req.body;
+  const { message: rawMessage, history: rawHistory = [], isAutoGreeting = false, deviceId = null } = req.body;
+
+  // ── Layer 1: Active context window ────────────────────────────────────────
+  // Claude only sees the last 20 messages. The full transcript is persisted in
+  // Supabase (chat_messages) and searchable on demand via "what did I say about X".
+  const ACTIVE_CONTEXT_LIMIT = 20;
+  const history: Array<{ role: string; content: string }> =
+    Array.isArray(rawHistory) && rawHistory.length > ACTIVE_CONTEXT_LIMIT
+      ? (rawHistory as Array<{ role: string; content: string }>).slice(-ACTIVE_CONTEXT_LIMIT)
+      : (rawHistory as Array<{ role: string; content: string }>);
 
   let message: string;
   if (isAutoGreeting) {
@@ -1949,6 +1975,36 @@ router.post("/chat", async (req, res) => {
     req.log.info({ location: navLocation.name, url: navigationUrl }, "Navigation triggered");
   }
 
+  // ── Layer 2: Transcript search — "what did I say about X last week?" ────────
+  // Only triggered by explicit recall queries — never auto-loaded.
+  if (TRANSCRIPT_SEARCH_PATTERN.test(message)) {
+    const searchTerm = extractTranscriptSearchTerm(message);
+    if (searchTerm.length >= 3) {
+      try {
+        const hits = await searchTranscripts(sessionUserName, searchTerm, 90);
+        if (hits.length > 0) {
+          const hitText = hits
+            .map((h) => `[${h.date}] ${h.role === "user" ? "David" : "Emma"}: ${h.excerpt}`)
+            .join("\n\n");
+          systemPrompt +=
+            `\n\n[Transcript Search — David asked about: "${searchTerm}"]\n` +
+            `These are matching excerpts from past conversations (up to 90 days back):\n\n${hitText}\n\n` +
+            `Surface these excerpts naturally and directly. Quote from them when David asks what he said. ` +
+            `Do not fabricate anything not shown above.`;
+          req.log.info({ searchTerm, hits: hits.length }, "[TRANSCRIPT] Search results injected");
+        } else {
+          systemPrompt +=
+            `\n\n[Transcript Search — "${searchTerm}"]\n` +
+            `No matching conversations found in the last 90 days for this topic. ` +
+            `Tell David honestly you don't have a record of that specific conversation.`;
+          req.log.info({ searchTerm }, "[TRANSCRIPT] No results found");
+        }
+      } catch (err) {
+        req.log.warn({ err }, "[TRANSCRIPT] Search failed");
+      }
+    }
+  }
+
   // ── Scrub stale data from conversation history ────────────────────────────
   // For any request that reads live DB data, strip prior assistant messages
   // that contain that same data type. This prevents Claude from reading stale
@@ -2076,6 +2132,11 @@ router.post("/chat", async (req, res) => {
         }
       })
       .catch(() => {});
+
+    // ── Post-response: extract and save key conversation facts ─────────────
+    // Fire-and-forget. Only runs when message contains personal statements.
+    // Saves durable facts (preferences, places, people) to profile_items.
+    extractAndSaveConversationFacts(message, reply, sessionUserName).catch(() => {});
 
     // ── Post-response: mark recommendation as followed up ─────────────────
     if (detectFollowUpAcknowledgment(message)) {

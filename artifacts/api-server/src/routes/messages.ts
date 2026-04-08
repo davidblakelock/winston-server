@@ -13,6 +13,53 @@ async function getUserName(req: Request): Promise<string | null> {
   return session?.userName ?? null;
 }
 
+// ── GET /api/messages/search — full-text search across archived transcripts ───
+// Used when the user asks "what did I say about X last week / last month".
+// Returns matching excerpts from the last `days` days (default 90).
+// This is the ONLY way archived conversations reach Claude — never auto-loaded.
+router.get("/messages/search", async (req: Request, res: Response) => {
+  try {
+    const userName = await getUserName(req);
+    if (!userName) { res.status(401).json({ error: "unauthorized" }); return; }
+
+    const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+    const days = Math.min(Number(req.query.days) || 90, 365);
+
+    if (!q || q.length < 2) {
+      res.status(400).json({ error: "q param required (min 2 chars)" });
+      return;
+    }
+
+    const { rows } = await query<{
+      role: string;
+      content: string;
+      created_at: Date;
+    }>(
+      `SELECT role, content, created_at
+       FROM chat_messages
+       WHERE user_name = $1
+         AND created_at >= NOW() - ($2 || ' days')::interval
+         AND content ILIKE '%' || $3 || '%'
+       ORDER BY created_at DESC
+       LIMIT 10`,
+      [userName, days.toString(), q]
+    );
+
+    const hits = rows.map((r) => ({
+      role: r.role,
+      excerpt: r.content.slice(0, 400),
+      date: r.created_at.toLocaleDateString("en-US", {
+        month: "short", day: "numeric", year: "numeric", timeZone: "America/Chicago",
+      }),
+    }));
+
+    res.json({ hits, query: q, days });
+  } catch (err) {
+    req.log.error({ err }, "Transcript search error");
+    res.status(500).json({ error: "server_error" });
+  }
+});
+
 // ── GET /api/messages — load recent messages ─────────────────────────────────
 router.get("/messages", async (req: Request, res: Response) => {
   try {
@@ -87,9 +134,11 @@ router.post("/messages", async (req: Request, res: Response) => {
       });
     }
 
-    // Auto-prune messages older than 14 days to keep DB tidy
+    // Archive: keep 365 days of messages. chat_messages is the full transcript store —
+    // Layer 2 of conversation memory. Claude never auto-loads old messages; they are
+    // only surfaced on demand via GET /api/messages/search.
     await query(
-      "DELETE FROM chat_messages WHERE user_name = $1 AND created_at < NOW() - INTERVAL '14 days'",
+      "DELETE FROM chat_messages WHERE user_name = $1 AND created_at < NOW() - INTERVAL '365 days'",
       [userName]
     ).catch(() => {});
 

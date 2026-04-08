@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
+import { addProfileItem } from "../profile/profileManager.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -189,4 +190,122 @@ export function formatMemoriesForContext(memories: ConversationMemory[]): string
   }
 
   return result;
+}
+
+// ── Layer 2: Transcript search ────────────────────────────────────────────────
+// Searches chat_messages for past conversations matching a keyword.
+// Returns matching excerpts — never auto-loaded into Claude's context.
+// Only surfaced when David explicitly asks "what did I say about X".
+
+export interface TranscriptHit {
+  date: string;
+  role: string;
+  excerpt: string;
+}
+
+export async function searchTranscripts(
+  userName: string,
+  searchQuery: string,
+  days = 90
+): Promise<TranscriptHit[]> {
+  if (!searchQuery || searchQuery.length < 2) return [];
+
+  try {
+    const { rows } = await query<{
+      role: string;
+      content: string;
+      created_at: Date;
+    }>(
+      `SELECT role, content, created_at
+       FROM chat_messages
+       WHERE user_name = $1
+         AND created_at >= NOW() - ($2 || ' days')::interval
+         AND content ILIKE '%' || $3 || '%'
+       ORDER BY created_at DESC
+       LIMIT 8`,
+      [userName, days.toString(), searchQuery]
+    );
+
+    return rows.map((r) => ({
+      date: r.created_at.toLocaleDateString("en-US", {
+        month: "short", day: "numeric", year: "numeric", timeZone: "America/Chicago",
+      }),
+      role: r.role,
+      excerpt: r.content.slice(0, 350) + (r.content.length > 350 ? "…" : ""),
+    }));
+  } catch (err) {
+    logger.warn({ err }, "Transcript search failed");
+    return [];
+  }
+}
+
+// ── Key fact auto-save ─────────────────────────────────────────────────────────
+// Pattern to detect personal statements that may contain saveable facts.
+// Only runs when this pattern matches the user's message (cost guard).
+const PERSONAL_FACT_PATTERN =
+  /\bI (?:prefer|like|love|hate|enjoy|dislike|tend to|always|usually|never|went to|visited|tried|am (?:thinking about|planning)|want to|just (?:had|tried|went|visited))\b|\bmy favorite\b|\bI(?:'m| am) (?:into|a fan of|not a fan of|trying|learning|reading|watching)\b/i;
+
+// Extracts durable personal facts from a user message and saves them to profile_items.
+// Fire-and-forget — non-blocking, non-fatal.
+export async function extractAndSaveConversationFacts(
+  userMessage: string,
+  _assistantResponse: string,
+  userName: string
+): Promise<void> {
+  if (!PERSONAL_FACT_PATTERN.test(userMessage)) return;
+
+  try {
+    const response = await anthropic.messages.create({
+      model: "claude-opus-4-5",
+      max_tokens: 300,
+      system: `You extract durable personal facts from a user's message that are worth saving to their profile.
+
+Return a JSON array. Each element has:
+- "category": "places" | "shows" | "restaurants" | "people" | "interests" | "other"
+- "name": short label (3-6 words, e.g. "Morning exercise preference")
+- "detail": the specific value (e.g. "Prefers morning workouts")
+
+Only extract DURABLE facts (lasting preferences, habits, people, places, shows being watched).
+Do NOT extract:
+- Temporary states ("I'm tired today", "I'm busy this week")
+- One-off events ("I had pizza last night")
+- Tasks or reminders
+- Weather preferences already obvious from context
+
+If nothing is worth saving, return exactly: []`,
+      messages: [{ role: "user", content: `User message: "${userMessage.slice(0, 500)}"` }],
+    });
+
+    const text = response.content[0].type === "text" ? response.content[0].text.trim() : "[]";
+    const jsonMatch = text.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) return;
+
+    const facts = JSON.parse(jsonMatch[0]) as Array<{
+      category: string;
+      name: string;
+      detail: string;
+    }>;
+
+    if (!Array.isArray(facts) || facts.length === 0) return;
+
+    const validCategories = ["places", "shows", "restaurants", "people", "interests", "other"];
+    let saved = 0;
+
+    for (const fact of facts.slice(0, 5)) {
+      if (!validCategories.includes(fact.category) || !fact.name?.trim()) continue;
+      await addProfileItem(
+        fact.category as "places" | "shows" | "restaurants" | "people" | "interests" | "other",
+        fact.name,
+        fact.detail ?? null,
+        userName
+      );
+      saved++;
+    }
+
+    if (saved > 0) {
+      logger.info({ saved, userName }, "Conversation facts extracted and saved to profile_items");
+    }
+  } catch (err) {
+    logger.warn({ err }, "Conversation fact extraction failed (non-fatal)");
+  }
 }
