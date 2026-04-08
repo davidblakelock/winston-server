@@ -2,7 +2,7 @@ import cron from "node-cron";
 import { broadcast } from "../reminders/sseStore.js";
 import { sendPushToAll } from "../push/pushManager.js";
 import { logger } from "../lib/logger.js";
-import { getProfile } from "../onboarding/onboardingManager.js";
+import { getProfile, type CollectedData } from "../onboarding/onboardingManager.js";
 import { fetchTodayEvents, type CalendarEvent } from "../google/calendar.js";
 import { estimateDriveTime, extractEventLocation } from "./departureManager.js";
 import { query } from "../db.js";
@@ -75,7 +75,12 @@ async function getLeaveByTime(
   });
   if (!location) return null;
 
-  const drive = await estimateDriveTime(location).catch(() => null);
+  const profile = await getProfile("David").catch(() => null);
+  const homeAddress = ((profile?.rawData as CollectedData)?.homeAddress) ?? "";
+  const homeLat = profile?.latitude ?? 0;
+  const homeLon = profile?.longitude ?? 0;
+
+  const drive = await estimateDriveTime(location, homeAddress, homeLat, homeLon).catch(() => null);
   if (!drive) return null;
 
   const eventStart = new Date(event.startIso);

@@ -2,7 +2,7 @@ import cron from "node-cron";
 import { broadcast } from "../reminders/sseStore.js";
 import { sendPushToAll } from "../push/pushManager.js";
 import { logger } from "../lib/logger.js";
-import { getProfile } from "../onboarding/onboardingManager.js";
+import { getProfile, type CollectedData } from "../onboarding/onboardingManager.js";
 import {
   estimateDriveTime,
   shouldFireAlert,
@@ -70,6 +70,11 @@ function clearIfNewDay() {
 async function checkDepartureAlerts(): Promise<void> {
   clearIfNewDay();
 
+  const profile = await getProfile("David").catch(() => null);
+  const homeAddress = ((profile?.rawData as CollectedData)?.homeAddress) ?? "";
+  const homeLat = profile?.latitude ?? 0;
+  const homeLon = profile?.longitude ?? 0;
+
   let events: Awaited<ReturnType<typeof fetchTodayEvents>>;
   try {
     events = await fetchTodayEvents();
@@ -104,7 +109,7 @@ async function checkDepartureAlerts(): Promise<void> {
     const alreadySent = await hasAlertBeenSent(event.summary, today);
     if (alreadySent) continue;
 
-    const drive = await estimateDriveTime(location);
+    const drive = await estimateDriveTime(location, homeAddress, homeLat, homeLon);
     if (!drive) continue;
 
     const fire = shouldFireAlert(start, drive.durationMinutes, now);

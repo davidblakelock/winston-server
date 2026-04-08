@@ -424,11 +424,6 @@ interface SavedLocation {
 
 const SAVED_LOCATIONS: SavedLocation[] = [
   {
-    name: "home",
-    address: "6345 Diamond Head Circle Dallas Texas 75225",
-    keywords: ["home", "my place", "my condo", "my house"],
-  },
-  {
     name: "Doctor Bonnet",
     address: "403 West Campbell Road Richardson Texas",
     keywords: ["doctor", "doc", "doctor bonnet", "bonnet", "physician", "my doctor", "the doctor"],
@@ -625,7 +620,7 @@ Your People:
 • Susan Smart is my girlfriend. She lives close to me and just bought her condo. She is always asking me to remind her of what she needs to do. Her dog's name is Lily. She is a toy poddle
 
 Your Places:
-• Home address 6345 Diamond Head Circle, Dallas Texas 75225
+• Home address in the Preston Hollow area, Dallas Texas
 • Doctor's name and address David Bonnet 403 W. Campbell Road Richardson Texas
 • Gym name and address Moody YMCA 6000 Preston Road Dallas Texas 75205, Semones YMCA 4332 Northaven Road Dallas Texas 75229
 • Favorite restaurants Louies, Chelsa Corner, The Mercury, Hillstone, Sensei, Rex's Seafood, The Lounge Here, Kellers Drive In
@@ -981,7 +976,9 @@ router.post("/chat", async (req, res) => {
 
   // ── Emergency protocol ──────────────────────────────────────────────────────
   if (isEmergency) {
-    systemPrompt += `\n\n[EMERGENCY PROTOCOL ACTIVATED]\nDavid may be in distress or danger. Respond immediately with calm, clear, reassuring emergency guidance. Tell him to call 911. Give his home address: 6345 Diamond Head Circle, Dallas, Texas 75225. Ask if he needs you to stay on the line. Use short sentences. Be calm and clear. Do NOT be wordy — emergency responders need clarity. Start your response with "David, I'm here."`;
+    const homeAddressForEmergency =
+      ((userProfile?.rawData as CollectedData)?.homeAddress) ?? "unknown";
+    systemPrompt += `\n\n[EMERGENCY PROTOCOL ACTIVATED]\nDavid may be in distress or danger. Respond immediately with calm, clear, reassuring emergency guidance. Tell him to call 911. Give his home address: ${homeAddressForEmergency}. Ask if he needs you to stay on the line. Use short sentences. Be calm and clear. Do NOT be wordy — emergency responders need clarity. Start your response with "David, I'm here."`;
   }
 
   // ── Important dates ──────────────────────────────────────────────────────────
@@ -1945,7 +1942,18 @@ router.post("/chat", async (req, res) => {
   }
 
   let navigationUrl: string | undefined;
-  const navLocation = detectNavigation(message, profilePlaces);
+  const profileHomeAddress =
+    ((userProfile?.rawData as CollectedData)?.homeAddress) ?? "";
+  const placesWithHome: Array<{ name: string; address: string }> = profileHomeAddress
+    ? [
+        { name: "home", address: profileHomeAddress },
+        { name: "my place", address: profileHomeAddress },
+        { name: "my condo", address: profileHomeAddress },
+        { name: "my house", address: profileHomeAddress },
+        ...profilePlaces,
+      ]
+    : profilePlaces;
+  const navLocation = detectNavigation(message, placesWithHome);
   if (navLocation) {
     navigationUrl = buildMapsUrl(navLocation.address);
     const displayName =

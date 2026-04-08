@@ -4,6 +4,7 @@ import {
   getProfile,
   updateProfileField,
   VOICE_OPTIONS,
+  type CollectedData,
 } from "../onboarding/onboardingManager.js";
 import { validateSession } from "../auth/sessionAuth.js";
 import { getProfilePlaces } from "../profile/profileManager.js";
@@ -176,11 +177,6 @@ router.delete("/profile/avatar", async (req, res) => {
 // (so window.open() is never blocked by popup blockers).
 const HARDCODED_PLACES = [
   {
-    name: "home",
-    address: "6345 Diamond Head Circle Dallas Texas 75225",
-    keywords: ["home", "my place", "my condo", "my house"],
-  },
-  {
     name: "Doctor Bonnet",
     address: "403 West Campbell Road Richardson Texas",
     keywords: ["doctor", "doc", "doctor bonnet", "bonnet", "physician", "my doctor", "the doctor"],
@@ -201,11 +197,24 @@ router.get("/navigation/places", async (req, res) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
   try {
-    const profilePlaces = await getProfilePlaces();
+    const [profilePlaces, userProfile] = await Promise.all([
+      getProfilePlaces(),
+      getProfile(userName).catch(() => null),
+    ]);
+    const homeAddress = ((userProfile?.rawData as CollectedData)?.homeAddress) ?? "";
+    const homePlaces = homeAddress
+      ? [
+          {
+            name: "home",
+            address: homeAddress,
+            keywords: ["home", "my place", "my condo", "my house"],
+          },
+        ]
+      : [];
     const extra = profilePlaces
       .filter((p) => !HARDCODED_PLACES.some((h) => h.name.toLowerCase() === p.name.toLowerCase()))
       .map((p) => ({ name: p.name, address: p.address, keywords: [p.name.toLowerCase()] }));
-    res.json({ places: [...HARDCODED_PLACES, ...extra] });
+    res.json({ places: [...homePlaces, ...HARDCODED_PLACES, ...extra] });
   } catch {
     res.json({ places: HARDCODED_PLACES });
   }

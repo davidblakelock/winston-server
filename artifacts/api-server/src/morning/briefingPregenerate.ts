@@ -30,7 +30,7 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 // ── Departure times for calendar events ───────────────────────────────────────
 // Calculates leave-by time for each event that has a location.
 // Runs all geocode/routing calls in parallel with a 10 s per-event timeout.
-async function buildCalendarDepartureTimes(events: CalendarEvent[]): Promise<string> {
+async function buildCalendarDepartureTimes(events: CalendarEvent[], homeAddress: string, homeLat: number, homeLon: number): Promise<string> {
   if (!events || events.length === 0) return "";
 
   const now = new Date();
@@ -55,7 +55,7 @@ async function buildCalendarDepartureTimes(events: CalendarEvent[]): Promise<str
 
       try {
         const drive = await Promise.race([
-          estimateDriveTime(location),
+          estimateDriveTime(location, homeAddress, homeLat, homeLon),
           new Promise<null>((resolve) => setTimeout(() => resolve(null), 10_000)),
         ]);
         if (!drive) return;
@@ -83,7 +83,7 @@ async function buildCalendarDepartureTimes(events: CalendarEvent[]): Promise<str
   return (
     `\n\n[Departure Times — when David needs to leave home for today's events]\n` +
     items.join("\n") +
-    `\n(These are calculated from home at 6345 Diamond Head Circle, Dallas TX)`
+    `\n(These are calculated from home at ${homeAddress || "home"})`
   );
 }
 
@@ -193,10 +193,10 @@ async function geocodeCity(city: string): Promise<{ lat: number; lon: number } |
   }
 }
 
-async function fetchDallasPollenData(): Promise<PollenResult | null> {
+async function fetchDallasPollenData(lat: number, lon: number): Promise<PollenResult | null> {
   try {
     const resp = await fetch(
-      "https://air-quality-api.open-meteo.com/v1/air-quality?latitude=32.7767&longitude=-96.7970&hourly=grass_pollen,ragweed_pollen,alder_pollen&timezone=America%2FChicago&forecast_days=1",
+      `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lon}&hourly=grass_pollen,ragweed_pollen,alder_pollen&timezone=America%2FChicago&forecast_days=1`,
       { signal: AbortSignal.timeout(8000) }
     );
     if (!resp.ok) return null;
@@ -536,6 +536,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     const primaryCity = userProfile?.city ?? "Dallas";
     const primaryLat = userProfile?.latitude ?? 32.7767;
     const primaryLon = userProfile?.longitude ?? -96.7970;
+    const homeAddress = ((userProfile?.rawData as CollectedData)?.homeAddress) ?? "";
 
     const [dallas, emails, events, lastNightNotes, newsBlock, yesterdayEps, todayEps, morningMeds, medsAlreadyTaken, sportsScores, upcomingBills, marketsData, upcomingDates, sundayData, pendingFollowUps, dallasEvents, journalCountWeek, recentJournals, totalStories, pollenData, venueConcertsBlock, dailyMotivation] = await Promise.all([
       fetchCityWeather(primaryCity, primaryLat, primaryLon).catch(() => null),
@@ -557,7 +558,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       getJournalCountThisWeek().catch(() => 0),
       getRecentJournalEntries(3).catch(() => []),
       getStoryCount().catch(() => 0),
-      fetchDallasPollenData().catch(() => null),
+      fetchDallasPollenData(primaryLat, primaryLon).catch(() => null),
       runVenueScan().catch(() => ""),
       fetchDailyMotivation().catch(() => ""),
     ]);
@@ -602,7 +603,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     // Build calendar block with departure times, and pre-populate sync state so
     // events in the briefing are never flagged as "new" by the 30-min sync scheduler.
     const [calendarDepartureTimes] = await Promise.all([
-      events !== null ? buildCalendarDepartureTimes(events) : Promise.resolve(""),
+      events !== null ? buildCalendarDepartureTimes(events, homeAddress, primaryLat, primaryLon) : Promise.resolve(""),
       events !== null ? populateCalendarSyncState(events).catch(() => {}) : Promise.resolve(),
     ]);
 

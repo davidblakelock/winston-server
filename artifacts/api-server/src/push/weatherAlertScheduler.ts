@@ -1,9 +1,14 @@
 import cron from "node-cron";
 import { sendPushToAll } from "./pushManager.js";
 import { logger } from "../lib/logger.js";
+import { getProfile } from "../onboarding/onboardingManager.js";
 
-const NWS_ALERTS_URL =
-  "https://api.weather.gov/alerts/active?point=32.7767,-96.7970&status=actual&message_type=alert";
+const DEFAULT_LAT = 32.7767;
+const DEFAULT_LON = -96.797;
+
+function buildNwsAlertsUrl(lat: number, lon: number): string {
+  return `https://api.weather.gov/alerts/active?point=${lat},${lon}&status=actual&message_type=alert`;
+}
 
 const SEVERE_EVENTS = [
   "Tornado Warning",
@@ -37,7 +42,11 @@ export function startWeatherAlertScheduler(): void {
   // Check every 15 minutes
   cron.schedule("*/15 * * * *", async () => {
     try {
-      const response = await fetch(NWS_ALERTS_URL, {
+      const profile = await getProfile("David").catch(() => null);
+      const lat = profile?.latitude ?? DEFAULT_LAT;
+      const lon = profile?.longitude ?? DEFAULT_LON;
+      const nwsUrl = buildNwsAlertsUrl(lat, lon);
+      const response = await fetch(nwsUrl, {
         headers: { "User-Agent": "Winston-AI-Companion/1.0 (emma@winston.app)" },
         signal: AbortSignal.timeout(8000),
       });
