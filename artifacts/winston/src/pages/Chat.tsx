@@ -70,6 +70,21 @@ interface Message {
   isMorningBriefing?: boolean;
 }
 
+// Detect morning briefing messages when loading from DB (flag is not persisted).
+// Morning briefings always start with "Good morning" and contain temperature data.
+function withMorningFlag(msg: Message): Message {
+  if (
+    msg.role === "assistant" &&
+    !msg.isMorningBriefing &&
+    msg.content.length > 400 &&
+    msg.content.toLowerCase().startsWith("good morning") &&
+    msg.content.includes("°")
+  ) {
+    return { ...msg, isMorningBriefing: true };
+  }
+  return msg;
+}
+
 interface ReminderEvent {
   id: number;
   userName: string;
@@ -827,8 +842,9 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         setMessagesLoaded(true);
 
         if (existing.length > 0) {
-          // Restore previous conversation — no greeting needed
-          setMessages(existing);
+          // Restore previous conversation — no greeting needed.
+          // Re-apply morning briefing flag since it is not persisted in the DB.
+          setMessages(existing.map(withMorningFlag));
           return;
         }
 
@@ -1540,7 +1556,8 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
             const localOnly = prev.filter(
               (m) => !serverIds.has(`${m.role}:${m.content}`) && m.id.startsWith("local-")
             );
-            return [...serverMessages, ...localOnly];
+            // Re-apply morning briefing flag — not persisted in the DB
+            return [...serverMessages.map(withMorningFlag), ...localOnly];
           });
 
           // Also drain any SSE queued messages that arrived during backgrounding

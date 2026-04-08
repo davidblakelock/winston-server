@@ -15,6 +15,14 @@ const TOMORROW_CONDITIONS: Record<number, string> = {
   8000: "thunderstorms",
 };
 
+interface ForecastDay {
+  dayName: string;
+  high: number;
+  low: number;
+  precipChance: number;
+  condition: string;
+}
+
 interface WeatherCardEntry {
   city: string;
   temp: number;
@@ -25,6 +33,7 @@ interface WeatherCardEntry {
   uvIndexMax: number;
   precipChance: number;
   windSpeed: number;
+  forecastDays: ForecastDay[];
 }
 
 interface PollenCardData {
@@ -89,11 +98,13 @@ async function fetchWeather(city: string, lat: number, lon: number): Promise<Wea
       forecastResp.json() as Promise<{
         timelines: {
           daily: Array<{
+            time: string;
             values: {
               temperatureMax: number;
               temperatureMin: number;
               precipitationProbabilityMax: number;
               uvIndexMax: number;
+              weatherCodeDay?: number;
             };
           }>;
         };
@@ -101,6 +112,21 @@ async function fetchWeather(city: string, lat: number, lon: number): Promise<Wea
     ]);
     const current = realtime.data.values;
     const today = forecast.timelines.daily[0]?.values;
+
+    // Build 5-day forecast (days 1–5, skipping today)
+    const forecastDays: ForecastDay[] = forecast.timelines.daily.slice(1, 6).map((day) => {
+      const date = new Date(day.time);
+      const dayName = date.toLocaleDateString("en-US", { timeZone: "America/Chicago", weekday: "short" });
+      const condition = TOMORROW_CONDITIONS[day.values.weatherCodeDay ?? 0] ?? "";
+      return {
+        dayName,
+        high: Math.round(day.values.temperatureMax),
+        low: Math.round(day.values.temperatureMin),
+        precipChance: Math.round(day.values.precipitationProbabilityMax),
+        condition,
+      };
+    });
+
     return {
       city,
       temp: Math.round(current.temperature),
@@ -111,6 +137,7 @@ async function fetchWeather(city: string, lat: number, lon: number): Promise<Wea
       uvIndexMax: Math.round(today?.uvIndexMax ?? current.uvIndex),
       precipChance: Math.round(today?.precipitationProbabilityMax ?? current.precipitationProbability),
       windSpeed: Math.round(current.windSpeed),
+      forecastDays,
     };
   } catch {
     return null;

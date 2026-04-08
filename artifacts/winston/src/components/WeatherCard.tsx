@@ -8,6 +8,14 @@ interface PollenData {
   aqi: number | null;
 }
 
+interface ForecastDay {
+  dayName: string;
+  high: number;
+  low: number;
+  precipChance: number;
+  condition: string;
+}
+
 interface PrimaryWeather {
   city: string;
   temp: number;
@@ -19,6 +27,7 @@ interface PrimaryWeather {
   precipChance: number;
   windSpeed: number;
   pollen: PollenData | null;
+  forecastDays: ForecastDay[];
 }
 
 interface SecondaryWeather {
@@ -197,6 +206,23 @@ export function WeatherCard() {
             </div>
           )}
         </div>
+
+        {/* 5-day forecast */}
+        {primary.forecastDays && primary.forecastDays.length > 0 && (
+          <div className="mt-3 pt-3 border-t border-white/5 flex justify-between gap-1">
+            {primary.forecastDays.slice(0, 5).map((day) => (
+              <div key={day.dayName} className="flex flex-col items-center gap-0.5 flex-1">
+                <span className="text-[10px] font-semibold tracking-wide text-white/40 uppercase">{day.dayName}</span>
+                <span className="text-sm leading-none">{conditionEmoji(day.condition)}</span>
+                <span className="text-[11px] font-medium text-red-400/80">{day.high}°</span>
+                <span className="text-[11px] text-sky-400/70">{day.low}°</span>
+                {day.precipChance >= 35 && (
+                  <span className="text-[9px] text-sky-300/60">{day.precipChance}%</span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Secondary city cards (compact) */}
