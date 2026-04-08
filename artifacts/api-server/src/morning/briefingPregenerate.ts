@@ -68,7 +68,10 @@ async function buildCalendarDepartureTimes(events: CalendarEvent[]): Promise<str
           minute: "2-digit",
           hour12: true,
         });
-        const sourceNote = drive.source === "osrm" ? "based on route" : "estimated";
+        const sourceNote =
+          drive.source === "google-maps" ? "based on current traffic" :
+          drive.source === "osrm"        ? "based on route"           :
+                                           "estimated";
         items.push(
           `  • ${event.summary} at ${event.start}: leave home by ${leaveStr} (~${Math.round(drive.durationMinutes)} min drive, ${sourceNote})`
         );
