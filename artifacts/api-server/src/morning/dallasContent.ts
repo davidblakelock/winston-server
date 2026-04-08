@@ -379,9 +379,13 @@ async function saveToDb(items: LocalContentItem[]): Promise<void> {
 // ── Briefing formatter ────────────────────────────────────────────────────────
 
 function formatForBriefing(items: LocalContentItem[]): string {
-  const top = items
+  // Prefer high/medium — fall back to low-priority items rather than returning empty
+  let top = items
     .filter((i) => i.priority === "high" || i.priority === "medium")
     .slice(0, 3);
+  if (top.length === 0) {
+    top = items.filter((i) => i.priority === "low").slice(0, 2);
+  }
   if (top.length === 0) return "";
 
   const lines = top.map(

@@ -443,7 +443,7 @@ const MASTER_BRIEFING_INSTRUCTION = `
 
   SECTION 10 — SPORTS: Rangers and Cowboys results from the last 24 hours only. If no games were played, SKIP THIS SECTION ENTIRELY — do not say no games were played.
 
-  SECTION 11 — LOCAL DALLAS: One or two items from CultureMap, Dallas Observer, or D Magazine from the last 72 hours. Prioritize: new restaurant openings, music events at David's saved venues, outdoor events. One to two sentences total. Skip if nothing fresh.
+  SECTION 11 — LOCAL DALLAS: MANDATORY when the [What's Happening in Dallas] block is present — deliver 1-2 items conversationally, one sentence each. Prioritize restaurant openings, music events at David's venues, and neighborhood news. If the block is absent, skip this section — Dallas is already covered by Section 8's local headline.
 
   SECTION 12 — MUSIC EVENTS: Upcoming concerts at David's saved venues that match his taste — Kessler, Granada, Dos Equis Pavilion, AT&T Performing Arts Center, Klyde Warren Park, Dallas Arboretum, Meyerson. Use the venue concerts block. If nothing upcoming or nothing found, skip this section entirely.
 

@@ -155,7 +155,7 @@ CATEGORY 5 — SCIENCE OR HEALTH: A discovery, medical breakthrough, space news,
 
 CATEGORY 6 — SPORTS: Texas Rangers or Dallas Cowboys — game result, roster news, or standings. If both teams are in off-season with nothing newsworthy, use any major US sports headline instead.
 
-CATEGORY 7 — DALLAS / TEXAS LOCAL (MANDATORY — never skip): A story specifically about Dallas, DFW, or Texas — local government, business, crime, infrastructure, culture, or community. This must be a local story, not a national story that mentions Texas.
+CATEGORY 7 — DALLAS / TEXAS LOCAL (MANDATORY — never skip, never omit): A story specifically about Dallas, DFW, or the Dallas-Fort Worth Metroplex — local government, business, development, crime, infrastructure, culture, events, or community. This must be a genuinely local Dallas or DFW story. A national story that happens to involve a Texas politician does NOT count. If your initial search doesn't surface a Dallas story, search explicitly: "Dallas news today", "DFW local news today", "Dallas Fort Worth news today", or "Dallas Texas breaking news". Always find one.
 
 CATEGORY 8 — WILDCARD: The most interesting or surprising story that does not fit any of the above categories. Could be entertainment, environment, human interest, international business, or anything genuinely noteworthy.
 
