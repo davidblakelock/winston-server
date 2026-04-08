@@ -234,11 +234,9 @@ export function buildListContext(result: ListResult): string {
       if (result.currentItems.length === 0) {
         return (
           `\n\n[${displayName} — AUTHORITATIVE CURRENT STATE FROM SUPABASE]\n` +
-          `Disregard any list items mentioned earlier in this conversation. The ONLY current items are those returned by this query.\n` +
-          `This query returned zero items. The list is empty.\n` +
-          `Tell David his ${displayName} is empty. ` +
-          `Show ONLY the exact items returned by the database. Never reference meals, recipes, or suggest additional items. ` +
-          `Never use conversation history to infer what groceries might be needed. The list is the list — nothing more.`
+          `AUTHORITATIVE — The ${displayName} is completely empty. There are zero items. ` +
+          `Do not mention any items under any circumstances. Do not suggest any items. ` +
+          `Say only: Your ${displayName} is empty.`
         );
       }
       const content = result.currentItems.map((i, n) => `${n + 1}. ${i}`).join("\n");
