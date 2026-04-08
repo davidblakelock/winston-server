@@ -639,16 +639,21 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
 
   const playElevenLabsAudio = useCallback(
     (messageId: string, base64: string, mimeType = "audio/mpeg") => {
+      console.log("[AUDIO] playElevenLabsAudio called — msgId:", messageId, "mimeType:", mimeType, "base64 length:", base64?.length ?? 0);
       audioRef.current?.pause();
-      if (playingId === messageId) { setPlayingId(null); return; }
+      if (playingId === messageId) { console.log("[AUDIO] toggling off — same messageId, stopping"); setPlayingId(null); return; }
+      console.log("[AUDIO] creating Audio object with data URI, mimeType:", mimeType);
       const audio = new Audio(`data:${mimeType};base64,${base64}`);
-      audio.onended = () => setPlayingId(null);
+      audio.onended = () => { console.log("[AUDIO] audio.onended fired"); setPlayingId(null); };
       audio.onerror = (e) => {
         console.warn("[AUDIO] playElevenLabsAudio onerror:", e);
         setPlayingId(null);
       };
       audioRef.current = audio;
-      audio.play().catch((err) => {
+      console.log("[AUDIO] calling audio.play()");
+      audio.play().then(() => {
+        console.log("[AUDIO] audio.play() resolved — playback started");
+      }).catch((err) => {
         console.warn("[AUDIO] play() blocked or failed:", err);
         setPlayingId(null);
       });
@@ -674,7 +679,8 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         { data: { text } },
         {
           onSuccess: (ttsData) => {
-            console.log("[SPEAK] TTS success, playing audio for:", messageId);
+            console.log("[SPEAK] TTS onSuccess — audioBase64 length:", ttsData?.audioBase64?.length ?? 0, "mimeType:", ttsData?.mimeType);
+            if (!ttsData?.audioBase64) { console.warn("[SPEAK] onSuccess fired but audioBase64 is empty/null — no audio to play"); return; }
             setMessages((prev) =>
               prev.map((m) =>
                 m.id === messageId
@@ -682,6 +688,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
                   : m
               )
             );
+            console.log("[SPEAK] calling playElevenLabsAudio for msgId:", messageId);
             playElevenLabsAudio(messageId, ttsData.audioBase64, ttsData.mimeType);
           },
           onError: (err) => {
