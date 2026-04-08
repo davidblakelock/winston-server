@@ -190,10 +190,11 @@ export function buildListContext(result: ListResult): string {
         // Nothing new was added — every item was already in Supabase
         const dupes = result.alreadyExisted.join(", ");
         return (
-          `\n\n[List — No Change — ${displayName}]\n` +
+          `\n\n[List — No Change — ${displayName} — AUTHORITATIVE CURRENT STATE FROM SUPABASE]\n` +
           `Already on list (not added again): ${dupes}\n` +
-          `Current list:\n${remaining}\n` +
-          `Tell David that ${dupes} is already on his ${displayName} so you didn't add it again.`
+          `Current list (these are the ONLY items that exist):\n${remaining}\n` +
+          `Tell David that ${dupes} is already on his ${displayName} so you didn't add it again. ` +
+          `Do NOT mention, suggest, or reference any items not in the current list above.`
         );
       }
 
@@ -202,10 +203,11 @@ export function buildListContext(result: ListResult): string {
         ? `\nAlready existed (skipped): ${result.alreadyExisted.join(", ")}`
         : "";
       return (
-        `\n\n[List updated — ${displayName}]\n` +
+        `\n\n[List updated — ${displayName} — AUTHORITATIVE CURRENT STATE FROM SUPABASE]\n` +
         `Added: ${added}${dupeNote}\n` +
-        `Current list:\n${remaining}\n` +
-        `Confirm warmly and mention what was added. You may optionally read the full list if it is short.`
+        `Current list (these are the ONLY items that exist — disregard anything mentioned earlier in this conversation):\n${remaining}\n` +
+        `Confirm warmly what was added. If you read back the list, read ONLY the items above. ` +
+        `Do NOT suggest additional items. Do NOT invent context, recipes, or dinner plans.`
       );
     }
     case "remove": {
@@ -215,31 +217,38 @@ export function buildListContext(result: ListResult): string {
           ? result.currentItems.map((i, n) => `${n + 1}. ${i}`).join("\n")
           : "(now empty)";
       return (
-        `\n\n[List updated — ${displayName}]\n` +
+        `\n\n[List updated — ${displayName} — AUTHORITATIVE CURRENT STATE FROM SUPABASE]\n` +
         `Removed: ${removed}\n` +
-        `Remaining:\n${remaining}\n` +
-        `Confirm the removal naturally.`
+        `Remaining (these are the ONLY items left — disregard anything mentioned earlier in this conversation):\n${remaining}\n` +
+        `Confirm the removal naturally. Do NOT mention the removed item(s) as still being needed. ` +
+        `Do NOT suggest replacements or additional items.`
       );
     }
     case "clear":
       return (
-        `\n\n[List cleared — ${displayName}]\n` +
-        `The list is now empty. Confirm naturally.`
+        `\n\n[List cleared — ${displayName} — AUTHORITATIVE CURRENT STATE FROM SUPABASE]\n` +
+        `The list is now completely empty — zero items remain. ` +
+        `Do NOT mention any previous items from this conversation. Confirm naturally.`
       );
     case "read": {
       if (result.currentItems.length === 0) {
         return (
           `\n\n[${displayName} — AUTHORITATIVE CURRENT STATE FROM SUPABASE]\n` +
-          `The list is empty — it has zero items. This is a confirmed fresh read from the database.\n` +
-          `Tell David his ${displayName} is empty. Do NOT mention any previous items from this conversation. Do NOT invent any items.`
+          `The list is empty — zero items. This is a confirmed live read from the database.\n` +
+          `CRITICAL: Tell David his ${displayName} is empty. ` +
+          `Do NOT mention ANY items from earlier in this conversation. ` +
+          `Do NOT suggest what he might need. Do NOT invent items. Say only that it is empty.`
         );
       }
       const content = result.currentItems.map((i, n) => `${n + 1}. ${i}`).join("\n");
       return (
         `\n\n[${displayName} — AUTHORITATIVE CURRENT STATE FROM SUPABASE]\n` +
-        `This is the complete and current list — disregard any items mentioned earlier in this conversation:\n` +
+        `This is the COMPLETE list. Every item that exists in the database is listed below. There are NO other items:\n` +
         `${content}\n` +
-        `Read ONLY these items back to David. Do not add or infer any items not listed above.`
+        `CRITICAL: Read back ONLY the items listed above — nothing else. ` +
+        `Do NOT add suggestions. Do NOT mention items from earlier in this conversation that are not listed above. ` +
+        `Do NOT invent dinner plans, recipes, or what David might need. ` +
+        `Do NOT say "you might also want" or similar. The list contains exactly these items and nothing else.`
       );
     }
   }
