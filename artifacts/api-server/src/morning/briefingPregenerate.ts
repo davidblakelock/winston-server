@@ -3,7 +3,6 @@ import { fetchAndSummarizeEmails, formatEmailsForPrompt, buildScamWarningInstruc
 import { fetchWeekEvents, formatCalendarForPrompt, toChicagoTime, type CalendarEvent } from "../google/calendar.js";
 import { estimateDriveTime, extractEventLocation } from "../departure/departureManager.js";
 import { populateCalendarSyncState } from "../departure/calendarSyncScheduler.js";
-import { getMedications, hasTakenMedicationsToday, buildMedReminderText } from "../medications/medicationManager.js";
 import { getLastNightNotes, formatNotesForMorningBriefing } from "../winddown/winddownManager.js";
 import { getRecentMemories, formatMemoriesForContext } from "../memory/memoryManager.js";
 import { fetchMorningNews, fetchDailyMotivation } from "../news/newsManager.js";
@@ -475,9 +474,7 @@ const MASTER_BRIEFING_INSTRUCTION = `
 
   SECTION 13 — BIRTHDAYS AND IMPORTANT DATES: Any birthdays or anniversaries in the next 7 days. Name the person and the date specifically. SKIP if none.
 
-  SECTION 14 — MEDICATION: Include ONLY if the [Medications — Not yet taken today] block is present. Remind David warmly in one sentence to take his morning meds with food. If the block says [Medications — Already confirmed today], skip this section entirely — do NOT mention medications or that you're skipping it. If the [Medications] block is absent entirely, include a brief reminder anyway ("Don't forget your morning meds with breakfast."). Never skip if medications have not been confirmed.
-
-  SECTION 15 — MORNING MOTIVATION: Use the [VERIFIED — Web Search — Today's Inspiration] block if available. Lead with the inspiring thought or finding, then connect it personally to David's specific day — what he has ahead (a dinner, his pickleball game, a free afternoon). Keep it to 2-3 sentences. Warm and genuine — a friend sharing something interesting, not a motivational poster.
+  SECTION 14 — MORNING MOTIVATION: Use the [VERIFIED — Web Search — Today's Inspiration] block if available. Lead with the inspiring thought or finding, then connect it personally to David's specific day — what he has ahead (a dinner, his pickleball game, a free afternoon). Keep it to 2-3 sentences. Warm and genuine — a friend sharing something interesting, not a motivational poster.
     CRITICAL — Fix 5: If the [Morning Motivation Context] says "MORNING WORKOUT ALREADY DONE" — do NOT mention exercise, going for a walk, heading outside, or any outdoor activity. Reference only what is actually AHEAD in his day (upcoming dinner, free time, interesting event). Do NOT repeat anything that already happened this morning.
 
   SECTION 16 — SUNDAY SPECIAL: Sundays ONLY — deliver a warm weekly recap just before Section 15: exercise this week, family archive stories captured, highlights, something to look forward to next week. Skip every other day of the week.
@@ -518,8 +515,16 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
         ? buildSystemPromptFromProfile(userProfile, userProfile.rawData as CollectedData)
         : BASE_SYSTEM_PROMPT;
 
+    const primaryCity = userProfile?.city ?? "Dallas";
+    const primaryLat = userProfile?.latitude ?? 32.7767;
+    const primaryLon = userProfile?.longitude ?? -96.7970;
+    const homeAddress = ((userProfile?.rawData as CollectedData)?.homeAddress) ?? "";
+
     // Geocode secondary cities from profile before the main Promise.all
-    const rawPeople = ((userProfile?.rawData as CollectedData)?.people ?? []).filter((p) => p.city && p.city.trim().length > 0).slice(0, 4);
+    // Only include people in a different city than the user's home city
+    const rawPeople = ((userProfile?.rawData as CollectedData)?.people ?? [])
+      .filter((p) => p.city && p.city.trim().length > 0 && p.city.trim().toLowerCase() !== primaryCity.trim().toLowerCase())
+      .slice(0, 4);
     const geocodedSecondary = await Promise.all(
       rawPeople.map(async (p) => {
         const coords = await geocodeCity(p.city!).catch(() => null);
@@ -533,21 +538,14 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       validSecondaryLocs.map((s) => fetchCityWeather(s.city, s.lat, s.lon).catch(() => null))
     );
 
-    const primaryCity = userProfile?.city ?? "Dallas";
-    const primaryLat = userProfile?.latitude ?? 32.7767;
-    const primaryLon = userProfile?.longitude ?? -96.7970;
-    const homeAddress = ((userProfile?.rawData as CollectedData)?.homeAddress) ?? "";
-
-    const [dallas, emails, events, lastNightNotes, newsBlock, yesterdayEps, todayEps, morningMeds, medsAlreadyTaken, sportsScores, upcomingBills, marketsData, upcomingDates, sundayData, pendingFollowUps, dallasEvents, journalCountWeek, recentJournals, totalStories, pollenData, venueConcertsBlock, dailyMotivation] = await Promise.all([
+    const [dallas, emails, events, lastNightNotes, newsBlock, yesterdayEps, todayEps, sportsScores, upcomingBills, marketsData, upcomingDates, sundayData, pendingFollowUps, dallasEvents, journalCountWeek, recentJournals, totalStories, pollenData, venueConcertsBlock, dailyMotivation] = await Promise.all([
       fetchCityWeather(primaryCity, primaryLat, primaryLon).catch(() => null),
       fetchAndSummarizeEmails(15).catch(() => null),
-      fetchWeekEvents().catch(() => null),
+      fetchWeekEvents(false).catch(() => null),
       getLastNightNotes().catch(() => []),
       fetchMorningNews().catch(() => ""),
       fetchEpisodesForDate(yesterday, watchedIds).catch(() => []),
       fetchEpisodesForDate(now, watchedIds).catch(() => []),
-      getMedications(userName).catch(() => []),
-      hasTakenMedicationsToday(userName).catch(() => false),
       fetchSportsScores().catch(() => null),
       getUpcomingBills(3, userName).catch(() => []),
       fetchMarkets().catch(() => null),
@@ -622,11 +620,6 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
         newEps.map((ep) => `• ${formatEpisodeForPrompt(ep)} (${ep.when})`).join("\n")
       : "";
 
-    const medMorningBlock = morningMeds.length > 0
-      ? medsAlreadyTaken
-        ? `\n\n[Medications — Already confirmed today]\nDo NOT mention medications in the briefing.`
-        : `\n\n[Medications — Not yet taken today]\nDavid's medications: ${buildMedReminderText(morningMeds)}`
-      : "";
 
     const sportsBlock = sportsScores ? formatSportsForPrompt(sportsScores) : "";
 
@@ -697,7 +690,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     })();
 
     const systemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + memoryBlock + dynamicProfileBlock +
-      notesBlock + weatherBlock + gmailBlock + calendarBlock + tvMorningBlock + medMorningBlock +
+      notesBlock + weatherBlock + gmailBlock + calendarBlock + tvMorningBlock +
       sportsBlock + billsMorningBlock + marketsBlock + datesBlock + sundaySummaryBlock +
       pickleballMorningBlock + recFollowUpBlock + motivationContextBlock +
       dallasEventsBlock + venueConcertsBlock + newsBlock + MASTER_BRIEFING_INSTRUCTION;
@@ -717,8 +710,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       "S11_local_dallas": !!(dallasEvents && dallasEvents.length > 0),
       "S12_music_events": !!(venueConcertsBlock && venueConcertsBlock.length > 0),
       "S13_birthdays": upcomingDates.length > 0,
-      "S14_medication": morningMeds.length > 0,
-      "S15_motivation": true,
+      "S14_motivation": true,
       "S16_sunday_special": isSunday,
     };
     logger.info({ userName, sections: sectionLog }, "[BRIEFING SECTIONS] Data availability per section");

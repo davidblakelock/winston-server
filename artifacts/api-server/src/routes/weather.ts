@@ -31,6 +31,7 @@ interface PollenCardData {
   tree: string;
   grass: string;
   ragweed: string;
+  aqi: number | null;
 }
 
 function pollenLabel(value: number): string {
@@ -118,17 +119,28 @@ async function fetchWeather(city: string, lat: number, lon: number): Promise<Wea
 
 async function fetchPollen(lat: number, lon: number): Promise<PollenCardData | null> {
   try {
-    const url = `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lon}&hourly=grass_pollen,ragweed_pollen,alder_pollen&timezone=America%2FChicago&forecast_days=1`;
+    const url = `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lon}&hourly=grass_pollen,ragweed_pollen,alder_pollen,us_aqi&timezone=America%2FChicago&forecast_days=1`;
     const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
     if (!resp.ok) return null;
-    const data = await resp.json() as { hourly: { grass_pollen: number[]; ragweed_pollen: number[]; alder_pollen: number[] } };
+    const data = await resp.json() as {
+      hourly: {
+        time: string[];
+        grass_pollen: number[];
+        ragweed_pollen: number[];
+        alder_pollen: number[];
+        us_aqi: number[];
+      };
+    };
     const grassMax = Math.max(0, ...data.hourly.grass_pollen.filter((v) => v != null));
     const ragweedMax = Math.max(0, ...data.hourly.ragweed_pollen.filter((v) => v != null));
     const treeMax = Math.max(0, ...data.hourly.alder_pollen.filter((v) => v != null));
+    const nowHour = new Date().getHours();
+    const aqiNow = data.hourly.us_aqi?.[nowHour] ?? data.hourly.us_aqi?.find((v) => v != null) ?? null;
     return {
       tree: pollenLabel(treeMax),
       grass: pollenLabel(grassMax),
       ragweed: pollenLabel(ragweedMax),
+      aqi: aqiNow != null ? Math.round(aqiNow) : null,
     };
   } catch {
     return null;
@@ -162,7 +174,9 @@ router.get("/weather/morning", async (req: Request, res: Response) => {
     }
 
     const rawData = (profile?.rawData ?? {}) as CollectedData;
-    const people = (rawData.people ?? []).filter((p) => p.city && p.city.trim().length > 0).slice(0, 4);
+    const people = (rawData.people ?? [])
+      .filter((p) => p.city && p.city.trim().length > 0 && p.city.trim().toLowerCase() !== primaryCity.trim().toLowerCase())
+      .slice(0, 4);
 
     const geocodedPeople = await Promise.all(
       people.map(async (p) => {

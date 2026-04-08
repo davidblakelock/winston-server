@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { Wind, Droplets, Sun } from "lucide-react";
+import { Wind, Droplets, Sun, Leaf, Wind as AirIcon } from "lucide-react";
 
 interface PollenData {
   tree: string;
   grass: string;
   ragweed: string;
+  aqi: number | null;
 }
 
 interface PrimaryWeather {
@@ -61,11 +62,27 @@ function pollenColor(level: string): string {
   }
 }
 
+function pollenWorstLevel(pollen: PollenData): string {
+  const order = ["very high", "high", "moderate", "low", "none"];
+  for (const lvl of order) {
+    if (pollen.tree === lvl || pollen.grass === lvl || pollen.ragweed === lvl) return lvl;
+  }
+  return "none";
+}
+
 function uvColor(uv: number): string {
   if (uv <= 2) return "text-emerald-400";
   if (uv <= 5) return "text-yellow-400";
   if (uv <= 7) return "text-orange-400";
   if (uv <= 10) return "text-red-400";
+  return "text-purple-400";
+}
+
+function aqiColor(aqi: number): string {
+  if (aqi <= 50) return "text-emerald-400";
+  if (aqi <= 100) return "text-yellow-400";
+  if (aqi <= 150) return "text-orange-400";
+  if (aqi <= 200) return "text-red-400";
   return "text-purple-400";
 }
 
@@ -102,11 +119,7 @@ export function WeatherCard() {
   if (!data?.primary) return null;
 
   const { primary, secondary } = data;
-  const hasSignificantPollen =
-    primary.pollen &&
-    ["moderate", "high", "very high"].some(
-      (lvl) => primary.pollen!.tree === lvl || primary.pollen!.grass === lvl || primary.pollen!.ragweed === lvl
-    );
+  const pollenLevel = primary.pollen ? pollenWorstLevel(primary.pollen) : null;
 
   return (
     <div className="mb-3 space-y-2">
@@ -133,16 +146,10 @@ export function WeatherCard() {
               <span className="text-white/30 mx-1">·</span>
               <span className="text-sky-400/90">L{primary.low}°</span>
             </p>
-            {primary.precipChance > 20 && (
-              <p className="text-xs text-sky-300/70 mt-0.5 flex items-center justify-end gap-1">
-                <Droplets className="h-3 w-3" />
-                {primary.precipChance}%
-              </p>
-            )}
           </div>
         </div>
 
-        {/* Stats row */}
+        {/* Stats row — UV, Wind, Rain, Pollen, AQI */}
         <div className="mt-3 pt-3 border-t border-white/5 flex flex-wrap gap-x-4 gap-y-1.5">
           {/* UV */}
           <div className="flex items-center gap-1.5">
@@ -161,34 +168,33 @@ export function WeatherCard() {
             </div>
           )}
 
-          {/* Pollen — only show if significant */}
-          {primary.pollen && hasSignificantPollen && (
-            <>
-              {["very high", "high", "moderate"].includes(primary.pollen.tree) && (
-                <div className="flex items-center gap-1">
-                  <span className="text-xs text-white/40">Tree</span>
-                  <span className={`text-xs font-medium ${pollenColor(primary.pollen.tree)}`}>
-                    {primary.pollen.tree}
-                  </span>
-                </div>
-              )}
-              {["very high", "high", "moderate"].includes(primary.pollen.grass) && (
-                <div className="flex items-center gap-1">
-                  <span className="text-xs text-white/40">Grass</span>
-                  <span className={`text-xs font-medium ${pollenColor(primary.pollen.grass)}`}>
-                    {primary.pollen.grass}
-                  </span>
-                </div>
-              )}
-              {["very high", "high", "moderate"].includes(primary.pollen.ragweed) && (
-                <div className="flex items-center gap-1">
-                  <span className="text-xs text-white/40">Ragweed</span>
-                  <span className={`text-xs font-medium ${pollenColor(primary.pollen.ragweed)}`}>
-                    {primary.pollen.ragweed}
-                  </span>
-                </div>
-              )}
-            </>
+          {/* Rain chance */}
+          <div className="flex items-center gap-1.5">
+            <Droplets className="h-3.5 w-3.5 text-sky-400/60" />
+            <span className="text-xs text-white/50">Rain</span>
+            <span className="text-xs font-semibold text-sky-300/80">{primary.precipChance}%</span>
+          </div>
+
+          {/* Pollen — single pill showing worst level */}
+          {pollenLevel && pollenLevel !== "none" && (
+            <div className="flex items-center gap-1.5">
+              <Leaf className="h-3.5 w-3.5 text-green-400/50" />
+              <span className="text-xs text-white/50">Pollen</span>
+              <span className={`text-xs font-semibold ${pollenColor(pollenLevel)}`}>
+                {pollenLevel}
+              </span>
+            </div>
+          )}
+
+          {/* AQI */}
+          {primary.pollen?.aqi != null && (
+            <div className="flex items-center gap-1.5">
+              <AirIcon className="h-3.5 w-3.5 text-white/30" />
+              <span className="text-xs text-white/50">AQI</span>
+              <span className={`text-xs font-semibold ${aqiColor(primary.pollen.aqi)}`}>
+                {primary.pollen.aqi}
+              </span>
+            </div>
           )}
         </div>
       </div>

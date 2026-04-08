@@ -235,7 +235,7 @@ export async function fetchTomorrowEvents(): Promise<CalendarEvent[] | null> {
   // Note: do NOT filter with isEventInPast — all tomorrow events are future events
 }
 
-export async function fetchWeekEvents(): Promise<CalendarEvent[] | null> {
+export async function fetchWeekEvents(filterPast = true): Promise<CalendarEvent[] | null> {
   const auth = await getAuthClient();
   if (!auth) return null;
 
@@ -250,7 +250,7 @@ export async function fetchWeekEvents(): Promise<CalendarEvent[] | null> {
   const timeMax = new Date(midnight.getTime() + 7 * 86400000).toISOString();
 
   const events = await fetchEventsFromAllCalendars(calendar, timeMin, timeMax, todayStr, tomorrowStr, 50);
-  return events.filter((event) => !isEventInPast(event));
+  return filterPast ? events.filter((event) => !isEventInPast(event)) : events;
 }
 
 export function formatCalendarForPrompt(events: CalendarEvent[], label = "today"): string {
