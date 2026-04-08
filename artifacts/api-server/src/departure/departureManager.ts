@@ -1,6 +1,7 @@
 import { logger } from "../lib/logger.js";
 
-// David's home: 6345 Diamond Head Circle, Dallas TX 75225
+// David's home address — used as origin for all drive time requests
+const HOME_ADDRESS = "6345 Diamond Head Circle, Dallas TX 75225";
 const HOME_LAT = 32.8703;
 const HOME_LON = -96.7977;
 
@@ -8,7 +9,7 @@ export interface DriveEstimate {
   durationSeconds: number;
   durationMinutes: number;
   distanceKm: number;
-  source: "osrm" | "estimate";
+  source: "google-maps" | "osrm" | "estimate";
 }
 
 export interface DepartureAlert {
@@ -20,7 +21,64 @@ export interface DepartureAlert {
   minutesUntilLeave: number;
 }
 
-// ── Geocode destination using Nominatim ───────────────────────────────────────
+// ── Google Maps Directions API (with real-time traffic) ───────────────────────
+async function getGoogleMapsDuration(destination: string): Promise<DriveEstimate | null> {
+  const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+  if (!apiKey) return null;
+
+  const params = new URLSearchParams({
+    origin: HOME_ADDRESS,
+    destination,
+    departure_time: "now",
+    traffic_model: "best_guess",
+    key: apiKey,
+  });
+
+  try {
+    const res = await fetch(
+      `https://maps.googleapis.com/maps/api/directions/json?${params.toString()}`,
+      { signal: AbortSignal.timeout(8000) }
+    );
+    if (!res.ok) return null;
+
+    const data = await res.json() as {
+      status: string;
+      routes?: Array<{
+        legs?: Array<{
+          distance?: { value: number };
+          duration?: { value: number };
+          duration_in_traffic?: { value: number };
+        }>;
+      }>;
+    };
+
+    if (data.status !== "OK" || !data.routes?.length) {
+      logger.warn({ status: data.status, destination }, "Google Maps Directions API non-OK status");
+      return null;
+    }
+
+    const leg = data.routes[0]?.legs?.[0];
+    if (!leg) return null;
+
+    // Prefer duration_in_traffic (real-time); fall back to duration (no traffic)
+    const durationSeconds = leg.duration_in_traffic?.value ?? leg.duration?.value ?? 0;
+    const distanceMeters = leg.distance?.value ?? 0;
+
+    if (durationSeconds === 0) return null;
+
+    return {
+      durationSeconds,
+      durationMinutes: Math.ceil(durationSeconds / 60),
+      distanceKm: distanceMeters / 1000,
+      source: "google-maps",
+    };
+  } catch (err) {
+    logger.warn({ err, destination }, "Google Maps Directions API call failed");
+    return null;
+  }
+}
+
+// ── Geocode destination using Nominatim (fallback only) ───────────────────────
 async function geocode(address: string): Promise<{ lat: number; lon: number } | null> {
   const encoded = encodeURIComponent(address + " Dallas TX");
   const url = `https://nominatim.openstreetmap.org/search?q=${encoded}&format=json&limit=1`;
@@ -38,7 +96,7 @@ async function geocode(address: string): Promise<{ lat: number; lon: number } | 
   }
 }
 
-// ── Route duration via OSRM (free, no API key) ────────────────────────────────
+// ── OSRM route duration (free, no API key, no traffic) ────────────────────────
 async function getOsrmDuration(
   fromLat: number,
   fromLon: number,
@@ -68,7 +126,7 @@ async function getOsrmDuration(
   }
 }
 
-// ── Haversine fallback estimate ────────────────────────────────────────────────
+// ── Haversine straight-line fallback ─────────────────────────────────────────
 function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const R = 6371;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -79,32 +137,44 @@ function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): nu
 }
 
 // ── Main drive time calculator ────────────────────────────────────────────────
+// Priority: 1. Google Maps (real-time traffic)  2. OSRM  3. Haversine estimate
 export async function estimateDriveTime(destination: string): Promise<DriveEstimate | null> {
-  const coords = await geocode(destination);
-  if (!coords) {
-    // Try with just the raw destination (in case it's already well-formed)
-    logger.warn({ destination }, "Geocode failed");
-    return null;
+  // 1. Google Maps — real-time traffic, most accurate
+  const google = await getGoogleMapsDuration(destination);
+  if (google) {
+    logger.info({ destination, durationMinutes: google.durationMinutes }, "Drive time via Google Maps (traffic)");
+    return google;
   }
 
-  const osrm = await getOsrmDuration(HOME_LAT, HOME_LON, coords.lat, coords.lon);
-  if (osrm) return osrm;
+  // 2. OSRM — free routing, no traffic data
+  const coords = await geocode(destination);
+  if (coords) {
+    const osrm = await getOsrmDuration(HOME_LAT, HOME_LON, coords.lat, coords.lon);
+    if (osrm) {
+      logger.info({ destination, durationMinutes: osrm.durationMinutes }, "Drive time via OSRM (no traffic)");
+      return osrm;
+    }
 
-  // Fallback: haversine + 25mph average Dallas speed
-  const km = haversineKm(HOME_LAT, HOME_LON, coords.lat, coords.lon);
-  const mph25 = 40.2; // km/h
-  const durationSeconds = (km / mph25) * 3600;
+    // 3. Haversine fallback at 25mph Dallas average
+    const km = haversineKm(HOME_LAT, HOME_LON, coords.lat, coords.lon);
+    const kmPerHour = 40.2; // ~25mph
+    const durationSeconds = (km / kmPerHour) * 3600;
+    logger.info({ destination, durationMinutes: Math.ceil(durationSeconds / 60) }, "Drive time via haversine estimate");
+    return {
+      durationSeconds,
+      durationMinutes: Math.ceil(durationSeconds / 60),
+      distanceKm: km,
+      source: "estimate",
+    };
+  }
 
-  return {
-    durationSeconds,
-    durationMinutes: Math.ceil(durationSeconds / 60),
-    distanceKm: km,
-    source: "estimate",
-  };
+  logger.warn({ destination }, "Geocode failed — cannot estimate drive time");
+  return null;
 }
 
-// ── Check whether we should fire a departure alert ───────────────────────────
-const BUFFER_MINUTES = 10; // leave buffer before drive time
+// ── Departure alert timing ────────────────────────────────────────────────────
+// Leave time = event start − drive time − 10 min buffer
+const BUFFER_MINUTES = 10;
 
 export function shouldFireAlert(
   eventStart: Date,
@@ -114,7 +184,7 @@ export function shouldFireAlert(
   const leaveAt = new Date(eventStart.getTime() - (driveMinutes + BUFFER_MINUTES) * 60000);
   const minutesUntilLeave = (leaveAt.getTime() - now.getTime()) / 60000;
 
-  // Fire when 0-5 minutes until leave time
+  // Fire when 0–5 minutes until leave time
   return minutesUntilLeave >= 0 && minutesUntilLeave <= 5;
 }
 
@@ -133,12 +203,12 @@ export function buildDepartureAlertMessage(
   });
 
   const trafficNote = hasTrafficData ? "based on current traffic" : "estimated";
-  const round = Math.round(driveMinutes / 5) * 5; // round to nearest 5 mins
+  const round = Math.round(driveMinutes / 5) * 5;
 
   return `David, you should think about heading out for your ${timeStr} ${eventTitle} — it's about ${round} minutes from home (${trafficNote}), so you'll want to leave in the next few minutes.`;
 }
 
-// ── Extract location from calendar event description/location ─────────────────
+// ── Extract location from calendar event ─────────────────────────────────────
 export function extractEventLocation(event: {
   summary?: string;
   location?: string;
@@ -146,7 +216,6 @@ export function extractEventLocation(event: {
 }): string | null {
   if (event.location) return event.location;
 
-  // Try to extract from description
   const desc = event.description ?? "";
   const locationMatch = desc.match(/location:\s*([^\n]+)/i) ??
     desc.match(/address:\s*([^\n]+)/i) ??

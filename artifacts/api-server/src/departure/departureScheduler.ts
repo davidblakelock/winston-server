@@ -115,7 +115,7 @@ async function checkDepartureAlerts(): Promise<void> {
       start,
       drive.durationMinutes,
       location,
-      drive.source === "osrm"
+      drive.source === "google-maps"
     );
 
     const companionName = await getCompanionName();
