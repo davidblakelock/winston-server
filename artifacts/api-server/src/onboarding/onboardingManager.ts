@@ -254,6 +254,17 @@ function formatWakeTime(t: string): string {
   return `${hour}:${String(m).padStart(2, "0")} ${ampm}`;
 }
 
+function calculateAge(birthday: string | null): number | null {
+  if (!birthday) return null;
+  const dob = new Date(birthday);
+  if (isNaN(dob.getTime())) return null;
+  const today = new Date();
+  let age = today.getFullYear() - dob.getFullYear();
+  const m = today.getMonth() - dob.getMonth();
+  if (m < 0 || (m === 0 && today.getDate() < dob.getDate())) age--;
+  return age;
+}
+
 // Build the personal-context block from structured profile columns + rawData.
 // Call this in every system prompt, always, regardless of onboarding status.
 export function buildProfileContext(
@@ -264,8 +275,8 @@ export function buildProfileContext(
   const city = profile?.city ?? "";
 
   // Structured columns with rawData fallbacks
-  const age: number | null = profile?.age ?? rawData.age ?? null;
   const birthday: string | null = profile?.birthday ?? rawData.birthday ?? null;
+  const age: number | null = calculateAge(birthday);
   const neighborhood: string | null = profile?.neighborhood ?? rawData.neighborhood ?? null;
   const relationshipStatus: string | null = profile?.relationshipStatus ?? rawData.maritalStatus ?? null;
   const homeAddress: string | null = profile?.homeAddress ?? rawData.homeAddress ?? null;
