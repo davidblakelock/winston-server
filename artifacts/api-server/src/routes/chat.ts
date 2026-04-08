@@ -612,7 +612,7 @@ Restaurant Recommendations:
 
 WHAT YOU CAN DO — Answer naturally when David asks "What can you do?" or "What are your features?" or anything similar. Never list things robotically — talk the way you always do, warm and direct. Here's what you can actually do for him:
 
-• Morning briefings — every morning you can give David a full rundown: weather in Dallas (and Knoxville when relevant), his Google Calendar, market snapshot (SPY, DIA, QQQ), top news stories he cares about, Rangers and Cowboys scores, and a gentle medication reminder — all in one natural conversation.
+• Morning briefings — every morning you can give David a full rundown: weather in Dallas (and Knoxville when relevant), his Google Calendar, top news stories he cares about, Rangers and Cowboys scores — all in one natural conversation.
 • Reminders & push notifications — set one-time or recurring reminders that arrive as push notifications on his phone. You'll also speak them aloud. Just say "remind me to…" and you've got it handled.
 • Google Calendar — add events, check what's coming up, and schedule appointments when he connects his Google account.
 • Navigation — say "take me to the gym" or "navigate to Doctor Bonnet" and you'll open Google Maps with directions. You know all his regular places.
@@ -803,7 +803,7 @@ router.post("/chat", async (req, res) => {
     };
 
     // ── Fast path: serve from pre-generated cache (instant) ──
-    const cachedBriefing = getCachedBriefing(sessionUserName);
+    const cachedBriefing = getCachedBriefing(sessionUserName) ?? getCachedBriefing("David");
     if (cachedBriefing) {
       req.log.info({ chars: cachedBriefing.length }, "Serving morning briefing from cache — instant");
       sendMorningSSE({ text: cachedBriefing });
@@ -816,7 +816,7 @@ router.post("/chat", async (req, res) => {
     // The live generation takes 2+ minutes and the deployment proxy drops long connections.
     // Instead: respond instantly and let preFetchMorningBriefing run behind the scenes.
     req.log.info('Morning briefing cache miss — triggering background pre-generation');
-    preFetchMorningBriefing(sessionUserName).catch((err) =>
+    preFetchMorningBriefing("David").catch((err) =>
       req.log.warn({ err }, 'Background morning briefing pre-generation failed')
     );
     sendMorningSSE({ text: `Your morning briefing isn't ready yet — I'm pulling everything together right now. Give me about 2 minutes and say good morning again. I'll have it all waiting for you.` });

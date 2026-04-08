@@ -14,7 +14,6 @@ import { fetchSportsScores, formatSportsForPrompt } from "../sports/sportsManage
 import { getUpcomingBills, formatBillsForPrompt } from "../bills/billManager.js";
 import { getUpcomingDates, formatDatesForPrompt } from "../dates/datesManager.js";
 import { isTodayPickleballDay } from "../pickleball/pickleballManager.js";
-import { fetchMarkets, buildMarketsBlock } from "../markets/marketsManager.js";
 import { getPendingFollowUps, buildRecommendationFollowUpBlock } from "../recommendations/recommendationsManager.js";
 import { collectSundayData, buildSundaySummaryBlock } from "../sundaySummary/sundaySummaryManager.js";
 import { getJournalCountThisWeek, getRecentJournalEntries } from "../journal/journalManager.js";
@@ -354,20 +353,6 @@ function getCurrentDateTimeBlock(): string {
   const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
   const yesterdayName = DAYS[(dow + 6) % 7];
 
-  // Market status
-  let marketStatus: string;
-  let lastTradingDay: string;
-  if (dow === 0 || dow === 6) {
-    marketStatus = "closed — it is the weekend";
-    lastTradingDay = dow === 6 ? "Friday" : "Friday"; // both Sat/Sun → Friday
-  } else if (dow === 1) {
-    marketStatus = "open today (Monday)";
-    lastTradingDay = "Friday";
-  } else {
-    marketStatus = "open today";
-    lastTradingDay = DAYS[dow - 1];
-  }
-
   // Tomorrow's name
   const tomorrowName = DAYS[(dow + 1) % 7];
 
@@ -377,9 +362,7 @@ function getCurrentDateTimeBlock(): string {
     `Current time: ${time} Central Time (${partOfDay}).\n` +
     `Day type: ${isWeekend ? "weekend" : "weekday"}.\n` +
     `Yesterday was ${yesterdayName}. Tomorrow is ${tomorrowName}.\n` +
-    `Stock markets: ${marketStatus}. Last trading day was ${lastTradingDay}.\n` +
     `Use ONLY these values when referring to days. "Yesterday" means ${yesterdayName}. "Tomorrow" means ${tomorrowName}.\n` +
-    `Market data in this briefing is from ${lastTradingDay}'s close — always label it as "${lastTradingDay}'s close" or "as of ${lastTradingDay}'s close" when speaking.\n` +
     `When David asks what time or day it is, answer directly using exactly the values above.\n`
   );
 }
@@ -424,8 +407,6 @@ const MASTER_BRIEFING_INSTRUCTION = `
     From [Watercooler Story] (if present): Introduce warmly — "oh, and here's one to share later —" then the story in two sentences max.
 
     FORMATTING RULES: Each headline is on its own line, bold. Each summary sentence is on the next line. A blank line between stories. Never merge headlines and summaries. Never use "in other news" or "moving on." Short transitions between sections only: "also —", "and —", "meanwhile —". NEVER repeat a topic from Section 10 (Sports) — that section already covers Rangers and Cowboys game results.
-
-  SECTION 9 — MARKETS: S&P, Dow, Nasdaq with one sentence of context ("tech led the rally," "inflation data spooked investors"). Always label as "as of [last trading day]'s close." SKIP THIS SECTION ENTIRELY on weekends and market holidays — the date block above tells you the market status.
 
   SECTION 10 — SPORTS: Rangers and Cowboys results from the last 24 hours only. If no games were played, SKIP THIS SECTION ENTIRELY — do not say no games were played.
 
@@ -501,7 +482,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       validSecondaryLocs.map((s) => fetchCityWeather(s.city, s.lat, s.lon).catch(() => null))
     );
 
-    const [dallas, emails, events, lastNightNotes, newsBlock, yesterdayEps, todayEps, sportsScores, upcomingBills, marketsData, upcomingDates, sundayData, pendingFollowUps, dallasEvents, journalCountWeek, recentJournals, totalStories, pollenData, venueConcertsBlock, dailyMotivation] = await Promise.all([
+    const [dallas, emails, events, lastNightNotes, newsBlock, yesterdayEps, todayEps, sportsScores, upcomingBills, upcomingDates, sundayData, pendingFollowUps, dallasEvents, journalCountWeek, recentJournals, totalStories, pollenData, venueConcertsBlock, dailyMotivation] = await Promise.all([
       fetchCityWeather(primaryCity, primaryLat, primaryLon).catch(() => null),
       fetchAndSummarizeEmails(15).catch(() => null),
       fetchWeekEvents(false).catch(() => null),
@@ -511,7 +492,6 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       fetchEpisodesForDate(now, watchedIds).catch(() => []),
       fetchSportsScores().catch(() => null),
       getUpcomingBills(3, userName).catch(() => []),
-      fetchMarkets().catch(() => null),
       getUpcomingDates(21, userName).catch(() => []),
       isSunday ? collectSundayData().catch(() => null) : Promise.resolve(null),
       getPendingFollowUps(2, 14).catch(() => []),
@@ -590,8 +570,6 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       ? `\n\n[VERIFIED — Bills Database — Due in Next 3 Days]\n${formatBillsForPrompt(upcomingBills)}\nMention ONLY if due within 3 days, skip entirely otherwise.`
       : "";
 
-    const marketsBlock = marketsData ? buildMarketsBlock(marketsData, now) : "";
-
     const datesBlock = upcomingDates.length > 0
       ? `\n\n[VERIFIED — Dates Database — Upcoming Birthdays & Anniversaries]\n${formatDatesForPrompt(upcomingDates)}`
       : "";
@@ -659,7 +637,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
 
     const systemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + profileContextBlock + memoryBlock + dynamicProfileBlock +
       notesBlock + weatherBlock + gmailBlock + calendarBlock + tvMorningBlock +
-      sportsBlock + billsMorningBlock + marketsBlock + datesBlock + sundaySummaryBlock +
+      sportsBlock + billsMorningBlock + datesBlock + sundaySummaryBlock +
       pickleballMorningBlock + recFollowUpBlock + motivationContextBlock +
       dallasEventsBlock + venueConcertsBlock + newsBlock + MASTER_BRIEFING_INSTRUCTION;
 
@@ -673,7 +651,6 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       "S6_calendar": events !== null && events.length > 0,
       "S7_bills_3day": upcomingBills.length > 0,
       "S8_news": newsBlock.length > 0,
-      "S9_markets_skip_weekend": !!(marketsData && (now.getDay() !== 0 && now.getDay() !== 6)),
       "S10_sports": !!(sportsScores),
       "S11_local_dallas": !!(dallasEvents && dallasEvents.length > 0),
       "S12_music_events": !!(venueConcertsBlock && venueConcertsBlock.length > 0),
