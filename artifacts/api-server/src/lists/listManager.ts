@@ -32,7 +32,11 @@ function normaliseListName(raw: string): string {
 
 // ── Extract list operation with Claude ───────────────────────────────────────
 
-export async function extractListOp(message: string): Promise<ListOp | null> {
+export async function extractListOp(message: string, contextListName?: string): Promise<ListOp | null> {
+  const contextNote = contextListName
+    ? `\n- The recent conversation was about the "${contextListName}" list. If the message doesn't name a specific list, assume it's an "add" to the "${contextListName}" list.`
+    : "";
+
   const extraction = await anthropic.messages.create({
     model: "claude-opus-4-5",
     max_tokens: 256,
@@ -50,7 +54,8 @@ Rules:
 - "clear" = user wants to wipe the whole list
 - "read" = user wants to hear what's on the list
 - Strip trailing "list" from the list name ("shopping list" → "shopping")
-- If you cannot detect a list operation, return null.
+- Casual phrases like "X as well", "also X", "X too", "throw in X", "grab X", "pick up X", "X also", "and X too", "also add X", "also get X" all mean action="add" with X as the item
+- If you cannot detect a list operation, return null.${contextNote}
 Return raw JSON only — no markdown fences.`,
     messages: [{ role: "user", content: message }],
   });

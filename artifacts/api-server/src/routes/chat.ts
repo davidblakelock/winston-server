@@ -368,6 +368,19 @@ const CALENDAR_DELETE_PATTERN = /\b(cancel\s+(my\s+)?(appointment|meeting|event|
 const CALENDAR_CONFIRM_PATTERN = /^(yes|yeah|yep|yup|sure|go\s+ahead|please\s+do|confirmed?|absolutely|do\s+it|ok(ay)?|correct|that'?s\s+right)[\s.!]*$/i;
 const CALENDAR_CANCEL_PATTERN = /^(no|nope|nah|never\s+mind|don'?t|keep\s+it|actually\s+no|cancel\s+that|forget\s+it|hold\s+on|wait)[\s.!]*$/i;
 const LIST_PATTERN = /\b(add\s+.+\s+to\s+(my\s+)?\w.+list|remove\s+.+\s+from\s+(my\s+)?\w.+list|clear\s+(my\s+)?\w.+list|what('?s|\s+is)\s+(on\s+)?(my\s+)?\w.+list|show\s+(me\s+)?(my\s+)?\w.+list|read\s+(me\s+)?(my\s+)?\w.+list|(shopping|to\s*-?\s*do|grocery|errand|task)\s+list)\b/i;
+const CASUAL_LIST_ADD_PATTERN = /\bas\s+well\b|\bthrow\s+in\b|\balso\s+(?:add|get|grab|pick\s+up)\b|\band\s+also\b|(?:\balso|\btoo)\s*$|^(?:grab|pick\s+up)\s/i;
+
+function detectActiveListFromHistory(history: Array<{ role: string; content: string }>): string | null {
+  const recent = [...history].slice(-8).reverse();
+  for (const msg of recent) {
+    const m = /\b(shopping|to[\s\-]?do|grocery|errand|task)(?:\s+list)?\b/i.exec(msg.content);
+    if (m) {
+      const raw = m[1].toLowerCase().replace(/[\s\-]+/, " ").trim();
+      return raw === "to-do" ? "to do" : raw;
+    }
+  }
+  return null;
+}
 const NAVIGATION_PATTERN = /\b(take\s+me\s+to|directions?\s+to|navigate\s+to|get\s+me\s+to|how\s+do\s+i\s+get\s+to|maps?\s+to|open\s+maps?\s+(for|to)|i\s+need\s+to\s+go\s+to|i\s+need\s+directions?\s+to|i\s+want\s+to\s+go\s+to|can\s+you\s+take\s+me\s+to|take\s+me|get\s+directions?\s+to|show\s+me\s+how\s+to\s+get\s+to)\b/i;
 const STORY_READ_PATTERN = /\b(read\s+(me\s+)?(my\s+)?stor(y|ies)|show\s+(me\s+)?(my\s+)?stor(y|ies)|what\s+stor(y|ies)\s+have\s+i|tell\s+me\s+(my|the)\s+stor(y|ies)|ms\.?\s*peel\s+read\s+(me\s+)?(my\s+)?stor(y|ies)|olivia\s+stor(y|ies))\b/i;
 const STORY_COUNT_PATTERN = /\b(how\s+many\s+stor(y|ies)|stor(y|ies)\s+count|how\s+many\s+memories|number\s+of\s+stor(y|ies)|how\s+many\s+have\s+i\s+(captured|saved|told))\b/i;
@@ -730,7 +743,10 @@ router.post("/chat", async (req, res) => {
   const isMorningGreeting = MORNING_PATTERN.test(message);
   const isEveningGreeting = !isMorningGreeting && EVENING_PATTERN.test(message);
   const isReminderRequest = REMINDER_PATTERN.test(message);
-  const isListRequest = LIST_PATTERN.test(message);
+  let isListRequest = LIST_PATTERN.test(message);
+  const activeListFromHistory = !isListRequest ? detectActiveListFromHistory(history) : null;
+  const isCasualListAdd = !isListRequest && CASUAL_LIST_ADD_PATTERN.test(message) && activeListFromHistory !== null;
+  if (isCasualListAdd) isListRequest = true;
   const isEmailRequest = !isMorningGreeting && EMAIL_PATTERN.test(message);
   const isCalendarRequest = !isMorningGreeting && CALENDAR_PATTERN.test(message);
   const isCompoundContactAndSave = COMPOUND_CONTACT_SAVE_PATTERN.test(message);
@@ -1579,7 +1595,7 @@ router.post("/chat", async (req, res) => {
 
   if (isListRequest) {
     try {
-      const op = await extractListOp(message);
+      const op = await extractListOp(message, isCasualListAdd ? (activeListFromHistory ?? undefined) : undefined);
       if (op) {
         const result = await executeListOp(op);
         const listContext = buildListContext(result);
