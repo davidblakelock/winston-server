@@ -234,21 +234,20 @@ export function buildListContext(result: ListResult): string {
       if (result.currentItems.length === 0) {
         return (
           `\n\n[${displayName} — AUTHORITATIVE CURRENT STATE FROM SUPABASE]\n` +
-          `The list is empty — zero items. This is a confirmed live read from the database.\n` +
-          `CRITICAL: Tell David his ${displayName} is empty. ` +
-          `Do NOT mention ANY items from earlier in this conversation. ` +
-          `Do NOT suggest what he might need. Do NOT invent items. Say only that it is empty.`
+          `Disregard any list items mentioned earlier in this conversation. The ONLY current items are those returned by this query.\n` +
+          `This query returned zero items. The list is empty.\n` +
+          `Tell David his ${displayName} is empty. ` +
+          `Show ONLY the exact items returned by the database. Never reference meals, recipes, or suggest additional items. ` +
+          `Never use conversation history to infer what groceries might be needed. The list is the list — nothing more.`
         );
       }
       const content = result.currentItems.map((i, n) => `${n + 1}. ${i}`).join("\n");
       return (
         `\n\n[${displayName} — AUTHORITATIVE CURRENT STATE FROM SUPABASE]\n` +
-        `This is the COMPLETE list. Every item that exists in the database is listed below. There are NO other items:\n` +
+        `Disregard any list items mentioned earlier in this conversation. The ONLY current items are those returned by this query:\n` +
         `${content}\n` +
-        `CRITICAL: Read back ONLY the items listed above — nothing else. ` +
-        `Do NOT add suggestions. Do NOT mention items from earlier in this conversation that are not listed above. ` +
-        `Do NOT invent dinner plans, recipes, or what David might need. ` +
-        `Do NOT say "you might also want" or similar. The list contains exactly these items and nothing else.`
+        `Show ONLY the exact items returned by the database. Never reference meals, recipes, or suggest additional items. ` +
+        `Never use conversation history to infer what groceries might be needed. The list is the list — nothing more.`
       );
     }
   }
