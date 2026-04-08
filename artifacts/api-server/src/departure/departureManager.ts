@@ -1,10 +1,5 @@
 import { logger } from "../lib/logger.js";
 
-// David's home address — used as origin for all drive time requests
-const HOME_ADDRESS = "6345 Diamond Head Circle, Dallas TX 75225";
-const HOME_LAT = 32.8703;
-const HOME_LON = -96.7977;
-
 export interface DriveEstimate {
   durationSeconds: number;
   durationMinutes: number;
@@ -22,12 +17,12 @@ export interface DepartureAlert {
 }
 
 // ── Google Maps Directions API (with real-time traffic) ───────────────────────
-async function getGoogleMapsDuration(destination: string): Promise<DriveEstimate | null> {
+async function getGoogleMapsDuration(destination: string, homeAddress: string): Promise<DriveEstimate | null> {
   const apiKey = process.env.GOOGLE_MAPS_API_KEY;
   if (!apiKey) return null;
 
   const params = new URLSearchParams({
-    origin: HOME_ADDRESS,
+    origin: homeAddress,
     destination,
     departure_time: "now",
     traffic_model: "best_guess",
@@ -138,9 +133,20 @@ function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): nu
 
 // ── Main drive time calculator ────────────────────────────────────────────────
 // Priority: 1. Google Maps (real-time traffic)  2. OSRM  3. Haversine estimate
-export async function estimateDriveTime(destination: string): Promise<DriveEstimate | null> {
+// Callers must supply home address and coordinates from the user profile.
+export async function estimateDriveTime(
+  destination: string,
+  homeAddress: string,
+  homeLat: number,
+  homeLon: number
+): Promise<DriveEstimate | null> {
+  if (!homeAddress || !homeLat || !homeLon) {
+    logger.warn({ destination }, "estimateDriveTime: home address/coords missing — cannot calculate");
+    return null;
+  }
+
   // 1. Google Maps — real-time traffic, most accurate
-  const google = await getGoogleMapsDuration(destination);
+  const google = await getGoogleMapsDuration(destination, homeAddress);
   if (google) {
     logger.info({ destination, durationMinutes: google.durationMinutes }, "Drive time via Google Maps (traffic)");
     return google;
@@ -149,14 +155,14 @@ export async function estimateDriveTime(destination: string): Promise<DriveEstim
   // 2. OSRM — free routing, no traffic data
   const coords = await geocode(destination);
   if (coords) {
-    const osrm = await getOsrmDuration(HOME_LAT, HOME_LON, coords.lat, coords.lon);
+    const osrm = await getOsrmDuration(homeLat, homeLon, coords.lat, coords.lon);
     if (osrm) {
       logger.info({ destination, durationMinutes: osrm.durationMinutes }, "Drive time via OSRM (no traffic)");
       return osrm;
     }
 
-    // 3. Haversine fallback at 25mph Dallas average
-    const km = haversineKm(HOME_LAT, HOME_LON, coords.lat, coords.lon);
+    // 3. Haversine fallback at 25mph average
+    const km = haversineKm(homeLat, homeLon, coords.lat, coords.lon);
     const kmPerHour = 40.2; // ~25mph
     const durationSeconds = (km / kmPerHour) * 3600;
     logger.info({ destination, durationMinutes: Math.ceil(durationSeconds / 60) }, "Drive time via haversine estimate");
