@@ -130,30 +130,51 @@ async function fetchNewsFromClaude(): Promise<string> {
     timeZone: tz, weekday: "long", month: "long", day: "numeric",
   });
 
-  // ── Main headlines: 5-6 bold-title + one-sentence-summary headlines ──────
+  // ── Main headlines: 8 diverse categories, one story each ────────────────
   const mainPrompt = `Today is ${todayStr}. Yesterday was ${yesterdayStr}.
 
 You are curating a morning news briefing for David Blakelock in Dallas, Texas. Use web search to find real, current news. RECENCY IS CRITICAL — every story must be from ${todayStr} or ${yesterdayStr} only.
 
-FORMAT: Return 5 to 6 stories. Each story has TWO parts:
+DIVERSITY RULE — THIS IS MANDATORY: Return EXACTLY 8 stories. Each story must come from a DIFFERENT category listed below. NEVER run two stories about the same topic, country, company, person, or theme. If the biggest story today is about Iran, you get ONE Iran story — not two, not three. Pick one story per category and move on.
+
+FORMAT: Each story has TWO parts:
 1. A bold short title (3-7 words, bold using **asterisks**)
 2. One sentence of context on the next line — specific, factual, with key numbers or names
 
-David's interests: stock market, AI/tech, global politics, Texas Rangers, Dallas Cowboys, Dallas/Texas news, energy sector.
+REQUIRED CATEGORIES — one story from each, in this order:
 
-Cover these categories:
-- US market performance ${yesterdayStr} — S&P 500 and Nasdaq with one key data point
-- Major US or global political development
-- AI or tech news (OpenAI, Anthropic, Google, Apple)
-- Texas Rangers or Cowboys update — if no game, replace with another story
-- Dallas or Texas local news
-- One other major breaking story
+CATEGORY 1 — WORLD NEWS: A major international story (non-US). Geopolitics, conflict, diplomacy, or a significant event outside the United States.
 
-STALENESS RULE: Only include stories from ${todayStr} or ${yesterdayStr}.
+CATEGORY 2 — US POLITICS: A domestic US political development — legislation, White House, Congress, Supreme Court, or federal agency action.
 
-Output in EXACTLY this format — no other text:
+CATEGORY 3 — BUSINESS & ECONOMY: A notable business story — corporate earnings, mergers, economic data, trade, or labor. Do NOT cover stock index performance (S&P, Dow, Nasdaq) — that is in a separate section.
+
+CATEGORY 4 — TECHNOLOGY & AI: One story about AI, software, a major tech company (Apple, Google, Microsoft, OpenAI, Meta, Amazon), or a significant product launch.
+
+CATEGORY 5 — SCIENCE OR HEALTH: A discovery, medical breakthrough, space news, climate science finding, or public health development.
+
+CATEGORY 6 — SPORTS: Texas Rangers or Dallas Cowboys — game result, roster news, or standings. If both teams are in off-season with nothing newsworthy, use any major US sports headline instead.
+
+CATEGORY 7 — DALLAS / TEXAS LOCAL (MANDATORY — never skip): A story specifically about Dallas, DFW, or Texas — local government, business, crime, infrastructure, culture, or community. This must be a local story, not a national story that mentions Texas.
+
+CATEGORY 8 — WILDCARD: The most interesting or surprising story that does not fit any of the above categories. Could be entertainment, environment, human interest, international business, or anything genuinely noteworthy.
+
+STALENESS RULE: Only include stories from ${todayStr} or ${yesterdayStr}. If a category has no fresh story, use the most recent story from that category that is within 48 hours.
+
+NO-REPEAT RULE: Before finalizing, check — do any two stories share the same country, company, person, or topic? If yes, replace one with a different story from that category.
+
+Output in EXACTLY this format — no other text, no category labels:
 
 HEADLINES:
+**[Short Bold Title]**
+[One sentence with specific fact, number, or name.]
+
+**[Short Bold Title]**
+[One sentence with specific fact, number, or name.]
+
+**[Short Bold Title]**
+[One sentence with specific fact, number, or name.]
+
 **[Short Bold Title]**
 [One sentence with specific fact, number, or name.]
 
