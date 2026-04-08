@@ -99,6 +99,7 @@ import {
   buildProfileContext,
   type CollectedData,
 } from "../onboarding/onboardingManager.js";
+import { getCachedWeather, type CachedWeather, TOMORROW_CONDITIONS } from "../weather/weatherCache.js";
 import {
   getWatchedShows,
   addWatchedShow,
@@ -164,130 +165,7 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-// ─── Tomorrow.io weather codes → human-readable conditions ──────────────────
-const TOMORROW_CONDITIONS: Record<number, string> = {
-  1000: "clear skies",
-  1001: "cloudy",
-  1100: "mostly clear",
-  1101: "partly cloudy",
-  1102: "mostly cloudy",
-  2000: "foggy",
-  2100: "light fog",
-  4000: "drizzle",
-  4001: "rain",
-  4200: "light rain",
-  4201: "heavy rain",
-  5000: "snow",
-  5001: "flurries",
-  5100: "light snow",
-  5101: "heavy snow",
-  6000: "freezing drizzle",
-  6001: "freezing rain",
-  6200: "light freezing rain",
-  6201: "heavy freezing rain",
-  7000: "ice pellets",
-  7101: "heavy ice pellets",
-  7102: "light ice pellets",
-  8000: "thunderstorms",
-};
-
-interface WeatherResult {
-  city: string;
-  temp: number;
-  feelsLike: number;
-  high: number;
-  low: number;
-  condition: string;
-  precipChance: number;
-  humidity: number;
-  windSpeed: number;
-  uvIndex: number;
-  uvIndexMax: number;
-}
-
-interface TomorrowRealtimeResponse {
-  data: {
-    values: {
-      temperature: number;
-      temperatureApparent: number;
-      humidity: number;
-      windSpeed: number;
-      precipitationProbability: number;
-      uvIndex: number;
-      weatherCode: number;
-    };
-  };
-}
-
-interface TomorrowForecastResponse {
-  timelines: {
-    daily: Array<{
-      values: {
-        temperatureMax: number;
-        temperatureMin: number;
-        precipitationProbabilityMax: number;
-        uvIndexMax: number;
-        weatherCodeMax: number;
-      };
-    }>;
-  };
-}
-
-async function fetchCityWeather(
-  city: string,
-  lat: number,
-  lon: number,
-  _timezone: string
-): Promise<WeatherResult> {
-  const apiKey = process.env.TOMORROW_IO_API_KEY;
-  if (!apiKey) throw new Error("TOMORROW_IO_API_KEY not configured");
-
-  const location = `${lat},${lon}`;
-  const units = "imperial";
-
-  const [realtimeResp, forecastResp] = await Promise.all([
-    fetch(
-      `https://api.tomorrow.io/v4/weather/realtime?location=${location}&units=${units}&apikey=${apiKey}`,
-      { signal: AbortSignal.timeout(8000) }
-    ),
-    fetch(
-      `https://api.tomorrow.io/v4/weather/forecast?location=${location}&units=${units}&timesteps=1d&apikey=${apiKey}`,
-      { signal: AbortSignal.timeout(8000) }
-    ),
-  ]);
-
-  const weatherFetchedAt = new Date().toISOString();
-  console.log(`[API] Tomorrow.io weather (${city}) — realtime HTTP ${realtimeResp.status}, forecast HTTP ${forecastResp.status} at ${weatherFetchedAt}`);
-  if (realtimeResp.status === 429 || forecastResp.status === 429) {
-    console.warn(`RATE LIMIT DETECTED on Tomorrow.io (weather/${city}) at ${weatherFetchedAt} — HTTP 429`);
-  }
-  if (!realtimeResp.ok) throw new Error(`Tomorrow.io realtime error for ${city}: ${realtimeResp.status}`);
-  if (!forecastResp.ok) throw new Error(`Tomorrow.io forecast error for ${city}: ${forecastResp.status}`);
-
-  const [realtime, forecast] = await Promise.all([
-    realtimeResp.json() as Promise<TomorrowRealtimeResponse>,
-    forecastResp.json() as Promise<TomorrowForecastResponse>,
-  ]);
-
-  const current = realtime.data.values;
-  const today = forecast.timelines.daily[0]?.values;
-
-  return {
-    city,
-    temp: Math.round(current.temperature),
-    feelsLike: Math.round(current.temperatureApparent),
-    high: Math.round(today?.temperatureMax ?? current.temperature),
-    low: Math.round(today?.temperatureMin ?? current.temperature),
-    condition: TOMORROW_CONDITIONS[current.weatherCode] ?? "conditions unknown",
-    precipChance: Math.round(today?.precipitationProbabilityMax ?? current.precipitationProbability),
-    humidity: Math.round(current.humidity),
-    windSpeed: Math.round(current.windSpeed),
-    uvIndex: Math.round(current.uvIndex),
-    uvIndexMax: Math.round(today?.uvIndexMax ?? current.uvIndex),
-  };
-}
-
-function formatWeatherBlock(w: WeatherResult): string {
+function formatWeatherBlock(w: CachedWeather): string {
   return (
     `${w.city}: ${w.temp}°F (feels like ${w.feelsLike}°F), ${w.condition}` +
     ` — high ${w.high}°F / low ${w.low}°F` +
@@ -295,7 +173,7 @@ function formatWeatherBlock(w: WeatherResult): string {
   );
 }
 
-function buildContextualWeatherBlock(dallas: WeatherResult, knoxville: WeatherResult, now: Date): string {
+function buildContextualWeatherBlock(dallas: CachedWeather, knoxville: CachedWeather, now: Date): string {
   const tz = "America/Chicago";
   const dayName = now.toLocaleDateString("en-US", { timeZone: tz, weekday: "long" });
 
@@ -1330,37 +1208,22 @@ router.post("/chat", async (req, res) => {
       ? `\n• Tomorrow is a pickleball day — mention it as part of the tomorrow preview.`
       : "";
 
-    // ── Fetch tonight + tomorrow's weather for Dallas ────────────────────────
+    // ── Fetch tonight + tomorrow's weather for Dallas (shared cache) ─────────
     let tomorrowWeatherBlock = "";
     try {
-      const apiKey = process.env.TOMORROW_IO_API_KEY;
-      if (apiKey) {
-        const forecastResp = await fetch(
-          `https://api.tomorrow.io/v4/weather/forecast?location=32.7767,-96.7970&units=imperial&timesteps=1d&apikey=${apiKey}`,
-          { signal: AbortSignal.timeout(6000) }
-        );
-        if (forecastResp.ok) {
-          const forecastData = await forecastResp.json() as {
-            timelines?: { daily?: Array<{ values?: { temperatureMax?: number; temperatureMin?: number; weatherCode?: number; precipitationProbabilityMax?: number } }> }
-          };
-          const daily = forecastData.timelines?.daily;
-          const tonightForecast = daily?.[0]?.values;
-          const tomorrowForecast = daily?.[1]?.values;
-          if (tonightForecast || tomorrowForecast) {
-            const tonightLow = tonightForecast ? `${Math.round(tonightForecast.temperatureMin ?? 0)}°F` : null;
-            const tomorrowHigh = tomorrowForecast ? Math.round(tomorrowForecast.temperatureMax ?? 0) : null;
-            const tomorrowCondition = tomorrowForecast ? (TOMORROW_CONDITIONS[tomorrowForecast.weatherCode ?? 0] ?? "conditions unknown") : null;
-            const tomorrowPrecip = tomorrowForecast ? Math.round(tomorrowForecast.precipitationProbabilityMax ?? 0) : 0;
-            tomorrowWeatherBlock =
-              `\n\n[Weather — Dallas]\n` +
-              (tonightLow ? `Tonight's low: ${tonightLow}. ` : "") +
-              (tomorrowHigh && tomorrowCondition
-                ? `Tomorrow: high ${tomorrowHigh}°F, ${tomorrowCondition}${tomorrowPrecip > 30 ? `, ${tomorrowPrecip}% chance of rain` : ""}.`
-                : "") +
-              `\nDeliver this as one natural sentence covering tonight and tomorrow — e.g. "Tonight should drop to around ${tonightLow ?? "the low 60s"}, and tomorrow's looking like a ${tomorrowCondition ?? "nice day"} with a high of ${tomorrowHigh ?? "–"}." Keep it brief and conversational.`;
-          }
-        }
-      }
+      const dallas = await getCachedWeather("Dallas", 32.7767, -96.7970);
+      const tonightLow = `${dallas.low}°F`;
+      const tomorrow = dallas.forecastDays[0]; // forecastDays[0] = tomorrow (day 1, skipping today)
+      const tomorrowHigh = tomorrow?.high ?? null;
+      const tomorrowCondition = tomorrow?.condition ?? null;
+      const tomorrowPrecip = tomorrow?.precipChance ?? 0;
+      tomorrowWeatherBlock =
+        `\n\n[Weather — Dallas]\n` +
+        `Tonight's low: ${tonightLow}. ` +
+        (tomorrowHigh && tomorrowCondition
+          ? `Tomorrow: high ${tomorrowHigh}°F, ${tomorrowCondition}${tomorrowPrecip > 30 ? `, ${tomorrowPrecip}% chance of rain` : ""}.`
+          : "") +
+        `\nDeliver this as one natural sentence covering tonight and tomorrow — e.g. "Tonight should drop to around ${tonightLow}, and tomorrow's looking like a ${tomorrowCondition ?? "nice day"} with a high of ${tomorrowHigh ?? "–"}." Keep it brief and conversational.`;
     } catch { /* non-fatal — skip weather if API unavailable */ }
 
     // ── Fetch tomorrow's calendar events for wind-down preview ──────────────

@@ -18,6 +18,7 @@ import { getPendingFollowUps, buildRecommendationFollowUpBlock } from "../recomm
 import { collectSundayData, buildSundaySummaryBlock } from "../sundaySummary/sundaySummaryManager.js";
 import { getJournalCountThisWeek, getRecentJournalEntries } from "../journal/journalManager.js";
 import { getStoryCount } from "../stories/storyManager.js";
+import { getCachedWeather, type CachedWeather, type ForecastDay, TOMORROW_CONDITIONS } from "../weather/weatherCache.js";
 import { setCachedBriefing } from "./briefingCache.js";
 import { fetchDallasContent } from "./dallasContent.js";
 import { runVenueScan } from "./venueMonitor.js";
@@ -88,76 +89,6 @@ async function buildCalendarDepartureTimes(events: CalendarEvent[], homeAddress:
 // Dallas local content is now handled by dallasContent.ts (RSS feeds + web search fallback).
 // Imported below alongside other module imports.
 
-const TOMORROW_CONDITIONS: Record<number, string> = {
-  1000: "clear skies", 1001: "cloudy", 1100: "mostly clear", 1101: "partly cloudy",
-  1102: "mostly cloudy", 2000: "foggy", 2100: "light fog", 4000: "drizzle",
-  4001: "rain", 4200: "light rain", 4201: "heavy rain", 5000: "snow",
-  5001: "flurries", 5100: "light snow", 5101: "heavy snow", 6000: "freezing drizzle",
-  6001: "freezing rain", 6200: "light freezing rain", 6201: "heavy freezing rain",
-  7000: "ice pellets", 7101: "heavy ice pellets", 7102: "light ice pellets",
-  8000: "thunderstorms",
-};
-
-interface ForecastDay {
-  dayName: string;
-  high: number;
-  low: number;
-  precipChance: number;
-  conditionCode?: number;
-}
-
-interface WeatherResult {
-  city: string; temp: number; feelsLike: number; high: number; low: number;
-  condition: string; precipChance: number; humidity: number; windSpeed: number;
-  uvIndex: number; uvIndexMax: number;
-  forecastDays: ForecastDay[];
-}
-
-async function fetchCityWeather(city: string, lat: number, lon: number): Promise<WeatherResult> {
-  const apiKey = process.env.TOMORROW_IO_API_KEY;
-  if (!apiKey) throw new Error("TOMORROW_IO_API_KEY not configured");
-  const location = `${lat},${lon}`;
-  const [realtimeResp, forecastResp] = await Promise.all([
-    fetch(`https://api.tomorrow.io/v4/weather/realtime?location=${location}&units=imperial&apikey=${apiKey}`, { signal: AbortSignal.timeout(10000) }),
-    fetch(`https://api.tomorrow.io/v4/weather/forecast?location=${location}&units=imperial&timesteps=1d&apikey=${apiKey}`, { signal: AbortSignal.timeout(10000) }),
-  ]);
-  const weatherFetchedAt = new Date().toISOString();
-  console.log(`[API] Tomorrow.io weather/briefing (${city}) — realtime HTTP ${realtimeResp.status}, forecast HTTP ${forecastResp.status} at ${weatherFetchedAt}`);
-  if (realtimeResp.status === 429 || forecastResp.status === 429) {
-    console.warn(`RATE LIMIT DETECTED on Tomorrow.io (weather/${city}) at ${weatherFetchedAt} — HTTP 429`);
-  }
-  if (!realtimeResp.ok) throw new Error(`Tomorrow.io realtime error for ${city}: ${realtimeResp.status}`);
-  if (!forecastResp.ok) throw new Error(`Tomorrow.io forecast error for ${city}: ${forecastResp.status}`);
-  const [realtime, forecast] = await Promise.all([
-    realtimeResp.json() as Promise<{ data: { values: { temperature: number; temperatureApparent: number; humidity: number; windSpeed: number; precipitationProbability: number; uvIndex: number; weatherCode: number } } }>,
-    forecastResp.json() as Promise<{ timelines: { daily: Array<{ time: string; values: { temperatureMax: number; temperatureMin: number; precipitationProbabilityMax: number; uvIndexMax: number; weatherCodeDay?: number } }> } }>,
-  ]);
-  const current = realtime.data.values;
-  const today = forecast.timelines.daily[0]?.values;
-
-  // Build 5-day forecast (days 1–5, skipping today)
-  const forecastDays: ForecastDay[] = forecast.timelines.daily.slice(1, 6).map((day) => {
-    const date = new Date(day.time);
-    const dayName = date.toLocaleDateString("en-US", { timeZone: "America/Chicago", weekday: "short" });
-    return {
-      dayName,
-      high: Math.round(day.values.temperatureMax),
-      low: Math.round(day.values.temperatureMin),
-      precipChance: Math.round(day.values.precipitationProbabilityMax),
-      conditionCode: day.values.weatherCodeDay,
-    };
-  });
-
-  return {
-    city, temp: Math.round(current.temperature), feelsLike: Math.round(current.temperatureApparent),
-    high: Math.round(today?.temperatureMax ?? current.temperature), low: Math.round(today?.temperatureMin ?? current.temperature),
-    condition: TOMORROW_CONDITIONS[current.weatherCode] ?? "conditions unknown",
-    precipChance: Math.round(today?.precipitationProbabilityMax ?? current.precipitationProbability),
-    humidity: Math.round(current.humidity), windSpeed: Math.round(current.windSpeed),
-    uvIndex: Math.round(current.uvIndex), uvIndexMax: Math.round(today?.uvIndexMax ?? current.uvIndex),
-    forecastDays,
-  };
-}
 
 // ── Dallas pollen data via Open-Meteo Air Quality API ─────────────────────────
 
@@ -208,16 +139,16 @@ async function fetchDallasPollenData(lat: number, lon: number): Promise<PollenRe
   }
 }
 
-function formatWeatherBlock(w: WeatherResult): string {
+function formatWeatherBlock(w: CachedWeather): string {
   return `${w.city}: ${w.temp}°F (feels like ${w.feelsLike}°F), ${w.condition} — high ${w.high}°F / low ${w.low}°F | ${w.precipChance}% precip | humidity ${w.humidity}%`;
 }
 
 interface SecondaryWeatherEntry {
   person: { name: string; city: string };
-  weather: WeatherResult;
+  weather: CachedWeather;
 }
 
-function buildContextualWeatherBlock(dallas: WeatherResult, secondary: SecondaryWeatherEntry[], now: Date): string {
+function buildContextualWeatherBlock(dallas: CachedWeather, secondary: SecondaryWeatherEntry[], now: Date): string {
   const tz = "America/Chicago";
   const dayName = now.toLocaleDateString("en-US", { timeZone: tz, weekday: "long" });
   const pickleballDays = ["Monday", "Wednesday", "Friday", "Saturday"];
@@ -482,11 +413,11 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
 
     // Start secondary weather fetches in parallel with the main Promise.all
     const secondaryWeatherPromise = Promise.all(
-      validSecondaryLocs.map((s) => fetchCityWeather(s.city, s.lat, s.lon).catch(() => null))
+      validSecondaryLocs.map((s) => getCachedWeather(s.city, s.lat, s.lon).catch(() => null))
     );
 
     const [dallas, emails, events, lastNightNotes, newsBlock, yesterdayEps, todayEps, sportsScores, upcomingBills, upcomingDates, sundayData, pendingFollowUps, dallasEvents, journalCountWeek, recentJournals, totalStories, pollenData, venueConcertsBlock, dailyMotivation] = await Promise.all([
-      fetchCityWeather(primaryCity, primaryLat, primaryLon).catch(() => null),
+      getCachedWeather(primaryCity, primaryLat, primaryLon).catch(() => null),
       fetchAndSummarizeEmails(15).catch(() => null),
       fetchWeekEvents(false).catch(() => null),
       getLastNightNotes().catch(() => []),
