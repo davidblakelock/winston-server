@@ -279,6 +279,22 @@ function AppWithAuth() {
     await signOut();
   }, [signOut]);
 
+  // ── Global notification tap handler ──────────────────────────────────────
+  // When the service worker posts NOTIFICATION_TAP (user tapped a push notification),
+  // always navigate to '/' regardless of which page the app is currently showing.
+  // The pending reminder/message is stored in IDB by the service worker and
+  // read by Chat.tsx once it mounts at '/'.
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+    const handler = (event: MessageEvent) => {
+      if (event.data?.type !== "NOTIFICATION_TAP") return;
+      console.log("[APP] NOTIFICATION_TAP received — forcing navigation to /");
+      navigate("/");
+    };
+    navigator.serviceWorker.addEventListener("message", handler);
+    return () => navigator.serviceWorker.removeEventListener("message", handler);
+  }, [navigate]);
+
   // ── Handle Google OAuth redirect: token + name arrive as URL params ───────
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);

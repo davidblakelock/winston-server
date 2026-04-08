@@ -142,22 +142,28 @@ self.addEventListener("notificationclick", (event) => {
     );
 
     if (existing) {
-      console.log("[SW] existing Winston tab found — focusing and posting message");
+      console.log("[SW] existing Winston tab found — writing IDB, focusing, signalling NOTIFICATION_TAP");
+      // Always write to IDB first so Chat.tsx can read the reminder after navigating to '/'.
+      try {
+        await storePendingReminder(reminderText, reminderId);
+      } catch { /* non-fatal */ }
       // Step 3: focus the existing tab
       try {
         await existing.focus();
-        // Step 4: post message so the app can speak the reminder immediately
-        existing.postMessage({ type: "NOTIFICATION_CLICK", url: targetUrl });
-        console.log("[SW] focus + postMessage succeeded");
+        // Step 4: signal the app to navigate home and read from IDB.
+        // App.tsx listens for NOTIFICATION_TAP and calls navigate('/').
+        // Chat.tsx listens for NOTIFICATION_TAP and reads IDB.
+        existing.postMessage({ type: "NOTIFICATION_TAP" });
+        console.log("[SW] focus + NOTIFICATION_TAP posted — IDB has the pending message");
         return;
       } catch (focusErr) {
-        // focus() can fail on Android Chrome when tab is in background
-        // Fall through to openWindow
-        console.warn("[SW] focus() failed — falling back to openWindow:", focusErr);
+        // focus() can fail on Android Chrome when tab is in background.
+        // IDB is already written above — fall through to openWindow.
+        console.warn("[SW] focus() failed — falling back to openWindow (IDB already stored):", focusErr);
       }
     }
 
-    // Step 5: no existing tab or focus failed — store reminder and open a fresh window
+    // Step 5: no existing tab or focus failed — store reminder and open a fresh window.
     console.log("[SW] opening new window:", WINSTON_URL);
     try {
       await storePendingReminder(reminderText, reminderId);

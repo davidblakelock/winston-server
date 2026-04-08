@@ -1008,29 +1008,47 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
     }
   }, [messagesLoaded, pendingNotification, submitText, speakReply]);
 
-  // Listen for NOTIFICATION_CLICK messages from the service worker.
-  // Fired when David taps "Open Winston" and the app is already open in the background.
-  // The SW posts this message after calling client.focus() so Emma speaks the reminder
-  // without requiring any navigation — the app is already mounted and ready.
+  // Listen for NOTIFICATION_TAP from the service worker.
+  // Fired when David taps a push notification and the app is already open.
+  // App.tsx has already called navigate('/') at this point.
+  // We read the pending reminder/check-in from IDB here so Chat.tsx can
+  // display and speak the message immediately without any extra steps.
+  // spokenReminderIds guards against double-speak when REMINDER_PUSH already
+  // handled a real reminder in the foreground.
   useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
     const handler = (event: MessageEvent) => {
-      if (event.data?.type !== "NOTIFICATION_CLICK") return;
-      const url = event.data.url as string;
+      if (event.data?.type !== "NOTIFICATION_TAP") return;
+      console.log("[CHAT] NOTIFICATION_TAP received — reading IDB for pending message");
       try {
-        const params = new URLSearchParams(new URL(url).search);
-        const type = params.get("notification");
-        if (type === "morning") {
-          setPendingNotification({ type: "morning" });
-        } else if (type === "reminder") {
-          const text = params.get("text");
-          const rawId = params.get("reminderId");
-          const id = rawId ? parseInt(rawId, 10) : undefined;
-          if (text) setPendingNotification({ type: "reminder", text, id: id && !isNaN(id) ? id : undefined });
-        }
-      } catch { /* ignore malformed URLs */ }
+        const req = indexedDB.open("winston-sw", 1);
+        req.onsuccess = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains("pending")) return;
+          const tx = db.transaction("pending", "readwrite");
+          const store = tx.objectStore("pending");
+          const getReq = store.get("reminder");
+          getReq.onsuccess = () => {
+            const pending = getReq.result as { reminderText?: string; reminderId?: number } | undefined;
+            if (!pending?.reminderText) return;
+            store.delete("reminder"); // consume so it never fires twice
+            const text = pending.reminderText;
+            const rid = typeof pending.reminderId === "number" ? pending.reminderId : null;
+            // If this specific reminder was already spoken via REMINDER_PUSH, skip it
+            if (rid != null && spokenReminderIds.current.has(rid)) {
+              console.log("[CHAT] NOTIFICATION_TAP: reminderId", rid, "already spoken — skipping");
+              return;
+            }
+            console.log("[CHAT] NOTIFICATION_TAP: setting pending notification from IDB — text:", text);
+            setPendingNotification((prev) => prev ?? { type: "reminder", text, id: rid ?? undefined });
+          };
+        };
+      } catch { /* IDB unavailable on this device */ }
     };
-    navigator.serviceWorker?.addEventListener("message", handler);
-    return () => navigator.serviceWorker?.removeEventListener("message", handler);
+    navigator.serviceWorker.addEventListener("message", handler);
+    return () => navigator.serviceWorker.removeEventListener("message", handler);
+  // spokenReminderIds is a ref — always current, no need in deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // IndexedDB fallback — reads any reminder the service worker stored before calling
