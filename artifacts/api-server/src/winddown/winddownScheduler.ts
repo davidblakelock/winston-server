@@ -96,13 +96,21 @@ export function startWinddownScheduler(): void {
         hour12: false,
       });
 
-      console.log(`WINDDOWN: checking at ${localTime} (scheduled: ${settings.scheduledTime}, enabled: ${settings.enabled})`);
-
       if (!settings.enabled) {
         return;
       }
 
-      if (localTime !== settings.scheduledTime) return;
+      // Convert HH:MM strings to minutes since midnight for window comparison
+      const toMinutes = (t: string) => {
+        const [h, m] = t.split(":").map(Number);
+        return h * 60 + m;
+      };
+      const nowMinutes = toMinutes(localTime);
+      const scheduledMinutes = toMinutes(settings.scheduledTime);
+      const minutesPast = nowMinutes - scheduledMinutes;
+
+      // Fire if we're within 0–9 minutes after the scheduled time (catches server restarts)
+      if (minutesPast < 0 || minutesPast >= 10) return;
 
       if (await hasFiredToday()) {
         console.log(`WINDDOWN: already fired today — skipping`);
