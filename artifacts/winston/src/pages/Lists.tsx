@@ -61,8 +61,9 @@ export default function Lists() {
       setItems((prev) => [...prev, data.item]);
       setInputValue("");
       inputRef.current?.focus();
-    } catch {
-      // silent
+    } catch(err) {
+      console.error("List add failed:", err);
+      alert("Failed to save: " + (err as Error).message);
     } finally {
       setAdding(false);
     }
