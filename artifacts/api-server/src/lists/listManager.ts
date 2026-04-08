@@ -15,6 +15,7 @@ export interface ListResult {
   action: ListAction;
   listName: string;
   items: string[];
+  alreadyExisted: string[];
   currentItems: string[];
 }
 
@@ -130,10 +131,24 @@ export async function getAllLists(): Promise<Record<string, string[]>> {
 // ── Execute a list operation and return context for Emma Peel ─────────────────
 
 export async function executeListOp(op: ListOp): Promise<ListResult> {
+  let alreadyExisted: string[] = [];
+
   switch (op.action) {
-    case "add":
-      await addItems(op.listName, op.items);
+    case "add": {
+      // Always read current state from Supabase first — never trust local state or cache
+      const existing = await getItems(op.listName);
+      const existingLower = new Set(existing.map((i) => i.trim().toLowerCase()));
+
+      const newItems = op.items.filter((i) => !existingLower.has(i.trim().toLowerCase()));
+      alreadyExisted = op.items.filter((i) => existingLower.has(i.trim().toLowerCase()));
+
+      if (newItems.length > 0) {
+        await addItems(op.listName, newItems);
+      }
+      // Replace op.items with only what was actually inserted
+      op = { ...op, items: newItems };
       break;
+    }
     case "remove":
       await removeItems(op.listName, op.items);
       break;
@@ -145,7 +160,7 @@ export async function executeListOp(op: ListOp): Promise<ListResult> {
   }
 
   const currentItems = await getItems(op.listName);
-  return { ...op, currentItems };
+  return { ...op, alreadyExisted, currentItems };
 }
 
 // ── Build the system-prompt injection ────────────────────────────────────────
@@ -155,14 +170,29 @@ export function buildListContext(result: ListResult): string {
 
   switch (result.action) {
     case "add": {
-      const added = result.items.join(", ");
       const remaining =
         result.currentItems.length > 0
           ? result.currentItems.map((i, n) => `${n + 1}. ${i}`).join("\n")
           : "(empty)";
+
+      if (result.items.length === 0 && result.alreadyExisted.length > 0) {
+        // Nothing new was added — every item was already in Supabase
+        const dupes = result.alreadyExisted.join(", ");
+        return (
+          `\n\n[List — No Change — ${displayName}]\n` +
+          `Already on list (not added again): ${dupes}\n` +
+          `Current list:\n${remaining}\n` +
+          `Tell David that ${dupes} is already on his ${displayName} so you didn't add it again.`
+        );
+      }
+
+      const added = result.items.join(", ");
+      const dupeNote = result.alreadyExisted.length > 0
+        ? `\nAlready existed (skipped): ${result.alreadyExisted.join(", ")}`
+        : "";
       return (
         `\n\n[List updated — ${displayName}]\n` +
-        `Added: ${added}\n` +
+        `Added: ${added}${dupeNote}\n` +
         `Current list:\n${remaining}\n` +
         `Confirm warmly and mention what was added. You may optionally read the full list if it is short.`
       );
