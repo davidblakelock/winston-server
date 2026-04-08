@@ -55,13 +55,16 @@ const DALLAS_FEEDS: FeedConfig[] = [
 
 const EXCLUDE_PATTERNS: RegExp[] = [
   /sponsored|advertisement|advertorial|promoted content/i,
+  // Sports game results are covered by the ESPN API in Section 10 — never duplicate here
+  /\b(rangers|cowboys|mavericks|dallas stars|fc dallas)\b.{0,60}(score|win|loss|beat|game recap|final|lead|inning|quarter|down \d|up \d)/i,
+  /\b(score|win|loss|beat|game recap|final)\b.{0,60}\b(rangers|cowboys|mavericks|dallas stars|fc dallas)\b/i,
 ];
 
-// High: new restaurants in David's neighborhoods + Rangers/Cowboys + his music artists/venues
+// High: new restaurants in David's neighborhoods + his music artists/venues
+// Note: Rangers/Cowboys scores come from the ESPN API (Section 10) — do NOT surface sports articles here
 const HIGH_PRIORITY_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
   { pattern: /new restaurant|just opened|opening|grand opening|now open/i,         label: "restaurant opening" },
   { pattern: /knox.?henderson|uptown dallas|deep ellum|bishop arts|downtown dallas/i, label: "preferred neighborhood" },
-  { pattern: /rangers|cowboys|mavericks|dallas stars|fc dallas/i,                  label: "dallas sports" },
   // David's specific music artists
   { pattern: /jimmy buffett|margaritaville/i,                                      label: "Jimmy Buffett" },
   { pattern: /bonnie raitt/i,                                                      label: "Bonnie Raitt" },
