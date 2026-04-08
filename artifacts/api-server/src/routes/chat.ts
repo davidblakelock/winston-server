@@ -846,7 +846,7 @@ router.post("/chat", async (req, res) => {
     if (cachedBriefing) {
       req.log.info({ chars: cachedBriefing.length }, "Serving morning briefing from cache — instant");
       sendMorningSSE({ text: cachedBriefing });
-      sendMorningSSE({ done: true });
+      sendMorningSSE({ done: true, isMorningBriefing: true });
       res.end();
       return;
     }

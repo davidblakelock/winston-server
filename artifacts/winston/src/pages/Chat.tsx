@@ -7,6 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useNotifications, isNotificationsSupported } from "@/hooks/useNotifications";
 import { EmergencyOverlay } from "@/components/EmergencyOverlay";
 import SettingsPanel from "@/components/SettingsPanel";
+import { WeatherCard } from "@/components/WeatherCard";
 
 const EMERGENCY_REGEX = /\b(ms\.?\s*peel\s+(i\s+(need|am|have|fell|can.t|cannot)|call\s+911|help\s+me)|call\s+911|i.ve\s+fallen|i\s+fell\s+(down|and)|i.m\s+not\s+(feeling|ok)|i\s+think\s+i.m\s+(having|going)|chest\s+pain|can.t\s+breathe|emergency|i\s+need\s+(help|an?\s+ambulance)|heart\s+attack|stroke|i.ve\s+been\s+(hurt|injured))\b/i;
 
@@ -66,6 +67,7 @@ interface Message {
   navigationUrl?: string;
   navigationDestination?: string;
   isWinddown?: boolean;
+  isMorningBriefing?: boolean;
 }
 
 interface ReminderEvent {
@@ -557,6 +559,11 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
             navUrl = data.navigationUrl as string | undefined;
             serverMsgId = data.messageId as string | undefined;
             finished = true;
+            if (data.isMorningBriefing) {
+              setMessages((prev) =>
+                prev.map((m) => m.id === targetMsgId ? { ...m, isMorningBriefing: true } : m)
+              );
+            }
           }
           if (data.error) {
             const errReply = (data.reply as string) || "Something went wrong. Please try again.";
@@ -2030,6 +2037,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
                   Evening Wind-Down
                 </p>
               )}
+              {msg.isMorningBriefing && <WeatherCard />}
               <div className="whitespace-pre-wrap font-sans">{msg.content}</div>
 
               {/* Navigation card — shown for messages that triggered directions */}

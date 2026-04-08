@@ -177,6 +177,22 @@ function pollenLevel(value: number): string {
   return "very high";
 }
 
+async function geocodeCity(city: string): Promise<{ lat: number; lon: number } | null> {
+  try {
+    const encoded = encodeURIComponent(city);
+    const url = `https://nominatim.openstreetmap.org/search?q=${encoded}&format=json&limit=1`;
+    const res = await fetch(url, {
+      headers: { "User-Agent": "WinstonCompanion/1.0" },
+      signal: AbortSignal.timeout(5000),
+    });
+    const data = await res.json() as Array<{ lat: string; lon: string }>;
+    if (!data.length) return null;
+    return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
+  } catch {
+    return null;
+  }
+}
+
 async function fetchDallasPollenData(): Promise<PollenResult | null> {
   try {
     const resp = await fetch(
@@ -198,7 +214,12 @@ function formatWeatherBlock(w: WeatherResult): string {
   return `${w.city}: ${w.temp}°F (feels like ${w.feelsLike}°F), ${w.condition} — high ${w.high}°F / low ${w.low}°F | ${w.precipChance}% precip | humidity ${w.humidity}%`;
 }
 
-function buildContextualWeatherBlock(dallas: WeatherResult, knoxville: WeatherResult, now: Date): string {
+interface SecondaryWeatherEntry {
+  person: { name: string; city: string };
+  weather: WeatherResult;
+}
+
+function buildContextualWeatherBlock(dallas: WeatherResult, secondary: SecondaryWeatherEntry[], now: Date): string {
   const tz = "America/Chicago";
   const dayName = now.toLocaleDateString("en-US", { timeZone: tz, weekday: "long" });
   const pickleballDays = ["Monday", "Wednesday", "Friday", "Saturday"];
@@ -274,7 +295,7 @@ function buildContextualWeatherBlock(dallas: WeatherResult, knoxville: WeatherRe
     `Now: ${dallas.temp}°F, ${dallas.condition} | Today: high ${dallas.high}°F / low ${dallas.low}°F | Rain chance: ${dallas.precipChance}%\n` +
     (fiveDayLines ? `5-Day Forecast: ${fiveDayLines}\n` : "") +
     (morningActivityPassed ? `[Morning activity window has passed — it is past 10am CT. Do NOT suggest David go for a run or to pickleball.]\n` : "") +
-    `\n[VERIFIED — Tomorrow.io Weather API — Knoxville (for Olivia)]\n${formatWeatherBlock(knoxville)}\n` +
+    secondary.map((s) => `\n[VERIFIED — Tomorrow.io Weather API — ${s.person.city} (for ${s.person.name})]\n${formatWeatherBlock(s.weather)}\n`).join("") +
     signalLines
   );
 }
@@ -417,7 +438,7 @@ const MASTER_BRIEFING_INSTRUCTION = `
     Sentence 1: "Dallas is [temp]° and [condition] today — high [X], low [Y]." (Use current temp and condition from the data. Just numbers. No "feels like.")
     Sentence 2 (only if pollen is high/severe): "[Tree/Grass] pollen is [high/severe] today." Weave this naturally. Skip entirely if pollen is low or moderate.
     Sentence 3 (only if there is a dangerous weather signal — thunderstorms, extreme heat, snow): One clear warning sentence. Skip if conditions are normal.
-    Then: ONE sentence for Knoxville — "Olivia's weather in Knoxville — [temp]° and [condition], high [X]." Use the [VERIFIED — Tomorrow.io Weather API — Knoxville] data block.
+    Then: For each [VERIFIED — Tomorrow.io Weather API — {City} (for {Person})] block that is present, deliver ONE sentence: "{Person}'s weather in {City} — [temp]° and [condition], high [X]." Use only verified data from that block.
     If [Morning activity window has passed] is flagged — do NOT mention workouts, runs, pickleball, walks, or outdoor activity at all. Just weather.
     If it is NOT flagged and an activity signal is present — one sentence about it only. Example: "Good morning for pickleball." or "Bring an umbrella for your run."
     NOTHING ELSE. No UV index commentary. No elaboration. No extra sentences.
@@ -497,9 +518,27 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
         ? buildSystemPromptFromProfile(userProfile, userProfile.rawData as CollectedData)
         : BASE_SYSTEM_PROMPT;
 
-    const [dallas, knoxville, emails, events, lastNightNotes, newsBlock, yesterdayEps, todayEps, morningMeds, medsAlreadyTaken, sportsScores, upcomingBills, marketsData, upcomingDates, sundayData, pendingFollowUps, dallasEvents, journalCountWeek, recentJournals, totalStories, pollenData, venueConcertsBlock, dailyMotivation] = await Promise.all([
-      fetchCityWeather("Dallas", 32.7767, -96.7970).catch(() => null),
-      fetchCityWeather("Knoxville", 35.9606, -83.9207).catch(() => null),
+    // Geocode secondary cities from profile before the main Promise.all
+    const rawPeople = ((userProfile?.rawData as CollectedData)?.people ?? []).filter((p) => p.city && p.city.trim().length > 0).slice(0, 4);
+    const geocodedSecondary = await Promise.all(
+      rawPeople.map(async (p) => {
+        const coords = await geocodeCity(p.city!).catch(() => null);
+        return coords ? { name: p.name, city: p.city!, lat: coords.lat, lon: coords.lon } : null;
+      })
+    );
+    const validSecondaryLocs = geocodedSecondary.filter(Boolean) as Array<{ name: string; city: string; lat: number; lon: number }>;
+
+    // Start secondary weather fetches in parallel with the main Promise.all
+    const secondaryWeatherPromise = Promise.all(
+      validSecondaryLocs.map((s) => fetchCityWeather(s.city, s.lat, s.lon).catch(() => null))
+    );
+
+    const primaryCity = userProfile?.city ?? "Dallas";
+    const primaryLat = userProfile?.latitude ?? 32.7767;
+    const primaryLon = userProfile?.longitude ?? -96.7970;
+
+    const [dallas, emails, events, lastNightNotes, newsBlock, yesterdayEps, todayEps, morningMeds, medsAlreadyTaken, sportsScores, upcomingBills, marketsData, upcomingDates, sundayData, pendingFollowUps, dallasEvents, journalCountWeek, recentJournals, totalStories, pollenData, venueConcertsBlock, dailyMotivation] = await Promise.all([
+      fetchCityWeather(primaryCity, primaryLat, primaryLon).catch(() => null),
       fetchAndSummarizeEmails(15).catch(() => null),
       fetchWeekEvents().catch(() => null),
       getLastNightNotes().catch(() => []),
@@ -523,6 +562,17 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       fetchDailyMotivation().catch(() => ""),
     ]);
 
+    // Collect secondary weather results (likely already resolved)
+    const secondaryWeatherResults = await secondaryWeatherPromise;
+    const secondaryWeatherEntries: SecondaryWeatherEntry[] = validSecondaryLocs.reduce<SecondaryWeatherEntry[]>(
+      (acc, loc, i) => {
+        const w = secondaryWeatherResults[i];
+        if (w) acc.push({ person: { name: loc.name, city: loc.city }, weather: w });
+        return acc;
+      },
+      []
+    );
+
     const pollenBlock = pollenData
       ? (() => {
           const parts: string[] = [];
@@ -533,9 +583,9 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
         })()
       : "";
 
-    const weatherBlock = dallas && knoxville
-      ? buildContextualWeatherBlock(dallas, knoxville, now) + pollenBlock
-      : (dallas ? `\n\n[VERIFIED — Tomorrow.io Weather API — Dallas]\n${formatWeatherBlock(dallas)}` + pollenBlock : "");
+    const weatherBlock = dallas
+      ? buildContextualWeatherBlock(dallas, secondaryWeatherEntries, now) + pollenBlock
+      : "";
 
     // Update the last-checked timestamp so on-demand checks during the day only show NEW emails
     if (emails !== null) {
