@@ -916,14 +916,14 @@ router.post("/chat", async (req, res) => {
       const upcoming = await getUpcomingBills(60, sessionUserName);
       const allBills = await getBills(sessionUserName);
       if (!allBills.length) {
-        systemPrompt += `\n\n[Financial Obligations — None tracked yet]\nTell David he doesn't have any bills tracked yet. Let him know he can add them naturally — e.g. "My Amex bill is due on the 15th of every month."`;
+        systemPrompt += `\n\n[Financial Obligations — AUTHORITATIVE CURRENT STATE FROM SUPABASE]\nThe bills list is empty — zero bills are tracked. Disregard any bills mentioned earlier in this conversation. Tell David he doesn't have any bills tracked yet and let him know he can add them naturally — e.g. "My Amex bill is due on the 15th of every month."`;
       } else {
         const upcomingText = formatBillsForPrompt(upcoming);
         const furtherOut = allBills.filter((b) => !upcoming.find((u) => u.id === b.id));
         const furtherOutText = furtherOut.length
           ? `\n\nTracked but more than 60 days away: ${furtherOut.map((b) => b.name).join(", ")}`
           : "";
-        systemPrompt += `\n\n[Financial Obligations — David's tracked bills]\n${upcomingText}${furtherOutText}\n\nRead these back to David in a warm, conversational way — chronological order, mentioning how many days until each one. Highlight anything due soon (within 7 days) first.`;
+        systemPrompt += `\n\n[Financial Obligations — AUTHORITATIVE CURRENT STATE FROM SUPABASE]\nDisregard any bills mentioned earlier in this conversation — this is the live list:\n${upcomingText}${furtherOutText}\nRead ONLY these bills back to David in a warm, conversational way — chronological order, mentioning how many days until each one. Highlight anything due soon (within 7 days) first. Do not mention any bill not listed above.`;
       }
     } catch (err) {
       req.log.warn({ err }, "Bill list failed");
@@ -1773,7 +1773,7 @@ router.post("/chat", async (req, res) => {
         systemPrompt += `\n\n[Medications — None Set Up]\nDavid has no medications configured yet. Let him know and offer to add one.`;
       } else {
         const medDetails = meds.map((m) => `• ${m.name}${m.dosage ? ` ${m.dosage}` : ""} — ${m.reminderTime}`).join("\n");
-        systemPrompt += `\n\n[Medications — David's List]\n${medDetails}\nStatus today: ${taken ? "✅ Confirmed taken" : "⏳ Not yet confirmed"}\nRead this back naturally. If not taken yet, gently remind him.`;
+        systemPrompt += `\n\n[Medications — David's List — AUTHORITATIVE CURRENT STATE FROM SUPABASE]\nDisregard any medications mentioned earlier in this conversation — this is the live list:\n${medDetails}\nStatus today: ${taken ? "✅ Confirmed taken" : "⏳ Not yet confirmed"}\nRead ONLY these medications back. Do not mention any medication not listed above.`;
       }
     } catch (err) {
       req.log.warn({ err }, "Medication list failed");
@@ -1949,37 +1949,35 @@ router.post("/chat", async (req, res) => {
     req.log.info({ location: navLocation.name, url: navigationUrl }, "Navigation triggered");
   }
 
-  // ── Scrub stale list data from conversation history ───────────────────────
-  // When a list request is in progress, strip any previous assistant messages
-  // that contain list content. This prevents Claude from reading old list items
-  // from history after the list has been cleared or modified in Supabase.
-  const LIST_DATA_PATTERN = /\b\d+\.\s+\S|(?:shopping|to[\s\-]?do|grocery|errand|task)\s+list[\s:,]|on\s+(?:your|the)\s+(?:shopping|to[\s\-]?do|grocery|errand|task)\s+list\b/i;
-
-  // ── Scrub contact data from conversation history ──────────────────────────
-  // When a contacts query is in progress, strip any previous assistant messages
-  // that contain contact-looking data (phone numbers, emails, "found X in contacts").
-  // This prevents Claude from reusing fabricated or stale contact data from prior turns.
+  // ── Scrub stale data from conversation history ────────────────────────────
+  // For any request that reads live DB data, strip prior assistant messages
+  // that contain that same data type. This prevents Claude from reading stale
+  // values out of history when the underlying Supabase data has changed.
+  const LIST_DATA_PATTERN    = /\b\d+\.\s+\S|(?:shopping|to[\s\-]?do|grocery|errand|task)\s+list[\s:,]|on\s+(?:your|the)\s+(?:shopping|to[\s\-]?do|grocery|errand|task)\s+list\b/i;
   const CONTACT_DATA_PATTERN = /\bPhone\s*:\s*[\d\s()+-]+|Email\s*:\s*\S+@\S+|\b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b|found\s+\w[\w\s]+in your contacts|@\w+\.(com|net|org|io)\b/i;
+  const MED_DATA_PATTERN     = /\[Medications — David's List\]|you(?:'re| are) (?:currently )?(?:taking|on)\b|\b(?:mg|dosage|dose)\b.*\b(?:daily|once|twice|morning|night)\b|\bmedication list\b/i;
+  const BILL_DATA_PATTERN    = /\[Financial Obligations\]|due (?:on (?:the )?\d+|in \d+ days?)|\$[\d,.]+ (?:is )?due|tracked bills|upcoming bills|bill.*due date/i;
 
-  const filteredHistory = isListRequest
+  const scrubPatterns: Array<{ active: boolean; pattern: RegExp; label: string }> = [
+    { active: isListRequest,              pattern: LIST_DATA_PATTERN,    label: "[LISTS]" },
+    { active: isContactRequest,           pattern: CONTACT_DATA_PATTERN, label: "[CONTACTS]" },
+    { active: isMedList,                  pattern: MED_DATA_PATTERN,     label: "[MEDS]" },
+    { active: isBillList,                 pattern: BILL_DATA_PATTERN,    label: "[BILLS]" },
+  ];
+  const activePatterns = scrubPatterns.filter((s) => s.active);
+
+  const filteredHistory = activePatterns.length > 0
     ? history.filter((msg: { role: string; content: string }) => {
         if (msg.role !== "assistant") return true;
-        const hasListData = LIST_DATA_PATTERN.test(msg.content);
-        if (hasListData) {
-          req.log.info("[LISTS] Stripped prior assistant message with list data from history to prevent stale data reuse");
-        }
-        return !hasListData;
-      })
-    : isContactRequest
-      ? history.filter((msg: { role: string; content: string }) => {
-          if (msg.role !== "assistant") return true;
-          const hasContactData = CONTACT_DATA_PATTERN.test(msg.content);
-          if (hasContactData) {
-            req.log.info("[CONTACTS] Stripped prior assistant message with contact-like data from history to prevent hallucination reuse");
+        for (const { pattern, label } of activePatterns) {
+          if (pattern.test(msg.content)) {
+            req.log.info(`${label} Stripped prior assistant message with stale data from history`);
+            return false;
           }
-          return !hasContactData;
-        })
-      : history;
+        }
+        return true;
+      })
+    : history;
 
   const messages: Anthropic.MessageParam[] = [
     ...filteredHistory.map((msg: { role: string; content: string }) => ({
