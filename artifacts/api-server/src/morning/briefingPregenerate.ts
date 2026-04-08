@@ -447,6 +447,8 @@ const MASTER_BRIEFING_INSTRUCTION = `
 
   SECTION 12 — MUSIC EVENTS: Upcoming concerts at David's saved venues that match his taste — Kessler, Granada, Dos Equis Pavilion, AT&T Performing Arts Center, Klyde Warren Park, Dallas Arboretum, Meyerson. Use the venue concerts block. If nothing upcoming or nothing found, skip this section entirely.
 
+  TV SHOWS — STRICT RULE: ONLY mention a TV show if the [TV Shows — New Episodes] block is present in this prompt. If that block is absent, never reference any TV show, series, episode, or streaming content — not Shrinking, not Lincoln Lawyer, not Friends & Neighbors, not any show from David's profile. No exceptions. TV is data-driven only.
+
   SECTION 13 — BIRTHDAYS AND IMPORTANT DATES: Any birthdays or anniversaries in the next 7 days. Name the person and the date specifically. SKIP if none.
 
   SECTION 14 — MEDICATION: Include ONLY if the [Medications — Not yet taken today] block is present. Remind David warmly in one sentence to take his morning meds with food. If the block says [Medications — Already confirmed today], skip this section entirely — do NOT mention medications or that you're skipping it. If the [Medications] block is absent entirely, include a brief reminder anyway ("Don't forget your morning meds with breakfast."). Never skip if medications have not been confirmed.
