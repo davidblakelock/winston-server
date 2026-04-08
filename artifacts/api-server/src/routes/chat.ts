@@ -1325,7 +1325,7 @@ router.post("/chat", async (req, res) => {
       ? `\n• Tomorrow is a pickleball day — mention it as part of the tomorrow preview.`
       : "";
 
-    // ── Fetch tomorrow's weather for Dallas (top of wind-down) ──────────────
+    // ── Fetch tonight + tomorrow's weather for Dallas ────────────────────────
     let tomorrowWeatherBlock = "";
     try {
       const apiKey = process.env.TOMORROW_IO_API_KEY;
@@ -1338,16 +1338,21 @@ router.post("/chat", async (req, res) => {
           const forecastData = await forecastResp.json() as {
             timelines?: { daily?: Array<{ values?: { temperatureMax?: number; temperatureMin?: number; weatherCode?: number; precipitationProbabilityMax?: number } }> }
           };
-          const tomorrowForecast = forecastData.timelines?.daily?.[1]?.values;
-          if (tomorrowForecast) {
-            const high = Math.round(tomorrowForecast.temperatureMax ?? 0);
-            const low = Math.round(tomorrowForecast.temperatureMin ?? 0);
-            const condition = TOMORROW_CONDITIONS[tomorrowForecast.weatherCode ?? 0] ?? "conditions unknown";
-            const precip = Math.round(tomorrowForecast.precipitationProbabilityMax ?? 0);
+          const daily = forecastData.timelines?.daily;
+          const tonightForecast = daily?.[0]?.values;
+          const tomorrowForecast = daily?.[1]?.values;
+          if (tonightForecast || tomorrowForecast) {
+            const tonightLow = tonightForecast ? `${Math.round(tonightForecast.temperatureMin ?? 0)}°F` : null;
+            const tomorrowHigh = tomorrowForecast ? Math.round(tomorrowForecast.temperatureMax ?? 0) : null;
+            const tomorrowCondition = tomorrowForecast ? (TOMORROW_CONDITIONS[tomorrowForecast.weatherCode ?? 0] ?? "conditions unknown") : null;
+            const tomorrowPrecip = tomorrowForecast ? Math.round(tomorrowForecast.precipitationProbabilityMax ?? 0) : 0;
             tomorrowWeatherBlock =
-              `\n\n[Tomorrow's Weather — Dallas]\n` +
-              `High ${high}°F / Low ${low}°F, ${condition}${precip > 30 ? `, ${precip}% chance of rain` : ""}.\n` +
-              `Mention this naturally at the top of the wind-down — two sentences max, temperature and conditions only.`;
+              `\n\n[Weather — Dallas]\n` +
+              (tonightLow ? `Tonight's low: ${tonightLow}. ` : "") +
+              (tomorrowHigh && tomorrowCondition
+                ? `Tomorrow: high ${tomorrowHigh}°F, ${tomorrowCondition}${tomorrowPrecip > 30 ? `, ${tomorrowPrecip}% chance of rain` : ""}.`
+                : "") +
+              `\nDeliver this as one natural sentence covering tonight and tomorrow — e.g. "Tonight should drop to around ${tonightLow ?? "the low 60s"}, and tomorrow's looking like a ${tomorrowCondition ?? "nice day"} with a high of ${tomorrowHigh ?? "–"}." Keep it brief and conversational.`;
           }
         }
       }
@@ -1398,36 +1403,33 @@ router.post("/chat", async (req, res) => {
     } catch { /* non-fatal */ }
 
     systemPrompt +=
-      `\n\n[Evening Wind-Down Session — ACTIVE]\n` +
-      `Follow this exact structure — one step at a time, let each breathe:\n\n` +
-      `STEP 0 — WEATHER PREVIEW (if [Tomorrow's Weather] block is present): Open with one warm sentence ` +
-      `about tomorrow's weather in Dallas — temperature and conditions only. Keep it brief and natural, ` +
-      `e.g. "Tomorrow's looking like a cool one — high of 62 and partly cloudy." Never more than two sentences.\n\n` +
-      `STEP 1 — WARM CHECK-IN: Ask how his day went. Reference one or two specific things from today ` +
-      `if you can (from calendar context or recent conversation). Keep it warm and genuine.\n\n` +
-      `STEP 2 — TOMORROW PREVIEW: After the check-in, briefly preview what's on tomorrow from the ` +
-      `[Tomorrow's Calendar] block. Include times. If the calendar is clear, say so warmly. ` +
-      `If he mentions wanting to remember something for tomorrow, save it.` +
-      tomorrowPickleballNote + `\n\n` +
-      `STEP 3 — OPTIONAL ENTERTAINMENT: If something relevant is in [TV — New Episodes in Last 3 Days], ` +
-      `mention it briefly and naturally. Skip entirely if nothing is listed. ` +
-      `NEVER suggest Spotify or Apple Music. If suggesting music, say: "You might search [artist/genre] ` +
-      `on YouTube Music" — artist or genre only, never a specific album. ` +
-      `NEVER suggest decaf, herbal tea, or any specific drink.\n\n` +
-      `STEP 4 — OLIVIA ARCHIVE (MANDATORY): Ask specifically: "Want to capture something from today ` +
-      `for Olivia's archive?" Keep this framing — light, warm, specific to today. ` +
-      `This is a quick daily capture moment, distinct from the deeper memory question below.\n\n` +
-      `STEP 5 — JOURNAL PROMPT (MANDATORY): After the archive offer, always ask: ` +
-      `"Would you like to add anything to your journal tonight? Just a few thoughts about your day — ` +
-      `completely optional." If he says no, move on.\n\n` +
-      `STEP 6 — MEMORY QUESTION (MANDATORY): Ask the deeper memory question from ` +
-      `[Tonight's Memory Question] block. Frame it warmly: ` +
-      `"I'd love to dig a little deeper tonight — [question]." One question only, never more.\n\n` +
-      `STEP 7 — GOODNIGHT: End warmly. If David hasn't taken his medications, remind him gently. ` +
-      `Mention Winston the corgi. Wish him well for tomorrow specifically. Keep it warm and brief.\n\n` +
-      `RULE: Never rush through multiple steps in one message. One step at a time. ` +
-      `RULE: Never suggest decaf, herbal tea, or sleep aids — that's condescending. ` +
-      `RULE: Never mention a TV show not listed in [TV — New Episodes in Last 3 Days].` +
+      `\n\n[Evening Wind-Down — ACTIVE]\n` +
+      `This is a warm, brief check-in from a trusted friend — not a checklist. ` +
+      `Move through these naturally, one topic per message. Never combine two topics into one message. ` +
+      `Let each breathe. Skip anything David already addressed.\n\n` +
+      `FLOW:\n\n` +
+      `1. CHECK-IN — Ask how his day went. Keep it warm, personal, and genuine. ` +
+      `Reference something specific from today's calendar or conversation if you can.\n\n` +
+      `2. WEATHER + TOMORROW — After he responds, weave weather and tomorrow's schedule into one natural exchange. ` +
+      `One sentence covering tonight and tomorrow's weather from [Weather — Dallas]. ` +
+      `One sentence on tomorrow's calendar from [Tomorrow's Calendar]. ` +
+      `If tomorrow is clear, say so warmly. ` + tomorrowPickleballNote + `\n\n` +
+      `3. MEMORY FOR OLIVIA — Ask the story question from [Tonight's Memory Question]. ` +
+      `Frame it as a warm invitation: "I'd love to capture something for Olivia — [question]." ` +
+      `One question only. Never more. This is one of the most meaningful things you do together.\n\n` +
+      `4. JOURNAL — Ask simply: "Is there anything from today you'd like to capture in your journal?" ` +
+      `Low-key. If he says no or nothing, move on without pushing.\n\n` +
+      `5. CLOSING — One warm, open question to end the evening. Something genuine — ` +
+      `what he's looking forward to, or just "Anything else on your mind tonight?"\n\n` +
+      `6. MUSIC (optional) — Only if the moment feels right, ask simply: ` +
+      `"Want some background music to wind down?" Do not suggest specific artists, playlists, or apps.\n\n` +
+      `RULES:\n` +
+      `• One topic per message — never rush two into one.\n` +
+      `• Never mention medications.\n` +
+      `• Never suggest phone charging, sleep aids, tea, or drinks.\n` +
+      `• Never suggest Spotify, Apple Music, YouTube Music, or specific artists.\n` +
+      `• Never mention a TV show not listed in [TV — New Episodes in Last 3 Days].\n` +
+      `• Keep the whole session feeling like a conversation, not a procedure.\n` +
       tomorrowWeatherBlock +
       tomorrowCalendarBlock +
       tvEveningNote;
@@ -1536,23 +1538,22 @@ router.post("/chat", async (req, res) => {
           await setPendingQuestion(storyQ.id, storyQ.question);
           req.log.info({ questionId: storyQ.id, category: storyQ.category, prompt: storyQ.question.substring(0, 80) }, "Evening story question queued");
           systemPrompt +=
-            `\n\n[Tonight's Memory Question for Olivia — MANDATORY — Step 4]\nCategory: ${storyQ.category}\nQuestion: "${storyQ.question}"\n\nIMPORTANT: This question MUST be asked every wind-down session. Do not skip it even if David seems tired or brief. ` +
-            `Wait until Steps 1 and 2 (check-in and tomorrow preview) are complete, then ask warmly: ` +
-            `"Before we say goodnight, I'd love to capture something for Olivia's book..." and then ask the question. ` +
-            `Frame it as an invitation, never homework. One question only. This is one of Winston's most important features.`;
+            `\n\n[Tonight's Memory Question for Olivia]\nCategory: ${storyQ.category}\nQuestion: "${storyQ.question}"\n\n` +
+            `Ask this as step 3 of the wind-down — after the check-in and weather/tomorrow preview. ` +
+            `Frame it as a warm invitation, not a task: "I'd love to capture something for Olivia — [question]." ` +
+            `One question only. Never more. This is one of the most meaningful parts of the evening.`;
         }
       }
     } catch (err) {
       req.log.warn({ err }, "Evening story question queue failed");
     }
   } else if (winddownActive && pendingPrompt && !isPotentialStoryResponse) {
-    // Story question was already queued in a previous message this session — remind Claude it's mandatory
+    // Story question was already queued in a previous message this session — remind Claude warmly
     systemPrompt +=
-      `\n\n[Tonight's Memory Question — Still Pending — MANDATORY]\n` +
+      `\n\n[Tonight's Memory Question — Still Pending]\n` +
       `Question for Olivia: "${pendingPrompt}"\n` +
-      `This question has not been answered yet tonight. It MUST be asked before goodnight. ` +
-      `If the check-in is done, ask it now warmly: "Before we wrap up, I'd love to capture something for Olivia's book..." ` +
-      `One question only. Do not skip it.`;
+      `This hasn't been asked yet tonight. When the moment feels right, bring it in warmly: ` +
+      `"I'd love to capture something for Olivia — [question]." One question only.`;
   }
 
   // ── Story retrieval ──
