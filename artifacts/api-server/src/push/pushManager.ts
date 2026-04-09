@@ -126,7 +126,10 @@ export async function sendPushToAll(
         const result = await webpush.sendNotification(
           { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
           body,
-          { TTL: 60 * 60 * 4 } // 4 hour TTL
+          {
+            TTL: 60 * 60 * 4, // 4 hour TTL
+            urgency: "high",  // bypass Android Doze mode — default "normal" defers delivery when screen is off
+          }
         );
         console.log(`PUSH SEND: FCM response status ${result.statusCode}`);
         console.log(`PUSH SEND: FCM response body ${result.body || "(empty)"}`);
