@@ -323,7 +323,7 @@ const MASTER_BRIEFING_INSTRUCTION = `
 
   SECTION 4 — POLLEN: SKIP THIS SECTION ENTIRELY.
 
-  SECTION 5 — EMAIL: Only unread emails from the last 24 hours. Share one or two that actually matter — something requiring action, from someone important, or genuinely worth knowing. If the inbox is clear, say exactly: "Your inbox is clear — no new unread emails this morning." Never count unread messages. Never summarize read emails or confirmation emails David has already seen.
+  SECTION 5 — EMAIL: If there is a [VERIFIED — Gmail API — unread emails] block below, share one or two that actually matter — something requiring action, from someone important, or genuinely worth knowing. Never count unread messages. Never summarize confirmation emails or automated mail David doesn't need to act on. If there is NO Gmail API block, SKIP SECTION 5 ENTIRELY — do not mention email, do not say the inbox is clear or quiet.
 
   SECTION 6 — CALENDAR: Today's upcoming events only — nothing in the past, nothing more than 7 days out. Include departure time for any appointment with a location. If the day is clear, say so warmly in one sentence. Do NOT mention bills here — bills have their own section.
     WEATHER EXCEPTION — the only place weather is ever permitted: if today's calendar includes a specific outdoor physical activity (a run, a walk, a pickleball game) AND the weather signals block flags severe/dangerous conditions (thunderstorms, extreme heat, heavy rain) OR explicitly PERFECT conditions — weave ONE brief phrase naturally into the sentence for that event. Example: "You've got pickleball at 8 — perfect morning for it." or "Your run is at 7, but rain is likely." This is the ONLY weather reference permitted anywhere in the entire briefing. Do NOT use this exception if no outdoor activity is on today's calendar, or if conditions are ordinary. Do NOT mention temperature numbers, degrees, highs, lows, or any other weather specifics here — only the plain-language signal word (perfect / stormy / rain likely).
@@ -529,12 +529,12 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       updateEmailLastChecked().catch(() => {});
     }
 
-    const gmailBlock = emails !== null
-      ? (emails.length === 0
-          ? `\n\n[VERIFIED — Gmail API — no new unread emails in the last 24 hours]\nDo not mention email in the briefing — tell David his inbox is quiet if he asks.`
-          : `\n\n[VERIFIED — Gmail API — unread emails from the last 24 hours]\n${formatEmailsForPrompt(emails)}\nThis is VERIFIED data. State sender names, subjects, and content exactly as shown.` +
-            buildScamWarningInstruction(emails))
+    const gmailBlock = emails !== null && emails.length > 0
+      ? `\n\n[VERIFIED — Gmail API — unread emails]\n${formatEmailsForPrompt(emails)}\nThis is VERIFIED data. State sender names, subjects, and content exactly as shown.` +
+        buildScamWarningInstruction(emails)
       : "";
+    // When emails is null (auth failure) or empty (inbox clear at briefing time),
+    // we inject NO gmail block — Section 5 is instructed to skip when block is absent.
 
     // Build calendar block with departure times, and pre-populate sync state so
     // events in the briefing are never flagged as "new" by the 30-min sync scheduler.
