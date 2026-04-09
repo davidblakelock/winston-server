@@ -142,25 +142,42 @@ self.addEventListener("notificationclick", (event) => {
     );
 
     if (existing) {
-      console.log("[SW] existing Winston tab found — writing IDB, focusing, signalling NOTIFICATION_TAP");
-      // Always write to IDB first so Chat.tsx can read the reminder after navigating to '/'.
+      console.log("[SW] existing Winston tab found — writing IDB, navigating/focusing");
+      // Always write to IDB first so Chat.tsx can read the reminder after any open path.
       try {
         await storePendingReminder(reminderText, reminderId);
       } catch { /* non-fatal */ }
-      // Step 3: focus the existing tab
+
+      // Step 3a: try navigate() — on Android Chrome this reliably brings the tab to the
+      // foreground (unlike focus() which resolves without actually foregrounding on mobile).
+      let signalled = false;
       try {
-        await existing.focus();
-        // Step 4: signal the app to navigate home and read from IDB.
-        // App.tsx listens for NOTIFICATION_TAP and calls navigate('/').
-        // Chat.tsx listens for NOTIFICATION_TAP and reads IDB.
-        existing.postMessage({ type: "NOTIFICATION_TAP" });
-        console.log("[SW] focus + NOTIFICATION_TAP posted — IDB has the pending message");
-        return;
-      } catch (focusErr) {
-        // focus() can fail on Android Chrome when tab is in background.
-        // IDB is already written above — fall through to openWindow.
-        console.warn("[SW] focus() failed — falling back to openWindow (IDB already stored):", focusErr);
+        if (typeof existing.navigate === "function") {
+          const navClient = await existing.navigate(targetUrl);
+          const client = navClient || existing;
+          await client.focus().catch(() => {});
+          client.postMessage({ type: "NOTIFICATION_TAP" });
+          console.log("[SW] navigate() + NOTIFICATION_TAP posted — IDB has pending data");
+          signalled = true;
+        }
+      } catch (navErr) {
+        console.warn("[SW] navigate() failed — will try focus():", navErr);
       }
+
+      // Step 3b: fallback to focus() if navigate() was unavailable or threw.
+      if (!signalled) {
+        try {
+          await existing.focus();
+          existing.postMessage({ type: "NOTIFICATION_TAP" });
+          console.log("[SW] focus() + NOTIFICATION_TAP posted — IDB has pending data");
+          signalled = true;
+        } catch (focusErr) {
+          console.warn("[SW] focus() also failed — falling back to openWindow:", focusErr);
+        }
+      }
+
+      if (signalled) return;
+      // Both navigate() and focus() failed — fall through to openWindow below.
     }
 
     // Step 5: no existing tab or focus failed — store reminder and open a fresh window.
@@ -201,7 +218,12 @@ self.addEventListener("notificationclick", (event) => {
   }
 
   // ── Unknown action — treat as open ──────────────────────────────────────────
-  console.warn("[SW] unknown action:", JSON.stringify(action), "— treating as open");
+  console.warn("[SW] unknown action:", JSON.stringify(action), "— treating as open, calling openWindow");
+  event.waitUntil(
+    storePendingReminder(reminderText, reminderId)
+      .catch(() => {})
+      .then(() => self.clients.openWindow(WINSTON_URL).catch(() => {}))
+  );
 });
 
 // ── Token relay ───────────────────────────────────────────────────────────────

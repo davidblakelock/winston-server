@@ -1461,12 +1461,11 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
           // that fired while the connection was down (screen lock, background tab, etc.)
           console.log("[REMINDER] SSE reconnected — polling for missed reminders");
           void pollMissedReminders();
-          // Re-register push subscription if it got cleared during a server restart
-          const resubscribe = notifResubscribeRef.current;
-          if (resubscribe) {
-            console.log("[PUSH] SSE reconnected — re-registering push subscription");
-            void resubscribe();
-          }
+          // NOTE: push re-registration is intentionally NOT done here.
+          // The useNotifications mount check handles re-registration on every page load.
+          // Calling resubscribe() from an SSE reconnect caused a race condition:
+          // it ran forceRenew=true during the mount check's async window, unsubscribing
+          // a valid browser subscription before the mount check could find it.
         }
         hasConnectedOnce = true;
       };
