@@ -381,12 +381,33 @@ interface ExtractedReminder {
 }
 
 async function extractReminder(message: string): Promise<ExtractedReminder | null> {
-  const now = new Date().toLocaleString("en-US", { timeZone: "America/Chicago" });
+  // Build current CT time in unambiguous 24-hour ISO-style format.
+  // toLocaleString() produces "4/9/2026, 2:30:00 PM" (12-hour) which the AI can
+  // misinterpret when computing relative times like "in 5 minutes".
+  // Intl.DateTimeFormat.formatToParts gives us 24-hour parts directly.
+  const nowRaw = new Date();
+  const ctFmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Chicago",
+    year:   "numeric",
+    month:  "2-digit",
+    day:    "2-digit",
+    hour:   "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZoneName: "short",
+  });
+  const ctParts = Object.fromEntries(
+    ctFmt.formatToParts(nowRaw).map((x) => [x.type, x.value])
+  );
+  // e.g. "2026-04-09 14:30 CDT"
+  const nowCT = `${ctParts.year}-${ctParts.month}-${ctParts.day} ${ctParts.hour}:${ctParts.minute} ${ctParts.timeZoneName ?? "CT"}`;
 
   const extraction = await anthropic.messages.create({
     model: "claude-opus-4-5",
     max_tokens: 256,
-    system: `You extract reminder details from natural language. Current time in Dallas, TX (Central Time): ${now}.
+    system: `You extract reminder details from natural language. Current time in Dallas, TX: ${nowCT} (24-hour clock).
+
+For relative times ("in 5 minutes", "in 1 hour", "in 30 minutes") add the offset to the EXACT current time shown above and output the result in 24-hour HH:MM format. Do not round to a convenient hour or half-hour.
 
 Return ONLY valid JSON with these fields:
 - reminderText: string — what to remind about (concise, e.g. "call Olivia")
@@ -397,7 +418,8 @@ Return ONLY valid JSON with these fields:
 Examples:
 "remind me to call Olivia at 3pm" → {"reminderText":"call Olivia","time":"15:00","isRecurring":false,"recurring":null}
 "remind me to take my medication every morning at 7am" → {"reminderText":"take my medication","time":"07:00","isRecurring":true,"recurring":"daily"}
-"remind me to walk Winston every weekday at 8am" → {"reminderText":"walk Winston","time":"08:00","isRecurring":true,"recurring":"weekdays"}`,
+"remind me to walk Winston every weekday at 8am" → {"reminderText":"walk Winston","time":"08:00","isRecurring":true,"recurring":"weekdays"}
+"remind me in 5 minutes" (current time 14:30) → {"reminderText":"...","time":"14:35","isRecurring":false,"recurring":null}`,
     messages: [{ role: "user", content: message }],
   });
 
@@ -437,7 +459,13 @@ function computeFireAt(timeStr: string, tz: string): Date {
   // Represent "now" as a fake-UTC ms value using the tz wall-clock values.
   // This lets us do arithmetic purely with UTC math.
   const localNowMs = Date.UTC(tzYear, tzMonth, tzDay, tzHour, tzMin, 0);
-  const offsetMs   = now.getTime() - localNowMs; // e.g. CDT = UTC-5 → offsetMs ≈ +5h
+
+  // Truncate real "now" to the minute boundary before computing the offset.
+  // now.getTime() carries raw seconds+ms; localNowMs has seconds=0.
+  // Without truncation, offsetMs would be "5h 0m 42s" instead of exactly "5h",
+  // and that 42-second noise would bleed into the final fire_at timestamp.
+  const nowTruncatedMs = now.getTime() - (now.getSeconds() * 1000 + now.getMilliseconds());
+  const offsetMs = nowTruncatedMs - localNowMs; // CDT → exactly +5h; CST → exactly +6h
 
   // Build the desired fire time on today's tz date (using fake-UTC)
   let candidateMs = Date.UTC(tzYear, tzMonth, tzDay, desiredH, desiredM, 0);
