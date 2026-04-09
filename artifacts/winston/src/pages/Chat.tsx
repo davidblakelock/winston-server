@@ -76,7 +76,7 @@ function withMorningFlag(msg: Message): Message {
   if (msg.role === "assistant" && !msg.isMorningBriefing) {
     const lower = msg.content.toLowerCase();
     const isBriefing =
-      (lower.startsWith("good morning") && msg.content.includes("°") && msg.content.length > 400) ||
+      (lower.startsWith("good morning") && msg.content.length > 400) ||
       lower.startsWith("your morning briefing isn't ready yet");
     if (isBriefing) return { ...msg, isMorningBriefing: true };
   }
