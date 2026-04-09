@@ -46,6 +46,7 @@ self.addEventListener("activate", (event) => {
 // ── Push event ────────────────────────────────────────────────────────────────
 self.addEventListener("push", (event) => {
   console.log("[SW] push event fired — service worker woke up", new Date().toISOString());
+  console.log("[SW] RAW push payload text:", event.data ? event.data.text() : "(no event.data)");
 
   let data = {};
   try {
