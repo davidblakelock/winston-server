@@ -1,8 +1,5 @@
-import Anthropic from "@anthropic-ai/sdk";
-import { fetchAndSummarizeEmails, formatEmailsForPrompt, buildScamWarningInstruction, updateEmailLastChecked } from "../google/gmail.js";
-import { fetchWeekEvents, formatCalendarForPrompt, toChicagoTime, type CalendarEvent } from "../google/calendar.js";
+import { toChicagoTime, type CalendarEvent } from "../google/calendar.js";
 import { estimateDriveTime, extractEventLocation } from "../departure/departureManager.js";
-import { populateCalendarSyncState } from "../departure/calendarSyncScheduler.js";
 import { getLastNightNotes, formatNotesForMorningBriefing } from "../winddown/winddownManager.js";
 import { getRecentMemories, formatMemoriesForContext } from "../memory/memoryManager.js";
 import { fetchMorningNews, fetchDailyMotivation } from "../news/newsManager.js";
@@ -18,25 +15,23 @@ import { getPendingFollowUps, buildRecommendationFollowUpBlock } from "../recomm
 import { collectSundayData, buildSundaySummaryBlock } from "../sundaySummary/sundaySummaryManager.js";
 import { getJournalCountThisWeek, getRecentJournalEntries } from "../journal/journalManager.js";
 import { getStoryCount } from "../stories/storyManager.js";
-import { getCachedWeather, type CachedWeather, type ForecastDay, TOMORROW_CONDITIONS } from "../weather/weatherCache.js";
-import { setCachedBriefing } from "./briefingCache.js";
+import { getCachedWeather, type CachedWeather, TOMORROW_CONDITIONS } from "../weather/weatherCache.js";
+import { setStaticBriefingContext } from "./briefingCache.js";
 import { fetchDallasContent, getDallasItems, buildDallasBlock } from "./dallasContent.js";
 import { runVenueScan, getVenueConcerts, buildVenueConcertsBlock } from "./venueMonitor.js";
 import {
   getSeenHeadlines,
-  logBriefingStories,
   isDuplicate,
   extractBoldHeadlines,
   filterNewsBlock,
 } from "./storyDedup.js";
 import { logger } from "../lib/logger.js";
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
 // ── Departure times for calendar events ───────────────────────────────────────
 // Calculates leave-by time for each event that has a location.
 // Runs all geocode/routing calls in parallel with a 10 s per-event timeout.
-async function buildCalendarDepartureTimes(events: CalendarEvent[], homeAddress: string, homeLat: number, homeLon: number): Promise<string> {
+// Exported so chat.ts can call it at briefing delivery time with live calendar events.
+export async function buildCalendarDepartureTimes(events: CalendarEvent[], homeAddress: string, homeLat: number, homeLon: number): Promise<string> {
   if (!events || events.length === 0) return "";
 
   const now = new Date();
@@ -421,10 +416,8 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       validSecondaryLocs.map((s) => getCachedWeather(s.city, s.lat, s.lon).catch(() => null))
     );
 
-    const [dallas, emails, events, lastNightNotes, newsBlock, yesterdayEps, todayEps, sportsScores, upcomingBills, upcomingDates, sundayData, pendingFollowUps, dallasEvents, journalCountWeek, recentJournals, totalStories, pollenData, venueConcertsBlock, dailyMotivation] = await Promise.all([
+    const [dallas, lastNightNotes, newsBlock, yesterdayEps, todayEps, sportsScores, upcomingBills, upcomingDates, sundayData, pendingFollowUps, dallasEvents, journalCountWeek, recentJournals, totalStories, pollenData, venueConcertsBlock, dailyMotivation] = await Promise.all([
       getCachedWeather(primaryCity, primaryLat, primaryLon).catch(() => null),
-      fetchAndSummarizeEmails(15).catch(() => null),
-      fetchWeekEvents(false).catch(() => null),
       getLastNightNotes().catch(() => []),
       fetchMorningNews().catch(() => ""),
       fetchEpisodesForDate(yesterday, watchedIds).catch(() => []),
@@ -529,28 +522,9 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       ? buildContextualWeatherBlock(dallas, secondaryWeatherEntries, now) + pollenBlock
       : "";
 
-    // Update the last-checked timestamp so on-demand checks during the day only show NEW emails
-    if (emails !== null) {
-      updateEmailLastChecked().catch(() => {});
-    }
-
-    const gmailBlock = emails !== null && emails.length > 0
-      ? `\n\n[VERIFIED — Gmail API — unread emails]\n${formatEmailsForPrompt(emails)}\nThis is VERIFIED data. State sender names, subjects, and content exactly as shown.` +
-        buildScamWarningInstruction(emails)
-      : "";
-    // When emails is null (auth failure) or empty (inbox clear at briefing time),
-    // we inject NO gmail block — Section 5 is instructed to skip when block is absent.
-
-    // Build calendar block with departure times, and pre-populate sync state so
-    // events in the briefing are never flagged as "new" by the 30-min sync scheduler.
-    const [calendarDepartureTimes] = await Promise.all([
-      events !== null ? buildCalendarDepartureTimes(events, homeAddress, primaryLat, primaryLon) : Promise.resolve(""),
-      events !== null ? populateCalendarSyncState(events).catch(() => {}) : Promise.resolve(),
-    ]);
-
-    const calendarBlock = events !== null
-      ? `\n\n[VERIFIED — Google Calendar API — today and next 7 days (past events excluded)]\n${formatCalendarForPrompt(events, "this week")}${calendarDepartureTimes}\n\n⚠ CALENDAR RULE — NO EXCEPTIONS: Use ONLY the exact event title shown above. NEVER substitute, infer, or enrich event titles with names or context from memory. Report every event title letter-for-letter as written. If you want to add context, frame it as a question (INFERRED tier), never a statement.`
-      : "";
+    // Email and calendar are NOT fetched at pre-generation time.
+    // They are fetched live at delivery time (when David says "good morning")
+    // so they always reflect the current moment.
 
     const notesBlock = formatNotesForMorningBriefing(lastNightNotes);
 
@@ -590,24 +564,9 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       ? dedupedDallasBlock
       : `\n\n[What's Happening in Dallas]\nNo new local events found for today. In Section 11, say exactly: "Nothing new on the Dallas events front this morning." Do not skip this section silently.`;
 
-    // Fix 5: Detect if David already had a morning workout on today's calendar
-    const morningWorkoutDone = (() => {
-      if (!events) return false;
-      const tz = "America/Chicago";
-      const nowMs = now.getTime();
-      const WORKOUT_KEYWORDS = /pickleball|run|jog|workout|gym|tennis|exercise|walk|hike|yoga|spinning|cycling|swim/i;
-      const todayIsoDate = now.toLocaleDateString("en-CA", { timeZone: tz }); // "YYYY-MM-DD"
-      return events.some((ev) => {
-        if (!ev.endIso) return false; // all-day or missing ISO, skip
-        const evEnd = new Date(ev.endIso);
-        // Must be today's date (compare using the event's isoDate field)
-        if (ev.isoDate !== todayIsoDate) return false;
-        // Must have already ended
-        if (evEnd.getTime() > nowMs) return false;
-        // Must match a workout keyword
-        return WORKOUT_KEYWORDS.test(ev.summary);
-      });
-    })();
+    // morningWorkoutDone is always false at pre-generation time (5 AM) — no workout
+    // has completed yet. This is computed from live calendar at delivery time if needed.
+    const morningWorkoutDone = false;
 
     const motivationContextBlock = (() => {
       const tz = "America/Chicago";
@@ -637,20 +596,24 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       (userProfile?.rawData ?? {}) as CollectedData
     );
 
-    const systemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + profileContextBlock + memoryBlock + dynamicProfileBlock +
-      notesBlock + weatherBlock + gmailBlock + calendarBlock + tvMorningBlock +
-      sportsBlock + billsMorningBlock + datesBlock + sundaySummaryBlock +
-      pickleballMorningBlock + recFollowUpBlock + motivationContextBlock +
+    // ── Split the system prompt into preamble (before email+calendar slot) ──────
+    // and suffix (after email+calendar slot, through MASTER_BRIEFING_INSTRUCTION).
+    // At delivery time, chat.ts inserts live gmailBlock + calendarBlock between them.
+    const preamble = getCurrentDateTimeBlock() + "\n" + corePrompt + profileContextBlock +
+      memoryBlock + dynamicProfileBlock + notesBlock + weatherBlock;
+
+    const suffix = tvMorningBlock + sportsBlock + billsMorningBlock + datesBlock +
+      sundaySummaryBlock + pickleballMorningBlock + recFollowUpBlock + motivationContextBlock +
       dallasEventsBlock + dedupedVenueConcertsBlock + dedupedNewsBlock + MASTER_BRIEFING_INSTRUCTION;
 
-    // Log which sections have data (for debugging completeness of the briefing)
+    // Log which static sections have data
     const sectionLog: Record<string, boolean | string> = {
       "S1_greeting": true,
       "S2_weather_today": !!dallas,
       "S3_five_day_forecast": !!(dallas?.forecastDays && dallas.forecastDays.length > 0),
       "S4_pollen": !!pollenData,
-      "S5_email": emails !== null,
-      "S6_calendar": events !== null && events.length > 0,
+      "S5_email": "live-at-delivery",
+      "S6_calendar": "live-at-delivery",
       "S7_bills_3day": upcomingBills.length > 0,
       "S8_news": dedupedNewsBlock.length > 0,
       "S10_sports": !!(sportsScores),
@@ -660,28 +623,21 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       "S14_motivation": true,
       "S16_sunday_special": isSunday,
     };
-    logger.info({ userName, sections: sectionLog }, "[BRIEFING SECTIONS] Data availability per section");
+    logger.info({ userName, sections: sectionLog }, "[BRIEFING SECTIONS] Static data availability per section (email+calendar fetched live at delivery)");
 
-    logger.info({ userName, newsChars: dedupedNewsBlock.length, seenCount: seenHeadlines.size }, "Pre-generate: calling Claude for briefing");
-
-    const response = await anthropic.messages.create({
-      model: "claude-opus-4-5",
-      max_tokens: 1800,
-      system: systemPrompt,
-      messages: [{ role: "user", content: "good morning" }],
+    setStaticBriefingContext(userName, {
+      preamble,
+      suffix,
+      candidateStoryKeys,
+      dateKey: generationDateKey,
+      builtAt: Date.now(),
     });
 
-    const text = response.content[0]?.type === "text" ? response.content[0].text.trim() : "";
-    if (text) {
-      setCachedBriefing(userName, text, generationDateKey);
-      logger.info({ userName, chars: text.length, dateKey: generationDateKey }, "Morning briefing pre-generated and cached");
-
-      // Log all candidate story keys so they won't repeat in the next 3 days
-      void logBriefingStories(userName, candidateStoryKeys);
-    } else {
-      logger.warn({ userName }, "Pre-generate: Claude returned empty text");
-    }
+    logger.info(
+      { userName, preambleChars: preamble.length, suffixChars: suffix.length, dateKey: generationDateKey },
+      "Static briefing context cached — email and calendar will be fetched live at delivery"
+    );
   } catch (err) {
-    logger.error({ err }, "Failed to pre-generate morning briefing");
+    logger.error({ err }, "Failed to pre-generate morning briefing static context");
   }
 }

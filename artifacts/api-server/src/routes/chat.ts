@@ -154,8 +154,10 @@ import {
 } from "../sundaySummary/sundaySummaryManager.js";
 import { validateSession } from "../auth/sessionAuth.js";
 import { normalizeTtsText } from "../lib/ttsNormalize.js";
-import { getCachedBriefing, setCachedBriefing } from "../morning/briefingCache.js";
-import { preFetchMorningBriefing } from "../morning/briefingPregenerate.js";
+import { getCachedBriefing, setCachedBriefing, getStaticBriefingContext } from "../morning/briefingCache.js";
+import { preFetchMorningBriefing, buildCalendarDepartureTimes } from "../morning/briefingPregenerate.js";
+import { populateCalendarSyncState } from "../departure/calendarSyncScheduler.js";
+import { logBriefingStories } from "../morning/storyDedup.js";
 import { createReminder } from "../reminders/reminderManager.js";
 import { broadcastToUser } from "../reminders/sseStore.js";
 
@@ -722,26 +724,109 @@ router.post("/chat", async (req, res) => {
       if (!res.writableEnded) res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
-    // ── Fast path: serve from pre-generated cache (instant) ──
-    const cachedBriefing = getCachedBriefing(sessionUserName) ?? getCachedBriefing("David");
-    if (cachedBriefing) {
-      req.log.info({ chars: cachedBriefing.length }, "Serving morning briefing from cache — instant");
-      sendMorningSSE({ text: cachedBriefing });
+    // ── Check for pre-built static context ──
+    const staticCtx = getStaticBriefingContext(sessionUserName) ?? getStaticBriefingContext("David");
+
+    if (!staticCtx) {
+      // Static context not ready — trigger background pre-generation
+      req.log.info("Morning briefing static context missing — triggering background pre-generation");
+      preFetchMorningBriefing("David").catch((err) =>
+        req.log.warn({ err }, "Background morning briefing pre-generation failed")
+      );
+      sendMorningSSE({ text: `Your morning briefing isn't ready yet — I'm pulling everything together right now. Give me about 2 minutes and say good morning again. I'll have it all waiting for you.` });
       sendMorningSSE({ done: true, isMorningBriefing: true });
       res.end();
       return;
     }
 
-    // ── Cache miss: kick off background pre-generation, return quick acknowledgment ──
-    // The live generation takes 2+ minutes and the deployment proxy drops long connections.
-    // Instead: respond instantly and let preFetchMorningBriefing run behind the scenes.
-    req.log.info('Morning briefing cache miss — triggering background pre-generation');
-    preFetchMorningBriefing("David").catch((err) =>
-      req.log.warn({ err }, 'Background morning briefing pre-generation failed')
+    // ── Fetch live email and calendar at delivery time ──
+    const deliveryNow = new Date();
+    const homeAddress = userProfile?.homeAddress ?? ((userProfile?.rawData as CollectedData)?.homeAddress) ?? "";
+    const primaryLat = userProfile?.latitude ?? 32.7767;
+    const primaryLon = userProfile?.longitude ?? -96.7970;
+
+    req.log.info("Fetching live email and calendar for morning briefing delivery");
+    const [liveEmails, allCalendarEvents] = await Promise.all([
+      fetchAndSummarizeEmails(15).catch(() => null),
+      fetchWeekEvents(false).catch(() => null),
+    ]);
+
+    // Filter calendar to events that have NOT yet started (start time is in the future)
+    // All-day events are always included since they don't have a specific start time that passes.
+    const liveEvents = allCalendarEvents?.filter((ev) => {
+      if (ev.allDay) return true;
+      if (!ev.startIso) return true;
+      return new Date(ev.startIso) > deliveryNow;
+    }) ?? null;
+
+    req.log.info(
+      {
+        emailCount: liveEmails?.length ?? "null (auth failed)",
+        totalCalEvents: allCalendarEvents?.length ?? "null",
+        futureCalEvents: liveEvents?.length ?? "null",
+      },
+      "Live email and calendar fetched for briefing delivery"
     );
-    sendMorningSSE({ text: `Your morning briefing isn't ready yet — I'm pulling everything together right now. Give me about 2 minutes and say good morning again. I'll have it all waiting for you.` });
+
+    // Build live Gmail block
+    const liveGmailBlock = liveEmails !== null && liveEmails.length > 0
+      ? `\n\n[VERIFIED — Gmail API — unread emails (live at delivery time)]\n${formatEmailsForPrompt(liveEmails)}\nThis is VERIFIED data. State sender names, subjects, and content exactly as shown.` +
+        buildScamWarningInstruction(liveEmails)
+      : "";
+
+    // Build live calendar block with departure times
+    let liveCalendarBlock = "";
+    if (liveEvents !== null) {
+      const [departureTimes] = await Promise.all([
+        buildCalendarDepartureTimes(liveEvents, homeAddress, primaryLat, primaryLon),
+        populateCalendarSyncState(liveEvents).catch(() => {}),
+      ]);
+      liveCalendarBlock =
+        `\n\n[VERIFIED — Google Calendar API — upcoming events from now through next 7 days (past events excluded)]\n` +
+        `${formatCalendarForPrompt(liveEvents, "this week")}${departureTimes}\n\n` +
+        `⚠ CALENDAR RULE — NO EXCEPTIONS: Use ONLY the exact event title shown above. NEVER substitute, infer, or enrich event titles with names or context from memory. Report every event title letter-for-letter as written. If you want to add context, frame it as a question (INFERRED tier), never a statement.`;
+    }
+
+    // Update email last-checked timestamp so on-demand checks show only new mail
+    if (liveEmails !== null) {
+      updateEmailLastChecked().catch(() => {});
+    }
+
+    // Assemble full system prompt: pre-built static preamble + live blocks + static suffix
+    const fullSystemPrompt = staticCtx.preamble + liveGmailBlock + liveCalendarBlock + staticCtx.suffix;
+
+    req.log.info(
+      { promptChars: fullSystemPrompt.length, hasEmail: !!liveGmailBlock, hasCalendar: !!liveCalendarBlock },
+      "Streaming morning briefing from live context"
+    );
+
+    // Stream Claude's response — each chunk is sent as a separate SSE text event.
+    // The frontend accumulates via: fullText += data.text (already handles this).
+    let fullBriefingText = "";
+    const stream = anthropic.messages.stream({
+      model: "claude-opus-4-5",
+      max_tokens: 1800,
+      system: fullSystemPrompt,
+      messages: [{ role: "user", content: "good morning" }],
+    });
+
+    for await (const event of stream) {
+      if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+        sendMorningSSE({ text: event.delta.text });
+        fullBriefingText += event.delta.text;
+      }
+    }
+
     sendMorningSSE({ done: true, isMorningBriefing: true });
     res.end();
+
+    // Cache the generated text for follow-up context and log story keys for dedup
+    if (fullBriefingText) {
+      setCachedBriefing(sessionUserName, fullBriefingText, staticCtx.dateKey);
+      void logBriefingStories(sessionUserName, staticCtx.candidateStoryKeys);
+      req.log.info({ chars: fullBriefingText.length }, "Morning briefing streamed and cached for follow-up context");
+    }
+
     return; // Morning greeting fully handled — skip generic handler below
   }
 
