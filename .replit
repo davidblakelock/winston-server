@@ -36,6 +36,7 @@ VAPID_EMAIL = "james@winston.app"
 OLIVIA_PASSWORD = "ForOlivia"
 SUPABASE_URL = "https://lwazyogcgyoivyjfniea.supabase.co"
 elevenlabs_api_key = "069f805acb411547f8d823645dd91b8e5876260fb24b8ff680c9f01ed7a758e7"
+APP_URL = "https://winston-companion--davidblakelock.replit.app"
 
 [userenv.production]
 GOOGLE_REDIRECT_URI = "https://winston-companion--davidblakelock.replit.app/api/auth/callback"
