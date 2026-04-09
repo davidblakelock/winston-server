@@ -461,10 +461,30 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
 
     // Dallas local content: filter by headline field, rebuild block
     const rawDallasItems = getDallasItems();
+    logger.info(
+      {
+        userName,
+        rawCount: rawDallasItems.length,
+        rawHeadlines: rawDallasItems.map((i) => i.headline).slice(0, 10),
+        dallasBlockChars: dallasEvents?.length ?? 0,
+      },
+      "[Dallas] fetchDallasContent result"
+    );
     const filteredDallasItems = rawDallasItems.filter((item) => !isDuplicate(item.headline, seenHeadlines));
+    const removedDallasCount = rawDallasItems.length - filteredDallasItems.length;
+    logger.info(
+      {
+        userName,
+        rawCount: rawDallasItems.length,
+        filteredCount: filteredDallasItems.length,
+        removedByDedup: removedDallasCount,
+        remainingHeadlines: filteredDallasItems.map((i) => i.headline),
+      },
+      "[Dallas] After dedup"
+    );
     const dedupedDallasBlock = buildDallasBlock(filteredDallasItems);
-    if (filteredDallasItems.length < rawDallasItems.length) {
-      logger.info({ userName, removed: rawDallasItems.length - filteredDallasItems.length }, "[StoryDedup] Filtered duplicate Dallas items");
+    if (dedupedDallasBlock.trim().length === 0) {
+      logger.warn({ userName, rawCount: rawDallasItems.length, removedByDedup: removedDallasCount }, "[Dallas] Block is EMPTY after dedup — injecting fallback");
     }
 
     // Venue concerts: filter by artistOrEvent + venue key, rebuild block
@@ -473,9 +493,15 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       (c) => !isDuplicate(`${c.artistOrEvent} ${c.venue}`, seenHeadlines)
     );
     const dedupedVenueConcertsBlock = buildVenueConcertsBlock(filteredVenueConcerts);
-    if (filteredVenueConcerts.length < rawVenueConcerts.length) {
-      logger.info({ userName, removed: rawVenueConcerts.length - filteredVenueConcerts.length }, "[StoryDedup] Filtered duplicate venue concerts");
-    }
+    logger.info(
+      {
+        userName,
+        rawCount: rawVenueConcerts.length,
+        filteredCount: filteredVenueConcerts.length,
+        removedByDedup: rawVenueConcerts.length - filteredVenueConcerts.length,
+      },
+      "[VenueMonitor] After dedup"
+    );
 
     // Collect all candidate story keys to log after successful briefing generation
     const candidateStoryKeys: string[] = [
@@ -553,8 +579,11 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       ? buildRecommendationFollowUpBlock(pendingFollowUps)
       : "";
 
-    // dallasEvents is the raw block from dallasContent.ts; use dedup-filtered version.
-    const dallasEventsBlock = dedupedDallasBlock || (dallasEvents ?? "");
+    // Use dedup-filtered Dallas block. If empty (all filtered or fetch failed),
+    // inject a fallback marker so Claude delivers the "no events" line rather than silently skipping.
+    const dallasEventsBlock = dedupedDallasBlock.trim().length > 0
+      ? dedupedDallasBlock
+      : `\n\n[What's Happening in Dallas]\nNo new local events found for today. In Section 11, say exactly: "Nothing new on the Dallas events front this morning." Do not skip this section silently.`;
 
     // Fix 5: Detect if David already had a morning workout on today's calendar
     const morningWorkoutDone = (() => {
@@ -620,8 +649,8 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       "S7_bills_3day": upcomingBills.length > 0,
       "S8_news": dedupedNewsBlock.length > 0,
       "S10_sports": !!(sportsScores),
-      "S11_local_dallas": dedupedDallasBlock.length > 0,
-      "S12_music_events": dedupedVenueConcertsBlock.length > 0,
+      "S11_local_dallas": filteredDallasItems.length > 0 ? `${filteredDallasItems.length} items` : `EMPTY (fallback — raw:${rawDallasItems.length})`,
+      "S12_music_events": filteredVenueConcerts.length > 0 ? `${filteredVenueConcerts.length} concerts` : "EMPTY",
       "S13_birthdays": upcomingDates.length > 0,
       "S14_motivation": true,
       "S16_sunday_special": isSunday,

@@ -43,14 +43,18 @@ export function normalizeKey(text: string): string {
 
 export async function getSeenHeadlines(userName: string, days = 3): Promise<Set<string>> {
   try {
+    // Strictly PREVIOUS days only — never today.
+    // Today's briefing must always regenerate freely (server restarts, cache misses).
+    // We log today's stories so they are filtered starting TOMORROW.
     const { rows } = await query<{ headline: string }>(
       `SELECT headline FROM daily_briefing_stories
        WHERE user_name = $1
-         AND story_date >= CURRENT_DATE - ($2 || ' days')::interval`,
+         AND story_date >= CURRENT_DATE - ($2 || ' days')::interval
+         AND story_date < CURRENT_DATE`,
       [userName, String(days)]
     );
     const set = new Set(rows.map((r) => r.headline));
-    logger.info({ userName, count: set.size, days }, "[StoryDedup] Loaded seen headlines");
+    logger.info({ userName, count: set.size, days }, "[StoryDedup] Loaded seen headlines (previous days only)");
     return set;
   } catch (err) {
     logger.warn({ err }, "[StoryDedup] Failed to load seen headlines — skipping dedup this run");
