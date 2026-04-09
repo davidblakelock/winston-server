@@ -35,17 +35,22 @@ export async function createReminder(input: ReminderInput): Promise<ReminderRow>
   const resolvedTz   = input.timezone   ?? "America/Chicago";
 
   // ── Duplicate guard ──────────────────────────────────────────────────────────
+  // Only block genuine double-submits: same user + text + fire_at created within
+  // the last 5 seconds.  A wider window (matching on fire_at alone) was dropping
+  // legitimate second reminders because computeFireAt rounds seconds to 0, making
+  // two "remind me in 2 min" requests set 30 s apart produce the same fire_at.
   const { rows: existing } = await query<ReminderRow>(
     `SELECT * FROM reminders
-      WHERE user_name    = $1
+      WHERE user_name     = $1
         AND reminder_text = $2
         AND fire_at       = $3
         AND status        = 'pending'
+        AND created_at    > NOW() - INTERVAL '5 seconds'
       LIMIT 1`,
     [resolvedUser, input.reminderText, input.fireAt]
   );
   if (existing.length > 0) {
-    // Already exists — return it without a second insert
+    // Genuine double-submit within 5 s — return the existing row without inserting
     return existing[0];
   }
 
