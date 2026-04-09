@@ -194,13 +194,15 @@ async function fetchFeed(feed: FeedConfig): Promise<LocalContentItem[]> {
   const xml = await res.text();
   const rssItems = parseRSS(xml);
 
+  let staleDrop = 0;
+  let scoreDrop = 0;
   const results: LocalContentItem[] = [];
   for (const item of rssItems.slice(0, 40)) {
-    if (!isWithin72Hours(item.pubDate)) continue;
+    if (!isWithin72Hours(item.pubDate)) { staleDrop++; continue; }
     const headline = stripHtml(item.title);
     const summary  = stripHtml(item.description).slice(0, 350);
     const { priority, keywords } = scoreItem(headline, summary);
-    if (!priority) continue;
+    if (!priority) { scoreDrop++; continue; }
     results.push({
       source: feed.name,
       headline,
@@ -211,6 +213,7 @@ async function fetchFeed(feed: FeedConfig): Promise<LocalContentItem[]> {
       keywordsMatched: keywords,
     });
   }
+  console.log(`[Dallas:feed] ${feed.name}: ${rssItems.length} parsed → ${staleDrop} dropped (stale) → ${scoreDrop} dropped (no match) → ${results.length} kept`);
   return results;
 }
 
@@ -428,11 +431,17 @@ function isCacheValid(): boolean {
  */
 export async function fetchDallasContent(): Promise<string> {
   if (isCacheValid()) {
-    logger.info("[Dallas] Returning cached local content");
-    return _cache!.formattedBlock;
+    const cached = _cache!;
+    console.log(`[Dallas] Returning CACHED content — ${cached.items.length} items, fetched at ${cached.fetchedAt.toLocaleTimeString("en-US", { timeZone: "America/Chicago" })}`);
+    if (cached.items.length > 0) {
+      console.log(`[Dallas] Cached headlines: ${cached.items.map((i) => `[${i.priority}] ${i.headline}`).join(" | ")}`);
+    } else {
+      console.log("[Dallas] Cache is EMPTY — briefing will use fallback text");
+    }
+    return cached.formattedBlock;
   }
 
-  logger.info("[Dallas] Fetching local Dallas content from RSS feeds");
+  console.log("[Dallas] ── Starting fresh Dallas content fetch ──────────────────");
   const allItems: LocalContentItem[] = [];
   let successCount = 0;
 
@@ -445,34 +454,48 @@ export async function fetchDallasContent(): Promise<string> {
   feedResults.forEach((result, i) => {
     const name = DALLAS_FEEDS[i].name;
     if (result.status === "fulfilled") {
-      logger.info(`[Dallas] ${name}: ${result.value.length} relevant items within 72h`);
       allItems.push(...result.value);
       successCount++;
+      if (result.value.length === 0) {
+        console.log(`[Dallas:feed] ${name}: ✗ 0 items survived filters (all dropped above)`);
+      }
     } else {
+      console.log(`[Dallas:feed] ${name}: ✗ FEED FAILED — ${String(result.reason)}`);
       logger.warn(`[Dallas] ${name}: feed failed — ${String(result.reason)}`);
     }
   });
+
+  console.log(`[Dallas] Music web search returned ${musicItems.length} items`);
   allItems.push(...musicItems);
-  logger.info(`[Dallas] Music web search: ${musicItems.length} items`);
 
   let finalItems = deduplicate(allItems);
+  console.log(`[Dallas] After dedup: ${finalItems.length} unique items from ${allItems.length} raw`);
 
   // Fallback: if all feeds failed or we have fewer than 2 items, try web search
   if (successCount === 0 || finalItems.length < 2) {
-    logger.info("[Dallas] RSS insufficient — running web search fallback");
+    console.log(`[Dallas] Insufficient items (${finalItems.length}) — triggering web search fallback`);
     const extra = await webSearchFallback();
+    console.log(`[Dallas] Web search fallback returned ${extra.length} items`);
     finalItems = deduplicate([...finalItems, ...extra]);
+    console.log(`[Dallas] After fallback dedup: ${finalItems.length} total items`);
   }
 
-  // Skip section entirely if still nothing usable
   const formattedBlock = formatForBriefing(finalItems);
 
   _cache = { items: finalItems, fetchedAt: new Date(), formattedBlock };
-
-  // Save to DB asynchronously — don't block the briefing
   void saveToDb(finalItems);
 
   const highCount = finalItems.filter((i) => i.priority === "high").length;
+  const medCount  = finalItems.filter((i) => i.priority === "medium").length;
+  const lowCount  = finalItems.filter((i) => i.priority === "low").length;
+
+  if (finalItems.length === 0) {
+    console.log(`[Dallas] ✗ RESULT: EMPTY — no items survived. Briefing will use fallback line.`);
+  } else {
+    console.log(`[Dallas] ✓ RESULT: ${finalItems.length} items — high:${highCount} med:${medCount} low:${lowCount} (${successCount}/${DALLAS_FEEDS.length} feeds ok)`);
+    console.log(`[Dallas] Final headlines: ${finalItems.map((i) => `[${i.priority}] ${i.headline}`).join(" | ")}`);
+  }
+
   logger.info(
     `[Dallas] Content ready: ${finalItems.length} items total, ${highCount} high-priority ` +
     `(${successCount}/${DALLAS_FEEDS.length} feeds succeeded)`

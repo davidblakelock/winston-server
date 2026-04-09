@@ -342,7 +342,9 @@ const MASTER_BRIEFING_INSTRUCTION = `
 
   SECTION 10 — SPORTS: Rangers and Cowboys results from the last 24 hours only. If no games were played, SKIP THIS SECTION ENTIRELY — do not say no games were played.
 
-  SECTION 11 — LOCAL DALLAS: MANDATORY when the [What's Happening in Dallas] block is present — deliver 1-2 items conversationally, one sentence each. Prioritize restaurant openings, music events at David's venues, and neighborhood news. If the block is absent, skip this section — Dallas is already covered by Section 8's local headline.
+  SECTION 11 — LOCAL DALLAS: ALWAYS INCLUDE THIS SECTION — it is never skipped. The [What's Happening in Dallas] block is always present below.
+    • If the block contains real items: deliver 1-2 items conversationally, one sentence each. Prioritize restaurant openings, music events at David's venues, and neighborhood news.
+    • If the block says "No new local events found": say exactly this and nothing more — "Nothing new on the Dallas events front this morning." Do not apologize, do not elaborate.
 
   SECTION 12 — MUSIC EVENTS: Upcoming concerts at David's saved venues that match his taste — Kessler, Granada, Dos Equis Pavilion, AT&T Performing Arts Center, Klyde Warren Park, Dallas Arboretum, Meyerson. Use the venue concerts block. If nothing upcoming or nothing found, skip this section entirely.
 
@@ -484,7 +486,10 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     );
     const dedupedDallasBlock = buildDallasBlock(filteredDallasItems);
     if (dedupedDallasBlock.trim().length === 0) {
+      console.log(`[Dallas:briefing] ✗ Block EMPTY after dedup — raw:${rawDallasItems.length}, dedup-removed:${removedDallasCount}, filtered:${filteredDallasItems.length} → injecting fallback line`);
       logger.warn({ userName, rawCount: rawDallasItems.length, removedByDedup: removedDallasCount }, "[Dallas] Block is EMPTY after dedup — injecting fallback");
+    } else {
+      console.log(`[Dallas:briefing] ✓ Block OK — ${filteredDallasItems.length} items going into briefing`);
     }
 
     // Venue concerts: filter by artistOrEvent + venue key, rebuild block
