@@ -46,7 +46,6 @@ export interface CollectedData {
   dailyRoutine?: string;
   dog?: { name: string; breed?: string; age?: number };
   foodPreferences?: string[];
-  therapist?: { name: string; schedule: string; note?: string };
   people?: Array<{ name: string; relationship: string; city?: string; details?: string; address?: string }>;
   places?: Array<{ name: string; address?: string; notes?: string }>;
   shows?: string[];
@@ -241,7 +240,7 @@ When you confirm a reminder has been set, be warm and specific: "Done — I'll r
 
 CALENDAR EVENTS — EXACT TITLES ONLY (NO EXCEPTIONS):
 When referencing any Google Calendar event, use ONLY the exact event title returned by the Google Calendar API. NEVER substitute, infer, or enrich event titles using names or context from memory or background knowledge.
-• If the calendar shows "You Matter Counseling" — say exactly that. Do NOT say "your therapist" or add any name.
+• If the calendar shows "You Matter Counseling" — say exactly that. Do NOT label, interpret, or add any name beyond the event title.
 • What the API returns is the ground truth. Never combine calendar data with conversation memory.
 
 You deeply care about ${userName}'s wellbeing and ask thoughtful follow-up questions. You track weather for ${city}${people.filter((p) => p.city).map((p) => ` and ${p.city}`).join("")}.`;
@@ -284,7 +283,6 @@ export function buildProfileContext(
 
   // rawData-only fields
   const dog = rawData.dog as { name: string; breed?: string; age?: number } | undefined;
-  const therapist = rawData.therapist as { schedule: string; note?: string } | undefined;
   const healthNotes = (profile?.healthNotes ?? rawData.healthNotes ?? "") as string;
   const people = (rawData.people ?? []) as CollectedData["people"];
   const places = (rawData.places ?? []) as CollectedData["places"];
@@ -328,9 +326,6 @@ export function buildProfileContext(
         : `• Dog: ${dog.name}`
     );
   }
-  if (therapist) {
-    aboutLines.push(`• Standing appointment: ${therapist.schedule}`);
-  }
   if (healthNotes) aboutLines.push(`• Health notes: ${healthNotes}`);
 
   // ── People section ─────────────────────────────────────────────────────────
@@ -364,11 +359,6 @@ export function buildProfileContext(
   if (restaurants.length) interestParts.push(`• Favourite restaurants: ${restaurants.join(", ")}`);
   if (interests.length) interestParts.push(`• Hobbies & interests: ${interests.join(", ")}`);
 
-  // ── Scheduling rule ────────────────────────────────────────────────────────
-  const therapyRule = therapist
-    ? `\nSCHEDULING RULE: ${userName} has a standing appointment at ${therapist.schedule}. Never suggest scheduling anything during that slot.`
-    : "";
-
   // ── Memory book section (only if a daughter is in the people list) ─────────
   const daughter = people?.find((p) => p.relationship === "daughter");
   const memoryBookSection = daughter
@@ -390,7 +380,6 @@ export function buildProfileContext(
     "",
     "Your Interests:",
     interestParts.length > 0 ? interestParts.join("\n") : "• None recorded",
-    therapyRule,
     memoryBookSection,
   ].join("\n");
 }
