@@ -1007,7 +1007,12 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         console.log("[REMINDER] pendingNotification: already shown via SSE/push — skipping id:", notif.id);
         return;
       }
-      if (notif.id != null) spokenReminderIds.current.add(notif.id);
+      if (notif.id != null) {
+        spokenReminderIds.current.add(notif.id);
+        // Remove from the upcoming reminders pill — this path (notification tap → IDB →
+        // pendingNotification) was the only one that forgot to clear the pill.
+        setUpcomingReminders((prev) => prev.filter((r) => r.id !== notif.id));
+      }
       const msgId = `notif-reminder-${Date.now()}`;
       setMessages((prev) => [
         ...prev,
