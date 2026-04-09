@@ -20,8 +20,15 @@ import { getJournalCountThisWeek, getRecentJournalEntries } from "../journal/jou
 import { getStoryCount } from "../stories/storyManager.js";
 import { getCachedWeather, type CachedWeather, type ForecastDay, TOMORROW_CONDITIONS } from "../weather/weatherCache.js";
 import { setCachedBriefing } from "./briefingCache.js";
-import { fetchDallasContent } from "./dallasContent.js";
-import { runVenueScan } from "./venueMonitor.js";
+import { fetchDallasContent, getDallasItems, buildDallasBlock } from "./dallasContent.js";
+import { runVenueScan, getVenueConcerts, buildVenueConcertsBlock } from "./venueMonitor.js";
+import {
+  getSeenHeadlines,
+  logBriefingStories,
+  isDuplicate,
+  extractBoldHeadlines,
+  filterNewsBlock,
+} from "./storyDedup.js";
 import { logger } from "../lib/logger.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -381,10 +388,11 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     const isSunday = now.toLocaleDateString("en-US", { timeZone: "America/Chicago", weekday: "long" }) === "Sunday";
     const isPickleballMorning = isTodayPickleballDay();
 
-    const [recentMemories, allProfileItems, userProfile] = await Promise.all([
+    const [recentMemories, allProfileItems, userProfile, seenHeadlines] = await Promise.all([
       getRecentMemories(7).catch(() => []),
       getProfileItems(undefined, userName).catch(() => []),
       getProfile(userName).catch(() => null),
+      getSeenHeadlines(userName, 3).catch(() => new Set<string>()),
     ]);
     const memoryBlock = formatMemoriesForContext(recentMemories);
     const dynamicProfileBlock = formatProfileForContext(allProfileItems);
@@ -448,6 +456,38 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       },
       []
     );
+
+    // ── Story dedup — filter seen headlines from news, Dallas, venue concerts ──
+    // News: strip **bold headline** + sentence pairs that appeared in the last 3 days
+    const { filtered: dedupedNewsBlock, removed: removedNewsHeadlines } = filterNewsBlock(newsBlock, seenHeadlines);
+    if (removedNewsHeadlines.length > 0) {
+      logger.info({ userName, removed: removedNewsHeadlines }, "[StoryDedup] Filtered duplicate news headlines");
+    }
+
+    // Dallas local content: filter by headline field, rebuild block
+    const rawDallasItems = getDallasItems();
+    const filteredDallasItems = rawDallasItems.filter((item) => !isDuplicate(item.headline, seenHeadlines));
+    const dedupedDallasBlock = buildDallasBlock(filteredDallasItems);
+    if (filteredDallasItems.length < rawDallasItems.length) {
+      logger.info({ userName, removed: rawDallasItems.length - filteredDallasItems.length }, "[StoryDedup] Filtered duplicate Dallas items");
+    }
+
+    // Venue concerts: filter by artistOrEvent + venue key, rebuild block
+    const rawVenueConcerts = getVenueConcerts();
+    const filteredVenueConcerts = rawVenueConcerts.filter(
+      (c) => !isDuplicate(`${c.artistOrEvent} ${c.venue}`, seenHeadlines)
+    );
+    const dedupedVenueConcertsBlock = buildVenueConcertsBlock(filteredVenueConcerts);
+    if (filteredVenueConcerts.length < rawVenueConcerts.length) {
+      logger.info({ userName, removed: rawVenueConcerts.length - filteredVenueConcerts.length }, "[StoryDedup] Filtered duplicate venue concerts");
+    }
+
+    // Collect all candidate story keys to log after successful briefing generation
+    const candidateStoryKeys: string[] = [
+      ...extractBoldHeadlines(newsBlock),                               // news headlines (pre-filter — log all that were offered)
+      ...rawDallasItems.map((i) => i.headline),                        // Dallas local
+      ...rawVenueConcerts.map((c) => `${c.artistOrEvent} ${c.venue}`), // venue concerts
+    ];
 
     const pollenBlock = pollenData
       ? (() => {
@@ -518,9 +558,8 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       ? buildRecommendationFollowUpBlock(pendingFollowUps)
       : "";
 
-    // dallasEvents is already a fully-formatted block from dallasContent.ts
-    // (includes header, source attributions, and Claude instructions).
-    const dallasEventsBlock = dallasEvents ?? "";
+    // dallasEvents is the raw block from dallasContent.ts; use dedup-filtered version.
+    const dallasEventsBlock = dedupedDallasBlock || (dallasEvents ?? "");
 
     // Fix 5: Detect if David already had a morning workout on today's calendar
     const morningWorkoutDone = (() => {
@@ -573,7 +612,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       notesBlock + weatherBlock + gmailBlock + calendarBlock + tvMorningBlock +
       sportsBlock + billsMorningBlock + datesBlock + sundaySummaryBlock +
       pickleballMorningBlock + recFollowUpBlock + motivationContextBlock +
-      dallasEventsBlock + venueConcertsBlock + newsBlock + MASTER_BRIEFING_INSTRUCTION;
+      dallasEventsBlock + dedupedVenueConcertsBlock + dedupedNewsBlock + MASTER_BRIEFING_INSTRUCTION;
 
     // Log which sections have data (for debugging completeness of the briefing)
     const sectionLog: Record<string, boolean | string> = {
@@ -584,17 +623,17 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       "S5_email": emails !== null,
       "S6_calendar": events !== null && events.length > 0,
       "S7_bills_3day": upcomingBills.length > 0,
-      "S8_news": newsBlock.length > 0,
+      "S8_news": dedupedNewsBlock.length > 0,
       "S10_sports": !!(sportsScores),
-      "S11_local_dallas": !!(dallasEvents && dallasEvents.length > 0),
-      "S12_music_events": !!(venueConcertsBlock && venueConcertsBlock.length > 0),
+      "S11_local_dallas": dedupedDallasBlock.length > 0,
+      "S12_music_events": dedupedVenueConcertsBlock.length > 0,
       "S13_birthdays": upcomingDates.length > 0,
       "S14_motivation": true,
       "S16_sunday_special": isSunday,
     };
     logger.info({ userName, sections: sectionLog }, "[BRIEFING SECTIONS] Data availability per section");
 
-    logger.info({ userName, newsChars: newsBlock.length }, "Pre-generate: calling Claude for briefing");
+    logger.info({ userName, newsChars: dedupedNewsBlock.length, seenCount: seenHeadlines.size }, "Pre-generate: calling Claude for briefing");
 
     const response = await anthropic.messages.create({
       model: "claude-opus-4-5",
@@ -607,6 +646,9 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     if (text) {
       setCachedBriefing(userName, text, generationDateKey);
       logger.info({ userName, chars: text.length, dateKey: generationDateKey }, "Morning briefing pre-generated and cached");
+
+      // Log all candidate story keys so they won't repeat in the next 3 days
+      void logBriefingStories(userName, candidateStoryKeys);
     } else {
       logger.warn({ userName }, "Pre-generate: Claude returned empty text");
     }

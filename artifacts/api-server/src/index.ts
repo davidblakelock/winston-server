@@ -22,6 +22,7 @@ import { ensureContactMentionsTable } from "./olivia/oliviaTracker";
 import { initDallasContentTable } from "./morning/dallasContent";
 import { startDallasProactiveScheduler } from "./morning/dallasProactiveScheduler";
 import { initConcertsTable, startVenueMonitorScheduler } from "./morning/venueMonitor";
+import { initBriefingStoriesTable } from "./morning/storyDedup";
 import { addProfileItem } from "./profile/profileManager";
 import { ensureContactsTable } from "./google/contacts";
 
@@ -77,6 +78,13 @@ app.listen(port, async (err) => {
     await initConcertsTable();
   } catch (e) {
     logger.warn({ e }, "Concerts table initialization warning");
+  }
+
+  try {
+    await initBriefingStoriesTable();
+    logger.info("[startup] daily_briefing_stories table ready");
+  } catch (e) {
+    logger.warn({ e }, "Briefing stories table initialization warning");
   }
 
   try {

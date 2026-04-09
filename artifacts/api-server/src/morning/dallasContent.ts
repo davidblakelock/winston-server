@@ -489,3 +489,19 @@ export async function getTodayHighPriorityItems(): Promise<LocalContentItem[]> {
   if (!isCacheValid()) await fetchDallasContent();
   return _cache?.items.filter((i) => i.priority === "high") ?? [];
 }
+
+/**
+ * Return today's cached items (all priorities) for deduplication filtering.
+ * Call after fetchDallasContent() to ensure the cache is populated.
+ */
+export function getDallasItems(): LocalContentItem[] {
+  return _cache?.items ?? [];
+}
+
+/**
+ * Build the briefing block from an already-filtered list of items.
+ * Used by dedup integration to re-format after removing seen stories.
+ */
+export function buildDallasBlock(items: LocalContentItem[]): string {
+  return formatForBriefing(items);
+}

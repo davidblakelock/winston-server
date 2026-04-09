@@ -416,6 +416,22 @@ export async function runVenueScan(): Promise<string> {
   return briefingBlock;
 }
 
+/**
+ * Return today's cached concert items for deduplication filtering.
+ * Call after runVenueScan() to ensure the cache is populated.
+ */
+export function getVenueConcerts(): ConcertItem[] {
+  return _cache?.concerts ?? [];
+}
+
+/**
+ * Build the briefing block from an already-filtered list of concerts.
+ * Used by dedup integration to re-format after removing seen events.
+ */
+export function buildVenueConcertsBlock(concerts: ConcertItem[]): string {
+  return formatConcertsForBriefing(concerts);
+}
+
 // ── Scheduler: runs daily at 5:30 AM CT ──────────────────────────────────────
 
 export function startVenueMonitorScheduler(): void {
