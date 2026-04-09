@@ -140,8 +140,8 @@ export async function estimateDriveTime(
   homeLat: number,
   homeLon: number
 ): Promise<DriveEstimate | null> {
-  if (!homeAddress || !homeLat || !homeLon) {
-    logger.warn({ destination }, "estimateDriveTime: home address/coords missing — cannot calculate");
+  if (!homeAddress) {
+    logger.warn({ destination }, "estimateDriveTime: home address missing — cannot calculate");
     return null;
   }
 

@@ -71,9 +71,24 @@ async function checkDepartureAlerts(): Promise<void> {
   clearIfNewDay();
 
   const profile = await getProfile("David").catch(() => null);
-  const homeAddress = ((profile?.rawData as CollectedData)?.homeAddress) ?? "";
-  const homeLat = profile?.latitude ?? 0;
-  const homeLon = profile?.longitude ?? 0;
+  const homeAddress = profile?.homeAddress ?? ((profile?.rawData as CollectedData)?.homeAddress) ?? "";
+  // Use home-specific coords first, fall back to city coords, then Dallas defaults
+  const homeLat = (profile?.homeLatitude && profile.homeLatitude !== 0 ? profile.homeLatitude : null)
+    ?? (profile?.latitude && profile.latitude !== 0 ? profile.latitude : null)
+    ?? 32.7767;
+  const homeLon = (profile?.homeLongitude && profile.homeLongitude !== 0 ? profile.homeLongitude : null)
+    ?? (profile?.longitude && profile.longitude !== 0 ? profile.longitude : null)
+    ?? -96.7970;
+
+  logger.info(
+    { homeAddress: homeAddress || "(empty)", homeLat, homeLon },
+    "[DepartureScheduler] Profile coords loaded"
+  );
+
+  if (!homeAddress) {
+    logger.warn("[DepartureScheduler] homeAddress is empty — departure alerts cannot fire");
+    return;
+  }
 
   let events: Awaited<ReturnType<typeof fetchTodayEvents>>;
   try {
