@@ -63,10 +63,13 @@ export function startScheduler(): void {
       );
 
       for (const reminder of rows) {
-        // ── 1. Mark as 'fired' IMMEDIATELY — prevents any race-condition double-fire ──
+        // ── 1. Mark as 'completed' IMMEDIATELY — prevents any race-condition double-fire ──
+        // Using 'completed' directly means the row is already in its final state once the
+        // push/SSE is sent — no second round-trip from the frontend is needed.
+        // The WHERE status = 'pending' guard is the atomic lock against double-fire.
         const updated = await query(
           `UPDATE reminders
-              SET status = 'fired', last_fired_at = NOW()
+              SET status = 'completed', last_fired_at = NOW()
             WHERE id = $1 AND status = 'pending'
             RETURNING id`,
           [reminder.id]
@@ -125,7 +128,7 @@ export function startScheduler(): void {
             broadcast("reminder_sync", { action: "created", reminder: updated[0] });
           }
         }
-        // One-time reminders stay as 'fired' — they won't be selected again
+        // One-time reminders stay as 'completed' — they won't be selected again
       }
     } catch (err) {
       logger.error({ err }, "Scheduler error");

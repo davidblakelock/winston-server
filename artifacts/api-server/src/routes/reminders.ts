@@ -67,20 +67,25 @@ router.get("/reminders", async (_req: Request, res: Response) => {
 });
 
 // ── GET /api/reminders/list — alias used by some frontend callers ─────────────
+// Only returns reminders that are still pending AND have not yet passed their
+// fire_at time.  Past-due pending rows (scheduler was down during their window)
+// are excluded — they will be fired the moment the scheduler next runs, which
+// sends the push/SSE immediately, so there is no value showing them in the pill.
 router.get("/reminders/list", async (_req: Request, res: Response) => {
   const { rows } = await query(
     `SELECT id, user_name, reminder_text, fire_at, recurring, recurring_time,
             timezone, status, last_fired_at, created_at
        FROM reminders
       WHERE status = 'pending'
+        AND fire_at > NOW()
       ORDER BY fire_at ASC`
   );
   res.json(rows);
 });
 
 // ── GET /api/reminders/due ────────────────────────────────────────────────────
-// Returns reminders that fired in the last 10 minutes (status = 'fired').
-// The frontend polls this every 30 s as a reliable fallback for when the SSE
+// Returns reminders completed in the last 10 minutes (status = 'completed').
+// The frontend polls this every 20 s as a reliable fallback for when the SSE
 // stream drops on mobile — it speaks any reminder it hasn't already spoken
 // (tracked client-side by reminder ID).
 // No-cache headers ensure the browser always fetches fresh data.
@@ -100,7 +105,7 @@ router.get("/reminders/due", async (_req: Request, res: Response) => {
   const { rows } = await query(
     `SELECT id, user_name, reminder_text, fire_at, status, last_fired_at
        FROM reminders
-      WHERE status = 'fired'
+      WHERE status = 'completed'
         AND last_fired_at > NOW() - INTERVAL '10 minutes'
       ORDER BY last_fired_at DESC`
   );
@@ -173,8 +178,10 @@ router.post("/reminders/:id/acknowledge", async (req: Request, res: Response) =>
   }
 
   try {
+    // Accept both 'fired' (legacy rows from before direct-complete) and 'completed'
+    // (rows already finalised by the scheduler).  Idempotent either way.
     const result = await query(
-      `UPDATE reminders SET status = 'completed' WHERE id = $1 AND status = 'fired'`,
+      `UPDATE reminders SET status = 'completed' WHERE id = $1 AND status IN ('fired', 'completed')`,
       [numId]
     );
     console.log(`[ACKNOWLEDGE] id=${numId} rowsAffected=${result.rowCount}`);
