@@ -34,11 +34,13 @@ self.addEventListener("install", () => {
 self.addEventListener("activate", (event) => {
   // claim() takes control of all open clients immediately so this service
   // worker handles fetches/pushes without waiting for a page reload.
-  // update() checks the server for a newer sw.js and installs it if found —
-  // this ensures the latest version is always active after each deployment.
-  event.waitUntil(
-    self.clients.claim().then(() => self.registration.update())
-  );
+  // NOTE: self.registration.update() is intentionally NOT called here.
+  // Calling update() in activate triggers an aggressive install→skipWaiting→
+  // activate cycle on every app open on Android Chrome, which causes the
+  // browser to lose the push subscription.  The browser already checks for a
+  // newer sw.js on every page navigation automatically — the explicit call is
+  // redundant and harmful on Android.
+  event.waitUntil(self.clients.claim());
 });
 
 // ── Push event ────────────────────────────────────────────────────────────────
@@ -226,14 +228,20 @@ self.addEventListener("notificationclick", (event) => {
   );
 });
 
-// ── Token relay ───────────────────────────────────────────────────────────────
+// ── Token / device-ID relay ───────────────────────────────────────────────────
 self.addEventListener("message", (event) => {
   if (event.data?.type === "SET_TOKEN") {
     self._winstonToken = event.data.token;
   }
+  if (event.data?.type === "SET_DEVICE_ID") {
+    self._winstonDeviceId = event.data.deviceId;
+  }
 });
 
 // ── Push subscription change ──────────────────────────────────────────────────
+// Fires when the browser auto-rotates a push subscription (e.g. FCM key refresh).
+// Re-subscribes with the same VAPID key and saves the new sub to the server,
+// including the device ID so the server can upsert the correct row.
 self.addEventListener("pushsubscriptionchange", (event) => {
   event.waitUntil(
     self.registration.pushManager
@@ -242,7 +250,8 @@ self.addEventListener("pushsubscriptionchange", (event) => {
         applicationServerKey: event.oldSubscription?.options?.applicationServerKey,
       })
       .then((newSub) => {
-        const token = self._winstonToken || null;
+        const token    = self._winstonToken    || null;
+        const deviceId = self._winstonDeviceId || null;
         return fetch(WINSTON_URL + "api/push/subscribe", {
           method: "POST",
           headers: {
@@ -253,8 +262,9 @@ self.addEventListener("pushsubscriptionchange", (event) => {
             endpoint: newSub.endpoint,
             keys: {
               p256dh: btoa(String.fromCharCode(...new Uint8Array(newSub.getKey("p256dh")))),
-              auth: btoa(String.fromCharCode(...new Uint8Array(newSub.getKey("auth")))),
+              auth:   btoa(String.fromCharCode(...new Uint8Array(newSub.getKey("auth")))),
             },
+            ...(deviceId ? { deviceId } : {}),
           }),
         });
       })

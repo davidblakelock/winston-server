@@ -89,6 +89,11 @@ export function sendTokenToServiceWorker(token: string | null): void {
   navigator.serviceWorker?.controller?.postMessage({ type: "SET_TOKEN", token });
 }
 
+export function sendDeviceIdToServiceWorker(): void {
+  const deviceId = getOrCreateDeviceId();
+  navigator.serviceWorker?.controller?.postMessage({ type: "SET_DEVICE_ID", deviceId });
+}
+
 // ── VAPID key fetch ───────────────────────────────────────────────────────────
 async function fetchVapidKey(): Promise<string | null> {
   STEP(4, "Fetching VAPID public key from server…");
@@ -371,9 +376,10 @@ export function useNotifications(): UseNotificationsResult {
     LOG("Mount check: UA:", navigator.userAgent.slice(0, 100));
     LOG("Mount check: permission at mount:", Notification.permission);
 
-    // Relay auth token to service worker (for push notification auth)
+    // Relay auth token and device ID to service worker
     const token = getSessionToken();
     sendTokenToServiceWorker(token);
+    sendDeviceIdToServiceWorker();
     LOG("Mount check: session token relayed to SW:", token ? "yes" : "no token yet");
 
     void (async () => {
