@@ -52,12 +52,11 @@ export async function saveSubscriptionWithAction(
   const { rows } = await query<{ id: number; xmax: string }>(
     `INSERT INTO push_subscriptions (user_name, endpoint, p256dh, auth, user_agent, device_id)
      VALUES ($1, $2, $3, $4, $5, $6)
-     ON CONFLICT (endpoint) DO UPDATE SET
-       user_name = EXCLUDED.user_name,
-       p256dh = EXCLUDED.p256dh,
-       auth = EXCLUDED.auth,
-       user_agent = EXCLUDED.user_agent,
-       device_id = EXCLUDED.device_id
+     ON CONFLICT (user_name, device_id) WHERE device_id IS NOT NULL DO UPDATE SET
+       endpoint   = EXCLUDED.endpoint,
+       p256dh     = EXCLUDED.p256dh,
+       auth       = EXCLUDED.auth,
+       updated_at = now()
      RETURNING id, xmax::text`,
     [userName, sub.endpoint, sub.p256dh, sub.auth, userAgent ?? null, deviceId ?? null]
   );

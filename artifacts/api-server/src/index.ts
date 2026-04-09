@@ -152,6 +152,45 @@ app.listen(port, async (err) => {
     logger.warn({ e }, "Startup migration warning: push_subscriptions device_id");
   }
 
+  // Add updated_at column to push_subscriptions.
+  try {
+    await query(`ALTER TABLE push_subscriptions ADD COLUMN IF NOT EXISTS updated_at timestamptz`);
+    logger.info("Startup migration: push_subscriptions.updated_at column ready");
+  } catch (e) {
+    logger.warn({ e }, "Startup migration warning: push_subscriptions updated_at");
+  }
+
+  // Remove duplicate rows keeping the newest id per (user_name, device_id).
+  // Must run before the unique index creation below.
+  try {
+    await query(
+      `DELETE FROM push_subscriptions
+       WHERE device_id IS NOT NULL
+         AND id NOT IN (
+           SELECT MAX(id)
+           FROM push_subscriptions
+           WHERE device_id IS NOT NULL
+           GROUP BY user_name, device_id
+         )`
+    );
+    logger.info("Startup migration: push_subscriptions duplicate rows cleaned");
+  } catch (e) {
+    logger.warn({ e }, "Startup migration warning: push_subscriptions dedup");
+  }
+
+  // Create partial unique index on (user_name, device_id) for non-null device_ids.
+  // This lets the upsert use ON CONFLICT (user_name, device_id) WHERE device_id IS NOT NULL.
+  try {
+    await query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS push_subs_user_device_uidx
+       ON push_subscriptions (user_name, device_id)
+       WHERE device_id IS NOT NULL`
+    );
+    logger.info("Startup migration: push_subscriptions unique index on (user_name, device_id) ready");
+  } catch (e) {
+    logger.warn({ e }, "Startup migration warning: push_subscriptions unique index");
+  }
+
   // companion_name migration removed — it used UPDATE...FROM (cross-table join) which
   // the Supabase exec_sql client silently ignores, stripping the WHERE guard and
   // unconditionally overwriting user-chosen companion names with 'Emma Peel' on every restart.
