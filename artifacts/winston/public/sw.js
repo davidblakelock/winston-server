@@ -135,7 +135,12 @@ self.addEventListener("notificationclick", (event) => {
     // Step 2: find any existing open Winston tab
     let clientList = [];
     try {
-      clientList = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      // Do NOT use includeUncontrolled: true here.  navigate() and focus() both
+      // throw InvalidStateError on Android Chrome when called on an uncontrolled
+      // WindowClient.  Because activate() calls clients.claim(), every open
+      // Winston tab is already controlled by the time any push arrives.
+      // Uncontrolled tabs (opened mid-SW-install, very rare) fall through to openWindow().
+      clientList = await self.clients.matchAll({ type: "window" });
     } catch (err) {
       console.warn("[SW] matchAll failed:", err);
     }
