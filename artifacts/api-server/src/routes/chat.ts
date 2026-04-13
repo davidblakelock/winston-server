@@ -620,10 +620,8 @@ router.post("/chat", async (req, res) => {
       return;
     }
     sessionUserName = session.userName;
-  } else {
-    res.status(401).json({ error: "unauthorized" });
-    return;
   }
+  // No credentials → sessionUserName stays "David" (single-user app)
 
   // ── Auto-greeting: derive time-appropriate message ────────────────────────
   const { message: rawMessage, history: rawHistory = [], isAutoGreeting = false, deviceId = null } = req.body;
