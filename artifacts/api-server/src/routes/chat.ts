@@ -602,6 +602,7 @@ function getCurrentDateTimeBlock(): string {
 }
 
 router.post("/chat", async (req, res) => {
+  console.log("CHAT HEADERS:", JSON.stringify(req.headers));
   // ── Auth ──────────────────────────────────────────────────────────────────
   // Two valid paths:
   //   1. x-api-key: winston-native-2026  →  native mobile app bypass, user = David
