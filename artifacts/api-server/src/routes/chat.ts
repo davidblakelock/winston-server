@@ -602,10 +602,17 @@ function getCurrentDateTimeBlock(): string {
 }
 
 router.post("/chat", async (req, res) => {
-  // ── Session auth ──────────────────────────────────────────────────────────
+  // ── Auth ──────────────────────────────────────────────────────────────────
+  // Two valid paths:
+  //   1. x-api-key: winston-native-2026  →  native mobile app bypass, user = David
+  //   2. Authorization: Bearer <token>   →  standard Google OAuth session
   const authHeader = req.headers.authorization;
   let sessionUserName = "David";
-  if (authHeader?.startsWith("Bearer ")) {
+
+  if (req.headers["x-api-key"] === "winston-native-2026") {
+    // Native mobile — skip session lookup, user is always David
+    sessionUserName = "David";
+  } else if (authHeader?.startsWith("Bearer ")) {
     const session = await validateSession(authHeader.slice(7));
     if (!session) {
       res.status(401).json({ error: "unauthorized" });
