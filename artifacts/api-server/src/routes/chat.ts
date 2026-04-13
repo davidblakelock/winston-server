@@ -601,7 +601,7 @@ function getCurrentDateTimeBlock(): string {
   );
 }
 
-router.post("/chat", async (req, res) => {
+const chatHandlerCore = async (req: Request, res: Response) => {
   console.log("CHAT HEADERS:", JSON.stringify(req.headers));
   // ── Auth ──────────────────────────────────────────────────────────────────
   // Two valid paths:
@@ -749,14 +749,7 @@ router.post("/chat", async (req, res) => {
   }
 
   if (isMorningGreeting) {
-    // ── SSE headers sent IMMEDIATELY — prevents proxy first-byte timeout ──
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    res.setHeader("X-Accel-Buffering", "no");
-    const sendMorningSSE = (data: Record<string, unknown>) => {
-      if (!res.writableEnded) res.write(`data: ${JSON.stringify(data)}\n\n`);
-    };
+    const isNativeMorning = (req as any)._nativeMode === true;
 
     // ── Check for pre-built static context ──
     const staticCtx = getStaticBriefingContext(sessionUserName) ?? getStaticBriefingContext("David");
@@ -767,11 +760,32 @@ router.post("/chat", async (req, res) => {
       preFetchMorningBriefing("David").catch((err) =>
         req.log.warn({ err }, "Background morning briefing pre-generation failed")
       );
-      sendMorningSSE({ text: `Your morning briefing isn't ready yet — I'm pulling everything together right now. Give me about 2 minutes and say good morning again. I'll have it all waiting for you.` });
-      sendMorningSSE({ done: true, isMorningBriefing: true });
+      const notReadyText = `Your morning briefing isn't ready yet — I'm pulling everything together right now. Give me about 2 minutes and say good morning again. I'll have it all waiting for you.`;
+      if (isNativeMorning) {
+        res.json({ response: notReadyText });
+        return;
+      }
+      // SSE path
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      res.setHeader("X-Accel-Buffering", "no");
+      res.write(`data: ${JSON.stringify({ text: notReadyText })}\n\n`);
+      res.write(`data: ${JSON.stringify({ done: true, isMorningBriefing: true })}\n\n`);
       res.end();
       return;
     }
+
+    if (!isNativeMorning) {
+      // ── SSE headers sent IMMEDIATELY — prevents proxy first-byte timeout ──
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      res.setHeader("X-Accel-Buffering", "no");
+    }
+    const sendMorningSSE = (data: Record<string, unknown>) => {
+      if (!res.writableEnded) res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
 
     // ── Fetch live email and calendar at delivery time ──
     const deliveryNow = new Date();
@@ -833,6 +847,25 @@ router.post("/chat", async (req, res) => {
       { promptChars: fullSystemPrompt.length, hasEmail: !!liveGmailBlock, hasCalendar: !!liveCalendarBlock },
       "Streaming morning briefing from live context"
     );
+
+    if (isNativeMorning) {
+      // ── Native: collect full briefing text, return as JSON ──
+      const nativeBriefing = await anthropic.messages.create({
+        model: "claude-opus-4-5",
+        max_tokens: 1800,
+        system: fullSystemPrompt,
+        messages: [{ role: "user", content: "good morning" }],
+      });
+      const nativeBriefingText =
+        nativeBriefing.content[0]?.type === "text" ? nativeBriefing.content[0].text : "";
+      if (nativeBriefingText) {
+        setCachedBriefing(sessionUserName, nativeBriefingText, staticCtx.dateKey);
+        void logBriefingStories(sessionUserName, staticCtx.candidateStoryKeys);
+        req.log.info({ chars: nativeBriefingText.length }, "Morning briefing fetched (native) and cached");
+      }
+      res.json({ response: nativeBriefingText });
+      return;
+    }
 
     // Stream Claude's response — each chunk is sent as a separate SSE text event.
     // The frontend accumulates via: fullText += data.text (already handles this).
@@ -2026,6 +2059,31 @@ router.post("/chat", async (req, res) => {
     { role: "user", content: message },
   ];
 
+  // ── Native mode: call Claude synchronously, return single JSON object ────
+  if ((req as any)._nativeMode === true) {
+    try {
+      const nativeResp = await anthropic.messages.create({
+        model: "claude-opus-4-5",
+        max_tokens: 1024,
+        system: systemPrompt,
+        messages,
+      });
+      const nativeReply =
+        nativeResp.content[0]?.type === "text" ? nativeResp.content[0].text : "";
+      res.json({ response: nativeReply });
+    } catch (err: unknown) {
+      const errStatus = (err as Record<string, unknown>)?.status as number | undefined;
+      req.log.error({ err, errStatus }, "Claude native error");
+      res.status(500).json({
+        error:
+          errStatus === 529
+            ? "I'm sorry, David — Claude's servers are a little busy right now. Give me a moment and try again."
+            : "I'm sorry, David — I had trouble thinking through that. Please try again.",
+      });
+    }
+    return;
+  }
+
   // ── Stream Claude's response via SSE ────────────────────────────────────
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
@@ -2133,6 +2191,16 @@ router.post("/chat", async (req, res) => {
         .catch(() => {});
     }
   }
+};
+
+router.post("/chat", chatHandlerCore);
+
+// ── /api/chat-native ─────────────────────────────────────────────────────────
+// Identical to /chat but returns a single JSON object {"response":"<full text>"}
+// instead of streaming SSE events. For use by native mobile clients.
+router.post("/chat-native", (req: Request, res: Response) => {
+  (req as any)._nativeMode = true;
+  return chatHandlerCore(req, res);
 });
 
 router.post("/speak", async (req, res) => {
