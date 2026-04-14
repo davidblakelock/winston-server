@@ -1,38 +1,35 @@
 kind = "web"
-previewPath = "/"
-title = "Winston"
-version = "1.0.0"
-id = "artifacts/winston"
-router = "path"
+  previewPath = "/"
+  title = "Winston"
+  version = "1.0.0"
+  id = "artifacts/winston"
+  router = "path"
 
-[[integratedSkills]]
-name = "react-vite"
-version = "1.0.0"
+  [[integratedSkills]]
+  name = "react-vite"
+  version = "1.0.0"
 
-[[services]]
-name = "web"
-paths = [ "/" ]
-localPort = 20925
+  [[services]]
+  name = "web"
+  paths = [ "/" ]
+  localPort = 20925
 
-[services.development]
-run = "pnpm --filter @workspace/winston run dev"
+  [services.development]
+  run = "pnpm --filter @workspace/winston run dev"
 
-[services.production.build]
-args = ["pnpm", "--filter", "@workspace/winston", "run", "build"]
+  [services.production]
+  serve = "static"
+  publicDir = "artifacts/winston/dist/public"
 
-[services.production.build.env]
-NODE_ENV = "production"
-PORT = "8080"
-BASE_PATH = "/"
+  [services.production.build]
+  args = ["pnpm", "--filter", "@workspace/winston", "run", "build"]
 
-[services.production.run]
-args = ["pnpm", "--filter", "@workspace/winston", "run", "serve"]
+  [services.production.build.env]
+  NODE_ENV = "production"
+  PORT = "8080"
+  BASE_PATH = "/"
 
-[services.production.run.env]
-PORT = "8080"
-BASE_PATH = "/"
-NODE_ENV = "production"
-
-[services.env]
-PORT = "20925"
-BASE_PATH = "/"
+  [services.env]
+  PORT = "20925"
+  BASE_PATH = "/"
+  
