@@ -1,5 +1,6 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import multer from "multer";
+import { logger } from "../lib/logger.js";
 
 const router: IRouter = Router();
 
@@ -17,35 +18,63 @@ router.post(
       return;
     }
 
-    const apiKey = (process.env.EL_API_KEY ?? process.env.ELEVENLABS_API_KEY ?? "").trim();
+    const apiKey = (process.env.GOOGLE_STT_API_KEY ?? "").trim();
     if (!apiKey) {
-      res.status(500).json({ error: "ElevenLabs API key is not configured" });
+      res.status(500).json({ error: "GOOGLE_STT_API_KEY is not configured" });
+      return;
+    }
+
+    const projectId = (process.env.GOOGLE_CLOUD_PROJECT_ID ?? "").trim();
+    if (!projectId) {
+      res.status(500).json({ error: "GOOGLE_CLOUD_PROJECT_ID is not configured" });
       return;
     }
 
     try {
-      const form = new FormData();
-      const blob = new Blob([req.file.buffer], {
-        type: req.file.mimetype || "audio/webm",
-      });
-      form.append("file", blob, "recording.webm");
-      form.append("model_id", "scribe_v1");
+      const audioBase64 = req.file.buffer.toString("base64");
 
-      const response = await fetch("https://api.elevenlabs.io/v1/speech-to-text", {
-        method: "POST",
-        headers: {
-          "xi-api-key": apiKey,
+      const body = {
+        config: {
+          autoDecodingConfig: {},
+          languageCodes: ["en-US"],
+          model: "chirp",
+          features: {
+            enableAutomaticPunctuation: true,
+          },
         },
-        body: form,
+        content: audioBase64,
+      };
+
+      const url =
+        `https://speech.googleapis.com/v2/projects/${projectId}` +
+        `/locations/global/recognizers/_:recognize?key=${apiKey}`;
+
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
       });
 
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(`ElevenLabs STT error ${response.status}: ${errorText}`);
+        logger.error("Google STT error", { status: response.status, body: errorText });
+        throw new Error(`Google STT error ${response.status}: ${errorText}`);
       }
 
-      const data = (await response.json()) as { text?: string };
-      res.json({ text: data.text ?? "" });
+      const data = (await response.json()) as {
+        results?: Array<{
+          alternatives?: Array<{ transcript?: string }>;
+        }>;
+      };
+
+      const text =
+        (data.results ?? [])
+          .flatMap((r) => r.alternatives ?? [])
+          .map((a) => a.transcript ?? "")
+          .join(" ")
+          .trim();
+
+      res.json({ text });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Transcription failed";
       res.status(500).json({ error: message });
