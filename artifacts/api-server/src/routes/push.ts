@@ -6,6 +6,9 @@ import {
   getSubscriptions,
   sendPushToAll,
   getVapidPublicKey,
+  saveExpoToken,
+  removeExpoToken,
+  getExpoTokens,
   type PushSubscriptionData,
 } from "../push/pushManager.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
@@ -159,6 +162,65 @@ router.post("/push/test", async (req, res) => {
   } catch (err) {
     logger.error({ err }, "[PUSH] Test push error");
     res.status(500).json({ error: "Test push failed" });
+  }
+});
+
+// ── Expo Push Token endpoints ─────────────────────────────────────────────────
+
+// POST /api/push/expo-token — register an Expo push token from the native app
+router.post("/push/expo-token", async (req, res) => {
+  const { expoPushToken, userName = "David", deviceId } = req.body as {
+    expoPushToken?: string;
+    userName?: string;
+    deviceId?: string;
+  };
+
+  if (!expoPushToken || typeof expoPushToken !== "string") {
+    res.status(400).json({ error: "Missing expoPushToken" });
+    return;
+  }
+  if (!expoPushToken.startsWith("ExponentPushToken[") && !expoPushToken.startsWith("ExpoPushToken[")) {
+    res.status(400).json({ error: "Invalid expoPushToken format — expected ExponentPushToken[...] or ExpoPushToken[...]" });
+    return;
+  }
+
+  try {
+    const userAgent = (req.headers["user-agent"] ?? "unknown").slice(0, 200);
+    const { id, action } = await saveExpoToken(userName, expoPushToken, deviceId, userAgent);
+    logger.info({ userName, deviceId, tokenTail: expoPushToken.slice(-20), id, action }, "[Expo Push] Token registered");
+    res.json({ success: true, id, action });
+  } catch (err) {
+    logger.error({ err }, "[Expo Push] Failed to save token");
+    res.status(500).json({ error: "Failed to save Expo push token" });
+  }
+});
+
+// DELETE /api/push/expo-token — remove an Expo push token (on logout / unsubscribe)
+router.delete("/push/expo-token", async (req, res) => {
+  const { expoPushToken } = req.body as { expoPushToken?: string };
+  if (!expoPushToken) {
+    res.status(400).json({ error: "Missing expoPushToken" });
+    return;
+  }
+  try {
+    await removeExpoToken(expoPushToken);
+    logger.info({ tokenTail: expoPushToken.slice(-20) }, "[Expo Push] Token removed");
+    res.json({ success: true });
+  } catch (err) {
+    logger.error({ err }, "[Expo Push] Failed to remove token");
+    res.status(500).json({ error: "Failed to remove Expo push token" });
+  }
+});
+
+// GET /api/push/expo-status — diagnostic: count registered Expo tokens
+router.get("/push/expo-status", async (req, res) => {
+  try {
+    const userName = (req.query.userName as string) ?? "David";
+    const tokens = await getExpoTokens(userName);
+    res.json({ userName, tokenCount: tokens.length, tokens: tokens.map((t) => "…" + t.slice(-20)) });
+  } catch (err) {
+    logger.error({ err }, "[Expo Push] Status check error");
+    res.status(500).json({ error: "Status check failed" });
   }
 });
 

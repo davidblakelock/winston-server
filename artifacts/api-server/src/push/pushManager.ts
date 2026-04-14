@@ -2,6 +2,19 @@ import webpush from "web-push";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 
+// ── Ensure expo_push_tokens table exists (idempotent) ────────────────────────
+query(`
+  CREATE TABLE IF NOT EXISTS expo_push_tokens (
+    id integer GENERATED ALWAYS AS IDENTITY NOT NULL PRIMARY KEY,
+    user_name text DEFAULT 'David' NOT NULL,
+    expo_push_token text NOT NULL UNIQUE,
+    device_id text,
+    user_agent text,
+    created_at timestamptz DEFAULT now(),
+    updated_at timestamptz DEFAULT now()
+  )
+`).catch((err) => logger.warn({ err }, "[Push] expo_push_tokens table init failed — may already exist"));
+
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY ?? "";
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY ?? "";
 const VAPID_EMAIL = process.env.VAPID_EMAIL ?? "emma@winston.app";
@@ -178,10 +191,127 @@ export async function sendPushToAll(
     })
   );
 
-  logger.info({ sent, failed, tag: payload.tag }, "[Push] sendPushToAll complete");
-  return { sent, failed };
+  // Also send to any registered Expo push tokens (native mobile app)
+  const expoResult = await sendExpoNotifications(payload, userName).catch((err) => {
+    logger.warn({ err }, "[Push] Expo notification send failed");
+    return { sent: 0, failed: 0 };
+  });
+
+  const totalSent = sent + expoResult.sent;
+  const totalFailed = failed + expoResult.failed;
+  logger.info(
+    { webSent: sent, webFailed: failed, expoSent: expoResult.sent, expoFailed: expoResult.failed, tag: payload.tag },
+    "[Push] sendPushToAll complete"
+  );
+  return { sent: totalSent, failed: totalFailed };
 }
 
 export function getVapidPublicKey(): string {
   return VAPID_PUBLIC_KEY;
+}
+
+// ── Expo Push Notification support ───────────────────────────────────────────
+
+export async function saveExpoToken(
+  userName: string,
+  expoPushToken: string,
+  deviceId?: string,
+  userAgent?: string
+): Promise<{ id: number | null; action: "inserted" | "updated" }> {
+  const { rows } = await query<{ id: number; xmax: string }>(
+    `INSERT INTO expo_push_tokens (user_name, expo_push_token, device_id, user_agent, updated_at)
+     VALUES ($1, $2, $3, $4, now())
+     ON CONFLICT (expo_push_token) DO UPDATE SET
+       user_name   = EXCLUDED.user_name,
+       device_id   = EXCLUDED.device_id,
+       updated_at  = now()
+     RETURNING id, xmax::text`,
+    [userName, expoPushToken, deviceId ?? null, userAgent ?? null]
+  );
+  const row = rows[0];
+  if (!row) return { id: null, action: "inserted" };
+  const action = row.xmax === "0" ? "inserted" : "updated";
+  return { id: row.id, action };
+}
+
+export async function removeExpoToken(expoPushToken: string): Promise<void> {
+  await query(`DELETE FROM expo_push_tokens WHERE expo_push_token = $1`, [expoPushToken]);
+}
+
+export async function getExpoTokens(userName = "David"): Promise<string[]> {
+  const { rows } = await query<{ expo_push_token: string }>(
+    `SELECT expo_push_token FROM expo_push_tokens WHERE user_name = $1`,
+    [userName]
+  );
+  return rows.map((r) => r.expo_push_token);
+}
+
+async function sendExpoNotifications(
+  payload: PushPayload,
+  userName = "David"
+): Promise<{ sent: number; failed: number }> {
+  const tokens = await getExpoTokens(userName);
+  if (!tokens.length) return { sent: 0, failed: 0 };
+
+  const messages = tokens.map((to) => ({
+    to,
+    title: payload.title,
+    body: payload.body,
+    sound: "default",
+    priority: "high",
+    channelId: "default",
+    data: {
+      ...(payload.reminderId != null ? { reminderId: payload.reminderId } : {}),
+      ...(payload.url ? { url: payload.url } : {}),
+      ...(payload.tag ? { tag: payload.tag } : {}),
+    },
+  }));
+
+  logger.info({ count: messages.length, title: payload.title }, "[Expo Push] Sending notifications");
+
+  let sent = 0;
+  let failed = 0;
+
+  try {
+    const res = await fetch("https://exp.host/--/api/v2/push/send", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(messages),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      logger.warn({ status: res.status, errText }, "[Expo Push] API error response");
+      return { sent: 0, failed: tokens.length };
+    }
+
+    const result = (await res.json()) as { data: Array<{ status: string; id?: string; details?: { error?: string } }> };
+    const tickets = result.data ?? [];
+
+    await Promise.all(
+      tickets.map(async (ticket, i) => {
+        if (ticket.status === "ok") {
+          sent++;
+        } else {
+          failed++;
+          const errorCode = ticket.details?.error;
+          logger.warn({ token: tokens[i]?.slice(-20), errorCode }, "[Expo Push] Ticket error");
+          // DeviceNotRegistered — remove stale token
+          if (errorCode === "DeviceNotRegistered" && tokens[i]) {
+            await removeExpoToken(tokens[i]).catch(() => {});
+            logger.info({ token: tokens[i].slice(-20) }, "[Expo Push] Removed unregistered token");
+          }
+        }
+      })
+    );
+  } catch (err) {
+    logger.error({ err }, "[Expo Push] Unexpected error sending notifications");
+    failed = tokens.length;
+  }
+
+  logger.info({ sent, failed }, "[Expo Push] sendExpoNotifications complete");
+  return { sent, failed };
 }

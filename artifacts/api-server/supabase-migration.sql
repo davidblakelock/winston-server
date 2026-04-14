@@ -200,6 +200,16 @@ CREATE TABLE IF NOT EXISTS public.push_subscriptions (
   created_at timestamptz DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS public.expo_push_tokens (
+  id integer GENERATED ALWAYS AS IDENTITY NOT NULL PRIMARY KEY,
+  user_name text DEFAULT 'David'::text NOT NULL,
+  expo_push_token text NOT NULL UNIQUE,
+  device_id text,
+  user_agent text,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS public.recommendations (
   id integer GENERATED ALWAYS AS IDENTITY NOT NULL PRIMARY KEY,
   user_name text DEFAULT 'David'::text NOT NULL,
