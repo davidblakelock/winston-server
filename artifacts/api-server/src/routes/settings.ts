@@ -48,6 +48,16 @@ async function authenticate(req: express.Request, res: express.Response): Promis
   return session.userName;
 }
 
+// ── GET /api/profile/photo ────────────────────────────────────────────────────
+// Open endpoint — no auth required. Always returns David's photo fields.
+router.get("/profile/photo", async (req, res) => {
+  const profile = await getProfile("David").catch(() => null);
+  res.json({
+    photoUrl: profile?.photoUrl ?? null,
+    avatarBase64: profile?.avatarBase64 ?? null,
+  });
+});
+
 // ── GET /api/settings/profile ────────────────────────────────────────────────
 router.get("/settings/profile", async (req, res) => {
   const userName = await authenticate(req, res);
