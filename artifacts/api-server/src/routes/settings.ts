@@ -35,6 +35,11 @@ async function generateTTS(voiceId: string, text: string): Promise<{ audioBase64
 }
 
 async function authenticate(req: express.Request, res: express.Response): Promise<string | null> {
+  // Native app API key — always resolves to David
+  if (req.headers["x-api-key"] === "winston-native-2026") {
+    return "David";
+  }
+
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith("Bearer ")) {
     res.status(401).json({ error: "authentication_required" });
