@@ -181,6 +181,45 @@ router.delete("/profile/avatar", async (req, res) => {
   }
 });
 
+// ── GET /api/voices/:voiceId/preview ─────────────────────────────────────────
+// Returns the ElevenLabs CDN preview_url for a given voice ID.
+// No credits consumed — preview_url is a pre-generated CDN sample.
+// Auth: open (same David-always pattern as other native endpoints).
+router.get("/voices/:voiceId/preview", async (req, res) => {
+  const { voiceId } = req.params;
+
+  const voice = VOICE_OPTIONS.find((v) => v.id === voiceId);
+  if (!voice) {
+    res.status(404).json({ error: "Unknown voiceId" });
+    return;
+  }
+
+  const apiKey = EL_KEY();
+  if (!apiKey) {
+    res.status(500).json({ error: "ElevenLabs API key is not configured" });
+    return;
+  }
+
+  try {
+    const elRes = await fetch(`https://api.elevenlabs.io/v1/voices/${voiceId}`, {
+      headers: { "xi-api-key": apiKey },
+    });
+    if (!elRes.ok) {
+      res.status(502).json({ error: `ElevenLabs error ${elRes.status}` });
+      return;
+    }
+    const data = (await elRes.json()) as { preview_url?: string };
+    if (!data.preview_url) {
+      res.status(502).json({ error: "No preview available for this voice" });
+      return;
+    }
+    res.json({ previewUrl: data.preview_url, voiceId, voiceName: voice.name });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Preview lookup failed";
+    res.status(500).json({ error: message });
+  }
+});
+
 // ── GET /api/navigation/places ────────────────────────────────────────────────
 // Returns hardcoded saved locations merged with profile_items places.
 // Frontend uses this to detect navigation intent in the user-gesture context
