@@ -2070,7 +2070,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       });
       const nativeReply =
         nativeResp.content[0]?.type === "text" ? nativeResp.content[0].text : "";
-      res.json({ response: nativeReply });
+      res.json({ response: nativeReply, ...(navigationUrl ? { navigationUrl } : {}) });
     } catch (err: unknown) {
       const errStatus = (err as Record<string, unknown>)?.status as number | undefined;
       req.log.error({ err, errStatus }, "Claude native error");
