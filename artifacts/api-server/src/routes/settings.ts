@@ -188,12 +188,6 @@ router.delete("/profile/avatar", async (req, res) => {
 router.get("/voices/:voiceId/preview", async (req, res) => {
   const { voiceId } = req.params;
 
-  const voice = VOICE_OPTIONS.find((v) => v.id === voiceId);
-  if (!voice) {
-    res.status(404).json({ error: "Unknown voiceId" });
-    return;
-  }
-
   const apiKey = EL_KEY();
   if (!apiKey) {
     res.status(500).json({ error: "ElevenLabs API key is not configured" });
@@ -205,15 +199,24 @@ router.get("/voices/:voiceId/preview", async (req, res) => {
       headers: { "xi-api-key": apiKey },
     });
     if (!elRes.ok) {
-      res.status(502).json({ error: `ElevenLabs error ${elRes.status}` });
+      // Surface ElevenLabs errors as JSON so the client never receives HTML
+      res.status(elRes.status === 404 ? 404 : 502).json({
+        error: `Voice not found or ElevenLabs error (${elRes.status})`,
+      });
       return;
     }
-    const data = (await elRes.json()) as { preview_url?: string };
+    const data = (await elRes.json()) as { name?: string; preview_url?: string };
     if (!data.preview_url) {
-      res.status(502).json({ error: "No preview available for this voice" });
+      res.status(404).json({ error: "No preview available for this voice" });
       return;
     }
-    res.json({ previewUrl: data.preview_url, voiceId, voiceName: voice.name });
+    // Prefer the configured display name from VOICE_OPTIONS if this is a known voice
+    const known = VOICE_OPTIONS.find((v) => v.id === voiceId);
+    res.json({
+      previewUrl: data.preview_url,
+      voiceId,
+      voiceName: known?.name ?? data.name ?? voiceId,
+    });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Preview lookup failed";
     res.status(500).json({ error: message });
