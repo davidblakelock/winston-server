@@ -182,9 +182,9 @@ router.delete("/profile/avatar", async (req, res) => {
 });
 
 // ── GET /api/voices/:voiceId/preview ─────────────────────────────────────────
-// Returns the ElevenLabs CDN preview_url for a given voice ID.
-// No credits consumed — preview_url is a pre-generated CDN sample.
-// Auth: open (same David-always pattern as other native endpoints).
+// Generates a short TTS sample for any ElevenLabs voice ID.
+// Returns { audioBase64, mimeType, voiceId, voiceName } — play directly on device.
+// Auth: open (no credentials required).
 router.get("/voices/:voiceId/preview", async (req, res) => {
   const { voiceId } = req.params;
 
@@ -194,31 +194,42 @@ router.get("/voices/:voiceId/preview", async (req, res) => {
     return;
   }
 
+  const known = VOICE_OPTIONS.find((v) => v.id === voiceId);
+
   try {
-    const elRes = await fetch(`https://api.elevenlabs.io/v1/voices/${voiceId}`, {
-      headers: { "xi-api-key": apiKey },
+    const elRes = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+      method: "POST",
+      headers: {
+        "xi-api-key": apiKey,
+        "Content-Type": "application/json",
+        Accept: "audio/mpeg",
+      },
+      body: JSON.stringify({
+        text: "Hello — I've been looking forward to meeting you. I'm going to be here whenever you need me.",
+        model_id: "eleven_turbo_v2_5",
+        voice_settings: { stability: 0.5, similarity_boost: 0.8, style: 0.2, use_speaker_boost: true },
+      }),
     });
+
     if (!elRes.ok) {
-      // Surface ElevenLabs errors as JSON so the client never receives HTML
-      res.status(elRes.status === 404 ? 404 : 502).json({
-        error: `Voice not found or ElevenLabs error (${elRes.status})`,
+      const txt = await elRes.text();
+      req.log.warn({ voiceId, status: elRes.status, txt }, "Voice preview TTS failed");
+      res.status(elRes.status === 401 ? 401 : 502).json({
+        error: `Voice preview failed (${elRes.status})`,
       });
       return;
     }
-    const data = (await elRes.json()) as { name?: string; preview_url?: string };
-    if (!data.preview_url) {
-      res.status(404).json({ error: "No preview available for this voice" });
-      return;
-    }
-    // Prefer the configured display name from VOICE_OPTIONS if this is a known voice
-    const known = VOICE_OPTIONS.find((v) => v.id === voiceId);
+
+    const buf = await elRes.arrayBuffer();
+    const audioBase64 = Buffer.from(buf).toString("base64");
     res.json({
-      previewUrl: data.preview_url,
+      audioBase64,
+      mimeType: "audio/mpeg",
       voiceId,
-      voiceName: known?.name ?? data.name ?? voiceId,
+      voiceName: known?.name ?? voiceId,
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Preview lookup failed";
+    const message = err instanceof Error ? err.message : "Preview failed";
     res.status(500).json({ error: message });
   }
 });
