@@ -9,31 +9,6 @@ const upload = multer({
   limits: { fileSize: 25 * 1024 * 1024 },
 });
 
-/**
- * Build a Google STT v1 RecognitionConfig for the given MIME type.
- * M4A (AAC-in-MP4) is not a named v1 encoding, so we omit the encoding
- * field to trigger ENCODING_UNSPECIFIED — Google's backend will attempt
- * auto-detection from the container header.
- */
-function buildSttConfig(mime: string): Record<string, unknown> {
-  const base: Record<string, unknown> = {
-    languageCode: "en-US",
-    enableAutomaticPunctuation: true,
-  };
-
-  if (mime.includes("webm")) {
-    return { ...base, encoding: "WEBM_OPUS", model: "latest_short" };
-  }
-  if (mime.includes("ogg")) {
-    return { ...base, encoding: "OGG_OPUS", model: "latest_short" };
-  }
-  if (mime.includes("mp3") || mime.includes("mpeg")) {
-    return { ...base, encoding: "MP3", model: "latest_short" };
-  }
-  // m4a / mp4 / aac — explicitly set ENCODING_UNSPECIFIED so Google auto-detects
-  return { ...base, encoding: "ENCODING_UNSPECIFIED", model: "latest_long" };
-}
-
 router.post(
   "/transcribe",
   upload.single("audio"),
@@ -43,55 +18,53 @@ router.post(
       return;
     }
 
-    const apiKey = (process.env.GOOGLE_STT_API_KEY ?? "").trim();
+    const apiKey = (
+      process.env.EL_API_KEY ??
+      process.env.ELEVENLABS_API_KEY ??
+      process.env.elevenlabs_api_key ??
+      ""
+    ).trim();
+
     if (!apiKey) {
-      res.status(500).json({ error: "GOOGLE_STT_API_KEY is not configured" });
+      res.status(500).json({ error: "ElevenLabs API key is not configured" });
       return;
     }
 
     try {
-      const mime = (req.file.mimetype || "audio/webm").toLowerCase();
-      const config = buildSttConfig(mime);
-      const audioBase64 = req.file.buffer.toString("base64");
+      const mime = (req.file.mimetype || "audio/m4a").toLowerCase();
 
       logger.info(
-        { mime, encoding: config.encoding ?? "UNSPECIFIED", model: config.model, bytes: req.file.size },
-        "STT request"
+        { mime, bytes: req.file.size },
+        "STT request (ElevenLabs)"
       );
 
-      const body = {
-        config,
-        audio: { content: audioBase64 },
-      };
+      const formData = new FormData();
+      formData.append(
+        "file",
+        new Blob([req.file.buffer], { type: mime }),
+        req.file.originalname || "audio.m4a"
+      );
+      formData.append("model_id", "scribe_v1");
 
-      const url = `https://speech.googleapis.com/v1/speech:recognize?key=${apiKey}`;
-
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+      const response = await fetch(
+        "https://api.elevenlabs.io/v1/speech-to-text",
+        {
+          method: "POST",
+          headers: { "xi-api-key": apiKey },
+          body: formData,
+        }
+      );
 
       if (!response.ok) {
         const errorText = await response.text();
-        logger.error("Google STT v1 error", { status: response.status, encoding: config.encoding, mime, body: errorText });
-        throw new Error(`Google STT error ${response.status}: ${errorText}`);
+        logger.error("ElevenLabs STT error", { status: response.status, mime, body: errorText });
+        throw new Error(`ElevenLabs STT error ${response.status}: ${errorText}`);
       }
 
-      const data = (await response.json()) as {
-        results?: Array<{
-          alternatives?: Array<{ transcript?: string }>;
-        }>;
-      };
+      const data = (await response.json()) as { text?: string };
+      const text = (data.text ?? "").trim();
 
-      const text =
-        (data.results ?? [])
-          .flatMap((r) => r.alternatives ?? [])
-          .map((a) => a.transcript ?? "")
-          .join(" ")
-          .trim();
-
-      logger.info({ mime, resultCount: data.results?.length ?? 0, textLength: text.length }, "STT result");
+      logger.info({ mime, textLength: text.length }, "STT result (ElevenLabs)");
 
       res.json({ text });
     } catch (err: unknown) {
