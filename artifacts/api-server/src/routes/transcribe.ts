@@ -30,8 +30,8 @@ function buildSttConfig(mime: string): Record<string, unknown> {
   if (mime.includes("mp3") || mime.includes("mpeg")) {
     return { ...base, encoding: "MP3", model: "latest_short" };
   }
-  // m4a / mp4 / aac — omit encoding so Google auto-detects from container header
-  return { ...base, model: "latest_long" };
+  // m4a / mp4 / aac — explicitly set ENCODING_UNSPECIFIED so Google auto-detects
+  return { ...base, encoding: "ENCODING_UNSPECIFIED", model: "latest_long" };
 }
 
 router.post(
