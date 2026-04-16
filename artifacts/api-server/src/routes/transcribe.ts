@@ -9,12 +9,29 @@ const upload = multer({
   limits: { fileSize: 25 * 1024 * 1024 },
 });
 
-function encodingForMime(mime: string): string {
-  if (mime.includes("webm")) return "WEBM_OPUS";
-  if (mime.includes("ogg")) return "OGG_OPUS";
-  // m4a / mp4 / aac — closest supported v1 encoding; Google's backend
-  // handles AAC-in-MP4 containers when MP3 is specified on newer models.
-  return "MP3";
+/**
+ * Build a Google STT v1 RecognitionConfig for the given MIME type.
+ * M4A (AAC-in-MP4) is not a named v1 encoding, so we omit the encoding
+ * field to trigger ENCODING_UNSPECIFIED — Google's backend will attempt
+ * auto-detection from the container header.
+ */
+function buildSttConfig(mime: string): Record<string, unknown> {
+  const base: Record<string, unknown> = {
+    languageCode: "en-US",
+    enableAutomaticPunctuation: true,
+  };
+
+  if (mime.includes("webm")) {
+    return { ...base, encoding: "WEBM_OPUS", model: "latest_short" };
+  }
+  if (mime.includes("ogg")) {
+    return { ...base, encoding: "OGG_OPUS", model: "latest_short" };
+  }
+  if (mime.includes("mp3") || mime.includes("mpeg")) {
+    return { ...base, encoding: "MP3", model: "latest_short" };
+  }
+  // m4a / mp4 / aac — omit encoding so Google auto-detects from container header
+  return { ...base, model: "latest_long" };
 }
 
 router.post(
@@ -33,20 +50,18 @@ router.post(
     }
 
     try {
-      const mime = req.file.mimetype || "audio/webm";
-      const encoding = encodingForMime(mime);
+      const mime = (req.file.mimetype || "audio/webm").toLowerCase();
+      const config = buildSttConfig(mime);
       const audioBase64 = req.file.buffer.toString("base64");
 
+      logger.info(
+        { mime, encoding: config.encoding ?? "UNSPECIFIED", model: config.model, bytes: req.file.size },
+        "STT request"
+      );
+
       const body = {
-        config: {
-          encoding,
-          languageCode: "en-US",
-          model: "latest_short",
-          enableAutomaticPunctuation: true,
-        },
-        audio: {
-          content: audioBase64,
-        },
+        config,
+        audio: { content: audioBase64 },
       };
 
       const url = `https://speech.googleapis.com/v1/speech:recognize?key=${apiKey}`;
@@ -59,7 +74,7 @@ router.post(
 
       if (!response.ok) {
         const errorText = await response.text();
-        logger.error("Google STT v1 error", { status: response.status, encoding, mime, body: errorText });
+        logger.error("Google STT v1 error", { status: response.status, encoding: config.encoding, mime, body: errorText });
         throw new Error(`Google STT error ${response.status}: ${errorText}`);
       }
 
@@ -75,6 +90,8 @@ router.post(
           .map((a) => a.transcript ?? "")
           .join(" ")
           .trim();
+
+      logger.info({ mime, resultCount: data.results?.length ?? 0, textLength: text.length }, "STT result");
 
       res.json({ text });
     } catch (err: unknown) {
