@@ -9,6 +9,14 @@ const upload = multer({
   limits: { fileSize: 25 * 1024 * 1024 },
 });
 
+function encodingForMime(mime: string): string {
+  if (mime.includes("webm")) return "WEBM_OPUS";
+  if (mime.includes("ogg")) return "OGG_OPUS";
+  // m4a / mp4 / aac — closest supported v1 encoding; Google's backend
+  // handles AAC-in-MP4 containers when MP3 is specified on newer models.
+  return "MP3";
+}
+
 router.post(
   "/transcribe",
   upload.single("audio"),
@@ -24,30 +32,24 @@ router.post(
       return;
     }
 
-    const projectId = (process.env.GOOGLE_CLOUD_PROJECT_ID ?? "").trim();
-    if (!projectId) {
-      res.status(500).json({ error: "GOOGLE_CLOUD_PROJECT_ID is not configured" });
-      return;
-    }
-
     try {
+      const mime = req.file.mimetype || "audio/webm";
+      const encoding = encodingForMime(mime);
       const audioBase64 = req.file.buffer.toString("base64");
 
       const body = {
         config: {
-          autoDecodingConfig: {},
-          languageCodes: ["en-US"],
-          model: "chirp",
-          features: {
-            enableAutomaticPunctuation: true,
-          },
+          encoding,
+          languageCode: "en-US",
+          model: "latest_short",
+          enableAutomaticPunctuation: true,
         },
-        content: audioBase64,
+        audio: {
+          content: audioBase64,
+        },
       };
 
-      const url =
-        `https://speech.googleapis.com/v2/projects/${projectId}` +
-        `/locations/global/recognizers/_:recognize?key=${apiKey}`;
+      const url = `https://speech.googleapis.com/v1/speech:recognize?key=${apiKey}`;
 
       const response = await fetch(url, {
         method: "POST",
@@ -57,7 +59,7 @@ router.post(
 
       if (!response.ok) {
         const errorText = await response.text();
-        logger.error("Google STT error", { status: response.status, body: errorText });
+        logger.error("Google STT v1 error", { status: response.status, encoding, mime, body: errorText });
         throw new Error(`Google STT error ${response.status}: ${errorText}`);
       }
 
