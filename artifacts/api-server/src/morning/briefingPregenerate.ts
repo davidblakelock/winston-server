@@ -98,6 +98,7 @@ interface PollenResult {
   grassMax: number;
   ragweedMax: number;
   treeMax: number;
+  aqiMax: number;
 }
 
 function pollenLevel(value: number): string {
@@ -124,18 +125,29 @@ async function geocodeCity(city: string): Promise<{ lat: number; lon: number } |
   }
 }
 
+function aqiLabel(aqi: number): string {
+  if (aqi <= 50) return "Good";
+  if (aqi <= 100) return "Moderate";
+  if (aqi <= 150) return "Unhealthy for Sensitive Groups";
+  if (aqi <= 200) return "Unhealthy";
+  if (aqi <= 300) return "Very Unhealthy";
+  return "Hazardous";
+}
+
 async function fetchDallasPollenData(lat: number, lon: number): Promise<PollenResult | null> {
   try {
     const resp = await fetch(
-      `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lon}&hourly=grass_pollen,ragweed_pollen,alder_pollen&timezone=America%2FChicago&forecast_days=1`,
+      `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lon}&hourly=grass_pollen,ragweed_pollen,alder_pollen,us_aqi&timezone=America%2FChicago&forecast_days=1`,
       { signal: AbortSignal.timeout(8000) }
     );
     if (!resp.ok) return null;
-    const data = await resp.json() as { hourly: { grass_pollen: number[]; ragweed_pollen: number[]; alder_pollen: number[] } };
-    const grassMax = Math.round(Math.max(...(data.hourly.grass_pollen ?? [0]).filter((v) => v != null)));
-    const ragweedMax = Math.round(Math.max(...(data.hourly.ragweed_pollen ?? [0]).filter((v) => v != null)));
-    const treeMax = Math.round(Math.max(...(data.hourly.alder_pollen ?? [0]).filter((v) => v != null)));
-    return { grassMax, ragweedMax, treeMax };
+    const data = await resp.json() as { hourly: { grass_pollen: number[]; ragweed_pollen: number[]; alder_pollen: number[]; us_aqi: number[] } };
+    const validNum = (arr: number[]) => (arr ?? []).filter((v) => v != null && !isNaN(v));
+    const grassMax = Math.round(Math.max(...validNum(data.hourly.grass_pollen), 0));
+    const ragweedMax = Math.round(Math.max(...validNum(data.hourly.ragweed_pollen), 0));
+    const treeMax = Math.round(Math.max(...validNum(data.hourly.alder_pollen), 0));
+    const aqiMax = Math.round(Math.max(...validNum(data.hourly.us_aqi), 0));
+    return { grassMax, ragweedMax, treeMax, aqiMax };
   } catch {
     return null;
   }
@@ -221,12 +233,26 @@ function buildContextualWeatherBlock(dallas: CachedWeather, secondary: Secondary
       }).join(" | ")
     : "";
 
+  const uvLine = `UV Index: ${dallas.uvIndex} now / peak ${dallas.uvIndexMax} (${uvLabel})`;
+
   return (
-    `\n\n[VERIFIED — Tomorrow.io Weather API — Dallas]\n` +
-    `Now: ${dallas.temp}°F, ${dallas.condition} | Today: high ${dallas.high}°F / low ${dallas.low}°F | Rain chance: ${dallas.precipChance}%\n` +
-    (fiveDayLines ? `5-Day Forecast: ${fiveDayLines}\n` : "") +
+    `\n\n[VERIFIED — Tomorrow.io Weather API — ${dallas.city}]\n` +
+    `Now: ${dallas.temp}°F (feels like ${dallas.feelsLike}°F), ${dallas.condition}\n` +
+    `Today: high ${dallas.high}°F / low ${dallas.low}°F | Rain chance: ${dallas.precipChance}% | Humidity: ${dallas.humidity}% | Wind: ${dallas.windSpeed} mph\n` +
+    `${uvLine}\n` +
+    (fiveDayLines ? `Forecast: ${fiveDayLines}\n` : "") +
     (morningActivityPassed ? `[Morning activity window has passed — it is past 10am CT. Do NOT suggest David go for a run or to pickleball.]\n` : "") +
-    secondary.map((s) => `\n[VERIFIED — Tomorrow.io Weather API — ${s.person.city} (for ${s.person.name})]\n${formatWeatherBlock(s.weather)}\n`).join("") +
+    secondary.map((s) => {
+      const w = s.weather;
+      const days = w.forecastDays.length > 0
+        ? w.forecastDays.map((d) => `${d.dayName}: ${d.high}°/${d.low}°${d.precipChance >= 40 ? ` ${d.precipChance}%rain` : ""}`).join(" | ")
+        : "";
+      return (
+        `\n[VERIFIED — Tomorrow.io Weather API — ${s.person.city} (for ${s.person.name})]\n` +
+        `Now: ${w.temp}°F (feels like ${w.feelsLike}°F), ${w.condition} — high ${w.high}°F / low ${w.low}°F | ${w.precipChance}% precip | humidity ${w.humidity}%\n` +
+        (days ? `Forecast: ${days}\n` : "")
+      );
+    }).join("") +
     signalLines
   );
 }
@@ -312,11 +338,11 @@ const MASTER_BRIEFING_INSTRUCTION = `
 
   SECTION 1 — GREETING: "Good morning, David" followed by one warm personal sentence naming the day of the week. One sentence total.
 
-  SECTION 2 — WEATHER TODAY: SKIP THIS SECTION ENTIRELY. All weather — temperature, condition, high/low, rain chance, pollen, UV, forecast — is displayed on the visual weather card in the app. Do not mention any of it. Move directly from Section 1 to Section 5.
+  SECTION 2 — WEATHER TODAY: Deliver a natural, conversational weather summary using the [VERIFIED — Tomorrow.io Weather API — Dallas] block. Include: current temperature and feels-like, today's high and low, conditions, rain chance, humidity, wind speed, and UV index. Keep it to 2–3 sentences — warm and informative, like a friend who checked the forecast. If UV is high (8+), mention it. If there is an Air Quality & Pollen block, weave pollen and AQI into the same breath — one concise sentence. Only skip this section if the Dallas weather block is missing entirely.
 
-  SECTION 3 — FIVE DAY FORECAST: SKIP THIS SECTION ENTIRELY.
+  SECTION 3 — FORECAST: Deliver a brief overview of the coming days using the Forecast data in the [VERIFIED — Tomorrow.io Weather API — Dallas] block. Mention any days with notable changes — rain, big temperature swings, heat. Keep it to 2 sentences max. If family member weather blocks are present (e.g. Knoxville for Olivia), mention those naturally: "Over in Knoxville, Olivia's got..." — one sentence per city, only if conditions are interesting or meaningfully different from Dallas. Skip this section only if no forecast data is available.
 
-  SECTION 4 — POLLEN: SKIP THIS SECTION ENTIRELY.
+  SECTION 4 — POLLEN / AIR QUALITY: SKIP THIS SECTION — pollen and AQI are already covered in Section 2.
 
   SECTION 5 — EMAIL: If there is a [VERIFIED — Gmail API — unread emails] block below, share one or two that actually matter — something requiring action, from someone important, or genuinely worth knowing. Never count unread messages. Never summarize confirmation emails or automated mail David doesn't need to act on. If there is NO Gmail API block, SKIP SECTION 5 ENTIRELY — do not mention email, do not say the inbox is clear or quiet.
 
@@ -358,10 +384,10 @@ const MASTER_BRIEFING_INSTRUCTION = `
   "Here is your morning briefing" or "Good morning, David, here is what you need to know"
   "Moving on to" or "Let us talk about" or "Turning to" or "Now for" or "Next up"
   "In other news" or "Speaking of which" or "On the topic of"
-  "Here is your weather" or "In terms of the weather" or "Weather-wise"
+  "Here is your weather" or "In terms of the weather" or "Weather-wise" or "Let's start with the weather" — instead, weave weather naturally into the flow
   "Anything else before you head into your day?" or "Is there anything else?" or "Let me know if you need anything" or any open-ended question at the close.
   Any phrase that announces that a new section is beginning.
-  ANY weather content outside the single exception in Section 6: no temperatures, no degrees (°), no highs, no lows, no rain percentages, no humidity, no pollen counts, no UV index, no forecast days, no condition descriptions (sunny, cloudy, partly cloudy, clear, etc.), no "feels like", no wind speed. The weather card shows all of this — the briefing text must never duplicate it.
+  Weather content in Sections 5–16 (email, calendar, news, sports, etc.) — weather belongs only in Sections 2 and 3, plus the single outdoor-activity exception in Section 6. Never repeat weather stats in other sections.
 
   IMPORTANT: The data blocks earlier in this system prompt contain the raw information. This instruction tells you how to weave it all together. Run all 16 sections in order. Skip only where explicitly told to. Follow this instruction over any other formatting guidance in the data blocks.
   `;
@@ -511,10 +537,11 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     const pollenBlock = pollenData
       ? (() => {
           const parts: string[] = [];
-          if (pollenData.grassMax > 0) parts.push(`Grass: ${pollenLevel(pollenData.grassMax)} (${pollenData.grassMax} gr/m³)`);
-          if (pollenData.ragweedMax > 0) parts.push(`Ragweed: ${pollenLevel(pollenData.ragweedMax)} (${pollenData.ragweedMax} gr/m³)`);
-          if (pollenData.treeMax > 0) parts.push(`Tree/Alder: ${pollenLevel(pollenData.treeMax)} (${pollenData.treeMax} gr/m³)`);
-          return parts.length > 0 ? `\nPollen today — ${parts.join(" | ")}` : "";
+          if (pollenData.aqiMax > 0) parts.push(`Air Quality (US AQI): ${pollenData.aqiMax} — ${aqiLabel(pollenData.aqiMax)}`);
+          if (pollenData.grassMax > 0) parts.push(`Grass pollen: ${pollenLevel(pollenData.grassMax)} (${pollenData.grassMax} gr/m³)`);
+          if (pollenData.ragweedMax > 0) parts.push(`Ragweed pollen: ${pollenLevel(pollenData.ragweedMax)} (${pollenData.ragweedMax} gr/m³)`);
+          if (pollenData.treeMax > 0) parts.push(`Tree/Alder pollen: ${pollenLevel(pollenData.treeMax)} (${pollenData.treeMax} gr/m³)`);
+          return parts.length > 0 ? `\nAir Quality & Pollen today — ${parts.join(" | ")}` : "";
         })()
       : "";
 

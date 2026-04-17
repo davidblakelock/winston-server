@@ -108,7 +108,8 @@ async function fetchFromTomorrowIo(city: string, lat: number, lon: number): Prom
   const current = realtime.data.values;
   const today = forecast.timelines.daily[0]?.values;
 
-  const forecastDays: ForecastDay[] = forecast.timelines.daily.slice(1, 6).map((day) => {
+  // Slice days 1–7 after today (index 0 = today); use whatever the API returns (free plan = up to 5-6)
+  const forecastDays: ForecastDay[] = forecast.timelines.daily.slice(1, 8).map((day) => {
     const date = new Date(day.time);
     const dayName = date.toLocaleDateString("en-US", { timeZone: "America/Chicago", weekday: "short" });
     const conditionCode = day.values.weatherCodeDay;
