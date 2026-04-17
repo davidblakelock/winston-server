@@ -265,6 +265,16 @@ function calculateAge(birthday: string | null): number | null {
   return age;
 }
 
+// Relationship keywords that indicate a romantic partner / significant other
+export const PARTNER_RELATIONSHIPS = new Set([
+  "girlfriend", "boyfriend", "partner", "wife", "husband", "spouse",
+  "fiancée", "fiancé", "fiance", "significant other", "so",
+]);
+
+export function isPartnerRelationship(rel: string): boolean {
+  return PARTNER_RELATIONSHIPS.has(rel.trim().toLowerCase());
+}
+
 // Build the personal-context block from structured profile columns + rawData.
 // Call this in every system prompt, always, regardless of onboarding status.
 export function buildProfileContext(
@@ -329,10 +339,28 @@ export function buildProfileContext(
   }
   if (healthNotes) aboutLines.push(`• Health notes: ${healthNotes}`);
 
+  // ── Partner / Significant Other section ───────────────────────────────────
+  const partner = people?.find((p) => isPartnerRelationship(p.relationship));
+  const nonPartnerPeople = people?.filter((p) => !isPartnerRelationship(p.relationship)) ?? [];
+
+  let partnerSection = "";
+  if (partner) {
+    let partnerLine = `• ${partner.name} — ${partner.relationship}`;
+    if (partner.city) partnerLine += `, lives in ${partner.city}`;
+    if (partner.address) partnerLine += ` (${partner.address})`;
+    if (partner.details) partnerLine += `. ${partner.details}`;
+    partnerSection = [
+      "",
+      `Your Partner — ${partner.name}:`,
+      partnerLine,
+      `⚑ ${partner.name} is ${userName}'s ${partner.relationship} and an important, valued person in his life. Mention ${partner.name} naturally and warmly in conversations and briefings. Ask how things are going with ${partner.name}. Show genuine interest and care for ${partner.name}.`,
+    ].join("\n");
+  }
+
   // ── People section ─────────────────────────────────────────────────────────
   const peopleLines =
-    people && people.length > 0
-      ? people.map((p) => {
+    nonPartnerPeople.length > 0
+      ? nonPartnerPeople.map((p) => {
           let line = `• ${p.name} — ${p.relationship}`;
           if (p.city) line += `, lives in ${p.city}`;
           if (p.address) line += ` (${p.address})`;
@@ -372,6 +400,7 @@ export function buildProfileContext(
     `About ${userName}:`,
     `• Name: ${userName}`,
     ...aboutLines,
+    partnerSection,
     "",
     "Your People:",
     peopleLines,

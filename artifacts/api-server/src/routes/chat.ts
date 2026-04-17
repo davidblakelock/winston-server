@@ -97,6 +97,7 @@ import {
   getProfile,
   buildSystemPromptFromProfile,
   buildProfileContext,
+  isPartnerRelationship,
   type CollectedData,
 } from "../onboarding/onboardingManager.js";
 import { getCachedWeather, type CachedWeather, TOMORROW_CONDITIONS } from "../weather/weatherCache.js";
@@ -319,8 +320,7 @@ const OLIVIA_CALL_PATTERN = /\b(called?\s+olivia|talked?\s+(to\s+)?olivia|spoke\
 const OLIVIA_MENTION_PATTERN = /\bolivia\b/i;
 
 
-// Susan coordination — detecting Susan-related tasks
-const SUSAN_PATTERN = /\bsusan\b/i;
+// Partner mention detection — built dynamically from profile at runtime (see chatHandlerCore)
 const MED_TAKEN_PATTERN = /\b(taken|took\s+(my\s+)?(meds?|medications?|pills?|them)|meds?\s+(done|taken|all\s+done)|medications?\s+taken|took\s+them|all\s+done\s+with\s+(my\s+)?meds?|done\s+with\s+(my\s+)?meds?|yes\s+(i\s+)?(took|taken)|confirmed\s+(meds?|medications?))\b/i;
 const MED_ADD_PATTERN = /\b(add\s+(a\s+)?(?:new\s+)?medication\s+(?:called\s+)?|new\s+medication\s+(?:called\s+)?|start\s+taking\s+(?:a\s+)?(?:new\s+)?medication|add\s+.{2,40}\s+to\s+my\s+medications?)\b/i;
 const MED_LIST_PATTERN = /\b(what\s+medications?\s+(do\s+i\s+take|am\s+i\s+(on|taking)|are\s+mine)|my\s+medications?|medication\s+list|what\s+(meds?|pills?)\s+(do\s+i|am\s+i)|list\s+(my\s+)?meds?|what\s+do\s+i\s+take)\b/i;
@@ -726,7 +726,13 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isDateList = !isMorningGreeting && DATE_LIST_PATTERN.test(message);
   const isDateRemove = !isMorningGreeting && DATE_REMOVE_PATTERN.test(message);
   const isEmergency = EMERGENCY_PATTERN.test(message);
-  const isSusanRelated = !isMorningGreeting && SUSAN_PATTERN.test(message);
+
+  // Dynamic partner detection — read from profile (any girlfriend/boyfriend/spouse/etc.)
+  const profilePeople = ((userProfile?.rawData as CollectedData)?.people ?? []);
+  const partner = profilePeople.find((p) => isPartnerRelationship(p.relationship)) ?? null;
+  const partnerFirstName = partner?.name?.split(" ")[0] ?? null;
+  const partnerPattern = partnerFirstName ? new RegExp(`\\b${partnerFirstName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i") : null;
+  const isPartnerRelated = !isMorningGreeting && partnerPattern !== null && partnerPattern.test(message);
   const isJournalReview = !isMorningGreeting && JOURNAL_REVIEW_PATTERN.test(message);
   const isOliviaCall = !isMorningGreeting && OLIVIA_CALL_PATTERN.test(message);
   const isOliviaMention = !isMorningGreeting && OLIVIA_MENTION_PATTERN.test(message);
@@ -1110,12 +1116,16 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     } catch {}
   }
 
-  // ── Susan coordination context ─────────────────────────────────────────────
-  if (isSusanRelated) {
-    systemPrompt += `\n\n[Susan Coordination]\nSusan Smart is David's girlfriend and a real, valued presence in his life. She lives nearby. Her dog's name is Lily (a toy poodle). You genuinely like Susan and care about her. In this message David has mentioned Susan — respond warmly:\n• If he's asking you to remind Susan of something (dentist, errand, task): acknowledge it and set a reminder, saying something like "I'll make a note for you to remind Susan about her dentist Thursday."\n• If he's asking you to remind him to do something FOR Susan (pick up flowers, make a reservation): save the reminder and be specific and warm.\n• If he's sharing something about Susan or asking how she is: engage with genuine curiosity and warmth — you're interested in how she's doing.\n• Occasionally and naturally (when relevant, not forced) ask: "How is Susan doing?" or "Did she enjoy that dinner?" — Emma genuinely cares about Susan.`;
+  // ── Partner coordination context (dynamic — works for any girlfriend/spouse/SO) ──
+  if (isPartnerRelated && partner) {
+    const rel = partner.relationship;
+    const pName = partner.name;
+    const cityNote = partner.city ? ` She lives in ${partner.city}.` : " She lives nearby.";
+    const detailNote = partner.details ? ` ${partner.details}` : "";
+    systemPrompt += `\n\n[Partner — ${pName}]\n${pName} is ${sessionUserName}'s ${rel} and a real, valued presence in his life.${cityNote}${detailNote} You genuinely like ${pName} and care about her. In this message ${sessionUserName} has mentioned ${pName} — respond warmly:\n• If he's asking you to remind ${pName} of something (dentist, errand, task): acknowledge it and set a reminder, e.g. "I'll make a note for you to remind ${pName} about that."\n• If he's asking you to remind him to do something FOR ${pName} (pick up flowers, make a reservation): save the reminder and be specific and warm.\n• If he's sharing something about ${pName} or asking how she is: engage with genuine curiosity and warmth — you're interested in how she's doing.\n• Naturally (when relevant, not forced) ask: "How is ${pName} doing?" or "Did she enjoy that?" — you genuinely care about ${pName}.`;
   }
 
-  // ── Generic relationship tracking (Susan + others from profile) ────────────
+  // ── Relationship tracking (partner + others from profile) ─────────────────
   {
     const detected = detectPersonMention(message);
     if (detected && !isMorningGreeting) {
@@ -1124,16 +1134,14 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       recordMention(person.name, person.relationship, mentionType, message.substring(0, 150), sessionUserName).catch(() => {});
     }
 
-    // If Susan hasn't been mentioned in 3+ days and this isn't a Susan message or morning greeting,
-    // give Emma a gentle opportunity to ask about her
-    if (!isSusanRelated && !isMorningGreeting) {
+    // If the partner hasn't been mentioned in 3+ days, give a gentle check-in opportunity
+    if (!isPartnerRelated && !isMorningGreeting && partner) {
       try {
-        const daysSinceSusan = await getDaysSinceLastMention("Susan", sessionUserName);
-        if (daysSinceSusan !== null && daysSinceSusan >= 3) {
-          systemPrompt += `\n\n[Susan — Gentle Check-In Opportunity]\nIt's been ${daysSinceSusan} days since David last mentioned Susan. If the moment feels natural, gently ask how she's doing — "How is Susan? Have you two been able to get together?" Don't force it if the conversation is urgent or unrelated.`;
-        } else if (daysSinceSusan === null) {
-          // Never mentioned Susan — seed so we don't nudge forever
-          // No nudge needed on very first use
+        const pName = partner.name;
+        const pFirst = partnerFirstName ?? pName;
+        const daysSincePartner = await getDaysSinceLastMention(pFirst, sessionUserName);
+        if (daysSincePartner !== null && daysSincePartner >= 3) {
+          systemPrompt += `\n\n[${pName} — Gentle Check-In Opportunity]\nIt's been ${daysSincePartner} days since ${sessionUserName} last mentioned ${pName}. If the moment feels natural, gently ask how she's doing — "How is ${pName}? Have you two been able to get together?" Don't force it if the conversation is urgent or unrelated.`;
         }
       } catch { /* non-fatal */ }
     }
