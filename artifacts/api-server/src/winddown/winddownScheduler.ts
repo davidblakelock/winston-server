@@ -6,6 +6,7 @@ import {
   getSettings,
   hasFiredToday,
   markFiredToday,
+  saveTonightMessage,
 } from "./winddownManager.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
 import { logger } from "../lib/logger.js";
@@ -124,6 +125,12 @@ export function startWinddownScheduler(): void {
 
       const companionName = await getCompanionName();
       const message = await generateOpeningMessage(companionName);
+
+      // Persist opening message so the native app can retrieve it after tapping the push notification
+      await saveTonightMessage(message).catch((err) =>
+        logger.warn({ err }, "Failed to save tonight's wind-down message")
+      );
+
       broadcast("winddown-start", { message });
 
       sendPushToAll({

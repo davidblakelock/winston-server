@@ -39,9 +39,14 @@ export async function ensureWinddownTables(): Promise<void> {
       id serial PRIMARY KEY,
       trigger_date date NOT NULL UNIQUE,
       triggered_at timestamptz NOT NULL DEFAULT NOW(),
-      active boolean NOT NULL DEFAULT true
+      active boolean NOT NULL DEFAULT true,
+      tonight_message text
     )
   `);
+  // Add tonight_message column if it doesn't exist (migration for existing installs)
+  await query(`
+    ALTER TABLE winddown_state ADD COLUMN IF NOT EXISTS tonight_message text
+  `).catch(() => {});
 }
 
 export async function getSettings(): Promise<WinddownSettings> {
@@ -145,6 +150,25 @@ export function formatNotesForMorningBriefing(notes: WinddownNote[]): string {
     items +
     `\nMention these naturally early in your morning briefing.`
   );
+}
+
+export async function saveTonightMessage(message: string): Promise<void> {
+  const tz = "America/Chicago";
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
+  await query(
+    `UPDATE winddown_state SET tonight_message = $1 WHERE trigger_date = $2`,
+    [message, today]
+  );
+}
+
+export async function getTonightMessage(): Promise<string | null> {
+  const tz = "America/Chicago";
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
+  const { rows } = await query<{ tonight_message: string | null }>(
+    `SELECT tonight_message FROM winddown_state WHERE trigger_date = $1`,
+    [today]
+  );
+  return rows.length > 0 ? (rows[0].tonight_message ?? null) : null;
 }
 
 export async function setJournalOfferPending(pending: boolean): Promise<void> {

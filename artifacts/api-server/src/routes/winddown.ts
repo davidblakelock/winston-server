@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import { getSettings, updateSettings } from "../winddown/winddownManager.js";
+import { getSettings, updateSettings, getTonightMessage } from "../winddown/winddownManager.js";
 
 const router: IRouter = Router();
 
@@ -9,6 +9,18 @@ router.get("/winddown/settings", async (_req: Request, res: Response) => {
     res.json(settings);
   } catch (err) {
     res.status(500).json({ error: "Failed to get wind-down settings" });
+  }
+});
+
+// Native app calls this after tapping the wind-down push notification to retrieve
+// tonight's pre-generated opening message (stored when the scheduler fired).
+// Returns { message, firedTonight } — message is null if wind-down hasn't fired yet today.
+router.get("/winddown/tonight-message", async (_req: Request, res: Response) => {
+  try {
+    const message = await getTonightMessage();
+    res.json({ message, firedTonight: message !== null });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to retrieve tonight's wind-down message" });
   }
 });
 
