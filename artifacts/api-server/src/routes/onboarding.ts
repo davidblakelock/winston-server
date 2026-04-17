@@ -344,13 +344,14 @@ Return ONLY valid JSON:
     "city": string or null,
     "wakeTime": "HH:MM" format or null (e.g. "07:00" for 7am, "06:30" for 6:30am),
     "healthNotes": string or null (brief summary of any health info shared),
-    "people": [{"name": string, "relationship": string, "city": string or null}] or null,
+    "people": [{"name": string, "relationship": string, "city": string or null, "birthday": "YYYY-MM-DD" or null}] or null,
     "places": [{"name": string, "address": string or null}] or null,
     "shows": [string] or null,
     "restaurants": [string] or null,
     "sportsTeams": [string] or null,
     "music": [string] or null,
     "interests": [string] or null,
+    "newsTopics": [string] or null,
     "voiceId": string or null,
     "voiceName": string or null,
     "wantsStoryArchive": boolean or null
@@ -365,6 +366,8 @@ Rules:
 - Merge arrays: if user says "I also like..." add to existing, don't replace
 - For wakeTime: "I wake up at 6" → "06:00", "around 7:30" → "07:30"
 - For people: "My daughter Olivia lives in Knoxville" → {name:"Olivia",relationship:"daughter",city:"Knoxville"}
+- For people birthdays: "Olivia's birthday is March 3rd" or "born March 3 1995" → include birthday:"YYYY-MM-DD" in the matching person object; if year unknown use current year as placeholder
+- For newsTopics: extract any mentioned news interests, e.g. "tech news", "politics", "business", "sports", "local news"
 - For voiceId: if user says "I'll take option 1" or "Tom" or "number 3" → extract the voiceId AND voiceName
   Voice options: 1=DYkrAHD8iwork3YSUBbs(Tom/British-American Male), 2=56bWURjYFHyYyVf490Dp(Emma/Friendly American Female), 3=hGQkZQUA5RiOXIw7P9iO(Kiora/Warm New Zealand Female), 4=sB7vwSCyX0tQmU24cW2C(Jon/Deep Authoritative American Male), 5=Fahco4VZzobUeiPqni1S(Archer/Charming Young British Male), 6=aj0fZfXTBc7E3By4X8L2(Best Female Friend/Warm Casual American Female), 7=UizRZo250FhTtKlJa6mo(Diana/Elegant American Female), 8=Ky9j3wxFbp3dSAdrkOEv(Bex/Expressive British Female)
 - wantsStoryArchive: true if user says yes to the evening story archive offer in scene 8, false if they decline
@@ -477,8 +480,8 @@ async function saveProfileItemsFromOnboarding(data: CollectedData): Promise<void
     ops.push(addProfileItem("restaurants", r, null).catch(() => {}));
   }
 
-  // Save interests + sports + music
-  for (const interest of [...(data.interests ?? []), ...(data.sportsTeams ?? []), ...(data.music ?? [])]) {
+  // Save interests + sports + music + news topics
+  for (const interest of [...(data.interests ?? []), ...(data.sportsTeams ?? []), ...(data.music ?? []), ...(data.newsTopics ?? [])]) {
     ops.push(addProfileItem("interests", interest, null).catch(() => {}));
   }
 

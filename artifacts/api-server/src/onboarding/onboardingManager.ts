@@ -46,13 +46,14 @@ export interface CollectedData {
   dailyRoutine?: string;
   dog?: { name: string; breed?: string; age?: number };
   foodPreferences?: string[];
-  people?: Array<{ name: string; relationship: string; city?: string; details?: string; address?: string }>;
+  people?: Array<{ name: string; relationship: string; city?: string; birthday?: string; details?: string; address?: string }>;
   places?: Array<{ name: string; address?: string; notes?: string }>;
   shows?: string[];
   restaurants?: string[];
   interests?: string[];
   sportsTeams?: string[];
   music?: string[];
+  newsTopics?: string[];
   wantsStoryArchive?: boolean;
 }
 
