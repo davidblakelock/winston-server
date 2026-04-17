@@ -5,6 +5,29 @@ const router: IRouter = Router();
 
 const USER = "David";
 
+// GET /api/lists — fetch all list names (with item counts) for the user
+router.get("/lists", async (req: Request, res: Response) => {
+  try {
+    const { rows } = await query<{ list_name: string; item_count: string }>(
+      `SELECT list_name, COUNT(*) AS item_count
+       FROM list_items
+       WHERE user_name = $1
+       GROUP BY list_name
+       ORDER BY list_name ASC`,
+      [USER]
+    );
+    res.json({
+      lists: rows.map((r) => ({
+        listName: r.list_name,
+        itemCount: parseInt(r.item_count, 10),
+      })),
+    });
+  } catch (err) {
+    req.log.warn({ err }, "Lists index GET error");
+    res.status(500).json({ error: "Failed to fetch lists" });
+  }
+});
+
 // GET /api/lists/:listName — fetch all items for a list
 router.get("/lists/:listName", async (req: Request, res: Response) => {
   const { listName } = req.params;
