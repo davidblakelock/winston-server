@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from "express";
+import express from "express";
 import { google } from "googleapis";
 import { createOAuthClient, getRedirectUri, SCOPES } from "../google/oauth.js";
 import { query } from "../db.js";
@@ -170,6 +171,108 @@ router.get("/auth/callback", async (req: Request, res: Response) => {
         else{window.location.href='/?auth=error';}
       </script></body></html>`);
     }
+  }
+});
+
+// ── Native app Google Sign-In ─────────────────────────────────────────────────
+// POST /api/auth/google/native
+// Body: { idToken: string, serverAuthCode?: string }
+//
+// The native app obtains a Google idToken (and optionally a serverAuthCode for
+// offline API access) via the Google Sign-In SDK. This endpoint:
+//   1. Verifies the idToken signature and audience with Google
+//   2. Resolves/creates the Winston user from the Google identity
+//   3. If serverAuthCode is provided, exchanges it for access+refresh tokens and
+//      upserts them into google_auth (enables server-side calendar/gmail/contacts)
+//   4. Creates a 30-day Winston session and returns the session token
+router.post("/auth/google/native", express.json({ limit: "1mb" }), async (req: Request, res: Response) => {
+  const { idToken, serverAuthCode } = req.body as {
+    idToken?: string;
+    serverAuthCode?: string;
+  };
+
+  if (!idToken || typeof idToken !== "string") {
+    res.status(400).json({ error: "idToken is required" });
+    return;
+  }
+
+  try {
+    // ── 1. Verify idToken ───────────────────────────────────────────────────
+    const client = createOAuthClient();
+    const ticket = await client.verifyIdToken({
+      idToken,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+    const payload = ticket.getPayload();
+    if (!payload) {
+      res.status(401).json({ error: "Invalid Google ID token" });
+      return;
+    }
+
+    const googleId = payload.sub;
+    const email = (payload.email ?? "").trim().toLowerCase();
+    const fullName = (payload.name ?? email.split("@")[0]).trim();
+    const picture = payload.picture ?? undefined;
+
+    if (!googleId || !email) {
+      res.status(401).json({ error: "Google token missing required identity fields" });
+      return;
+    }
+
+    req.log.info({ email, googleId }, "[AUTH] /auth/google/native — idToken verified");
+
+    // ── 2. Resolve Winston user ─────────────────────────────────────────────
+    const { userName, isNewUser } = await lookupOrCreateGoogleUser(googleId, email, fullName, picture);
+
+    req.log.info({ userName, isNewUser }, "[AUTH] /auth/google/native — user resolved");
+
+    // ── 3. Exchange serverAuthCode → store OAuth tokens (optional) ──────────
+    if (serverAuthCode && typeof serverAuthCode === "string") {
+      try {
+        const { tokens } = await client.getToken({ code: serverAuthCode });
+        if (tokens.access_token) {
+          await query(
+            `INSERT INTO google_auth (user_name, email, access_token, refresh_token, token_expiry, scope)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             ON CONFLICT (user_name) DO UPDATE SET
+               email         = EXCLUDED.email,
+               access_token  = EXCLUDED.access_token,
+               refresh_token = COALESCE(EXCLUDED.refresh_token, google_auth.refresh_token),
+               token_expiry  = EXCLUDED.token_expiry,
+               scope         = EXCLUDED.scope,
+               updated_at    = NOW()`,
+            [
+              userName,
+              email,
+              tokens.access_token ?? null,
+              tokens.refresh_token ?? null,
+              tokens.expiry_date ? new Date(tokens.expiry_date) : null,
+              SCOPES.join(" "),
+            ]
+          );
+          req.log.info({ userName }, "[AUTH] /auth/google/native — google_auth upserted from serverAuthCode");
+        }
+      } catch (codeErr) {
+        // Non-fatal — session still issued, but server-side Google APIs won't work
+        req.log.warn({ err: codeErr }, "[AUTH] /auth/google/native — serverAuthCode exchange failed (non-fatal)");
+      }
+    }
+
+    // ── 4. Create Winston session ───────────────────────────────────────────
+    const sessionToken = await createSession(userName, email, googleId, picture);
+
+    req.log.info({ userName, email }, "[AUTH] /auth/google/native — session created");
+
+    res.json({
+      sessionToken,
+      userName,
+      email,
+      picture: picture ?? null,
+      isNewUser,
+    });
+  } catch (err) {
+    req.log.error({ err }, "[AUTH] /auth/google/native — error");
+    res.status(401).json({ error: "Google authentication failed" });
   }
 });
 
