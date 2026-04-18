@@ -1,7 +1,7 @@
 /**
- * Dallas local content system — fetches RSS feeds from CultureMap Dallas,
- * Dallas Observer, and D Magazine, filters by David's interests and 72-hour
- * freshness, deduplicates across sources, and falls back to web search.
+ * Dallas local content system — fetches RSS feeds from Dallas Observer, D Magazine,
+ * Google News, and Art&Seek, filters by David's interests and a per-feed freshness
+ * window, deduplicates across sources, and falls back to web search.
  *
  * Results are cached in memory for the day and persisted to daily_local_content.
  */
@@ -34,21 +34,29 @@ interface RSSItem {
 interface FeedConfig {
   name: string;
   url: string;
+  /** How many days back to accept items. Defaults to 3 if omitted. */
+  maxAgeDays?: number;
 }
 
 // ── RSS feed definitions ──────────────────────────────────────────────────────
+//
+// maxAgeDays is set per feed to reflect how frequently each source publishes:
+//   • Daily news sites (Observer): 3 days — keep the feed feeling fresh
+//   • D Magazine / lifestyle: 7 days — publishes less frequently than daily news
+//   • Google News RSS: 7 days — with when:7d query param, returns only recent results
+//
+// Note: NBC DFW /news/feed/ and Art&Seek /feed/ both return old "popular" content
+// (2022–2025 items), not a real-time headline stream. Removed.
 
 const DALLAS_FEEDS: FeedConfig[] = [
-  // Dallas Observer — redirects to /feed/ (301 → 200)
-  { name: "Dallas Observer", url: "https://www.dallasobserver.com/feed/" },
-  // D Magazine — /feed/ returns 200
-  { name: "D Magazine",      url: "https://www.dmagazine.com/feed/" },
-  // Google News RSS — general Dallas events, food, arts
-  { name: "Dallas News",     url: "https://news.google.com/rss/search?q=dallas+restaurant+opening+events+food+arts&hl=en-US&gl=US&ceid=US:en" },
-  // Google News RSS — Dallas music events specifically (jazz, concerts, live music)
-  { name: "Dallas Music News", url: "https://news.google.com/rss/search?q=dallas+jazz+concert+live+music+kessler+granada+meyerson+outdoor+concert&hl=en-US&gl=US&ceid=US:en" },
-  // Art&Seek (KERA) — reliable Dallas arts, music, culture & events feed
-  { name: "Art&Seek Dallas", url: "https://artandseek.org/feed/" },
+  // Dallas Observer — daily alt-weekly, strict freshness fine
+  { name: "Dallas Observer",   url: "https://www.dallasobserver.com/feed/",                                                                                                            maxAgeDays: 3 },
+  // D Magazine — monthly/lifestyle, publishes less often
+  { name: "D Magazine",        url: "https://www.dmagazine.com/feed/",                                                                                                                 maxAgeDays: 7 },
+  // Google News RSS — general Dallas events, food, arts — when:7d forces Google to return only recent results
+  { name: "Dallas News",       url: "https://news.google.com/rss/search?q=dallas+restaurant+opening+events+food+arts+when:7d&hl=en-US&gl=US&ceid=US:en",                              maxAgeDays: 7 },
+  // Google News RSS — Dallas music events — when:7d forces recency at the Google level
+  { name: "Dallas Music News", url: "https://news.google.com/rss/search?q=dallas+jazz+concert+live+music+kessler+granada+meyerson+outdoor+concert+when:7d&hl=en-US&gl=US&ceid=US:en", maxAgeDays: 7 },
 ];
 
 // ── Interest patterns ─────────────────────────────────────────────────────────
@@ -140,11 +148,11 @@ function parseRSS(xml: string): RSSItem[] {
 
 // ── Freshness check ───────────────────────────────────────────────────────────
 
-function isWithin72Hours(dateStr: string): boolean {
+function isWithinMaxAge(dateStr: string, maxAgeDays: number): boolean {
   if (!dateStr) return false;
   const d = new Date(dateStr);
   if (isNaN(d.getTime())) return false;
-  return Date.now() - d.getTime() <= 72 * 60 * 60 * 1000;
+  return Date.now() - d.getTime() <= maxAgeDays * 24 * 60 * 60 * 1000;
 }
 
 // ── Priority scoring ──────────────────────────────────────────────────────────
@@ -194,11 +202,13 @@ async function fetchFeed(feed: FeedConfig): Promise<LocalContentItem[]> {
   const xml = await res.text();
   const rssItems = parseRSS(xml);
 
+  const maxAgeDays = feed.maxAgeDays ?? 3;
   let staleDrop = 0;
   let scoreDrop = 0;
   const results: LocalContentItem[] = [];
-  for (const item of rssItems.slice(0, 40)) {
-    if (!isWithin72Hours(item.pubDate)) { staleDrop++; continue; }
+  // Process up to 60 items (was 40) so fresh items beyond position 40 are not skipped.
+  for (const item of rssItems.slice(0, 60)) {
+    if (!isWithinMaxAge(item.pubDate, maxAgeDays)) { staleDrop++; continue; }
     const headline = stripHtml(item.title);
     const summary  = stripHtml(item.description).slice(0, 350);
     const { priority, keywords } = scoreItem(headline, summary);
