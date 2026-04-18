@@ -9,7 +9,7 @@ import cron from "node-cron";
 import { broadcastToUser } from "../reminders/sseStore.js";
 import { sendPushToAll } from "../push/pushManager.js";
 import { logger } from "../lib/logger.js";
-import { getTodayHighPriorityItems } from "./dallasContent.js";
+import { getTodayHighPriorityItems, getLocalContentCity } from "./dallasContent.js";
 import { query } from "../db.js";
 
 const TZ = "America/Chicago";
@@ -97,7 +97,7 @@ async function runDallasProactiveCheck(): Promise<void> {
 
   // Push notification
   try {
-    await sendPushToAll(USER, "Winston — What's Happening in Dallas", text);
+    await sendPushToAll(USER, `Winston — What's Happening in ${getLocalContentCity()}`, text);
     logger.info("[Dallas Proactive] Push sent");
   } catch (err) {
     logger.warn({ err }, "[Dallas Proactive] Push failed (non-fatal)");

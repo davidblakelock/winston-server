@@ -1,9 +1,18 @@
 /**
- * Dallas local content system — fetches RSS feeds from Dallas Observer, D Magazine,
- * Google News, and Art&Seek, filters by David's interests and a per-feed freshness
- * window, deduplicates across sources, and falls back to web search.
+ * Local content system — fetches city-specific news and events for any user.
  *
- * Results are cached in memory for the day and persisted to daily_local_content.
+ * City is passed in from the briefing pre-generator via UserLocalContext, pulled
+ * from the user's profile (user_profiles.city). Three Google News RSS feeds are
+ * generated dynamically for the user's city (local news, dining, arts & events),
+ * all scoped to the last 7 days via Google's `when:7d` operator.
+ *
+ * Also queries the Ticketmaster Discovery API for upcoming music events when
+ * TICKETMASTER_API_KEY is set (free tier, no key = graceful skip).
+ *
+ * Note: Eventbrite shut down their public API in 2023 — not usable here.
+ *
+ * Results are cached in memory for the day keyed by city, and persisted to
+ * the daily_local_content table.
  */
 
 import Anthropic from "@anthropic-ai/sdk";
@@ -24,6 +33,22 @@ export interface LocalContentItem {
   keywordsMatched: string[];
 }
 
+/** User context passed in from the briefing pre-generator */
+export interface UserLocalContext {
+  /** Primary city name, e.g. "Dallas" or "Austin" */
+  city: string;
+  /** User's first name for log messages */
+  userName?: string;
+  /** Favorite music venues (exact/partial names) */
+  venues?: string[];
+  /** Favorite artists / bands */
+  artists?: string[];
+  /** Preferred city neighborhoods */
+  neighborhoods?: string[];
+  /** Food/dining interests */
+  foodInterests?: string[];
+}
+
 interface RSSItem {
   title: string;
   description: string;
@@ -38,78 +63,121 @@ interface FeedConfig {
   maxAgeDays?: number;
 }
 
-// ── RSS feed definitions ──────────────────────────────────────────────────────
+// ── City-aware feed builder ───────────────────────────────────────────────────
 //
-// maxAgeDays is set per feed to reflect how frequently each source publishes:
-//   • Daily news sites (Observer): 3 days — keep the feed feeling fresh
-//   • D Magazine / lifestyle: 7 days — publishes less frequently than daily news
-//   • Google News RSS: 7 days — with when:7d query param, returns only recent results
-//
-// Note: NBC DFW /news/feed/ and Art&Seek /feed/ both return old "popular" content
-// (2022–2025 items), not a real-time headline stream. Removed.
+// All feeds use Google News RSS with `when:7d` so Google pre-filters to recent
+// results before we even receive the payload. Three complementary queries are
+// generated per city to broaden coverage across news types.
 
-const DALLAS_FEEDS: FeedConfig[] = [
-  // Dallas Observer — daily alt-weekly, strict freshness fine
-  { name: "Dallas Observer",   url: "https://www.dallasobserver.com/feed/",                                                                                                            maxAgeDays: 3 },
-  // D Magazine — monthly/lifestyle, publishes less often
-  { name: "D Magazine",        url: "https://www.dmagazine.com/feed/",                                                                                                                 maxAgeDays: 7 },
-  // Google News RSS — general Dallas events, food, arts — when:7d forces Google to return only recent results
-  { name: "Dallas News",       url: "https://news.google.com/rss/search?q=dallas+restaurant+opening+events+food+arts+when:7d&hl=en-US&gl=US&ceid=US:en",                              maxAgeDays: 7 },
-  // Google News RSS — Dallas music events — when:7d forces recency at the Google level
-  { name: "Dallas Music News", url: "https://news.google.com/rss/search?q=dallas+jazz+concert+live+music+kessler+granada+meyerson+outdoor+concert+when:7d&hl=en-US&gl=US&ceid=US:en", maxAgeDays: 7 },
-];
+function buildCityFeeds(city: string): FeedConfig[] {
+  const q = encodeURIComponent(city);
+  return [
+    {
+      name: `${city} Local News`,
+      url: `https://news.google.com/rss/search?q=${q}+local+news+events+community+when:7d&hl=en-US&gl=US&ceid=US:en`,
+      maxAgeDays: 7,
+    },
+    {
+      name: `${city} Dining & Food`,
+      url: `https://news.google.com/rss/search?q=${q}+restaurant+opening+dining+food+chef+when:7d&hl=en-US&gl=US&ceid=US:en`,
+      maxAgeDays: 7,
+    },
+    {
+      name: `${city} Arts & Entertainment`,
+      url: `https://news.google.com/rss/search?q=${q}+arts+concert+festival+live+music+events+when:7d&hl=en-US&gl=US&ceid=US:en`,
+      maxAgeDays: 7,
+    },
+  ];
+}
 
-// ── Interest patterns ─────────────────────────────────────────────────────────
+// ── Dynamic interest patterns (built from user profile) ───────────────────────
 
-const EXCLUDE_PATTERNS: RegExp[] = [
-  /sponsored|advertisement|advertorial|promoted content/i,
-  // Sports game results are covered by the ESPN API in Section 10 — never duplicate here
-  /\b(rangers|cowboys|mavericks|dallas stars|fc dallas)\b.{0,60}(score|win|loss|beat|game recap|final|lead|inning|quarter|down \d|up \d)/i,
-  /\b(score|win|loss|beat|game recap|final)\b.{0,60}\b(rangers|cowboys|mavericks|dallas stars|fc dallas)\b/i,
-];
+interface PriorityPattern { pattern: RegExp; label: string }
 
-// High: new restaurants in David's neighborhoods + his music artists/venues
-// Note: Rangers/Cowboys scores come from the ESPN API (Section 10) — do NOT surface sports articles here
-const HIGH_PRIORITY_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
-  { pattern: /new restaurant|just opened|opening|grand opening|now open/i,         label: "restaurant opening" },
-  { pattern: /knox.?henderson|uptown dallas|deep ellum|bishop arts|downtown dallas/i, label: "preferred neighborhood" },
-  // David's specific music artists
-  { pattern: /jimmy buffett|margaritaville/i,                                      label: "Jimmy Buffett" },
-  { pattern: /bonnie raitt/i,                                                      label: "Bonnie Raitt" },
-  { pattern: /jackson browne/i,                                                    label: "Jackson Browne" },
-  { pattern: /rolling stones|stones tribute/i,                                     label: "Rolling Stones" },
-  { pattern: /gordon lightfoot/i,                                                  label: "Gordon Lightfoot" },
-  { pattern: /van morrison/i,                                                      label: "Van Morrison" },
-  // David's favorite venues
-  { pattern: /kessler theater|granada theater|dos equis pavilion|meyerson|klyde warren/i, label: "favorite venue" },
-  { pattern: /music under the stars|dallas arboretum.*concert|arboretum.*music/i, label: "Dallas Arboretum concert" },
-];
+function buildPatterns(ctx: UserLocalContext): {
+  exclude: RegExp[];
+  high: PriorityPattern[];
+  medium: PriorityPattern[];
+  low: PriorityPattern[];
+} {
+  const city = ctx.city;
+  const citySlug = city.replace(/[^a-z0-9]/gi, "").toLowerCase();
 
-// Medium: arts, food, outdoor, culture broadly + music genres David loves
-const MEDIUM_PRIORITY_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
-  { pattern: /restaurant|dining|chef|food festival|cocktail bar|brunch|new bar/i,  label: "food & dining" },
-  { pattern: /jazz|bebop|big band|classic rock|blues/i,                            label: "jazz/classic rock" },
-  { pattern: /outdoor concert|amphitheater|summer concert|concert series/i,        label: "outdoor concert" },
-  { pattern: /tribute band|tribute act/i,                                          label: "tribute" },
-  { pattern: /arts|concert|music|festival|exhibition|gallery|show|performance/i,   label: "arts & culture" },
-  { pattern: /outdoor|park|trail|farmers market|hike/i,                            label: "outdoor" },
-  { pattern: /dallas|dfw|north texas/i,                                            label: "dallas general" },
-];
+  // ── Exclude ────────────────────────────────────────────────────────────────
+  const exclude: RegExp[] = [
+    /sponsored|advertisement|advertorial|promoted content/i,
+    // Sports game-result scores are covered by ESPN — avoid duplication
+    /\b(score|win|loss|beat|game recap|final|inning|quarter)\b.{0,60}\b(nfl|nba|mlb|nhl|mls)\b/i,
+  ];
 
-// Low: business / community
-const LOW_PRIORITY_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
-  { pattern: /real estate|development|business|economy/i,  label: "business" },
-  { pattern: /neighborhood|community|local politics/i,     label: "community" },
-];
+  // ── High priority ─────────────────────────────────────────────────────────
+  const high: PriorityPattern[] = [
+    { pattern: /new restaurant|just opened|grand opening|opening soon|now open/i, label: "restaurant opening" },
+  ];
+
+  // Favorite venues from profile
+  if (ctx.venues && ctx.venues.length > 0) {
+    const venueRx = new RegExp(
+      ctx.venues.map((v) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"),
+      "i"
+    );
+    high.push({ pattern: venueRx, label: "favorite venue" });
+  }
+
+  // Favorite artists from profile
+  if (ctx.artists && ctx.artists.length > 0) {
+    const artistRx = new RegExp(
+      ctx.artists.map((a) => a.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"),
+      "i"
+    );
+    high.push({ pattern: artistRx, label: "favorite artist" });
+  }
+
+  // Preferred neighborhoods from profile
+  if (ctx.neighborhoods && ctx.neighborhoods.length > 0) {
+    const hoodRx = new RegExp(
+      ctx.neighborhoods.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"),
+      "i"
+    );
+    high.push({ pattern: hoodRx, label: "preferred neighborhood" });
+  }
+
+  // ── Medium priority ───────────────────────────────────────────────────────
+  const medium: PriorityPattern[] = [
+    { pattern: /restaurant|dining|chef|food festival|cocktail bar|brunch|new bar/i, label: "food & dining" },
+    { pattern: /jazz|bebop|big band|classic rock|blues|live music/i,                label: "jazz & classic rock" },
+    { pattern: /outdoor concert|amphitheater|summer concert|concert series/i,       label: "outdoor concert" },
+    { pattern: /tribute band|tribute act/i,                                         label: "tribute" },
+    { pattern: /arts|concert|music|festival|exhibition|gallery|show|performance/i,  label: "arts & culture" },
+    { pattern: /outdoor|park|trail|farmers market|hike/i,                           label: "outdoor" },
+    // City name match — everything local qualifies as at least medium
+    { pattern: new RegExp(city.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"),        label: "city local" },
+  ];
+
+  // Food interests from profile add medium boosts
+  if (ctx.foodInterests && ctx.foodInterests.length > 0) {
+    const foodRx = new RegExp(
+      ctx.foodInterests.map((f) => f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"),
+      "i"
+    );
+    medium.push({ pattern: foodRx, label: "food preference" });
+  }
+
+  // ── Low priority ──────────────────────────────────────────────────────────
+  const low: PriorityPattern[] = [
+    { pattern: /real estate|development|business|economy/i, label: "business" },
+    { pattern: /neighborhood|community|local politics/i,    label: "community" },
+  ];
+
+  return { exclude, high, medium, low };
+}
 
 // ── Lightweight RSS parser (no external packages needed) ──────────────────────
 
 function extractTag(xml: string, tag: string): string {
-  // Try CDATA block first
   const cdataRx = new RegExp(`<${tag}[^>]*>\\s*<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>`, "i");
   const cdata = cdataRx.exec(xml);
   if (cdata) return cdata[1].trim();
-  // Plain text
   const plainRx = new RegExp(`<${tag}[^>]*>([^<]*)<`, "i");
   const plain = plainRx.exec(xml);
   return plain ? plain[1].trim() : "";
@@ -122,7 +190,7 @@ function stripHtml(html: string): string {
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
-    .replace(/&#\d+;/g, " ")
+    .replace(/&#\d+;/gi, " ")
     .replace(/&[a-z]+;/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -160,30 +228,28 @@ function isWithinMaxAge(dateStr: string, maxAgeDays: number): boolean {
 function scoreItem(
   headline: string,
   description: string,
+  patterns: ReturnType<typeof buildPatterns>,
 ): { priority: "high" | "medium" | "low" | null; keywords: string[] } {
   const text = `${headline} ${description}`;
 
-  for (const rx of EXCLUDE_PATTERNS) {
+  for (const rx of patterns.exclude) {
     if (rx.test(text)) return { priority: null, keywords: [] };
   }
 
-  // High
   const highKeywords: string[] = [];
-  for (const { pattern, label } of HIGH_PRIORITY_PATTERNS) {
+  for (const { pattern, label } of patterns.high) {
     if (pattern.test(text)) highKeywords.push(label);
   }
   if (highKeywords.length > 0) return { priority: "high", keywords: highKeywords };
 
-  // Medium
   const medKeywords: string[] = [];
-  for (const { pattern, label } of MEDIUM_PRIORITY_PATTERNS) {
+  for (const { pattern, label } of patterns.medium) {
     if (pattern.test(text)) medKeywords.push(label);
   }
   if (medKeywords.length > 0) return { priority: "medium", keywords: medKeywords };
 
-  // Low
   const lowKeywords: string[] = [];
-  for (const { pattern, label } of LOW_PRIORITY_PATTERNS) {
+  for (const { pattern, label } of patterns.low) {
     if (pattern.test(text)) lowKeywords.push(label);
   }
   if (lowKeywords.length > 0) return { priority: "low", keywords: lowKeywords };
@@ -193,7 +259,10 @@ function scoreItem(
 
 // ── RSS feed fetcher ──────────────────────────────────────────────────────────
 
-async function fetchFeed(feed: FeedConfig): Promise<LocalContentItem[]> {
+async function fetchFeed(
+  feed: FeedConfig,
+  patterns: ReturnType<typeof buildPatterns>,
+): Promise<LocalContentItem[]> {
   const res = await fetch(feed.url, {
     headers: { "User-Agent": "Winston/1.0 (personal assistant)" },
     signal: AbortSignal.timeout(12_000),
@@ -206,12 +275,11 @@ async function fetchFeed(feed: FeedConfig): Promise<LocalContentItem[]> {
   let staleDrop = 0;
   let scoreDrop = 0;
   const results: LocalContentItem[] = [];
-  // Process up to 60 items (was 40) so fresh items beyond position 40 are not skipped.
   for (const item of rssItems.slice(0, 60)) {
     if (!isWithinMaxAge(item.pubDate, maxAgeDays)) { staleDrop++; continue; }
     const headline = stripHtml(item.title);
     const summary  = stripHtml(item.description).slice(0, 350);
-    const { priority, keywords } = scoreItem(headline, summary);
+    const { priority, keywords } = scoreItem(headline, summary, patterns);
     if (!priority) { scoreDrop++; continue; }
     results.push({
       source: feed.name,
@@ -223,21 +291,80 @@ async function fetchFeed(feed: FeedConfig): Promise<LocalContentItem[]> {
       keywordsMatched: keywords,
     });
   }
-  console.log(`[Dallas:feed] ${feed.name}: ${rssItems.length} parsed → ${staleDrop} dropped (stale) → ${scoreDrop} dropped (no match) → ${results.length} kept`);
+  console.log(`[LocalContent:feed] ${feed.name}: ${rssItems.length} parsed → ${staleDrop} dropped (stale) → ${scoreDrop} dropped (no match) → ${results.length} kept`);
   return results;
+}
+
+// ── Ticketmaster Discovery API ────────────────────────────────────────────────
+//
+// Requires TICKETMASTER_API_KEY environment variable (free at developer.ticketmaster.com).
+// Gracefully returns [] when key is absent — no config required.
+
+async function fetchTicketmasterEvents(city: string): Promise<LocalContentItem[]> {
+  const apiKey = process.env.TICKETMASTER_API_KEY;
+  if (!apiKey) return [];
+
+  try {
+    const params = new URLSearchParams({
+      apikey: apiKey,
+      city,
+      classificationName: "music",
+      sort: "date,asc",
+      size: "10",
+    });
+    const res = await fetch(
+      `https://app.ticketmaster.com/discovery/v2/events.json?${params}`,
+      { signal: AbortSignal.timeout(10_000) }
+    );
+    if (!res.ok) {
+      logger.warn(`[LocalContent] Ticketmaster HTTP ${res.status} for city="${city}"`);
+      return [];
+    }
+    const data = await res.json() as {
+      _embedded?: {
+        events?: Array<{
+          name: string;
+          url: string;
+          dates?: { start?: { localDate?: string; localTime?: string } };
+          _embedded?: { venues?: Array<{ name: string }> };
+          info?: string;
+        }>;
+      };
+    };
+
+    const events = data._embedded?.events ?? [];
+    const results: LocalContentItem[] = events.map((ev) => {
+      const venueName = ev._embedded?.venues?.[0]?.name ?? city;
+      const dateStr = ev.dates?.start?.localDate ?? "";
+      const timeStr = ev.dates?.start?.localTime ?? "";
+      const when = dateStr ? ` on ${dateStr}${timeStr ? " at " + timeStr : ""}` : "";
+      return {
+        source: "Ticketmaster",
+        headline: `${ev.name} at ${venueName}${when}`,
+        summary: ev.info ?? `Live music event at ${venueName} in ${city}.`,
+        url: ev.url,
+        publishedAt: dateStr ? new Date(dateStr) : null,
+        priority: "high" as const,
+        keywordsMatched: ["ticketmaster_event"],
+      };
+    });
+    console.log(`[LocalContent:ticketmaster] ${results.length} music events found in ${city}`);
+    return results;
+  } catch (err) {
+    logger.warn({ err }, `[LocalContent] Ticketmaster fetch failed for ${city}`);
+    return [];
+  }
 }
 
 // ── Deduplication ─────────────────────────────────────────────────────────────
 
 function deduplicate(items: LocalContentItem[]): LocalContentItem[] {
-  // Sort: high → medium → low, then newest first within each tier
   const priorityRank: Record<string, number> = { high: 0, medium: 1, low: 2 };
   items.sort((a, b) => {
     const pr = priorityRank[a.priority] - priorityRank[b.priority];
     if (pr !== 0) return pr;
     return (b.publishedAt?.getTime() ?? 0) - (a.publishedAt?.getTime() ?? 0);
   });
-
   const seen = new Set<string>();
   return items.filter((item) => {
     const key = item.headline
@@ -252,19 +379,21 @@ function deduplicate(items: LocalContentItem[]): LocalContentItem[] {
   });
 }
 
-// ── Music-specific web search (always runs, not just fallback) ────────────────
+// ── Music/events web search supplement ───────────────────────────────────────
 
-async function musicWebSearch(): Promise<LocalContentItem[]> {
-  logger.info("[Dallas] Running music events web search supplement");
+async function musicWebSearch(ctx: UserLocalContext): Promise<LocalContentItem[]> {
+  const city = ctx.city;
+  const venueHints = ctx.venues?.slice(0, 4).join(", ") ?? `${city} music venues`;
+  logger.info(`[LocalContent] Running music events web search for ${city}`);
   try {
     const result = await anthropic.messages.create({
       model: "claude-opus-4-5",
       max_tokens: 600,
       tools: [{ type: "web_search_20250305" as "web_search_20250305", name: "web_search", max_uses: 2 }],
-      system: `You are a Dallas music events researcher. Search for jazz venues, outdoor concerts, and live music events in Dallas this week and next week. Focus on: Kessler Theater, Granada Theater, Dos Equis Pavilion, Jazz at the Meyerson, Klyde Warren Park, Dallas Arboretum, and any classic rock or jazz tribute bands. Return ONLY a JSON array (no markdown, no explanation) with up to 4 objects, each having: headline (string), summary (1–2 sentence string), url (string), source (string).`,
+      system: `You are a local music events researcher for ${city}. Search for upcoming jazz, outdoor concerts, and live music events in ${city} this week and next week. Focus on venues such as: ${venueHints}. Return ONLY a JSON array (no markdown, no explanation) with up to 4 objects, each having: headline (string), summary (1–2 sentence string), url (string), source (string).`,
       messages: [{
         role: "user",
-        content: "Search: Dallas jazz venues outdoor concerts music under the stars this week. Also: Kessler Theater Dallas events Granada Theater Dallas concerts upcoming.",
+        content: `Search: ${city} live music concerts this week. Also: ${venueHints} upcoming events concerts.`,
       }],
     });
 
@@ -278,7 +407,7 @@ async function musicWebSearch(): Promise<LocalContentItem[]> {
       return parsed
         .filter((p) => p.headline)
         .map((p) => ({
-          source: p.source ?? "Dallas Music Search",
+          source: p.source ?? `${city} Music Search`,
           headline: p.headline ?? "",
           summary: p.summary ?? "",
           url: p.url ?? "",
@@ -288,24 +417,25 @@ async function musicWebSearch(): Promise<LocalContentItem[]> {
         }));
     }
   } catch (err) {
-    logger.warn({ err }, "[Dallas] Music web search failed");
+    logger.warn({ err }, `[LocalContent] Music web search failed for ${city}`);
   }
   return [];
 }
 
 // ── Web search fallback ───────────────────────────────────────────────────────
 
-async function webSearchFallback(): Promise<LocalContentItem[]> {
-  logger.info("[Dallas] Running web search fallback for local content");
+async function webSearchFallback(ctx: UserLocalContext): Promise<LocalContentItem[]> {
+  const city = ctx.city;
+  logger.info(`[LocalContent] Running web search fallback for ${city}`);
   try {
     const result = await anthropic.messages.create({
       model: "claude-opus-4-5",
       max_tokens: 600,
       tools: [{ type: "web_search_20250305" as "web_search_20250305", name: "web_search", max_uses: 3 }],
-      system: `You are a Dallas local content researcher. Search for recent news (within the last 72 hours) about new restaurant openings and events in Dallas. Return ONLY a JSON array (no markdown, no explanation) with up to 3 objects, each having these fields: headline (string), summary (1–2 sentence string), url (string), source (string, e.g. "CultureMap Dallas").`,
+      system: `You are a local content researcher for ${city}. Search for recent news (within the last 72 hours) about new restaurant openings and events in ${city}. Return ONLY a JSON array (no markdown, no explanation) with up to 3 objects, each having: headline (string), summary (1–2 sentence string), url (string), source (string).`,
       messages: [{
         role: "user",
-        content: "Find new restaurant openings and local events in Dallas this week. Query: new restaurants events Dallas this week site:dallas.culturemap.com OR site:dallasobserver.com OR site:dmagazine.com",
+        content: `Find new restaurant openings and local events in ${city} this week.`,
       }],
     });
 
@@ -319,7 +449,7 @@ async function webSearchFallback(): Promise<LocalContentItem[]> {
       return parsed
         .filter((p) => p.headline)
         .map((p) => ({
-          source: p.source ?? "Dallas Web Search",
+          source: p.source ?? `${city} Web Search`,
           headline: p.headline ?? "",
           summary: p.summary ?? "",
           url: p.url ?? "",
@@ -329,7 +459,7 @@ async function webSearchFallback(): Promise<LocalContentItem[]> {
         }));
     }
   } catch (err) {
-    logger.warn({ err }, "[Dallas] Web search fallback failed");
+    logger.warn({ err }, `[LocalContent] Web search fallback failed for ${city}`);
   }
   return [];
 }
@@ -391,8 +521,7 @@ async function saveToDb(items: LocalContentItem[]): Promise<void> {
 
 // ── Briefing formatter ────────────────────────────────────────────────────────
 
-function formatForBriefing(items: LocalContentItem[]): string {
-  // Prefer high/medium — fall back to low-priority items rather than returning empty
+function formatForBriefing(items: LocalContentItem[], city: string): string {
   let top = items
     .filter((i) => i.priority === "high" || i.priority === "medium")
     .slice(0, 3);
@@ -404,95 +533,122 @@ function formatForBriefing(items: LocalContentItem[]): string {
   const lines = top.map(
     (i) => `• [${i.source}] ${i.headline}${i.summary ? " — " + i.summary.slice(0, 160) : ""}`
   );
-
   const sourceNames = [...new Set(top.map((i) => i.source))].join(", ");
   return (
-    `\n\n[What's Happening in Dallas — sourced from ${sourceNames} this morning]\n` +
+    `\n\n[What's Happening in ${city} — sourced from ${sourceNames} this morning]\n` +
     lines.join("\n") +
-    `\n\nPresent this as a dedicated section called "What's Happening in Dallas" with 2–3 items maximum. ` +
+    `\n\nPresent this as a dedicated section called "What's Happening in ${city}" with 2–3 items maximum. ` +
     `Keep each item to one or two warm, conversational sentences as if a well-connected friend is sharing it. ` +
-    `Lead with high-priority items (restaurant openings in Uptown/Knox Henderson/Deep Ellum, Rangers/Cowboys news). ` +
-    `Skip any item that feels generic or irrelevant to David's life.`
+    `Lead with high-priority items (restaurant openings, upcoming concerts at favorite venues). ` +
+    `Skip any item that feels generic or irrelevant to the user's life.`
   );
 }
 
 // ── In-memory daily cache ─────────────────────────────────────────────────────
 
-interface DallasCache {
+interface LocalCache {
+  city: string;
   items: LocalContentItem[];
   fetchedAt: Date;
   formattedBlock: string;
 }
 
-let _cache: DallasCache | null = null;
+let _cache: LocalCache | null = null;
 
-function isCacheValid(): boolean {
+function isCacheValid(city: string): boolean {
   if (!_cache) return false;
+  if (_cache.city !== city) return false;
   if (_cache.fetchedAt.toDateString() !== new Date().toDateString()) return false;
   if (Date.now() - _cache.fetchedAt.getTime() > 12 * 60 * 60 * 1000) return false;
   return true;
 }
 
-// ── Main exports ──────────────────────────────────────────────────────────────
+// ── Exported helpers (used by briefingPregenerate and proactiveScheduler) ─────
+
+/** Returns cached items array (may be empty if fetch hasn't run yet) */
+export function getDallasItems(): LocalContentItem[] {
+  return _cache?.items ?? [];
+}
+
+/** Returns the city name from the current cache (for display in notifications etc.) */
+export function getLocalContentCity(): string {
+  return _cache?.city ?? "your city";
+}
+
+/** Returns today's cached high-priority items — used by the proactive scheduler */
+export function getTodayHighPriorityItems(): LocalContentItem[] {
+  return (_cache?.items ?? []).filter((i) => i.priority === "high");
+}
+
+/** Builds a formatted briefing block from an item list (used after dedup in briefingPregenerate) */
+export function buildDallasBlock(items: LocalContentItem[], city = "your city"): string {
+  return formatForBriefing(items, city);
+}
+
+// ── Main export ───────────────────────────────────────────────────────────────
 
 /**
- * Fetch and return a formatted block of Dallas local content for the morning briefing.
- * Results are cached for the day.
+ * Fetch and return a formatted block of local content for the morning briefing.
+ * Results are cached for the day keyed by city.
+ *
+ * @param ctx  City + user interests from the user's profile. Defaults to Dallas
+ *             if not provided (backward compat).
  */
-export async function fetchDallasContent(): Promise<string> {
-  if (isCacheValid()) {
+export async function fetchDallasContent(ctx: UserLocalContext = { city: "Dallas" }): Promise<string> {
+  const city = ctx.city || "Dallas";
+
+  if (isCacheValid(city)) {
     const cached = _cache!;
-    console.log(`[Dallas] Returning CACHED content — ${cached.items.length} items, fetched at ${cached.fetchedAt.toLocaleTimeString("en-US", { timeZone: "America/Chicago" })}`);
-    if (cached.items.length > 0) {
-      console.log(`[Dallas] Cached headlines: ${cached.items.map((i) => `[${i.priority}] ${i.headline}`).join(" | ")}`);
-    } else {
-      console.log("[Dallas] Cache is EMPTY — briefing will use fallback text");
-    }
+    console.log(`[LocalContent] Returning CACHED content for ${city} — ${cached.items.length} items, fetched at ${cached.fetchedAt.toLocaleTimeString("en-US", { timeZone: "America/Chicago" })}`);
     return cached.formattedBlock;
   }
 
-  console.log("[Dallas] ── Starting fresh Dallas content fetch ──────────────────");
+  console.log(`[LocalContent] ── Starting fresh content fetch for ${city} ──────────────────`);
+  const patterns = buildPatterns(ctx);
+  const feeds = buildCityFeeds(city);
   const allItems: LocalContentItem[] = [];
   let successCount = 0;
 
-  // Run RSS feeds + dedicated music web search in parallel
-  const [feedResults, musicItems] = await Promise.all([
-    Promise.allSettled(DALLAS_FEEDS.map((f) => fetchFeed(f))),
-    musicWebSearch(),
+  // Run RSS feeds + music web search + Ticketmaster in parallel
+  const [feedResults, musicItems, ticketmasterItems] = await Promise.all([
+    Promise.allSettled(feeds.map((f) => fetchFeed(f, patterns))),
+    musicWebSearch(ctx),
+    fetchTicketmasterEvents(city),
   ]);
 
   feedResults.forEach((result, i) => {
-    const name = DALLAS_FEEDS[i].name;
+    const name = feeds[i].name;
     if (result.status === "fulfilled") {
       allItems.push(...result.value);
       successCount++;
       if (result.value.length === 0) {
-        console.log(`[Dallas:feed] ${name}: ✗ 0 items survived filters (all dropped above)`);
+        console.log(`[LocalContent:feed] ${name}: ✗ 0 items survived filters`);
       }
     } else {
-      console.log(`[Dallas:feed] ${name}: ✗ FEED FAILED — ${String(result.reason)}`);
-      logger.warn(`[Dallas] ${name}: feed failed — ${String(result.reason)}`);
+      console.log(`[LocalContent:feed] ${name}: ✗ FEED FAILED — ${String(result.reason)}`);
+      logger.warn(`[LocalContent] ${name}: feed failed — ${String(result.reason)}`);
     }
   });
 
-  console.log(`[Dallas] Music web search returned ${musicItems.length} items`);
-  allItems.push(...musicItems);
+  console.log(`[LocalContent] Music web search returned ${musicItems.length} items`);
+  console.log(`[LocalContent] Ticketmaster returned ${ticketmasterItems.length} events`);
+  allItems.push(...musicItems, ...ticketmasterItems);
 
   let finalItems = deduplicate(allItems);
-  console.log(`[Dallas] After dedup: ${finalItems.length} unique items from ${allItems.length} raw`);
+  console.log(`[LocalContent] After dedup: ${finalItems.length} unique items from ${allItems.length} raw`);
 
-  // Fallback: if all feeds failed or we have fewer than 2 items, try web search
+  // Fallback: if feeds are dry, try a broader web search
   if (successCount === 0 || finalItems.length < 2) {
-    console.log(`[Dallas] Insufficient items (${finalItems.length}) — triggering web search fallback`);
-    const extra = await webSearchFallback();
-    console.log(`[Dallas] Web search fallback returned ${extra.length} items`);
+    console.log(`[LocalContent] Insufficient items (${finalItems.length}) — triggering web search fallback`);
+    const extra = await webSearchFallback(ctx);
+    console.log(`[LocalContent] Web search fallback returned ${extra.length} items`);
     finalItems = deduplicate([...finalItems, ...extra]);
-    console.log(`[Dallas] After fallback dedup: ${finalItems.length} total items`);
+    console.log(`[LocalContent] After fallback dedup: ${finalItems.length} total items`);
   }
 
-  const formattedBlock = formatForBriefing(finalItems);
+  const formattedBlock = formatForBriefing(finalItems, city);
 
-  _cache = { items: finalItems, fetchedAt: new Date(), formattedBlock };
+  _cache = { city, items: finalItems, fetchedAt: new Date(), formattedBlock };
   void saveToDb(finalItems);
 
   const highCount = finalItems.filter((i) => i.priority === "high").length;
@@ -500,41 +656,13 @@ export async function fetchDallasContent(): Promise<string> {
   const lowCount  = finalItems.filter((i) => i.priority === "low").length;
 
   if (finalItems.length === 0) {
-    console.log(`[Dallas] ✗ RESULT: EMPTY — no items survived. Briefing will use fallback line.`);
+    console.log(`[LocalContent] ✗ RESULT: EMPTY — no items for ${city}. Briefing will use fallback line.`);
   } else {
-    console.log(`[Dallas] ✓ RESULT: ${finalItems.length} items — high:${highCount} med:${medCount} low:${lowCount} (${successCount}/${DALLAS_FEEDS.length} feeds ok)`);
-    console.log(`[Dallas] Final headlines: ${finalItems.map((i) => `[${i.priority}] ${i.headline}`).join(" | ")}`);
+    console.log(`[LocalContent] ✓ RESULT: ${finalItems.length} items for ${city} — high:${highCount} med:${medCount} low:${lowCount} (${successCount}/${feeds.length} feeds ok)`);
+    console.log(`[LocalContent] Final headlines: ${finalItems.map((i) => `[${i.priority}] ${i.headline}`).join(" | ")}`);
   }
 
-  logger.info(
-    `[Dallas] Content ready: ${finalItems.length} items total, ${highCount} high-priority ` +
-    `(${successCount}/${DALLAS_FEEDS.length} feeds succeeded)`
-  );
+  logger.info(`[Dallas] Content ready: ${finalItems.length} items total, ${highCount} high-priority (${successCount}/${feeds.length} feeds succeeded)`);
 
   return formattedBlock;
-}
-
-/**
- * Return today's high-priority items for proactive notifications.
- * Triggers a fetch if the cache is stale.
- */
-export async function getTodayHighPriorityItems(): Promise<LocalContentItem[]> {
-  if (!isCacheValid()) await fetchDallasContent();
-  return _cache?.items.filter((i) => i.priority === "high") ?? [];
-}
-
-/**
- * Return today's cached items (all priorities) for deduplication filtering.
- * Call after fetchDallasContent() to ensure the cache is populated.
- */
-export function getDallasItems(): LocalContentItem[] {
-  return _cache?.items ?? [];
-}
-
-/**
- * Build the briefing block from an already-filtered list of items.
- * Used by dedup integration to re-format after removing seen stories.
- */
-export function buildDallasBlock(items: LocalContentItem[]): string {
-  return formatForBriefing(items);
 }

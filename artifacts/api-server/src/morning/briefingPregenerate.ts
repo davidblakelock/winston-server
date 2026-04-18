@@ -424,6 +424,25 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     const primaryLon = userProfile?.longitude ?? -96.7970;
     const homeAddress = userProfile?.homeAddress ?? ((userProfile?.rawData as CollectedData)?.homeAddress) ?? "";
 
+    // Build city-aware local content context from profile items
+    const VENUE_KEYWORDS = /theater|theatre|pavilion|amphitheater|arena|concert hall|performing arts|venue|auditorium|ballroom/i;
+    const localCtx = {
+      city: primaryCity,
+      userName,
+      venues: allProfileItems
+        .filter((p) => p.category === "places" && VENUE_KEYWORDS.test(p.name + " " + (p.detail ?? "")))
+        .map((p) => p.name)
+        .slice(0, 8),
+      artists: allProfileItems
+        .filter((p) => p.category === "music" || p.category === "favorites")
+        .map((p) => p.name)
+        .slice(0, 10),
+      neighborhoods: allProfileItems
+        .filter((p) => p.category === "places" && !VENUE_KEYWORDS.test(p.name + " " + (p.detail ?? "")) && !/(restaurant|bar|cafe|coffee|hotel|gym|store|shop)/i.test(p.name + " " + (p.detail ?? "")))
+        .map((p) => p.name)
+        .slice(0, 6),
+    };
+
     // Geocode secondary cities from profile before the main Promise.all
     // Only include people in a different city than the user's home city
     const rawPeople = ((userProfile?.rawData as CollectedData)?.people ?? [])
@@ -453,7 +472,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       getUpcomingDates(21, userName).catch(() => []),
       isSunday ? collectSundayData().catch(() => null) : Promise.resolve(null),
       getPendingFollowUps(2, 14).catch(() => []),
-      fetchDallasContent().catch(() => ""),
+      fetchDallasContent(localCtx).catch(() => ""),
       getJournalCountThisWeek().catch(() => 0),
       getRecentJournalEntries(3).catch(() => []),
       getStoryCount().catch(() => 0),
@@ -503,7 +522,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       },
       "[Dallas] After dedup"
     );
-    const dedupedDallasBlock = buildDallasBlock(filteredDallasItems);
+    const dedupedDallasBlock = buildDallasBlock(filteredDallasItems, primaryCity);
     if (dedupedDallasBlock.trim().length === 0) {
       console.log(`[Dallas:briefing] ✗ Block EMPTY after dedup — raw:${rawDallasItems.length}, dedup-removed:${removedDallasCount}, filtered:${filteredDallasItems.length} → injecting fallback line`);
       logger.warn({ userName, rawCount: rawDallasItems.length, removedByDedup: removedDallasCount }, "[Dallas] Block is EMPTY after dedup — injecting fallback");
