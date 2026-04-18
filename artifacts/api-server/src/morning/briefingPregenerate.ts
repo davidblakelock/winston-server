@@ -18,7 +18,7 @@ import { getStoryCount } from "../stories/storyManager.js";
 import { getCachedWeather, type CachedWeather, TOMORROW_CONDITIONS } from "../weather/weatherCache.js";
 import { setStaticBriefingContext } from "./briefingCache.js";
 import { fetchDallasContent, getDallasItems, buildDallasBlock } from "./dallasContent.js";
-import { runVenueScan, getVenueConcerts, buildVenueConcertsBlock } from "./venueMonitor.js";
+import { runVenueScan, getVenueConcerts, buildVenueConcertsBlock, getFavoriteVenueNames } from "./venueMonitor.js";
 import {
   getSeenHeadlines,
   isDuplicate,
@@ -424,23 +424,65 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     const primaryLon = userProfile?.longitude ?? -96.7970;
     const homeAddress = userProfile?.homeAddress ?? ((userProfile?.rawData as CollectedData)?.homeAddress) ?? "";
 
-    // Build city-aware local content context from profile items
+    // ── Build city-aware local content context from profile ──────────────────
+    // Pull preferences from both rawData (onboarding) and profile_items (ongoing)
+    // to drive preference-aware scoring in dallasContent.ts.
+    const rawData = (userProfile?.rawData ?? {}) as CollectedData;
+
     const VENUE_KEYWORDS = /theater|theatre|pavilion|amphitheater|arena|concert hall|performing arts|venue|auditorium|ballroom/i;
+    const RESTAURANT_KEYWORDS = /restaurant|bar|cafe|coffee|diner|bistro|grill|kitchen|eatery|cantina|pub/i;
+    const NOT_NEIGHBORHOOD = new RegExp([VENUE_KEYWORDS.source, RESTAURANT_KEYWORDS.source].join("|"), "i");
+
+    // Venues: use the authoritative in-memory list from venueMonitor (avoids startup
+    // race where briefing pre-gen runs before the DB seeding of favorite_venues completes),
+    // then supplement with any additional venue-like places saved by the user at runtime.
+    const runtimeVenuePlaces = allProfileItems
+      .filter((p) => p.category === "places" && VENUE_KEYWORDS.test(p.name + " " + (p.detail ?? "")))
+      .map((p) => p.name);
+    const profileVenues = [
+      ...getFavoriteVenueNames(),
+      ...runtimeVenuePlaces,
+    ].filter((v, i, a) => a.indexOf(v) === i); // dedupe
+
+    // Artists: profile_items.music category (individual artist entries)
+    const profileArtists = allProfileItems
+      .filter((p) => p.category === "music" || p.category === "favorites")
+      .map((p) => p.name);
+
+    // Neighborhoods: profile places that are NOT venues or restaurants
+    const profileNeighborhoods = allProfileItems
+      .filter((p) => p.category === "places" && !NOT_NEIGHBORHOOD.test(p.name + " " + (p.detail ?? "")))
+      .map((p) => p.name);
+
+    // Favorite restaurants: combine raw_data.restaurants + profile_items.restaurants
+    const profileRestaurants = allProfileItems
+      .filter((p) => p.category === "restaurants")
+      .map((p) => p.name);
+    const favoriteRestaurants = [
+      ...(rawData.restaurants ?? []),
+      ...profileRestaurants,
+    ].filter((v, i, a) => a.indexOf(v) === i); // dedupe
+
+    // Interests/hobbies: combine raw_data.interests + profile_items.interests
+    const profileInterests = allProfileItems
+      .filter((p) => p.category === "interests")
+      .map((p) => p.name);
+    const allInterests = [
+      ...(rawData.interests ?? []),
+      ...profileInterests,
+    ].filter((v, i, a) => a.indexOf(v) === i);
+
     const localCtx = {
       city: primaryCity,
       userName,
-      venues: allProfileItems
-        .filter((p) => p.category === "places" && VENUE_KEYWORDS.test(p.name + " " + (p.detail ?? "")))
-        .map((p) => p.name)
-        .slice(0, 8),
-      artists: allProfileItems
-        .filter((p) => p.category === "music" || p.category === "favorites")
-        .map((p) => p.name)
-        .slice(0, 10),
-      neighborhoods: allProfileItems
-        .filter((p) => p.category === "places" && !VENUE_KEYWORDS.test(p.name + " " + (p.detail ?? "")) && !/(restaurant|bar|cafe|coffee|hotel|gym|store|shop)/i.test(p.name + " " + (p.detail ?? "")))
-        .map((p) => p.name)
-        .slice(0, 6),
+      venues: profileVenues.slice(0, 8),
+      artists: profileArtists.slice(0, 10),
+      neighborhoods: profileNeighborhoods.slice(0, 6),
+      musicGenres: (rawData.music ?? []) as string[],
+      interests: allInterests.slice(0, 12),
+      favoriteRestaurants: favoriteRestaurants.slice(0, 12),
+      sportsTeams: (rawData.sportsTeams ?? []) as string[],
+      dietaryRestrictions: [],  // no field in rawData yet; reserved for future onboarding
     };
 
     // Geocode secondary cities from profile before the main Promise.all

@@ -45,8 +45,35 @@ export interface UserLocalContext {
   artists?: string[];
   /** Preferred city neighborhoods */
   neighborhoods?: string[];
-  /** Food/dining interests */
+  /** Food/dining interests (cuisine types, e.g. "Italian", "seafood") */
   foodInterests?: string[];
+  /**
+   * Music genre preferences from raw_data.music, e.g.
+   * ["classic rock from the 60s and 70s", "classic jazz"].
+   * Used to build genre-specific concert/event scoring.
+   */
+  musicGenres?: string[];
+  /**
+   * Hobbies and general interests from raw_data.interests, e.g.
+   * ["pickleball", "woodworking", "boats", "cooking", "stock market"].
+   * Local events matching any interest get elevated to high priority.
+   */
+  interests?: string[];
+  /**
+   * Favorite restaurant names from raw_data.restaurants + profile_items.restaurants.
+   * News mentioning a favorite restaurant by name gets high priority.
+   */
+  favoriteRestaurants?: string[];
+  /**
+   * Sports teams the user follows, e.g. ["Rangers", "Cowboys"].
+   * Non-score local news about their teams gets high priority.
+   */
+  sportsTeams?: string[];
+  /**
+   * Dietary restrictions / preferences, e.g. ["gluten-free", "vegetarian"].
+   * Used to boost restaurants that cater to these needs.
+   */
+  dietaryRestrictions?: string[];
 }
 
 interface RSSItem {
@@ -90,10 +117,90 @@ function buildCityFeeds(city: string): FeedConfig[] {
   ];
 }
 
-// ── Dynamic interest patterns (built from user profile) ───────────────────────
+// ── Preference-aware pattern builder ─────────────────────────────────────────
 
 interface PriorityPattern { pattern: RegExp; label: string }
 
+/** Escape a string for use inside a RegExp */
+function escRx(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Build a single OR regex from an array of strings. Returns null if empty. */
+function stringsToRx(arr: string[]): RegExp | null {
+  const cleaned = arr.map((s) => s.trim()).filter((s) => s.length > 1);
+  if (cleaned.length === 0) return null;
+  return new RegExp(cleaned.map(escRx).join("|"), "i");
+}
+
+/**
+ * Expand a free-text music genre preference into searchable keyword terms.
+ * E.g. "classic rock from the 60s and 70s" → ["classic rock","60s","70s","blues rock"]
+ *      "classic jazz" → ["jazz","bebop","big band","swing"]
+ */
+function expandMusicPreference(pref: string): string[] {
+  const p = pref.toLowerCase();
+  const terms: string[] = [];
+
+  if (/classic rock|rock.*(60|70|1960|1970)|60s rock|70s rock/.test(p)) {
+    terms.push("classic rock", "60s", "70s", "blues rock", "rock and roll", "album rock");
+  }
+  if (/\bjazz\b|bebop|big band|swing/.test(p)) {
+    terms.push("jazz", "bebop", "big band", "swing", "cool jazz", "jazz fusion");
+  }
+  if (/\bblues\b/.test(p)) {
+    terms.push("blues", "blues rock", "rhythm and blues");
+  }
+  if (/country/.test(p)) {
+    terms.push("country", "country music", "bluegrass");
+  }
+  if (/folk|acoustic/.test(p)) {
+    terms.push("folk", "acoustic", "singer-songwriter");
+  }
+  if (/classical|orchestra|symphony|opera/.test(p)) {
+    terms.push("classical", "symphony", "orchestra", "philharmonic", "opera");
+  }
+  if (/hip.?hop|rap\b/.test(p)) {
+    terms.push("hip hop", "hip-hop", "rap");
+  }
+  if (/electronic|edm|techno|house/.test(p)) {
+    terms.push("electronic", "edm", "techno", "house music");
+  }
+  if (/soul|r&b|motown/.test(p)) {
+    terms.push("soul", "r&b", "motown", "funk");
+  }
+  if (/reggae/.test(p)) {
+    terms.push("reggae");
+  }
+  if (/latin|salsa|tejano/.test(p)) {
+    terms.push("latin", "salsa", "tejano");
+  }
+
+  // Fallback: pull meaningful words (>3 chars) from the raw preference string
+  if (terms.length === 0) {
+    const STOPWORDS = new Set(["from","with","and","the","for","this","that","just","have","more"]);
+    terms.push(
+      ...pref.split(/[\s,]+/)
+        .map((w) => w.toLowerCase())
+        .filter((w) => w.length > 3 && !STOPWORDS.has(w))
+    );
+  }
+
+  return [...new Set(terms)];
+}
+
+/**
+ * Build all scoring patterns from the user's profile context.
+ *
+ * Design principles:
+ *  HIGH  — Directly matches a user preference (their venue, artist, restaurant, hobby, team, genre)
+ *  MEDIUM — Matches broad interest category; no specific preference match required
+ *  LOW   — Generic local content (community, business) worth knowing but not personalized
+ *  NULL  — Excluded (sponsored, score results, no local relevance)
+ *
+ * When user has preferences set for a category (e.g. music genres), generic signals
+ * in that category drop to MEDIUM at most, keeping HIGH for genuinely matched content.
+ */
 function buildPatterns(ctx: UserLocalContext): {
   exclude: RegExp[];
   high: PriorityPattern[];
@@ -101,72 +208,115 @@ function buildPatterns(ctx: UserLocalContext): {
   low: PriorityPattern[];
 } {
   const city = ctx.city;
-  const citySlug = city.replace(/[^a-z0-9]/gi, "").toLowerCase();
 
-  // ── Exclude ────────────────────────────────────────────────────────────────
+  // ── Signals that detect what a headline is "about" ─────────────────────────
+  const MUSIC_EVENT_SIGNAL = /\b(concert|performing|live|show|tour|tickets|gig|festival|at the .{3,30}theater|at the .{3,30}venue)\b/i;
+  const RESTAURANT_OPENING_SIGNAL = /\b(open|opens|opening|grand opening|now open|new restaurant|soft open|debut)\b/i;
+  const LOCAL_EVENT_SIGNAL = /\b(event|festival|tournament|league|class|workshop|show|fair|expo|market|tour|race|run|competition)\b/i;
+
+  // ── EXCLUDE ────────────────────────────────────────────────────────────────
   const exclude: RegExp[] = [
     /sponsored|advertisement|advertorial|promoted content/i,
-    // Sports game-result scores are covered by ESPN — avoid duplication
-    /\b(score|win|loss|beat|game recap|final|inning|quarter)\b.{0,60}\b(nfl|nba|mlb|nhl|mls)\b/i,
+    // Sports final-score results are covered by ESPN — don't duplicate here
+    /\b(final score|box score|recap|postgame)\b/i,
+    /\b(beats|defeats|wins against|loses to)\b.{0,40}\b\d+[-–]\d+\b/i,
   ];
 
-  // ── High priority ─────────────────────────────────────────────────────────
-  const high: PriorityPattern[] = [
-    { pattern: /new restaurant|just opened|grand opening|opening soon|now open/i, label: "restaurant opening" },
-  ];
+  // ── HIGH priority ──────────────────────────────────────────────────────────
+  const high: PriorityPattern[] = [];
 
-  // Favorite venues from profile
-  if (ctx.venues && ctx.venues.length > 0) {
-    const venueRx = new RegExp(
-      ctx.venues.map((v) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"),
-      "i"
-    );
-    high.push({ pattern: venueRx, label: "favorite venue" });
+  // 1. Favorite venues — always high when mentioned
+  const venueRx = stringsToRx(ctx.venues ?? []);
+  if (venueRx) high.push({ pattern: venueRx, label: "favorite venue" });
+
+  // 2. Favorite artists — always high when mentioned
+  const artistRx = stringsToRx(ctx.artists ?? []);
+  if (artistRx) high.push({ pattern: artistRx, label: "favorite artist" });
+
+  // 3. Music genres — high ONLY if it's a music event AND matches their genres
+  //    If user has NO genre preferences, any concert stays as a medium signal (below)
+  if (ctx.musicGenres && ctx.musicGenres.length > 0) {
+    const genreTerms = ctx.musicGenres.flatMap(expandMusicPreference);
+    const genreRx = stringsToRx(genreTerms);
+    if (genreRx) {
+      // Combine: genre match + music event signal → high
+      // We achieve this by using a pattern that tests genre terms, and the
+      // MUSIC_EVENT_SIGNAL already overlaps; scoreItem will catch it.
+      high.push({ pattern: genreRx, label: "preferred music genre" });
+    }
   }
 
-  // Favorite artists from profile
-  if (ctx.artists && ctx.artists.length > 0) {
-    const artistRx = new RegExp(
-      ctx.artists.map((a) => a.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"),
-      "i"
-    );
-    high.push({ pattern: artistRx, label: "favorite artist" });
+  // 4. Specific interests / hobbies — high when paired with a local event signal
+  //    We score these as high directly; the scorer will handle it.
+  const interestTerms = (ctx.interests ?? []).filter((i) => i.length > 2);
+  if (interestTerms.length > 0) {
+    const interestRx = stringsToRx(interestTerms);
+    if (interestRx) high.push({ pattern: interestRx, label: "personal interest" });
   }
 
-  // Preferred neighborhoods from profile
-  if (ctx.neighborhoods && ctx.neighborhoods.length > 0) {
-    const hoodRx = new RegExp(
-      ctx.neighborhoods.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"),
-      "i"
-    );
-    high.push({ pattern: hoodRx, label: "preferred neighborhood" });
+  // 5. Favorite restaurants — high when mentioned by name
+  const favRestaurantRx = stringsToRx(ctx.favoriteRestaurants ?? []);
+  if (favRestaurantRx) high.push({ pattern: favRestaurantRx, label: "favorite restaurant" });
+
+  // 6. Dietary restrictions match (opens a restaurant catering to their needs)
+  const dietRx = stringsToRx(ctx.dietaryRestrictions ?? []);
+  if (dietRx) high.push({ pattern: dietRx, label: "dietary match" });
+
+  // 7. Sports teams — non-score news about their teams is high interest
+  //    We can't easily distinguish score vs. non-score at this layer, so we add
+  //    their teams as high but the EXCLUDE block above will catch pure score results.
+  if (ctx.sportsTeams && ctx.sportsTeams.length > 0) {
+    const teamRx = stringsToRx(ctx.sportsTeams);
+    if (teamRx) high.push({ pattern: teamRx, label: "followed sports team" });
   }
 
-  // ── Medium priority ───────────────────────────────────────────────────────
-  const medium: PriorityPattern[] = [
-    { pattern: /restaurant|dining|chef|food festival|cocktail bar|brunch|new bar/i, label: "food & dining" },
-    { pattern: /jazz|bebop|big band|classic rock|blues|live music/i,                label: "jazz & classic rock" },
-    { pattern: /outdoor concert|amphitheater|summer concert|concert series/i,       label: "outdoor concert" },
-    { pattern: /tribute band|tribute act/i,                                         label: "tribute" },
-    { pattern: /arts|concert|music|festival|exhibition|gallery|show|performance/i,  label: "arts & culture" },
-    { pattern: /outdoor|park|trail|farmers market|hike/i,                           label: "outdoor" },
-    // City name match — everything local qualifies as at least medium
-    { pattern: new RegExp(city.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"),        label: "city local" },
-  ];
+  // 8. Preferred neighborhoods — any local news from their neighborhoods is high
+  const hoodRx = stringsToRx(ctx.neighborhoods ?? []);
+  if (hoodRx) high.push({ pattern: hoodRx, label: "preferred neighborhood" });
 
-  // Food interests from profile add medium boosts
-  if (ctx.foodInterests && ctx.foodInterests.length > 0) {
-    const foodRx = new RegExp(
-      ctx.foodInterests.map((f) => f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"),
-      "i"
-    );
-    medium.push({ pattern: foodRx, label: "food preference" });
+  // 9. New restaurant opening is always high — everyone wants to know about openings
+  high.push({ pattern: RESTAURANT_OPENING_SIGNAL, label: "restaurant opening" });
+
+  // ── MEDIUM priority ─────────────────────────────────────────────────────────
+  const medium: PriorityPattern[] = [];
+
+  // General food & dining (not a specific opening, not a fav restaurant)
+  medium.push({ pattern: /restaurant|dining|chef|food|cocktail bar|brunch|new bar|eatery/i, label: "food & dining" });
+
+  // Cuisine preferences → medium boost for matching cuisine type in dining news
+  const cuisineRx = stringsToRx(ctx.foodInterests ?? []);
+  if (cuisineRx) medium.push({ pattern: cuisineRx, label: "cuisine preference" });
+
+  // Music / concerts — if user HAS genre prefs, generic live music is medium at best
+  // (their specific genres got HIGH above); if no prefs, keep broad music at medium
+  if (ctx.musicGenres && ctx.musicGenres.length > 0) {
+    // User has specific genre taste — broad "live music" doesn't auto-qualify for high
+    medium.push({ pattern: /\b(live music|concert|music festival|open mic)\b/i, label: "live music (medium)" });
+  } else {
+    // No preferences stored — broad music interest at medium
+    medium.push({ pattern: /jazz|bebop|big band|classic rock|blues|live music|concert series/i, label: "music (no pref)" });
   }
 
-  // ── Low priority ──────────────────────────────────────────────────────────
+  // Outdoor concerts & amphitheaters (relevant regardless of genre)
+  medium.push({ pattern: /outdoor concert|amphitheater|summer concert|tribute band/i, label: "outdoor concert" });
+
+  // Arts, culture, festivals broadly
+  medium.push({ pattern: /arts|festival|exhibition|gallery|performance|show|theater|theatre/i, label: "arts & culture" });
+
+  // Outdoor / nature activities
+  medium.push({ pattern: /outdoor|park|trail|farmers market|hike|nature/i, label: "outdoor activity" });
+
+  // City catch-all — any local mention qualifies as at least medium
+  medium.push({
+    pattern: new RegExp(escRx(city), "i"),
+    label: "city local",
+  });
+
+  // ── LOW priority ────────────────────────────────────────────────────────────
   const low: PriorityPattern[] = [
-    { pattern: /real estate|development|business|economy/i, label: "business" },
-    { pattern: /neighborhood|community|local politics/i,    label: "community" },
+    { pattern: /real estate|development|commercial property/i, label: "real estate" },
+    { pattern: /local business|economy|business opens|retail/i, label: "local business" },
+    { pattern: /neighborhood association|community meeting|city council|zoning/i, label: "community" },
   ];
 
   return { exclude, high, medium, low };
@@ -604,6 +754,13 @@ export async function fetchDallasContent(ctx: UserLocalContext = { city: "Dallas
   }
 
   console.log(`[LocalContent] ── Starting fresh content fetch for ${city} ──────────────────`);
+  console.log(
+    `[LocalContent:prefs] musicGenres:${(ctx.musicGenres ?? []).length} interests:${(ctx.interests ?? []).length} ` +
+    `artists:${(ctx.artists ?? []).length} venues:${(ctx.venues ?? []).length} ` +
+    `restaurants:${(ctx.favoriteRestaurants ?? []).length} teams:${(ctx.sportsTeams ?? []).length}` +
+    (ctx.musicGenres?.length ? ` | genres: [${ctx.musicGenres.join(", ")}]` : "") +
+    (ctx.interests?.length ? ` | interests: [${ctx.interests.slice(0, 5).join(", ")}${(ctx.interests.length > 5 ? "…" : "")}]` : "")
+  );
   const patterns = buildPatterns(ctx);
   const feeds = buildCityFeeds(city);
   const allItems: LocalContentItem[] = [];

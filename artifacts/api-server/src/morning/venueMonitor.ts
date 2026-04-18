@@ -75,6 +75,11 @@ const DAVID_VENUES: VenueConfig[] = [
 
 // ── DB: concerts_of_interest table ───────────────────────────────────────────
 
+/** Returns the list of favorite venue names (for use in local-content preference scoring) */
+export function getFavoriteVenueNames(): string[] {
+  return DAVID_VENUES.map((v) => v.name);
+}
+
 export interface ConcertItem {
   venue: string;
   artistOrEvent: string;
