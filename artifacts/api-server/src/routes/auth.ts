@@ -10,6 +10,7 @@ import {
   lookupOrCreateGoogleUser,
   getAppUrl,
 } from "../auth/sessionAuth.js";
+import { registerUser, loginUser } from "../auth/passwordAuth.js";
 
 const router = Router();
 
@@ -388,6 +389,100 @@ router.post("/auth/logout", async (req: Request, res: Response) => {
   } catch (err) {
     req.log.error({ err }, "Logout error");
     res.status(500).json({ error: "Logout failed" });
+  }
+});
+
+// ── Email / Password authentication ──────────────────────────────────────────
+
+// POST /api/auth/register
+// Body: { email, password, name }
+// Returns: { sessionToken, userName, email, name, isNewUser: true }
+router.post("/auth/register", express.json({ limit: "1mb" }), async (req: Request, res: Response) => {
+  const { email, password, name } = req.body as {
+    email?: string;
+    password?: string;
+    name?: string;
+  };
+
+  if (!email || typeof email !== "string" || !email.includes("@")) {
+    res.status(400).json({ error: "A valid email address is required." });
+    return;
+  }
+  if (!password || typeof password !== "string" || password.length < 8) {
+    res.status(400).json({ error: "Password must be at least 8 characters." });
+    return;
+  }
+  if (!name || typeof name !== "string" || name.trim().length < 1) {
+    res.status(400).json({ error: "Name is required." });
+    return;
+  }
+
+  try {
+    const result = await registerUser(email, password, name);
+
+    if ("error" in result) {
+      res.status(409).json({ error: result.error });
+      return;
+    }
+
+    const { userName } = result;
+    const sessionToken = await createSession(userName, email.trim().toLowerCase());
+
+    req.log.info({ userName, email }, "[AUTH] /auth/register — registration successful");
+
+    res.status(201).json({
+      sessionToken,
+      userName,
+      email: email.trim().toLowerCase(),
+      name: name.trim(),
+      isNewUser: true,
+    });
+  } catch (err) {
+    req.log.error({ err }, "[AUTH] /auth/register — error");
+    res.status(500).json({ error: "Registration failed. Please try again." });
+  }
+});
+
+// POST /api/auth/login
+// Body: { email, password }
+// Returns: { sessionToken, userName, email, name }
+router.post("/auth/login", express.json({ limit: "1mb" }), async (req: Request, res: Response) => {
+  const { email, password } = req.body as {
+    email?: string;
+    password?: string;
+  };
+
+  if (!email || typeof email !== "string") {
+    res.status(400).json({ error: "Email is required." });
+    return;
+  }
+  if (!password || typeof password !== "string") {
+    res.status(400).json({ error: "Password is required." });
+    return;
+  }
+
+  try {
+    const user = await loginUser(email, password);
+
+    if (!user) {
+      // Return generic message to avoid leaking whether the email exists
+      res.status(401).json({ error: "Invalid email or password." });
+      return;
+    }
+
+    const sessionToken = await createSession(user.userName, user.email);
+
+    req.log.info({ userName: user.userName, email: user.email }, "[AUTH] /auth/login — login successful");
+
+    res.json({
+      sessionToken,
+      userName: user.userName,
+      email: user.email,
+      name: user.name,
+    });
+  } catch (err) {
+    req.log.error({ err }, "[AUTH] /auth/login — error");
+    res.status(500).json({ error: "Login failed. Please try again." });
   }
 });
 

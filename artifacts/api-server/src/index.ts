@@ -4,6 +4,7 @@ import { query } from "./db";
 import { startScheduler } from "./reminders/scheduler";
 import { startWinddownScheduler } from "./winddown/winddownScheduler";
 import { ensureWinddownTables } from "./winddown/winddownManager";
+import { ensureUsersTable } from "./auth/passwordAuth";
 import { ensureMemoryTable } from "./memory/memoryManager";
 import { ensureProfileTable } from "./profile/profileManager";
 import { ensureOnboardingTable } from "./onboarding/onboardingManager";
@@ -66,6 +67,13 @@ app.listen(port, async (err) => {
     logger.info("[startup] proactive_message_log table ready");
   } catch (e) {
     logger.warn({ e }, "proactive_message_log table initialization warning");
+  }
+
+  try {
+    await ensureUsersTable();
+    logger.info("[startup] users table ready");
+  } catch (e) {
+    logger.warn({ e }, "users table initialization warning");
   }
 
   try {

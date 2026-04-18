@@ -26,7 +26,7 @@ export interface SessionUser {
 
 // ── Username generation ────────────────────────────────────────────────────────
 
-async function generateUniqueUsername(base: string): Promise<string> {
+export async function generateUniqueUsername(base: string): Promise<string> {
   const clean = base.replace(/[^a-zA-Z0-9]/g, "").slice(0, 20) || "User";
   const { rows } = await query<{ user_name: string }>(
     "SELECT user_name FROM user_profiles WHERE user_name = $1 LIMIT 1",
