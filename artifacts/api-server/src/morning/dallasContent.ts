@@ -47,8 +47,8 @@ const DALLAS_FEEDS: FeedConfig[] = [
   { name: "Dallas News",     url: "https://news.google.com/rss/search?q=dallas+restaurant+opening+events+food+arts&hl=en-US&gl=US&ceid=US:en" },
   // Google News RSS — Dallas music events specifically (jazz, concerts, live music)
   { name: "Dallas Music News", url: "https://news.google.com/rss/search?q=dallas+jazz+concert+live+music+kessler+granada+meyerson+outdoor+concert&hl=en-US&gl=US&ceid=US:en" },
-  // CultureMap Dallas — RSS endpoint unstable; kept for when they restore it
-  { name: "CultureMap Dallas", url: "https://dallas.culturemap.com/rss.xml" },
+  // Art&Seek (KERA) — reliable Dallas arts, music, culture & events feed
+  { name: "Art&Seek Dallas", url: "https://artandseek.org/feed/" },
 ];
 
 // ── Interest patterns ─────────────────────────────────────────────────────────
