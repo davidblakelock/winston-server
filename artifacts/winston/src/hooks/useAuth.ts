@@ -5,10 +5,6 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 export const SESSION_KEY = "winston_session_token";
 const PICTURE_KEY = "winston_user_picture";
 
-// Enforce the correct Google account — any cached session from another account
-// (e.g. an old winston@... account in Chrome) is automatically cleared.
-const REQUIRED_EMAIL = "davidblakelock01@gmail.com";
-
 export interface AuthState {
   loading: boolean;
   authenticated: boolean;
@@ -136,18 +132,6 @@ export function useAuth() {
       });
 
       if (data && data.authenticated && data.userName) {
-        // Fix 5: Enforce the correct Google account — clear any cached session
-        // from a different account (e.g. old winston@... session cached in Chrome).
-        if (data.email && data.email.toLowerCase() !== REQUIRED_EMAIL) {
-          console.warn("[AUTH] useAuth — wrong account detected:", data.email, "— expected:", REQUIRED_EMAIL, "— clearing session");
-          localStorage.removeItem(SESSION_KEY);
-          localStorage.removeItem(PICTURE_KEY);
-          localStorage.removeItem("winston_user_name");
-          localStorage.removeItem("winston_companion_name");
-          setAuthTokenGetter(null);
-          setAuthState({ loading: false, authenticated: false });
-          return;
-        }
         // Persist picture to localStorage so it's available instantly next time
         const resolvedPicture = data.picture ?? storedPicture ?? undefined;
         if (resolvedPicture) localStorage.setItem(PICTURE_KEY, resolvedPicture);

@@ -1,8 +1,10 @@
 /**
- * Proactive Dallas content scheduler — once per day around 9 AM CT,
- * checks for high-priority local items (new restaurant openings in David's
- * preferred neighborhoods, Rangers/Cowboys news) and sends a gentle SSE +
- * push notification if something particularly relevant came through.
+ * Proactive local content scheduler — once per day around 9 AM CT,
+ * checks for high-priority local items (new restaurant openings, sports news)
+ * and sends a gentle SSE + push notification to each active user.
+ *
+ * Phase 6: loops over all active users; uses their name in notifications;
+ * only sends to users whose city matches the local content source (Dallas for now).
  */
 
 import cron from "node-cron";
@@ -11,20 +13,21 @@ import { sendPushToAll } from "../push/pushManager.js";
 import { logger } from "../lib/logger.js";
 import { getTodayHighPriorityItems, getLocalContentCity } from "./dallasContent.js";
 import { query } from "../db.js";
+import { getActiveUsers, type ActiveUser } from "../onboarding/onboardingManager.js";
 
 const TZ = "America/Chicago";
-const USER = "David";
+const DALLAS_CITY_PATTERN = /dallas|tx|texas/i;
 
 function todayStr(): string {
   return new Date().toLocaleDateString("en-CA", { timeZone: TZ });
 }
 
-async function hasBeenSentToday(key: string): Promise<boolean> {
+async function hasBeenSentToday(userName: string, key: string): Promise<boolean> {
   try {
     const { rows } = await query<{ count: string }>(
       `SELECT COUNT(*) AS count FROM proactive_message_log
        WHERE user_name = $1 AND message_type = $2 AND sent_date = $3`,
-      [USER, key, todayStr()]
+      [userName, key, todayStr()]
     );
     return parseInt(rows[0].count, 10) > 0;
   } catch {
@@ -32,35 +35,37 @@ async function hasBeenSentToday(key: string): Promise<boolean> {
   }
 }
 
-async function markSent(key: string): Promise<void> {
+async function markSent(userName: string, key: string): Promise<void> {
   try {
     await query(
       `INSERT INTO proactive_message_log (user_name, message_type, sent_date)
        VALUES ($1, $2, $3)
        ON CONFLICT (user_name, message_type, sent_date) DO NOTHING`,
-      [USER, key, todayStr()]
+      [userName, key, todayStr()]
     );
   } catch (err) {
-    logger.warn({ err }, "[Dallas Proactive] Failed to mark sent");
+    logger.warn({ err, userName }, "[Dallas Proactive] Failed to mark sent");
   }
 }
 
-/** Build a warm, conversational notification text for the item */
-function buildNotificationText(item: { source: string; headline: string; summary: string; priority: string }): string {
+function buildNotificationText(
+  item: { source: string; headline: string; summary: string; priority: string },
+  displayName: string
+): string {
   const isRestaurant = item.priority === "high" && /restaurant|opening|opened|dining/i.test(item.headline + item.summary);
   const isSports = /rangers|cowboys|mavericks|stars|fc dallas/i.test(item.headline + item.summary);
 
   if (isRestaurant) {
-    return `Hey David — ${item.source} just wrote up a new spot that might interest you: ${item.headline}. ${item.summary ? item.summary.slice(0, 120) : ""}`.trim();
+    return `Hey ${displayName} — ${item.source} just wrote up a new spot that might interest you: ${item.headline}. ${item.summary ? item.summary.slice(0, 120) : ""}`.trim();
   }
   if (isSports) {
-    return `David — quick local sports note from ${item.source}: ${item.headline}. ${item.summary ? item.summary.slice(0, 100) : ""}`.trim();
+    return `${displayName} — quick local sports note from ${item.source}: ${item.headline}. ${item.summary ? item.summary.slice(0, 100) : ""}`.trim();
   }
-  return `Hey David — something local worth knowing from ${item.source}: ${item.headline}. ${item.summary ? item.summary.slice(0, 120) : ""}`.trim();
+  return `Hey ${displayName} — something local worth knowing from ${item.source}: ${item.headline}. ${item.summary ? item.summary.slice(0, 120) : ""}`.trim();
 }
 
 async function runDallasProactiveCheck(): Promise<void> {
-  logger.info("[Dallas Proactive] Checking for high-priority items to notify about");
+  logger.info("[Dallas Proactive] Checking for high-priority items");
 
   let highItems: Awaited<ReturnType<typeof getTodayHighPriorityItems>>;
   try {
@@ -71,44 +76,69 @@ async function runDallasProactiveCheck(): Promise<void> {
   }
 
   if (highItems.length === 0) {
-    logger.info("[Dallas Proactive] No high-priority Dallas items today — skipping");
+    logger.info("[Dallas Proactive] No high-priority items today — skipping");
     return;
   }
 
-  // Send at most 1 proactive notification per day (the best high-priority item)
   const top = highItems[0];
   const dedupKey = `dallas-proactive-${todayStr()}`;
+  const contentCity = getLocalContentCity();
 
-  if (await hasBeenSentToday(dedupKey)) {
-    logger.info("[Dallas Proactive] Already sent today — skipping");
+  let users: ActiveUser[];
+  try {
+    users = await getActiveUsers();
+  } catch (err) {
+    logger.warn({ err }, "[Dallas Proactive] Failed to load active users");
     return;
   }
 
-  const text = buildNotificationText(top);
-  if (!text) return;
+  // Only notify users who are in a Dallas-area city (or have no city set — default is Dallas)
+  const targetUsers = users.filter(
+    (u) => !u.city || DALLAS_CITY_PATTERN.test(u.city)
+  );
 
-  // SSE to all connected clients
-  try {
-    broadcastToUser(USER, "proactive", { message: text, type: "dallas" });
-    logger.info(`[Dallas Proactive] SSE sent: "${text.slice(0, 80)}..."`);
-  } catch (err) {
-    logger.warn({ err }, "[Dallas Proactive] SSE broadcast failed");
+  if (targetUsers.length === 0) {
+    logger.info("[Dallas Proactive] No Dallas-area users to notify");
+    return;
   }
 
-  // Push notification
-  try {
-    await sendPushToAll(USER, `Winston — What's Happening in ${getLocalContentCity()}`, text);
-    logger.info("[Dallas Proactive] Push sent");
-  } catch (err) {
-    logger.warn({ err }, "[Dallas Proactive] Push failed (non-fatal)");
-  }
+  for (const user of targetUsers) {
+    const { userName } = user;
+    const displayName = user.name ?? userName;
 
-  await markSent(dedupKey);
+    if (await hasBeenSentToday(userName, dedupKey)) {
+      logger.info({ userName }, "[Dallas Proactive] Already sent today — skipping");
+      continue;
+    }
+
+    const text = buildNotificationText(top, displayName);
+    if (!text) continue;
+
+    try {
+      broadcastToUser(userName, "proactive", { message: text, type: "dallas" });
+      logger.info({ userName }, `[Dallas Proactive] SSE sent: "${text.slice(0, 80)}..."`);
+    } catch (err) {
+      logger.warn({ err, userName }, "[Dallas Proactive] SSE broadcast failed");
+    }
+
+    try {
+      await sendPushToAll({
+        title: `Winston — What's Happening in ${contentCity}`,
+        body: text,
+        tag: "dallas-proactive",
+      }, userName);
+      logger.info({ userName }, "[Dallas Proactive] Push sent");
+    } catch (err) {
+      logger.warn({ err, userName }, "[Dallas Proactive] Push failed (non-fatal)");
+    }
+
+    await markSent(userName, dedupKey);
+  }
 }
 
 export function startDallasProactiveScheduler(): void {
   // Run once at 9:15 AM CT — after the morning briefing has been delivered
-  // so David isn't doubled-up with content right at wake-up.
+  // so users aren't doubled-up with content right at wake-up.
   cron.schedule("15 9 * * *", () => {
     void runDallasProactiveCheck();
   }, { timezone: TZ });

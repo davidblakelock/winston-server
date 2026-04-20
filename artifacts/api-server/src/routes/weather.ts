@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from "express";
-import { validateSession } from "../auth/sessionAuth.js";
+import { authenticate } from "../auth/middleware.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
 import type { CollectedData } from "../onboarding/onboardingManager.js";
 import { getCachedWeather } from "../weather/weatherCache.js";
@@ -69,12 +69,8 @@ async function fetchPollen(lat: number, lon: number): Promise<PollenCardData | n
 }
 
 router.get("/weather/morning", async (req: Request, res: Response) => {
-  const authHeader = req.headers.authorization;
-  let userName = "David";
-  if (authHeader?.startsWith("Bearer ")) {
-    const session = await validateSession(authHeader.slice(7)).catch(() => null);
-    if (session) userName = session.userName;
-  }
+  const userName = await authenticate(req, res);
+  if (!userName) return;
 
   try {
     const profile = await getProfile(userName).catch(() => null);

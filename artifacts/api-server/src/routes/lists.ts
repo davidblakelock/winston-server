@@ -1,12 +1,13 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { query } from "../db.js";
+import { authenticate } from "../auth/middleware.js";
 
 const router: IRouter = Router();
 
-const USER = "David";
-
 // GET /api/lists — fetch all list names (with item counts) for the user
 router.get("/lists", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
   try {
     const { rows } = await query<{ list_name: string; item_count: string }>(
       `SELECT list_name, COUNT(*) AS item_count
@@ -14,7 +15,7 @@ router.get("/lists", async (req: Request, res: Response) => {
        WHERE user_name = $1
        GROUP BY list_name
        ORDER BY list_name ASC`,
-      [USER]
+      [userName]
     );
     res.json({
       lists: rows.map((r) => ({
@@ -30,6 +31,8 @@ router.get("/lists", async (req: Request, res: Response) => {
 
 // GET /api/lists/:listName — fetch all items for a list
 router.get("/lists/:listName", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
   const { listName } = req.params;
   try {
     const { rows } = await query<{ id: number; item_text: string; created_at: string }>(
@@ -37,7 +40,7 @@ router.get("/lists/:listName", async (req: Request, res: Response) => {
        FROM list_items
        WHERE user_name = $1 AND list_name = $2
        ORDER BY created_at ASC`,
-      [USER, listName]
+      [userName, listName]
     );
     res.json({ items: rows });
   } catch (err) {
@@ -48,6 +51,8 @@ router.get("/lists/:listName", async (req: Request, res: Response) => {
 
 // POST /api/lists/:listName — add an item
 router.post("/lists/:listName", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
   const { listName } = req.params;
   const { item } = req.body as { item?: string };
   if (!item || !item.trim()) {
@@ -59,7 +64,7 @@ router.post("/lists/:listName", async (req: Request, res: Response) => {
       `INSERT INTO list_items (user_name, list_name, item_text)
        VALUES ($1, $2, $3)
        RETURNING id, item_text, created_at`,
-      [USER, listName, item.trim()]
+      [userName, listName, item.trim()]
     );
     res.json({ item: rows[0] });
   } catch (err) {
@@ -70,11 +75,13 @@ router.post("/lists/:listName", async (req: Request, res: Response) => {
 
 // DELETE /api/lists/:listName/:id — remove an item by id
 router.delete("/lists/:listName/:id", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
   const { listName, id } = req.params;
   try {
     await query(
       `DELETE FROM list_items WHERE id = $1 AND user_name = $2 AND list_name = $3`,
-      [id, USER, listName]
+      [id, userName, listName]
     );
     res.json({ deleted: true });
   } catch (err) {

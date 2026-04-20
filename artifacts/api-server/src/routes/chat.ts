@@ -154,6 +154,7 @@ import {
   buildSundaySummaryBlock,
 } from "../sundaySummary/sundaySummaryManager.js";
 import { validateSession } from "../auth/sessionAuth.js";
+import { authenticate, tryAuthenticate } from "../auth/middleware.js";
 import { normalizeTtsText } from "../lib/ttsNormalize.js";
 import { getCachedBriefing, setCachedBriefing, getStaticBriefingContext } from "../morning/briefingCache.js";
 import { preFetchMorningBriefing, buildCalendarDepartureTimes } from "../morning/briefingPregenerate.js";
@@ -606,22 +607,10 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   // ── Auth ──────────────────────────────────────────────────────────────────
   // Two valid paths:
   //   1. x-api-key: winston-native-2026  →  native mobile app bypass, user = David
-  //   2. Authorization: Bearer <token>   →  standard Google OAuth session
-  const authHeader = req.headers.authorization;
-  let sessionUserName = "David";
-
-  if (req.headers["x-api-key"] === "winston-native-2026") {
-    // Native mobile — skip session lookup, user is always David
-    sessionUserName = "David";
-  } else if (authHeader?.startsWith("Bearer ")) {
-    const session = await validateSession(authHeader.slice(7));
-    if (!session) {
-      res.status(401).json({ error: "unauthorized" });
-      return;
-    }
-    sessionUserName = session.userName;
-  }
-  // No credentials → sessionUserName stays "David" (single-user app)
+  //   2. Authorization: Bearer <token>   →  standard session (any provider)
+  // No credentials → 401 (no silent David fallback)
+  const sessionUserName = await authenticate(req, res);
+  if (!sessionUserName) return;
 
   // ── Auto-greeting: derive time-appropriate message ────────────────────────
   const { message: rawMessage, history: rawHistory = [], isAutoGreeting = false, deviceId = null } = req.body;
@@ -758,12 +747,12 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     const isNativeMorning = (req as any)._nativeMode === true;
 
     // ── Check for pre-built static context ──
-    const staticCtx = getStaticBriefingContext(sessionUserName) ?? getStaticBriefingContext("David");
+    const staticCtx = getStaticBriefingContext(sessionUserName);
 
     if (!staticCtx) {
-      // Static context not ready — trigger background pre-generation
-      req.log.info("Morning briefing static context missing — triggering background pre-generation");
-      preFetchMorningBriefing("David").catch((err) =>
+      // Static context not ready — trigger background pre-generation for THIS user
+      req.log.info({ sessionUserName }, "Morning briefing static context missing — triggering background pre-generation");
+      preFetchMorningBriefing(sessionUserName).catch((err) =>
         req.log.warn({ err }, "Background morning briefing pre-generation failed")
       );
       const notReadyText = `Your morning briefing isn't ready yet — I'm pulling everything together right now. Give me about 2 minutes and say good morning again. I'll have it all waiting for you.`;
@@ -1617,7 +1606,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         });
 
         await createReminder({
-          userName: "David",
+          userName: sessionUserName,
           reminderText: extracted.reminderText,
           fireAt,
           recurring: extracted.recurring ?? null,
@@ -2230,16 +2219,7 @@ router.post("/speak", async (req, res) => {
   // Resolve the user's chosen voice from their profile (falls back to env default)
   let ELEVENLABS_VOICE_ID = DEFAULT_VOICE_ID;
   try {
-    let profileUserName: string | null = null;
-    if (req.headers["x-api-key"] === "winston-native-2026") {
-      profileUserName = "David";
-    } else {
-      const authHeader = req.headers.authorization;
-      if (authHeader?.startsWith("Bearer ")) {
-        const session = await validateSession(authHeader.slice(7));
-        if (session) profileUserName = session.userName;
-      }
-    }
+    const profileUserName = await tryAuthenticate(req);
     if (profileUserName) {
       const profile = await getProfile(profileUserName).catch(() => null);
       if (profile?.voiceId) ELEVENLABS_VOICE_ID = profile.voiceId;

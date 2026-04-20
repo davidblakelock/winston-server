@@ -6,7 +6,7 @@ import {
   VOICE_OPTIONS,
   type CollectedData,
 } from "../onboarding/onboardingManager.js";
-import { validateSession } from "../auth/sessionAuth.js";
+import { authenticate, tryAuthenticate } from "../auth/middleware.js";
 import { getProfilePlaces } from "../profile/profileManager.js";
 
 const router: IRouter = Router();
@@ -34,29 +34,12 @@ async function generateTTS(voiceId: string, text: string): Promise<{ audioBase64
   }
 }
 
-async function authenticate(req: express.Request, res: express.Response): Promise<string | null> {
-  // Native app API key — always resolves to David
-  if (req.headers["x-api-key"] === "winston-native-2026") {
-    return "David";
-  }
-
-  const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith("Bearer ")) {
-    res.status(401).json({ error: "authentication_required" });
-    return null;
-  }
-  const session = await validateSession(authHeader.slice(7));
-  if (!session) {
-    res.status(401).json({ error: "session_expired" });
-    return null;
-  }
-  return session.userName;
-}
-
 // ── GET /api/profile/photo ────────────────────────────────────────────────────
-// Open endpoint — no auth required. Always returns David's photo fields.
+// Lightly-authed: uses session if present, falls back to David for the
+// sign-in page avatar. A fully multi-user UI should pass a session token.
 router.get("/profile/photo", async (req, res) => {
-  const profile = await getProfile("David").catch(() => null);
+  const userName = await tryAuthenticate(req) ?? "David";
+  const profile = await getProfile(userName).catch(() => null);
   res.json({
     photoUrl: profile?.photoUrl ?? null,
     avatarBase64: profile?.avatarBase64 ?? null,

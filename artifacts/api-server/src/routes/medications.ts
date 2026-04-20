@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import express from "express";
-import { validateSession } from "../auth/sessionAuth.js";
+import { authenticate } from "../auth/middleware.js";
 import {
   getMedications,
   addMedication,
@@ -8,21 +8,6 @@ import {
 } from "../medications/medicationManager.js";
 
 const router: IRouter = Router();
-
-async function authenticate(req: express.Request, res: express.Response): Promise<string | null> {
-  if (req.headers["x-api-key"] === "winston-native-2026") return "David";
-  const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith("Bearer ")) {
-    res.status(401).json({ error: "authentication_required" });
-    return null;
-  }
-  const session = await validateSession(authHeader.slice(7));
-  if (!session) {
-    res.status(401).json({ error: "session_expired" });
-    return null;
-  }
-  return session.userName;
-}
 
 // ── GET /api/medications ──────────────────────────────────────────────────────
 // Returns all active medications for the user.

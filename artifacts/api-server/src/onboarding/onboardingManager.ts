@@ -220,6 +220,42 @@ export async function isOnboardingComplete(userName = "David"): Promise<boolean>
   return profile?.onboardingCompleted ?? false;
 }
 
+// ── Active users (Phase 6: per-user runtime) ───────────────────────────────────
+// Returns all users who have completed onboarding and are eligible for
+// scheduled jobs (morning briefings, proactive notifications, etc.).
+export interface ActiveUser {
+  userName: string;
+  name: string | null;
+  city: string | null;
+  timezone: string | null;
+  wakeTime: string | null;   // "HH:MM" 24h local time, or null → default 06:00
+  companionName: string | null;
+}
+
+export async function getActiveUsers(): Promise<ActiveUser[]> {
+  const { rows } = await query<{
+    user_name: string;
+    name: string | null;
+    city: string | null;
+    timezone: string | null;
+    wake_time: string | null;
+    companion_name: string | null;
+  }>(
+    `SELECT user_name, name, city, timezone, wake_time, companion_name
+     FROM user_profiles
+     WHERE onboarding_completed = true
+     ORDER BY user_name`
+  );
+  return rows.map((r) => ({
+    userName: r.user_name,
+    name: r.name,
+    city: r.city,
+    timezone: r.timezone,
+    wakeTime: r.wake_time,
+    companionName: r.companion_name,
+  }));
+}
+
 // Build the persona/behavioral portion of the system prompt from a dynamic user profile.
 // Personal context (people, places, interests, etc.) is injected separately via buildProfileContext().
 export function buildSystemPromptFromProfile(

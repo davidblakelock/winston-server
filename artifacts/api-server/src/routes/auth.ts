@@ -1,16 +1,20 @@
 import { Router, type Request, type Response } from "express";
 import express from "express";
 import { google } from "googleapis";
-import { createOAuthClient, getRedirectUri, SCOPES } from "../google/oauth.js";
+import { createOAuthClient, getRedirectUri, SCOPES, IDENTITY_SCOPES } from "../google/oauth.js";
 import { query } from "../db.js";
 import {
   createSession,
   validateSession,
   revokeSession,
   lookupOrCreateGoogleUser,
+  lookupOrCreateMicrosoftUser,
+  lookupOrCreateAppleUser,
   getAppUrl,
 } from "../auth/sessionAuth.js";
 import { registerUser, loginUser } from "../auth/passwordAuth.js";
+// @ts-ignore — apple-signin-auth has no bundled types
+import appleSignin from "apple-signin-auth";
 
 const router = Router();
 
@@ -22,7 +26,9 @@ router.get("/auth/google", (req: Request, res: Response) => {
   const oauth2Client = createOAuthClient();
   const url = oauth2Client.generateAuthUrl({
     access_type: "offline",
-    scope: SCOPES,
+    // Identity sign-in: request minimal scopes (openid + email + profile only).
+    // Integration connect: request full scopes (calendar, gmail, contacts).
+    scope: isSignIn ? IDENTITY_SCOPES : SCOPES,
     prompt: "select_account consent",
     // state carries whether this is a sign-in so the callback knows what to do
     state: isSignIn ? "signin" : "connect",
@@ -479,10 +485,292 @@ router.post("/auth/login", express.json({ limit: "1mb" }), async (req: Request, 
       userName: user.userName,
       email: user.email,
       name: user.name,
+      isNewUser: false,
     });
   } catch (err) {
     req.log.error({ err }, "[AUTH] /auth/login — error");
     res.status(500).json({ error: "Login failed. Please try again." });
+  }
+});
+
+// ── Microsoft Sign-In ──────────────────────────────────────────────────────────
+// Standard OAuth2 code flow against Microsoft Identity Platform.
+// Requires MICROSOFT_CLIENT_ID and MICROSOFT_CLIENT_SECRET env vars.
+// Supports work/school/personal accounts via the "common" tenant.
+
+const MS_SCOPES = ["openid", "email", "profile", "User.Read"].join(" ");
+
+function getMicrosoftAuthUrl(appUrl: string, state: string): string {
+  const clientId = process.env.MICROSOFT_CLIENT_ID ?? "";
+  const redirect = `${appUrl}/api/auth/microsoft/callback`;
+  const params = new URLSearchParams({
+    client_id: clientId,
+    response_type: "code",
+    redirect_uri: redirect,
+    scope: MS_SCOPES,
+    response_mode: "query",
+    state,
+  });
+  return `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?${params}`;
+}
+
+router.get("/auth/microsoft", (req: Request, res: Response) => {
+  const clientId = process.env.MICROSOFT_CLIENT_ID;
+  if (!clientId) {
+    res.status(503).json({ error: "Microsoft sign-in not configured — MICROSOFT_CLIENT_ID missing" });
+    return;
+  }
+  const appUrl = getAppUrl(req.headers.host as string | undefined);
+  res.redirect(getMicrosoftAuthUrl(appUrl, "signin"));
+});
+
+router.get("/auth/microsoft/callback", async (req: Request, res: Response) => {
+  const appUrl = getAppUrl(req.headers.host as string | undefined);
+  const { code, error } = req.query;
+
+  if (error || !code) {
+    res.redirect(`${appUrl}/?auth=error`);
+    return;
+  }
+
+  try {
+    const clientId = process.env.MICROSOFT_CLIENT_ID ?? "";
+    const clientSecret = process.env.MICROSOFT_CLIENT_SECRET ?? "";
+    const redirect = `${appUrl}/api/auth/microsoft/callback`;
+
+    // Exchange code for tokens
+    const tokenRes = await fetch("https://login.microsoftonline.com/common/oauth2/v2.0/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        code: code as string,
+        redirect_uri: redirect,
+        grant_type: "authorization_code",
+        scope: MS_SCOPES,
+      }),
+    });
+
+    if (!tokenRes.ok) {
+      req.log.error({ status: tokenRes.status }, "[AUTH] Microsoft token exchange failed");
+      res.redirect(`${appUrl}/?auth=error`);
+      return;
+    }
+
+    const tokenData = (await tokenRes.json()) as {
+      access_token: string;
+      id_token?: string;
+      oid?: string;
+    };
+
+    // Get user profile from Microsoft Graph
+    const graphRes = await fetch("https://graph.microsoft.com/v1.0/me", {
+      headers: { Authorization: `Bearer ${tokenData.access_token}` },
+    });
+
+    if (!graphRes.ok) {
+      req.log.error({ status: graphRes.status }, "[AUTH] Microsoft Graph /me failed");
+      res.redirect(`${appUrl}/?auth=error`);
+      return;
+    }
+
+    const msUser = (await graphRes.json()) as {
+      id: string;
+      displayName: string;
+      mail?: string;
+      userPrincipalName?: string;
+    };
+
+    const microsoftOid = msUser.id;
+    const email = (msUser.mail ?? msUser.userPrincipalName ?? "").trim().toLowerCase();
+    const fullName = (msUser.displayName ?? email.split("@")[0]).trim();
+
+    if (!microsoftOid || !email) {
+      req.log.error({ microsoftOid, email }, "[AUTH] Microsoft — missing OID or email");
+      res.redirect(`${appUrl}/?auth=error`);
+      return;
+    }
+
+    const { userName, isNewUser } = await lookupOrCreateMicrosoftUser(microsoftOid, email, fullName);
+    const sessionToken = await createSession(userName, email);
+
+    req.log.info({ userName, email, isNewUser }, "[AUTH] Microsoft sign-in — session created");
+    res.redirect(`${appUrl}/?token=${encodeURIComponent(sessionToken)}&name=${encodeURIComponent(userName)}&new=${isNewUser ? "1" : "0"}`);
+  } catch (err) {
+    req.log.error({ err }, "[AUTH] Microsoft callback error");
+    res.redirect(`${appUrl}/?auth=error`);
+  }
+});
+
+// POST /api/auth/microsoft/native — native app: receives a Microsoft access token
+// and verifies it against the Graph API. Used by apps that complete the MSAL flow
+// natively and exchange the result for a Winston session.
+router.post("/auth/microsoft/native", express.json({ limit: "1mb" }), async (req: Request, res: Response) => {
+  const { accessToken } = req.body as { accessToken?: string };
+  if (!accessToken || typeof accessToken !== "string") {
+    res.status(400).json({ error: "accessToken is required" });
+    return;
+  }
+
+  try {
+    const graphRes = await fetch("https://graph.microsoft.com/v1.0/me", {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (!graphRes.ok) {
+      res.status(401).json({ error: "Microsoft token validation failed" });
+      return;
+    }
+
+    const msUser = (await graphRes.json()) as {
+      id: string;
+      displayName: string;
+      mail?: string;
+      userPrincipalName?: string;
+    };
+
+    const microsoftOid = msUser.id;
+    const email = (msUser.mail ?? msUser.userPrincipalName ?? "").trim().toLowerCase();
+    const fullName = (msUser.displayName ?? email.split("@")[0]).trim();
+
+    if (!microsoftOid || !email) {
+      res.status(401).json({ error: "Microsoft token missing required identity fields" });
+      return;
+    }
+
+    const { userName, isNewUser } = await lookupOrCreateMicrosoftUser(microsoftOid, email, fullName);
+    const sessionToken = await createSession(userName, email);
+
+    req.log.info({ userName, email }, "[AUTH] /auth/microsoft/native — session created");
+    res.json({ sessionToken, userName, email, isNewUser });
+  } catch (err) {
+    req.log.error({ err }, "[AUTH] /auth/microsoft/native — error");
+    res.status(401).json({ error: "Microsoft authentication failed" });
+  }
+});
+
+// ── Apple Sign-In ──────────────────────────────────────────────────────────────
+// Web flow: Apple redirects back via POST with code + id_token.
+// Native flow: app completes Sign in with Apple and sends the identity token.
+// Requires APPLE_CLIENT_ID, APPLE_TEAM_ID, APPLE_KEY_ID, APPLE_PRIVATE_KEY env vars.
+
+router.get("/auth/apple", (req: Request, res: Response) => {
+  const clientId = process.env.APPLE_CLIENT_ID;
+  if (!clientId) {
+    res.status(503).json({ error: "Apple sign-in not configured — APPLE_CLIENT_ID missing" });
+    return;
+  }
+  const appUrl = getAppUrl(req.headers.host as string | undefined);
+  const redirect = `${appUrl}/api/auth/apple/callback`;
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirect,
+    response_type: "code id_token",
+    response_mode: "form_post",
+    scope: "name email",
+    state: "signin",
+  });
+  res.redirect(`https://appleid.apple.com/auth/authorize?${params}`);
+});
+
+// Apple sends a POST (form_post) to the callback
+router.post("/auth/apple/callback", express.urlencoded({ extended: true }), async (req: Request, res: Response) => {
+  const appUrl = getAppUrl(req.headers.host as string | undefined);
+  const { code, id_token, error, user: userJson } = req.body as {
+    code?: string;
+    id_token?: string;
+    error?: string;
+    user?: string;   // JSON string — only on first sign-in
+  };
+
+  if (error || (!code && !id_token)) {
+    res.redirect(`${appUrl}/?auth=error`);
+    return;
+  }
+
+  try {
+    const clientId = process.env.APPLE_CLIENT_ID ?? "";
+
+    // Verify the id_token using Apple's public JWKS
+    const payload = await appleSignin.verifyIdToken(id_token, {
+      audience: clientId,
+      ignoreExpiration: false,
+    }) as { sub: string; email?: string };
+
+    const appleSub = payload.sub;
+    const email = payload.email?.trim().toLowerCase() ?? null;
+
+    // Apple only provides name on the FIRST sign-in — it's in a JSON "user" form field
+    let fullName: string | null = null;
+    if (userJson) {
+      try {
+        const parsed = JSON.parse(userJson) as { name?: { firstName?: string; lastName?: string } };
+        const fn = parsed.name?.firstName ?? "";
+        const ln = parsed.name?.lastName ?? "";
+        fullName = [fn, ln].filter(Boolean).join(" ") || null;
+      } catch { /* ignore parse errors */ }
+    }
+
+    if (!appleSub) {
+      req.log.error({ appleSub }, "[AUTH] Apple — missing sub in id_token");
+      res.redirect(`${appUrl}/?auth=error`);
+      return;
+    }
+
+    const { userName, isNewUser } = await lookupOrCreateAppleUser(appleSub, email, fullName);
+    const sessionToken = await createSession(userName, email ?? `apple-${appleSub}@noemail`);
+
+    req.log.info({ userName, email, isNewUser }, "[AUTH] Apple sign-in — session created");
+    res.redirect(`${appUrl}/?token=${encodeURIComponent(sessionToken)}&name=${encodeURIComponent(userName)}&new=${isNewUser ? "1" : "0"}`);
+  } catch (err) {
+    req.log.error({ err }, "[AUTH] Apple callback error");
+    res.redirect(`${appUrl}/?auth=error`);
+  }
+});
+
+// POST /api/auth/apple/native — native app sends the Apple identity token
+// (from expo-apple-authentication or the iOS Sign in with Apple SDK)
+router.post("/auth/apple/native", express.json({ limit: "1mb" }), async (req: Request, res: Response) => {
+  const { identityToken, fullName: nameObj } = req.body as {
+    identityToken?: string;
+    fullName?: { givenName?: string; familyName?: string } | null;
+  };
+
+  if (!identityToken || typeof identityToken !== "string") {
+    res.status(400).json({ error: "identityToken is required" });
+    return;
+  }
+
+  try {
+    const clientId = process.env.APPLE_CLIENT_ID ?? "";
+
+    const payload = await appleSignin.verifyIdToken(identityToken, {
+      audience: clientId,
+      ignoreExpiration: false,
+    }) as { sub: string; email?: string };
+
+    const appleSub = payload.sub;
+    const email = payload.email?.trim().toLowerCase() ?? null;
+
+    let fullName: string | null = null;
+    if (nameObj?.givenName || nameObj?.familyName) {
+      fullName = [nameObj.givenName, nameObj.familyName].filter(Boolean).join(" ");
+    }
+
+    if (!appleSub) {
+      res.status(401).json({ error: "Apple token missing sub claim" });
+      return;
+    }
+
+    const { userName, isNewUser } = await lookupOrCreateAppleUser(appleSub, email, fullName);
+    const sessionToken = await createSession(userName, email ?? `apple-${appleSub}@noemail`);
+
+    req.log.info({ userName, email }, "[AUTH] /auth/apple/native — session created");
+    res.json({ sessionToken, userName, email, isNewUser });
+  } catch (err) {
+    req.log.error({ err }, "[AUTH] /auth/apple/native — error");
+    res.status(401).json({ error: "Apple authentication failed" });
   }
 });
 

@@ -13,6 +13,7 @@ import {
 } from "../push/pushManager.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
 import { logger } from "../lib/logger.js";
+import { authenticate, tryAuthenticate, NATIVE_USER } from "../auth/middleware.js";
 
 const router = Router();
 
@@ -41,8 +42,10 @@ router.post("/push/subscribe", async (req, res) => {
     "[PUSH STEP B1] Subscribe request received"
   );
 
-  // STEP B2 — Validate payload
-  const { endpoint, keys, userName = "David", deviceId } = body;
+  // STEP B2 — Resolve user: prefer auth header, fall back to body.userName (native compat)
+  const authedUser = await tryAuthenticate(req);
+  const { endpoint, keys, userName: bodyUserName, deviceId } = body;
+  const userName = authedUser ?? bodyUserName ?? NATIVE_USER;
 
   if (!endpoint) {
     logger.warn("[PUSH STEP B2] FAIL — Missing endpoint in request body");
@@ -107,7 +110,8 @@ router.delete("/push/subscribe", async (req, res) => {
 // GET /api/push/status — check subscription count for current user (diagnostic)
 router.get("/push/status", async (req, res) => {
   try {
-    const userName = (req.query.userName as string) ?? "David";
+    const authedUser = await tryAuthenticate(req);
+    const userName = authedUser ?? (req.query.userName as string) ?? NATIVE_USER;
     const subs = await getSubscriptions(userName);
     logger.info({ userName, count: subs.length }, "[PUSH] Status check");
     res.json({
@@ -124,7 +128,9 @@ router.get("/push/status", async (req, res) => {
 // POST /api/push/test — send an immediate test push to all subscriptions for the user
 router.post("/push/test", async (req, res) => {
   try {
-    const { userName = "David" } = req.body as { userName?: string };
+    const authedUser = await tryAuthenticate(req);
+    const { userName: bodyUserName } = req.body as { userName?: string };
+    const userName = authedUser ?? bodyUserName ?? NATIVE_USER;
     logger.info({ userName }, "[PUSH] Test push requested");
 
     const vapidKey = getVapidPublicKey();
@@ -169,11 +175,13 @@ router.post("/push/test", async (req, res) => {
 
 // POST /api/push/expo-token — register an Expo push token from the native app
 router.post("/push/expo-token", async (req, res) => {
-  const { expoPushToken, userName = "David", deviceId } = req.body as {
+  const authedUser = await tryAuthenticate(req);
+  const { expoPushToken, userName: bodyUserName, deviceId } = req.body as {
     expoPushToken?: string;
     userName?: string;
     deviceId?: string;
   };
+  const userName = authedUser ?? bodyUserName ?? NATIVE_USER;
 
   if (!expoPushToken || typeof expoPushToken !== "string") {
     res.status(400).json({ error: "Missing expoPushToken" });
@@ -215,7 +223,8 @@ router.delete("/push/expo-token", async (req, res) => {
 // GET /api/push/expo-status — diagnostic: count registered Expo tokens
 router.get("/push/expo-status", async (req, res) => {
   try {
-    const userName = (req.query.userName as string) ?? "David";
+    const authedUser = await tryAuthenticate(req);
+    const userName = authedUser ?? (req.query.userName as string) ?? NATIVE_USER;
     const tokens = await getExpoTokens(userName);
     res.json({ userName, tokenCount: tokens.length, tokens: tokens.map((t) => "…" + t.slice(-20)) });
   } catch (err) {

@@ -315,6 +315,60 @@ export const departureAlertLog = pgTable(
   (t) => [uniqueIndex("departure_alert_log_event_date").on(t.eventTitle, t.eventDate)]
 );
 
+// ── Microsoft Users ──────────────────────────────────────────────────────────
+// Maps Microsoft Object IDs (OID) to Winston usernames.
+export const microsoftUsers = pgTable(
+  "microsoft_users",
+  {
+    id: serial("id").primaryKey(),
+    microsoftOid: text("microsoft_oid").notNull(),
+    email: text("email").notNull(),
+    name: text("name"),
+    userName: text("user_name").notNull(),
+    picture: text("picture"),
+    createdAt: timestamp("created_at", { withTimezone: true }).default(sql`now()`),
+  },
+  (t) => [uniqueIndex("microsoft_users_oid").on(t.microsoftOid)]
+);
+
+// ── Apple Users ──────────────────────────────────────────────────────────────
+// Maps Apple subject identifiers to Winston usernames.
+export const appleUsers = pgTable(
+  "apple_users",
+  {
+    id: serial("id").primaryKey(),
+    appleSub: text("apple_sub").notNull(),
+    email: text("email"),      // Apple may withhold email after first sign-in
+    name: text("name"),        // Only available on first sign-in
+    userName: text("user_name").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).default(sql`now()`),
+  },
+  (t) => [uniqueIndex("apple_users_sub").on(t.appleSub)]
+);
+
+// ── User Integrations ────────────────────────────────────────────────────────
+// Stores OAuth tokens and metadata for every third-party service a user connects.
+// Providers: google_calendar | gmail | google_contacts |
+//            outlook_calendar | outlook_mail |
+//            garmin | google_fit | oura
+export const userIntegrations = pgTable(
+  "user_integrations",
+  {
+    id: serial("id").primaryKey(),
+    userName: text("user_name").notNull(),
+    provider: text("provider").notNull(),
+    accessToken: text("access_token"),
+    refreshToken: text("refresh_token"),
+    tokenExpiry: timestamp("token_expiry", { withTimezone: true }),
+    scopes: text("scopes"),
+    externalEmail: text("external_email"),  // the account email for this integration
+    metadata: jsonb("metadata"),            // provider-specific data (e.g. Garmin user id)
+    connectedAt: timestamp("connected_at", { withTimezone: true }).default(sql`now()`),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).default(sql`now()`),
+  },
+  (t) => [uniqueIndex("user_integrations_user_provider").on(t.userName, t.provider)]
+);
+
 // ── User Profiles (onboarding) ──────────────────────────────────────────────
 export const userProfiles = pgTable("user_profiles", {
   id: serial("id").primaryKey(),

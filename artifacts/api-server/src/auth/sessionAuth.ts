@@ -221,6 +221,114 @@ export async function lookupOrCreateGoogleUser(
   return { userName, isNewUser };
 }
 
+// ── Microsoft user lookup / creation ──────────────────────────────────────────
+
+export async function lookupOrCreateMicrosoftUser(
+  microsoftOid: string,
+  email: string,
+  name: string,
+  picture?: string
+): Promise<{ userName: string; isNewUser: boolean }> {
+  logger.info({ microsoftOid, email, name }, "[AUTH] lookupOrCreateMicrosoftUser — START");
+
+  const { rows: existing } = await query<{ user_name: string }>(
+    "SELECT user_name FROM microsoft_users WHERE microsoft_oid = $1",
+    [microsoftOid]
+  );
+
+  if (existing.length > 0) {
+    const userName = existing[0].user_name;
+    if (picture) {
+      await query("UPDATE microsoft_users SET picture = $2 WHERE microsoft_oid = $1", [microsoftOid, picture]).catch(() => {});
+    }
+    const { rows: profileRows } = await query<{ onboarding_completed: boolean }>(
+      "SELECT onboarding_completed FROM user_profiles WHERE user_name = $1 LIMIT 1",
+      [userName]
+    );
+    const hasCompletedProfile = profileRows.length > 0 && profileRows[0].onboarding_completed === true;
+    logger.info({ microsoftOid, userName, isNewUser: !hasCompletedProfile }, "[AUTH] lookupOrCreateMicrosoftUser — KNOWN user");
+    return { userName, isNewUser: !hasCompletedProfile };
+  }
+
+  // New Microsoft OID — try to find an existing account by email
+  const prior = await findExistingUserByEmail(email).catch(() => null);
+
+  let userName: string;
+  let isNewUser: boolean;
+  if (prior) {
+    userName = prior.userName;
+    isNewUser = prior.isNewUser;
+    logger.info({ microsoftOid, email, userName }, "[AUTH] lookupOrCreateMicrosoftUser — linked to EXISTING user");
+  } else {
+    const firstName = name.split(" ")[0] || "Friend";
+    userName = await generateUniqueUsername(firstName);
+    isNewUser = true;
+    logger.info({ microsoftOid, email, userName }, "[AUTH] lookupOrCreateMicrosoftUser — BRAND NEW user");
+  }
+
+  await query(
+    `INSERT INTO microsoft_users (microsoft_oid, email, name, user_name, picture)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (microsoft_oid) DO NOTHING`,
+    [microsoftOid, email, name, userName, picture ?? null]
+  );
+
+  logger.info({ microsoftOid, email, userName, isNewUser }, "[AUTH] lookupOrCreateMicrosoftUser — COMPLETE");
+  return { userName, isNewUser };
+}
+
+// ── Apple user lookup / creation ───────────────────────────────────────────────
+
+export async function lookupOrCreateAppleUser(
+  appleSub: string,
+  email: string | null,
+  name: string | null
+): Promise<{ userName: string; isNewUser: boolean }> {
+  logger.info({ appleSub, email, name }, "[AUTH] lookupOrCreateAppleUser — START");
+
+  const { rows: existing } = await query<{ user_name: string }>(
+    "SELECT user_name FROM apple_users WHERE apple_sub = $1",
+    [appleSub]
+  );
+
+  if (existing.length > 0) {
+    const userName = existing[0].user_name;
+    const { rows: profileRows } = await query<{ onboarding_completed: boolean }>(
+      "SELECT onboarding_completed FROM user_profiles WHERE user_name = $1 LIMIT 1",
+      [userName]
+    );
+    const hasCompletedProfile = profileRows.length > 0 && profileRows[0].onboarding_completed === true;
+    logger.info({ appleSub, userName, isNewUser: !hasCompletedProfile }, "[AUTH] lookupOrCreateAppleUser — KNOWN user");
+    return { userName, isNewUser: !hasCompletedProfile };
+  }
+
+  // New Apple sub — try to find an existing account by email (Apple provides it only once)
+  const prior = email ? await findExistingUserByEmail(email).catch(() => null) : null;
+
+  let userName: string;
+  let isNewUser: boolean;
+  if (prior) {
+    userName = prior.userName;
+    isNewUser = prior.isNewUser;
+    logger.info({ appleSub, email, userName }, "[AUTH] lookupOrCreateAppleUser — linked to EXISTING user");
+  } else {
+    const firstName = name?.split(" ")[0] ?? "Friend";
+    userName = await generateUniqueUsername(firstName);
+    isNewUser = true;
+    logger.info({ appleSub, email, userName }, "[AUTH] lookupOrCreateAppleUser — BRAND NEW user");
+  }
+
+  await query(
+    `INSERT INTO apple_users (apple_sub, email, name, user_name)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (apple_sub) DO NOTHING`,
+    [appleSub, email ?? null, name ?? null, userName]
+  );
+
+  logger.info({ appleSub, email, userName, isNewUser }, "[AUTH] lookupOrCreateAppleUser — COMPLETE");
+  return { userName, isNewUser };
+}
+
 // ── App sessions ──────────────────────────────────────────────────────────────
 
 export async function createSession(
