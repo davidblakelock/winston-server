@@ -5,8 +5,9 @@ import { broadcastToUser } from "../reminders/sseStore.js";
 
 const router = Router();
 
-// ── Auth helper ───────────────────────────────────────────────────────────────
+// ── Auth helper — supports both native API key and Bearer session token ────────
 async function getUserName(req: Request): Promise<string | null> {
+  if (req.headers["x-api-key"] === "winston-native-2026") return "David";
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith("Bearer ")) return null;
   const session = await validateSession(authHeader.slice(7));

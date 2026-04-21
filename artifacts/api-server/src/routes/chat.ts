@@ -715,11 +715,31 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   // ── Layer 1: Active context window ────────────────────────────────────────
   // Claude only sees the last 20 messages. The full transcript is persisted in
   // Supabase (chat_messages) and searchable on demand via "what did I say about X".
+  // If the client sends no history (e.g. native app fresh launch), hydrate from DB
+  // so Winston always has recent conversation context.
   const ACTIVE_CONTEXT_LIMIT = 20;
-  const history: Array<{ role: string; content: string }> =
+  let history: Array<{ role: string; content: string }> =
     Array.isArray(rawHistory) && rawHistory.length > ACTIVE_CONTEXT_LIMIT
       ? (rawHistory as Array<{ role: string; content: string }>).slice(-ACTIVE_CONTEXT_LIMIT)
       : (rawHistory as Array<{ role: string; content: string }>);
+
+  if (history.length === 0 && !isAutoGreeting) {
+    try {
+      const { rows: dbHistory } = await query<{ role: string; content: string }>(
+        `SELECT role, content FROM chat_messages
+         WHERE user_name = $1
+         ORDER BY created_at DESC, id DESC
+         LIMIT $2`,
+        [sessionUserName, ACTIVE_CONTEXT_LIMIT]
+      );
+      if (dbHistory.length > 0) {
+        history = dbHistory.reverse(); // chronological order
+        req.log.info({ count: history.length }, "[CHAT] History hydrated from DB (client sent none)");
+      }
+    } catch (err) {
+      req.log.warn({ err }, "[CHAT] DB history hydration failed — proceeding without history");
+    }
+  }
 
   let message: string;
   if (isAutoGreeting) {
@@ -785,10 +805,11 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isStoryCount = STORY_COUNT_PATTERN.test(message);
   const isProfileRequest = PROFILE_PATTERN.test(message);
   // IMPORTANT: Reminder requests (REMINDER_PATTERN) must NEVER route to Google Calendar.
-  // IMPORTANT: MODIFY is evaluated before CREATE — move/reschedule phrases always win over create.
-  // If both MODIFY and CREATE patterns match (e.g. "reschedule" contains "schedule"), MODIFY wins.
-  const isCalendarModify = !isMorningGreeting && !isReminderRequest && CALENDAR_MODIFY_PATTERN.test(message);
-  const isCalendarCreate = !isMorningGreeting && !isReminderRequest && !isCalendarModify && CALENDAR_CREATE_PATTERN.test(message);
+  // IMPORTANT: CREATE is evaluated before MODIFY — explicit "add/create/schedule/put on calendar"
+  // always wins, even if the event title contains a word like "move" or "transfer".
+  // MODIFY wins only when there is no create keyword (e.g. "reschedule", "move my appointment").
+  const isCalendarCreate = !isMorningGreeting && !isReminderRequest && CALENDAR_CREATE_PATTERN.test(message);
+  const isCalendarModify = !isMorningGreeting && !isReminderRequest && !isCalendarCreate && CALENDAR_MODIFY_PATTERN.test(message);
   const isCalendarDelete = !isMorningGreeting && !isReminderRequest && CALENDAR_DELETE_PATTERN.test(message);
   const isCalendarWriteOp = isCalendarCreate || isCalendarModify || isCalendarDelete;
   const pendingDel = getPendingDelete();
