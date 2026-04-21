@@ -452,6 +452,42 @@ router.get("/auth/status", async (req: Request, res: Response) => {
   }
 });
 
+// GET /api/auth/onboarding-status — returns whether the current user has completed onboarding
+router.get("/auth/onboarding-status", async (req: Request, res: Response) => {
+  try {
+    const apiKey = req.headers["x-api-key"];
+    const authHeader = req.headers.authorization;
+    let userName: string | null = null;
+
+    if (apiKey === "winston-native-2026") {
+      userName = "David";
+    } else if (authHeader?.startsWith("Bearer ")) {
+      const session = await validateSession(authHeader.slice(7));
+      if (session) userName = session.userName;
+    }
+
+    if (!userName) {
+      res.status(401).json({ error: "authentication_required" });
+      return;
+    }
+
+    const { rows } = await query<{ onboarding_completed: boolean }>(
+      "SELECT onboarding_completed FROM user_profiles WHERE user_name = $1 LIMIT 1",
+      [userName]
+    );
+
+    if (rows.length === 0) {
+      res.json({ onboardingCompleted: false, userName });
+      return;
+    }
+
+    res.json({ onboardingCompleted: rows[0].onboarding_completed === true, userName });
+  } catch (err) {
+    req.log.error({ err }, "[AUTH] /auth/onboarding-status — error");
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
 // GET /api/auth/providers — returns which sign-in/integration providers are configured
 // No auth required — used by the frontend to show/hide provider buttons.
 router.get("/auth/providers", (_req: Request, res: Response) => {
