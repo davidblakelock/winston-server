@@ -17,6 +17,7 @@ import contactsRouter from "./contacts";
 import listsRouter from "./lists";
 import weatherRouter from "./weather";
 import medicationsRouter from "./medications";
+import garminRouter from "./garmin";
 
 const router: IRouter = Router();
 
@@ -38,5 +39,6 @@ router.use(contactsRouter);
 router.use(listsRouter);
 router.use(weatherRouter);
 router.use(medicationsRouter);
+router.use(garminRouter);
 
 export default router;

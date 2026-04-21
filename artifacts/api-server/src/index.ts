@@ -27,6 +27,7 @@ import { initConcertsTable, startVenueMonitorScheduler } from "./morning/venueMo
 import { initBriefingStoriesTable } from "./morning/storyDedup";
 import { addProfileItem } from "./profile/profileManager";
 import { ensureContactsTable } from "./google/contacts";
+import { startGarminScheduler } from "./garmin/garminScheduler";
 
 const rawPort = process.env["PORT"];
 
@@ -119,6 +120,7 @@ app.listen(port, async (err) => {
   startConversationStarterScheduler();
   startDallasProactiveScheduler();
   startVenueMonitorScheduler();
+  startGarminScheduler();
 
   // Seed David's music preferences into profile_items so they persist and
   // can be referenced in any conversation naturally.

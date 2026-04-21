@@ -27,6 +27,7 @@ import {
 } from "./storyDedup.js";
 import { logger } from "../lib/logger.js";
 import { getBriefingPreferences, buildBriefingPrefsBlock } from "../briefingPreferences/briefingPreferencesManager.js";
+import { getStoredGarminData, formatGarminForBriefing } from "../garmin/garminService.js";
 
 // ── Departure times for calendar events ───────────────────────────────────────
 // Calculates leave-by time for each event that has a location.
@@ -365,6 +366,8 @@ function buildBriefingInstruction(city: string, savedVenues: string[]): string {
 
   SECTION 7 — BILLS DUE SOON: ONLY if a bill appears in the [VERIFIED — Bills Database — Due in Next 3 Days] block. Name the bill and amount. If that block is empty or absent, SKIP THIS SECTION ENTIRELY — do not mention bills at all, do not say nothing is due.
 
+  SECTION 9 — HEALTH SNAPSHOT: ONLY if a [VERIFIED — Garmin Connect — Yesterday's Health Data] block is present. Weave the data naturally into 2–3 sentences — casual and warm, like a friend who noticed. Lead with sleep if it's notable. Mention workout if one happened. Include resting HR or HRV if it's interesting (unusually high or low). Examples: "You got a solid 7.5 hours last night — looks like a good one, with nearly two hours of deep sleep." or "Nice workout yesterday — 85 minutes of pickleball, that's a big one." or "Your resting heart rate was 52 — solid." Keep it brief. SKIP entirely if no Garmin block is present.
+
   SECTION 8 — NEWS: A structured news sweep using the data in [VERIFIED — Web Search News — ...] block. Deliver in this exact format — each story on its own lines:
 
     From [Headlines — bold title + one sentence summary each]: Read each story EXACTLY as formatted — bold title on one line, then the summary sentence on the next line. Do not merge them. Do not change the format. Read all 8 headlines. These already cover 8 distinct categories (world, US politics, business, tech, science, sports, ${city} local, wildcard) — do NOT reorder or drop any.
@@ -539,6 +542,9 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       fetchDailyMotivation().catch(() => ""),
     ]);
 
+    // Fetch Garmin health data (yesterday's stored data — no live API call needed)
+    const garminData = await getStoredGarminData(userName).catch(() => null);
+
     // Collect secondary weather results (likely already resolved)
     const secondaryWeatherResults = await secondaryWeatherPromise;
     const secondaryWeatherEntries: SecondaryWeatherEntry[] = validSecondaryLocs.reduce<SecondaryWeatherEntry[]>(
@@ -707,7 +713,9 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     const preamble = getCurrentDateTimeBlock() + "\n" + corePrompt + profileContextBlock +
       memoryBlock + dynamicProfileBlock + prefsBlock + notesBlock + weatherBlock;
 
-    const suffix = tvMorningBlock + sportsBlock + billsMorningBlock + datesBlock +
+    const garminBlock = garminData ? formatGarminForBriefing(garminData) : "";
+
+    const suffix = garminBlock + tvMorningBlock + sportsBlock + billsMorningBlock + datesBlock +
       sundaySummaryBlock + pickleballMorningBlock + recFollowUpBlock + motivationContextBlock +
       dallasEventsBlock + dedupedVenueConcertsBlock + dedupedNewsBlock + buildBriefingInstruction(primaryCity, localCtx.venues ?? []);
 

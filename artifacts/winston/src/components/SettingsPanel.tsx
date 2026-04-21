@@ -145,6 +145,14 @@ export default function SettingsPanel({
 
   const [providers, setProviders] = useState<{ google: boolean; microsoft: boolean; apple: boolean }>({ google: true, microsoft: false, apple: false });
 
+  const [garminConnected, setGarminConnected] = useState(false);
+  const [garminEmail, setGarminEmail] = useState<string | null>(null);
+  const [garminLastSync, setGarminLastSync] = useState<string | null>(null);
+  const [garminFormEmail, setGarminFormEmail] = useState("");
+  const [garminFormPassword, setGarminFormPassword] = useState("");
+  const [garminConnecting, setGarminConnecting] = useState(false);
+  const [garminError, setGarminError] = useState<string | null>(null);
+
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -174,6 +182,62 @@ export default function SettingsPanel({
       })
       .catch(() => {});
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const token = localStorage.getItem("winston_session_token") ?? "";
+    const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : { "x-api-key": "winston-native-2026" };
+    fetch(`${CHAT_BASE}/api/garmin/status`, { headers })
+      .then((r) => r.json())
+      .then((d: { connected?: boolean; garminEmail?: string; lastSync?: string | null }) => {
+        setGarminConnected(d.connected ?? false);
+        setGarminEmail(d.garminEmail ?? null);
+        setGarminLastSync(d.lastSync ?? null);
+      })
+      .catch(() => {});
+  }, [isOpen]);
+
+  const handleGarminConnect = useCallback(async () => {
+    if (!garminFormEmail || !garminFormPassword) return;
+    setGarminConnecting(true);
+    setGarminError(null);
+    try {
+      const token = localStorage.getItem("winston_session_token") ?? "";
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : { "x-api-key": "winston-native-2026" }),
+      };
+      const res = await fetch(`${CHAT_BASE}/api/garmin/connect`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ email: garminFormEmail, password: garminFormPassword }),
+      });
+      const data = await res.json() as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) {
+        setGarminError(data.error ?? "Connection failed — check your credentials");
+      } else {
+        setGarminConnected(true);
+        setGarminEmail(garminFormEmail);
+        setGarminFormEmail("");
+        setGarminFormPassword("");
+      }
+    } catch {
+      setGarminError("Connection failed — please try again");
+    } finally {
+      setGarminConnecting(false);
+    }
+  }, [garminFormEmail, garminFormPassword]);
+
+  const handleGarminDisconnect = useCallback(async () => {
+    try {
+      const token = localStorage.getItem("winston_session_token") ?? "";
+      const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : { "x-api-key": "winston-native-2026" };
+      await fetch(`${CHAT_BASE}/api/garmin/disconnect`, { method: "POST", headers });
+      setGarminConnected(false);
+      setGarminEmail(null);
+      setGarminLastSync(null);
+    } catch { /* silent */ }
+  }, []);
 
   const stopAudio = useCallback(() => {
     audioRef.current?.pause();
@@ -761,6 +825,76 @@ export default function SettingsPanel({
                   </Button>
                 ) : (
                   <p className="text-xs text-muted-foreground/50">Configure Apple Developer credentials to enable.</p>
+                )}
+              </div>
+
+              {/* Garmin */}
+              <div className="rounded-xl border border-white/8 bg-white/3 p-4 transition-colors">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-7 h-7 rounded-lg bg-[#007DC5]/20 flex items-center justify-center flex-shrink-0">
+                      <svg viewBox="0 0 24 24" className="h-4 w-4 fill-[#007DC5]" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/>
+                      </svg>
+                    </div>
+                    <div>
+                      <p className="text-sm text-foreground font-medium">Garmin Connect</p>
+                      <p className="text-xs text-muted-foreground">Sleep, steps, heart rate & workouts</p>
+                    </div>
+                  </div>
+                  {garminConnected ? (
+                    <span className="text-xs text-green-400 font-medium px-2 py-0.5 rounded-full bg-green-400/10 border border-green-400/20">Connected</span>
+                  ) : (
+                    <span className="text-xs text-muted-foreground/60 font-medium px-2 py-0.5 rounded-full bg-white/5 border border-white/10">Not connected</span>
+                  )}
+                </div>
+
+                {garminConnected ? (
+                  <div className="space-y-2">
+                    <p className="text-xs text-muted-foreground">
+                      Connected as <span className="text-foreground/80">{garminEmail}</span>
+                      {garminLastSync ? ` · Last synced ${new Date(garminLastSync).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}` : " · Syncing daily at 6 AM"}
+                    </p>
+                    <Button
+                      variant="outline"
+                      className="w-full h-8 text-xs text-red-400 border-red-400/20 hover:bg-red-400/10"
+                      onClick={handleGarminDisconnect}
+                    >
+                      Disconnect Garmin
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <p className="text-xs text-muted-foreground mb-2">
+                      Enter your Garmin Connect credentials to share health data with {currentCompanionName}.
+                    </p>
+                    <input
+                      type="email"
+                      placeholder="Garmin Connect email"
+                      value={garminFormEmail}
+                      onChange={(e) => setGarminFormEmail(e.target.value)}
+                      className="w-full h-8 px-3 text-xs rounded-lg bg-white/5 border border-white/10 text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-white/20"
+                    />
+                    <input
+                      type="password"
+                      placeholder="Password"
+                      value={garminFormPassword}
+                      onChange={(e) => setGarminFormPassword(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") void handleGarminConnect(); }}
+                      className="w-full h-8 px-3 text-xs rounded-lg bg-white/5 border border-white/10 text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-white/20"
+                    />
+                    {garminError && (
+                      <p className="text-xs text-red-400">{garminError}</p>
+                    )}
+                    <Button
+                      className="w-full h-8 text-xs"
+                      onClick={handleGarminConnect}
+                      disabled={garminConnecting || !garminFormEmail || !garminFormPassword}
+                    >
+                      {garminConnecting ? <Loader2 className="h-3 w-3 animate-spin mr-1.5" /> : null}
+                      {garminConnecting ? "Connecting…" : "Connect Garmin"}
+                    </Button>
+                  </div>
                 )}
               </div>
 
