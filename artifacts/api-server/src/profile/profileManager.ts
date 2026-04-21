@@ -238,7 +238,7 @@ function mapRow(r: {
 }
 
 // Format all dynamic profile items for injection into system prompt
-export function formatProfileForContext(items: ProfileItem[]): string {
+export function formatProfileForContext(items: ProfileItem[], userName = "the user"): string {
   if (items.length === 0) return "";
 
   const byCategory = new Map<string, ProfileItem[]>();
@@ -267,9 +267,9 @@ export function formatProfileForContext(items: ProfileItem[]): string {
   }
 
   return (
-    `\n\n[David's Dynamic Profile — items he has added himself]\n` +
+    `\n\n[${userName}'s Saved Profile Items — added by the user directly]\n` +
     lines.join("\n") +
-    `\nThese supplement the static profile above. Reference them naturally.`
+    `\nThese supplement the profile context above. Reference them naturally.`
   );
 }
 

@@ -14,6 +14,7 @@ import {
   deleteCalendarEvent,
   findEventByKeywords,
   findEventForUpdate,
+  type CalendarEvent,
 } from "../google/calendar.js";
 import {
   parseCalendarOperation,
@@ -162,6 +163,76 @@ import { populateCalendarSyncState } from "../departure/calendarSyncScheduler.js
 import { logBriefingStories } from "../morning/storyDedup.js";
 import { createReminder } from "../reminders/reminderManager.js";
 import { broadcastToUser } from "../reminders/sseStore.js";
+
+// ── Calendar location context helpers ──────────────────────────────────────
+// Short-lived per-user cache of today's events so we don't hit the Google API
+// on every single message turn.
+const _todayEventsCache = new Map<string, { events: CalendarEvent[]; fetchedAt: number }>();
+const TODAY_EVENTS_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+async function getTodayEventsCached(userName: string): Promise<CalendarEvent[] | null> {
+  const cached = _todayEventsCache.get(userName);
+  if (cached && Date.now() - cached.fetchedAt < TODAY_EVENTS_TTL_MS) {
+    return cached.events;
+  }
+  const events = await fetchTodayEvents(userName).catch(() => null);
+  if (events) _todayEventsCache.set(userName, { events, fetchedAt: Date.now() });
+  return events;
+}
+
+const _LOCATION_STOP_WORDS = new Set([
+  "what", "where", "when", "have", "that", "this", "with", "from", "your", "their",
+  "there", "going", "about", "today", "tonight", "will", "would", "should", "could",
+  "does", "want", "need", "make", "take", "good", "great", "like", "know", "just",
+  "much", "some", "more", "also", "very", "than", "then", "they", "them", "been",
+  "were", "said", "each", "which", "time", "into", "look", "come", "over", "think",
+  "back", "after", "well", "even", "only", "because", "before", "here", "tell",
+  "help", "give", "still", "such", "down", "long", "right", "away", "again",
+]);
+
+/** Return today's events whose summary or location shares a significant word with the message. */
+function findCalendarLocationMatches(message: string, events: CalendarEvent[]): CalendarEvent[] {
+  const msgWords = message
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length >= 4 && !_LOCATION_STOP_WORDS.has(w));
+
+  if (msgWords.length === 0) return [];
+
+  const matches: CalendarEvent[] = [];
+  for (const event of events) {
+    const eventText = `${event.summary} ${event.location ?? ""} ${event.description ?? ""}`.toLowerCase();
+    if (msgWords.some((w) => eventText.includes(w))) {
+      matches.push(event);
+    }
+  }
+  return matches;
+}
+
+function buildCalendarLocationBlock(events: CalendarEvent[]): string {
+  const lines = events.map((e) => {
+    const time = e.allDay
+      ? "all day"
+      : e.startIso
+        ? new Date(e.startIso).toLocaleTimeString("en-US", {
+            hour: "numeric",
+            minute: "2-digit",
+            timeZone: "America/Chicago",
+          })
+        : "";
+    const loc = e.location ? ` — at ${e.location}` : "";
+    const desc = e.description ? ` (${e.description.slice(0, 100)})` : "";
+    return `  • ${e.summary}${time ? ` at ${time}` : ""}${loc}${desc}`;
+  });
+  return (
+    `\n\n[Calendar Context — Today's Matching Events]\n` +
+    `The following event(s) from today's calendar appear related to this message. ` +
+    `Use this as context when answering — only state details explicitly shown below:\n` +
+    lines.join("\n") +
+    `\nIf the user is asking about one of these events, reference this data directly.`
+  );
+}
 
 const router: IRouter = Router();
 
@@ -651,12 +722,12 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   // Fetch recent memories, dynamic profile, and user profile concurrently
   const [recentMemories, allProfileItems, profilePlaces, userProfile] = await Promise.all([
     getRecentMemories(7).catch(() => []),
-    getProfileItems().catch(() => []),
-    getProfilePlaces().catch(() => []),
+    getProfileItems(undefined, sessionUserName).catch(() => []),
+    getProfilePlaces(sessionUserName).catch(() => []),
     getProfile(sessionUserName).catch(() => null),
   ]);
   const memoryBlock = formatMemoriesForContext(recentMemories);
-  const dynamicProfileBlock = formatProfileForContext(allProfileItems);
+  const dynamicProfileBlock = formatProfileForContext(allProfileItems, sessionUserName);
 
   // Use dynamic system prompt if onboarding was completed for a new user
   const corePrompt =
@@ -1163,6 +1234,26 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   // ── Sleep reminder ─────────────────────────────────────────────────────────
   if (sleepReminderFired) {
     systemPrompt += `\n\n[Sleep Reminder — One Time Tonight]\nIt's past 11pm. David is still up and chatting. At the right moment in your response — gently, warmly, and briefly note the time. Something like "David, it's getting late — you might want to think about winding down soon." Keep it to one sentence. Never preachy. Don't repeat this if he continues talking.`;
+  }
+
+  // ── Calendar location context (proactive) ──────────────────────────────────
+  // When the message mentions a place, venue, or restaurant that appears on
+  // today's calendar, inject those events as context without the user having
+  // to ask about their schedule explicitly.
+  if (!isCalendarRequest && !isMorningGreeting && !isEmailRequest) {
+    try {
+      const todayEvts = await getTodayEventsCached(sessionUserName);
+      if (todayEvts && todayEvts.length > 0) {
+        const locationMatches = findCalendarLocationMatches(message, todayEvts);
+        if (locationMatches.length > 0) {
+          systemPrompt += buildCalendarLocationBlock(locationMatches);
+          req.log.info(
+            { matchCount: locationMatches.length, summaries: locationMatches.map((e) => e.summary) },
+            "[CalendarCtx] Injected matching today events into prompt"
+          );
+        }
+      }
+    } catch { /* non-fatal */ }
   }
 
   if (isEmailRequest || isCalendarRequest) {

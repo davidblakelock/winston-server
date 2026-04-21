@@ -338,6 +338,7 @@ export function buildProfileContext(
   const interests = (rawData.interests ?? []) as string[];
   const sportsTeams = (rawData.sportsTeams ?? []) as string[];
   const music = (rawData.music ?? []) as string[];
+  const foodPreferences = (rawData.foodPreferences ?? []) as string[];
 
   // ── About section ──────────────────────────────────────────────────────────
   const aboutLines: string[] = [];
@@ -422,6 +423,7 @@ export function buildProfileContext(
   if (sportsTeams.length) interestParts.push(`• Sports: ${sportsTeams.join(", ")}`);
   if (music.length) interestParts.push(`• Music: ${music.join(", ")}`);
   if (restaurants.length) interestParts.push(`• Favourite restaurants: ${restaurants.join(", ")}`);
+  if (foodPreferences.length) interestParts.push(`• Dietary preferences & food notes: ${foodPreferences.join(", ")}`);
   if (interests.length) interestParts.push(`• Hobbies & interests: ${interests.join(", ")}`);
 
   // ── Memory book section (only if a daughter is in the people list) ─────────
