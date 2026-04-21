@@ -13,6 +13,7 @@ import {
 import { addProfileItem } from "../profile/profileManager.js";
 import { validateSession } from "../auth/sessionAuth.js";
 import { query } from "../db.js";
+import { fetchFamilySuggestions } from "../google/contacts.js";
 
 const router: IRouter = Router();
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -286,6 +287,31 @@ router.post("/onboarding/chat", async (req, res) => {
 });
 
 // ── POST /api/onboarding/complete ─────────────────────────────────────────────
+// ── Suggested people from Google Contacts (onboarding Scene 5) ───────────────
+router.get("/onboarding/suggested-people", async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith("Bearer ")) {
+    res.status(401).json({ error: "authentication_required" });
+    return;
+  }
+  const session = await validateSession(authHeader.slice(7));
+  if (!session) {
+    res.status(401).json({ error: "session_expired" });
+    return;
+  }
+  const { userName } = session;
+  try {
+    const profile = await getProfile(userName);
+    const userFullName = profile?.name ?? undefined;
+    const suggestions = await fetchFamilySuggestions(userName, userFullName);
+    req.log.info({ userName, count: suggestions.length }, "[OnboardingSuggest] Family suggestions returned");
+    res.json({ suggestions });
+  } catch (err) {
+    req.log.warn({ err, userName }, "[OnboardingSuggest] Failed — returning empty");
+    res.json({ suggestions: [] });
+  }
+});
+
 router.post("/onboarding/complete", async (req, res) => {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith("Bearer ")) {

@@ -5,7 +5,7 @@ import {
   useCallback,
   KeyboardEvent,
 } from "react";
-import { Send, Mic, MicOff, Loader2, Play, Check } from "lucide-react";
+import { Send, Mic, MicOff, Loader2, Play, Check, X, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -50,6 +50,16 @@ interface CollectedData {
   sportsTeams?: string[];
   music?: string[];
   interests?: string[];
+}
+
+interface SuggestedPerson {
+  name: string;
+  relationship: string;
+  email?: string;
+  phone?: string;
+  resourceName?: string;
+  confidence: "high" | "medium";
+  source: "relation" | "family_group" | "same_name";
 }
 
 // ─── Voice recorder hook ────────────────────────────────────────────────────
@@ -189,6 +199,13 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
   const [selectedVoice, setSelectedVoice] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [voiceAudioRef] = useState<{ current: HTMLAudioElement | null }>({ current: null });
+  // ── Scene 5 people suggestions from Google Contacts ──
+  const [suggestedPeople, setSuggestedPeople] = useState<SuggestedPerson[]>([]);
+  const [dismissedIdxs, setDismissedIdxs] = useState<Set<number>>(new Set());
+  const [confirmedIdxs, setConfirmedIdxs] = useState<Set<number>>(new Set());
+  const [editingIdx, setEditingIdx] = useState<number | null>(null);
+  const [editedRelationships, setEditedRelationships] = useState<Record<number, string>>({});
+  const suggestFetchedRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -206,6 +223,17 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
       .then((d) => setVoices(d.voices ?? []))
       .catch(() => {});
   }, []);
+
+  // Scene 5: fetch Google Contacts family suggestions
+  useEffect(() => {
+    if (scene === 5 && !suggestFetchedRef.current) {
+      suggestFetchedRef.current = true;
+      fetch(`${API}/api/onboarding/suggested-people`, { headers: getAuthHeaders() })
+        .then((r) => r.json() as Promise<{ suggestions: SuggestedPerson[] }>)
+        .then((d) => { if (d.suggestions?.length > 0) setSuggestedPeople(d.suggestions); })
+        .catch(() => {});
+    }
+  }, [scene]);
 
   const playAudio = useCallback((base64: string, mimeType = "audio/mpeg") => {
     audioRef.current?.pause();
@@ -389,6 +417,31 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
     [collectedData, scene, sendMessage, voiceAudioRef]
   );
 
+  const handleConfirmSuggestion = useCallback(
+    (idx: number) => {
+      const person = suggestedPeople[idx];
+      if (!person) return;
+      const relationship = editedRelationships[idx] ?? person.relationship;
+      setCollectedData((prev) => ({
+        ...prev,
+        people: [...(prev.people ?? []), { name: person.name, relationship }],
+      }));
+      setConfirmedIdxs((prev) => new Set([...prev, idx]));
+      setEditingIdx(null);
+    },
+    [suggestedPeople, editedRelationships]
+  );
+
+  const handleDismissSuggestion = useCallback((idx: number) => {
+    setDismissedIdxs((prev) => new Set([...prev, idx]));
+    if (editingIdx === idx) setEditingIdx(null);
+  }, [editingIdx]);
+
+  const handleEditSuggestion = useCallback((idx: number, currentRelationship: string) => {
+    setEditingIdx(idx);
+    setEditedRelationships((prev) => ({ ...prev, [idx]: currentRelationship }));
+  }, []);
+
   const handleSkip = useCallback(async () => {
     try {
       await fetch(`${API}/api/onboarding/complete`, {
@@ -405,6 +458,12 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
   const isRecording = recordingState === "recording";
   const isTranscribing = recordingState === "transcribing";
   const showVoiceCards = scene === 2 && voices.length > 0 && !selectedVoice;
+
+  // Scene 5: visible suggestion cards (not dismissed)
+  const visibleSuggestions = suggestedPeople
+    .map((p, i) => ({ ...p, idx: i }))
+    .filter((p) => !dismissedIdxs.has(p.idx));
+  const showSuggestionCards = scene === 5 && visibleSuggestions.length > 0;
 
   return (
     <div className="flex flex-col h-screen bg-zinc-950 text-zinc-100">
@@ -545,6 +604,115 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
           {previewError && (
             <p className="text-xs text-amber-400/80 text-center mt-1 px-2">{previewError}</p>
           )}
+        </div>
+      )}
+
+      {/* ── Scene 5: People suggestions from Google Contacts ── */}
+      {showSuggestionCards && (
+        <div className="flex-shrink-0 px-4 pb-2">
+          <div className="max-w-xl mx-auto">
+            <div className="flex items-center justify-between mb-2 px-1">
+              <p className="text-xs text-zinc-500 font-medium">
+                From your Google Contacts
+              </p>
+              <button
+                onClick={() => setDismissedIdxs(new Set(suggestedPeople.map((_, i) => i)))}
+                className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors underline underline-offset-2"
+              >
+                Skip all
+              </button>
+            </div>
+            <div className="space-y-2 max-h-64 overflow-y-auto pr-1" style={{ scrollbarWidth: "thin", scrollbarColor: "#27272a transparent" }}>
+              {visibleSuggestions.map((person) => {
+                const isConfirmed = confirmedIdxs.has(person.idx);
+                const isEditing = editingIdx === person.idx;
+                const displayRelationship = editedRelationships[person.idx] ?? person.relationship;
+                const initial = person.name.trim()[0]?.toUpperCase() ?? "?";
+
+                return (
+                  <div
+                    key={person.idx}
+                    className={`rounded-xl border px-3 py-2.5 transition-all duration-200 ${
+                      isConfirmed
+                        ? "bg-emerald-950/30 border-emerald-800/40"
+                        : "bg-zinc-800/70 border-zinc-700/50"
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      {/* Avatar */}
+                      <div className={`h-8 w-8 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-semibold ${
+                        isConfirmed ? "bg-emerald-800/60 text-emerald-200" : "bg-zinc-700 text-zinc-300"
+                      }`}>
+                        {isConfirmed ? <Check className="w-4 h-4" /> : initial}
+                      </div>
+
+                      {/* Name + relationship */}
+                      <div className="flex-1 min-w-0">
+                        <div className={`text-sm font-medium truncate ${isConfirmed ? "text-emerald-300" : "text-zinc-100"}`}>
+                          {person.name}
+                        </div>
+                        {isEditing ? (
+                          <input
+                            className="mt-0.5 text-xs bg-zinc-700 text-zinc-100 rounded px-2 py-0.5 border border-indigo-600 w-full max-w-[160px] focus:outline-none"
+                            value={displayRelationship}
+                            autoFocus
+                            onChange={(e) =>
+                              setEditedRelationships((prev) => ({ ...prev, [person.idx]: e.target.value }))
+                            }
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") handleConfirmSuggestion(person.idx);
+                              if (e.key === "Escape") setEditingIdx(null);
+                            }}
+                            placeholder="e.g. daughter, spouse…"
+                          />
+                        ) : (
+                          <div className="flex items-center gap-1.5 mt-0.5">
+                            <span className={`text-xs px-1.5 py-0.5 rounded-full border ${
+                              isConfirmed
+                                ? "text-emerald-400 bg-emerald-950/50 border-emerald-800/50"
+                                : "text-indigo-300 bg-indigo-950/50 border-indigo-800/50"
+                            }`}>
+                              {displayRelationship}
+                            </span>
+                            {person.source === "same_name" && !isConfirmed && (
+                              <span className="text-[10px] text-zinc-600">same name</span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Action buttons */}
+                      {!isConfirmed && (
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          <button
+                            onClick={() => handleEditSuggestion(person.idx, displayRelationship)}
+                            title="Edit relationship"
+                            className="h-6 w-6 rounded-lg flex items-center justify-center text-zinc-500 hover:text-zinc-300 hover:bg-zinc-700 transition-colors"
+                          >
+                            <Pencil className="w-3 h-3" />
+                          </button>
+                          <button
+                            onClick={() => handleConfirmSuggestion(person.idx)}
+                            title="Add this person"
+                            className="h-6 w-6 rounded-lg flex items-center justify-center text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/50 transition-colors"
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleDismissSuggestion(person.idx)}
+                            title="Remove suggestion"
+                            className="h-6 w-6 rounded-lg flex items-center justify-center text-zinc-600 hover:text-zinc-400 hover:bg-zinc-700 transition-colors"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </div>
       )}
 
