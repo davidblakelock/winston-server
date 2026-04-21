@@ -192,7 +192,7 @@ function buildContextualWeatherBlock(dallas: CachedWeather, secondary: Secondary
   const signals: string[] = [];
   // Severe weather always surfaces regardless of time
   if (isStormy) signals.push(`SEVERE WEATHER — THUNDERSTORMS: mention this clearly`);
-  else if (isSnowy) signals.push(`${dallas.condition} — unusual for Dallas, affects roads`);
+  else if (isSnowy) signals.push(`${dallas.condition} — unusual for ${dallas.city}, affects roads`);
 
   // Activity-specific signals only shown if morning window hasn't passed (before 10am CT)
   if (!morningActivityPassed) {
@@ -327,7 +327,12 @@ function getCurrentDateTimeBlock(): string {
   );
 }
 
-const MASTER_BRIEFING_INSTRUCTION = `
+function buildBriefingInstruction(city: string, savedVenues: string[]): string {
+  const cityUpper = city.toUpperCase();
+  const venueList = savedVenues.length > 0
+    ? savedVenues.join(", ")
+    : "your saved venues";
+  return `
 
   [MORNING BRIEFING — DELIVER ALL 16 SECTIONS IN THIS EXACT ORDER]
 
@@ -339,9 +344,9 @@ const MASTER_BRIEFING_INSTRUCTION = `
 
   SECTION 1 — GREETING: "Good morning, David" followed by one warm personal sentence naming the day of the week. One sentence total.
 
-  SECTION 2 — WEATHER TODAY: Deliver a natural, conversational weather summary using the [VERIFIED — Tomorrow.io Weather API — Dallas] block. Include: current temperature and feels-like, today's high and low, conditions, rain chance, humidity, wind speed, and UV index. Keep it to 2–3 sentences — warm and informative, like a friend who checked the forecast. If UV is high (8+), mention it. If there is an Air Quality & Pollen block, weave pollen and AQI into the same breath — one concise sentence. Only skip this section if the Dallas weather block is missing entirely.
+  SECTION 2 — WEATHER TODAY: Deliver a natural, conversational weather summary using the [VERIFIED — Tomorrow.io Weather API — ${city}] block. Include: current temperature and feels-like, today's high and low, conditions, rain chance, humidity, wind speed, and UV index. Keep it to 2–3 sentences — warm and informative, like a friend who checked the forecast. If UV is high (8+), mention it. If there is an Air Quality & Pollen block, weave pollen and AQI into the same breath — one concise sentence. Only skip this section if the [VERIFIED — Tomorrow.io Weather API — ${city}] block is missing entirely.
 
-  SECTION 3 — FORECAST: Deliver a brief overview of the coming days using the Forecast data in the [VERIFIED — Tomorrow.io Weather API — Dallas] block. Mention any days with notable changes — rain, big temperature swings, heat. Keep it to 2 sentences max. Then, for every [VERIFIED — Tomorrow.io Weather API — <city> (for <name>)] block present, always mention that person's weather — one natural sentence per person, every single time, regardless of conditions. Example: "Over in Knoxville, Olivia's looking at a mild 68 with some cloud cover." These are family members — David always wants to know how their weather looks. Never skip a family member city. Skip this section only if no forecast data is available at all.
+  SECTION 3 — FORECAST: Deliver a brief overview of the coming days using the Forecast data in the [VERIFIED — Tomorrow.io Weather API — ${city}] block. Mention any days with notable changes — rain, big temperature swings, heat. Keep it to 2 sentences max. Then, for every [VERIFIED — Tomorrow.io Weather API — <city> (for <name>)] block present, always mention that person's weather — one natural sentence per person, every single time, regardless of conditions. Example: "Over in Knoxville, Olivia's looking at a mild 68 with some cloud cover." These are family members — David always wants to know how their weather looks. Never skip a family member city. Skip this section only if no forecast data is available at all.
 
   SECTION 4 — POLLEN / AIR QUALITY: SKIP THIS SECTION — pollen and AQI are already covered in Section 2.
 
@@ -354,21 +359,21 @@ const MASTER_BRIEFING_INSTRUCTION = `
 
   SECTION 8 — NEWS: A structured news sweep using the data in [VERIFIED — Web Search News — ...] block. Deliver in this exact format — each story on its own lines:
 
-    From [Headlines — bold title + one sentence summary each]: Read each story EXACTLY as formatted — bold title on one line, then the summary sentence on the next line. Do not merge them. Do not change the format. Read all 8 headlines. These already cover 8 distinct categories (world, US politics, business, tech, science, sports, Dallas local, wildcard) — do NOT reorder or drop any.
+    From [Headlines — bold title + one sentence summary each]: Read each story EXACTLY as formatted — bold title on one line, then the summary sentence on the next line. Do not merge them. Do not change the format. Read all 8 headlines. These already cover 8 distinct categories (world, US politics, business, tech, science, sports, ${city} local, wildcard) — do NOT reorder or drop any.
 
     From [Entertainment & Pop Culture] (if present): One item only. Bold title on one line, summary sentence on the next. Skip if absent.
 
     From [Watercooler Story] (if present): Introduce warmly — "oh, and here's one to share later —" then the story in two sentences max.
 
-    FORMATTING RULES: Each headline is on its own line, bold. Each summary sentence is on the next line. A blank line between stories. Never merge headlines and summaries. Never use "in other news" or "moving on." Short transitions between sections only: "also —", "and —", "meanwhile —". NEVER repeat a topic from Section 10 (Sports) — that section already covers Rangers and Cowboys game results.
+    FORMATTING RULES: Each headline is on its own line, bold. Each summary sentence is on the next line. A blank line between stories. Never merge headlines and summaries. Never use "in other news" or "moving on." Short transitions between sections only: "also —", "and —", "meanwhile —". NEVER repeat a topic from Section 10 (Sports) — that section already covers sports game results.
 
-  SECTION 10 — SPORTS: Rangers and Cowboys results from the last 24 hours only. If no games were played, SKIP THIS SECTION ENTIRELY — do not say no games were played.
+  SECTION 10 — SPORTS: Sports results from the last 24 hours only (teams from the user's profile). If no games were played, SKIP THIS SECTION ENTIRELY — do not say no games were played.
 
-  SECTION 11 — LOCAL DALLAS: ALWAYS INCLUDE THIS SECTION — it is never skipped. The [What's Happening in Dallas] block is always present below.
+  SECTION 11 — LOCAL ${cityUpper}: ALWAYS INCLUDE THIS SECTION — it is never skipped. The [What's Happening in ${city}] block is always present below.
     • If the block contains real items: deliver 1-2 items conversationally, one sentence each. Prioritize restaurant openings, music events at David's venues, and neighborhood news.
-    • If the block says "No new local events found": say exactly this and nothing more — "Nothing new on the Dallas events front this morning." Do not apologize, do not elaborate.
+    • If the block says "No new local events found": say exactly this and nothing more — "Nothing new on the ${city} events front this morning." Do not apologize, do not elaborate.
 
-  SECTION 12 — MUSIC EVENTS: Upcoming concerts at David's saved venues that match his taste — Kessler, Granada, Dos Equis Pavilion, AT&T Performing Arts Center, Klyde Warren Park, Dallas Arboretum, Meyerson. Use the venue concerts block. If nothing upcoming or nothing found, skip this section entirely.
+  SECTION 12 — MUSIC EVENTS: Upcoming concerts at David's saved venues that match his taste — ${venueList}. Use the venue concerts block. If nothing upcoming or nothing found, skip this section entirely.
 
   TV SHOWS — STRICT RULE: ONLY mention a TV show if the [TV Shows — New Episodes] block is present in this prompt. If that block is absent, never reference any TV show, series, episode, or streaming content — not Shrinking, not Lincoln Lawyer, not Friends & Neighbors, not any show from David's profile. No exceptions. TV is data-driven only.
 
@@ -392,6 +397,7 @@ const MASTER_BRIEFING_INSTRUCTION = `
 
   IMPORTANT: The data blocks earlier in this system prompt contain the raw information. This instruction tells you how to weave it all together. Run all 16 sections in order. Skip only where explicitly told to. Follow this instruction over any other formatting guidance in the data blocks.
   `;
+}
 
 export async function preFetchMorningBriefing(userName: string): Promise<void> {
   // Capture the CT date NOW, before any async work. setCachedBriefing receives this
@@ -652,7 +658,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     // inject a fallback marker so Claude delivers the "no events" line rather than silently skipping.
     const dallasEventsBlock = dedupedDallasBlock.trim().length > 0
       ? dedupedDallasBlock
-      : `\n\n[What's Happening in Dallas]\nNo new local events found for today. In Section 11, say exactly: "Nothing new on the Dallas events front this morning." Do not skip this section silently.`;
+      : `\n\n[What's Happening in ${primaryCity}]\nNo new local events found for today. In Section 11, say exactly: "Nothing new on the ${primaryCity} events front this morning." Do not skip this section silently.`;
 
     // morningWorkoutDone is always false at pre-generation time (5 AM) — no workout
     // has completed yet. This is computed from live calendar at delivery time if needed.
@@ -695,7 +701,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
 
     const suffix = tvMorningBlock + sportsBlock + billsMorningBlock + datesBlock +
       sundaySummaryBlock + pickleballMorningBlock + recFollowUpBlock + motivationContextBlock +
-      dallasEventsBlock + dedupedVenueConcertsBlock + dedupedNewsBlock + MASTER_BRIEFING_INSTRUCTION;
+      dallasEventsBlock + dedupedVenueConcertsBlock + dedupedNewsBlock + buildBriefingInstruction(primaryCity, localCtx.venues ?? []);
 
     // Log which static sections have data
     const sectionLog: Record<string, boolean | string> = {

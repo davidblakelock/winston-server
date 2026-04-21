@@ -140,6 +140,24 @@ async function checkDepartureAlerts(): Promise<void> {
 
     const companionName = await getCompanionName();
 
+    // Build a Google Maps navigation URL from home to the event location.
+    // Tapping the push notification opens turn-by-turn navigation directly.
+    const mapsUrl =
+      `https://www.google.com/maps/dir/?api=1` +
+      `&origin=${encodeURIComponent(homeAddress)}` +
+      `&destination=${encodeURIComponent(location)}` +
+      `&travelmode=driving`;
+
+    // A short, push-notification-friendly body (drive time + event time).
+    const eventTimeStr = start.toLocaleTimeString("en-US", {
+      timeZone: TZ,
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
+    const roundedMins = Math.round(drive.durationMinutes / 5) * 5;
+    const pushBody = `~${roundedMins} min drive · ${eventTimeStr}${location.length < 60 ? ` · ${location}` : ""}`;
+
     broadcast("reminder", {
       id: `departure-${event.summary}-${Date.now()}`,
       userName: "David",
@@ -149,9 +167,10 @@ async function checkDepartureAlerts(): Promise<void> {
     });
 
     await sendPushToAll({
-      title: `🚗 Time to Leave — ${companionName}`,
-      body: message,
+      title: `🚗 Leave now — ${event.summary}`,
+      body: pushBody,
       tag: `departure-${event.summary}`,
+      url: mapsUrl,
       requireInteraction: true,
     }).catch(() => {});
 
