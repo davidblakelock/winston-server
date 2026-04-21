@@ -1,5 +1,5 @@
 import { google } from "googleapis";
-import { getAuthClient } from "./oauth.js";
+import { getAuthClient, getAuthClientForUser } from "./oauth.js";
 import { query } from "../db.js";
 
 export interface EmailSummary {
@@ -253,11 +253,11 @@ export async function updateEmailLastChecked(): Promise<void> {
  * descending (newest first). Both code paths use this so behaviour is identical.
  * @param since  If provided, only return emails received after this timestamp.
  */
-export async function fetchAndSummarizeEmails(maxResults = 15, since?: Date): Promise<EmailSummary[] | null> {
+export async function fetchAndSummarizeEmails(maxResults = 15, since?: Date, userName?: string): Promise<EmailSummary[] | null> {
   const fetchStart = new Date();
-  console.log(`[Gmail] fetchAndSummarizeEmails called at ${fetchStart.toISOString()} — maxResults=${maxResults}`);
+  console.log(`[Gmail] fetchAndSummarizeEmails called at ${fetchStart.toISOString()} — maxResults=${maxResults}${userName ? ` user=${userName}` : ""}`);
 
-  const auth = await getAuthClient();
+  const auth = userName ? await getAuthClientForUser(userName) : await getAuthClient();
   if (!auth) {
     console.warn("[Gmail] No auth client — Google not connected");
     return null;

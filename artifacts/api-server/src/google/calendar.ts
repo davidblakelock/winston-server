@@ -1,5 +1,10 @@
 import { google } from "googleapis";
-import { getAuthClient } from "./oauth.js";
+import { getAuthClient, getAuthClientForUser } from "./oauth.js";
+
+async function resolveAuthClient(userName?: string) {
+  if (userName) return getAuthClientForUser(userName);
+  return getAuthClient();
+}
 
 export interface CalendarEvent {
   id: string;
@@ -197,8 +202,8 @@ async function fetchEventsFromAllCalendars(
   return allEvents;
 }
 
-export async function fetchTodayEvents(): Promise<CalendarEvent[] | null> {
-  const auth = await getAuthClient();
+export async function fetchTodayEvents(userName?: string): Promise<CalendarEvent[] | null> {
+  const auth = await resolveAuthClient(userName);
   if (!auth) return null;
 
   const calendar = google.calendar({ version: "v3", auth });
@@ -215,8 +220,8 @@ export async function fetchTodayEvents(): Promise<CalendarEvent[] | null> {
   return events.filter((event) => !isEventInPast(event));
 }
 
-export async function fetchTomorrowEvents(): Promise<CalendarEvent[] | null> {
-  const auth = await getAuthClient();
+export async function fetchTomorrowEvents(userName?: string): Promise<CalendarEvent[] | null> {
+  const auth = await resolveAuthClient(userName);
   if (!auth) return null;
 
   const calendar = google.calendar({ version: "v3", auth });
@@ -235,8 +240,8 @@ export async function fetchTomorrowEvents(): Promise<CalendarEvent[] | null> {
   // Note: do NOT filter with isEventInPast — all tomorrow events are future events
 }
 
-export async function fetchWeekEvents(filterPast = true): Promise<CalendarEvent[] | null> {
-  const auth = await getAuthClient();
+export async function fetchWeekEvents(filterPast = true, userName?: string): Promise<CalendarEvent[] | null> {
+  const auth = await resolveAuthClient(userName);
   if (!auth) return null;
 
   const calendar = google.calendar({ version: "v3", auth });

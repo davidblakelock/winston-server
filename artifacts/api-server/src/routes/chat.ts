@@ -790,8 +790,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
     req.log.info("Fetching live email and calendar for morning briefing delivery");
     const [liveEmails, allCalendarEvents] = await Promise.all([
-      fetchAndSummarizeEmails(15).catch(() => null),
-      fetchWeekEvents(false).catch(() => null),
+      fetchAndSummarizeEmails(15, undefined, sessionUserName).catch(() => null),
+      fetchWeekEvents(false, sessionUserName).catch(() => null),
     ]);
 
     // Filter calendar to events that have NOT yet started (start time is in the future)
@@ -1166,8 +1166,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       const [emails, events] = await Promise.all([
         // User-initiated check: no timestamp filter — always return the last 15 unread emails.
         // The delta filter (emailLastChecked) is for background sync only, not conversational queries.
-        isEmailRequest ? fetchAndSummarizeEmails(15, undefined).catch(() => null) : Promise.resolve(undefined),
-        isCalendarRequest ? fetchWeekEvents().catch(() => null) : Promise.resolve(undefined),
+        isEmailRequest ? fetchAndSummarizeEmails(15, undefined, sessionUserName).catch(() => null) : Promise.resolve(undefined),
+        isCalendarRequest ? fetchWeekEvents(true, sessionUserName).catch(() => null) : Promise.resolve(undefined),
       ]);
 
       // Stamp last-checked so background sync knows when the user last looked
@@ -1216,7 +1216,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       systemPrompt += `\n\n[Calendar Delete Cancelled]\nDavid chose NOT to delete "${pd.summary}". Acknowledge warmly — e.g. "Got it, keeping your ${pd.summary} on the calendar."`;
     }
   } else if (isCalendarWriteOp) {
-    const hasWriteScope = await hasCalendarWriteScope().catch(() => false);
+    const hasWriteScope = await hasCalendarWriteScope(sessionUserName).catch(() => false);
     if (!hasWriteScope) {
       systemPrompt +=
         `\n\n[Calendar Write — Insufficient Permission]\nDavid's current Google connection only has read-only calendar access. To create, edit, or delete events, he needs to reconnect Google to grant the updated permission. Tell him this warmly — e.g. "I'd love to add that for you, but I need a quick update to my Google permissions first. Just tap the Google button in the header to reconnect — it only takes a second."`;
@@ -1378,7 +1378,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     // ── Fetch tomorrow's calendar events for wind-down preview ──────────────
     let tomorrowCalendarBlock = "";
     try {
-      const tomorrowEvts = await fetchTomorrowEvents();
+      const tomorrowEvts = await fetchTomorrowEvents(sessionUserName);
       if (tomorrowEvts && tomorrowEvts.length > 0) {
         const lines = tomorrowEvts.map((e) => {
           const time = e.allDay ? "all day" : `${e.start}${e.end && e.end !== e.start ? ` – ${e.end}` : ""}`;

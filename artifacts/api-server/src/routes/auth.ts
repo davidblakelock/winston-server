@@ -119,29 +119,35 @@ router.get("/auth/callback", async (req: Request, res: Response) => {
       "[AUTH] /auth/callback — lookupOrCreateGoogleUser returned"
     );
 
-    // ── Upsert google_auth (OAuth tokens for calendar/gmail access) ───────────
-    req.log.info({ userName, email }, "[AUTH] /auth/callback — upserting google_auth row");
-    await query(
-      `INSERT INTO google_auth (user_name, email, access_token, refresh_token, token_expiry, scope)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT (user_name) DO UPDATE SET
-         email         = EXCLUDED.email,
-         access_token  = EXCLUDED.access_token,
-         refresh_token = COALESCE(EXCLUDED.refresh_token, google_auth.refresh_token),
-         token_expiry  = EXCLUDED.token_expiry,
-         scope         = EXCLUDED.scope,
-         updated_at    = NOW()`,
-      [
-        userName,
-        email,
-        tokens.access_token ?? null,
-        tokens.refresh_token ?? null,
-        tokens.expiry_date ? new Date(tokens.expiry_date) : null,
-        SCOPES.join(" "),
-      ]
-    );
-
-    req.log.info({ email, userName, isSignIn, isNewUser }, "[AUTH] /auth/callback — google_auth upserted");
+    // ── Upsert google_auth ONLY for full-scope connect flow ───────────────────
+    // Sign-in (?signin=1) uses identity-only scopes — never write those tokens
+    // to google_auth, which is reserved for calendar/gmail integration tokens.
+    // Overwriting with identity-only tokens would silently break calendar/gmail.
+    if (!isSignIn) {
+      req.log.info({ userName, email }, "[AUTH] /auth/callback — upserting google_auth row (connect flow)");
+      await query(
+        `INSERT INTO google_auth (user_name, email, access_token, refresh_token, token_expiry, scope)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (user_name) DO UPDATE SET
+           email         = EXCLUDED.email,
+           access_token  = EXCLUDED.access_token,
+           refresh_token = COALESCE(EXCLUDED.refresh_token, google_auth.refresh_token),
+           token_expiry  = EXCLUDED.token_expiry,
+           scope         = EXCLUDED.scope,
+           updated_at    = NOW()`,
+        [
+          userName,
+          email,
+          tokens.access_token ?? null,
+          tokens.refresh_token ?? null,
+          tokens.expiry_date ? new Date(tokens.expiry_date) : null,
+          tokens.scope ?? SCOPES.join(" "),
+        ]
+      );
+      req.log.info({ email, userName, isNewUser }, "[AUTH] /auth/callback — google_auth upserted (connect)");
+    } else {
+      req.log.info({ email, userName }, "[AUTH] /auth/callback — sign-in flow, skipping google_auth upsert");
+    }
 
     if (isSignIn) {
       // ── Create app session and redirect frontend with token ─────────────────

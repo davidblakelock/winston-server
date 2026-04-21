@@ -29,20 +29,30 @@ const PREFERRED_ACCOUNT_ORDER = `
     updated_at DESC NULLS LAST
 `;
 
-export async function hasCalendarWriteScope(): Promise<boolean> {
-  const { rows } = await query<{ scope: string | null }>(
-    `SELECT scope FROM google_auth ${PREFERRED_ACCOUNT_ORDER} LIMIT 1`
-  );
+export async function hasCalendarWriteScope(userName?: string): Promise<boolean> {
+  const { rows } = userName
+    ? await query<{ scope: string | null }>(
+        `SELECT scope FROM google_auth WHERE user_name = $1 LIMIT 1`,
+        [userName]
+      )
+    : await query<{ scope: string | null }>(
+        `SELECT scope FROM google_auth ${PREFERRED_ACCOUNT_ORDER} LIMIT 1`
+      );
   if (!rows.length || !rows[0].scope) return false;
   return rows[0].scope
     .split(" ")
     .some((s) => s === "https://www.googleapis.com/auth/calendar");
 }
 
-export async function hasContactsScope(): Promise<boolean> {
-  const { rows } = await query<{ scope: string | null }>(
-    `SELECT scope FROM google_auth ${PREFERRED_ACCOUNT_ORDER} LIMIT 1`
-  );
+export async function hasContactsScope(userName?: string): Promise<boolean> {
+  const { rows } = userName
+    ? await query<{ scope: string | null }>(
+        `SELECT scope FROM google_auth WHERE user_name = $1 LIMIT 1`,
+        [userName]
+      )
+    : await query<{ scope: string | null }>(
+        `SELECT scope FROM google_auth ${PREFERRED_ACCOUNT_ORDER} LIMIT 1`
+      );
   if (!rows.length || !rows[0].scope) return false;
   return rows[0].scope
     .split(" ")
