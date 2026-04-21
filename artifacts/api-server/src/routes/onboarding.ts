@@ -12,6 +12,7 @@ import {
 } from "../onboarding/onboardingManager.js";
 import { addProfileItem } from "../profile/profileManager.js";
 import { validateSession } from "../auth/sessionAuth.js";
+import { query } from "../db.js";
 
 const router: IRouter = Router();
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -261,7 +262,10 @@ router.post("/onboarding/chat", async (req, res) => {
     if (isComplete) {
       try {
         await completeOnboarding(userName);
-        await saveProfileItemsFromOnboarding(updatedData);
+        await Promise.all([
+          saveProfileItemsFromOnboarding(updatedData, userName),
+          seedListsFromOnboarding(updatedData, userName),
+        ]);
       } catch (err) {
         req.log.error({ err }, "Failed to complete onboarding");
       }
@@ -299,7 +303,10 @@ router.post("/onboarding/complete", async (req, res) => {
   try {
     if (collectedData) await upsertProfile(collectedData, userName);
     await completeOnboarding(userName);
-    await saveProfileItemsFromOnboarding(collectedData ?? {});
+    await Promise.all([
+      saveProfileItemsFromOnboarding(collectedData ?? {}, userName),
+      seedListsFromOnboarding(collectedData ?? {}, userName),
+    ]);
     res.json({ success: true });
   } catch (err) {
     req.log.error({ err }, "Failed to complete onboarding");
@@ -453,38 +460,71 @@ function computeNextScene(
   }
 }
 
-async function saveProfileItemsFromOnboarding(data: CollectedData): Promise<void> {
+async function saveProfileItemsFromOnboarding(data: CollectedData, userName = "David"): Promise<void> {
   const ops: Array<Promise<unknown>> = [];
 
   // Save people
   for (const person of data.people ?? []) {
     ops.push(
-      addProfileItem("people", person.name, person.city ?? person.relationship).catch(() => {})
+      addProfileItem("people", person.name, person.city ?? person.relationship, userName).catch(() => {})
     );
   }
 
   // Save places
   for (const place of data.places ?? []) {
     ops.push(
-      addProfileItem("places", place.name, place.address ?? null).catch(() => {})
+      addProfileItem("places", place.name, place.address ?? null, userName).catch(() => {})
     );
   }
 
   // Save shows
   for (const show of data.shows ?? []) {
-    ops.push(addProfileItem("shows", show, null).catch(() => {}));
+    ops.push(addProfileItem("shows", show, null, userName).catch(() => {}));
   }
 
   // Save restaurants
   for (const r of data.restaurants ?? []) {
-    ops.push(addProfileItem("restaurants", r, null).catch(() => {}));
+    ops.push(addProfileItem("restaurants", r, null, userName).catch(() => {}));
   }
 
   // Save interests + sports + music + news topics
   for (const interest of [...(data.interests ?? []), ...(data.sportsTeams ?? []), ...(data.music ?? []), ...(data.newsTopics ?? [])]) {
-    ops.push(addProfileItem("interests", interest, null).catch(() => {}));
+    ops.push(addProfileItem("interests", interest, null, userName).catch(() => {}));
   }
 
+  await Promise.all(ops);
+}
+
+// Seed named list_items entries from onboarding data so the user's preferences
+// are immediately available as queryable lists (e.g. "what's on my favorite restaurants list?").
+// Uses idempotent INSERT — safe to call multiple times.
+async function seedListsFromOnboarding(data: CollectedData, userName: string): Promise<void> {
+  const UPSERT_SQL = `
+    INSERT INTO list_items (user_name, list_name, item_text)
+    SELECT $1, $2, $3
+    WHERE NOT EXISTS (
+      SELECT 1 FROM list_items
+      WHERE user_name = $1
+        AND list_name = $2
+        AND lower(item_text) = lower($3)
+    )`;
+
+  type ListSeed = { listName: string; items: string[] };
+
+  const seeds: ListSeed[] = [
+    { listName: "favorite restaurants", items: (data.restaurants ?? []).filter(Boolean) },
+    { listName: "tv shows",             items: (data.shows ?? []).filter(Boolean) },
+    { listName: "music",                items: (data.music ?? []).filter(Boolean) },
+    { listName: "interests",            items: (data.interests ?? []).filter(Boolean) },
+    { listName: "sports teams",         items: (data.sportsTeams ?? []).filter(Boolean) },
+  ];
+
+  const ops: Array<Promise<unknown>> = [];
+  for (const { listName, items } of seeds) {
+    for (const item of items) {
+      ops.push(query(UPSERT_SQL, [userName, listName, item.trim()]).catch(() => {}));
+    }
+  }
   await Promise.all(ops);
 }
 
