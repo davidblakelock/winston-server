@@ -102,14 +102,13 @@ export async function connectGarmin(
     await gc.getUserProfile(); // verify the session is live
 
     await query(
-      `INSERT INTO garmin_credentials (user_name, garmin_email, garmin_password, connected_at, updated_at)
-       VALUES ($1, $2, $3, NOW(), NOW())
+      `INSERT INTO garmin_credentials (user_name, garmin_email, garmin_password, connected_at)
+       VALUES ($1, $2, $3, NOW())
        ON CONFLICT (user_name) DO UPDATE SET
          garmin_email    = EXCLUDED.garmin_email,
          garmin_password = EXCLUDED.garmin_password,
          connected_at    = NOW(),
-         sync_error      = NULL,
-         updated_at      = NOW()`,
+         sync_error      = NULL`,
       [userName, garminEmail, garminPassword]
     );
 
@@ -117,7 +116,15 @@ export async function connectGarmin(
     return { ok: true };
   } catch (err) {
     evictSession(cacheKey);
-    const msg = err instanceof Error ? err.message : "Authentication failed";
+    const raw = err instanceof Error ? err.message : "Authentication failed";
+    // Detect Garmin-side rate limiting and return a clear user-facing message
+    const isRateLimit = /429|rate.limit|too many/i.test(raw);
+    const isWrongCreds = /401|403|invalid.*password|incorrect|wrong.*pass/i.test(raw);
+    const msg = isRateLimit
+      ? "Garmin is temporarily rate limiting sign-ins — please wait a few minutes and try again"
+      : isWrongCreds
+      ? "Incorrect Garmin Connect email or password"
+      : "Could not connect to Garmin Connect — please try again";
     logger.warn({ userName, garminEmail, err }, "[Garmin] Connection failed");
     return { ok: false, error: msg };
   }
@@ -148,7 +155,7 @@ export async function fetchAndStoreGarminData(
   } catch (err) {
     evictSession(cacheKey);
     await query(
-      `UPDATE garmin_credentials SET sync_error = $1, updated_at = NOW() WHERE user_name = $2`,
+      `UPDATE garmin_credentials SET sync_error = $1 WHERE user_name = $2`,
       [(err instanceof Error ? err.message : "Login failed"), userName]
     );
     return null;
@@ -296,7 +303,7 @@ export async function fetchAndStoreGarminData(
 
     // Update last_sync
     await query(
-      `UPDATE garmin_credentials SET last_sync = NOW(), sync_error = NULL, updated_at = NOW() WHERE user_name = $1`,
+      `UPDATE garmin_credentials SET last_sync = NOW(), sync_error = NULL WHERE user_name = $1`,
       [userName]
     );
 
@@ -328,7 +335,7 @@ export async function fetchAndStoreGarminData(
     evictSession(cacheKey);
     const errMsg = err instanceof Error ? err.message : "Fetch failed";
     await query(
-      `UPDATE garmin_credentials SET sync_error = $1, updated_at = NOW() WHERE user_name = $2`,
+      `UPDATE garmin_credentials SET sync_error = $1 WHERE user_name = $2`,
       [errMsg, userName]
     );
     logger.error({ userName, err }, "[Garmin] Fetch error");
