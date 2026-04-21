@@ -4,6 +4,7 @@ import { query } from "./db";
 import { startScheduler } from "./reminders/scheduler";
 import { startWinddownScheduler } from "./winddown/winddownScheduler";
 import { ensureWinddownTables } from "./winddown/winddownManager";
+import { ensureBriefingPreferencesTable } from "./briefingPreferences/briefingPreferencesManager";
 import { ensureUsersTable } from "./auth/passwordAuth";
 import { ensureMemoryTable } from "./memory/memoryManager";
 import { ensureProfileTable } from "./profile/profileManager";
@@ -51,6 +52,7 @@ app.listen(port, async (err) => {
 
   try {
     await ensureWinddownTables();
+    await ensureBriefingPreferencesTable();
     await ensureMemoryTable();
     await ensureProfileTable();
     await ensureOnboardingTable();

@@ -158,6 +158,17 @@ import { validateSession } from "../auth/sessionAuth.js";
 import { authenticate, tryAuthenticate } from "../auth/middleware.js";
 import { normalizeTtsText } from "../lib/ttsNormalize.js";
 import { getCachedBriefing, setCachedBriefing, getStaticBriefingContext } from "../morning/briefingCache.js";
+import {
+  BRIEFING_PREF_PATTERN,
+  extractBriefingPrefOp,
+  upsertBriefingPreference,
+  getBriefingPreferences,
+  buildBriefingPrefsBlock,
+  confirmationMessage as briefingPrefConfirm,
+  isStoryQuestionsEnabled,
+  isJournalPromptsEnabled,
+  type BriefingPreference,
+} from "../briefingPreferences/briefingPreferencesManager.js";
 import { preFetchMorningBriefing, buildCalendarDepartureTimes } from "../morning/briefingPregenerate.js";
 import { populateCalendarSyncState } from "../departure/calendarSyncScheduler.js";
 import { logBriefingStories } from "../morning/storyDedup.js";
@@ -720,14 +731,16 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   }
 
   // Fetch recent memories, dynamic profile, and user profile concurrently
-  const [recentMemories, allProfileItems, profilePlaces, userProfile] = await Promise.all([
+  const [recentMemories, allProfileItems, profilePlaces, userProfile, briefingPrefs] = await Promise.all([
     getRecentMemories(7).catch(() => []),
     getProfileItems(undefined, sessionUserName).catch(() => []),
     getProfilePlaces(sessionUserName).catch(() => []),
     getProfile(sessionUserName).catch(() => null),
+    getBriefingPreferences(sessionUserName).catch(() => [] as BriefingPreference[]),
   ]);
   const memoryBlock = formatMemoriesForContext(recentMemories);
   const dynamicProfileBlock = formatProfileForContext(allProfileItems, sessionUserName);
+  const prefsBlock = buildBriefingPrefsBlock(briefingPrefs, sessionUserName);
 
   // Use dynamic system prompt if onboarding was completed for a new user
   const corePrompt =
@@ -740,7 +753,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     (userProfile?.rawData ?? {}) as CollectedData
   );
 
-  let systemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + profileContextBlock + memoryBlock + dynamicProfileBlock;
+  let systemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + profileContextBlock + memoryBlock + dynamicProfileBlock + prefsBlock;
   let reminderConfirmation = "";
 
   const isMorningGreeting = MORNING_PATTERN.test(message);
@@ -783,6 +796,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isMedRequest = isMedTaken || isMedAdd || isMedList || isMedRemove;
   const isSportsRequest = !isMorningGreeting && SPORTS_PATTERN.test(message);
   const isMarketsRequest = !isMorningGreeting && MARKETS_PATTERN.test(message);
+  const isBriefingPrefRequest = !isMorningGreeting && BRIEFING_PREF_PATTERN.test(message);
   const isBillAdd = !isMorningGreeting && BILL_ADD_PATTERN.test(message);
   const isBillList = !isMorningGreeting && BILL_LIST_PATTERN.test(message);
   const isBillRemove = !isMorningGreeting && BILL_REMOVE_PATTERN.test(message);
@@ -1236,6 +1250,23 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     systemPrompt += `\n\n[Sleep Reminder — One Time Tonight]\nIt's past 11pm. David is still up and chatting. At the right moment in your response — gently, warmly, and briefly note the time. Something like "David, it's getting late — you might want to think about winding down soon." Keep it to one sentence. Never preachy. Don't repeat this if he continues talking.`;
   }
 
+  // ── Briefing / wind-down preference change ───────────────────────────────────
+  if (isBriefingPrefRequest) {
+    try {
+      const op = await extractBriefingPrefOp(message);
+      if (op) {
+        await upsertBriefingPreference(sessionUserName, op.key, op.value);
+        const confirm = briefingPrefConfirm(op.key, op.value);
+        systemPrompt +=
+          `\n\n[Briefing Preference Saved]\nThe user's preference has been saved: "${op.key}" → "${op.value}".\n` +
+          `Reply with ONLY this confirmation — warm, brief, nothing more: "${confirm}"`;
+        req.log.info({ key: op.key, value: op.value, userName: sessionUserName }, "[BriefingPref] Saved");
+      }
+    } catch (err) {
+      req.log.warn({ err }, "[BriefingPref] Failed to save preference");
+    }
+  }
+
   // ── Calendar location context (proactive) ──────────────────────────────────
   // When the message mentions a place, venue, or restaurant that appears on
   // today's calendar, inject those events as context without the user having
@@ -1514,16 +1545,23 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       }
     } catch { /* non-fatal */ }
 
+    const _wdJournalOff = briefingPrefs.some(p => p.prefKey === "journal" && p.prefValue === "off");
+    const _wdStoryOff = briefingPrefs.some(p => p.prefKey === "story_questions" && p.prefValue === "off");
+    const _wdStep1 = _wdStoryOff
+      ? `1. CHECK-IN — Ask David warmly how his day went and what the highlight was.`
+      : `1. OLIVIA — Ask the memory question from [Tonight's Memory Question]. Frame it warmly: "I'd love to capture something for Olivia — [question]."`;
+    const _wdTopicCount = (_wdJournalOff ? 4 : 5);
+    const _wdN = (base: number) => (_wdJournalOff ? base - 1 : base);
     systemPrompt +=
       `\n\n[Evening Wind-Down — ACTIVE]\n` +
-      `Five topics. One per message. Keep each to one or two sentences. ` +
+      `${_wdTopicCount} topics. One per message. Keep each to one or two sentences. ` +
       `Total word count for the entire session must stay under 150 words. ` +
       `Feel like a warm nightcap — personal and unhurried, not a checklist.\n\n` +
-      `1. OLIVIA — Ask the memory question from [Tonight's Memory Question]. Frame it warmly: "I'd love to capture something for Olivia — [question]."\n` +
-      `2. JOURNAL — Ask: "Anything from today you'd like to capture in your journal?"\n` +
-      `3. TOMORROW CALENDAR — One sentence only. Name the one or two most important events from [Tomorrow's Calendar] — just the event and time, no detail. If pickleball is tomorrow, mention it.` + (tomorrowPickleballNote ? ` ${tomorrowPickleballNote.trim()}` : "") + `\n` +
-      `4. TOMORROW WEATHER — One sentence only. Tomorrow morning's temperature and conditions from [Weather — Dallas]. No forecast beyond tomorrow morning. Example: "Tomorrow's starting around 68 and clear."\n` +
-      `5. CLOSE — Sign off with one warm, confident closing line that has some character — like James Bond signing off for the night. Not "Sleep well." Not generic. Something specific to David and the day. End there. Do not ask any more questions.\n\n` +
+      `${_wdStep1}\n` +
+      (!_wdJournalOff ? `2. JOURNAL — Ask: "Anything from today you'd like to capture in your journal?"\n` : ``) +
+      `${_wdN(3)}. TOMORROW CALENDAR — One sentence only. Name the one or two most important events from [Tomorrow's Calendar] — just the event and time, no detail. If pickleball is tomorrow, mention it.` + (tomorrowPickleballNote ? ` ${tomorrowPickleballNote.trim()}` : "") + `\n` +
+      `${_wdN(4)}. TOMORROW WEATHER — One sentence only. Tomorrow morning's temperature and conditions from [Weather — Dallas]. No forecast beyond tomorrow morning. Example: "Tomorrow's starting around 68 and clear."\n` +
+      `${_wdN(5)}. CLOSE — Sign off with one warm, confident closing line that has some character — like James Bond signing off for the night. Not "Sleep well." Not generic. Something specific to David and the day. End there. Do not ask any more questions.\n\n` +
       `RULES: No medication reminders. No music suggestions. No phone reminders. No checklists. One topic per message. Never ask a question in the closing line.\n` +
       tomorrowWeatherBlock +
       tomorrowCalendarBlock;
@@ -1613,8 +1651,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       req.log.info({ prompt: pendingPrompt.substring(0, 80), words: wordCount, questionId: pendingQuestionId }, "Story captured");
       systemPrompt +=
         `\n\n[Story Saved for Olivia]\nDavid just shared a memory in response to your question: "${pendingPrompt}"\nHis story (${wordCount} words) has been saved to his memory book for Olivia.\nRespond with deep, genuine warmth — reflect on something specific he shared, what it reveals about him, and what it means that Olivia will have this one day. Let it land. Don't rush to the next thing. This is the heart of why this app exists.\n\nAfter responding to the story warmly, if he seems engaged and the time feels right, you may gently offer: "Would you like to add anything to your journal tonight? Just talk — I'll capture it." Only offer if the mood is right and he hasn't already written one tonight. This is completely optional.`;
-      // Offer journal after story is captured (unless already captured tonight)
-      if (!hasJournalTonight) {
+      // Offer journal after story is captured (unless already captured tonight or disabled by pref)
+      const journalPromptsEnabled = await isJournalPromptsEnabled(sessionUserName).catch(() => true);
+      if (!hasJournalTonight && journalPromptsEnabled) {
         await setJournalOfferPending(true).catch(() => {});
       }
     } catch (err) {
@@ -1623,7 +1662,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   }
 
   // ── Evening wind-down: queue a story question (offered AFTER check-in and loose ends) ──
-  if (winddownActive && !pendingPrompt && !isPotentialStoryResponse) {
+  const _storyQsEnabled = await isStoryQuestionsEnabled(sessionUserName).catch(() => true);
+  if (winddownActive && !pendingPrompt && !isPotentialStoryResponse && _storyQsEnabled) {
     try {
       const capturedTonight = await hasStoryCapturedTonight();
       if (!capturedTonight) {

@@ -26,6 +26,7 @@ import {
   filterNewsBlock,
 } from "./storyDedup.js";
 import { logger } from "../lib/logger.js";
+import { getBriefingPreferences, buildBriefingPrefsBlock } from "../briefingPreferences/briefingPreferencesManager.js";
 
 // ── Departure times for calendar events ───────────────────────────────────────
 // Calculates leave-by time for each event that has a location.
@@ -406,11 +407,12 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     const isSunday = now.toLocaleDateString("en-US", { timeZone: "America/Chicago", weekday: "long" }) === "Sunday";
     const isPickleballMorning = isTodayPickleballDay();
 
-    const [recentMemories, allProfileItems, userProfile, seenHeadlines] = await Promise.all([
+    const [recentMemories, allProfileItems, userProfile, seenHeadlines, briefingPrefs] = await Promise.all([
       getRecentMemories(7).catch(() => []),
       getProfileItems(undefined, userName).catch(() => []),
       getProfile(userName).catch(() => null),
       getSeenHeadlines(userName, 3).catch(() => new Set<string>()),
+      getBriefingPreferences(userName).catch(() => []),
     ]);
     const memoryBlock = formatMemoriesForContext(recentMemories);
     const dynamicProfileBlock = formatProfileForContext(allProfileItems);
@@ -687,8 +689,9 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     // ── Split the system prompt into preamble (before email+calendar slot) ──────
     // and suffix (after email+calendar slot, through MASTER_BRIEFING_INSTRUCTION).
     // At delivery time, chat.ts inserts live gmailBlock + calendarBlock between them.
+    const prefsBlock = buildBriefingPrefsBlock(briefingPrefs, userName);
     const preamble = getCurrentDateTimeBlock() + "\n" + corePrompt + profileContextBlock +
-      memoryBlock + dynamicProfileBlock + notesBlock + weatherBlock;
+      memoryBlock + dynamicProfileBlock + prefsBlock + notesBlock + weatherBlock;
 
     const suffix = tvMorningBlock + sportsBlock + billsMorningBlock + datesBlock +
       sundaySummaryBlock + pickleballMorningBlock + recFollowUpBlock + motivationContextBlock +
