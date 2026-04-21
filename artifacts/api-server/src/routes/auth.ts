@@ -363,6 +363,16 @@ router.get("/auth/status", async (req: Request, res: Response) => {
   }
 });
 
+// GET /api/auth/providers — returns which sign-in/integration providers are configured
+// No auth required — used by the frontend to show/hide provider buttons.
+router.get("/auth/providers", (_req: Request, res: Response) => {
+  res.json({
+    google:    true, // always available (client ID is always configured)
+    microsoft: !!(process.env.MICROSOFT_CLIENT_ID && process.env.MICROSOFT_CLIENT_SECRET),
+    apple:     !!(process.env.APPLE_CLIENT_ID && process.env.APPLE_TEAM_ID && process.env.APPLE_KEY_ID && process.env.APPLE_PRIVATE_KEY),
+  });
+});
+
 // POST /api/auth/google/disconnect — disconnect Google (keeps app session intact)
 router.post("/auth/google/disconnect", async (req: Request, res: Response) => {
   try {

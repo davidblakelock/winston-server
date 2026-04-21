@@ -281,6 +281,9 @@ const CONTACT_PATTERN = /\b(find|look\s+up|search|get|what(?:'?s)?|pull\s+up|add
 const COMPOUND_CONTACT_SAVE_PATTERN = /(?:find|look\s+up|search(?:\s+for)?|get)\s+.{1,60}\s+(?:in\s+(?:my\s+)?contacts?|from\s+(?:my\s+)?contacts?).{0,80}(?:add|save|put)\s+(?:him|her|them|it)\s+(?:to|in|into)\s+(?:my\s+)?(?:winston\s+)?(?:profile|contacts?|list)/i;
 // Detects when David explicitly wants to save a contact to his curated Winston list
 const SAVE_CONTACT_PATTERN = /\b(yes,?\s+)?(save|remember|add|keep)\s+(her|him|them|this\s+(contact|person))(\s+to\s+(my\s+)?(winston\s+)?(contacts?|list))?\b|\b(save|add)\s+((?:\w+\s+){1,3}\w+)\s+to\s+my\s+(winston\s+)?(contacts?|list)\b|\b(remember|save)\s+((?:\w+\s+){1,3}\w+)\s+in\s+my\s+(winston\s+)?(contacts?|list)\b/i;
+// Detects "call [name]", "phone [name]", "dial [name]", "ring [name]", "give [name] a call/ring"
+// Excludes "call 911", "call me", "call you", reminder phrases, and bare "call" with no name.
+const CALL_PATTERN = /\b(call|phone|dial|ring)\s+(?!me\b|you\b|us\b|911\b|them\b|him\b|her\b|it\b|back\b|now\b|later\b)([A-Za-z][A-Za-z'.]*(?:\s+[A-Za-z][A-Za-z'.]*)?)(?:\s|$)|give\s+([A-Za-z][A-Za-z'.]*(?:\s+[A-Za-z][A-Za-z'.]*)?)\s+a\s+(call|ring)\b/i;
 const WINDDOWN_NOTE_PATTERN = /\b(remember\s+(to|that)|note\s+(for\s+tomorrow|this\s+down)|write\s+(this|that)\s+down|add\s+(this\s+)?to\s+(my\s+)?morning\s+briefing|don'?t\s+let\s+me\s+forget\s+(to|that)|make\s+sure\s+i\s+(remember|know)|for\s+tomorrow\s+(i\s+need\s+to|remind\s+me))\b/i;
 const SPORTS_PATTERN = /\b(rangers|cowboys|score|scores|how\s+did\s+(they|the\s+(rangers|cowboys))\s+do|did\s+(they|the\s+(rangers|cowboys))\s+(win|lose|play)|last\s+night'?s?\s+(game|score)|(rangers|cowboys)\s+(score|win|lose|lost|beat|game|result|update)|check\s+(the\s+)?(rangers|cowboys)|what('?s|\s+is)\s+the\s+(rangers|cowboys|score|game)|any\s+(rangers|cowboys)\s+(news|game|score))\b/i;
 const BILL_ADD_PATTERN = /\b(my\s+\w.{1,40}(bill|payment|insurance|premium|subscription|rent|mortgage|registration|fee|taxes?)\s+is\s+due|add\s+(a\s+)?(bill|payment|financial\s+obligation|reminder\s+for)|track\s+(my\s+)?(bill|payment|insurance|rent|subscription)|remind\s+me\s+(about|when|before)\s+(my\s+)?\w.{1,30}(bill|payment|due|insurance|premium|subscription|rent|mortgage|registration|fee|taxes?)|(is\s+due|renews?)\s+(on|every|each|the)\s+(the\s+)?\d{1,2}(st|nd|rd|th)?|quarterly\s+taxes?\s+are?\s+due|due\s+(on\s+)?(the\s+)?\d{1,2}(st|nd|rd|th)?\b|(rent|mortgage|insurance|premium|subscription)\s+is?\s*(due|paid|owed)|(send|pay|transfer|give)\s+.{1,40}(allowance|payment|money)\s+.{0,30}(on\s+the\s+\d{1,2}(st|nd|rd|th)?|every\s+month|monthly|each\s+month|via\s+(venmo|zelle|paypal|cash\s+app))|\ballowance\b.{0,40}(on\s+the\s+\d{1,2}(st|nd|rd|th)?|every\s+month|monthly|via\s+(venmo|zelle|paypal)))\b/i;
@@ -681,6 +684,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isCompoundContactAndSave = COMPOUND_CONTACT_SAVE_PATTERN.test(message);
   const isContactRequest = isCompoundContactAndSave || CONTACT_PATTERN.test(message);
   const isSaveContactRequest = !isContactRequest && SAVE_CONTACT_PATTERN.test(message);
+  const isCallRequest = !isReminderRequest && CALL_PATTERN.test(message);
   const isStoryRead = STORY_READ_PATTERN.test(message);
   const isStoryCount = STORY_COUNT_PATTERN.test(message);
   const isProfileRequest = PROFILE_PATTERN.test(message);
@@ -1962,6 +1966,91 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     }
   }
 
+  // ── "Call [name]" phone lookup ────────────────────────────────────────────────
+  if (isCallRequest) {
+    try {
+      // Extract the target name from CALL_PATTERN groups
+      const callMatch = message.match(
+        /\b(?:call|phone|dial|ring)\s+(?!me\b|you\b|us\b|911\b|them\b|him\b|her\b|it\b|back\b|now\b|later\b)([A-Za-z][A-Za-z'.]*(?:\s+[A-Za-z][A-Za-z'.]*)?)(?:\s|$)/i
+      ) ?? message.match(
+        /give\s+([A-Za-z][A-Za-z'.]*(?:\s+[A-Za-z][A-Za-z'.]*)?)\s+a\s+(?:call|ring)/i
+      );
+      const callTargetName = callMatch?.[1]?.trim() ?? "";
+      console.log(`[CALL INTENT] Detected — target="${callTargetName}"`);
+
+      if (callTargetName.length > 1) {
+        // Extract phone from a free-text detail string (e.g. "Phone: 214-555-1234 | Email: ...")
+        const extractPhone = (detail: string | null | undefined): string | null => {
+          if (!detail) return null;
+          const m = detail.match(/(\+?1?[-.\s]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4})/);
+          return m ? m[1].replace(/\s+/g, "-").replace(/[()]/g, "").replace(/\.\-/g, "-") : null;
+        };
+
+        // Fuzzy name match helper — true when any word of target appears in candidate name
+        const nameMatches = (candidate: string, target: string): boolean => {
+          const targetLower = target.toLowerCase();
+          const candidateLower = candidate.toLowerCase();
+          // Exact start match first
+          if (candidateLower.startsWith(targetLower) || targetLower.startsWith(candidateLower)) return true;
+          // Any target word (≥3 chars) found in candidate
+          return target.toLowerCase().split(/\s+/).filter(w => w.length >= 3).some(w => candidateLower.includes(w));
+        };
+
+        let foundPhone: string | null = null;
+        let foundName: string = callTargetName;
+
+        // Tier 1: profile_items (people category) — fastest, zero API calls
+        const profilePeople = await getProfileItems("people", sessionUserName).catch(() => []);
+        const profileMatch = profilePeople.find(p => nameMatches(p.name, callTargetName));
+        if (profileMatch) {
+          foundPhone = extractPhone(profileMatch.detail);
+          foundName = profileMatch.name;
+          console.log(`[CALL INTENT] Tier-1 profile_items hit: "${foundName}" phone="${foundPhone}"`);
+        }
+
+        // Tier 2: curated google_contacts — has a dedicated phone column
+        if (!foundPhone) {
+          const curated = await getCuratedContacts(sessionUserName).catch(() => []);
+          const curatedMatch = curated.find(c => nameMatches(c.name, callTargetName));
+          if (curatedMatch) {
+            foundPhone = curatedMatch.phone ?? null;
+            foundName = curatedMatch.name;
+            console.log(`[CALL INTENT] Tier-2 curated contacts hit: "${foundName}" phone="${foundPhone}"`);
+          }
+        }
+
+        // Tier 3: live Google Contacts API search
+        if (!foundPhone) {
+          const searchResult = await searchContacts(callTargetName).catch(() => ({ contacts: [], needsReauth: false, source: "none" as const }));
+          if (searchResult.contacts.length > 0) {
+            const liveMatch = searchResult.contacts[0];
+            foundPhone = liveMatch.phone ?? null;
+            foundName = liveMatch.name;
+            console.log(`[CALL INTENT] Tier-3 Google Contacts hit: "${foundName}" phone="${foundPhone}"`);
+          }
+        }
+
+        if (foundPhone) {
+          systemPrompt +=
+            `\n\n[CALL REQUEST — Phone Found]\n` +
+            `${sessionUserName} wants to call ${foundName}.\n` +
+            `Phone number: ${foundPhone}\n` +
+            `IMPORTANT: Include the phone number formatted as-is in your response — the native app detects it to offer a tap-to-dial button. ` +
+            `Respond naturally, e.g. "Here's ${foundName.split(" ")[0]}'s number: ${foundPhone}" or "Calling ${foundName.split(" ")[0]} at ${foundPhone}." Keep it short.`;
+        } else {
+          systemPrompt +=
+            `\n\n[CALL REQUEST — No Phone Found]\n` +
+            `${sessionUserName} wants to call "${callTargetName}" but no phone number was found in profile, curated contacts, or Google Contacts.\n` +
+            `Respond conversationally: "I don't have a number for ${callTargetName} — want me to look them up or save their number?"`;
+        }
+
+        req.log.info({ callTargetName, foundName, hasPhone: !!foundPhone }, "[CALL INTENT] Lookup complete");
+      }
+    } catch (err) {
+      req.log.warn({ err }, "[CALL INTENT] Lookup failed, continuing without");
+    }
+  }
+
   let navigationUrl: string | undefined;
   const profileHomeAddress =
     ((userProfile?.rawData as CollectedData)?.homeAddress) ?? "";
@@ -2029,7 +2118,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
   const scrubPatterns: Array<{ active: boolean; pattern: RegExp; label: string }> = [
     { active: isListRequest,              pattern: LIST_DATA_PATTERN,    label: "[LISTS]" },
-    { active: isContactRequest,           pattern: CONTACT_DATA_PATTERN, label: "[CONTACTS]" },
+    { active: isContactRequest || isCallRequest, pattern: CONTACT_DATA_PATTERN, label: "[CONTACTS]" },
     { active: isMedList,                  pattern: MED_DATA_PATTERN,     label: "[MEDS]" },
     { active: isBillList,                 pattern: BILL_DATA_PATTERN,    label: "[BILLS]" },
   ];

@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import {
   X, Volume2, Play, Check, Loader2, User, Camera, Moon, Bell,
-  Upload, Trash2, Music2, Mail, CheckCircle2, AlertCircle
+  Upload, Trash2, Music2, Mail, CheckCircle2, AlertCircle, Link2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { isNotificationsSupported } from "@/hooks/useNotifications";
@@ -143,6 +143,8 @@ export default function SettingsPanel({
   const [savingPhoto, setSavingPhoto] = useState(false);
   const [photoError, setPhotoError] = useState<string | null>(null);
 
+  const [providers, setProviders] = useState<{ google: boolean; microsoft: boolean; apple: boolean }>({ google: true, microsoft: false, apple: false });
+
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -162,6 +164,16 @@ export default function SettingsPanel({
       .then((d: { voices?: Voice[] }) => { if (d.voices) setVoices(d.voices); })
       .catch(() => {});
   }, [isOpen, voices.length]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    fetch(`${CHAT_BASE}/api/auth/providers`)
+      .then((r) => r.json())
+      .then((d: { google?: boolean; microsoft?: boolean; apple?: boolean }) => {
+        setProviders({ google: d.google ?? true, microsoft: d.microsoft ?? false, apple: d.apple ?? false });
+      })
+      .catch(() => {});
+  }, [isOpen]);
 
   const stopAudio = useCallback(() => {
     audioRef.current?.pause();
@@ -630,57 +642,128 @@ export default function SettingsPanel({
             </>
           )}
 
-          {/* ── Section 6: Google Connections ───────────────────────── */}
+          {/* ── Section 6: Connected Services ───────────────────────── */}
           <div className="border-t border-white/8" />
           <section className="pb-4">
             <div className="flex items-center gap-2 mb-4">
               <div className="p-1.5 rounded-lg bg-primary/15">
-                <Mail className="h-3.5 w-3.5 text-primary" />
+                <Link2 className="h-3.5 w-3.5 text-primary" />
               </div>
-              <h3 className="text-sm font-semibold text-foreground">Google Connections</h3>
+              <h3 className="text-sm font-semibold text-foreground">Connected Services</h3>
             </div>
             <p className="text-xs text-muted-foreground mb-4 leading-relaxed">
-              Connecting Google gives {currentCompanionName} access to your Gmail and Calendar for morning briefings and scheduling.
+              Connect services to give {currentCompanionName} access to your calendar, email, and contacts for morning briefings and scheduling.
             </p>
 
-            <div className="rounded-xl border border-white/8 bg-white/3 p-4 space-y-3">
-              {googleConnected ? (
-                <>
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <CheckCircle2 className="h-4 w-4 text-green-400 flex-shrink-0" />
-                      <div>
-                        <p className="text-sm text-foreground font-medium">Gmail &amp; Calendar</p>
-                        {googleEmail && (
-                          <p className="text-xs text-muted-foreground mt-0.5 truncate max-w-[180px]">{googleEmail}</p>
-                        )}
-                      </div>
+            <div className="space-y-3">
+
+              {/* Google */}
+              <div className="rounded-xl border border-white/8 bg-white/3 p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-7 h-7 rounded-lg bg-white/10 flex items-center justify-center flex-shrink-0">
+                      <Mail className="h-3.5 w-3.5 text-white/70" />
                     </div>
-                    <span className="text-xs text-green-400 font-medium px-2 py-0.5 rounded-full bg-green-400/10 border border-green-400/20">
-                      Connected
-                    </span>
+                    <div>
+                      <p className="text-sm text-foreground font-medium">Google</p>
+                      <p className="text-xs text-muted-foreground">Gmail &amp; Calendar</p>
+                    </div>
                   </div>
-                  <button
-                    onClick={onGoogleDisconnect}
-                    className="w-full text-xs font-medium px-3 py-2 rounded-lg border border-red-500/20 bg-red-950/20 text-red-400/80 hover:bg-red-950/40 hover:border-red-500/30 transition-colors"
-                  >
-                    Disconnect Google
-                  </button>
-                </>
-              ) : (
-                <>
-                  <div className="flex items-center gap-2 mb-3">
-                    <AlertCircle className="h-4 w-4 text-muted-foreground/60 flex-shrink-0" />
-                    <p className="text-sm text-muted-foreground">Not connected</p>
+                  {googleConnected ? (
+                    <span className="text-xs text-green-400 font-medium px-2 py-0.5 rounded-full bg-green-400/10 border border-green-400/20">Connected</span>
+                  ) : (
+                    <span className="text-xs text-muted-foreground/60 font-medium px-2 py-0.5 rounded-full bg-white/5 border border-white/10">Not connected</span>
+                  )}
+                </div>
+                {googleConnected ? (
+                  <div className="space-y-2">
+                    {googleEmail && (
+                      <div className="flex items-center gap-1.5">
+                        <CheckCircle2 className="h-3 w-3 text-green-400 flex-shrink-0" />
+                        <p className="text-xs text-muted-foreground truncate">{googleEmail}</p>
+                      </div>
+                    )}
+                    <button
+                      onClick={onGoogleDisconnect}
+                      className="w-full text-xs font-medium px-3 py-2 rounded-lg border border-red-500/20 bg-red-950/20 text-red-400/80 hover:bg-red-950/40 hover:border-red-500/30 transition-colors"
+                    >
+                      Disconnect
+                    </button>
                   </div>
-                  <Button
-                    className="w-full h-9 text-sm"
-                    onClick={onGoogleConnect}
-                  >
+                ) : (
+                  <Button className="w-full h-8 text-xs" onClick={onGoogleConnect}>
                     Connect Gmail &amp; Calendar
                   </Button>
-                </>
-              )}
+                )}
+              </div>
+
+              {/* Microsoft */}
+              <div className={`rounded-xl border p-4 transition-colors ${providers.microsoft ? "border-white/8 bg-white/3" : "border-white/5 bg-white/2 opacity-50"}`}>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-7 h-7 rounded-lg bg-white/10 flex items-center justify-center flex-shrink-0">
+                      <svg viewBox="0 0 21 21" className="h-3.5 w-3.5" fill="none">
+                        <rect x="1" y="1" width="9" height="9" fill="#f25022"/>
+                        <rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
+                        <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>
+                        <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
+                      </svg>
+                    </div>
+                    <div>
+                      <p className="text-sm text-foreground font-medium">Microsoft</p>
+                      <p className="text-xs text-muted-foreground">Outlook Calendar &amp; Mail</p>
+                    </div>
+                  </div>
+                  {providers.microsoft ? (
+                    <span className="text-xs text-muted-foreground/60 font-medium px-2 py-0.5 rounded-full bg-white/5 border border-white/10">Not connected</span>
+                  ) : (
+                    <span className="text-xs text-muted-foreground/40 font-medium px-2 py-0.5 rounded-full bg-white/3 border border-white/8">Coming soon</span>
+                  )}
+                </div>
+                {providers.microsoft ? (
+                  <Button
+                    className="w-full h-8 text-xs"
+                    onClick={() => { window.location.href = `${CHAT_BASE}/api/auth/microsoft`; }}
+                  >
+                    Connect Microsoft
+                  </Button>
+                ) : (
+                  <p className="text-xs text-muted-foreground/50">Configure Microsoft OAuth credentials to enable.</p>
+                )}
+              </div>
+
+              {/* Apple */}
+              <div className={`rounded-xl border p-4 transition-colors ${providers.apple ? "border-white/8 bg-white/3" : "border-white/5 bg-white/2 opacity-50"}`}>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-7 h-7 rounded-lg bg-white/10 flex items-center justify-center flex-shrink-0">
+                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 fill-white/70">
+                        <path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701"/>
+                      </svg>
+                    </div>
+                    <div>
+                      <p className="text-sm text-foreground font-medium">Apple</p>
+                      <p className="text-xs text-muted-foreground">Sign In with Apple</p>
+                    </div>
+                  </div>
+                  {providers.apple ? (
+                    <span className="text-xs text-muted-foreground/60 font-medium px-2 py-0.5 rounded-full bg-white/5 border border-white/10">Not connected</span>
+                  ) : (
+                    <span className="text-xs text-muted-foreground/40 font-medium px-2 py-0.5 rounded-full bg-white/3 border border-white/8">Coming soon</span>
+                  )}
+                </div>
+                {providers.apple ? (
+                  <Button
+                    className="w-full h-8 text-xs"
+                    onClick={() => { window.location.href = `${CHAT_BASE}/api/auth/apple`; }}
+                  >
+                    Sign In with Apple
+                  </Button>
+                ) : (
+                  <p className="text-xs text-muted-foreground/50">Configure Apple Developer credentials to enable.</p>
+                )}
+              </div>
+
             </div>
           </section>
 
