@@ -301,12 +301,18 @@ export async function createCalendarEvent(details: {
   location?: string;
   description?: string;
   allDay?: boolean;
-}): Promise<{ id: string; htmlLink: string } | null> {
-  const auth = await getAuthClient();
-  if (!auth) return null;
+}, userName?: string): Promise<{ id: string; htmlLink: string } | null> {
+  const auth = await resolveAuthClient(userName);
+  if (!auth) {
+    console.error("[CALENDAR CREATE] no auth client — Google not connected");
+    return null;
+  }
+
+  // Log which credentials are being used
+  const creds = auth.credentials;
+  console.log(`[CALENDAR CREATE] auth resolved — has access_token: ${!!creds.access_token}, has refresh_token: ${!!creds.refresh_token}, expiry: ${creds.expiry_date ? new Date(creds.expiry_date).toISOString() : "none"}`);
 
   const calendar = google.calendar({ version: "v3", auth });
-
   const endTime = details.endTime ?? addOneHour(details.startTime);
 
   const requestBody: any = {
@@ -323,13 +329,30 @@ export async function createCalendarEvent(details: {
     requestBody.end = buildEventDateTime(details.date, endTime);
   }
 
-  const response = await calendar.events.insert({
-    calendarId: "primary",
-    requestBody,
-  });
+  console.log(`[CALENDAR CREATE] inserting event — title: "${details.title}", date: ${details.date}, startTime: ${details.startTime}, allDay: ${!!details.allDay}`);
 
-  if (!response.data.id) return null;
-  return { id: response.data.id, htmlLink: response.data.htmlLink ?? "" };
+  try {
+    const response = await calendar.events.insert({
+      calendarId: "primary",
+      requestBody,
+    });
+
+    console.log(`[CALENDAR CREATE] Google API response status: ${response.status}, id: ${response.data.id ?? "none"}, htmlLink: ${response.data.htmlLink ?? "none"}`);
+
+    if (!response.data.id) {
+      console.error("[CALENDAR CREATE] insert returned no event ID — treating as failure");
+      return null;
+    }
+    return { id: response.data.id, htmlLink: response.data.htmlLink ?? "" };
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    const errCode = (err as any)?.code ?? (err as any)?.status ?? "unknown";
+    console.error(`[CALENDAR CREATE] Google Calendar API insert failed — code: ${errCode}, message: ${errMsg}`);
+    if ((err as any)?.response?.data) {
+      console.error("[CALENDAR CREATE] Google API error body:", JSON.stringify((err as any).response.data));
+    }
+    return null;
+  }
 }
 
 export async function updateCalendarEvent(
@@ -341,11 +364,12 @@ export async function updateCalendarEvent(
     endTime?: string;
     location?: string;
     description?: string;
-  }
+  },
+  userName?: string
 ): Promise<boolean> {
   console.log(`[CALENDAR UPDATE] attempting to update event id: ${eventId}`, JSON.stringify(updates));
 
-  const auth = await getAuthClient();
+  const auth = await resolveAuthClient(userName);
   if (!auth) {
     console.error("[CALENDAR UPDATE] ERROR — no auth client (Google not connected)");
     return false;
@@ -422,13 +446,23 @@ export async function updateCalendarEvent(
   }
 }
 
-export async function deleteCalendarEvent(eventId: string): Promise<boolean> {
-  const auth = await getAuthClient();
-  if (!auth) return false;
+export async function deleteCalendarEvent(eventId: string, userName?: string): Promise<boolean> {
+  const auth = await resolveAuthClient(userName);
+  if (!auth) {
+    console.error("[CALENDAR DELETE] no auth client — Google not connected");
+    return false;
+  }
 
   const calendar = google.calendar({ version: "v3", auth });
-  await calendar.events.delete({ calendarId: "primary", eventId });
-  return true;
+  try {
+    const response = await calendar.events.delete({ calendarId: "primary", eventId });
+    console.log(`[CALENDAR DELETE] event ${eventId} deleted, status: ${response.status}`);
+    return true;
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.error(`[CALENDAR DELETE] failed to delete event ${eventId}: ${errMsg}`);
+    return false;
+  }
 }
 
 export async function findEventByKeywords(

@@ -1,0 +1,114 @@
+Two bugs: 1) When a user says 'add Move Table today at 5:30, address is 4549 Walnut Hill Dallas Texas' to add a calendar event, Winston says it can't find anything on the calendar to modify and then fails to add the event. The calendar write intent detection may be broken. 2) Winston is telling the user 'I don't have access to previous conversations' — the conversation history is not being passed correctly in chat requests. Please check both issues.
+
+6 minutes ago
+
+Examining calendar write intent
+Let me pull up the logs and the relevant code files simultaneously:
+
+
+2 actions
+No relevant chat logs yet. Let me read the actual code for both issues in parallel:
+
+
+3 actions
+Now I need to find the intent detection logic and history passing in chat.ts:
+
+
+3 actions
+Let me read the pattern definitions and the history/write operation sections:
+
+
+3 actions
+Let me now check how the client sends history and read the write-op section of chat.ts:
+
+
+3 actions
+Now let me find the exact fetch call in Chat.tsx that sends messages to the API:
+
+
+4 actions
+The client sends history correctly. Now let me find where streamChat is called to see what history array is passed:
+
+
+5 actions
+Let me see how historyForApi is built:
+
+
+2 actions
+Now let me look at how the server uses the history in the Anthropic call:
+
+
+4 actions
+Let me check how _nativeMode is detected and if there's a separate history path for native:
+
+
+5 actions
+Let me check the system prompt for any "previous conversation" language and look for where Winston might be saying this:
+
+
+2 actions
+Let me look at the system prompt's identity/memory section:
+
+
+2 actions
+Now I have a clear picture of both bugs. Let me also check the messages storage to understand the history persistence:
+
+
+2 actions
+I've found both root causes. Let me fix them now:
+
+Bug 1: isCalendarModify is evaluated first — "add Move Table" matches the modify regex because "Move" appears in the event title. Swap the evaluation order so isCalendarCreate wins when the user clearly says "add".
+
+Bug 2: The /api/messages endpoint only accepts Bearer tokens, not the native API key, so the native app can never load history. AND chat doesn't auto-load history from the database when the client sends an empty array. Fix both: support the API key in messages.ts, and auto-hydrate history server-side when none is sent.
+
+
+3 actions
+Now I'll fix all three problems simultaneously:
+
+
+2 actions
+Now fix messages.ts to support the native API key for both GET and POST:
+
+
+2 actions
+Remove the unused authenticate import I accidentally left in:
+
+
+2 actions
+Now add server-side history hydration to chatHandlerCore — when the client sends no history, load the last 20 turns from the database:
+
+
+4 actions
+Now restart the API server and verify the fixes:
+
+
+2 actions
+Let me test the calendar intent detection fix and verify the messages endpoint now supports the API key:
+
+
+4 actions
+All tests pass. Here's what was wrong and what was fixed:
+
+Bug 1 — "Add Move Table" routed to modify instead of create
+
+Root cause: the code evaluated the modify pattern first. The regex for modify is move\s+(my\s+)?(?!\w+\s+list) — which matched "Move Table" in the event title, so isCalendarModify came back true and isCalendarCreate was forced to false. It then searched your calendar for an existing "Move Table" event, found nothing, and gave up.
+
+Fix: flip the evaluation order — isCalendarCreate is checked first. An explicit "add" keyword always wins. isCalendarModify only fires when there's no create keyword. Verified with the test message: now correctly routes to CREATE.
+
+Bug 2 — "I don't have access to previous conversations"
+
+Two-part root cause:
+
+The /api/messages endpoint only accepted Bearer session tokens — the native API key was silently rejected with a 401, so the native app couldn't load chat history at all.
+Even if the native app sent history: [], the server just used that empty array and Claude had nothing to work with.
+Two-part fix:
+
+/api/messages (GET + POST) now accepts the native API key alongside Bearer tokens.
+When the server receives an empty history array (not an auto-greeting), it automatically loads the last 20 messages from the database as a fallback — so Winston always has recent conversation context, regardless of whether the client passes history.
+
+Checkpoint made
+just now
+
+Worked for 5 minutes
+
+Scroll to latest

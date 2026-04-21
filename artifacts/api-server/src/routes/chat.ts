@@ -1418,7 +1418,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     const pd = getPendingDelete()!;
     if (isDeleteConfirm) {
       try {
-        await deleteCalendarEvent(pd.eventId);
+        await deleteCalendarEvent(pd.eventId, sessionUserName);
         clearPendingDelete();
         systemPrompt +=
           `\n\n[Calendar Event Deleted]\n"${pd.summary}" on ${pd.dateLabel} has been permanently removed from David's Google Calendar.\nConfirm warmly and briefly — e.g. "Done — I've cancelled your ${pd.summary} on ${pd.dateLabel}."`;
@@ -1453,7 +1453,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
             location: parsed.location,
             description: parsed.description,
             allDay: parsed.allDay,
-          });
+          }, sessionUserName);
           if (created) {
             const confirmation = formatEventConfirmation({
               title: parsed.title,
@@ -1509,7 +1509,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
             startTime: parsed.newStartTime,
             endTime: parsed.newEndTime,
             location: parsed.newLocation,
-          });
+          }, sessionUserName);
 
           console.log(`[CALENDAR] patch response: ${updated ? "SUCCESS" : "FAILED"} for event "${event.summary}"`);
 
