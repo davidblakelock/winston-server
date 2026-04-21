@@ -190,7 +190,7 @@ Examples:
 }
 
 // ── Reminder messages ─────────────────────────────────────────────────────────
-export function buildDateReminderMessage(d: UpcomingDate): string {
+export function buildDateReminderMessage(d: UpcomingDate, displayName = "David"): string {
   const { personName, eventType, daysUntil, label, yearsCount } = d;
 
   const yearsStr = yearsCount && eventType === "anniversary"
@@ -199,9 +199,9 @@ export function buildDateReminderMessage(d: UpcomingDate): string {
 
   if (daysUntil === 0) {
     if (eventType === "birthday") {
-      return `David, just a reminder — today is ${personName}'s birthday! Hope you have something special planned.`;
+      return `${displayName}, just a reminder — today is ${personName}'s birthday! Hope you have something special planned.`;
     }
-    return `David, today is your anniversary with ${personName}${yearsStr}. Make it a special one.`;
+    return `${displayName}, today is your anniversary with ${personName}${yearsStr}. Make it a special one.`;
   }
 
   const timeStr =
@@ -210,9 +210,9 @@ export function buildDateReminderMessage(d: UpcomingDate): string {
     `in ${daysUntil} days on ${label}`;
 
   if (eventType === "birthday") {
-    return `David, heads up — ${personName}'s birthday is ${timeStr}. Have you thought about what you'd like to do for them?`;
+    return `${displayName}, heads up — ${personName}'s birthday is ${timeStr}. Have you thought about what you'd like to do for them?`;
   }
-  return `David, your anniversary with ${personName} is ${timeStr}${yearsStr}. Something to keep in mind.`;
+  return `${displayName}, your anniversary with ${personName} is ${timeStr}${yearsStr}. Something to keep in mind.`;
 }
 
 // ── Format for prompts ─────────────────────────────────────────────────────────

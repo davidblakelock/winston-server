@@ -1,5 +1,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { saveMemory } from "../memory/memoryManager.js";
+import { tryAuthenticate } from "../auth/middleware.js";
+import { getProfile } from "../onboarding/onboardingManager.js";
 
 const router: IRouter = Router();
 
@@ -15,7 +17,16 @@ router.post("/memory/save", async (req: Request, res: Response) => {
   }
 
   try {
-    const saved = await saveMemory(history);
+    const userName = await tryAuthenticate(req);
+    let companionName: string | null = null;
+    let displayName: string | null = null;
+    if (userName) {
+      const profile = await getProfile(userName).catch(() => null);
+      companionName = profile?.companionName ?? null;
+      displayName = profile?.name ?? null;
+    }
+
+    const saved = await saveMemory(history, companionName, displayName);
     res.json({ saved });
   } catch (err) {
     req.log.warn({ err }, "Memory save endpoint error");

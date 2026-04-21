@@ -144,7 +144,27 @@ router.get("/auth/callback", async (req: Request, res: Response) => {
           tokens.scope ?? SCOPES.join(" "),
         ]
       );
-      req.log.info({ email, userName, isNewUser }, "[AUTH] /auth/callback — google_auth upserted (connect)");
+      // Also write to user_integrations (canonical multi-user integration store)
+      await query(
+        `INSERT INTO user_integrations (user_name, provider, access_token, refresh_token, token_expiry, scopes, external_email, updated_at)
+         VALUES ($1, 'google', $2, $3, $4, $5, $6, NOW())
+         ON CONFLICT (user_name, provider) DO UPDATE SET
+           access_token   = EXCLUDED.access_token,
+           refresh_token  = COALESCE(EXCLUDED.refresh_token, user_integrations.refresh_token),
+           token_expiry   = EXCLUDED.token_expiry,
+           scopes         = EXCLUDED.scopes,
+           external_email = EXCLUDED.external_email,
+           updated_at     = NOW()`,
+        [
+          userName,
+          tokens.access_token ?? null,
+          tokens.refresh_token ?? null,
+          tokens.expiry_date ? new Date(tokens.expiry_date) : null,
+          tokens.scope ?? SCOPES.join(" "),
+          email,
+        ]
+      );
+      req.log.info({ email, userName, isNewUser }, "[AUTH] /auth/callback — google_auth + user_integrations upserted (connect)");
     } else {
       req.log.info({ email, userName }, "[AUTH] /auth/callback — sign-in flow, skipping google_auth upsert");
     }
@@ -787,6 +807,47 @@ router.post("/auth/apple/native", express.json({ limit: "1mb" }), async (req: Re
   } catch (err) {
     req.log.error({ err }, "[AUTH] /auth/apple/native — error");
     res.status(401).json({ error: "Apple authentication failed" });
+  }
+});
+
+// GET /api/integrations/status — returns which integrations the signed-in user has connected
+router.get("/integrations/status", async (req: Request, res: Response) => {
+  try {
+    const authHeader = req.headers.authorization;
+    let userName: string | null = null;
+    if (authHeader?.startsWith("Bearer ")) {
+      const session = await validateSession(authHeader.slice(7));
+      if (session) userName = session.userName;
+    }
+    if (!userName) {
+      res.status(401).json({ error: "Not authenticated" });
+      return;
+    }
+
+    const { rows } = await query<{
+      provider: string;
+      external_email: string | null;
+      scopes: string | null;
+      connected_at: Date | null;
+    }>(
+      `SELECT provider, external_email, scopes, connected_at
+       FROM user_integrations WHERE user_name = $1 ORDER BY provider`,
+      [userName]
+    );
+
+    const integrations: Record<string, { connected: boolean; email: string | null; connectedAt: string | null }> = {};
+    for (const row of rows) {
+      integrations[row.provider] = {
+        connected: true,
+        email: row.external_email,
+        connectedAt: row.connected_at ? row.connected_at.toISOString() : null,
+      };
+    }
+
+    res.json({ userName, integrations });
+  } catch (err) {
+    req.log.error({ err }, "[AUTH] /integrations/status error");
+    res.status(500).json({ error: "Failed to fetch integrations" });
   }
 });
 

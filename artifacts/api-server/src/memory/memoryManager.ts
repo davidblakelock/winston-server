@@ -29,22 +29,27 @@ export async function ensureMemoryTable(): Promise<void> {
 
 // Generate a memory summary from conversation history using Claude
 export async function generateMemorySummary(
-  history: Array<{ role: string; content: string }>
+  history: Array<{ role: string; content: string }>,
+  companionName?: string | null,
+  userName?: string | null
 ): Promise<string | null> {
   if (history.length < 4) return null; // Too short to be worth remembering
 
+  const companion = companionName ?? "the AI companion";
+  const user = userName ?? "the user";
+
   const formatted = history
-    .map((m) => `${m.role === "user" ? "David" : "Emma"}: ${m.content}`)
+    .map((m) => `${m.role === "user" ? user : companion}: ${m.content}`)
     .join("\n\n");
 
   const prompt =
-    `Review this conversation between David Blakelock and his AI companion Emma Peel. ` +
+    `Review this conversation between ${user} and their AI companion ${companion}. ` +
     `Write a memory note (80-120 words) capturing what's worth remembering for future conversations. ` +
     `Focus on:\n` +
     `- Physical health mentions (pain, energy, how activities like pickleball or running went)\n` +
     `- Family and relationship updates (Olivia, Susan, etc.)\n` +
-    `- Plans David mentioned (things he said he'd do, try, call, or visit)\n` +
-    `- Mood, feelings, or things weighing on him\n` +
+    `- Plans ${user} mentioned (things they said they'd do, try, call, or visit)\n` +
+    `- Mood, feelings, or things weighing on them\n` +
     `- New experiences (restaurants tried, things done for the first time, events attended)\n` +
     `- Anything else a close friend would naturally follow up on next time\n\n` +
     `Write in concise third-person notes. Be specific with names and details. ` +
@@ -70,12 +75,14 @@ export async function generateMemorySummary(
 
 // Save or update today's memory with the new summary
 export async function saveMemory(
-  history: Array<{ role: string; content: string }>
+  history: Array<{ role: string; content: string }>,
+  companionName?: string | null,
+  userName?: string | null
 ): Promise<boolean> {
   const tz = "America/Chicago";
   const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
 
-  const summary = await generateMemorySummary(history);
+  const summary = await generateMemorySummary(history, companionName, userName);
   if (!summary) return false;
 
   await query(

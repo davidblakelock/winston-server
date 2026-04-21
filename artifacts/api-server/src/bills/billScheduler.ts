@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { broadcast } from "../reminders/sseStore.js";
 import { sendPushToAll } from "../push/pushManager.js";
 import { logger } from "../lib/logger.js";
+import { getActiveUsers } from "../onboarding/onboardingManager.js";
 import {
   getBills,
   computeNextDueDate,
@@ -39,63 +40,70 @@ async function checkBillReminders(): Promise<void> {
   if (_lastCheckedDate === today) return;
   _lastCheckedDate = today;
 
-  const bills = await getBills("David");
-  if (!bills.length) return;
+  const users = await getActiveUsers().catch(() => []);
+  if (!users.length) return;
 
   const now = new Date();
 
-  for (const bill of bills) {
-    const nextDue = computeNextDueDate(bill, now);
-    const daysUntil = daysBetween(now, nextDue);
+  for (const user of users) {
+    const { userName, name: displayName, companionName } = user;
+    const userDisplay = displayName ?? userName;
+    const companion = companionName ?? "Winston";
 
-    if (daysUntil !== bill.reminderLeadDays) continue;
+    const bills = await getBills(userName).catch(() => []);
+    if (!bills.length) continue;
 
-    // Don't re-fire if already reminded within the last 7 days
-    if (bill.lastRemindedDate) {
-      const daysSinceLast = daysBetween(new Date(bill.lastRemindedDate + "T12:00:00"), now);
-      if (daysSinceLast < 7) continue;
+    for (const bill of bills) {
+      const nextDue = computeNextDueDate(bill, now);
+      const daysUntil = daysBetween(now, nextDue);
+
+      if (daysUntil !== bill.reminderLeadDays) continue;
+
+      if (bill.lastRemindedDate) {
+        const daysSinceLast = daysBetween(new Date(bill.lastRemindedDate + "T12:00:00"), now);
+        if (daysSinceLast < 7) continue;
+      }
+
+      const upcoming: UpcomingBill = {
+        ...bill,
+        nextDueDate: nextDue,
+        daysUntilDue: daysUntil,
+        dueDateLabel: nextDue.toLocaleDateString("en-US", {
+          timeZone: TZ,
+          month: "long",
+          day: "numeric",
+        }),
+      };
+
+      const message = buildBillReminderMessage(upcoming, userDisplay);
+
+      broadcast("reminder", {
+        id: `bill-${bill.id}-${Date.now()}`,
+        userName,
+        reminderText: message,
+        speakText: message,
+        isBill: true,
+      });
+
+      await sendPushToAll({
+        title: `💳 Bill Reminder — ${companion}`,
+        body: message,
+        tag: `bill-${bill.id}`,
+        url: "/",
+        requireInteraction: true,
+      }, userName).catch(() => {});
+
+      await markReminded(bill.id, today);
+
+      logger.info(
+        { billId: bill.id, name: bill.name, daysUntil, userName },
+        "Bill reminder fired"
+      );
     }
-
-    const upcoming: UpcomingBill = {
-      ...bill,
-      nextDueDate: nextDue,
-      daysUntilDue: daysUntil,
-      dueDateLabel: nextDue.toLocaleDateString("en-US", {
-        timeZone: TZ,
-        month: "long",
-        day: "numeric",
-      }),
-    };
-
-    const message = buildBillReminderMessage(upcoming);
-
-    broadcast("reminder", {
-      id: `bill-${bill.id}-${Date.now()}`,
-      userName: "David",
-      reminderText: message,
-      speakText: message,
-      isBill: true,
-    });
-
-    await sendPushToAll({
-      title: "💳 Bill Reminder — Emma Peel",
-      body: message,
-      tag: `bill-${bill.id}`,
-      url: "/",
-      requireInteraction: true,
-    }).catch(() => {});
-
-    await markReminded(bill.id, today);
-
-    logger.info(
-      { billId: bill.id, name: bill.name, daysUntil },
-      "Bill reminder fired"
-    );
   }
 }
 
 export function startBillScheduler(): void {
-  // Run every minute, but only actually execute once per day at 09:00 Central
   cron.schedule("* * * * *", async () => {
     try {
       if (getLocalTime() !== "09:00") return;

@@ -6,13 +6,8 @@ import {
   hasTakenMedicationsToday,
   buildMedReminderText,
 } from "./medicationManager.js";
-import { getProfile } from "../onboarding/onboardingManager.js";
+import { getActiveUsers } from "../onboarding/onboardingManager.js";
 import { logger } from "../lib/logger.js";
-
-async function getCompanionName(): Promise<string> {
-  const profile = await getProfile("David").catch(() => null);
-  return profile?.companionName ?? "Emma Peel";
-}
 
 const TZ = "America/Chicago";
 
@@ -25,111 +20,89 @@ function getCurrentLocalTime(): string {
   });
 }
 
-function buildInitialMessage(medText: string): string {
-  return `Good morning, David — don't forget to take ${medText} today. Take them with food if you can.`;
+function buildInitialMessage(medText: string, displayName = "David"): string {
+  return `Good morning, ${displayName} — don't forget to take ${medText} today. Take them with food if you can.`;
 }
 
-function buildFollowUpMessage(medText: string): string {
-  return `Just a gentle nudge, David — have you taken ${medText} yet? Whenever you're ready.`;
+function buildFollowUpMessage(medText: string, displayName = "David"): string {
+  return `Just a gentle nudge, ${displayName} — have you taken ${medText} yet? Whenever you're ready.`;
 }
 
-async function checkAndFireMedicationReminder(
-  targetTime: string,
-  isFollowUp: boolean
-): Promise<void> {
-  const localTime = getCurrentLocalTime();
-  if (localTime !== targetTime) return;
-
-  const meds = await getMedications("David");
-  if (!meds.length) return;
-
-  const taken = await hasTakenMedicationsToday("David");
-  if (taken) return;
-
-  const medText = buildMedReminderText(meds);
-  const message = isFollowUp ? buildFollowUpMessage(medText) : buildInitialMessage(medText);
-
-  broadcast("reminder", {
-    id: `med-${Date.now()}`,
-    userName: "David",
-    reminderText: isFollowUp
-      ? `Gentle nudge — have you taken ${medText} yet?`
-      : `Don't forget to take ${medText} today. Take them with food if you can.`,
-    speakText: message,
-    isMedication: true,
-  });
-
-  logger.info({ targetTime, isFollowUp, medCount: meds.length }, "Medication reminder fired");
-}
-
-let _initialFiredDate: string | null = null;
-let _followUpFiredDate: string | null = null;
+// Track per-user fired dates to avoid double-firing within the same day
+const _initialFiredDate = new Map<string, string>();
+const _followUpFiredDate = new Map<string, string>();
 
 export function startMedicationScheduler(): void {
   cron.schedule("* * * * *", async () => {
     try {
       const today = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
-      const meds = await getMedications("David").catch(() => []);
-      if (!meds.length) return;
+      const localTime = getCurrentLocalTime();
 
-      // Collect unique reminder times; also check 9am follow-up
-      const reminderTimes = [...new Set(meds.map((m) => m.reminderTime))];
+      const users = await getActiveUsers().catch(() => []);
+      if (!users.length) return;
 
-      for (const rt of reminderTimes) {
-        const localTime = getCurrentLocalTime();
-        if (localTime === rt && _initialFiredDate !== today) {
-          const taken = await hasTakenMedicationsToday("David");
+      for (const user of users) {
+        const { userName, name: displayName, companionName } = user;
+        const userDisplay = displayName ?? userName;
+        const companion = companionName ?? "Winston";
+
+        const meds = await getMedications(userName).catch(() => []);
+        if (!meds.length) continue;
+
+        // Collect unique reminder times
+        const reminderTimes = [...new Set(meds.map((m) => m.reminderTime))];
+
+        for (const rt of reminderTimes) {
+          if (localTime === rt && _initialFiredDate.get(userName) !== today) {
+            const taken = await hasTakenMedicationsToday(userName);
+            if (!taken) {
+              const medText = buildMedReminderText(meds);
+              broadcast("reminder", {
+                id: `med-init-${userName}-${Date.now()}`,
+                userName,
+                reminderText: `Don't forget to take ${medText} today. Take them with food if you can.`,
+                speakText: buildInitialMessage(medText, userDisplay),
+                isMedication: true,
+              });
+              sendPushToAll({
+                title: `💊 Medication Reminder — ${companion}`,
+                body: `Don't forget your ${medText} this morning. Take with food if you can.`,
+                tag: "medication-morning",
+                requireInteraction: true,
+              }, userName).catch(() => {});
+              logger.info({ time: rt, userName }, "Medication initial reminder fired");
+            }
+            _initialFiredDate.set(userName, today);
+          }
+        }
+
+        // Follow-up 1 hour after earliest reminder time
+        const [h, m] = meds[0].reminderTime.split(":").map(Number);
+        const followUpH = (h + 1) % 24;
+        const followUpTime = `${String(followUpH).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+
+        if (localTime === followUpTime && _followUpFiredDate.get(userName) !== today) {
+          const taken = await hasTakenMedicationsToday(userName);
           if (!taken) {
             const medText = buildMedReminderText(meds);
             broadcast("reminder", {
-              id: `med-init-${Date.now()}`,
-              userName: "David",
-              reminderText: `Don't forget to take ${medText} today. Take them with food if you can.`,
-              speakText: buildInitialMessage(medText),
+              id: `med-followup-${userName}-${Date.now()}`,
+              userName,
+              reminderText: `Gentle nudge — have you taken ${medText} yet?`,
+              speakText: buildFollowUpMessage(medText, userDisplay),
               isMedication: true,
             });
-            const companionName = await getCompanionName();
             sendPushToAll({
-              title: `💊 Medication Reminder — ${companionName}`,
-              body: `Don't forget your ${medText} this morning. Take with food if you can.`,
-              tag: "medication-morning",
-
-              requireInteraction: true,
-            }).catch(() => {});
-            logger.info({ time: rt }, "Medication initial reminder fired");
+              title: `💊 Gentle Nudge — ${companion}`,
+              body: `Have you taken your ${medText} yet? Tap to confirm.`,
+              tag: "medication-followup",
+              url: "/",
+              requireInteraction: false,
+            }, userName).catch(() => {});
+            logger.info({ time: followUpTime, userName }, "Medication follow-up reminder fired");
           }
-          _initialFiredDate = today;
+          _followUpFiredDate.set(userName, today);
         }
-      }
-
-      // Follow-up 1 hour after earliest reminder time
-      const [h, m] = meds[0].reminderTime.split(":").map(Number);
-      const followUpH = (h + 1) % 24;
-      const followUpTime = `${String(followUpH).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-      const localTime = getCurrentLocalTime();
-
-      if (localTime === followUpTime && _followUpFiredDate !== today) {
-        const taken = await hasTakenMedicationsToday("David");
-        if (!taken) {
-          const medText = buildMedReminderText(meds);
-          broadcast("reminder", {
-            id: `med-followup-${Date.now()}`,
-            userName: "David",
-            reminderText: `Gentle nudge — have you taken ${medText} yet?`,
-            speakText: buildFollowUpMessage(medText),
-            isMedication: true,
-          });
-          const companionName2 = await getCompanionName();
-          sendPushToAll({
-            title: `💊 Gentle Nudge — ${companionName2}`,
-            body: `Have you taken your ${medText} yet? Tap to confirm.`,
-            tag: "medication-followup",
-            url: "/",
-            requireInteraction: false,
-          }).catch(() => {});
-          logger.info({ time: followUpTime }, "Medication follow-up reminder fired");
-        }
-        _followUpFiredDate = today;
       }
     } catch (err) {
       logger.error({ err }, "Medication scheduler error");

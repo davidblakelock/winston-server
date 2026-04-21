@@ -11,6 +11,11 @@ interface StoryRow {
   captured_at: string;
 }
 
+interface ProfileRow {
+  name: string | null;
+  companion_name: string | null;
+}
+
 // GET /api/stories/archive?password=xxx — returns all stories if password matches
 router.get("/stories/archive", async (req, res) => {
   try {
@@ -28,11 +33,22 @@ router.get("/stories/archive", async (req, res) => {
       return;
     }
 
-    const { rows } = await query<StoryRow>(
-      `SELECT id, prompt_question, response, captured_at
-       FROM stories
-       ORDER BY captured_at ASC`
-    );
+    const [{ rows }, { rows: profileRows }] = await Promise.all([
+      query<StoryRow>(
+        `SELECT id, prompt_question, response, captured_at
+         FROM stories
+         ORDER BY captured_at ASC`
+      ),
+      query<ProfileRow>(
+        `SELECT name, companion_name
+         FROM user_profiles
+         WHERE onboarding_completed = true
+         ORDER BY created_at ASC
+         LIMIT 1`
+      ),
+    ]);
+
+    const profile = profileRows[0] ?? null;
 
     logger.info({ count: rows.length }, "Olivia archive accessed");
 
@@ -44,6 +60,8 @@ router.get("/stories/archive", async (req, res) => {
         capturedAt: r.captured_at,
       })),
       count: rows.length,
+      displayName: profile?.name ?? null,
+      companionName: profile?.companion_name ?? null,
     });
   } catch (err) {
     logger.error({ err }, "Stories archive error");

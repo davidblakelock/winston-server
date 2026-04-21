@@ -89,19 +89,53 @@ interface GoogleAuthRow {
 
 // ── Per-user Google auth client ────────────────────────────────────────────────
 // For multi-user: resolves the OAuth client for a specific Winston userName.
-// Falls back to the global preference order (best available account) when no
-// user-specific row exists — preserving backward compat for David.
+// Priority: user_integrations (canonical) → google_auth (legacy) → global fallback.
 export async function getAuthClientForUser(
   userName: string
 ): Promise<InstanceType<typeof google.auth.OAuth2> | null> {
-  // First try: user-specific row in google_auth
+  // First try: user_integrations (canonical integration store, written by connect flow)
+  const { rows: integrationRows } = await query<{
+    access_token: string | null;
+    refresh_token: string | null;
+    token_expiry: Date | null;
+    external_email: string | null;
+  }>(
+    `SELECT access_token, refresh_token, token_expiry, external_email
+     FROM user_integrations
+     WHERE user_name = $1 AND provider = 'google'
+       AND (access_token IS NOT NULL OR refresh_token IS NOT NULL)
+     LIMIT 1`,
+    [userName]
+  );
+  if (integrationRows.length > 0) {
+    const row = integrationRows[0];
+    console.log(`[OAuth] getAuthClientForUser(${userName}) → user_integrations (${row.external_email ?? "unknown"})`);
+    const oauth2Client = createOAuthClient();
+    oauth2Client.setCredentials({
+      access_token: row.access_token,
+      refresh_token: row.refresh_token ?? undefined,
+      expiry_date: row.token_expiry ? new Date(row.token_expiry).getTime() : undefined,
+    });
+    oauth2Client.on("tokens", async (tokens) => {
+      if (tokens.access_token) {
+        await query(
+          `UPDATE user_integrations SET access_token = $1, token_expiry = $2, updated_at = NOW()
+           WHERE user_name = $3 AND provider = 'google'`,
+          [tokens.access_token, tokens.expiry_date ? new Date(tokens.expiry_date) : null, userName]
+        );
+      }
+    });
+    return oauth2Client;
+  }
+
+  // Second try: legacy google_auth row for this user
   const { rows: userRows } = await query<GoogleAuthRow>(
     `SELECT * FROM google_auth WHERE user_name = $1 AND (access_token IS NOT NULL OR refresh_token IS NOT NULL) LIMIT 1`,
     [userName]
   );
   if (userRows.length > 0) {
     const auth = userRows[0];
-    console.log(`[OAuth] getAuthClientForUser(${userName}) → ${auth.email ?? "unknown"}`);
+    console.log(`[OAuth] getAuthClientForUser(${userName}) → google_auth (legacy) (${auth.email ?? "unknown"})`);
     const oauth2Client = createOAuthClient();
     oauth2Client.setCredentials({
       access_token: auth.access_token,
@@ -119,7 +153,7 @@ export async function getAuthClientForUser(
     return oauth2Client;
   }
 
-  // Fallback: global preference (ensures David's old rows still work)
+  // Fallback: global preference (ensures backward compat)
   return getAuthClient();
 }
 

@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { broadcast } from "../reminders/sseStore.js";
 import { sendPushToAll } from "../push/pushManager.js";
 import { logger } from "../lib/logger.js";
+import { getActiveUsers } from "../onboarding/onboardingManager.js";
 import {
   getDates,
   nextOccurrence,
@@ -72,47 +73,56 @@ async function checkDateReminders(): Promise<void> {
   if (_lastChecked === today) return;
   _lastChecked = today;
 
-  const dates = await getDates("David");
+  const users = await getActiveUsers().catch(() => []);
+  if (!users.length) return;
+
   const now = new Date();
 
-  for (const d of dates) {
-    const occ = nextOccurrence(d.month, d.day, now);
-    const daysUntil = daysBetween(now, occ);
+  for (const user of users) {
+    const { userName, name: displayName, companionName } = user;
+    const userDisplay = displayName ?? userName;
+    const companion = companionName ?? "Winston";
 
-    if (!LEAD_DAYS.includes(daysUntil)) continue;
+    const dates = await getDates(userName).catch(() => [] as ImportantDate[]);
 
-    const alreadySent = await hasReminderBeenSent(d.id, daysUntil, today);
-    if (alreadySent) continue;
+    for (const d of dates) {
+      const occ = nextOccurrence(d.month, d.day, now);
+      const daysUntil = daysBetween(now, occ);
 
-    const upcoming: UpcomingDate = {
-      ...d,
-      nextOccurrence: occ,
-      daysUntil,
-      yearsCount: null,
-      label: occ.toLocaleDateString("en-US", { month: "long", day: "numeric" }),
-    };
+      if (!LEAD_DAYS.includes(daysUntil)) continue;
 
-    const message = buildDateReminderMessage(upcoming);
+      const alreadySent = await hasReminderBeenSent(d.id, daysUntil, today);
+      if (alreadySent) continue;
 
-    broadcast("reminder", {
-      id: `date-${d.id}-${daysUntil}-${Date.now()}`,
-      userName: "David",
-      reminderText: message,
-      speakText: message,
-      isDateReminder: true,
-    });
+      const upcoming: UpcomingDate = {
+        ...d,
+        nextOccurrence: occ,
+        daysUntil,
+        yearsCount: null,
+        label: occ.toLocaleDateString("en-US", { month: "long", day: "numeric" }),
+      };
 
-    await sendPushToAll({
-      title: `${d.eventType === "birthday" ? "🎂" : "💍"} Important Date — Emma Peel`,
-      body: message,
-      tag: `date-${d.id}-${daysUntil}`,
+      const message = buildDateReminderMessage(upcoming, userDisplay);
 
-      requireInteraction: daysUntil <= 3,
-    }).catch(() => {});
+      broadcast("reminder", {
+        id: `date-${d.id}-${daysUntil}-${Date.now()}`,
+        userName,
+        reminderText: message,
+        speakText: message,
+        isDateReminder: true,
+      });
 
-    await markReminderSent(d.id, daysUntil, today);
+      await sendPushToAll({
+        title: `${d.eventType === "birthday" ? "🎂" : "💍"} Important Date — ${companion}`,
+        body: message,
+        tag: `date-${d.id}-${daysUntil}`,
+        requireInteraction: daysUntil <= 3,
+      }, userName).catch(() => {});
 
-    logger.info({ dateId: d.id, personName: d.personName, daysUntil }, "Date reminder fired");
+      await markReminderSent(d.id, daysUntil, today);
+
+      logger.info({ dateId: d.id, personName: d.personName, daysUntil, userName }, "Date reminder fired");
+    }
   }
 }
 

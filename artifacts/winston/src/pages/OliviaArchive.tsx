@@ -249,7 +249,9 @@ function PasswordGate({ onSuccess }: { onSuccess: (pwd: string) => void }) {
 
 // ── Archive View ──────────────────────────────────────────────────────────────
 
-function ArchiveView({ stories }: { stories: Story[] }) {
+function ArchiveView({ stories, companionName, displayName }: { stories: Story[]; companionName: string | null; displayName: string | null }) {
+  const companion = companionName ?? "their AI companion";
+  const authorName = displayName ?? "your dad";
   const printRef = useRef<HTMLDivElement>(null);
 
   const handlePrint = useCallback(() => {
@@ -300,9 +302,9 @@ function ArchiveView({ stories }: { stories: Story[] }) {
 
           {/* ── Introduction ── */}
           <p style={introStyle}>
-            These are stories and memories your dad, David Blakelock, chose to share — one evening at a time —
-            with his AI companion Emma Peel. Each one was captured in response to a gentle question,
-            and every word is his own. Together they form a portrait of a life, told in his voice,
+            These are stories and memories {authorName} chose to share — one evening at a time —
+            with their AI companion {companion}. Each one was captured in response to a gentle question,
+            and every word is their own. Together they form a portrait of a life, told in their voice,
             preserved for you.
           </p>
           <p style={{ ...introStyle, marginBottom: "0" }}>
@@ -337,7 +339,7 @@ function ArchiveView({ stories }: { stories: Story[] }) {
                 No memories have been captured yet.
               </p>
               <p style={{ fontSize: "0.9rem", marginTop: "12px" }}>
-                Stories will appear here as your dad shares them during his evening conversations with Emma Peel.
+                Stories will appear here as {authorName} shares them during evening conversations with {companion}.
               </p>
             </div>
           )}
@@ -379,7 +381,7 @@ function ArchiveView({ stories }: { stories: Story[] }) {
                 {stories.length > 1 && ` and ${formatDate(stories[stories.length - 1].capturedAt)}`}.
               </p>
               <p style={{ marginTop: "8px" }}>
-                Written by David Blakelock, with a little help from Emma Peel.
+                Written by {authorName}, with a little help from {companion}.
               </p>
               <p style={{ marginTop: "8px", fontSize: "0.78rem", color: "#b89070" }}>
                 For Olivia — always.
@@ -398,6 +400,8 @@ function ArchiveView({ stories }: { stories: Story[] }) {
 export default function OliviaArchive() {
   const [password, setPassword] = useState<string | null>(null);
   const [stories, setStories] = useState<Story[]>([]);
+  const [companionName, setCompanionName] = useState<string | null>(null);
+  const [displayName, setDisplayName] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(false);
 
@@ -408,8 +412,10 @@ export default function OliviaArchive() {
     try {
       const res = await fetch(`${BASE}/api/stories/archive?password=${encodeURIComponent(pwd)}`);
       if (res.ok) {
-        const data = await res.json() as { stories: Story[] };
+        const data = await res.json() as { stories: Story[]; companionName: string | null; displayName: string | null };
         setStories(data.stories);
+        setCompanionName(data.companionName ?? null);
+        setDisplayName(data.displayName ?? null);
         setPassword(pwd);
       } else {
         setLoadError(true);
@@ -444,5 +450,5 @@ export default function OliviaArchive() {
     return <PasswordGate onSuccess={handlePasswordSuccess} />;
   }
 
-  return <ArchiveView stories={stories} />;
+  return <ArchiveView stories={stories} companionName={companionName} displayName={displayName} />;
 }

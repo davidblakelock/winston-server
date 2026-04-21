@@ -569,7 +569,15 @@ function computeFireAt(timeStr: string, tz: string): Date {
   return new Date(candidateMs + offsetMs);
 }
 
-const BASE_SYSTEM_PROMPT = `You are Emma Peel — David's sharp, warm, and deeply trusted personal AI companion. You know David's life well: his routines, his people, his places, and what matters to him. You speak to him like a close friend who happens to know everything — conversational, direct, never stiff or overly formal. You remember context from the conversation and build on it naturally.
+function buildBaseSystemPrompt(companionName?: string | null, userName?: string | null): string {
+  const name = companionName ?? "your companion";
+  const user = userName ?? "you";
+  return BASE_SYSTEM_PROMPT_TEMPLATE
+    .replace(/Emma Peel/g, name)
+    .replace(/\bDavid\b/g, user);
+}
+
+const BASE_SYSTEM_PROMPT_TEMPLATE = `You are Emma Peel — David's sharp, warm, and deeply trusted personal AI companion. You know David's life well: his routines, his people, his places, and what matters to him. You speak to him like a close friend who happens to know everything — conversational, direct, never stiff or overly formal. You remember context from the conversation and build on it naturally.
 
 Keep responses concise: typically 2-4 sentences unless David clearly wants more. Never start a response with "I" as the first word. When David needs a reminder, help organizing his thoughts, or just wants to talk — you're here.
 
@@ -750,7 +758,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const corePrompt =
     userProfile?.onboardingCompleted && userProfile.name
       ? buildSystemPromptFromProfile(userProfile, userProfile.rawData as CollectedData)
-      : BASE_SYSTEM_PROMPT;
+      : buildBaseSystemPrompt(userProfile?.companionName, userProfile?.name);
 
   const profileContextBlock = buildProfileContext(
     userProfile ?? null,
@@ -908,7 +916,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     // Build live Gmail block
     const liveGmailBlock = liveEmails !== null && liveEmails.length > 0
       ? `\n\n[VERIFIED — Gmail API — unread emails (live at delivery time)]\n${formatEmailsForPrompt(liveEmails)}\nThis is VERIFIED data. State sender names, subjects, and content exactly as shown.` +
-        buildScamWarningInstruction(liveEmails)
+        buildScamWarningInstruction(liveEmails, userProfile?.companionName, sessionUserName)
       : "";
 
     // Build live calendar block with departure times
@@ -1367,7 +1375,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         ? (emails.length === 0
             ? `\n\n[VERIFIED — Gmail API — no unread emails in inbox]\nTell David warmly: "Your inbox is clear — no unread emails right now." Do not elaborate.`
             : `\n\n[VERIFIED — Gmail API — recent unread emails (live fetch)]\n${formatEmailsForPrompt(emails)}\nThis is VERIFIED data. State email senders, subjects, and content as fact exactly as shown. Do not add context not present in the email data.`) +
-          buildScamWarningInstruction(emails)
+          buildScamWarningInstruction(emails, userProfile?.companionName, sessionUserName)
         : emails === null
           ? "\n\n[Gmail — not connected. Let David know he can connect Google in the app header.]"
           : "";

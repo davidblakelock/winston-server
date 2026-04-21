@@ -1,0 +1,99 @@
+Build the proactive contact pull during onboarding. When a new user signs in with Google and starts onboarding, automatically pull their Google Contacts and pre-populate the 'Your People' step with likely family members. Use heuristics like: same last name as the user, contacts marked as family, or contacts with relationship labels. Show them as pre-filled cards that the user can confirm, edit, or remove.
+
+9 minutes ago
+
+Exploring onboarding and contacts code
+Let me explore the codebase to understand the current onboarding flow and contacts infrastructure before building:
+
+
+5 actions
+Good picture. Now let me read the key files to understand the exact implementation details before writing code:
+
+
+7 actions
+Let me read the Onboarding.tsx more carefully and look at the full picture:
+
+
+3 actions
+Let me check the onboarding route and how authentication works there:
+
+
+3 actions
+Now I have the full picture. Here's the plan:
+
+Backend: New fetchFamilySuggestions() in contacts.ts that calls people.connections.list with relations+memberships fields, then applies 3 heuristics. New GET /api/onboarding/suggested-people route in onboarding.ts.
+Frontend: When Scene 5 starts, fetch suggestions and show pre-filled cards above the input that users can confirm, edit inline, or remove. Confirmed people get added to collectedData.people.
+Let me build it all now:
+
+
+4 actions
+I have everything I need. Now I'll implement all three parts in parallel — the backend suggestion function, the route, and the frontend card UI:
+
+
+3 actions
+Now I have everything. Let me build all three parts simultaneously:
+
+
+2 actions
+Now let me write all three parts simultaneously:
+
+
+2 actions
+Now add the route to onboarding.ts and update the frontend simultaneously:
+
+
+3 actions
+Now update the frontend — adding the interface, state, fetch logic, and card UI all at once:
+
+
+4 actions
+Now add state, fetch logic, and handlers inside the component:
+
+
+2 actions
+Now add the useEffect and handlers:
+
+
+2 actions
+Now add the confirm/dismiss handlers and the card UI section:
+
+
+2 actions
+Now add the computed value and the card UI section:
+
+
+4 actions
+Now restart both servers to build and test:
+
+
+4 actions
+Clean build — Done in 205ms, server listening, no TypeScript errors. Let me do a quick check of the endpoint:
+
+
+3 actions
+Build is clean, server is live. Here's what was built across all three layers:
+
+Backend — contacts.ts: fetchFamilySuggestions()
+
+Fetches up to 200 of the user's Google Contacts (sorted by most-recently-modified, so family is usually near the top) and applies three heuristics in priority order:
+
+Explicit relation labels — contacts where Google Contacts knows the relationship (spouse, daughter, father, sibling, etc.). These come back marked high confidence with the exact label ("Wife", "Son", "Grandmother", etc.)
+"Family" contact group — contacts the user has manually placed in Google's built-in Family group. Also high confidence.
+Same last name — contacts sharing the user's last name (extracted from their profile). Marked medium confidence, labeled "Family".
+Returns up to 8 suggestions sorted: high-confidence first, then by whether they have a phone number. Gracefully returns an empty array if the user has no Google auth or hasn't granted contacts scope.
+
+Backend — onboarding.ts: GET /api/onboarding/suggested-people
+
+Session-authenticated endpoint. Gets the user's full name from their profile (for the last-name heuristic), calls fetchFamilySuggestions, and returns the results. Falls back to { suggestions: [] } on any error — Scene 5 never breaks even if contacts can't be fetched.
+
+Frontend — Onboarding.tsx: Scene 5 suggestion cards
+
+When the user enters Scene 5, the endpoint is called once in the background. If suggestions come back, a "From your Google Contacts" panel appears above the chat input — a compact scrollable list of cards. Each card has:
+
+Letter avatar → turns to a green check when confirmed
+Name + relationship badge (e.g., Daughter, Spouse, Family)
+✎ Pencil — makes the relationship label inline-editable (type a correction, press Enter to confirm or Escape to cancel)
+✓ Green check — adds the person to collectedData.people immediately, card goes green
+✗ X — dismisses the card without adding
+Skip all link in the header to clear everything at once
+Confirmed people flow silently into the onboarding data — Emma's Scene 5 conversation picks them up naturally, and they get saved to the profile at completion. Users who signed in without Google auth, or whose token lacks contacts scope, simply see no cards and the step works exactly as before.

@@ -462,18 +462,25 @@ export function formatEmailsForPrompt(emails: EmailSummary[]): string {
   return lines.join("\n");
 }
 
-export function buildScamWarningInstruction(emails: EmailSummary[]): string {
+export function buildScamWarningInstruction(
+  emails: EmailSummary[],
+  companionName?: string | null,
+  userName?: string | null
+): string {
   const suspicious = emails.filter((e) => e.suspicion?.isSuspicious);
   if (suspicious.length === 0) return "";
+
+  const companion = companionName ?? "your companion";
+  const user = userName ?? "the user";
 
   const highRisk = suspicious.filter((e) => e.suspicion?.riskLevel === "high");
   const mediumRisk = suspicious.filter((e) => e.suspicion?.riskLevel === "medium");
 
   let instruction = `\n\n[⚠️ SCAM / PHISHING ALERT — CRITICAL INSTRUCTIONS]\n`;
-  instruction += `${suspicious.length} suspicious email${suspicious.length > 1 ? "s" : ""} detected in David's inbox.\n\n`;
+  instruction += `${suspicious.length} suspicious email${suspicious.length > 1 ? "s" : ""} detected in ${user}'s inbox.\n\n`;
 
   if (highRisk.length > 0) {
-    instruction += `HIGH-RISK emails (do NOT let David click links or reply):\n`;
+    instruction += `HIGH-RISK emails (do NOT let ${user} click links or reply):\n`;
     for (const e of highRisk) {
       instruction += `• "${e.subject}" from ${e.from} (${e.fromEmail}) — ${e.suspicion!.flags.slice(0, 2).join("; ")}\n`;
     }
@@ -489,11 +496,11 @@ export function buildScamWarningInstruction(emails: EmailSummary[]): string {
   }
 
   instruction +=
-    `HOW TO HANDLE — speak as Emma Peel, David's protective companion:\n` +
-    `1. Flag suspicious emails FIRST, before summarizing the rest — start with "David, I want to flag something."\n` +
-    `2. Be warm and protective, NOT alarmist. You're a caring friend alerting him, not a security system.\n` +
-    `3. For HIGH RISK: tell him clearly — don't click any links, don't reply, don't call any phone numbers in the email. He can verify by going directly to the bank/company's website.\n` +
-    `4. For MEDIUM RISK: flag it with "this one looks a bit off" and suggest he treat it with caution.\n` +
+    `HOW TO HANDLE — speak as ${companion}, ${user}'s protective companion:\n` +
+    `1. Flag suspicious emails FIRST, before summarizing the rest — start with "${user}, I want to flag something."\n` +
+    `2. Be warm and protective, NOT alarmist. You're a caring friend alerting them, not a security system.\n` +
+    `3. For HIGH RISK: tell them clearly — don't click any links, don't reply, don't call any phone numbers in the email. They can verify by going directly to the bank/company's website.\n` +
+    `4. For MEDIUM RISK: flag it with "this one looks a bit off" and suggest they treat it with caution.\n` +
     `5. After flagging suspicious ones, summarize the legitimate emails normally and warmly.\n` +
     `6. Keep the tone protective and reassuring — "I've got your back on this one."`;
 

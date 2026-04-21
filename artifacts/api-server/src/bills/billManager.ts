@@ -341,20 +341,20 @@ export function formatBillsForPrompt(bills: UpcomingBill[]): string {
     .join("\n");
 }
 
-export function buildBillReminderMessage(bill: UpcomingBill): string {
+export function buildBillReminderMessage(bill: UpcomingBill, displayName = "David"): string {
   const { name, daysUntilDue, dueDateLabel, amount } = bill;
   const amtPart = amount ? ` (${amount})` : "";
 
   if (daysUntilDue === 0) {
-    return `David, heads up — your ${name}${amtPart} payment is due today. Don't want you to miss it.`;
+    return `${displayName}, heads up — your ${name}${amtPart} payment is due today. Don't want you to miss it.`;
   }
   if (bill.frequency === "quarterly") {
-    return `David, just a heads up — your ${name}${amtPart} is due in about a month on ${dueDateLabel}. Wanted to give you plenty of time to get that ready.`;
+    return `${displayName}, just a heads up — your ${name}${amtPart} is due in about a month on ${dueDateLabel}. Wanted to give you plenty of time to get that ready.`;
   }
   if (bill.frequency === "annual") {
-    return `David, just a reminder — your ${name}${amtPart} is coming up in two weeks on ${dueDateLabel}. Didn't want that one sneaking up on you.`;
+    return `${displayName}, just a reminder — your ${name}${amtPart} is coming up in two weeks on ${dueDateLabel}. Didn't want that one sneaking up on you.`;
   }
-  return `David, just a heads up — your ${name}${amtPart} payment is due in ${daysUntilDue} day${daysUntilDue === 1 ? "" : "s"} on ${dueDateLabel}. Don't want you to miss it.`;
+  return `${displayName}, just a heads up — your ${name}${amtPart} payment is due in ${daysUntilDue} day${daysUntilDue === 1 ? "" : "s"} on ${dueDateLabel}. Don't want you to miss it.`;
 }
 
 export function confirmBillAdded(bill: Bill): string {
