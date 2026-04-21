@@ -94,38 +94,49 @@ export async function getAuthClientForUser(
   userName: string
 ): Promise<InstanceType<typeof google.auth.OAuth2> | null> {
   // First try: user_integrations (canonical integration store, written by connect flow)
-  const { rows: integrationRows } = await query<{
-    access_token: string | null;
-    refresh_token: string | null;
-    token_expiry: Date | null;
-    external_email: string | null;
-  }>(
-    `SELECT access_token, refresh_token, token_expiry, external_email
-     FROM user_integrations
-     WHERE user_name = $1 AND provider = 'google'
-       AND (access_token IS NOT NULL OR refresh_token IS NOT NULL)
-     LIMIT 1`,
-    [userName]
-  );
-  if (integrationRows.length > 0) {
-    const row = integrationRows[0];
-    console.log(`[OAuth] getAuthClientForUser(${userName}) → user_integrations (${row.external_email ?? "unknown"})`);
-    const oauth2Client = createOAuthClient();
-    oauth2Client.setCredentials({
-      access_token: row.access_token,
-      refresh_token: row.refresh_token ?? undefined,
-      expiry_date: row.token_expiry ? new Date(row.token_expiry).getTime() : undefined,
-    });
-    oauth2Client.on("tokens", async (tokens) => {
-      if (tokens.access_token) {
-        await query(
-          `UPDATE user_integrations SET access_token = $1, token_expiry = $2, updated_at = NOW()
-           WHERE user_name = $3 AND provider = 'google'`,
-          [tokens.access_token, tokens.expiry_date ? new Date(tokens.expiry_date) : null, userName]
-        );
-      }
-    });
-    return oauth2Client;
+  // Wrapped in try/catch so a missing table or query error falls through gracefully.
+  try {
+    const { rows: integrationRows } = await query<{
+      access_token: string | null;
+      refresh_token: string | null;
+      token_expiry: Date | null;
+      external_email: string | null;
+    }>(
+      `SELECT access_token, refresh_token, token_expiry, external_email
+       FROM user_integrations
+       WHERE user_name = $1 AND provider = 'google'
+         AND (access_token IS NOT NULL OR refresh_token IS NOT NULL)
+       LIMIT 1`,
+      [userName]
+    );
+    if (integrationRows.length > 0) {
+      const row = integrationRows[0];
+      console.log(`[OAuth] getAuthClientForUser(${userName}) → user_integrations (${row.external_email ?? "unknown"})`);
+      const oauth2Client = createOAuthClient();
+      oauth2Client.setCredentials({
+        access_token: row.access_token,
+        refresh_token: row.refresh_token ?? undefined,
+        expiry_date: row.token_expiry ? new Date(row.token_expiry).getTime() : undefined,
+      });
+      oauth2Client.on("tokens", async (tokens) => {
+        if (tokens.access_token) {
+          // Keep both stores in sync on token refresh
+          await query(
+            `UPDATE user_integrations SET access_token = $1, token_expiry = $2, updated_at = NOW()
+             WHERE user_name = $3 AND provider = 'google'`,
+            [tokens.access_token, tokens.expiry_date ? new Date(tokens.expiry_date) : null, userName]
+          ).catch(() => {});
+          await query(
+            `UPDATE google_auth SET access_token = $1, token_expiry = $2, updated_at = NOW()
+             WHERE user_name = $3`,
+            [tokens.access_token, tokens.expiry_date ? new Date(tokens.expiry_date) : null, userName]
+          ).catch(() => {});
+        }
+      });
+      return oauth2Client;
+    }
+  } catch (err) {
+    console.warn(`[OAuth] getAuthClientForUser(${userName}) — user_integrations query failed, falling back:`, err instanceof Error ? err.message : err);
   }
 
   // Second try: legacy google_auth row for this user
