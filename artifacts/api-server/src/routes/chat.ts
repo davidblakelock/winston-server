@@ -172,6 +172,7 @@ import {
 import { preFetchMorningBriefing, buildCalendarDepartureTimes } from "../morning/briefingPregenerate.js";
 import { populateCalendarSyncState } from "../departure/calendarSyncScheduler.js";
 import { logBriefingStories } from "../morning/storyDedup.js";
+import { getDallasItems, getLocalContentCity, type LocalContentItem } from "../morning/dallasContent.js";
 import { createReminder } from "../reminders/reminderManager.js";
 import { broadcastToUser } from "../reminders/sseStore.js";
 
@@ -374,6 +375,9 @@ const BILL_REMOVE_PATTERN = /\b(remove\s+(my\s+)?\w.{1,40}(bill|payment|insuranc
 
 // Markets / stocks
 const MARKETS_PATTERN = /\b(market(s)?|s&p|s&p\s*500|dow|nasdaq|stock(s)?|spy|dia|qqq|uso|oil\s+price|crude|financial\s+update|market\s+update|how('?s|\s+are)\s+(the\s+)?market(s)?|what('?s|\s+are)\s+(the\s+)?(market(s)?|stock(s)?|index|indices)|market\s+check|check\s+(the\s+)?market(s)?|market\s+open|wall\s+street)\b/i;
+
+// Local events — "what's happening in Dallas", "things to do this weekend", etc.
+const LOCAL_EVENTS_PATTERN = /\b(what'?s\s+happening|what'?s\s+going\s+on|things?\s+to\s+do|local\s+events?|events?\s+(?:this|the|near|in|around|next)\s+(?:weekend|week|me|town|city|area)|anything\s+(?:going\s+on|happening|to\s+do)|what\s+to\s+do|something\s+to\s+do|places?\s+to\s+go|weekend\s+plans?|things?\s+(?:happening|going\s+on)|fun\s+(?:things?|stuff|activities?)|what'?s?\s+(?:on|up)\s+(?:this|the)\s+(?:weekend|week)|events?\s+(?:tonight|this\s+week|this\s+weekend|upcoming)|what\s+can\s+(?:i|we)\s+do)\b/i;
 
 // Important dates
 const DATE_ADD_PATTERN = /\b(('s\s+birthday|birthday\s+is|my\s+anniversary\s+with|our\s+anniversary\s+is|anniversary\s+with|birthday\s+is|remember\s+(that\s+)?(\w+\s+)?birthday|add\s+(a\s+)?(birthday|anniversary)))\b/i;
@@ -797,6 +801,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isSportsRequest = !isMorningGreeting && SPORTS_PATTERN.test(message);
   const isMarketsRequest = !isMorningGreeting && MARKETS_PATTERN.test(message);
   const isBriefingPrefRequest = !isMorningGreeting && BRIEFING_PREF_PATTERN.test(message);
+  const isLocalEventsRequest = !isMorningGreeting && !isCalendarRequest && LOCAL_EVENTS_PATTERN.test(message);
   const isBillAdd = !isMorningGreeting && BILL_ADD_PATTERN.test(message);
   const isBillList = !isMorningGreeting && BILL_LIST_PATTERN.test(message);
   const isBillRemove = !isMorningGreeting && BILL_REMOVE_PATTERN.test(message);
@@ -1264,6 +1269,63 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       }
     } catch (err) {
       req.log.warn({ err }, "[BriefingPref] Failed to save preference");
+    }
+  }
+
+  // ── Local events injection ──────────────────────────────────────────────────
+  // When the user asks "what's happening in Dallas this weekend" or similar,
+  // inject the in-memory cached RSS items so Claude can answer with real data.
+  if (isLocalEventsRequest) {
+    try {
+      const cachedItems = getDallasItems();
+      const contentCity = getLocalContentCity();
+      const userCity = userProfile?.city ?? "Dallas";
+
+      if (cachedItems.length > 0 && contentCity.trim().toLowerCase() === userCity.trim().toLowerCase()) {
+        // Fast path: use today's in-memory cached items (populated at briefing pre-gen)
+        const sorted = [...cachedItems]
+          .sort((a, b) => {
+            const o: Record<string, number> = { high: 0, medium: 1, low: 2 };
+            return (o[a.priority] ?? 2) - (o[b.priority] ?? 2);
+          })
+          .slice(0, 20);
+
+        const isWeekendQuery = /weekend|fri|sat|sun/i.test(message);
+        const lines = sorted
+          .map(
+            (i: LocalContentItem) =>
+              `• ${i.headline}${i.summary ? ` — ${i.summary}` : ""}` +
+              `${i.publishedAt ? ` (${new Date(i.publishedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "America/Chicago" })})` : ""}`
+          )
+          .join("\n");
+
+        systemPrompt +=
+          `\n\n[What's Happening in ${userCity} — Today's Local Feed]\n${lines}\n\n` +
+          `[Local Events Query] The user is asking about local events / things to do in ${userCity}. ` +
+          `Use the block above to answer directly. ` +
+          (isWeekendQuery
+            ? `They asked about the weekend — focus on events happening Friday, Saturday, or Sunday. `
+            : "") +
+          `Share 4–6 highlights conversationally — no bullet points or headers. ` +
+          `Prioritise high-priority items. Never invent events not listed above.`;
+
+        req.log.info(
+          { city: userCity, itemCount: cachedItems.length },
+          "[LocalEvents] Injected cached items into chat"
+        );
+      } else {
+        // Cache miss or city mismatch — let Claude use its web_search tool
+        systemPrompt +=
+          `\n\n[Local Events Query — No Cached Data]\n` +
+          `No local content is cached yet for ${userCity}. Use your web_search tool to find ` +
+          `current events, things to do, restaurant news, and local happenings in ${userCity}` +
+          (/weekend/i.test(message) ? ` this weekend` : "") +
+          `. Share 4–6 highlights conversationally.`;
+
+        req.log.info({ city: userCity }, "[LocalEvents] Cache miss — instructing Claude to search");
+      }
+    } catch (err) {
+      req.log.warn({ err }, "[LocalEvents] Failed to inject local content");
     }
   }
 
