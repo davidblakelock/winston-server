@@ -145,6 +145,7 @@ export default function SettingsPanel({
 
   const [providers, setProviders] = useState<{ google: boolean; microsoft: boolean; apple: boolean }>({ google: true, microsoft: false, apple: false });
 
+  const [googleConnecting, setGoogleConnecting] = useState(false);
   const [garminConnected, setGarminConnected] = useState(false);
   const [garminEmail, setGarminEmail] = useState<string | null>(null);
   const [garminLastSync, setGarminLastSync] = useState<string | null>(null);
@@ -163,6 +164,7 @@ export default function SettingsPanel({
     setPendingAvatarDataUrl(null);
     setPhotoError(null);
     setNameSaved(false);
+    setGoogleConnecting(false);
   }, [isOpen, currentVoiceId, currentCompanionName]);
 
   useEffect(() => {
@@ -755,8 +757,19 @@ export default function SettingsPanel({
                     </button>
                   </div>
                 ) : (
-                  <Button className="w-full h-8 text-xs" onClick={onGoogleConnect}>
-                    Connect Gmail &amp; Calendar
+                  <Button
+                    className="w-full h-8 text-xs"
+                    disabled={googleConnecting}
+                    onClick={() => {
+                      setGoogleConnecting(true);
+                      onGoogleConnect();
+                    }}
+                  >
+                    {googleConnecting ? (
+                      <><Loader2 className="h-3 w-3 animate-spin mr-1.5" />Opening Google…</>
+                    ) : (
+                      "Connect Gmail \u0026 Calendar"
+                    )}
                   </Button>
                 )}
               </div>

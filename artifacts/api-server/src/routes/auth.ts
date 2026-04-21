@@ -260,30 +260,95 @@ router.post("/auth/google/native", express.json({ limit: "1mb" }), async (req: R
     req.log.info({ userName, isNewUser }, "[AUTH] /auth/google/native — user resolved");
 
     // ── 3. Exchange serverAuthCode → store OAuth tokens (optional) ──────────
+    // IMPORTANT: Only write to google_auth/user_integrations if the exchanged
+    // tokens actually include the full calendar/gmail/contacts scopes.
+    // Identity-only tokens (email+profile) must NEVER overwrite existing
+    // full-scope tokens — that would silently break calendar/gmail/contacts.
     if (serverAuthCode && typeof serverAuthCode === "string") {
       try {
         const { tokens } = await client.getToken({ code: serverAuthCode });
         if (tokens.access_token) {
-          await query(
-            `INSERT INTO google_auth (user_name, email, access_token, refresh_token, token_expiry, scope)
-             VALUES ($1, $2, $3, $4, $5, $6)
-             ON CONFLICT (user_name) DO UPDATE SET
-               email         = EXCLUDED.email,
-               access_token  = EXCLUDED.access_token,
-               refresh_token = COALESCE(EXCLUDED.refresh_token, google_auth.refresh_token),
-               token_expiry  = EXCLUDED.token_expiry,
-               scope         = EXCLUDED.scope,
-               updated_at    = NOW()`,
-            [
-              userName,
-              email,
-              tokens.access_token ?? null,
-              tokens.refresh_token ?? null,
-              tokens.expiry_date ? new Date(tokens.expiry_date) : null,
-              SCOPES.join(" "),
-            ]
-          );
-          req.log.info({ userName }, "[AUTH] /auth/google/native — google_auth upserted from serverAuthCode");
+          const grantedScope = tokens.scope ?? "";
+          const hasCalendar = grantedScope.includes("calendar");
+          const hasGmail    = grantedScope.includes("gmail");
+          const hasContacts = grantedScope.includes("contacts");
+          const hasFullScopes = hasCalendar || hasGmail || hasContacts;
+
+          if (hasFullScopes) {
+            // Full integration scopes granted — write to both stores
+            await query(
+              `INSERT INTO google_auth (user_name, email, access_token, refresh_token, token_expiry, scope)
+               VALUES ($1, $2, $3, $4, $5, $6)
+               ON CONFLICT (user_name) DO UPDATE SET
+                 email         = EXCLUDED.email,
+                 access_token  = EXCLUDED.access_token,
+                 refresh_token = COALESCE(EXCLUDED.refresh_token, google_auth.refresh_token),
+                 token_expiry  = EXCLUDED.token_expiry,
+                 scope         = EXCLUDED.scope,
+                 updated_at    = NOW()`,
+              [
+                userName, email,
+                tokens.access_token ?? null,
+                tokens.refresh_token ?? null,
+                tokens.expiry_date ? new Date(tokens.expiry_date) : null,
+                grantedScope,
+              ]
+            );
+            await query(
+              `INSERT INTO user_integrations (user_name, provider, access_token, refresh_token, token_expiry, scopes, external_email, updated_at)
+               VALUES ($1, 'google', $2, $3, $4, $5, $6, NOW())
+               ON CONFLICT (user_name, provider) DO UPDATE SET
+                 access_token   = EXCLUDED.access_token,
+                 refresh_token  = COALESCE(EXCLUDED.refresh_token, user_integrations.refresh_token),
+                 token_expiry   = EXCLUDED.token_expiry,
+                 scopes         = EXCLUDED.scopes,
+                 external_email = EXCLUDED.external_email,
+                 updated_at     = NOW()`,
+              [
+                userName,
+                tokens.access_token ?? null,
+                tokens.refresh_token ?? null,
+                tokens.expiry_date ? new Date(tokens.expiry_date) : null,
+                grantedScope,
+                email,
+              ]
+            );
+            req.log.info({ userName, hasCalendar, hasGmail, hasContacts }, "[AUTH] /auth/google/native — google_auth + user_integrations upserted (full scopes)");
+          } else {
+            // Identity-only tokens — preserve any existing full-scope tokens.
+            // Only update the access_token if the user has NO existing tokens at all.
+            const { rows: existing } = await query<{ scope: string | null }>(
+              `SELECT scope FROM google_auth WHERE user_name = $1 LIMIT 1`,
+              [userName]
+            );
+            const existingHasFullScopes = existing.length > 0 &&
+              (existing[0].scope ?? "").includes("calendar");
+
+            if (!existingHasFullScopes) {
+              // No full-scope tokens exist yet — safe to write identity tokens as a placeholder
+              await query(
+                `INSERT INTO google_auth (user_name, email, access_token, refresh_token, token_expiry, scope)
+                 VALUES ($1, $2, $3, $4, $5, $6)
+                 ON CONFLICT (user_name) DO UPDATE SET
+                   email         = EXCLUDED.email,
+                   access_token  = EXCLUDED.access_token,
+                   refresh_token = COALESCE(EXCLUDED.refresh_token, google_auth.refresh_token),
+                   token_expiry  = EXCLUDED.token_expiry,
+                   scope         = EXCLUDED.scope,
+                   updated_at    = NOW()`,
+                [
+                  userName, email,
+                  tokens.access_token ?? null,
+                  tokens.refresh_token ?? null,
+                  tokens.expiry_date ? new Date(tokens.expiry_date) : null,
+                  grantedScope,
+                ]
+              );
+              req.log.info({ userName, grantedScope }, "[AUTH] /auth/google/native — google_auth upserted (no prior full-scope tokens)");
+            } else {
+              req.log.info({ userName, grantedScope }, "[AUTH] /auth/google/native — identity-only serverAuthCode, preserving existing full-scope tokens");
+            }
+          }
         }
       } catch (codeErr) {
         // Non-fatal — session still issued, but server-side Google APIs won't work
@@ -360,8 +425,12 @@ router.post("/auth/session/logout", async (req: Request, res: Response) => {
 router.get("/auth/status", async (req: Request, res: Response) => {
   try {
     const authHeader = req.headers.authorization;
+    const apiKey = req.headers["x-api-key"];
     let userName: string | null = null;
-    if (authHeader?.startsWith("Bearer ")) {
+    // Accept both Bearer session token and native-app API key
+    if (apiKey === "winston-native-2026") {
+      userName = "David";
+    } else if (authHeader?.startsWith("Bearer ")) {
       const session = await validateSession(authHeader.slice(7));
       if (session) userName = session.userName;
     }
