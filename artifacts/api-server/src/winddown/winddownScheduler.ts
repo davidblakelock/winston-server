@@ -9,7 +9,12 @@ import {
   saveTonightMessage,
 } from "./winddownManager.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
-import { fetchTodayEvents } from "../google/calendar.js";
+import { fetchTodayEvents, fetchTomorrowEvents } from "../google/calendar.js";
+import {
+  getNextStoryQuestion,
+  setPendingPrompt,
+  hasStoryCapturedTonight,
+} from "../stories/storyManager.js";
 import { logger } from "../lib/logger.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -22,48 +27,87 @@ async function getCompanionName(): Promise<string> {
 export async function generateOpeningMessage(companionName: string): Promise<string> {
   const tz = "America/Chicago";
   const now = new Date();
-  const dayName = now.toLocaleDateString("en-US", {
-    timeZone: tz,
-    weekday: "long",
-  });
+  const dayName = now.toLocaleDateString("en-US", { timeZone: tz, weekday: "long" });
 
   const isPickleballDay = ["Monday", "Wednesday", "Friday", "Saturday"].includes(dayName);
+  const pickleballVenue = dayName === "Saturday" ? "Moody's YMCA" : "Semones YMCA";
 
-  // Fetch today's calendar events to ground the opening in specifics
-  let todayEventsContext = "";
+  // Fetch today's calendar events
+  let todayContext = "";
   try {
     const evts = await fetchTodayEvents("David");
     if (evts && evts.length > 0) {
-      // Filter to non-all-day, non-pickleball events worth referencing
       const notable = evts
         .filter((e) => !e.allDay && !/pickleball/i.test(e.summary))
         .slice(0, 3)
         .map((e) => e.summary);
       if (notable.length > 0) {
-        todayEventsContext = `Today's calendar included: ${notable.join(", ")}.`;
+        todayContext = `Today's calendar events: ${notable.join(", ")}.`;
       }
     }
-  } catch {
-    // non-fatal — continue without calendar context
+  } catch { /* non-fatal */ }
+
+  // Fetch tomorrow's calendar events
+  let tomorrowContext = "";
+  try {
+    const evts = await fetchTomorrowEvents("David");
+    if (evts && evts.length > 0) {
+      const notable = evts
+        .filter((e) => !e.allDay)
+        .slice(0, 2)
+        .map((e) => {
+          const time = (e as { startTime?: string }).startTime
+            ? ` at ${(e as { startTime?: string }).startTime}`
+            : "";
+          return `${e.summary}${time}`;
+        });
+      if (notable.length > 0) {
+        tomorrowContext = `Tomorrow: ${notable.join(", ")}.`;
+      }
+    }
+  } catch { /* non-fatal */ }
+
+  // Fetch tonight's story question from the bank and set it as pending
+  let storyQuestion = "";
+  try {
+    const capturedTonight = await hasStoryCapturedTonight();
+    if (!capturedTonight) {
+      const storyQ = await getNextStoryQuestion();
+      if (storyQ) {
+        await setPendingPrompt(storyQ.question);
+        storyQuestion = storyQ.question;
+        logger.info({ questionId: storyQ.id, category: storyQ.category }, "Evening story question set");
+      }
+    }
+  } catch (err) {
+    logger.warn({ err }, "Failed to fetch/set story question");
   }
 
   const prompt =
-    `You are ${companionName}, David Blakelock's warm personal AI companion. It's ${dayName} evening in Dallas, Texas.\n` +
-    (isPickleballDay
-      ? `David played pickleball this morning at the YMCA (indoor courts — weather doesn't affect it). `
-      : ``) +
-    (todayEventsContext ? `${todayEventsContext} ` : ``) +
-    `\nGenerate a warm, genuine 2–3 sentence opening to start the evening check-in. ` +
-    `Start with "Good evening, David." then ask naturally how his day went. ` +
-    `If there are specific calendar events, reference one by name — e.g., "How did that lunch with Mike go?" ` +
-    `Make it feel like a close friend checking in — warm, personal, never stiff or robotic. ` +
-    `Do NOT mention pickleball weather (indoor courts). ` +
-    `Do NOT ask about stories, memories, or tomorrow yet. Just the warm evening check-in.`;
+    `You are ${companionName}, David Blakelock's warm personal AI companion. It's ${dayName} evening in Dallas, Texas.\n\n` +
+    `David's family: wife Susan, daughter Olivia, and Winston his corgi.\n` +
+    (isPickleballDay ? `David played pickleball this morning at ${pickleballVenue} (indoor courts — do NOT mention weather for pickleball).\n` : ``) +
+    (todayContext ? `${todayContext}\n` : ``) +
+    (tomorrowContext ? `${tomorrowContext}\n` : ``) +
+    (storyQuestion ? `Tonight's story question: "${storyQuestion}"\n` : ``) +
+    `\nWrite ONE complete, flowing evening check-in message — about 150–200 words. ` +
+    `Flowing warm prose. No headers. No numbered sections. One connected message.\n\n` +
+    `Cover these six elements in order, woven together naturally:\n\n` +
+    `1. OPENER: Warm personal greeting. Reference something real from today${todayContext ? " (use the calendar events)" : ""}. ` +
+    `Mention Susan, Olivia, and/or Winston naturally where it fits — don't force all three.\n\n` +
+    (storyQuestion
+      ? `2. STORY QUESTION: Include this word for word: "Here's something worth sitting with tonight — something for Olivia someday: ${storyQuestion}"\n\n`
+      : `2. STORY QUESTION: Skip — no question available tonight.\n\n`) +
+    `3. JOURNAL INVITE: Soft optional — something like: "If you want to add anything to your journal tonight, just talk and I'll capture it — or just say 'I don't journal' and we'll skip it."\n\n` +
+    `4. REFLECTION: One brief, genuine thought for before sleep. Not advice. Not a quote. Just warm and human.\n\n` +
+    `5. TOMORROW PREP: ${tomorrowContext ? `Mention what's ahead (${tomorrowContext}). ` : ``}Ask: "Anything you want to add to your list or calendar before we close out?"\n\n` +
+    `6. CLOSING: Warm goodnight. Mention Susan, Olivia, and Winston by name. One encouraging sentence.\n\n` +
+    `Write this as one flowing piece of prose — no bullet points, no headers, no numbers.`;
 
   try {
     const response = await anthropic.messages.create({
       model: "claude-opus-4-5",
-      max_tokens: 180,
+      max_tokens: 500,
       messages: [{ role: "user", content: prompt }],
     });
     const block = response.content[0];
@@ -72,26 +116,18 @@ export async function generateOpeningMessage(companionName: string): Promise<str
     logger.warn({ err }, "Failed to generate wind-down opening, using fallback");
   }
 
-  // Fallback messages — brief, warm, personal to the day
-  const fallbacks: Record<string, string> = {
-    Monday:
-      "Good evening, David. Monday's wrapping up — hope it was a solid one after pickleball this morning. How did the rest of the day go?",
-    Tuesday:
-      "Good evening, David. Hope Tuesday treated you well. I'm all yours — how was your day?",
-    Wednesday:
-      "Good evening, David. Mid-week already. Hope pickleball this morning got the day started right. How did the rest of it go?",
-    Thursday:
-      "Good evening, David. Thursday's almost done — how was your day? Anything worth talking about?",
-    Friday:
-      "Good evening, David. End of the week. Hope pickleball was a good one this morning. How did Friday treat you?",
-    Saturday:
-      "Good evening, David. Hope Saturday pickleball at Moody's was a great one. How was the rest of your day?",
-    Sunday:
-      "Good evening, David. Hope Sunday was a good one for you. How was your day?",
-  };
+  // Fallback — includes all key elements
+  const pickleballNote = isPickleballDay ? ` Hope ${pickleballVenue} was a good session this morning.` : ``;
   return (
-    fallbacks[dayName] ??
-    "Good evening, David. How was your day? I'd love to hear about it before we check in for the night."
+    `Good evening, David.${pickleballNote} Hope your ${dayName} was a solid one — ` +
+    `and that Susan and Olivia had a good evening too. Winston getting his walk in?\n\n` +
+    (storyQuestion
+      ? `Here's something worth sitting with tonight — something for Olivia someday: ${storyQuestion}\n\n`
+      : ``) +
+    `If you want to add anything to your journal tonight, just talk and I'll capture it — or just say "I don't journal" and we'll skip it.\n\n` +
+    `Take a breath. Whatever didn't get done today can wait.\n\n` +
+    (tomorrowContext ? `Tomorrow: ${tomorrowContext} Anything you want to add to your list before we close out?\n\n` : `Anything you want to add to your list or calendar before we close out?\n\n`) +
+    `Goodnight — give Susan, Olivia, and Winston a squeeze from me. You did good today.`
   );
 }
 

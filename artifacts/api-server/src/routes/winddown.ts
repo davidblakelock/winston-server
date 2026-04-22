@@ -42,16 +42,12 @@ router.post("/winddown/activate", async (_req: Request, res: Response) => {
     await markFiredToday();        // Ensures today's row exists (no-op if already present)
     await setWinddownActive(true); // Ensures active = true (re-activates if deactivated)
 
-    // Return the pre-generated message if available; otherwise generate one on-demand.
-    // This is the common case when the user taps the button before the 9 PM scheduler runs.
-    let message = await getTonightMessage();
-    if (!message) {
-      const profile = await getProfile("David").catch(() => null);
-      const companionName = profile?.companionName ?? "Your Companion";
-      message = await generateOpeningMessage(companionName);
-      // Save so subsequent calls return the same message
-      await saveTonightMessage(message).catch(() => {});
-    }
+    // Always generate fresh — the opening message includes tonight's story question,
+    // calendar events, and all 6 check-in elements. Caching would serve stale content.
+    const profile = await getProfile("David").catch(() => null);
+    const companionName = profile?.companionName ?? "Your Companion";
+    const message = await generateOpeningMessage(companionName);
+    await saveTonightMessage(message).catch(() => {});
 
     res.json({ activated: true, message });
   } catch (err) {
