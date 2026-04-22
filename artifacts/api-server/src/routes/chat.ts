@@ -1754,62 +1754,64 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       }
     } catch { /* non-fatal */ }
 
-    const _wdJournalOff = briefingPrefs.some(p => p.prefKey === "journal" && p.prefValue === "off");
-    const _wdStoryOff = briefingPrefs.some(p => p.prefKey === "story_questions" && p.prefValue === "off");
-
-    // Build step numbers dynamically based on what's enabled
-    let stepNum = 1;
-    const step = () => stepNum++;
-
-    const step1Num = step();
-    const step2Num = _wdStoryOff ? null : step();
-    const step3Num = _wdJournalOff ? null : step();
-    const step4Num = step(); // Tomorrow calendar
-    const step5Num = step(); // Tomorrow weather
-    const step6Num = step(); // Close
-
-    const weatherInstruction = tomorrowWeatherData
+    // Build weather note for the tomorrow preview step (only if data available)
+    const weatherNote = tomorrowWeatherData
       ? (tomorrowHasOutdoor
-          ? `${step5Num}. TOMORROW WEATHER — One sentence. Mention outdoor conditions relevant to any outdoor activity tomorrow. Be specific: "Good day for a run — it'll be around ${tomorrowWeatherData.high ?? "–"} and ${tomorrowWeatherData.condition ?? "clear"}." Skip if no outdoor activities.`
-          : `${step5Num}. TOMORROW WEATHER — One sentence. Just a natural note on overnight low and tomorrow's feel — e.g. "Should cool down nicely tonight — tomorrow's looking like a ${tomorrowWeatherData.condition ?? "nice day"} with a high of ${tomorrowWeatherData.high ?? "–"}." Do NOT tie weather to pickleball or any indoor activity.`)
-      : `${step5Num}. TOMORROW WEATHER — Skip this step if no weather data is available.`;
+          ? ` Weather note for outdoor activities: ${tomorrowWeatherData.condition ?? ""}${tomorrowWeatherData.high ? `, high ${tomorrowWeatherData.high}°F` : ""}${tomorrowWeatherData.precip > 30 ? `, ${tomorrowWeatherData.precip}% rain` : ""}.`
+          : ` Overnight low ${tomorrowWeatherData.tonightLow}, tomorrow high ${tomorrowWeatherData.high ?? "–"}°F${tomorrowWeatherData.condition ? ` (${tomorrowWeatherData.condition})` : ""}.`)
+      : "";
 
     systemPrompt +=
       `\n\n[Evening Check-In — ACTIVE]\n` +
-      `This is a genuine 3–5 minute evening check-in — warm, personal, unhurried. ` +
-      `Move through one step per message. Each response: 2–3 warm sentences. ` +
-      `Do NOT rush. Do NOT stack multiple steps into one message. ` +
-      `This should feel like a trusted friend checking in, not a scripted checklist.\n\n` +
+      `You are leading David through a warm, structured 4-step evening check-in. ` +
+      `This is a real conversation — not a form or checklist. ` +
+      `Move through EXACTLY ONE STEP per message. ` +
+      `After David responds to each step, advance to the next. ` +
+      `Never skip a step. Never combine two steps into one message. ` +
+      `Each response should be 2–3 sentences — warm, unhurried, like a trusted friend.\n\n` +
 
-      `${step1Num}. CHECK-IN — Ask David how his day went. If [Today's Calendar] shows specific events, ` +
-      `reference one by name — e.g. "How did that lunch with Mike go?" or "Hope pickleball was a good one today." ` +
-      `Make it feel personal and specific, not generic. One warm question to open.\n` +
+      `THE 4 STEPS — follow this exact sequence:\n\n` +
 
-      (step2Num !== null
-        ? `${step2Num}. MEMORY CAPTURE — Ask the question from [Tonight's Memory Question]. ` +
-          `Frame it warmly: "I'd love to capture something for Olivia — [question]." ` +
-          `One question only. This is one of the most meaningful parts of the evening — ask it like you mean it.\n`
-        : ``) +
+      `STEP 1 — OPENER (do this on the FIRST message of this check-in):\n` +
+      `Greet David and reference something specific from today. Use [Today's Activities] to mention ` +
+      `something concrete — e.g. "Hope pickleball at Semones was a good one this morning" if it was a pickleball day, ` +
+      `or reference a calendar event by name if one exists. ` +
+      `Then ask one warm, open question: "How did the rest of your day go?" or "How was your Wednesday?" ` +
+      `Make it feel personal — not "How was your day?" in isolation.\n\n` +
 
-      (step3Num !== null
-        ? `${step3Num}. JOURNAL — Ask one thoughtful, specific question to prompt reflection. ` +
-          `Not "how was your day" (already asked). Something deeper — e.g. "What's one thing from today you want to remember?", ` +
-          `"Anything you're sitting with tonight?", "What surprised you today?", "What are you proud of from today?" ` +
-          `Pick the question that fits the mood of the conversation. One question only.\n`
-        : ``) +
+      `STEP 2 — REFLECTION (after David responds to Step 1):\n` +
+      `Ask one meaningful question about something from today that's worth holding onto. ` +
+      `Choose from these based on the tone of David's response:\n` +
+      `  • "What's one thing from today you want to hold onto?"\n` +
+      `  • "Anything from today catch you off guard?"\n` +
+      `  • "What are you most proud of from today?"\n` +
+      `  • "Anything sitting with you tonight — good or bad?"\n` +
+      `  • "What was the highlight?"\n` +
+      `Pick the one that fits the mood. One question only — no preamble, no explanation. Just ask it naturally.\n\n` +
 
-      `${step4Num}. TOMORROW PREVIEW — Tell David what's ahead tomorrow using [Tomorrow's Calendar]. ` +
+      `STEP 3 — TOMORROW PREVIEW (after David responds to Step 2):\n` +
+      `Briefly set David up for tomorrow using [Tomorrow's Calendar]. ` +
       `Name 1–2 events with their times. Keep it to 1–2 natural sentences. ` +
-      `If pickleball is tomorrow, mention it — but never connect it to weather (indoor courts).\n` +
+      `If pickleball is tomorrow, mention it ("Early pickleball tomorrow — good way to start the day."). ` +
+      `${weatherNote ? `Add one short weather note if relevant to outdoor activities only: ${weatherNote}` : "No weather data — skip weather."} ` +
+      `Never connect weather to pickleball or any indoor activity.\n\n` +
 
-      `${weatherInstruction}\n` +
+      `STEP 4 — CLOSE (after David responds to Step 3, OR if he signals he's done):\n` +
+      `One warm, specific closing line. Reference something he said tonight — a memory, something he was proud of, ` +
+      `or what's ahead tomorrow. Give it some character. ` +
+      `Not "Sleep well, David." Not generic. No questions. End there.\n\n` +
 
-      `${step6Num}. CLOSE — One warm, specific closing line with some character. ` +
-      `Reference something personal from tonight's conversation — a memory he shared, something he's proud of, or what's ahead tomorrow. ` +
-      `Not "Sleep well." Not generic. No more questions after this. End there.\n\n` +
+      `READING THE CONVERSATION:\n` +
+      `Look at the conversation history to determine which step you're on. ` +
+      `If this is the first message of the check-in (no prior check-in messages in history), do STEP 1. ` +
+      `If David just answered Step 1 (you asked about his day, he responded), do STEP 2. ` +
+      `If David just answered Step 2 (reflection question), do STEP 3. ` +
+      `If David just answered Step 3 (tomorrow preview), do STEP 4. ` +
+      `If David says goodnight or signals he's done at any point, go directly to STEP 4.\n\n` +
 
-      `RULES: No medication reminders. No music suggestions. No phone reminders. No checklists. ` +
-      `One step per message. Never ask a question in the closing line. ` +
+      `RULES: No medication reminders. No music suggestions. No phone reminders. ` +
+      `No random trivia or story questions. No "capturing something for Olivia" — ` +
+      `this check-in is purely about David's day. ` +
       `Never mention weather in connection with pickleball or any indoor activity.\n` +
 
       todayCalendarBlock +
