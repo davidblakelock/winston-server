@@ -316,7 +316,7 @@ async function sendConcertAlertsForUser(userName: string, companionName: string)
        FROM concerts_of_interest
        WHERE notified = FALSE AND score >= 5
          AND (event_date BETWEEN $1 AND $2 OR event_date IS NULL)
-       ORDER BY score DESC LIMIT 3`,
+       ORDER BY score DESC LIMIT 12`,
       [today, limit7]
     );
     rows = result.rows;
@@ -324,27 +324,66 @@ async function sendConcertAlertsForUser(userName: string, companionName: string)
     return;
   }
 
+  if (!rows.length) return;
+
+  // Group by venue so a concert series (multiple bands, same venue) becomes ONE notification
+  const venueMap = new Map<string, typeof rows>();
   for (const row of rows) {
-    const when = row.event_date_text ? ` ${row.event_date_text}` : "";
-    const text = `Hey — ${row.venue} has ${row.artist_or_event}${when} that looks right up your alley.`;
+    const key = row.venue.trim().toLowerCase();
+    if (!venueMap.has(key)) venueMap.set(key, []);
+    venueMap.get(key)!.push(row);
+  }
+
+  for (const concerts of venueMap.values()) {
+    const venueName = concerts[0].venue;
+    const venueSlug = venueName.replace(/\W+/g, "-").toLowerCase();
+
+    let bodyText: string;
+    let companionMessage: string;
+
+    if (concerts.length === 1) {
+      const c = concerts[0];
+      const when = c.event_date_text ? ` on ${c.event_date_text}` : "";
+      bodyText = `${venueName} has ${c.artist_or_event}${when} coming up.`;
+      companionMessage = `Hey — I spotted a concert that looks right up your alley. ${venueName} has ${c.artist_or_event}${when}. Want me to add it to your calendar?`;
+    } else {
+      const list = concerts
+        .map((c) => `${c.artist_or_event}${c.event_date_text ? ` (${c.event_date_text})` : ""}`)
+        .join(", ");
+      bodyText = `${venueName} has ${concerts.length} upcoming concerts: ${list}.`;
+      companionMessage = `Hey — ${venueName} has ${concerts.length} upcoming concerts you might enjoy: ${list}. Want me to add any of them to your calendar?`;
+    }
 
     try {
-      broadcastToUser(userName, "proactive", { message: text, type: "concert-alert" });
+      broadcastToUser(userName, "proactive", { message: companionMessage, type: "concert-alert" });
     } catch (err) {
       logger.warn({ err }, "[VenueMonitor] SSE broadcast failed");
     }
+
     try {
       await sendPushToAll({
-        title: `🎵 ${companionName} — Music Event`,
-        body: text,
-        tag: `concert-alert-${row.id}`,
+        title: `🎵 ${companionName} — Concert Alert`,
+        body: bodyText,
+        tag: `concert-alert-${venueSlug}`,
+        notificationType: "concert-alert",
+        companionMessage,
+        eventDetails: concerts.map((c) => ({
+          id: c.id,
+          venue: c.venue,
+          artistOrEvent: c.artist_or_event,
+          eventDateText: c.event_date_text,
+        })),
         requireInteraction: false,
       }, userName);
     } catch {
       // non-fatal
     }
-    await markNotified(row.id);
-    logger.info(`[VenueMonitor] Concert alert sent: ${row.artist_or_event} @ ${row.venue} → ${userName}`);
+
+    for (const c of concerts) {
+      await markNotified(c.id);
+    }
+
+    logger.info(`[VenueMonitor] Concert alert sent: ${concerts.length} event(s) @ ${venueName} → ${userName}`);
   }
 }
 

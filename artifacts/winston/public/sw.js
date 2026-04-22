@@ -15,15 +15,23 @@ function openDb() {
   });
 }
 
-function storePendingReminder(reminderText, reminderId) {
+function storePendingNotification(reminderText, reminderId, notificationType, companionMessage) {
   return openDb().then((db) => {
     return new Promise((resolve, reject) => {
       const tx = db.transaction("pending", "readwrite");
-      tx.objectStore("pending").put({ key: "reminder", reminderText, reminderId });
+      const record = { key: "reminder", reminderText, reminderId };
+      if (notificationType) record.notificationType = notificationType;
+      if (companionMessage) record.companionMessage = companionMessage;
+      tx.objectStore("pending").put(record);
       tx.oncomplete = resolve;
       tx.onerror    = reject;
     });
   });
+}
+
+// Keep old name as an alias so any other callers still work
+function storePendingReminder(reminderText, reminderId) {
+  return storePendingNotification(reminderText, reminderId, null, null);
 }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
@@ -57,9 +65,11 @@ self.addEventListener("push", (event) => {
     console.log("[SW] push payload was not JSON, using raw text:", data.body);
   }
 
-  const title        = data.title || "Winston";
-  const reminderText = data.body  || "";
-  const targetUrl = data.url || WINSTON_URL;
+  const title            = data.title || "Winston";
+  const reminderText     = data.body  || "";
+  const targetUrl        = data.url || WINSTON_URL;
+  const notificationType = data.notificationType || null;
+  const companionMessage = data.companionMessage || null;
 
   const options = {
     body: reminderText || "Tap to open Winston.",
@@ -67,9 +77,11 @@ self.addEventListener("push", (event) => {
     badge: WINSTON_URL + "badge-72.png",
     tag:   data.tag || "winston",
     data: {
-      url:          targetUrl,
-      reminderText: reminderText,
-      reminderId:   data.reminderId ?? null,
+      url:              targetUrl,
+      reminderText:     reminderText,
+      reminderId:       data.reminderId ?? null,
+      notificationType: notificationType,
+      companionMessage: companionMessage,
     },
     requireInteraction: true,
     vibrate: [200, 100, 200],
@@ -119,10 +131,12 @@ self.addEventListener("notificationclick", (event) => {
   // Step 1: always close the notification immediately
   event.notification.close();
 
-  const action       = event.action;
-  const targetUrl    = event.notification.data?.url          || WINSTON_URL;
-  const reminderText = event.notification.data?.reminderText || "";
-  const reminderId   = event.notification.data?.reminderId   ?? null;
+  const action           = event.action;
+  const targetUrl        = event.notification.data?.url              || WINSTON_URL;
+  const reminderText     = event.notification.data?.reminderText     || "";
+  const reminderId       = event.notification.data?.reminderId       ?? null;
+  const notificationType = event.notification.data?.notificationType || null;
+  const companionMessage = event.notification.data?.companionMessage || null;
 
   console.log("[SW] notificationclick — action:", JSON.stringify(action), "| url:", targetUrl);
 
@@ -151,9 +165,9 @@ self.addEventListener("notificationclick", (event) => {
 
     if (existing) {
       console.log("[SW] existing Winston tab found — writing IDB, navigating/focusing");
-      // Always write to IDB first so Chat.tsx can read the reminder after any open path.
+      // Always write to IDB first so Chat.tsx can read the reminder/event after any open path.
       try {
-        await storePendingReminder(reminderText, reminderId);
+        await storePendingNotification(reminderText, reminderId, notificationType, companionMessage);
       } catch { /* non-fatal */ }
 
       // Step 3a: try navigate() — on Android Chrome this reliably brings the tab to the
@@ -188,10 +202,10 @@ self.addEventListener("notificationclick", (event) => {
       // Both navigate() and focus() failed — fall through to openWindow below.
     }
 
-    // Step 5: no existing tab or focus failed — store reminder and open a fresh window.
+    // Step 5: no existing tab or focus failed — store notification and open a fresh window.
     console.log("[SW] opening new window:", WINSTON_URL);
     try {
-      await storePendingReminder(reminderText, reminderId);
+      await storePendingNotification(reminderText, reminderId, notificationType, companionMessage);
     } catch { /* non-fatal — IDB may fail on some devices */ }
 
     try {

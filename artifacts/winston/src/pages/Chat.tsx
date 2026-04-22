@@ -448,7 +448,12 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [messagesLoaded, setMessagesLoaded] = useState(false);
-  const [pendingNotification, setPendingNotification] = useState<{ type: "morning" | "reminder"; text?: string; id?: number } | null>(() => {
+  const [pendingNotification, setPendingNotification] = useState<{
+    type: "morning" | "reminder" | "concert-alert";
+    text?: string;
+    id?: number;
+    companionMessage?: string;
+  } | null>(() => {
     const params = new URLSearchParams(window.location.search);
     const type = params.get("notification");
     if (type === "morning") return { type: "morning" };
@@ -999,8 +1004,20 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
     window.history.replaceState({}, "", window.location.pathname);
 
     if (notif.type === "morning") {
-      // Auto-trigger "good morning" so Emma delivers the full briefing
+      // Auto-trigger "good morning" so the companion delivers the full briefing
       setTimeout(() => submitText("good morning"), 600);
+    } else if (notif.type === "concert-alert" && notif.companionMessage) {
+      // Display the companion's concert message and speak it
+      const msgId = `concert-alert-${Date.now()}`;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: msgId,
+          role: "assistant" as const,
+          content: notif.companionMessage!,
+        },
+      ]);
+      speakReply(msgId, notif.companionMessage!);
     } else if (notif.type === "reminder" && notif.text) {
       // Dedup: if SSE or push already fired this reminder, don't show it twice
       if (notif.id != null && spokenReminderIds.current.has(notif.id)) {
@@ -1013,19 +1030,20 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         // pendingNotification) was the only one that forgot to clear the pill.
         setUpcomingReminders((prev) => prev.filter((r) => r.id !== notif.id));
       }
+      const greeting = companionName ? `Hey — your reminder` : "Your reminder";
       const msgId = `notif-reminder-${Date.now()}`;
       setMessages((prev) => [
         ...prev,
         {
           id: msgId,
-          role: "assistant",
-          content: `Hey David — your reminder: ${notif.text}`,
+          role: "assistant" as const,
+          content: `${greeting}: ${notif.text}`,
           isReminder: true,
         },
       ]);
-      speakReply(msgId, `Hey David, your reminder: ${notif.text}`);
+      speakReply(msgId, `${greeting}: ${notif.text}`);
     }
-  }, [messagesLoaded, pendingNotification, submitText, speakReply]);
+  }, [messagesLoaded, pendingNotification, submitText, speakReply, companionName]);
 
   // Listen for NOTIFICATION_TAP from the service worker.
   // Fired when David taps a push notification and the app is already open.
@@ -1048,10 +1066,23 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
           const store = tx.objectStore("pending");
           const getReq = store.get("reminder");
           getReq.onsuccess = () => {
-            const pending = getReq.result as { reminderText?: string; reminderId?: number } | undefined;
-            if (!pending?.reminderText) return;
+            const pending = getReq.result as { reminderText?: string; reminderId?: number; notificationType?: string; companionMessage?: string } | undefined;
+            if (!pending) return;
             store.delete("reminder"); // consume so it never fires twice
+
+            const notifType = pending.notificationType;
+            const compMsg = pending.companionMessage;
+
+            // Concert alert: display companion's crafted message
+            if (notifType === "concert-alert" && compMsg) {
+              console.log("[CHAT] NOTIFICATION_TAP: concert-alert from IDB");
+              setPendingNotification((prev) => prev ?? { type: "concert-alert", companionMessage: compMsg });
+              return;
+            }
+
+            // Reminder: use stored text
             const text = pending.reminderText;
+            if (!text) return;
             const rid = typeof pending.reminderId === "number" ? pending.reminderId : null;
             // If this specific reminder was already spoken via REMINDER_PUSH, skip it
             if (rid != null && spokenReminderIds.current.has(rid)) {
@@ -1083,9 +1114,17 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         const store = tx.objectStore("pending");
         const getReq = store.get("reminder");
         getReq.onsuccess = () => {
-          const pending = getReq.result as { reminderText?: string } | undefined;
-          if (pending?.reminderText) {
-            store.delete("reminder"); // consume immediately so it never fires twice
+          const pending = getReq.result as { reminderText?: string; notificationType?: string; companionMessage?: string } | undefined;
+          if (!pending) return;
+          store.delete("reminder"); // consume immediately so it never fires twice
+
+          // Concert alert stored from a previous notification tap
+          if (pending.notificationType === "concert-alert" && pending.companionMessage) {
+            setPendingNotification((prev) => prev ?? { type: "concert-alert", companionMessage: pending.companionMessage });
+            return;
+          }
+          // Standard reminder
+          if (pending.reminderText) {
             const text = pending.reminderText;
             // Only set if URL params didn't already give us a pendingNotification
             setPendingNotification((prev) => prev ?? { type: "reminder", text });

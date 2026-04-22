@@ -28,6 +28,13 @@ if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
   );
 }
 
+export interface EventDetail {
+  id: number;
+  venue: string;
+  artistOrEvent: string;
+  eventDateText: string;
+}
+
 export interface PushPayload {
   title: string;
   body: string;
@@ -38,6 +45,9 @@ export interface PushPayload {
   reminderId?: number;
   requireInteraction?: boolean;
   silent?: boolean;
+  notificationType?: string;       // e.g. "concert-alert", "reminder", "morning"
+  companionMessage?: string;       // What the companion should say/display when notification is tapped
+  eventDetails?: EventDetail[];    // For concert-alert: structured event info for the native app
 }
 
 export interface PushSubscriptionData {
@@ -126,6 +136,9 @@ export async function sendPushToAll(
   if (payload.icon) notificationData.icon = payload.icon;
   if (payload.badge) notificationData.badge = payload.badge;
   if (payload.reminderId != null) notificationData.reminderId = payload.reminderId;
+  if (payload.notificationType) notificationData.notificationType = payload.notificationType;
+  if (payload.companionMessage) notificationData.companionMessage = payload.companionMessage;
+  if (payload.eventDetails) notificationData.eventDetails = payload.eventDetails;
   const body = JSON.stringify(notificationData);
 
   await Promise.all(
@@ -269,9 +282,12 @@ async function sendExpoNotifications(
     data: {
       // NOTE: do NOT include a web URL here — it causes the native Android app
       // to open the web app in a browser when the notification is tapped.
-      // The native app handles taps itself; reminderId is enough for navigation.
+      // The native app handles taps itself using these structured fields.
       ...(payload.reminderId != null ? { reminderId: payload.reminderId } : {}),
       ...(payload.tag ? { tag: payload.tag } : {}),
+      ...(payload.notificationType ? { notificationType: payload.notificationType } : {}),
+      ...(payload.companionMessage ? { companionMessage: payload.companionMessage } : {}),
+      ...(payload.eventDetails ? { eventDetails: payload.eventDetails } : {}),
     },
   }));
 
