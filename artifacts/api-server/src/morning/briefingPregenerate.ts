@@ -336,6 +336,55 @@ function getCurrentDateTimeBlock(): string {
   );
 }
 
+function buildPeopleContextBlock(rawData: CollectedData): string {
+  type PersonEntry = {
+    name?: string;
+    relationship?: string;
+    city?: string;
+    birthday?: string;
+    details?: string;
+    address?: string;
+    anniversary?: string;
+  };
+  const people = (rawData.people ?? []) as PersonEntry[];
+  if (people.length === 0) return "";
+
+  const partnerRels = ["girlfriend", "boyfriend", "wife", "husband", "partner", "fiancée", "fiancé"];
+  const lines: string[] = [];
+
+  for (const p of people) {
+    const name = (p.name ?? "").trim();
+    const rel = (p.relationship ?? "").trim();
+    if (!name || !rel) continue;
+
+    const city = p.city?.trim();
+    const birthday = p.birthday?.trim();
+    const details = p.details?.trim();
+    const anniversary = p.anniversary?.trim();
+    const isPartner = partnerRels.some((r) => rel.toLowerCase().includes(r));
+
+    const parts: string[] = [`${name} — ${rel}${isPartner ? " (Your Partner)" : ""}`];
+    if (city) parts.push(`based in ${city}`);
+    if (birthday) parts.push(`birthday: ${birthday}`);
+    if (anniversary) parts.push(`David & ${name.split(" ")[0]} anniversary: ${anniversary}`);
+    if (details) parts.push(details);
+
+    lines.push(`• ${parts.join(", ")}`);
+  }
+
+  if (lines.length === 0) return "";
+
+  return (
+    `\n\n[People in David's Life — Reference naturally in the briefing]\n` +
+    lines.join("\n") + "\n\n" +
+    `HOW TO USE THIS:\n` +
+    `• Olivia — always mention her weather in Section 3 if her [VERIFIED weather] block is present. Even just one warm sentence: "Over in Knoxville, Olivia's got a breezy 65 today."\n` +
+    `• Susan (Your Partner) — include a warm, specific one-liner in the Section 15 closing every briefing. Examples: "Hope you and Susan have a great night", "Give Susan my best." Keep it natural — not every closing needs to be about her, but include her often.\n` +
+    `• Birthdays — if any birthday is within 7 days, surface it in Section 13 with the date. If it's today, make it feel special.\n` +
+    `• Never invent details not listed here. Base any reference on the facts in this block.`
+  );
+}
+
 function buildBriefingInstruction(city: string, savedVenues: string[]): string {
   const cityUpper = city.toUpperCase();
   const venueList = savedVenues.length > 0
@@ -438,7 +487,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
         ? buildSystemPromptFromProfile(userProfile, userProfile.rawData as CollectedData)
         : buildBaseSystemPrompt(userProfile?.companionName, userProfile?.name);
 
-    const primaryCity = userProfile?.city ?? "Dallas";
+    const primaryCity = (userProfile?.city ?? "Dallas").trim();
     const primaryLat = userProfile?.latitude ?? 32.7767;
     const primaryLon = userProfile?.longitude ?? -96.7970;
     const homeAddress = userProfile?.homeAddress ?? ((userProfile?.rawData as CollectedData)?.homeAddress) ?? "";
@@ -505,14 +554,20 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     };
 
     // Geocode secondary cities from profile before the main Promise.all
-    // Only include people in a different city than the user's home city
+    // Only include people in a different city than the user's home city.
+    // Trim all values — raw_data strings from onboarding may have trailing spaces.
     const rawPeople = ((userProfile?.rawData as CollectedData)?.people ?? [])
-      .filter((p) => p.city && p.city.trim().length > 0 && p.city.trim().toLowerCase() !== primaryCity.trim().toLowerCase())
+      .filter((p) => {
+        const city = p.city?.trim();
+        return city && city.length > 0 && city.toLowerCase() !== primaryCity.toLowerCase();
+      })
       .slice(0, 4);
     const geocodedSecondary = await Promise.all(
       rawPeople.map(async (p) => {
-        const coords = await geocodeCity(p.city!).catch(() => null);
-        return coords ? { name: p.name, city: p.city!, lat: coords.lat, lon: coords.lon } : null;
+        const city = p.city!.trim();
+        const name = p.name.trim();
+        const coords = await geocodeCity(city).catch(() => null);
+        return coords ? { name, city, lat: coords.lat, lon: coords.lon } : null;
       })
     );
     const validSecondaryLocs = geocodedSecondary.filter(Boolean) as Array<{ name: string; city: string; lat: number; lon: number }>;
@@ -628,9 +683,34 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
         })()
       : "";
 
+    // Build secondary-only weather block — shown even when primary city weather is unavailable.
+    // This ensures Olivia's Knoxville weather (and any other family member's city) always
+    // appears in the briefing regardless of whether Dallas weather fetched successfully.
+    const secondaryOnlyBlock = secondaryWeatherEntries.length > 0
+      ? secondaryWeatherEntries
+          .map((s) => {
+            const w = s.weather;
+            const days =
+              w.forecastDays.length > 0
+                ? w.forecastDays
+                    .map(
+                      (d) =>
+                        `${d.dayName}: ${d.high}°/${d.low}°${d.precipChance >= 40 ? ` ${d.precipChance}%rain` : ""}`
+                    )
+                    .join(" | ")
+                : "";
+            return (
+              `\n[VERIFIED — Tomorrow.io Weather API — ${s.person.city} (for ${s.person.name})]\n` +
+              `Now: ${w.temp}°F (feels like ${w.feelsLike}°F), ${w.condition} — high ${w.high}°F / low ${w.low}°F | ${w.precipChance}% precip | humidity ${w.humidity}%\n` +
+              (days ? `Forecast: ${days}\n` : "")
+            );
+          })
+          .join("")
+      : "";
+
     const weatherBlock = dallas
       ? buildContextualWeatherBlock(dallas, secondaryWeatherEntries, now) + pollenBlock
-      : "";
+      : secondaryOnlyBlock;
 
     // Email and calendar are NOT fetched at pre-generation time.
     // They are fetched live at delivery time (when David says "good morning")
@@ -706,12 +786,14 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       (userProfile?.rawData ?? {}) as CollectedData
     );
 
+    const peopleContextBlock = buildPeopleContextBlock((userProfile?.rawData ?? {}) as CollectedData);
+
     // ── Split the system prompt into preamble (before email+calendar slot) ──────
     // and suffix (after email+calendar slot, through MASTER_BRIEFING_INSTRUCTION).
     // At delivery time, chat.ts inserts live gmailBlock + calendarBlock between them.
     const prefsBlock = buildBriefingPrefsBlock(briefingPrefs, userName);
     const preamble = getCurrentDateTimeBlock() + "\n" + corePrompt + profileContextBlock +
-      memoryBlock + dynamicProfileBlock + prefsBlock + notesBlock + weatherBlock;
+      memoryBlock + dynamicProfileBlock + prefsBlock + notesBlock + peopleContextBlock + weatherBlock;
 
     const garminBlock = garminData ? formatGarminForBriefing(garminData) : "";
 

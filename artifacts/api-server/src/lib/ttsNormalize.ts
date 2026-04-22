@@ -7,9 +7,11 @@ export function normalizeTtsText(text: string): string {
   let s = text;
 
   // ── Currency ───────────────────────────────────────────────────────────────
+  // $1,250.00 → "1250 dollars"  (drop "and 00 cents" — sounds robotic)
+  s = s.replace(/\$(\d[\d,]*)\.00\b/g, (_, d) => `${d.replace(/,/g, "")} dollars`);
   // $1,250.50 → "1250 dollars and 50 cents"
-  s = s.replace(/\$(\d[\d,]*)\.(\d{2})\b/g, (_, dollars, cents) =>
-    `${dollars.replace(/,/g, "")} dollars and ${cents} cents`
+  s = s.replace(/\$(\d[\d,]*)\.(\d{2})\b/g, (_, d, c) =>
+    `${d.replace(/,/g, "")} dollars and ${c} cents`
   );
   // $50 → "50 dollars"
   s = s.replace(/\$(\d[\d,]*)\b/g, (_, n) => `${n.replace(/,/g, "")} dollars`);
@@ -26,8 +28,20 @@ export function normalizeTtsText(text: string): string {
   s = s.replace(/(\d+(?:\.\d+)?)\s*%/g, "$1 percent");
 
   // ── Time ─────────────────────────────────────────────────────────────────
-  // 10:30 AM → "10 30 AM"  /  10:00 → "10 00"  (ElevenLabs reads colons awkwardly)
+  // More specific patterns FIRST to avoid double-applying.
+  //
+  // "6:00 AM" / "6:00 PM" → "6 AM" / "6 PM"
+  //   Drop :00 entirely with an AM/PM marker — ElevenLabs reads "6 AM" as "six AM" naturally.
+  s = s.replace(/\b(\d{1,2}):00\s*(AM|PM|am|pm)\b/g, "$1 $2");
+  //
+  // "6:00" (bare, no AM/PM) → "6 o'clock"
+  //   Prevents ElevenLabs reading "6 00" as "six hundred".
+  s = s.replace(/\b(\d{1,2}):00\b/g, "$1 o'clock");
+  //
+  // "10:30 AM" → "10 30 AM"   "10:30 PM" → "10 30 PM"
   s = s.replace(/\b(\d{1,2}):(\d{2})\s*(AM|PM|am|pm)\b/g, "$1 $2 $3");
+  //
+  // "10:30" (bare) → "10 30"
   s = s.replace(/\b(\d{1,2}):(\d{2})\b/g, "$1 $2");
 
   // ── Address abbreviations ─────────────────────────────────────────────────
