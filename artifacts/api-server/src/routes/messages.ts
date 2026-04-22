@@ -2,12 +2,16 @@ import { Router, type Request, type Response } from "express";
 import { query } from "../db.js";
 import { validateSession } from "../auth/sessionAuth.js";
 import { broadcastToUser } from "../reminders/sseStore.js";
+import { NATIVE_API_KEY, NATIVE_USER } from "../auth/middleware.js";
 
 const router = Router();
 
 // ── Auth helper — supports both native API key and Bearer session token ────────
 async function getUserName(req: Request): Promise<string | null> {
-  if (req.headers["x-api-key"] === "winston-native-2026") return "David";
+  if (req.headers["x-api-key"] === NATIVE_API_KEY) {
+    const headerUser = req.headers["x-user-name"];
+    return (typeof headerUser === "string" && headerUser.trim()) ? headerUser.trim() : NATIVE_USER;
+  }
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith("Bearer ")) return null;
   const session = await validateSession(authHeader.slice(7));

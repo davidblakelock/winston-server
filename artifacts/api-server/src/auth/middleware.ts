@@ -14,8 +14,11 @@ import { validateSession } from "./sessionAuth.js";
 import { logger } from "../lib/logger.js";
 
 export const NATIVE_API_KEY = "winston-native-2026";
-/** Backward-compat default for native app routes that don't carry x-user-name */
-export const NATIVE_USER = "David";
+/** Backward-compat default for native app routes that don't carry x-user-name.
+ *  Points to the primary Google-authenticated account. Old native builds that
+ *  omit x-user-name will use this; new builds should send the header explicitly.
+ */
+export const NATIVE_USER = "davidblakelock";
 
 function resolveNativeUser(req: Request): string {
   const headerUser = req.headers["x-user-name"];
@@ -23,7 +26,7 @@ function resolveNativeUser(req: Request): string {
     return headerUser.trim();
   }
   // Backward compat: older native builds don't send x-user-name
-  return "David";
+  return NATIVE_USER;
 }
 
 export async function authenticate(

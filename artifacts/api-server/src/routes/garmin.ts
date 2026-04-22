@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import { validateSession } from "../auth/sessionAuth.js";
+import { NATIVE_API_KEY, NATIVE_USER } from "../auth/middleware.js";
 import {
   connectGarmin,
   disconnectGarmin,
@@ -11,7 +12,10 @@ const router = Router();
 
 async function resolveUser(req: Request): Promise<string | null> {
   const apiKey = req.headers["x-api-key"];
-  if (apiKey === "winston-native-2026") return "David";
+  if (apiKey === NATIVE_API_KEY) {
+    const headerUser = req.headers["x-user-name"];
+    return (typeof headerUser === "string" && headerUser.trim()) ? headerUser.trim() : NATIVE_USER;
+  }
 
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith("Bearer ")) return null;

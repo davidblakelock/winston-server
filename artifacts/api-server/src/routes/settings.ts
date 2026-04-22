@@ -6,7 +6,7 @@ import {
   VOICE_OPTIONS,
   type CollectedData,
 } from "../onboarding/onboardingManager.js";
-import { authenticate, tryAuthenticate } from "../auth/middleware.js";
+import { authenticate, tryAuthenticate, NATIVE_USER } from "../auth/middleware.js";
 import { getProfilePlaces } from "../profile/profileManager.js";
 
 const router: IRouter = Router();
@@ -38,7 +38,7 @@ async function generateTTS(voiceId: string, text: string): Promise<{ audioBase64
 // Lightly-authed: uses session if present, falls back to David for the
 // sign-in page avatar. A fully multi-user UI should pass a session token.
 router.get("/profile/photo", async (req, res) => {
-  const userName = await tryAuthenticate(req) ?? "David";
+  const userName = await tryAuthenticate(req) ?? NATIVE_USER;
   const profile = await getProfile(userName).catch(() => null);
   res.json({
     photoUrl: profile?.photoUrl ?? null,
