@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { logger } from "../lib/logger.js";
+import { getProfile } from "../onboarding/onboardingManager.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -116,11 +117,23 @@ async function fetchEntertainmentNews(): Promise<string> {
   return text;
 }
 
+// ── Resolve user context (name + city) for the news prompt ───────────────────
+
+async function resolveNewsContext(userName?: string): Promise<{ displayName: string; city: string; state: string }> {
+  if (!userName) return { displayName: "the listener", city: "Dallas", state: "Texas" };
+  const profile = await getProfile(userName).catch(() => null);
+  const city = profile?.city ?? "Dallas";
+  const state = (profile?.rawData as { state?: string } | null)?.state ?? "Texas";
+  const displayName = profile?.name ?? userName;
+  return { displayName, city, state };
+}
+
 // ── Core fetch (calls Claude with web_search) ─────────────────────────────────
 
-async function fetchNewsFromClaude(): Promise<string> {
+async function fetchNewsFromClaude(userName?: string): Promise<string> {
   const tz = "America/Chicago";
   const now = new Date();
+  const { city, state } = await resolveNewsContext(userName);
 
   const todayStr = now.toLocaleDateString("en-US", {
     timeZone: tz, weekday: "long", month: "long", day: "numeric", year: "numeric",
@@ -133,7 +146,7 @@ async function fetchNewsFromClaude(): Promise<string> {
   // ── Main headlines: 8 diverse categories, one story each ────────────────
   const mainPrompt = `Today is ${todayStr}. Yesterday was ${yesterdayStr}.
 
-You are curating a morning news briefing for David Blakelock in Dallas, Texas. Use web search to find real, current news. RECENCY IS CRITICAL — every story must be from ${todayStr} or ${yesterdayStr} only.
+You are curating a morning news briefing for a listener in ${city}, ${state}. Use web search to find real, current news. RECENCY IS CRITICAL — every story must be from ${todayStr} or ${yesterdayStr} only.
 
 DIVERSITY RULE — THIS IS MANDATORY: Return EXACTLY 8 stories. Each story must come from a DIFFERENT category listed below. NEVER run two stories about the same topic, country, company, person, or theme. If the biggest story today is about Iran, you get ONE Iran story — not two, not three. Pick one story per category and move on.
 
@@ -155,7 +168,7 @@ CATEGORY 5 — SCIENCE OR HEALTH: A discovery, medical breakthrough, space news,
 
 CATEGORY 6 — SPORTS: One major US sports story from the last 24 hours — a game result, standings update, trade, or significant team news. NBA, MLB, NHL, NFL, MLS, or college sports. Do NOT cover draft speculation, mock drafts, or offseason projection pieces — only confirmed results or official transactions.
 
-CATEGORY 7 — DALLAS / TEXAS LOCAL (MANDATORY — never skip, never omit): A story specifically about Dallas, DFW, or the Dallas-Fort Worth Metroplex — local government, business, development, crime, infrastructure, culture, events, or community. This must be a genuinely local Dallas or DFW story. A national story that happens to involve a Texas politician does NOT count. If your initial search doesn't surface a Dallas story, search explicitly: "Dallas news today", "DFW local news today", "Dallas Fort Worth news today", or "Dallas Texas breaking news". Always find one.
+CATEGORY 7 — ${city.toUpperCase()} / ${state.toUpperCase()} LOCAL (MANDATORY — never skip, never omit): A story specifically about ${city} or the surrounding area — local government, business, development, crime, infrastructure, culture, events, or community. This must be a genuinely local story. A national story that happens to involve a state politician does NOT count. If your initial search doesn't surface a local story, search explicitly: "${city} news today", "${city} local news today", or "${city} ${state} breaking news". Always find one.
 
 CATEGORY 8 — WILDCARD: The most interesting or surprising story that does not fit any of the above categories. Could be entertainment, environment, human interest, international business, or anything genuinely noteworthy.
 
@@ -235,10 +248,10 @@ Only report real stories you found and verified are current. Never invent or emb
  * Pre-fetch news in the background (called at 5:50 AM by the morning scheduler).
  * Silently caches the result so `fetchMorningNews()` is instant during the briefing.
  */
-export async function preFetchMorningNews(): Promise<void> {
+export async function preFetchMorningNews(userName?: string): Promise<void> {
   try {
     logger.info("Starting morning news pre-fetch");
-    const content = await fetchNewsFromClaude();
+    const content = await fetchNewsFromClaude(userName);
     _cache = { content, fetchedAt: new Date() };
     logger.info({ chars: content.length }, "Morning news pre-fetched and cached");
   } catch (err) {
@@ -251,7 +264,7 @@ export async function preFetchMorningNews(): Promise<void> {
  * Returns cached content instantly if available; otherwise fetches with a 90s timeout.
  * Warns if serving stale (>12h old) cached news.
  */
-export async function fetchMorningNews(): Promise<string> {
+export async function fetchMorningNews(userName?: string): Promise<string> {
   // Fast path: serve from cache (pre-fetched at 5:50 AM)
   if (isCacheFresh() && _cache) {
     const ageMs = Date.now() - _cache.fetchedAt.getTime();
@@ -272,7 +285,7 @@ export async function fetchMorningNews(): Promise<string> {
   );
 
   try {
-    const content = await Promise.race([fetchNewsFromClaude(), timeout]);
+    const content = await Promise.race([fetchNewsFromClaude(userName), timeout]);
     _cache = { content, fetchedAt: new Date() };
     return content;
   } catch (err) {

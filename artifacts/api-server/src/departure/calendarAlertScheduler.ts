@@ -3,6 +3,8 @@ import { broadcastToUser } from "../reminders/sseStore.js";
 import { sendPushToAll } from "../push/pushManager.js";
 import { logger } from "../lib/logger.js";
 import { fetchTodayEvents, toChicagoTime, type CalendarEvent } from "../google/calendar.js";
+import { getActiveUsers } from "../onboarding/onboardingManager.js";
+import { getProfile } from "../onboarding/onboardingManager.js";
 import { query } from "../db.js";
 
 const TZ = "America/Chicago";
@@ -11,12 +13,12 @@ function localDateStr(): string {
   return new Date().toLocaleDateString("en-CA", { timeZone: TZ });
 }
 
-async function hasAlertBeenSent(eventId: string, dateStr: string): Promise<boolean> {
+async function hasAlertBeenSent(eventId: string, dateStr: string, userName: string): Promise<boolean> {
   try {
     const { rows } = await query<{ count: string }>(
       `SELECT COUNT(*) AS count FROM proactive_message_log
-       WHERE user_name = 'David' AND message_type = $1 AND sent_date = $2`,
-      [`calendar-alert-${eventId}`, dateStr]
+       WHERE user_name = $1 AND message_type = $2 AND sent_date = $3`,
+      [userName, `calendar-alert-${eventId}`, dateStr]
     );
     return parseInt(rows[0].count, 10) > 0;
   } catch {
@@ -24,27 +26,31 @@ async function hasAlertBeenSent(eventId: string, dateStr: string): Promise<boole
   }
 }
 
-async function markAlertSent(eventId: string, dateStr: string): Promise<void> {
+async function markAlertSent(eventId: string, dateStr: string, userName: string): Promise<void> {
   try {
     await query(
       `INSERT INTO proactive_message_log (user_name, message_type, sent_date)
-       VALUES ('David', $1, $2)
+       VALUES ($1, $2, $3)
        ON CONFLICT (user_name, message_type, sent_date) DO NOTHING`,
-      [`calendar-alert-${eventId}`, dateStr]
+      [userName, `calendar-alert-${eventId}`, dateStr]
     );
   } catch (err) {
     logger.warn({ err }, "[CAL-ALERT] Failed to mark alert sent");
   }
 }
 
-async function runCalendarAlertCheck(): Promise<void> {
+async function runCalendarAlertCheckForUser(userName: string): Promise<void> {
   let events: CalendarEvent[] | null;
   try {
-    events = await fetchTodayEvents();
+    events = await fetchTodayEvents(userName);
   } catch {
     return;
   }
   if (!events || events.length === 0) return;
+
+  const profile = await getProfile(userName).catch(() => null);
+  const displayName = profile?.name ?? userName;
+  const companionName = profile?.companionName ?? "Your Companion";
 
   const now = new Date();
   const twoHoursFromNow = new Date(now.getTime() + 2 * 60 * 60 * 1000);
@@ -54,20 +60,17 @@ async function runCalendarAlertCheck(): Promise<void> {
     if (!event.id || !event.startIso || event.allDay) continue;
 
     const eventStart = new Date(event.startIso);
-    // Use CT-converted times for comparison to correctly handle DST boundaries
     const eventStartCT = toChicagoTime(eventStart);
     const nowCT = toChicagoTime(now);
     const twoHoursFromNowCT = toChicagoTime(twoHoursFromNow);
 
-    // Only alert for events starting within the next 2 hours that haven't started yet
     if (eventStartCT.getTime() <= nowCT.getTime() || eventStartCT.getTime() > twoHoursFromNowCT.getTime()) continue;
 
-    const alreadySent = await hasAlertBeenSent(event.id, today);
+    const alreadySent = await hasAlertBeenSent(event.id, today, userName);
     if (alreadySent) continue;
 
-    await markAlertSent(event.id, today);
+    await markAlertSent(event.id, today, userName);
 
-    // Format time in CT 12-hour format for display to David
     const eventTimeStr = eventStart.toLocaleTimeString("en-US", {
       timeZone: TZ,
       hour: "numeric",
@@ -75,17 +78,16 @@ async function runCalendarAlertCheck(): Promise<void> {
       hour12: true,
     });
 
-    // Minutes until event calculated from CT-aware timestamps
     const minutesAway = Math.round((eventStartCT.getTime() - nowCT.getTime()) / 60000);
     const timeContext = minutesAway <= 30
       ? `in ${minutesAway} minutes`
       : `at ${eventTimeStr}`;
 
-    const speakText = `Hey David, just a heads-up — you have ${event.summary} ${timeContext}. Want me to remind you when to leave based on traffic?`;
+    const speakText = `Hey ${displayName}, just a heads-up — you have ${event.summary} ${timeContext}. Want me to remind you when to leave based on traffic?`;
 
-    broadcastToUser("David", "reminder", {
+    broadcastToUser(userName, "reminder", {
       id: `calendar-alert-${event.id}-${Date.now()}`,
-      userName: "David",
+      userName,
       reminderText: speakText,
       speakText,
       isCalendarAlert: true,
@@ -93,15 +95,25 @@ async function runCalendarAlertCheck(): Promise<void> {
 
     await sendPushToAll({
       title: `📅 Upcoming — ${event.summary}`,
-      body: `${event.summary} ${timeContext}. Tap to open Winston.`,
+      body: `${event.summary} ${timeContext}. Tap to open ${companionName}.`,
       tag: `cal-alert-${event.id}`,
       requireInteraction: false,
-    }).catch(() => {});
+    }, userName).catch(() => {});
 
     logger.info(
-      { event: event.summary, time: eventTimeStr, minutesAway },
+      { event: event.summary, time: eventTimeStr, minutesAway, userName },
       "[CAL-ALERT] Proactive 2-hour event alert sent"
     );
+  }
+}
+
+async function runCalendarAlertCheck(): Promise<void> {
+  try {
+    const users = await getActiveUsers();
+    if (users.length === 0) return;
+    await Promise.allSettled(users.map((u) => runCalendarAlertCheckForUser(u.userName)));
+  } catch (err) {
+    logger.warn({ err }, "[CAL-ALERT] Failed to load active users");
   }
 }
 

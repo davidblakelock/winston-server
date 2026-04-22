@@ -14,10 +14,10 @@ Winston is a personal AI companion app with a dark-themed chat interface. Users 
 - `ELEVENLABS_VOICE_ID` — ElevenLabs voice ID
 
 ### Features
-- Chat with Claude Opus (personalized Emma Peel system prompt for David Blakelock)
+- Chat with Claude Opus (personalized Emma Peel system prompt, fully multi-user — no hardcoded names)
 - Auto text-to-speech via ElevenLabs with browser TTS fallback
 - Typing indicator, replay button, voice input (STT via ElevenLabs Scribe)
-- Morning briefings: weather (Dallas + Knoxville), Gmail, Google Calendar
+- Morning briefings: weather (dynamic city from profile), Gmail, Google Calendar
 - On-demand email and calendar queries
 - Reminder system with SSE push + recurring support
 - **Medication Reminders**: Daily meds (statin + Meloxicam) at 8am, 9am follow-up if not confirmed, DB logging; add/remove/list via conversation; morning briefing includes med reminder if not yet taken

@@ -2,8 +2,9 @@
  * Shared authentication middleware for Winston API routes.
  *
  * Two valid auth paths:
- *   1. x-api-key: winston-native-2026  →  native mobile app bypass, user = David
- *      (kept for backward compat until native app migrates to session tokens)
+ *   1. x-api-key: winston-native-2026  →  native mobile app bypass.
+ *      The caller MUST also supply x-user-name to identify the user.
+ *      Falls back to "David" only for backward compatibility with older app builds.
  *   2. Authorization: Bearer <token>   →  standard session token (any provider)
  *
  * Returns the resolved userName string, or sends a 401 and returns null.
@@ -13,14 +14,24 @@ import { validateSession } from "./sessionAuth.js";
 import { logger } from "../lib/logger.js";
 
 export const NATIVE_API_KEY = "winston-native-2026";
+/** Backward-compat default for native app routes that don't carry x-user-name */
 export const NATIVE_USER = "David";
+
+function resolveNativeUser(req: Request): string {
+  const headerUser = req.headers["x-user-name"];
+  if (typeof headerUser === "string" && headerUser.trim()) {
+    return headerUser.trim();
+  }
+  // Backward compat: older native builds don't send x-user-name
+  return "David";
+}
 
 export async function authenticate(
   req: Request,
   res: Response
 ): Promise<string | null> {
   if (req.headers["x-api-key"] === NATIVE_API_KEY) {
-    return NATIVE_USER;
+    return resolveNativeUser(req);
   }
 
   const authHeader = req.headers.authorization;
@@ -49,7 +60,7 @@ export async function authenticate(
  */
 export async function tryAuthenticate(req: Request): Promise<string | null> {
   if (req.headers["x-api-key"] === NATIVE_API_KEY) {
-    return NATIVE_USER;
+    return resolveNativeUser(req);
   }
 
   const authHeader = req.headers.authorization;

@@ -1,8 +1,8 @@
 import cron from "node-cron";
-import { broadcast } from "../reminders/sseStore.js";
+import { broadcastToUser } from "../reminders/sseStore.js";
 import { sendPushToAll } from "../push/pushManager.js";
 import { logger } from "../lib/logger.js";
-import { getProfile, type CollectedData } from "../onboarding/onboardingManager.js";
+import { getProfile, getActiveUsers, type CollectedData } from "../onboarding/onboardingManager.js";
 import {
   estimateDriveTime,
   shouldFireAlert,
@@ -14,9 +14,9 @@ import { query } from "../db.js";
 
 const TZ = "America/Chicago";
 
-async function getCompanionName(): Promise<string> {
-  const profile = await getProfile("David").catch(() => null);
-  return profile?.companionName ?? "Emma Peel";
+async function getCompanionName(userName: string): Promise<string> {
+  const profile = await getProfile(userName).catch(() => null);
+  return profile?.companionName ?? "Your Companion";
 }
 
 function localDateStr(): string {
@@ -26,8 +26,8 @@ function localDateStr(): string {
 // ── In-memory set to avoid double-firing ─────────────────────────────────────
 const _alertedToday = new Set<string>();
 
-async function hasAlertBeenSent(eventTitle: string, eventDate: string): Promise<boolean> {
-  const key = `${eventTitle}::${eventDate}`;
+async function hasAlertBeenSent(eventTitle: string, eventDate: string, userName: string): Promise<boolean> {
+  const key = `${userName}::${eventTitle}::${eventDate}`;
   if (_alertedToday.has(key)) return true;
 
   try {
@@ -42,8 +42,8 @@ async function hasAlertBeenSent(eventTitle: string, eventDate: string): Promise<
   }
 }
 
-async function markAlertSent(eventTitle: string, eventDate: string): Promise<void> {
-  const key = `${eventTitle}::${eventDate}`;
+async function markAlertSent(eventTitle: string, eventDate: string, userName: string): Promise<void> {
+  const key = `${userName}::${eventTitle}::${eventDate}`;
   _alertedToday.add(key);
 
   try {
@@ -66,13 +66,10 @@ function clearIfNewDay() {
   }
 }
 
-// ── Main check ────────────────────────────────────────────────────────────────
-async function checkDepartureAlerts(): Promise<void> {
-  clearIfNewDay();
-
-  const profile = await getProfile("David").catch(() => null);
+// ── Per-user check ────────────────────────────────────────────────────────────
+async function checkDepartureAlertsForUser(userName: string): Promise<void> {
+  const profile = await getProfile(userName).catch(() => null);
   const homeAddress = profile?.homeAddress ?? ((profile?.rawData as CollectedData)?.homeAddress) ?? "";
-  // Use home-specific coords first, fall back to city coords, then Dallas defaults
   const homeLat = (profile?.homeLatitude && profile.homeLatitude !== 0 ? profile.homeLatitude : null)
     ?? (profile?.latitude && profile.latitude !== 0 ? profile.latitude : null)
     ?? 32.7767;
@@ -80,19 +77,11 @@ async function checkDepartureAlerts(): Promise<void> {
     ?? (profile?.longitude && profile.longitude !== 0 ? profile.longitude : null)
     ?? -96.7970;
 
-  logger.info(
-    { homeAddress: homeAddress || "(empty)", homeLat, homeLon },
-    "[DepartureScheduler] Profile coords loaded"
-  );
-
-  if (!homeAddress) {
-    logger.warn("[DepartureScheduler] homeAddress is empty — departure alerts cannot fire");
-    return;
-  }
+  if (!homeAddress) return;
 
   let events: Awaited<ReturnType<typeof fetchTodayEvents>>;
   try {
-    events = await fetchTodayEvents();
+    events = await fetchTodayEvents(userName);
   } catch {
     return;
   }
@@ -103,11 +92,7 @@ async function checkDepartureAlerts(): Promise<void> {
   const today = localDateStr();
 
   for (const event of events) {
-    if (!event.summary) continue;
-    if (event.allDay) continue;
-
-    // Use startIso (raw ISO datetime) — event.start is only a formatted string
-    if (!event.startIso) continue;
+    if (!event.summary || event.allDay || !event.startIso) continue;
     const start = new Date(event.startIso);
 
     const minutesUntilEvent = (start.getTime() - now.getTime()) / 60000;
@@ -118,10 +103,9 @@ async function checkDepartureAlerts(): Promise<void> {
       location: event.location,
       description: event.description,
     });
-
     if (!location) continue;
 
-    const alreadySent = await hasAlertBeenSent(event.summary, today);
+    const alreadySent = await hasAlertBeenSent(event.summary, today, userName);
     if (alreadySent) continue;
 
     const drive = await estimateDriveTime(location, homeAddress, homeLat, homeLon);
@@ -138,17 +122,14 @@ async function checkDepartureAlerts(): Promise<void> {
       drive.source === "google-maps"
     );
 
-    const companionName = await getCompanionName();
+    const companionName = await getCompanionName(userName);
 
-    // Build a Google Maps navigation URL from home to the event location.
-    // Tapping the push notification opens turn-by-turn navigation directly.
     const mapsUrl =
       `https://www.google.com/maps/dir/?api=1` +
       `&origin=${encodeURIComponent(homeAddress)}` +
       `&destination=${encodeURIComponent(location)}` +
       `&travelmode=driving`;
 
-    // A short, push-notification-friendly body (drive time + event time).
     const eventTimeStr = start.toLocaleTimeString("en-US", {
       timeZone: TZ,
       hour: "numeric",
@@ -158,9 +139,9 @@ async function checkDepartureAlerts(): Promise<void> {
     const roundedMins = Math.round(drive.durationMinutes / 5) * 5;
     const pushBody = `~${roundedMins} min drive · ${eventTimeStr}${location.length < 60 ? ` · ${location}` : ""}`;
 
-    broadcast("reminder", {
+    broadcastToUser(userName, "reminder", {
       id: `departure-${event.summary}-${Date.now()}`,
-      userName: "David",
+      userName,
       reminderText: message,
       speakText: message,
       isDeparture: true,
@@ -169,17 +150,29 @@ async function checkDepartureAlerts(): Promise<void> {
     await sendPushToAll({
       title: `🚗 Leave now — ${event.summary}`,
       body: pushBody,
-      tag: `departure-${event.summary}`,
+      tag: `departure-${userName}-${event.summary}`,
       url: mapsUrl,
       requireInteraction: true,
-    }).catch(() => {});
+    }, userName).catch(() => {});
 
-    await markAlertSent(event.summary, today);
+    await markAlertSent(event.summary, today, userName);
 
     logger.info(
-      { event: event.summary, driveMinutes: drive.durationMinutes, source: drive.source },
+      { event: event.summary, driveMinutes: drive.durationMinutes, source: drive.source, userName },
       "Departure alert fired"
     );
+  }
+}
+
+// ── Main scheduler check ──────────────────────────────────────────────────────
+async function checkDepartureAlerts(): Promise<void> {
+  clearIfNewDay();
+  try {
+    const users = await getActiveUsers();
+    if (users.length === 0) return;
+    await Promise.allSettled(users.map((u) => checkDepartureAlertsForUser(u.userName)));
+  } catch (err) {
+    logger.warn({ err }, "Departure scheduler: failed to load active users");
   }
 }
 

@@ -608,10 +608,10 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     const [dallas, lastNightNotes, newsBlock, yesterdayEps, todayEps, sportsScores, upcomingBills, upcomingDates, sundayData, pendingFollowUps, dallasEvents, journalCountWeek, recentJournals, totalStories, pollenData, venueConcertsBlock, dailyMotivation] = await Promise.all([
       getCachedWeather(primaryCity, primaryLat, primaryLon).catch(() => null),
       getLastNightNotes().catch(() => []),
-      fetchMorningNews().catch(() => ""),
+      fetchMorningNews(userName).catch(() => ""),
       fetchEpisodesForDate(yesterday, watchedIds).catch(() => []),
       fetchEpisodesForDate(now, watchedIds).catch(() => []),
-      fetchSportsScores().catch(() => null),
+      fetchSportsScores(userName).catch(() => null),
       getUpcomingBills(3, userName).catch(() => []),
       getUpcomingDates(21, userName).catch(() => []),
       isSunday ? collectSundayData().catch(() => null) : Promise.resolve(null),

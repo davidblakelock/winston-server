@@ -1,17 +1,17 @@
 import cron from "node-cron";
-import { broadcast } from "../reminders/sseStore.js";
+import { broadcastToUser } from "../reminders/sseStore.js";
 import { sendPushToAll } from "../push/pushManager.js";
 import { logger } from "../lib/logger.js";
-import { getProfile, type CollectedData } from "../onboarding/onboardingManager.js";
+import { getProfile, getActiveUsers, type CollectedData } from "../onboarding/onboardingManager.js";
 import { fetchTodayEvents, type CalendarEvent } from "../google/calendar.js";
 import { estimateDriveTime, extractEventLocation } from "./departureManager.js";
 import { query } from "../db.js";
 
 const TZ = "America/Chicago";
 
-async function getCompanionName(): Promise<string> {
-  const profile = await getProfile("David").catch(() => null);
-  return profile?.companionName ?? "Emma Peel";
+async function getCompanionName(userName: string): Promise<string> {
+  const profile = await getProfile(userName).catch(() => null);
+  return profile?.companionName ?? "Your Companion";
 }
 
 function localDateStr(): string {
@@ -64,7 +64,8 @@ async function markEventKnown(
 // ── Departure time helper ──────────────────────────────────────────────────────
 
 async function getLeaveByTime(
-  event: CalendarEvent
+  event: CalendarEvent,
+  userName: string
 ): Promise<{ leaveTimeStr: string; driveMinutes: number; source: string } | null> {
   if (!event.startIso || event.allDay) return null;
 
@@ -75,7 +76,7 @@ async function getLeaveByTime(
   });
   if (!location) return null;
 
-  const profile = await getProfile("David").catch(() => null);
+  const profile = await getProfile(userName).catch(() => null);
   const homeAddress = ((profile?.rawData as CollectedData)?.homeAddress) ?? "";
   const homeLat = profile?.latitude ?? 0;
   const homeLon = profile?.longitude ?? 0;
@@ -104,27 +105,27 @@ async function getLeaveByTime(
 
 // ── Proactive new-event message ────────────────────────────────────────────────
 
-async function sendNewEventAlert(event: CalendarEvent): Promise<void> {
-  const companionName = await getCompanionName();
+async function sendNewEventAlert(event: CalendarEvent, userName: string): Promise<void> {
+  const companionName = await getCompanionName(userName);
   const eventTimeStr = event.start || "today";
   const eventName = event.summary;
 
   let speakText: string;
   let pushBody: string;
 
-  const departure = await getLeaveByTime(event).catch(() => null);
+  const departure = await getLeaveByTime(event, userName).catch(() => null);
 
   if (departure) {
-    speakText = `Hey David, looks like you just added ${eventName} at ${eventTimeStr}. Based on traffic from home, you'd want to leave around ${departure.leaveTimeStr} — about ${Math.round(departure.driveMinutes)} minutes. I'll remind you when it's time.`;
+    speakText = `Hey, looks like you just added ${eventName} at ${eventTimeStr}. Based on traffic from home, you'd want to leave around ${departure.leaveTimeStr} — about ${Math.round(departure.driveMinutes)} minutes. I'll remind you when it's time.`;
     pushBody = `${eventName} at ${eventTimeStr} added. Leave home by ${departure.leaveTimeStr} (~${Math.round(departure.driveMinutes)} min drive).`;
   } else {
-    speakText = `Hey David, I noticed you just added ${eventName} at ${eventTimeStr} to your calendar. Thought you'd want a heads up.`;
+    speakText = `Hey, I noticed you just added ${eventName} at ${eventTimeStr} to your calendar. Thought you'd want a heads up.`;
     pushBody = `${eventName} at ${eventTimeStr} added to your calendar.`;
   }
 
-  broadcast("reminder", {
+  broadcastToUser(userName, "reminder", {
     id: `new-event-${event.id}-${Date.now()}`,
-    userName: "David",
+    userName,
     reminderText: speakText,
     speakText,
     isCalendarAlert: true,
@@ -135,9 +136,9 @@ async function sendNewEventAlert(event: CalendarEvent): Promise<void> {
     body: pushBody,
     tag: `new-event-${event.id}`,
     requireInteraction: false,
-  }).catch(() => {});
+  }, userName).catch(() => {});
 
-  logger.info({ event: eventName, time: eventTimeStr }, "Calendar sync: new event alert sent");
+  logger.info({ event: eventName, time: eventTimeStr, userName }, "Calendar sync: new event alert sent");
 }
 
 // ── Throttle: track last successful sync time (module-level) ──────────────────
@@ -145,19 +146,15 @@ let lastSyncAt: number | null = null;
 
 // ── Main sync check ────────────────────────────────────────────────────────────
 
-async function runCalendarSync(): Promise<void> {
+async function runCalendarSyncForUser(userName: string): Promise<void> {
   const now = Date.now();
   if (lastSyncAt !== null && now - lastSyncAt < 55 * 60 * 1000) {
-    logger.info(
-      { minsAgo: Math.floor((now - lastSyncAt) / 60_000) },
-      "Calendar sync: skipped — last sync was less than 55 minutes ago"
-    );
     return;
   }
   lastSyncAt = now;
   let events: CalendarEvent[] | null;
   try {
-    events = await fetchTodayEvents();
+    events = await fetchTodayEvents(userName);
   } catch {
     return;
   }
@@ -170,26 +167,32 @@ async function runCalendarSync(): Promise<void> {
 
   for (const event of events) {
     if (!event.id) continue;
-
     if (knownIds.has(event.id)) continue;
 
     if (isFirstSyncToday) {
-      // First sync of the day — record all current events silently (no alert)
-      // These were either in the morning briefing or existed before we started monitoring
       await markEventKnown(today, event.id, event.summary, true);
       logger.info({ event: event.summary }, "Calendar sync: initial population (no alert)");
     } else {
-      // Subsequent sync — this is a genuinely new event added today
       await markEventKnown(today, event.id, event.summary, true);
-      await sendNewEventAlert(event);
+      await sendNewEventAlert(event, userName);
     }
   }
 
   if (!isFirstSyncToday) {
     logger.info(
-      { eventCount: events.length, newEvents: events.filter((e) => !knownIds.has(e.id)).length },
+      { eventCount: events.length, newEvents: events.filter((e) => !knownIds.has(e.id)).length, userName },
       "Calendar sync: check complete"
     );
+  }
+}
+
+async function runCalendarSync(): Promise<void> {
+  try {
+    const users = await getActiveUsers();
+    if (users.length === 0) return;
+    await Promise.allSettled(users.map((u) => runCalendarSyncForUser(u.userName)));
+  } catch (err) {
+    logger.warn({ err }, "Calendar sync: failed to load active users");
   }
 }
 

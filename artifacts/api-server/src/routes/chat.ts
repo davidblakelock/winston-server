@@ -265,63 +265,6 @@ function formatWeatherBlock(w: CachedWeather): string {
   );
 }
 
-function buildContextualWeatherBlock(dallas: CachedWeather, knoxville: CachedWeather, now: Date): string {
-  const tz = "America/Chicago";
-  const dayName = now.toLocaleDateString("en-US", { timeZone: tz, weekday: "long" });
-
-  const pickleballDays = ["Monday", "Wednesday", "Friday", "Saturday"];
-  const isPickleballDay = pickleballDays.includes(dayName);
-  const activityLabel = isPickleballDay ? "pickleball" : "a run";
-
-  const uvMax = dallas.uvIndexMax;
-  const uvLabel = uvMax <= 2 ? "low" : uvMax <= 5 ? "moderate" : uvMax <= 7 ? "high" : uvMax <= 10 ? "very high" : "extreme";
-
-  // Derive key signals for Emma to use
-  const isStormy = /thunderstorm/.test(dallas.condition);
-  const isRainy = /rain|drizzle|shower/.test(dallas.condition);
-  const isSnowy = /snow|flurr|ice/.test(dallas.condition);
-  const isFoggy = /fog/.test(dallas.condition);
-  const likelyRain = dallas.precipChance >= 60;
-  const possibleRain = dallas.precipChance >= 35 && dallas.precipChance < 60;
-  const isVeryHot = dallas.high >= 98;
-  const isHot = dallas.high >= 93;
-  const isWarm = dallas.high >= 85;
-  const isCold = dallas.temp <= 40;
-  const isCool = dallas.temp <= 55;
-  const isHighWind = dallas.windSpeed >= 20;
-  const isPerfect = !isRainy && !likelyRain && !isStormy && dallas.temp >= 62 && dallas.high <= 87 && uvMax <= 7;
-
-  const signals: string[] = [];
-  if (isStormy) signals.push(`THUNDERSTORMS — outdoor plans are off`);
-  else if (isSnowy) signals.push(`${dallas.condition} — unusual for Dallas, affects roads and outdoor plans`);
-  else if (isRainy && likelyRain) signals.push(`Rain likely (${dallas.precipChance}%) — treadmill/indoor court is the smart call for ${activityLabel}`);
-  else if (likelyRain) signals.push(`${dallas.precipChance}% rain chance — outdoor ${activityLabel} is risky, going early helps`);
-  else if (possibleRain) signals.push(`${dallas.precipChance}% rain chance — keep an eye on timing for ${activityLabel}`);
-  if (isFoggy) signals.push(`Morning fog — matters for running outside and early driving`);
-  if (isVeryHot) signals.push(`Extreme heat (high ${dallas.high}°F) — dangerous for prolonged outdoor activity, go very early and hydrate aggressively`);
-  else if (isHot) signals.push(`Hot day (high ${dallas.high}°F) — extra hydration needed for ${activityLabel}`);
-  else if (isWarm) signals.push(`Warm day building (high ${dallas.high}°F) — hydrate well for ${activityLabel}`);
-  if (isCold) signals.push(`Cold morning (${dallas.temp}°F, feels ${dallas.feelsLike}°F) — layers, proper warm-up before hard effort`);
-  else if (isCool) signals.push(`Cool morning (${dallas.temp}°F) — light jacket to start, great once moving`);
-  if (isHighWind) signals.push(`Winds at ${dallas.windSpeed} mph — gusty for outdoor play or a run`);
-  if (!isStormy && !isRainy && uvMax >= 8) signals.push(`UV peaks at ${uvMax} (${uvLabel}) — sunscreen is non-negotiable outdoors`);
-  else if (!isStormy && !isRainy && uvMax >= 6) signals.push(`UV peaks at ${uvMax} (${uvLabel}) — sunscreen before heading out`);
-  if (isPerfect) signals.push(`PERFECT conditions for ${activityLabel} — lead with this${uvMax >= 6 ? `, mention sunscreen (UV ${uvMax})` : ""}`);
-
-  const signalLines = signals.length > 0
-    ? `\nKey signals for briefing:\n${signals.map((s) => `• ${s}`).join("\n")}`
-    : `\n• Conditions are unremarkable — weave in naturally`;
-
-  return (
-    `\n\n[Live Weather Data — Dallas, via Tomorrow.io, fetched now]\n` +
-    `Current: ${dallas.temp}°F (feels like ${dallas.feelsLike}°F), ${dallas.condition}\n` +
-    `Today: low ${dallas.low}°F → high ${dallas.high}°F | Rain: ${dallas.precipChance}% | Humidity: ${dallas.humidity}% | Wind: ${dallas.windSpeed} mph\n` +
-    `UV now: ${dallas.uvIndex} | UV peak today: ${dallas.uvIndexMax} (${uvLabel})\n` +
-    `\n[Knoxville (Olivia's weather)]\n${formatWeatherBlock(knoxville)}\n` +
-    `\nToday is ${dayName}. David's morning activity: ${activityLabel}.` +
-    signalLines
-  );
-}
 
 // Tightened: must be an EXPLICIT greeting or request — never fires on bare "morning" alone
 // or on messages that contain "morning" mid-sentence (e.g. "update my morning preferences").
@@ -438,16 +381,7 @@ const SAVED_LOCATIONS: SavedLocation[] = [
     address: "403 West Campbell Road Richardson Texas",
     keywords: ["doctor", "doc", "doctor bonnet", "bonnet", "physician", "my doctor", "the doctor"],
   },
-  {
-    name: "Moody YMCA",
-    address: "6000 Preston Road Dallas Texas 75205",
-    keywords: ["moody", "moody ymca", "moody y"],
-  },
-  {
-    name: "Semones YMCA",
-    address: "4332 Northaven Road Dallas Texas 75229",
-    keywords: ["semones", "semones ymca", "semones y", "the gym", "gym", "the y", "ymca"],
-  },
+
 ];
 
 function detectNavigation(
@@ -657,20 +591,19 @@ Restaurant Recommendations:
 
 WHAT YOU CAN DO — Answer naturally when David asks "What can you do?" or "What are your features?" or anything similar. Never list things robotically — talk the way you always do, warm and direct. Here's what you can actually do for him:
 
-• Morning briefings — every morning you can give David a full rundown: weather in Dallas (and Knoxville when relevant), his Google Calendar, top news stories he cares about, Rangers and Cowboys scores — all in one natural conversation.
+• Morning briefings — every morning you can give David a full rundown: local weather, his Google Calendar, top news stories he cares about, sports scores — all in one natural conversation.
 • Reminders & push notifications — set one-time or recurring reminders that arrive as push notifications on his phone. You'll also speak them aloud. Just say "remind me to…" and you've got it handled.
 • Google Calendar — add events, check what's coming up, and schedule appointments when he connects his Google account.
-• Navigation — say "take me to the gym" or "navigate to Doctor Bonnet" and you'll open Google Maps with directions. You know all his regular places.
-• Lists — shopping lists, to-do lists, Susan's to-do list. Add, read, or clear them anytime.
+• Navigation — say "take me to the gym" and you'll open Google Maps with directions. You know all his regular places.
+• Lists — shopping lists, to-do lists. Add, read, or clear them anytime.
 • Medications — track his medications and remind him when it's time to take them.
-• Evening check-in — each evening at a time he sets, you check in, ask how his day went, and capture a memory for Olivia's book.
-• Memory book for Olivia — every story he shares gets saved. One day they'll be compiled into a memory book for her. He can ask to hear them back anytime.
+• Evening check-in — each evening at a time he sets, you check in, ask how his day went, and capture a memory in his story book.
+• Memory book — every story he shares gets saved. One day they'll be compiled into a memory book for loved ones. He can ask to hear them back anytime.
 • Bills — track bill due dates and send reminders before they're due.
 • Birthdays and anniversaries — save important dates and get reminded well ahead of time.
 • Departure alerts — tell him when it's time to leave for an appointment, accounting for drive time.
 • Restaurant recommendations — suggest places based on his taste and offer to check availability.
-• Susan coordination — help him track things Susan needs to be reminded about.
-• Conversation and company — just talk. About his day, about what's on his mind, about Olivia. That's what he's here for too.
+• Conversation and company — just talk. About his day, about what's on his mind. That's what he's here for too.
 
 When answering "what can you do?" — pick 4–6 of the most relevant things based on what David has been talking about, and describe them in your voice, not as a bulleted list. Make it feel like a friend telling him what she's there for, not a software manual.`;
 
@@ -1029,12 +962,12 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
   if (isSportsRequest) {
     try {
-      const scores = await fetchSportsScores();
+      const scores = await fetchSportsScores(sessionUserName);
       systemPrompt += formatSportsForPrompt(scores) +
-        `\n\nDavid is asking about sports. Answer directly using only the data above. Give him the final score and result if the game is done, the live score if in progress, or the exact start time (morning/afternoon/evening) if it hasn't started yet. Be brief and conversational, like a friend giving a quick update. Do NOT say "tonight" if the game start time shows it's a morning or afternoon game. Do NOT invent any other games, records, or stats.`;
+        `\n\n${sessionUserName} is asking about sports. Answer directly using only the data above. Give the final score and result if the game is done, the live score if in progress, or the exact start time (morning/afternoon/evening) if it hasn't started yet. Be brief and conversational, like a friend giving a quick update. Do NOT say "tonight" if the game start time shows it's a morning or afternoon game. Do NOT invent any other games, records, or stats.`;
     } catch (err) {
       req.log.warn({ err }, "On-demand sports fetch failed");
-      systemPrompt += `\n\n[Sports Scores — Unavailable]\nTell David you weren't able to pull the scores right now and suggest he check back shortly.`;
+      systemPrompt += `\n\n[Sports Scores — Unavailable]\nLet the user know you weren't able to pull the scores right now and suggest they check back shortly.`;
     }
   }
 
@@ -1045,7 +978,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       systemPrompt += buildMarketsBlock(markets);
     } catch (err) {
       req.log.warn({ err }, "On-demand markets fetch failed");
-      systemPrompt += `\n\n[Markets — Unavailable]\nTell David you weren't able to pull market data right now and suggest he check back in a moment.`;
+      systemPrompt += `\n\n[Markets — Unavailable]\nLet the user know you weren't able to pull market data right now and suggest they check back in a moment.`;
     }
   }
 
@@ -1060,7 +993,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       req.log.info({ extracted }, "Bill extraction result");
       if (!extracted) {
         console.log(`[BILL PARSING] Claude returned null — could not parse bill from message`);
-        systemPrompt += `\n\n[Bill Add — Parse Failed]\nTell David you understood he wants to track a bill but you need a bit more info. Ask him to say the bill name and due date clearly — like "My Amex is due on the 15th every month" or "My rent is $2950 due on the 1st."`;
+        systemPrompt += `\n\n[Bill Add — Parse Failed]\nTell the user you understood they want to track a bill but you need a bit more info. Ask them to say the bill name and due date clearly — like "My Amex is due on the 15th every month" or "My rent is $2950 due on the 1st."`;
       } else {
         console.log(`[BILL SAVE] Attempting INSERT — name="${extracted.name}" category="${extracted.category}" freq="${extracted.frequency}" dueDay=${extracted.dueDay} user="${sessionUserName}"`);
         const result = await addBill(
@@ -1075,11 +1008,11 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         );
         if (result.alreadyExists) {
           console.log(`[BILL SAVE] Already exists — skipping INSERT for "${extracted.name}"`);
-          systemPrompt += `\n\n[Bill Add — Already Exists]\nTell David you already have "${extracted.name}" tracked. If he wants to update it, he can remove it first and re-add it.`;
+          systemPrompt += `\n\n[Bill Add — Already Exists]\nTell the user you already have "${extracted.name}" tracked. If they want to update it, they can remove it first and re-add it.`;
         } else if (result.bill) {
           console.log(`[BILL SAVE] SUCCESS — id=${result.bill.id} name="${result.bill.name}" dueDay=${result.bill.dueDay}`);
           const confirmation = confirmBillAdded(result.bill);
-          systemPrompt += `\n\n[Bill Added Successfully]\n${confirmation}\nTell David exactly this confirmation. Be warm and brief.`;
+          systemPrompt += `\n\n[Bill Added Successfully]\n${confirmation}\nTell the user exactly this confirmation. Be warm and brief.`;
           req.log.info({ name: result.bill.name, frequency: result.bill.frequency, dueDay: result.bill.dueDay }, "Bill added to DB");
         } else {
           console.log(`[BILL SAVE] ERROR — addBill returned neither alreadyExists nor bill object`);
@@ -1088,7 +1021,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     } catch (err) {
       console.log(`[BILL SAVE] EXCEPTION — ${err instanceof Error ? err.message : String(err)}`);
       req.log.warn({ err }, "Bill add failed");
-      systemPrompt += `\n\n[Bill Add — Error]\nTell David you had trouble adding that obligation and ask him to try again.`;
+      systemPrompt += `\n\n[Bill Add — Error]\nTell the user you had trouble adding that obligation and ask them to try again.`;
     }
   } else if (!isMorningGreeting) {
     // Only log misses for debugging when the message looks bill-like
@@ -1102,7 +1035,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       const upcoming = await getUpcomingBills(60, sessionUserName);
       const allBills = await getBills(sessionUserName);
       if (!allBills.length) {
-        systemPrompt += `\n\n[Financial Obligations — AUTHORITATIVE CURRENT STATE FROM SUPABASE]\nThe bills list is empty — zero bills are tracked. Disregard any bills mentioned earlier in this conversation. Tell David he doesn't have any bills tracked yet and let him know he can add them naturally — e.g. "My Amex bill is due on the 15th of every month."`;
+        systemPrompt += `\n\n[Financial Obligations — AUTHORITATIVE CURRENT STATE FROM SUPABASE]\nThe bills list is empty — zero bills are tracked. Disregard any bills mentioned earlier in this conversation. Tell the user they don't have any bills tracked yet and let them know they can add them naturally — e.g. "My Amex bill is due on the 15th of every month."`;
       } else {
         const upcomingText = formatBillsForPrompt(upcoming);
         const furtherOut = allBills.filter((b) => !upcoming.find((u) => u.id === b.id));
@@ -1127,14 +1060,14 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
       const nameQuery = nameMatch?.[1]?.trim();
       if (!nameQuery) {
-        systemPrompt += `\n\n[Bill Remove — Unclear]\nAsk David which bill he'd like to remove. He can say "Remove my Amex reminder."`;
+        systemPrompt += `\n\n[Bill Remove — Unclear]\nAsk the user which bill they'd like to remove. He can say "Remove my Amex reminder."`;
       } else {
         const removed = await removeBill(nameQuery, sessionUserName);
         if (removed) {
-          systemPrompt += `\n\n[Bill Removed]\nTell David that "${nameQuery}" has been removed from his bill tracking. Keep it brief and warm.`;
+          systemPrompt += `\n\n[Bill Removed]\nTell the user that "${nameQuery}" has been removed from bill tracking. Keep it brief and warm.`;
           req.log.info({ nameQuery }, "Bill removed");
         } else {
-          systemPrompt += `\n\n[Bill Remove — Not Found]\nTell David you couldn't find a bill matching "${nameQuery}". Suggest he say "what bills do I have" to see the full list.`;
+          systemPrompt += `\n\n[Bill Remove — Not Found]\nTell the user you couldn't find a bill matching "${nameQuery}". Suggest they say "what bills do I have" to see the full list.`;
         }
       }
     } catch (err) {
@@ -1146,7 +1079,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   if (isEmergency) {
     const homeAddressForEmergency =
       ((userProfile?.rawData as CollectedData)?.homeAddress) ?? "unknown";
-    systemPrompt += `\n\n[EMERGENCY PROTOCOL ACTIVATED]\nDavid may be in distress or danger. Respond immediately with calm, clear, reassuring emergency guidance. Tell him to call 911. Give his home address: ${homeAddressForEmergency}. Ask if he needs you to stay on the line. Use short sentences. Be calm and clear. Do NOT be wordy — emergency responders need clarity. Start your response with "David, I'm here."`;
+    systemPrompt += `\n\n[EMERGENCY PROTOCOL ACTIVATED]\nThe user may be in distress or danger. Respond immediately with calm, clear, reassuring emergency guidance. Tell them to call 911. Give their home address: ${homeAddressForEmergency}. Ask if they need you to stay on the line. Use short sentences. Be calm and clear. Do NOT be wordy — emergency responders need clarity. Start your response with a warm, direct greeting using their name.`;
   }
 
   // ── Important dates ──────────────────────────────────────────────────────────
@@ -1154,7 +1087,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     try {
       const extracted = await extractDateFromMessage(message);
       if (!extracted) {
-        systemPrompt += `\n\n[Date Add — Parse Failed]\nTell David you had trouble understanding that. Ask him to say it more clearly — e.g. "Olivia's birthday is October 15th."`;
+        systemPrompt += `\n\n[Date Add — Parse Failed]\nTell the user you had trouble understanding that. Ask them to say it more clearly — e.g. "My daughter's birthday is October 15th."`;
       } else {
         const result = await addDate(
           extracted.personName,
@@ -1167,10 +1100,10 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           sessionUserName
         );
         if (result.alreadyExists) {
-          systemPrompt += `\n\n[Date Add — Already Exists]\nTell David you already have ${extracted.personName}'s ${extracted.eventType} saved.`;
+          systemPrompt += `\n\n[Date Add — Already Exists]\nTell the user you already have ${extracted.personName}'s ${extracted.eventType} saved.`;
         } else if (result.date) {
           const confirmation = confirmDateAdded(result.date);
-          systemPrompt += `\n\n[Date Added Successfully]\n${confirmation}\nTell David exactly this confirmation. Be warm.`;
+          systemPrompt += `\n\n[Date Added Successfully]\n${confirmation}\nTell the user exactly this confirmation. Be warm.`;
           req.log.info({ personName: result.date.personName, eventType: result.date.eventType }, "Date added");
         }
       }
@@ -1183,7 +1116,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     try {
       const allDates = await getDates(sessionUserName);
       if (!allDates.length) {
-        systemPrompt += `\n\n[Important Dates — None yet]\nTell David he doesn't have any birthdays or anniversaries saved yet. He can add them naturally — e.g. "Olivia's birthday is October 15th."`;
+        systemPrompt += `\n\n[Important Dates — None yet]\nTell the user they don't have any birthdays or anniversaries saved yet. They can add them naturally — e.g. "My daughter's birthday is October 15th."`;
       } else {
         const upcoming = await getUpcomingDates(90, sessionUserName);
         const formattedList = upcoming.length
@@ -1201,14 +1134,14 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       const nameMatch = message.match(/(?:remove|forget|delete)\s+(?:my\s+|[\w]+\s*'s\s+)?(.+?)\s*(?:birthday|anniversary)/i);
       const nameQuery = nameMatch?.[1]?.trim() ?? message.replace(/remove|forget|delete|birthday|anniversary/gi, "").trim();
       if (!nameQuery) {
-        systemPrompt += `\n\n[Date Remove — Unclear]\nAsk David which person's birthday or anniversary to remove.`;
+        systemPrompt += `\n\n[Date Remove — Unclear]\nAsk the user which person's birthday or anniversary to remove.`;
       } else {
         const removed = await removeDate(nameQuery, undefined, sessionUserName);
         if (removed) {
-          systemPrompt += `\n\n[Date Removed]\nTell David you've removed "${nameQuery}" from the important dates list.`;
+          systemPrompt += `\n\n[Date Removed]\nTell the user you've removed "${nameQuery}" from the important dates list.`;
           req.log.info({ nameQuery }, "Date removed");
         } else {
-          systemPrompt += `\n\n[Date Remove — Not Found]\nTell David you couldn't find "${nameQuery}" in the important dates list. He can say "what birthdays do I have" to see the full list.`;
+          systemPrompt += `\n\n[Date Remove — Not Found]\nTell the user you couldn't find "${nameQuery}" in the important dates list. They can say "what birthdays do I have" to see the full list.`;
         }
       }
     } catch (err) {
@@ -1292,7 +1225,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   // ── Olivia relationship tracking ───────────────────────────────────────────
   if (isOliviaCall) {
     recordOliviaContact("call", message.substring(0, 200), sessionUserName).catch(() => {});
-    systemPrompt += `\n\n[Olivia Contact Logged]\nDavid mentioned talking to or calling Olivia. This has been noted. Be warm and curious — ask how she's doing, what they talked about, how she seems. Express genuine delight that they connected.`;
+    const displayName = userProfile?.name ?? sessionUserName;
+    systemPrompt += `\n\n[Olivia Contact Logged]\n${displayName} mentioned talking to or calling Olivia. This has been noted. Be warm and curious — ask how she's doing, what they talked about, how she seems. Express genuine delight that they connected.`;
   } else if (isOliviaMention && !isOliviaCall) {
     recordOliviaContact("mention", message.substring(0, 100), sessionUserName).catch(() => {});
   }
@@ -1301,17 +1235,22 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     try {
       const daysSinceCall = await getDaysSinceLastCall(sessionUserName);
       if (daysSinceCall !== null && daysSinceCall >= 3) {
-        systemPrompt += `\n\n[Olivia — Gentle Check-In Opportunity]\nIt's been ${daysSinceCall} days since David last mentioned calling Olivia. If the moment feels natural in this conversation, gently note it: "David, it's been a few days since you mentioned talking to Olivia — how is she doing?" Don't force it if the conversation is about something urgent or completely unrelated.`;
+        const displayName = userProfile?.name ?? sessionUserName;
+        systemPrompt += `\n\n[Olivia — Gentle Check-In Opportunity]\nIt's been ${daysSinceCall} days since ${displayName} last mentioned calling Olivia. If the moment feels natural in this conversation, gently note it: "${displayName}, it's been a few days since you mentioned talking to Olivia — how is she doing?" Don't force it if the conversation is about something urgent or completely unrelated.`;
       }
     } catch { /* non-fatal */ }
   }
 
   // ── Mood awareness ─────────────────────────────────────────────────────────
-  systemPrompt += `\n\n[Emotional Attunement]\nPay close attention to David's tone and energy in this message. If he seems short, quiet, frustrated, or low-energy — respond with extra warmth and gentle curiosity. Something like "You seem a little quiet today, David — everything okay?" If he mentions being tired, suggest rest. If he seems frustrated, acknowledge it without diagnosing. If he seems happy or energized, match that energy. Never over-interpret or make assumptions — just notice and respond the way a caring friend would. If his message is completely neutral or upbeat, no need to comment on his mood at all.`;
+  {
+    const _dn = userProfile?.name ?? sessionUserName;
+    systemPrompt += `\n\n[Emotional Attunement]\nPay close attention to ${_dn}'s tone and energy in this message. If they seem short, quiet, frustrated, or low-energy — respond with extra warmth and gentle curiosity. Something like "You seem a little quiet today — everything okay?" If they mention being tired, suggest rest. If they seem frustrated, acknowledge it without diagnosing. If they seem happy or energized, match that energy. Never over-interpret or make assumptions — just notice and respond the way a caring friend would. If the message is completely neutral or upbeat, no need to comment on their mood at all.`;
+  }
 
   // ── Sleep reminder ─────────────────────────────────────────────────────────
   if (sleepReminderFired) {
-    systemPrompt += `\n\n[Sleep Reminder — One Time Tonight]\nIt's past 11pm. David is still up and chatting. At the right moment in your response — gently, warmly, and briefly note the time. Something like "David, it's getting late — you might want to think about winding down soon." Keep it to one sentence. Never preachy. Don't repeat this if he continues talking.`;
+    const _dn = userProfile?.name ?? sessionUserName;
+    systemPrompt += `\n\n[Sleep Reminder — One Time Tonight]\nIt's past 11pm. ${_dn} is still up and chatting. At the right moment in your response — gently, warmly, and briefly note the time. Something like "${_dn}, it's getting late — you might want to think about winding down soon." Keep it to one sentence. Never preachy. Don't repeat this if they continue talking.`;
   }
 
   // ── Briefing / wind-down preference change ───────────────────────────────────
@@ -1424,7 +1363,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
       const gmailBlock = emails !== undefined && emails !== null
         ? (emails.length === 0
-            ? `\n\n[VERIFIED — Gmail API — no unread emails in inbox]\nTell David warmly: "Your inbox is clear — no unread emails right now." Do not elaborate.`
+            ? `\n\n[VERIFIED — Gmail API — no unread emails in inbox]\nTell the user warmly: "Your inbox is clear — no unread emails right now." Do not elaborate.`
             : `\n\n[VERIFIED — Gmail API — recent unread emails (live fetch)]\n${formatEmailsForPrompt(emails)}\nThis is VERIFIED data. State email senders, subjects, and content as fact exactly as shown. Do not add context not present in the email data.`) +
           buildScamWarningInstruction(emails, userProfile?.companionName, sessionUserName)
         : emails === null
@@ -1456,7 +1395,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       } catch (err) {
         clearPendingDelete();
         req.log.warn({ err }, "Calendar delete failed");
-        systemPrompt += `\n\n[Calendar Delete Failed]\nTell David the delete failed and he can try again or do it manually in Google Calendar.`;
+        systemPrompt += `\n\n[Calendar Delete Failed]\nTell the user the delete failed and they can try again or do it manually in Google Calendar.`;
       }
     } else {
       clearPendingDelete();
@@ -1466,14 +1405,14 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     const hasWriteScope = await hasCalendarWriteScope(sessionUserName).catch(() => false);
     if (!hasWriteScope) {
       systemPrompt +=
-        `\n\n[Calendar Write — Insufficient Permission]\nDavid's current Google connection only has read-only calendar access. To create, edit, or delete events, he needs to reconnect Google to grant the updated permission. Tell him this warmly — e.g. "I'd love to add that for you, but I need a quick update to my Google permissions first. Just tap the Google button in the header to reconnect — it only takes a second."`;
+        `\n\n[Calendar Write — Insufficient Permission]\nThe user's current Google connection only has read-only calendar access. To create, edit, or delete events, they need to reconnect Google to grant the updated permission. Tell them this warmly — e.g. "I'd love to add that for you, but I need a quick update to my Google permissions first. Just tap the Google button in the header to reconnect — it only takes a second."`;
     } else if (isCalendarCreate) {
       try {
         const parsed = await parseCalendarOperation(message, "create") as ParsedCreateEvent | null;
         if (!parsed) throw new Error("parse failed");
 
         if (parsed.ambiguous && parsed.clarificationNeeded) {
-          systemPrompt += `\n\n[Calendar Create — Clarification Needed]\nAsk David: "${parsed.clarificationNeeded}" — before creating the event.`;
+          systemPrompt += `\n\n[Calendar Create — Clarification Needed]\nAsk the user: "${parsed.clarificationNeeded}" — before creating the event.`;
         } else {
           const created = await createCalendarEvent({
             title: parsed.title,
@@ -1507,12 +1446,12 @@ const chatHandlerCore = async (req: Request, res: Response) => {
             systemPrompt += calendarCreateMsg;
             req.log.info({ title: parsed.title, date: parsed.date }, "Calendar event created");
           } else {
-            systemPrompt += `\n\n[Calendar Create Failed]\nTell David the event couldn't be created and suggest he check Google Calendar or try again.`;
+            systemPrompt += `\n\n[Calendar Create Failed]\nTell the user the event couldn't be created and suggest he check Google Calendar or try again.`;
           }
         }
       } catch (err) {
         req.log.warn({ err }, "Calendar create failed");
-        systemPrompt += `\n\n[Calendar Create — Parse Error]\nTell David you had trouble understanding the event details and ask him to repeat with the date and time.`;
+        systemPrompt += `\n\n[Calendar Create — Parse Error]\nTell the user you had trouble understanding the event details and ask them to repeat with the date and time.`;
       }
     } else if (isCalendarModify) {
       console.log("[CALENDAR] intent detected as move or reschedule — routing to UPDATE path (events.patch)");
@@ -1528,7 +1467,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
         if (!event) {
           console.log(`[CALENDAR] event not found for keywords: "${parsed.searchKeywords}" — telling David`);
-          systemPrompt += `\n\n[Calendar Modify — Event Not Found]\nTell David you couldn't find "${parsed.searchKeywords}" in his calendar. Ask him to double-check the event name or tell you the date it's on.`;
+          systemPrompt += `\n\n[Calendar Modify — Event Not Found]\nTell the user you couldn't find "${parsed.searchKeywords}" in their calendar. Ask them to double-check the event name or tell you the date it's on.`;
         } else {
           console.log(`[CALENDAR] found event id: ${event.id} — "${event.summary}" on ${event.isoDate}`);
           console.log(`[CALENDAR] calling events.patch with new time: date=${parsed.newDate ?? "(unchanged)"} start=${parsed.newStartTime ?? "(unchanged)"} end=${parsed.newEndTime ?? "(unchanged)"}`);
@@ -1555,12 +1494,12 @@ const chatHandlerCore = async (req: Request, res: Response) => {
               `\n\n[Calendar Event Updated]\n"${event.summary}" has been moved/updated using events.patch (NOT insert).\nConfirm specifically: "Done — ${confirmation} is all set." Read the new details back to David.`;
             req.log.info({ eventId: event.id, summary: event.summary }, "Calendar event updated via events.patch");
           } else {
-            systemPrompt += `\n\n[Calendar Update Failed]\nTell David the update failed and suggest he try again or edit in Google Calendar directly.`;
+            systemPrompt += `\n\n[Calendar Update Failed]\nTell the user the update failed and suggest they try again or edit in Google Calendar directly.`;
           }
         }
       } catch (err) {
         req.log.warn({ err }, "Calendar modify failed");
-        systemPrompt += `\n\n[Calendar Modify — Parse Error]\nTell David you had trouble identifying which event to change, and ask him to describe it with more detail (name and current date).`;
+        systemPrompt += `\n\n[Calendar Modify — Parse Error]\nTell the user you had trouble identifying which event to change, and ask them to describe it with more detail (name and current date).`;
       }
     } else if (isCalendarDelete) {
       try {
@@ -1569,7 +1508,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
         const event = await findEventByKeywords(parsed.searchKeywords, parsed.searchDate);
         if (!event) {
-          systemPrompt += `\n\n[Calendar Delete — Event Not Found]\nTell David you couldn't find "${parsed.searchKeywords}" in his calendar for the next 7 days.`;
+          systemPrompt += `\n\n[Calendar Delete — Event Not Found]\nTell the user you couldn't find "${parsed.searchKeywords}" in their calendar for the next 7 days.`;
         } else {
           setPendingDelete({
             eventId: event.id,
@@ -1585,7 +1524,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         }
       } catch (err) {
         req.log.warn({ err }, "Calendar delete parse failed");
-        systemPrompt += `\n\n[Calendar Delete — Parse Error]\nTell David you had trouble identifying which event to cancel, and ask him to be more specific.`;
+        systemPrompt += `\n\n[Calendar Delete — Parse Error]\nTell the user you had trouble identifying which event to cancel, and ask them to be more specific.`;
       }
     }
   }
@@ -1635,47 +1574,40 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     } catch { /* non-fatal */ }
 
     // ── Profile-based fallback when Google Calendar is unavailable ───────────
-    // David plays pickleball Mon/Wed/Fri mornings (Semones YMCA) and Sat mornings (Moody's YMCA).
-    // On those days we always have something specific to reference in Step 1,
-    // even if Google Calendar returns nothing.
     if (!todayCalendarBlock) {
-      const PICKLEBALL_DAYS = ["Monday", "Wednesday", "Friday", "Saturday"];
-      const pickleball = PICKLEBALL_DAYS.includes(dayName);
-      const pickleballVenue = dayName === "Saturday" ? "Moody's YMCA" : "Semones YMCA";
+      const windDownDisplayName = userProfile?.name ?? sessionUserName;
       todayCalendarBlock =
         `\n\n[Today's Activities — Profile-Based (live calendar unavailable)]\n` +
-        (pickleball
-          ? `David likely played pickleball this morning at ${pickleballVenue} (indoor courts).`
-          : `David's calendar wasn't available. Use his known interests — woodworking, tinkering on old cars, ` +
-            `music, family, and his corgi Winston — to make Step 1 feel personal rather than generic.`) +
-        `\nIn Step 1, reference this naturally. For pickleball days: ` +
-        `"Hope pickleball was a good one this morning — how was the rest of ${dayName}?" or similar. ` +
-        `For non-pickleball days: pick one of David's interests and ask something personal about his day ` +
+        `${windDownDisplayName}'s calendar wasn't available. Make Step 1 feel personal ` +
+        `by referencing something natural about their day — ask a warm, specific question ` +
         `rather than a flat "how was your day?"`;
     }
 
-    // ── Fetch tonight + tomorrow's weather for Dallas (shared cache) ─────────
+    // ── Fetch tonight + tomorrow's weather for user's city ───────────────────
     let tomorrowWeatherBlock = "";
     let tomorrowHasOutdoor = false;
     let tomorrowWeatherData: { high: number | null; condition: string | null; precip: number; tonightLow: string } | null = null;
+    const _weatherCity = userProfile?.city ?? "Dallas";
+    const _weatherLat = userProfile?.latitude ?? 32.7767;
+    const _weatherLon = userProfile?.longitude ?? -96.7970;
     try {
-      const dallas = await getCachedWeather("Dallas", 32.7767, -96.7970);
-      const tonightLow = `${dallas.low}°F`;
-      const tomorrow = dallas.forecastDays[0]; // forecastDays[0] = tomorrow (day 1, skipping today)
+      const weatherData = await getCachedWeather(_weatherCity, _weatherLat, _weatherLon);
+      const tonightLow = `${weatherData.low}°F`;
+      const tomorrow = weatherData.forecastDays[0]; // forecastDays[0] = tomorrow
       const tomorrowHigh = tomorrow?.high ?? null;
       const tomorrowCondition = tomorrow?.condition ?? null;
       const tomorrowPrecip = tomorrow?.precipChance ?? 0;
       tomorrowWeatherData = { high: tomorrowHigh, condition: tomorrowCondition, precip: tomorrowPrecip, tonightLow };
 
       tomorrowWeatherBlock =
-        `\n\n[Weather — Dallas Tonight and Tomorrow]\n` +
+        `\n\n[Weather — ${_weatherCity} Tonight and Tomorrow]\n` +
         `Tonight's low: ${tonightLow}.\n` +
         (tomorrowHigh && tomorrowCondition
           ? `Tomorrow: high ${tomorrowHigh}°F, ${tomorrowCondition}${tomorrowPrecip > 30 ? `, ${tomorrowPrecip}% chance of rain` : ""}.`
           : "") +
         `\nUSAGE RULES:\n` +
         `• Mention weather naturally in Step 5 as one conversational sentence.\n` +
-        `• INDOOR ACTIVITIES (pickleball at YMCA/gym, gym workouts) — weather is irrelevant, do NOT connect weather to these.\n` +
+        `• INDOOR ACTIVITIES (gym workouts, indoor courts) — weather is irrelevant, do NOT connect weather to these.\n` +
         `• OUTDOOR ACTIVITIES (a run, golf, an outdoor event) — DO mention relevant conditions briefly.\n` +
         `• If tomorrow only has indoor or office activities, just note the overnight low and tomorrow's high naturally: "Should cool down nicely tonight — tomorrow's looking like a [condition] day."\n` +
         `• Never mention specific weather numbers in context of indoor activities.`;
@@ -1695,40 +1627,29 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           return OUTDOOR_ACTIVITY.test(text) && !INDOOR_OVERRIDE.test(text);
         });
 
-        const tomorrowPickleball = ["Sunday", "Tuesday", "Thursday", "Friday"].includes(dayName);
         const lines = tomorrowEvts.map((e) => {
           const time = e.allDay ? "all day" : `${e.start}${e.end && e.end !== e.start ? ` – ${e.end}` : ""}`;
           const loc = e.location ? ` at ${e.location}` : "";
           return `  • ${e.summary} — ${time}${loc}`;
         });
         tomorrowCalendarBlock =
-          `\n\n[Tomorrow's Calendar — fetched live in CT]\n` +
+          `\n\n[Tomorrow's Calendar — fetched live]\n` +
           lines.join("\n") +
-          (tomorrowPickleball ? `\n  • Pickleball (YMCA — indoor courts)` : "") +
           `\nIn Step 4, mention the 1–2 most relevant events with their times. ` +
           `Include location if it matters for planning. Keep it to 1–2 sentences.`;
       } else if (tomorrowEvts !== null) {
-        const tomorrowPickleball = ["Sunday", "Tuesday", "Thursday", "Friday"].includes(dayName);
         tomorrowCalendarBlock =
           `\n\n[Tomorrow's Calendar]\n` +
-          (tomorrowPickleball ? `  • Pickleball morning (YMCA — indoor courts)\n` : "") +
-          (!tomorrowPickleball ? `Calendar is otherwise clear tomorrow.\n` : `Calendar is otherwise clear.\n`) +
-          `Tell David what's on for tomorrow in Step 4.`;
+          `Calendar is clear tomorrow.\n` +
+          `Mention this briefly in Step 4.`;
       }
     } catch { /* non-fatal */ }
 
     // ── Profile-based fallback for tomorrow's calendar ───────────────────────
-    // Same pattern as today — if Google Calendar throws, use pickleball schedule.
     if (!tomorrowCalendarBlock) {
-      // Pickleball days: Mon/Wed/Fri/Sat. Translate "today" to "is tomorrow a pickleball day?"
-      const tomorrowPickleball = ["Sunday", "Tuesday", "Thursday", "Friday"].includes(dayName);
-      const tomorrowVenue = dayName === "Friday" ? "Moody's YMCA" : "Semones YMCA";
       tomorrowCalendarBlock =
         `\n\n[Tomorrow's Calendar — Profile-Based (live calendar unavailable)]\n` +
-        (tomorrowPickleball
-          ? `  • Pickleball morning (${tomorrowVenue} — indoor courts)\n`
-          : `Calendar appears clear tomorrow.\n`) +
-        `Tell David what's on for tomorrow in Step 4.`;
+        `Calendar data wasn't available. Ask the user if anything is coming up tomorrow.`;
     }
 
     // ── Check TV for episodes aired in the last 72 hours only ───────────────
@@ -1760,27 +1681,42 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           : ` Overnight low ${tomorrowWeatherData.tonightLow}, tomorrow high ${tomorrowWeatherData.high ?? "–"}°F${tomorrowWeatherData.condition ? ` (${tomorrowWeatherData.condition})` : ""}.`)
       : "";
 
+    // Build dynamic family context for the evening check-in
+    const _windDownDisplayName = userProfile?.name ?? sessionUserName;
+    const _closeFamilyPeople = profilePeople.filter((p: { relationship?: string }) => {
+      const rel = (p.relationship ?? "").toLowerCase();
+      return ["wife","husband","spouse","partner","girlfriend","boyfriend","daughter","son","child","dog","cat","pet","corgi","puppy"].includes(rel);
+    });
+    const _familyNames = _closeFamilyPeople.map((p: { name: string }) => p.name);
+    const _familyMentionStr = _familyNames.length > 0
+      ? `Weave in ${_familyNames.join(", ")} naturally — don't force all names, use what feels natural.`
+      : "";
+    const _storyPersonStr = _closeFamilyPeople.find((p: { relationship?: string }) => {
+      const rel = (p.relationship ?? "").toLowerCase();
+      return ["daughter","son","child"].includes(rel);
+    })?.name ?? null;
+    const _closingFamilyStr = _familyNames.length > 0
+      ? `Mention ${_familyNames.join(", ")} by name.`
+      : "";
+
     systemPrompt +=
       `\n\n[Evening Check-In — ACTIVE]\n` +
       `Write ONE complete, flowing evening check-in message. ` +
       `Do NOT ask a question and wait — deliver everything below in a single warm, natural message. ` +
       `This is not a back-and-forth checklist. It reads like a thoughtful note from a trusted friend ` +
-      `who knows David's whole life. Aim for about 150–200 words total. ` +
+      `who knows ${_windDownDisplayName}'s whole life. Aim for about 150–200 words total. ` +
       `Weave the six elements below together naturally — they should feel like one piece, not six sections.\n\n` +
 
       `ELEMENT 1 — PERSONAL OPENER:\n` +
       `Start with a warm greeting that references something real from today. ` +
       `Check [Today's Calendar] — if an event is listed, name it. ` +
-      `Weave in Susan, Olivia, and/or Winston the corgi naturally — ` +
-      `e.g. "Hope Susan and Olivia had a good evening" or "Winston get his evening walk in?" ` +
-      `Don't force all three — use what feels natural. ` +
-      `NEVER mention weather for pickleball or indoor activities. ` +
+      (_familyMentionStr ? `${_familyMentionStr} ` : ``) +
       `NEVER invent events not in the calendar.\n\n` +
 
       `ELEMENT 2 — STORY QUESTION:\n` +
       `Include the question from [Tonight's Story Question] as a warm invitation. ` +
       `Frame it exactly like this: ` +
-      `"Here's something worth sitting with tonight — something for Olivia someday: [question]" ` +
+      `"Here's something worth sitting with tonight${_storyPersonStr ? ` — something for ${_storyPersonStr} someday` : ""}: [question]" ` +
       `Use the exact question text. Don't reframe or paraphrase it.\n\n` +
 
       `ELEMENT 3 — JOURNAL INVITE:\n` +
@@ -1795,16 +1731,15 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       `Quick look at [Tomorrow's Calendar] — name 1–2 events with times if they exist. ` +
       `Then ask: "Anything you want to add to your list or calendar before we close out?" ` +
       `${weatherNote
-        ? `If there's an outdoor activity tomorrow, one short weather note is fine: ${weatherNote} Never connect weather to pickleball or indoor activities.`
+        ? `If there's an outdoor activity tomorrow, one short weather note is fine: ${weatherNote} Never connect weather to indoor activities.`
         : `No weather data — skip weather.`}\n\n` +
 
       `ELEMENT 6 — CLOSING:\n` +
-      `Warm goodnight. Mention Susan, Olivia, and Winston by name. One encouraging sentence. Done.\n\n` +
+      `Warm goodnight to ${_windDownDisplayName}. ${_closingFamilyStr} One encouraging sentence. Done.\n\n` +
 
       `RULES: Do NOT structure the output with headers or numbers. ` +
       `Write it as flowing prose — one connected message. ` +
-      `No medication reminders. No music suggestions. No phone reminders. ` +
-      `Never mention weather in connection with pickleball or any indoor activity.\n` +
+      `No medication reminders. No music suggestions. No phone reminders.\n` +
 
       todayCalendarBlock +
       tomorrowWeatherBlock +
@@ -1904,11 +1839,16 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       await saveStory(pendingPrompt, message, pendingQuestionId);
       await clearPendingPrompt();
       req.log.info({ prompt: pendingPrompt.substring(0, 80), words: wordCount, questionId: pendingQuestionId }, "Story captured");
+      const _storyDisplayName = userProfile?.name ?? sessionUserName;
+      const _storyPerson = profilePeople.find((p: { relationship?: string }) => {
+        const rel = (p.relationship ?? "").toLowerCase();
+        return ["daughter","son","child"].includes(rel);
+      })?.name ?? null;
       systemPrompt +=
-        `\n\n[Memory Saved]\nDavid just responded to tonight's story question: "${pendingPrompt}"\n` +
-        `His response (${wordCount} words) has been saved as a memory for Olivia.\n` +
-        `Respond with genuine warmth — reflect on something specific he shared. 2–3 sentences. Let it land.\n` +
-        `Then gently ask if he'd like to add anything to his journal tonight: "Want to capture anything else before we close out? Just talk — I'll save it."`;
+        `\n\n[Memory Saved]\n${_storyDisplayName} just responded to tonight's story question: "${pendingPrompt}"\n` +
+        `Their response (${wordCount} words) has been saved${_storyPerson ? ` as a memory for ${_storyPerson}` : " in the memory book"}.\n` +
+        `Respond with genuine warmth — reflect on something specific they shared. 2–3 sentences. Let it land.\n` +
+        `Then gently ask if they'd like to add anything to their journal tonight: "Want to capture anything else before we close out? Just talk — I'll save it."`;
       // Enable journal capture after story is saved
       const journalPromptsEnabled = await isJournalPromptsEnabled(sessionUserName).catch(() => true);
       if (!hasJournalTonight && journalPromptsEnabled) {
@@ -1928,12 +1868,16 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         if (storyQ) {
           await setPendingPrompt(storyQ.question);
           req.log.info({ questionId: storyQ.id, category: storyQ.category, prompt: storyQ.question.substring(0, 80) }, "Evening story question queued");
+          const _sqPerson = profilePeople.find((p: { relationship?: string }) => {
+            const rel = (p.relationship ?? "").toLowerCase();
+            return ["daughter","son","child"].includes(rel);
+          })?.name ?? null;
           systemPrompt +=
             `\n\n[Tonight's Story Question]\nCategory: ${storyQ.category}\nQuestion: "${storyQ.question}"\n\n` +
             `Include this in the check-in message as ELEMENT 2. ` +
-            `Frame it exactly as: "Here's something worth sitting with tonight — something for Olivia someday: [question]" ` +
+            `Frame it exactly as: "Here's something worth sitting with tonight${_sqPerson ? ` — something for ${_sqPerson} someday` : ""}: [question]" ` +
             `Use the exact question text above. Do not paraphrase. ` +
-            `When David responds with 15+ words, his answer will be saved automatically.`;
+            `When the user responds with 15+ words, their answer will be saved automatically.`;
         }
       }
     } catch (err) {
@@ -1941,19 +1885,28 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     }
   } else if (winddownActive && pendingPrompt && !isPotentialStoryResponse) {
     // Story question already queued — include it in the check-in message
+    const _sqPerson2 = profilePeople.find((p: { relationship?: string }) => {
+      const rel = (p.relationship ?? "").toLowerCase();
+      return ["daughter","son","child"].includes(rel);
+    })?.name ?? null;
     systemPrompt +=
       `\n\n[Tonight's Story Question — Already Queued]\n` +
       `"${pendingPrompt}"\n` +
       `Include this as ELEMENT 2 in the check-in message: ` +
-      `"Here's something worth sitting with tonight — something for Olivia someday: [question]"`;
+      `"Here's something worth sitting with tonight${_sqPerson2 ? ` — something for ${_sqPerson2} someday` : ""}: [question]"`;
   }
 
   // ── Story retrieval ──
   if (isStoryRead) {
     try {
       const stories = await getStories();
+      const _readPerson = profilePeople.find((p: { relationship?: string }) => {
+        const rel = (p.relationship ?? "").toLowerCase();
+        return ["daughter","son","child"].includes(rel);
+      })?.name ?? null;
+      const _readDisplayName = userProfile?.name ?? sessionUserName;
       systemPrompt +=
-        `\n\n[Memory Book — All Stories for Olivia]\n${formatStoriesForPrompt(stories)}\nRead these back to David warmly. Each one is a gift for Olivia. If there are many, highlight the most recent few and let him know how many total are saved.`;
+        `\n\n[Memory Book — All Stories]\n${formatStoriesForPrompt(stories)}\nRead these back to ${_readDisplayName} warmly.${_readPerson ? ` Each one is a gift for ${_readPerson}.` : ""} If there are many, highlight the most recent few and let them know how many total are saved.`;
     } catch (err) {
       req.log.warn({ err }, "Story read failed");
     }
@@ -1963,7 +1916,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     try {
       const count = await getStoryCount();
       systemPrompt +=
-        `\n\n[Memory Book — Story Count]\nDavid has captured ${count} ${count === 1 ? "story" : "stories"} for Olivia so far. Tell him warmly and with encouragement.`;
+        `\n\n[Memory Book — Story Count]\nThe user has captured ${count} ${count === 1 ? "story" : "stories"} in their memory book so far. Tell them warmly and with encouragement.`;
     } catch (err) {
       req.log.warn({ err }, "Story count failed");
     }
@@ -2029,18 +1982,18 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     try {
       const op = await extractListOp(message, isCasualListAdd ? (activeListFromHistory ?? undefined) : undefined);
       if (op) {
-        const result = await executeListOp(op);
+        const result = await executeListOp(op, sessionUserName);
         const listContext = buildListContext(result);
         systemPrompt = systemPrompt + listContext;
         req.log.info({ op, itemCount: result.currentItems.length }, "List operation executed");
       } else {
         systemPrompt = systemPrompt +
-          `\n\n[List Request — Could Not Parse]\nCould not determine which list or operation David is referring to. Ask him to clarify (e.g., "Which list — shopping or to do?"). Do NOT guess or invent any list items.`;
+          `\n\n[List Request — Could Not Parse]\nCould not determine which list or operation was requested. Ask the user to clarify (e.g., "Which list — shopping or to do?"). Do NOT guess or invent any list items.`;
       }
     } catch (err) {
       req.log.warn({ err }, "List operation failed");
       systemPrompt = systemPrompt +
-        `\n\n[List Request — Failed]\nThe list retrieval failed due to a system error. Tell David: "I couldn't retrieve your list right now — please try again in a moment." Do NOT invent or guess any list items.`;
+        `\n\n[List Request — Failed]\nThe list retrieval failed due to a system error. Tell the user: "I couldn't retrieve your list right now — please try again in a moment." Do NOT invent or guess any list items.`;
     }
   }
 
@@ -2086,7 +2039,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       if (showName) {
         const result = await addWatchedShow(showName);
         if (result.alreadyExists) {
-          systemPrompt += `\n\n[TV Watch List — Already Watching]\nDavid already has "${result.showName}" on his watch list. Confirm this warmly.`;
+          systemPrompt += `\n\n[TV Watch List — Already Watching]\nThe user already has "${result.showName}" on their watch list. Confirm this warmly.`;
         } else {
           systemPrompt += `\n\n[TV Watch List — Show Added]\n"${result.showName}" has been added to David's watch list. Confirm warmly, maybe comment on it being a good choice.`;
         }
@@ -2123,7 +2076,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
       if (isTVList) {
         const listBlock = buildShowListBlock(watchedShowsNow);
-        systemPrompt += `\n\n[TV Watch List — David's Shows]\n${listBlock}\nTell David what he's currently watching in a friendly way.`;
+        systemPrompt += `\n\n[TV Watch List — User's Shows]\n${listBlock}\nTell the user what they're currently watching in a friendly way.`;
       }
 
       if (isTVTonight) {
@@ -2132,7 +2085,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           systemPrompt +=
             `\n\n[TV Tonight — New Episodes Airing]\n` +
             tonightEps.map((ep) => `• ${formatEpisodeForPrompt(ep)}`).join("\n") +
-            `\n\nTell David what's on tonight from his watch list conversationally — e.g. "You've got a new Shrinking tonight at 9 on Apple TV."`;
+            `\n\nTell the user what's on tonight from his watch list conversationally — e.g. "You've got a new Shrinking tonight at 9 on Apple TV."`;
         } else {
           systemPrompt += `\n\n[TV Tonight — Nothing New]\nNone of David's watched shows have new episodes tonight. Let him know warmly, maybe suggest it's a good night for an older episode or some reading.`;
         }
@@ -2189,7 +2142,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           req.log.info({ name: result.medication.name }, "Medication added");
         }
       } else {
-        systemPrompt += `\n\n[Medications — Add Failed]\nCouldn't parse the medication name from David's message. Ask him to clarify — e.g. "What's the name of the medication you'd like to add?"`;
+        systemPrompt += `\n\n[Medications — Add Failed]\nCouldn't parse the medication name from the message. Ask the user to clarify — e.g. "What's the name of the medication you'd like to add?"`;
       }
     } catch (err) {
       req.log.warn({ err }, "Medication add failed");
@@ -2297,7 +2250,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           systemPrompt += (
             `\n\n[Compound Contact Request — Contact Not Found]\n` +
             `Searched Google Contacts for "${searchQuery}" — no results.\n` +
-            `Tell David: "I searched your contacts but couldn't find anyone named ${searchQuery}. ` +
+            `Tell the user: "I searched your contacts but couldn't find anyone named ${searchQuery}. ` +
             `Want me to add them manually? Just give me their name and any details you have."`
           );
           req.log.info({ query: searchQuery }, "[CONTACTS] Compound lookup — not found");
@@ -2348,7 +2301,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         systemPrompt += `\n\n[Contact Saved to Winston Curated List]\n"${contactToSave.name}" has been saved to David's Winston contacts.${contactToSave.phone ? ` Phone: ${contactToSave.phone}.` : ""}${contactToSave.email ? ` Email: ${contactToSave.email}.` : ""}\nConfirm naturally: "Got it — I've saved [Name] to your Winston contacts. I'll remember them for next time."`;
         req.log.info({ name: contactToSave.name }, "[CONTACTS] Contact saved to curated list");
       } else {
-        systemPrompt += `\n\n[Contact Save — Name Not Found]\nWas unable to identify which contact to save from this message. Ask David who specifically they'd like to save: "Who would you like me to add to your Winston contacts?"`;
+        systemPrompt += `\n\n[Contact Save — Name Not Found]\nWas unable to identify which contact to save from this message. Ask the user who specifically they'd like to save: "Who would you like me to add to your Winston contacts?"`;
       }
     } catch (err) {
       req.log.warn({ err }, "[CONTACTS] Save contact failed");
@@ -2487,7 +2440,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           systemPrompt +=
             `\n\n[Transcript Search — "${searchTerm}"]\n` +
             `No matching conversations found in the last 90 days for this topic. ` +
-            `Tell David honestly you don't have a record of that specific conversation.`;
+            `Tell the user honestly you don't have a record of that specific conversation.`;
           req.log.info({ searchTerm }, "[TRANSCRIPT] No results found");
         }
       } catch (err) {

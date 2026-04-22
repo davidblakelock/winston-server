@@ -77,54 +77,52 @@ Return raw JSON only — no markdown fences.`,
 
 // ── DB operations ─────────────────────────────────────────────────────────────
 
-const USER = "David";
-
-export async function addItems(listName: string, items: string[]): Promise<void> {
+export async function addItems(listName: string, items: string[], userName: string): Promise<void> {
   for (const item of items) {
     await query(
       `INSERT INTO list_items (user_name, list_name, item_text)
        VALUES ($1, $2, $3)
        ON CONFLICT (user_name, list_name, lower(item_text)) DO NOTHING`,
-      [USER, listName, item.trim()]
+      [userName, listName, item.trim()]
     );
   }
 }
 
-export async function removeItems(listName: string, items: string[]): Promise<void> {
+export async function removeItems(listName: string, items: string[], userName: string): Promise<void> {
   for (const item of items) {
     await query(
       `DELETE FROM list_items
        WHERE user_name = $1
          AND list_name = $2
          AND lower(item_text) = lower($3)`,
-      [USER, listName, item.trim()]
+      [userName, listName, item.trim()]
     );
   }
 }
 
-export async function clearList(listName: string): Promise<void> {
+export async function clearList(listName: string, userName: string): Promise<void> {
   await query(
     `DELETE FROM list_items WHERE user_name = $1 AND list_name = $2`,
-    [USER, listName]
+    [userName, listName]
   );
 }
 
-export async function getItems(listName: string): Promise<string[]> {
+export async function getItems(listName: string, userName: string): Promise<string[]> {
   const { rows } = await query<{ item_text: string }>(
     `SELECT item_text FROM list_items
      WHERE user_name = $1 AND list_name = $2
      ORDER BY created_at ASC`,
-    [USER, listName]
+    [userName, listName]
   );
   return rows.map((r) => r.item_text);
 }
 
-export async function getAllLists(): Promise<Record<string, string[]>> {
+export async function getAllLists(userName: string): Promise<Record<string, string[]>> {
   const { rows } = await query<{ list_name: string; item_text: string }>(
     `SELECT list_name, item_text FROM list_items
      WHERE user_name = $1
      ORDER BY list_name, created_at ASC`,
-    [USER]
+    [userName]
   );
   const result: Record<string, string[]> = {};
   for (const row of rows) {
@@ -134,38 +132,38 @@ export async function getAllLists(): Promise<Record<string, string[]>> {
   return result;
 }
 
-// ── Execute a list operation and return context for Emma Peel ─────────────────
+// ── Execute a list operation and return context for the companion ─────────────
 
-export async function executeListOp(op: ListOp): Promise<ListResult> {
+export async function executeListOp(op: ListOp, userName: string): Promise<ListResult> {
   let alreadyExisted: string[] = [];
 
   switch (op.action) {
     case "add": {
       // Always read current state from Supabase first — never trust local state or cache
-      const existing = await getItems(op.listName);
+      const existing = await getItems(op.listName, userName);
       const existingLower = new Set(existing.map((i) => i.trim().toLowerCase()));
 
       const newItems = op.items.filter((i) => !existingLower.has(i.trim().toLowerCase()));
       alreadyExisted = op.items.filter((i) => existingLower.has(i.trim().toLowerCase()));
 
       if (newItems.length > 0) {
-        await addItems(op.listName, newItems);
+        await addItems(op.listName, newItems, userName);
       }
       // Replace op.items with only what was actually inserted
       op = { ...op, items: newItems };
       break;
     }
     case "remove":
-      await removeItems(op.listName, op.items);
+      await removeItems(op.listName, op.items, userName);
       break;
     case "clear":
-      await clearList(op.listName);
+      await clearList(op.listName, userName);
       break;
     case "read":
       break;
   }
 
-  const currentItems = await getItems(op.listName);
+  const currentItems = await getItems(op.listName, userName);
   return { ...op, alreadyExisted, currentItems };
 }
 
@@ -188,7 +186,7 @@ export function buildListContext(result: ListResult): string {
           `\n\n[List — No Change — ${displayName} — AUTHORITATIVE CURRENT STATE FROM SUPABASE]\n` +
           `Already on list (not added again): ${dupes}\n` +
           `Current list (these are the ONLY items that exist):\n${remaining}\n` +
-          `Tell David that ${dupes} is already on his ${displayName} so you didn't add it again. ` +
+          `Let the user know that ${dupes} is already on the ${displayName} so you didn't add it again. ` +
           `Do NOT mention, suggest, or reference any items not in the current list above.`
         );
       }

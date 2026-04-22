@@ -9,6 +9,7 @@ import {
 } from "../winddown/winddownManager.js";
 import { generateOpeningMessage } from "../winddown/winddownScheduler.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
+import { tryAuthenticate } from "../auth/middleware.js";
 
 const router: IRouter = Router();
 
@@ -37,14 +38,17 @@ router.get("/winddown/tonight-message", async (_req: Request, res: Response) => 
 // independent of the scheduled 9 PM push notification. Idempotent — safe to call multiple times.
 // Generates and returns an opening message immediately if the scheduler hasn't fired yet,
 // so the native app always gets a real AI-generated opening, not a null/fallback.
-router.post("/winddown/activate", async (_req: Request, res: Response) => {
+router.post("/winddown/activate", async (req: Request, res: Response) => {
   try {
     await markFiredToday();        // Ensures today's row exists (no-op if already present)
     await setWinddownActive(true); // Ensures active = true (re-activates if deactivated)
 
+    // Resolve the authenticated user; fall back to primary user from active users list.
+    const sessionUserName = await tryAuthenticate(req) ?? "David";
+
     // Always generate fresh — the opening message includes tonight's story question,
     // calendar events, and all 6 check-in elements. Caching would serve stale content.
-    const profile = await getProfile("David").catch(() => null);
+    const profile = await getProfile(sessionUserName).catch(() => null);
     const companionName = profile?.companionName ?? "Your Companion";
     const message = await generateOpeningMessage(companionName);
     await saveTonightMessage(message).catch(() => {});
