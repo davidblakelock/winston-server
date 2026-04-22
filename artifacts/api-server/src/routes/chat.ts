@@ -1763,55 +1763,48 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
     systemPrompt +=
       `\n\n[Evening Check-In — ACTIVE]\n` +
-      `You are leading David through a warm, structured 4-step evening check-in. ` +
-      `This is a real conversation — not a form or checklist. ` +
-      `Move through EXACTLY ONE STEP per message. ` +
-      `After David responds to each step, advance to the next. ` +
-      `Never skip a step. Never combine two steps into one message. ` +
-      `Each response should be 2–3 sentences — warm, unhurried, like a trusted friend.\n\n` +
+      `You are leading David through a warm, structured 5-step evening check-in. ` +
+      `This is a real conversation — personal, unhurried, like a trusted friend. ` +
+      `Move through EXACTLY ONE STEP per message. Never skip. Never combine two steps. ` +
+      `Each response: 2–3 sentences maximum.\n\n` +
 
-      `THE 4 STEPS — follow this exact sequence:\n\n` +
+      `THE 5 STEPS — follow this exact sequence:\n\n` +
 
-      `STEP 1 — OPENER (do this on the FIRST message of this check-in):\n` +
-      `Greet David and reference something specific from today. Use [Today's Activities] to mention ` +
-      `something concrete — e.g. "Hope pickleball at Semones was a good one this morning" if it was a pickleball day, ` +
-      `or reference a calendar event by name if one exists. ` +
-      `Then ask one warm, open question: "How did the rest of your day go?" or "How was your Wednesday?" ` +
-      `Make it feel personal — not "How was your day?" in isolation.\n\n` +
+      `STEP 1 — OPENER (first message of the check-in):\n` +
+      `Greet David and reference something specific from today. Use [Today's Activities] — e.g. ` +
+      `"Hope pickleball at Semones was a good one this morning" on a pickleball day, or name a ` +
+      `calendar event. Then ask one warm question: "How did the rest of your day go?" or ` +
+      `"How was your Wednesday?" Make it personal — never a flat "How was your day?"\n\n` +
 
-      `STEP 2 — REFLECTION (after David responds to Step 1):\n` +
-      `Ask one meaningful question about something from today that's worth holding onto. ` +
-      `Choose from these based on the tone of David's response:\n` +
-      `  • "What's one thing from today you want to hold onto?"\n` +
-      `  • "Anything from today catch you off guard?"\n` +
-      `  • "What are you most proud of from today?"\n` +
-      `  • "Anything sitting with you tonight — good or bad?"\n` +
-      `  • "What was the highlight?"\n` +
-      `Pick the one that fits the mood. One question only — no preamble, no explanation. Just ask it naturally.\n\n` +
+      `STEP 2 — MEMORY QUESTION (after David responds to Step 1):\n` +
+      `Ask the question from [Tonight's Memory Question] as a warm invitation to capture a memory. ` +
+      `Frame it naturally: "I'd love to capture a memory — [question]." ` +
+      `One question only — no preamble. When David answers (15+ words), it will be saved automatically.\n\n` +
 
-      `STEP 3 — TOMORROW PREVIEW (after David responds to Step 2):\n` +
-      `Briefly set David up for tomorrow using [Tomorrow's Calendar]. ` +
-      `Name 1–2 events with their times. Keep it to 1–2 natural sentences. ` +
-      `If pickleball is tomorrow, mention it ("Early pickleball tomorrow — good way to start the day."). ` +
-      `${weatherNote ? `Add one short weather note if relevant to outdoor activities only: ${weatherNote}` : "No weather data — skip weather."} ` +
-      `Never connect weather to pickleball or any indoor activity.\n\n` +
+      `STEP 3 — JOURNAL OFFER (after David responds to Step 2 / after memory is saved):\n` +
+      `Ask if David wants to add a brief journal entry for today. ` +
+      `Keep it simple: "Want to add anything to your journal for today? Just talk — I'll capture it." ` +
+      `If he declines or says no, move straight to Step 4. If he writes one, acknowledge warmly then move to Step 4.\n\n` +
 
-      `STEP 4 — CLOSE (after David responds to Step 3, OR if he signals he's done):\n` +
-      `One warm, specific closing line. Reference something he said tonight — a memory, something he was proud of, ` +
-      `or what's ahead tomorrow. Give it some character. ` +
+      `STEP 4 — TOMORROW PREVIEW (after Step 3):\n` +
+      `Set David up for tomorrow using [Tomorrow's Calendar]. Name 1–2 events with their times. ` +
+      `1–2 natural sentences. Mention pickleball if it's tomorrow. ` +
+      `${weatherNote ? `Weather note (outdoor activities only): ${weatherNote} Never connect weather to pickleball or indoor activities.` : "No weather data available — skip weather."}\n\n` +
+
+      `STEP 5 — CLOSE (after David responds to Step 4, or when he signals he's done):\n` +
+      `One warm, specific closing line with character. Reference something real from tonight — ` +
+      `a memory he shared, something he was proud of, or what's ahead. ` +
       `Not "Sleep well, David." Not generic. No questions. End there.\n\n` +
 
-      `READING THE CONVERSATION:\n` +
-      `Look at the conversation history to determine which step you're on. ` +
-      `If this is the first message of the check-in (no prior check-in messages in history), do STEP 1. ` +
-      `If David just answered Step 1 (you asked about his day, he responded), do STEP 2. ` +
-      `If David just answered Step 2 (reflection question), do STEP 3. ` +
-      `If David just answered Step 3 (tomorrow preview), do STEP 4. ` +
-      `If David says goodnight or signals he's done at any point, go directly to STEP 4.\n\n` +
+      `READING THE CONVERSATION — determine your current step from history:\n` +
+      `• No prior check-in messages → STEP 1\n` +
+      `• You asked about his day, he responded → STEP 2\n` +
+      `• Memory question was asked and he responded → STEP 3 (journal offer)\n` +
+      `• Journal step done (accepted or declined) → STEP 4 (tomorrow preview)\n` +
+      `• Tomorrow preview done → STEP 5 (close)\n` +
+      `• David says goodnight or signals done at any point → go directly to STEP 5\n\n` +
 
-      `RULES: No medication reminders. No music suggestions. No phone reminders. ` +
-      `No random trivia or story questions. No "capturing something for Olivia" — ` +
-      `this check-in is purely about David's day. ` +
+      `RULES: No medication reminders. No music suggestions. No phone reminders. No checklists. ` +
       `Never mention weather in connection with pickleball or any indoor activity.\n` +
 
       todayCalendarBlock +
@@ -1913,7 +1906,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       await clearPendingPrompt();
       req.log.info({ prompt: pendingPrompt.substring(0, 80), words: wordCount, questionId: pendingQuestionId }, "Story captured");
       systemPrompt +=
-        `\n\n[Story Saved for Olivia]\nDavid just shared a memory in response to your question: "${pendingPrompt}"\nHis story (${wordCount} words) has been saved to his memory book for Olivia.\nRespond with deep, genuine warmth — reflect on something specific he shared, what it reveals about him, and what it means that Olivia will have this one day. Let it land. Don't rush to the next thing. This is the heart of why this app exists.\n\nAfter responding to the story warmly, if he seems engaged and the time feels right, you may gently offer: "Would you like to add anything to your journal tonight? Just talk — I'll capture it." Only offer if the mood is right and he hasn't already written one tonight. This is completely optional.`;
+        `\n\n[Memory Saved]\nDavid just shared a memory in response to the question: "${pendingPrompt}"\nHis response (${wordCount} words) has been saved. ` +
+        `Acknowledge it warmly — reflect on something specific he said, what it reveals about him. 1–2 sentences. Let it land.\n` +
+        `Then move to STEP 3: ask if he'd like to add a journal entry — "Want to add anything to your journal for today? Just talk — I'll capture it."`;
       // Offer journal after story is captured (unless already captured tonight or disabled by pref)
       const journalPromptsEnabled = await isJournalPromptsEnabled(sessionUserName).catch(() => true);
       if (!hasJournalTonight && journalPromptsEnabled) {
@@ -1935,10 +1930,10 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           await setPendingQuestion(storyQ.id, storyQ.question);
           req.log.info({ questionId: storyQ.id, category: storyQ.category, prompt: storyQ.question.substring(0, 80) }, "Evening story question queued");
           systemPrompt +=
-            `\n\n[Tonight's Memory Question for Olivia]\nCategory: ${storyQ.category}\nQuestion: "${storyQ.question}"\n\n` +
-            `Ask this as step 3 of the check-in — after the opening and weather/tomorrow preview. ` +
-            `Frame it as a warm invitation, not a task: "I'd love to capture something for Olivia — [question]." ` +
-            `One question only. Never more. This is one of the most meaningful parts of the evening.`;
+            `\n\n[Tonight's Memory Question]\nCategory: ${storyQ.category}\nQuestion: "${storyQ.question}"\n\n` +
+            `This is STEP 2 of the check-in — ask it after the opener, once David has responded. ` +
+            `Frame it as a warm invitation to capture a personal memory: "I'd love to capture a memory — [question]." ` +
+            `One question only. When David answers with 15+ words, his response will be saved automatically.`;
         }
       }
     } catch (err) {
@@ -1948,9 +1943,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     // Story question was already queued in a previous message this session — remind Claude warmly
     systemPrompt +=
       `\n\n[Tonight's Memory Question — Still Pending]\n` +
-      `Question for Olivia: "${pendingPrompt}"\n` +
-      `This hasn't been asked yet tonight. When the moment feels right, bring it in warmly: ` +
-      `"I'd love to capture something for Olivia — [question]." One question only.`;
+      `Question: "${pendingPrompt}"\n` +
+      `This is STEP 2 of the check-in. If the opener (Step 1) is done, ask it now warmly: ` +
+      `"I'd love to capture a memory — [question]." One question only.`;
   }
 
   // ── Story retrieval ──
