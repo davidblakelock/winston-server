@@ -239,8 +239,13 @@ export async function removeExpoToken(expoPushToken: string): Promise<void> {
 }
 
 export async function getExpoTokens(userName = "David"): Promise<string[]> {
+  // Return only the most-recently-updated token per device_id so stale tokens
+  // from previous app installs/re-installs don't receive (and fail) every send.
   const { rows } = await query<{ expo_push_token: string }>(
-    `SELECT expo_push_token FROM expo_push_tokens WHERE user_name = $1`,
+    `SELECT DISTINCT ON (device_id) expo_push_token
+       FROM expo_push_tokens
+      WHERE user_name = $1
+      ORDER BY device_id, updated_at DESC`,
     [userName]
   );
   return rows.map((r) => r.expo_push_token);
@@ -299,10 +304,10 @@ async function sendExpoNotifications(
           failed++;
           const errorCode = ticket.details?.error;
           logger.warn({ token: tokens[i]?.slice(-20), errorCode }, "[Expo Push] Ticket error");
-          // DeviceNotRegistered — remove stale token
-          if (errorCode === "DeviceNotRegistered" && tokens[i]) {
+          // DeviceNotRegistered / InvalidCredentials — token is dead, remove it
+          if ((errorCode === "DeviceNotRegistered" || errorCode === "InvalidCredentials") && tokens[i]) {
             await removeExpoToken(tokens[i]).catch(() => {});
-            logger.info({ token: tokens[i].slice(-20) }, "[Expo Push] Removed unregistered token");
+            logger.info({ token: tokens[i].slice(-20), errorCode }, "[Expo Push] Removed invalid/unregistered token");
           }
         }
       })
