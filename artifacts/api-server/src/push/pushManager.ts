@@ -1,12 +1,13 @@
 import webpush from "web-push";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
+import { NATIVE_USER } from "../auth/middleware.js";
 
 // ── Ensure expo_push_tokens table exists (idempotent) ────────────────────────
 query(`
   CREATE TABLE IF NOT EXISTS expo_push_tokens (
     id integer GENERATED ALWAYS AS IDENTITY NOT NULL PRIMARY KEY,
-    user_name text DEFAULT 'David' NOT NULL,
+    user_name text NOT NULL,
     expo_push_token text NOT NULL UNIQUE,
     device_id text,
     user_agent text,
@@ -84,7 +85,7 @@ export async function removeSubscription(endpoint: string): Promise<void> {
   await query(`DELETE FROM push_subscriptions WHERE endpoint = $1`, [endpoint]);
 }
 
-export async function getSubscriptions(userName = "David"): Promise<PushSubscriptionData[]> {
+export async function getSubscriptions(userName = NATIVE_USER): Promise<PushSubscriptionData[]> {
   const { rows } = await query<{ endpoint: string; p256dh: string; auth: string }>(
     `SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_name = $1`,
     [userName]
@@ -94,7 +95,7 @@ export async function getSubscriptions(userName = "David"): Promise<PushSubscrip
 
 export async function sendPushToAll(
   payload: PushPayload,
-  userName = "David"
+  userName = NATIVE_USER
 ): Promise<{ sent: number; failed: number }> {
   if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
     logger.warn("VAPID keys not configured — push notifications disabled");
@@ -238,7 +239,7 @@ export async function removeExpoToken(expoPushToken: string): Promise<void> {
   await query(`DELETE FROM expo_push_tokens WHERE expo_push_token = $1`, [expoPushToken]);
 }
 
-export async function getExpoTokens(userName = "David"): Promise<string[]> {
+export async function getExpoTokens(userName = NATIVE_USER): Promise<string[]> {
   // Return only the most-recently-updated token per device_id so stale tokens
   // from previous app installs/re-installs don't receive (and fail) every send.
   const { rows } = await query<{ expo_push_token: string }>(
@@ -253,7 +254,7 @@ export async function getExpoTokens(userName = "David"): Promise<string[]> {
 
 async function sendExpoNotifications(
   payload: PushPayload,
-  userName = "David"
+  userName = NATIVE_USER
 ): Promise<{ sent: number; failed: number }> {
   const tokens = await getExpoTokens(userName);
   if (!tokens.length) return { sent: 0, failed: 0 };
@@ -266,8 +267,10 @@ async function sendExpoNotifications(
     priority: "high",
     channelId: "default",
     data: {
+      // NOTE: do NOT include a web URL here — it causes the native Android app
+      // to open the web app in a browser when the notification is tapped.
+      // The native app handles taps itself; reminderId is enough for navigation.
       ...(payload.reminderId != null ? { reminderId: payload.reminderId } : {}),
-      ...(payload.url ? { url: payload.url } : {}),
       ...(payload.tag ? { tag: payload.tag } : {}),
     },
   }));
