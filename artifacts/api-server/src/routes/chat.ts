@@ -800,6 +800,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
   const isMorningGreeting = MORNING_PATTERN.test(message);
   const isEveningGreeting = !isMorningGreeting && EVENING_PATTERN.test(message);
+  // [DIAG] Log pattern detection for Evening Check-In debugging
+  req.log.info({ message, isMorningGreeting, isEveningGreeting }, "[DIAG:1] Pattern detection");
   const isReminderRequest = REMINDER_PATTERN.test(message);
   let isListRequest = LIST_PATTERN.test(message);
   const activeListFromHistory = !isListRequest ? detectActiveListFromHistory(history) : null;
@@ -1604,6 +1606,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       req.log.warn({ err }, "Failed to activate evening check-in on-demand");
     }
   }
+  // [DIAG] Log winddown state after possible activation
+  req.log.info({ winddownActive, isEveningGreeting }, "[DIAG:2] Winddown state after activation check");
   const isWinddownNote = winddownActive && WINDDOWN_NOTE_PATTERN.test(message);
   const isGoodnightMessage = /\b(goodnight|good\s+night|good\s+nite|sweet\s+dreams|see\s+you\s+tomorrow|talk\s+tomorrow)\b/i.test(message);
 
@@ -1812,6 +1816,16 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       tomorrowWeatherBlock +
       tomorrowCalendarBlock +
       tvEveningNote;
+
+    // [DIAG] Log the winddown context blocks that were injected
+    req.log.info({
+      hasTodayCalendar: !!todayCalendarBlock,
+      todayCalendarBlock: todayCalendarBlock.slice(0, 300),
+      hasTomorrowCalendar: !!tomorrowCalendarBlock,
+      tomorrowCalendarBlock: tomorrowCalendarBlock.slice(0, 200),
+      hasWeather: !!tomorrowWeatherBlock,
+      hasTvNote: !!tvEveningNote,
+    }, "[DIAG:3] Winddown system prompt context blocks");
   }
 
   if (isWinddownNote) {
@@ -2534,6 +2548,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       });
       const nativeReply =
         nativeResp.content[0]?.type === "text" ? nativeResp.content[0].text : "";
+      // [DIAG] Log the actual response text sent back to native app
+      req.log.info({ responsePreview: nativeReply.slice(0, 300) }, "[DIAG:4] Native response sent");
       res.json({ response: nativeReply, ...(navigationUrl ? { navigationUrl } : {}) });
     } catch (err: unknown) {
       const errStatus = (err as Record<string, unknown>)?.status as number | undefined;
