@@ -151,6 +151,11 @@ import {
   detectFollowUpAcknowledgment,
 } from "../recommendations/recommendationsManager.js";
 import {
+  searchRestaurants,
+  extractCuisineFromMessage,
+  formatPlacesForPrompt,
+} from "../google/places.js";
+import {
   collectSundayData,
   buildSundaySummaryBlock,
 } from "../sundaySummary/sundaySummaryManager.js";
@@ -378,6 +383,10 @@ const MARKETS_PATTERN = /\b(market(s)?|s&p|s&p\s*500|dow|nasdaq|stock(s)?|spy|di
 
 // Local events — "what's happening in Dallas", "things to do this weekend", etc.
 const LOCAL_EVENTS_PATTERN = /\b(what'?s\s+happening|what'?s\s+going\s+on|things?\s+to\s+do|local\s+events?|events?\s+(?:this|the|near|in|around|next)\s+(?:weekend|week|me|town|city|area)|anything\s+(?:going\s+on|happening|to\s+do)|what\s+to\s+do|something\s+to\s+do|places?\s+to\s+go|weekend\s+plans?|things?\s+(?:happening|going\s+on)|fun\s+(?:things?|stuff|activities?)|what'?s?\s+(?:on|up)\s+(?:this|the)\s+(?:weekend|week)|events?\s+(?:tonight|this\s+week|this\s+weekend|upcoming)|what\s+can\s+(?:i|we)\s+do)\b/i;
+
+// Restaurant recommendations — "recommend a restaurant", "where should I eat", etc.
+const RESTAURANT_RECO_PATTERN =
+  /\b(recommend\s+(?:a|some|any|me\s+a)\s+(?:restaurant|place\s+to\s+eat|spot|place\s+for\s+(?:dinner|lunch|breakfast))|suggest\s+(?:a|some)\s+(?:restaurant|place|spot)|where\s+should\s+(?:i|we)\s+(?:eat|go\s+(?:for\s+)?(?:dinner|lunch|breakfast))|good\s+(?:place|restaurant|spot)\s+(?:for\s+(?:dinner|lunch)|to\s+eat)|best\s+(?:restaurant|place|spot)\s+(?:in|near|around|for)|where\s+(?:can|to)\s+(?:i|we)\s+(?:eat|grab\s+(?:dinner|lunch|breakfast|food|a\s+bite))|(?:dinner|lunch|breakfast)\s+(?:recommendation|suggestion)|find\s+(?:me\s+)?(?:a|some)\s+(?:restaurant|place\s+to\s+eat)|what.?s\s+(?:a\s+)?good\s+(?:restaurant|place)\s+(?:in|near|around|for)|take\s+(?:me|us)\s+(?:somewhere|out)\s+(?:for|to)\s+(?:eat|dinner|lunch)|(?:restaurant|dining)\s+(?:recommendation|suggestion)|good\s+(?:italian|mexican|japanese|sushi|thai|indian|chinese|french|korean|vietnamese|mediterranean|bbq|steakhouse|seafood|pizza|burger|tex-mex|ramen)\s+(?:restaurant|place|spot|food))\b/i;
 
 // Important dates
 const DATE_ADD_PATTERN = /\b(('s\s+birthday|birthday\s+is|my\s+anniversary\s+with|our\s+anniversary\s+is|anniversary\s+with|birthday\s+is|remember\s+(that\s+)?(\w+\s+)?birthday|add\s+(a\s+)?(birthday|anniversary)))\b/i;
@@ -831,6 +840,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isMarketsRequest = !isMorningGreeting && MARKETS_PATTERN.test(message);
   const isBriefingPrefRequest = !isMorningGreeting && BRIEFING_PREF_PATTERN.test(message);
   const isLocalEventsRequest = !isMorningGreeting && !isCalendarRequest && LOCAL_EVENTS_PATTERN.test(message);
+  const isRestaurantReco = !isMorningGreeting && !isLocalEventsRequest && RESTAURANT_RECO_PATTERN.test(message);
   const isBillAdd = !isMorningGreeting && BILL_ADD_PATTERN.test(message);
   const isBillList = !isMorningGreeting && BILL_LIST_PATTERN.test(message);
   const isBillRemove = !isMorningGreeting && BILL_REMOVE_PATTERN.test(message);
@@ -1215,17 +1225,35 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   }
 
   // ── Recommendation follow-up context (non-morning) ───────────────────────
+  // Fires once on day 3, then immediately resolves — no lingering follow-ups.
   if (!isMorningGreeting) {
     try {
-      const followUps = await getPendingFollowUps(3, 14, sessionUserName);
+      const followUps = await getPendingFollowUps(3, 4, sessionUserName);
       if (followUps.length > 0 && !isDateAdd && !isEmergency) {
         systemPrompt += buildRecommendationFollowUpBlock(followUps);
-      }
-      // Detect if user is responding to a follow-up
-      if (detectFollowUpAcknowledgment(message) && followUps.length > 0) {
-        systemPrompt += `\n\nIf David is following up on a recommendation, mark it acknowledged by referencing recommendation ID ${followUps[0].id} in your context. Respond warmly to what he says — ask how it was, what he thought.`;
+        // Auto-resolve: mark all as followed_up immediately — one attempt only
+        for (const fu of followUps) {
+          markFollowedUp(fu.id).catch(() => {});
+        }
       }
     } catch {}
+  }
+
+  // ── Google Places — live restaurant search ────────────────────────────────
+  if (isRestaurantReco) {
+    try {
+      const city = userProfile?.city ?? "Dallas";
+      const cuisine = extractCuisineFromMessage(message);
+      const places = await searchRestaurants(cuisine, city, 5);
+      if (places.length > 0) {
+        systemPrompt += formatPlacesForPrompt(places, city, cuisine);
+        req.log.info({ city, cuisine, count: places.length }, "[Places] Restaurant results injected");
+      } else {
+        req.log.info({ city, cuisine }, "[Places] No results — Claude will use training knowledge");
+      }
+    } catch (err) {
+      req.log.warn({ err }, "[Places] Search failed — continuing without live results");
+    }
   }
 
   // ── Partner coordination context (dynamic — works for any girlfriend/spouse/SO) ──
@@ -2308,7 +2336,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         const hits = await searchTranscripts(sessionUserName, searchTerm, 90);
         if (hits.length > 0) {
           const hitText = hits
-            .map((h) => `[${h.date}] ${h.role === "user" ? "David" : "Emma"}: ${h.excerpt}`)
+            .map((h) => `[${h.date}] ${h.role === "user" ? (userProfile?.name ?? sessionUserName) : (userProfile?.companionName ?? "assistant")}: ${h.excerpt}`)
             .join("\n\n");
           systemPrompt +=
             `\n\n[Transcript Search — David asked about: "${searchTerm}"]\n` +
