@@ -337,6 +337,7 @@ CREATE UNIQUE INDEX google_auth_user_name ON public.google_auth USING btree (use
 CREATE UNIQUE INDEX google_users_google_id_idx ON public.google_users USING btree (google_id);
 CREATE INDEX important_dates_user_active ON public.important_dates USING btree (user_name, active);
 CREATE INDEX list_items_user_list ON public.list_items USING btree (user_name, list_name);
+CREATE UNIQUE INDEX IF NOT EXISTS list_items_uq ON public.list_items (user_name, list_name, lower(item_text));
 CREATE UNIQUE INDEX magic_link_tokens_token_idx ON public.magic_link_tokens USING btree (token);
 CREATE UNIQUE INDEX medication_logs_user_date ON public.medication_logs USING btree (user_name, log_date);
 CREATE UNIQUE INDEX medications_user_name ON public.medications USING btree (user_name, name);

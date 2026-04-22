@@ -83,13 +83,8 @@ export async function addItems(listName: string, items: string[]): Promise<void>
   for (const item of items) {
     await query(
       `INSERT INTO list_items (user_name, list_name, item_text)
-       SELECT $1, $2, $3
-       WHERE NOT EXISTS (
-         SELECT 1 FROM list_items
-         WHERE user_name = $1
-           AND list_name = $2
-           AND lower(item_text) = lower($3)
-       )`,
+       VALUES ($1, $2, $3)
+       ON CONFLICT (user_name, list_name, lower(item_text)) DO NOTHING`,
       [USER, listName, item.trim()]
     );
   }
