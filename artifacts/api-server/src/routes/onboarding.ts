@@ -518,6 +518,20 @@ async function saveProfileItemsFromOnboarding(data: CollectedData, userName = "D
     ops.push(addProfileItem("interests", interest, null, userName).catch(() => {}));
   }
 
+  // Save pets (new `pets` array takes priority; fall back to legacy `dog` field)
+  const petsToSave = data.pets && data.pets.length > 0
+    ? data.pets
+    : data.dog
+      ? [{ name: data.dog.name, type: "dog", breed: data.dog.breed, age: data.dog.age }]
+      : [];
+  for (const pet of petsToSave) {
+    const detail = [
+      pet.breed ?? null,
+      pet.age != null ? `${pet.age} years old` : null,
+    ].filter(Boolean).join(", ") || null;
+    ops.push(addProfileItem("pets", pet.name, `${pet.type}${detail ? ` — ${detail}` : ""}`, userName).catch(() => {}));
+  }
+
   await Promise.all(ops);
 }
 

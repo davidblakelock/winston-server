@@ -347,7 +347,18 @@ function buildPeopleContextBlock(rawData: CollectedData): string {
     anniversary?: string;
   };
   const people = (rawData.people ?? []) as PersonEntry[];
-  if (people.length === 0) return "";
+
+  // Pets — support both new `pets` array and legacy `dog` field
+  const rawPets = rawData.pets as Array<{ name: string; type: string; breed?: string; age?: number }> | undefined;
+  const legacyDog = rawData.dog as { name: string; breed?: string; age?: number } | undefined;
+  const allPets: Array<{ name: string; type: string; breed?: string; age?: number }> =
+    rawPets && rawPets.length > 0
+      ? rawPets
+      : legacyDog
+        ? [{ name: legacyDog.name, type: "dog", breed: legacyDog.breed, age: legacyDog.age }]
+        : [];
+
+  if (people.length === 0 && allPets.length === 0) return "";
 
   const partnerRels = ["girlfriend", "boyfriend", "wife", "husband", "partner", "fiancée", "fiancé"];
   const lines: string[] = [];
@@ -372,16 +383,33 @@ function buildPeopleContextBlock(rawData: CollectedData): string {
     lines.push(`• ${parts.join(", ")}`);
   }
 
-  if (lines.length === 0) return "";
+  if (lines.length === 0 && allPets.length === 0) return "";
+
+  // Build pets lines
+  const petLines: string[] = [];
+  for (const pet of allPets) {
+    const typeLabel = pet.type.charAt(0).toUpperCase() + pet.type.slice(1);
+    const detail = [
+      pet.breed ?? null,
+      pet.age != null ? `${pet.age} years old` : null,
+    ].filter(Boolean).join(", ");
+    petLines.push(`• ${typeLabel}: ${pet.name}${detail ? ` — ${detail}` : ""}`);
+  }
+
+  const petsBlock = petLines.length > 0
+    ? `\n\n[David's Pets]\n` + petLines.join("\n") +
+      `\n• Mention pets naturally and warmly when appropriate — e.g. "Hope ${allPets[0]?.name} is keeping you company today." Don't force it into every briefing — once or twice a week is plenty.`
+    : "";
 
   return (
     `\n\n[People in David's Life — Reference naturally in the briefing]\n` +
-    lines.join("\n") + "\n\n" +
+    (lines.length > 0 ? lines.join("\n") : "(no people recorded)") + "\n\n" +
     `HOW TO USE THIS:\n` +
     `• Olivia — always mention her weather in Section 3 if her [VERIFIED weather] block is present. Even just one warm sentence: "Over in Knoxville, Olivia's got a breezy 65 today."\n` +
     `• Susan (Your Partner) — include a warm, specific one-liner in the Section 15 closing every briefing. Examples: "Hope you and Susan have a great night", "Give Susan my best." Keep it natural — not every closing needs to be about her, but include her often.\n` +
     `• Birthdays — if any birthday is within 7 days, surface it in Section 13 with the date. If it's today, make it feel special.\n` +
-    `• Never invent details not listed here. Base any reference on the facts in this block.`
+    `• Never invent details not listed here. Base any reference on the facts in this block.` +
+    petsBlock
   );
 }
 

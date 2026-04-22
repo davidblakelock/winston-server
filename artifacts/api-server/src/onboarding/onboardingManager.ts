@@ -45,6 +45,7 @@ export interface CollectedData {
   neighborhood?: string;
   dailyRoutine?: string;
   dog?: { name: string; breed?: string; age?: number };
+  pets?: Array<{ name: string; type: string; breed?: string; age?: number }>;
   foodPreferences?: string[];
   people?: Array<{ name: string; relationship: string; city?: string; birthday?: string; details?: string; address?: string }>;
   places?: Array<{ name: string; address?: string; notes?: string }>;
@@ -329,7 +330,15 @@ export function buildProfileContext(
   const wakeTime: string | null = profile?.wakeTime ?? rawData.wakeTime ?? null;
 
   // rawData-only fields
-  const dog = rawData.dog as { name: string; breed?: string; age?: number } | undefined;
+  // Support both new `pets` array and legacy `dog` field
+  const rawPets = rawData.pets as Array<{ name: string; type: string; breed?: string; age?: number }> | undefined;
+  const legacyDog = rawData.dog as { name: string; breed?: string; age?: number } | undefined;
+  const allPets: Array<{ name: string; type: string; breed?: string; age?: number }> =
+    rawPets && rawPets.length > 0
+      ? rawPets
+      : legacyDog
+        ? [{ name: legacyDog.name, type: "dog", breed: legacyDog.breed, age: legacyDog.age }]
+        : [];
   const healthNotes = (profile?.healthNotes ?? rawData.healthNotes ?? "") as string;
   const people = (rawData.people ?? []) as CollectedData["people"];
   const places = (rawData.places ?? []) as CollectedData["places"];
@@ -367,11 +376,12 @@ export function buildProfileContext(
     aboutLines.push(`• Relationship status: ${relationshipStatus}`);
   }
 
-  if (dog) {
+  for (const pet of allPets) {
+    const typeLabel = pet.type.charAt(0).toUpperCase() + pet.type.slice(1);
     aboutLines.push(
-      dog.breed
-        ? `• Dog: ${dog.name}, a${dog.age != null ? ` ${dog.age}-year-old` : ""} ${dog.breed}`
-        : `• Dog: ${dog.name}`
+      pet.breed
+        ? `• ${typeLabel}: ${pet.name}${pet.age != null ? `, ${pet.age} years old` : ""}, ${pet.breed}`
+        : `• ${typeLabel}: ${pet.name}${pet.age != null ? `, ${pet.age} years old` : ""}`
     );
   }
   if (healthNotes) aboutLines.push(`• Health notes: ${healthNotes}`);
@@ -432,6 +442,24 @@ export function buildProfileContext(
     ? `\nMemory Book for ${daughter.name}:\n• Each evening during the check-in, you gently ask ${userName} one warm, open-ended question to capture a memory or story for ${daughter.name}. You never make it feel like homework — it's always a natural, warm invitation.\n• When ${userName} shares a story, you respond with genuine warmth and appreciation before confirming it's been saved. Never clinical, never transactional.\n• If ${userName} asks to hear his stories, read them back to him with care. If he asks how many he's captured, tell him with encouragement.\n• Every story captured is for ${daughter.name}. Frame it that way when relevant — "She'll love hearing this someday."`
     : "";
 
+  // ── Pets section ───────────────────────────────────────────────────────────
+  const petsSection: string[] = [];
+  if (allPets.length > 0) {
+    petsSection.push("", "Your Pets:");
+    for (const pet of allPets) {
+      const typeLabel = pet.type.charAt(0).toUpperCase() + pet.type.slice(1);
+      const detail = [
+        pet.breed ?? null,
+        pet.age != null ? `${pet.age} years old` : null,
+      ].filter(Boolean).join(", ");
+      petsSection.push(`• ${typeLabel}: ${pet.name}${detail ? ` — ${detail}` : ""}`);
+    }
+    const firstName = allPets[0].name;
+    petsSection.push(
+      `⚑ You know ${userName}'s pet${allPets.length > 1 ? "s" : ""} well. Ask about them naturally in conversation — e.g. "How's ${firstName} doing today?" or "Did ${firstName} behave this morning?" Mention them occasionally in briefings when relevant. Never over-do it — just the way a close friend would.`
+    );
+  }
+
   return [
     `\nHere is everything you know about ${userName}:`,
     "",
@@ -448,6 +476,7 @@ export function buildProfileContext(
     "",
     "Your Interests:",
     interestParts.length > 0 ? interestParts.join("\n") : "• None recorded",
+    ...petsSection,
     memoryBookSection,
   ].join("\n");
 }

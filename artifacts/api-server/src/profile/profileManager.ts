@@ -10,6 +10,7 @@ export type ProfileCategory =
   | "restaurants"
   | "people"
   | "interests"
+  | "pets"
   | "other";
 
 export interface ProfileItem {
