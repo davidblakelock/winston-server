@@ -53,7 +53,7 @@ async function generateOpeningMessage(companionName: string): Promise<string> {
       ? `David played pickleball this morning at the YMCA (indoor courts — weather doesn't affect it). `
       : ``) +
     (todayEventsContext ? `${todayEventsContext} ` : ``) +
-    `\nGenerate a warm, genuine 2–3 sentence opening to start the evening wind-down. ` +
+    `\nGenerate a warm, genuine 2–3 sentence opening to start the evening check-in. ` +
     `Start with "Good evening, David." then ask naturally how his day went. ` +
     `If there are specific calendar events, reference one by name — e.g., "How did that lunch with Mike go?" ` +
     `Make it feel like a close friend checking in — warm, personal, never stiff or robotic. ` +
@@ -91,7 +91,7 @@ async function generateOpeningMessage(companionName: string): Promise<string> {
   };
   return (
     fallbacks[dayName] ??
-    "Good evening, David. How was your day? I'd love to hear about it before we wind down for the night."
+    "Good evening, David. How was your day? I'd love to hear about it before we check in for the night."
   );
 }
 
@@ -146,7 +146,7 @@ export function startWinddownScheduler(): void {
       broadcast("winddown-start", { message });
 
       sendPushToAll({
-        title: `🌙 Evening Wind-Down — ${companionName}`,
+        title: `🌙 Evening Check-In — ${companionName}`,
         body: `${companionName} is ready for your evening check-in. Tap to chat.`,
         tag: "winddown",
         requireInteraction: false,

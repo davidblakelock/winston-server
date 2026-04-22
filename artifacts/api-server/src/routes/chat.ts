@@ -663,7 +663,7 @@ WHAT YOU CAN DO — Answer naturally when David asks "What can you do?" or "What
 • Navigation — say "take me to the gym" or "navigate to Doctor Bonnet" and you'll open Google Maps with directions. You know all his regular places.
 • Lists — shopping lists, to-do lists, Susan's to-do list. Add, read, or clear them anytime.
 • Medications — track his medications and remind him when it's time to take them.
-• Evening wind-down — each evening at a time he sets, you check in, ask how his day went, and capture a memory for Olivia's book.
+• Evening check-in — each evening at a time he sets, you check in, ask how his day went, and capture a memory for Olivia's book.
 • Memory book for Olivia — every story he shares gets saved. One day they'll be compiled into a memory book for her. He can ask to hear them back anytime.
 • Bills — track bill due dates and send reminders before they're due.
 • Birthdays and anniversaries — save important dates and get reminded well ahead of time.
@@ -1723,7 +1723,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       : `${step5Num}. TOMORROW WEATHER — Skip this step if no weather data is available.`;
 
     systemPrompt +=
-      `\n\n[Evening Wind-Down — ACTIVE]\n` +
+      `\n\n[Evening Check-In — ACTIVE]\n` +
       `This is a genuine 3–5 minute evening check-in — warm, personal, unhurried. ` +
       `Move through one step per message. Each response: 2–3 warm sentences. ` +
       `Do NOT rush. Do NOT stack multiple steps into one message. ` +
@@ -1771,7 +1771,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       await saveWinddownNote(message);
       req.log.info({ note: message.substring(0, 60) }, "Wind-down note saved");
       systemPrompt +=
-        `\n\n[Wind-Down Note Saved]\nDavid's note has been saved and will appear in tomorrow's morning briefing: "${message.substring(0, 120)}"\nAcknowledge warmly that you've got it noted for tomorrow morning.`;
+        `\n\n[Check-In Note Saved]\nDavid's note has been saved and will appear in tomorrow's morning briefing: "${message.substring(0, 120)}"\nAcknowledge warmly that you've got it noted for tomorrow morning.`;
     } catch (err) {
       req.log.warn({ err }, "Wind-down note save failed");
     }
@@ -1872,7 +1872,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           req.log.info({ questionId: storyQ.id, category: storyQ.category, prompt: storyQ.question.substring(0, 80) }, "Evening story question queued");
           systemPrompt +=
             `\n\n[Tonight's Memory Question for Olivia]\nCategory: ${storyQ.category}\nQuestion: "${storyQ.question}"\n\n` +
-            `Ask this as step 3 of the wind-down — after the check-in and weather/tomorrow preview. ` +
+            `Ask this as step 3 of the check-in — after the opening and weather/tomorrow preview. ` +
             `Frame it as a warm invitation, not a task: "I'd love to capture something for Olivia — [question]." ` +
             `One question only. Never more. This is one of the most meaningful parts of the evening.`;
         }
@@ -1915,7 +1915,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     try {
       const entries = await getRecentJournalEntries(30);
       if (entries.length === 0) {
-        systemPrompt += `\n\n[Journal — No Entries Yet]\nDavid has no journal entries yet. Let him know warmly — and remind him that during his evening wind-down, he can add journal entries anytime.`;
+        systemPrompt += `\n\n[Journal — No Entries Yet]\nDavid has no journal entries yet. Let him know warmly — and remind him that during his evening check-in, he can add journal entries anytime.`;
       } else {
         systemPrompt += `\n\n[David's Journal — Last 30 Days]\n${formatJournalForPrompt(entries)}\n\nRead these back to David warmly and privately. This is his personal reflection space. Acknowledge what he shared. If there are many entries, summarize the themes warmly. Treat these with care.`;
       }

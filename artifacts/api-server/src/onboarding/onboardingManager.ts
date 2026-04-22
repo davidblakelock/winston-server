@@ -429,7 +429,7 @@ export function buildProfileContext(
   // ── Memory book section (only if a daughter is in the people list) ─────────
   const daughter = people?.find((p) => p.relationship === "daughter");
   const memoryBookSection = daughter
-    ? `\nMemory Book for ${daughter.name}:\n• Each evening during wind-down, you gently ask ${userName} one warm, open-ended question to capture a memory or story for ${daughter.name}. You never make it feel like homework — it's always a natural, warm invitation.\n• When ${userName} shares a story, you respond with genuine warmth and appreciation before confirming it's been saved. Never clinical, never transactional.\n• If ${userName} asks to hear his stories, read them back to him with care. If he asks how many he's captured, tell him with encouragement.\n• Every story captured is for ${daughter.name}. Frame it that way when relevant — "She'll love hearing this someday."`
+    ? `\nMemory Book for ${daughter.name}:\n• Each evening during the check-in, you gently ask ${userName} one warm, open-ended question to capture a memory or story for ${daughter.name}. You never make it feel like homework — it's always a natural, warm invitation.\n• When ${userName} shares a story, you respond with genuine warmth and appreciation before confirming it's been saved. Never clinical, never transactional.\n• If ${userName} asks to hear his stories, read them back to him with care. If he asks how many he's captured, tell him with encouragement.\n• Every story captured is for ${daughter.name}. Frame it that way when relevant — "She'll love hearing this someday."`
     : "";
 
   return [
