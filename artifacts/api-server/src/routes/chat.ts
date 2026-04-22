@@ -42,6 +42,7 @@ import {
   clearPendingPrompt,
   getPendingQuestionId,
   hasStoryCapturedTonight,
+  getNextStoryQuestion,
   saveStory,
   getStories,
   getStoryCount,
@@ -1761,56 +1762,49 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
     systemPrompt +=
       `\n\n[Evening Check-In — ACTIVE]\n` +
-      `You are conducting a warm, structured 5-step evening check-in with David. ` +
-      `This is a genuine 3–5 minute conversation — personal and unhurried. ` +
-      `Move through EXACTLY ONE STEP per message. ` +
-      `ALWAYS wait for David's response before moving to the next step. ` +
-      `Never skip a step. Never combine two steps into one message. ` +
-      `Each response: 2–3 sentences.\n\n` +
+      `Write ONE complete, flowing evening check-in message. ` +
+      `Do NOT ask a question and wait — deliver everything below in a single warm, natural message. ` +
+      `This is not a back-and-forth checklist. It reads like a thoughtful note from a trusted friend ` +
+      `who knows David's whole life. Aim for about 150–200 words total. ` +
+      `Weave the six elements below together naturally — they should feel like one piece, not six sections.\n\n` +
 
-      `THE STEPS:\n\n` +
-
-      `STEP 1 — OPENER:\n` +
-      `Check [Today's Calendar] for actual events. If an event is listed, reference it by name — ` +
-      `e.g. "How did [event name] go today?" or "Hope pickleball was a good one today." ` +
-      `If nothing is on the calendar, ask a warm open question without making assumptions. ` +
-      `Ask ONE genuine question about their day. ` +
+      `ELEMENT 1 — PERSONAL OPENER:\n` +
+      `Start with a warm greeting that references something real from today. ` +
+      `Check [Today's Calendar] — if an event is listed, name it. ` +
+      `Weave in Susan, Olivia, and/or Winston the corgi naturally — ` +
+      `e.g. "Hope Susan and Olivia had a good evening" or "Winston get his evening walk in?" ` +
+      `Don't force all three — use what feels natural. ` +
       `NEVER mention weather for pickleball or indoor activities. ` +
-      `NEVER invent events — only reference what's actually in the calendar.\n\n` +
+      `NEVER invent events not in the calendar.\n\n` +
 
-      `STEP 2 — MEMORY CAPTURE (after David responds to Step 1):\n` +
-      `Ask the question in [Tonight's Memory Question]. ` +
-      `Present it simply and warmly — no long preamble, no "I'd love to capture" framing if it feels forced. ` +
-      `Just ask it naturally. One question only. ` +
-      `When David answers (15+ words), his response will be saved automatically as a memory.\n\n` +
+      `ELEMENT 2 — STORY QUESTION:\n` +
+      `Include the question from [Tonight's Story Question] as a warm invitation. ` +
+      `Frame it exactly like this: ` +
+      `"Here's something worth sitting with tonight — something for Olivia someday: [question]" ` +
+      `Use the exact question text. Don't reframe or paraphrase it.\n\n` +
 
-      `STEP 3 — JOURNAL PROMPT (after the memory is captured from Step 2):\n` +
-      `Ask if David wants to add anything to his journal today. ` +
-      `Say: "Want to add anything to your journal for today? Just talk — I'll capture it." ` +
-      `If he shares something, it will be saved as a journal entry — acknowledge it warmly and move to Step 4. ` +
-      `If he declines, simply acknowledge and move to Step 4.\n\n` +
+      `ELEMENT 3 — JOURNAL INVITE:\n` +
+      `A soft, optional invite — something like: ` +
+      `"If you want to add anything to your journal tonight, just talk and I'll capture it — or just say 'I don't journal' and we'll skip it."\n\n` +
 
-      `STEP 4 — TOMORROW PREVIEW (after Step 3):\n` +
-      `Check [Tomorrow's Calendar] and mention 1–2 events with their times. 1–2 sentences. ` +
+      `ELEMENT 4 — REFLECTION:\n` +
+      `One brief, genuine thought for before sleep — something grounding or worth sitting with. ` +
+      `Not advice. Not a quote. Just a warm, human observation that fits the tone of the day.\n\n` +
+
+      `ELEMENT 5 — TOMORROW PREP:\n` +
+      `Quick look at [Tomorrow's Calendar] — name 1–2 events with times if they exist. ` +
+      `Then ask: "Anything you want to add to your list or calendar before we close out?" ` +
       `${weatherNote
-        ? `Only mention weather if there's an outdoor activity tomorrow. If relevant: ${weatherNote} Never connect weather to pickleball or indoor activities.`
-        : `No weather data — skip weather entirely.`}\n\n` +
+        ? `If there's an outdoor activity tomorrow, one short weather note is fine: ${weatherNote} Never connect weather to pickleball or indoor activities.`
+        : `No weather data — skip weather.`}\n\n` +
 
-      `STEP 5 — CLOSING (after David responds to Step 4, or when he signals he's done):\n` +
-      `Warm good night. One encouraging sentence. ` +
-      `Reference something real from tonight if it fits naturally. Brief. No questions. Done.\n\n` +
+      `ELEMENT 6 — CLOSING:\n` +
+      `Warm goodnight. Mention Susan, Olivia, and Winston by name. One encouraging sentence. Done.\n\n` +
 
-      `HOW TO KNOW WHICH STEP YOU'RE ON — read the conversation history:\n` +
-      `• No prior check-in messages in history → STEP 1\n` +
-      `• You asked about his day, he responded → STEP 2\n` +
-      `• Memory question was asked and he responded → STEP 3\n` +
-      `• Journal prompt done (accepted or declined) → STEP 4\n` +
-      `• Tomorrow preview done → STEP 5\n` +
-      `• David says goodnight or signals he's done at any point → jump to STEP 5\n\n` +
-
-      `RULES: No medication reminders. No music suggestions. No phone reminders. No unsolicited advice. ` +
-      `Never mention weather in connection with pickleball or any indoor activity. ` +
-      `Never invent calendar events — only reference what's in [Today's Calendar] or [Tomorrow's Calendar].\n` +
+      `RULES: Do NOT structure the output with headers or numbers. ` +
+      `Write it as flowing prose — one connected message. ` +
+      `No medication reminders. No music suggestions. No phone reminders. ` +
+      `Never mention weather in connection with pickleball or any indoor activity.\n` +
 
       todayCalendarBlock +
       tomorrowWeatherBlock +
@@ -1911,10 +1905,11 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       await clearPendingPrompt();
       req.log.info({ prompt: pendingPrompt.substring(0, 80), words: wordCount, questionId: pendingQuestionId }, "Story captured");
       systemPrompt +=
-        `\n\n[Memory Saved]\nDavid just shared a memory in response to the question: "${pendingPrompt}"\nHis response (${wordCount} words) has been saved. ` +
-        `Acknowledge it warmly — reflect on something specific he said, what it reveals about him. 1–2 sentences. Let it land.\n` +
-        `Then move to STEP 3: ask if he'd like to add a journal entry — "Want to add anything to your journal for today? Just talk — I'll capture it."`;
-      // Offer journal after story is captured (unless already captured tonight or disabled by pref)
+        `\n\n[Memory Saved]\nDavid just responded to tonight's story question: "${pendingPrompt}"\n` +
+        `His response (${wordCount} words) has been saved as a memory for Olivia.\n` +
+        `Respond with genuine warmth — reflect on something specific he shared. 2–3 sentences. Let it land.\n` +
+        `Then gently ask if he'd like to add anything to his journal tonight: "Want to capture anything else before we close out? Just talk — I'll save it."`;
+      // Enable journal capture after story is saved
       const journalPromptsEnabled = await isJournalPromptsEnabled(sessionUserName).catch(() => true);
       if (!hasJournalTonight && journalPromptsEnabled) {
         await setJournalOfferPending(true).catch(() => {});
@@ -1924,37 +1919,33 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     }
   }
 
-  // ── Evening wind-down: queue today's rotating memory question (Step 2 of check-in) ──
-  // Rotates daily through 3 fixed questions — no story bank needed
-  const DAILY_MEMORY_QUESTIONS = [
-    "What was the best moment of your day?",
-    "Did anything surprise you today?",
-    "What's one thing you're grateful for today?",
-  ];
-  const dayIndex = Math.floor(Date.now() / (1000 * 60 * 60 * 24)) % DAILY_MEMORY_QUESTIONS.length;
-  const dailyMemoryQ = DAILY_MEMORY_QUESTIONS[dayIndex];
-
+  // ── Evening wind-down: queue tonight's story question from the 120-question bank ──
   if (winddownActive && !pendingPrompt && !isPotentialStoryResponse) {
     try {
       const capturedTonight = await hasStoryCapturedTonight();
       if (!capturedTonight) {
-        await setPendingPrompt(dailyMemoryQ);
-        req.log.info({ question: dailyMemoryQ, dayIndex }, "Evening memory question queued");
-        systemPrompt +=
-          `\n\n[Tonight's Memory Question]\n"${dailyMemoryQ}"\n\n` +
-          `Ask this as STEP 2 of the check-in — after David responds to the opener. ` +
-          `Ask it naturally and simply. One question only. ` +
-          `When David answers with 15+ words, his response will be saved as a memory.`;
+        const storyQ = await getNextStoryQuestion();
+        if (storyQ) {
+          await setPendingPrompt(storyQ.question);
+          req.log.info({ questionId: storyQ.id, category: storyQ.category, prompt: storyQ.question.substring(0, 80) }, "Evening story question queued");
+          systemPrompt +=
+            `\n\n[Tonight's Story Question]\nCategory: ${storyQ.category}\nQuestion: "${storyQ.question}"\n\n` +
+            `Include this in the check-in message as ELEMENT 2. ` +
+            `Frame it exactly as: "Here's something worth sitting with tonight — something for Olivia someday: [question]" ` +
+            `Use the exact question text above. Do not paraphrase. ` +
+            `When David responds with 15+ words, his answer will be saved automatically.`;
+        }
       }
     } catch (err) {
-      req.log.warn({ err }, "Evening memory question queue failed");
+      req.log.warn({ err }, "Evening story question queue failed");
     }
   } else if (winddownActive && pendingPrompt && !isPotentialStoryResponse) {
-    // Memory question was already queued — remind Claude it's still Step 2
+    // Story question already queued — include it in the check-in message
     systemPrompt +=
-      `\n\n[Tonight's Memory Question — Still Pending]\n` +
+      `\n\n[Tonight's Story Question — Already Queued]\n` +
       `"${pendingPrompt}"\n` +
-      `This is STEP 2. If Step 1 (opener) is done, ask this question now. One question only.`;
+      `Include this as ELEMENT 2 in the check-in message: ` +
+      `"Here's something worth sitting with tonight — something for Olivia someday: [question]"`;
   }
 
   // ── Story retrieval ──
