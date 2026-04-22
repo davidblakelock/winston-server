@@ -1631,6 +1631,26 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       }
     } catch { /* non-fatal */ }
 
+    // ── Profile-based fallback when Google Calendar is unavailable ───────────
+    // David plays pickleball Mon/Wed/Fri mornings (Semones YMCA) and Sat mornings (Moody's YMCA).
+    // On those days we always have something specific to reference in Step 1,
+    // even if Google Calendar returns nothing.
+    if (!todayCalendarBlock) {
+      const PICKLEBALL_DAYS = ["Monday", "Wednesday", "Friday", "Saturday"];
+      const pickleball = PICKLEBALL_DAYS.includes(dayName);
+      const pickleballVenue = dayName === "Saturday" ? "Moody's YMCA" : "Semones YMCA";
+      todayCalendarBlock =
+        `\n\n[Today's Activities — Profile-Based (live calendar unavailable)]\n` +
+        (pickleball
+          ? `David likely played pickleball this morning at ${pickleballVenue} (indoor courts).`
+          : `David's calendar wasn't available. Use his known interests — woodworking, tinkering on old cars, ` +
+            `music, family, and his corgi Winston — to make Step 1 feel personal rather than generic.`) +
+        `\nIn Step 1, reference this naturally. For pickleball days: ` +
+        `"Hope pickleball was a good one this morning — how was the rest of ${dayName}?" or similar. ` +
+        `For non-pickleball days: pick one of David's interests and ask something personal about his day ` +
+        `rather than a flat "how was your day?"`;
+    }
+
     // ── Fetch tonight + tomorrow's weather for Dallas (shared cache) ─────────
     let tomorrowWeatherBlock = "";
     let tomorrowHasOutdoor = false;
@@ -1693,6 +1713,20 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           `Tell David what's on for tomorrow in Step 4.`;
       }
     } catch { /* non-fatal */ }
+
+    // ── Profile-based fallback for tomorrow's calendar ───────────────────────
+    // Same pattern as today — if Google Calendar throws, use pickleball schedule.
+    if (!tomorrowCalendarBlock) {
+      // Pickleball days: Mon/Wed/Fri/Sat. Translate "today" to "is tomorrow a pickleball day?"
+      const tomorrowPickleball = ["Sunday", "Tuesday", "Thursday", "Friday"].includes(dayName);
+      const tomorrowVenue = dayName === "Friday" ? "Moody's YMCA" : "Semones YMCA";
+      tomorrowCalendarBlock =
+        `\n\n[Tomorrow's Calendar — Profile-Based (live calendar unavailable)]\n` +
+        (tomorrowPickleball
+          ? `  • Pickleball morning (${tomorrowVenue} — indoor courts)\n`
+          : `Calendar appears clear tomorrow.\n`) +
+        `Tell David what's on for tomorrow in Step 4.`;
+    }
 
     // ── Check TV for episodes aired in the last 72 hours only ───────────────
     // If airedAt is missing/null, do NOT suggest the show — stale data risk.
