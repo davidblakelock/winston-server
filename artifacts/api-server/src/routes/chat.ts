@@ -327,7 +327,7 @@ function buildContextualWeatherBlock(dallas: CachedWeather, knoxville: CachedWea
 // Tightened: must be an EXPLICIT greeting or request — never fires on bare "morning" alone
 // or on messages that contain "morning" mid-sentence (e.g. "update my morning preferences").
 const MORNING_PATTERN = /^(good\s+morning|mornin[g']?|morning\s+(briefing|summary|update)|daily\s+(briefing|summary|update)|give\s+me\s+(my\s+)?(morning\s+)?briefing|what('?s|\s+is)\s+(my\s+)?(morning\s+)?briefing|i\s+want\s+(my\s+)?(morning\s+)?briefing|wakin[g']?\s+up|just\s+woke)[\s!.,?]*/i;
-const EVENING_PATTERN = /\b(good\s+evening|winding\s+down|wind\s+down|heading\s+to\s+bed|going\s+to\s+bed|getting\s+ready\s+for\s+bed|calling\s+it\s+a\s+night|turning\s+in|good\s+night|goodnite|end\s+of\s+the\s+day|wrapping\s+up|relaxing\s+(tonight|this\s+evening)|settling\s+in)\b/i;
+const EVENING_PATTERN = /\b(good\s+evening|evening\s+check-?in|check[\s-]?in\s+for\s+the\s+evening|start\s+(my\s+)?evening\s+check-?in|winding\s+down|wind\s+down|heading\s+to\s+bed|going\s+to\s+bed|getting\s+ready\s+for\s+bed|calling\s+it\s+a\s+night|turning\s+in|good\s+night|goodnite|end\s+of\s+the\s+day|wrapping\s+up|relaxing\s+(tonight|this\s+evening)|settling\s+in)\b/i;
 const REMINDER_PATTERN = /\b(remind\s+me|set\s+a?\s*reminder|reminder|don'?t\s+let\s+me\s+forget|make\s+sure\s+i|peel\s+remind|ms\.?\s*peel\s+remind)\b/i;
 const EMAIL_PATTERN = /\b(email|emails|mail|inbox|check\s+my\s+(email|mail|inbox)|any\s+(new\s+)?(emails?|messages?|mail)|what('?s|\s+is)\s+(in\s+)?(my\s+)?(email|inbox|mail)|do\s+i\s+have\s+(any\s+)?(email|mail|messages?))\b/i;
 const CALENDAR_PATTERN = /\b(calendar|schedule|agenda|appointments?|what('?s|\s+is)\s+(on\s+)?(my\s+)?(calendar|schedule|agenda|week)|(today|tomorrow|this\s+week|next\s+week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)'?s?\s+(schedule|events?|appointments?|look\s+like)|do\s+i\s+have\s+anything\s+(today|tomorrow|this\s+week|scheduled|on\s+my\s+calendar)|what\s+does\s+my\s+(day|week|morning|afternoon|evening)\s+look\s+like|what('?s|\s+is)\s+on\s+for\s+(today|tomorrow|this\s+week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|anything\s+(on\s+)?(today|tomorrow|this\s+week|my\s+calendar|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|busy\s+(today|tomorrow|this\s+week|monday|tuesday|wednesday|thursday|friday)|am\s+i\s+free\s+(today|tomorrow|this\s+(morning|afternoon|week)|monday|tuesday|wednesday|thursday|friday)|what\s+do\s+i\s+have\s+(today|tomorrow|this\s+week|this\s+morning|this\s+afternoon|on\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday))|do\s+i\s+have\s+(a\s+)?(meeting|lunch|dinner|appointment|call|interview|class|session|game)\s+(today|tomorrow|this\s+(morning|afternoon|week)|on\s+(monday|tuesday|wednesday|thursday|friday))|(when|what\s+time)\s+is\s+(my\s+)?(meeting|lunch|dinner|appointment|call|interview|class|session|game|next\s+appointment)|where\s+(am\s+i\s+(having|eating|meeting|going\s+for)|is\s+(my\s+|the\s+)?)\s*(lunch|dinner|breakfast|brunch|meeting|appointment|event)|what('?s|\s+is)\s+(my\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow)\s+(look\s+like|schedule|plans?)|what\s+are\s+my\s+plans?\s+(for\s+)?(today|tomorrow|this\s+week|tonight|this\s+(morning|afternoon|evening))|how\s+does\s+my\s+(day|week|morning|afternoon|schedule)\s+look)\b/i;
@@ -720,7 +720,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   if (!sessionUserName) return;
 
   // ── Auto-greeting: derive time-appropriate message ────────────────────────
-  const { message: rawMessage, history: rawHistory = [], isAutoGreeting = false, deviceId = null } = req.body;
+  const { message: rawMessage, history: rawHistory = [], isAutoGreeting = false, deviceId = null, winddownRequest = false } = req.body;
 
   // ── Layer 1: Active context window ────────────────────────────────────────
   // Claude only sees the last 20 messages. The full transcript is persisted in
@@ -752,17 +752,17 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   }
 
   let message: string;
-  if (isAutoGreeting) {
-    // Use Dallas local time (UTC-5/UTC-6)
+  if (winddownRequest) {
+    // Explicit evening check-in request from the native app button — always treat as evening
+    // regardless of time of day so the check-in works anytime.
+    message = "good evening";
+  } else if (isAutoGreeting) {
+    // Use Dallas local time (UTC-6 CDT). After noon, always use "good evening" so the
+    // Evening Check-In button works at any time of day — "good afternoon" never triggered
+    // winddown activation and had no useful function of its own.
     const nowUtc = new Date();
-    const dallasHour = (nowUtc.getUTCHours() - 6 + 24) % 24; // CDT offset
-    if (dallasHour >= 5 && dallasHour < 12) {
-      message = "good morning";
-    } else if (dallasHour >= 12 && dallasHour < 18) {
-      message = "good afternoon";
-    } else {
-      message = "good evening";
-    }
+    const dallasHour = (nowUtc.getUTCHours() - 6 + 24) % 24;
+    message = dallasHour >= 5 && dallasHour < 12 ? "good morning" : "good evening";
   } else {
     message = rawMessage;
   }

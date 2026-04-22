@@ -19,7 +19,7 @@ async function getCompanionName(): Promise<string> {
   return profile?.companionName ?? "Your Companion";
 }
 
-async function generateOpeningMessage(companionName: string): Promise<string> {
+export async function generateOpeningMessage(companionName: string): Promise<string> {
   const tz = "America/Chicago";
   const now = new Date();
   const dayName = now.toLocaleDateString("en-US", {
