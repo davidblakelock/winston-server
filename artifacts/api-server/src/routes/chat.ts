@@ -1597,13 +1597,30 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     const tz = "America/Chicago";
     const now = new Date();
     const dayName = now.toLocaleDateString("en-US", { timeZone: tz, weekday: "long" });
-    const tomorrowPickleball = ["Sunday", "Tuesday", "Thursday", "Friday"].includes(dayName);
-    const tomorrowPickleballNote = tomorrowPickleball
-      ? `\n• Tomorrow is a pickleball day — mention it as part of the tomorrow preview.`
-      : "";
+
+    // ── Fetch today's calendar for context (reference what actually happened) ──
+    let todayCalendarBlock = "";
+    try {
+      const todayEvts = await getTodayEventsCached(sessionUserName);
+      if (todayEvts && todayEvts.length > 0) {
+        const lines = todayEvts.map((e) => {
+          const time = e.allDay ? "all day" : `${e.start}${e.end && e.end !== e.start ? ` – ${e.end}` : ""}`;
+          const loc = e.location ? ` at ${e.location}` : "";
+          return `  • ${e.summary} — ${time}${loc}`;
+        });
+        todayCalendarBlock =
+          `\n\n[Today's Calendar — use in Step 1 to ground the check-in in specifics]\n` +
+          lines.join("\n") +
+          `\nIn the check-in, reference a specific event from today by name if relevant — ` +
+          `e.g. "How did that lunch with Mike go?" or "How was the pickleball this morning?" ` +
+          `Make it feel personal, not generic.`;
+      }
+    } catch { /* non-fatal */ }
 
     // ── Fetch tonight + tomorrow's weather for Dallas (shared cache) ─────────
     let tomorrowWeatherBlock = "";
+    let tomorrowHasOutdoor = false;
+    let tomorrowWeatherData: { high: number | null; condition: string | null; precip: number; tonightLow: string } | null = null;
     try {
       const dallas = await getCachedWeather("Dallas", 32.7767, -96.7970);
       const tonightLow = `${dallas.low}°F`;
@@ -1611,13 +1628,20 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       const tomorrowHigh = tomorrow?.high ?? null;
       const tomorrowCondition = tomorrow?.condition ?? null;
       const tomorrowPrecip = tomorrow?.precipChance ?? 0;
+      tomorrowWeatherData = { high: tomorrowHigh, condition: tomorrowCondition, precip: tomorrowPrecip, tonightLow };
+
       tomorrowWeatherBlock =
-        `\n\n[Weather — Dallas]\n` +
-        `Tonight's low: ${tonightLow}. ` +
+        `\n\n[Weather — Dallas Tonight and Tomorrow]\n` +
+        `Tonight's low: ${tonightLow}.\n` +
         (tomorrowHigh && tomorrowCondition
           ? `Tomorrow: high ${tomorrowHigh}°F, ${tomorrowCondition}${tomorrowPrecip > 30 ? `, ${tomorrowPrecip}% chance of rain` : ""}.`
           : "") +
-        `\nDeliver this as one natural sentence covering tonight and tomorrow — e.g. "Tonight should drop to around ${tonightLow}, and tomorrow's looking like a ${tomorrowCondition ?? "nice day"} with a high of ${tomorrowHigh ?? "–"}." Keep it brief and conversational.`;
+        `\nUSAGE RULES:\n` +
+        `• Mention weather naturally in Step 5 as one conversational sentence.\n` +
+        `• INDOOR ACTIVITIES (pickleball at YMCA/gym, gym workouts) — weather is irrelevant, do NOT connect weather to these.\n` +
+        `• OUTDOOR ACTIVITIES (a run, golf, an outdoor event) — DO mention relevant conditions briefly.\n` +
+        `• If tomorrow only has indoor or office activities, just note the overnight low and tomorrow's high naturally: "Should cool down nicely tonight — tomorrow's looking like a [condition] day."\n` +
+        `• Never mention specific weather numbers in context of indoor activities.`;
     } catch { /* non-fatal — skip weather if API unavailable */ }
 
     // ── Fetch tomorrow's calendar events for wind-down preview ──────────────
@@ -1625,20 +1649,34 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     try {
       const tomorrowEvts = await fetchTomorrowEvents(sessionUserName);
       if (tomorrowEvts && tomorrowEvts.length > 0) {
+        // Detect if any tomorrow events are genuinely outdoor (run, golf, walk, etc.)
+        // Pickleball at YMCA/Semones/Moody is ALWAYS indoor — do not flag as outdoor.
+        const OUTDOOR_ACTIVITY = /\b(run|running|walk|golf|tennis|hike|hiking|soccer|swim|cycling|bike|trail|outdoor)\b/i;
+        const INDOOR_OVERRIDE = /\b(ymca|gym|indoor|semones|moody|fitness|studio|court|court)\b/i;
+        tomorrowHasOutdoor = tomorrowEvts.some((e) => {
+          const text = `${e.summary} ${e.location ?? ""}`;
+          return OUTDOOR_ACTIVITY.test(text) && !INDOOR_OVERRIDE.test(text);
+        });
+
+        const tomorrowPickleball = ["Sunday", "Tuesday", "Thursday", "Friday"].includes(dayName);
         const lines = tomorrowEvts.map((e) => {
           const time = e.allDay ? "all day" : `${e.start}${e.end && e.end !== e.start ? ` – ${e.end}` : ""}`;
           const loc = e.location ? ` at ${e.location}` : "";
           return `  • ${e.summary} — ${time}${loc}`;
         });
         tomorrowCalendarBlock =
-          `\n\n[Tomorrow's Calendar — fetched now in CT]\n` +
+          `\n\n[Tomorrow's Calendar — fetched live in CT]\n` +
           lines.join("\n") +
-          `\nMention tomorrow's events naturally in Step 2 of the wind-down. ` +
-          `Include the time and location if relevant so David knows what to expect.`;
+          (tomorrowPickleball ? `\n  • Pickleball (YMCA — indoor courts)` : "") +
+          `\nIn Step 4, mention the 1–2 most relevant events with their times. ` +
+          `Include location if it matters for planning. Keep it to 1–2 sentences.`;
       } else if (tomorrowEvts !== null) {
+        const tomorrowPickleball = ["Sunday", "Tuesday", "Thursday", "Friday"].includes(dayName);
         tomorrowCalendarBlock =
-          `\n\n[Tomorrow's Calendar]\nCalendar is clear tomorrow — nothing scheduled. ` +
-          `Tell David his calendar is clear tomorrow if we get to the tomorrow preview.`;
+          `\n\n[Tomorrow's Calendar]\n` +
+          (tomorrowPickleball ? `  • Pickleball morning (YMCA — indoor courts)\n` : "") +
+          (!tomorrowPickleball ? `Calendar is otherwise clear tomorrow.\n` : `Calendar is otherwise clear.\n`) +
+          `Tell David what's on for tomorrow in Step 4.`;
       }
     } catch { /* non-fatal */ }
 
@@ -1659,31 +1697,73 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         tvEveningNote =
           `\n\n[TV — New Episodes in Last 3 Days]\n` +
           freshEps.map((ep) => `• ${formatEpisodeForPrompt(ep)}`).join("\n") +
-          `\nIf the moment feels right in Step 3, mention one briefly and naturally. ` +
+          `\nIf the mood is right after Step 2, mention one briefly and naturally. ` +
           `ONLY mention shows listed above — never suggest a show not in this list.`;
       }
     } catch { /* non-fatal */ }
 
     const _wdJournalOff = briefingPrefs.some(p => p.prefKey === "journal" && p.prefValue === "off");
     const _wdStoryOff = briefingPrefs.some(p => p.prefKey === "story_questions" && p.prefValue === "off");
-    const _wdStep1 = _wdStoryOff
-      ? `1. CHECK-IN — Ask David warmly how his day went and what the highlight was.`
-      : `1. OLIVIA — Ask the memory question from [Tonight's Memory Question]. Frame it warmly: "I'd love to capture something for Olivia — [question]."`;
-    const _wdTopicCount = (_wdJournalOff ? 4 : 5);
-    const _wdN = (base: number) => (_wdJournalOff ? base - 1 : base);
+
+    // Build step numbers dynamically based on what's enabled
+    let stepNum = 1;
+    const step = () => stepNum++;
+
+    const step1Num = step();
+    const step2Num = _wdStoryOff ? null : step();
+    const step3Num = _wdJournalOff ? null : step();
+    const step4Num = step(); // Tomorrow calendar
+    const step5Num = step(); // Tomorrow weather
+    const step6Num = step(); // Close
+
+    const weatherInstruction = tomorrowWeatherData
+      ? (tomorrowHasOutdoor
+          ? `${step5Num}. TOMORROW WEATHER — One sentence. Mention outdoor conditions relevant to any outdoor activity tomorrow. Be specific: "Good day for a run — it'll be around ${tomorrowWeatherData.high ?? "–"} and ${tomorrowWeatherData.condition ?? "clear"}." Skip if no outdoor activities.`
+          : `${step5Num}. TOMORROW WEATHER — One sentence. Just a natural note on overnight low and tomorrow's feel — e.g. "Should cool down nicely tonight — tomorrow's looking like a ${tomorrowWeatherData.condition ?? "nice day"} with a high of ${tomorrowWeatherData.high ?? "–"}." Do NOT tie weather to pickleball or any indoor activity.`)
+      : `${step5Num}. TOMORROW WEATHER — Skip this step if no weather data is available.`;
+
     systemPrompt +=
       `\n\n[Evening Wind-Down — ACTIVE]\n` +
-      `${_wdTopicCount} topics. One per message. Keep each to one or two sentences. ` +
-      `Total word count for the entire session must stay under 150 words. ` +
-      `Feel like a warm nightcap — personal and unhurried, not a checklist.\n\n` +
-      `${_wdStep1}\n` +
-      (!_wdJournalOff ? `2. JOURNAL — Ask: "Anything from today you'd like to capture in your journal?"\n` : ``) +
-      `${_wdN(3)}. TOMORROW CALENDAR — One sentence only. Name the one or two most important events from [Tomorrow's Calendar] — just the event and time, no detail. If pickleball is tomorrow, mention it.` + (tomorrowPickleballNote ? ` ${tomorrowPickleballNote.trim()}` : "") + `\n` +
-      `${_wdN(4)}. TOMORROW WEATHER — One sentence only. Tomorrow morning's temperature and conditions from [Weather — Dallas]. No forecast beyond tomorrow morning. Example: "Tomorrow's starting around 68 and clear."\n` +
-      `${_wdN(5)}. CLOSE — Sign off with one warm, confident closing line that has some character — like James Bond signing off for the night. Not "Sleep well." Not generic. Something specific to David and the day. End there. Do not ask any more questions.\n\n` +
-      `RULES: No medication reminders. No music suggestions. No phone reminders. No checklists. One topic per message. Never ask a question in the closing line.\n` +
+      `This is a genuine 3–5 minute evening check-in — warm, personal, unhurried. ` +
+      `Move through one step per message. Each response: 2–3 warm sentences. ` +
+      `Do NOT rush. Do NOT stack multiple steps into one message. ` +
+      `This should feel like a trusted friend checking in, not a scripted checklist.\n\n` +
+
+      `${step1Num}. CHECK-IN — Ask David how his day went. If [Today's Calendar] shows specific events, ` +
+      `reference one by name — e.g. "How did that lunch with Mike go?" or "Hope pickleball was a good one today." ` +
+      `Make it feel personal and specific, not generic. One warm question to open.\n` +
+
+      (step2Num !== null
+        ? `${step2Num}. MEMORY CAPTURE — Ask the question from [Tonight's Memory Question]. ` +
+          `Frame it warmly: "I'd love to capture something for Olivia — [question]." ` +
+          `One question only. This is one of the most meaningful parts of the evening — ask it like you mean it.\n`
+        : ``) +
+
+      (step3Num !== null
+        ? `${step3Num}. JOURNAL — Ask one thoughtful, specific question to prompt reflection. ` +
+          `Not "how was your day" (already asked). Something deeper — e.g. "What's one thing from today you want to remember?", ` +
+          `"Anything you're sitting with tonight?", "What surprised you today?", "What are you proud of from today?" ` +
+          `Pick the question that fits the mood of the conversation. One question only.\n`
+        : ``) +
+
+      `${step4Num}. TOMORROW PREVIEW — Tell David what's ahead tomorrow using [Tomorrow's Calendar]. ` +
+      `Name 1–2 events with their times. Keep it to 1–2 natural sentences. ` +
+      `If pickleball is tomorrow, mention it — but never connect it to weather (indoor courts).\n` +
+
+      `${weatherInstruction}\n` +
+
+      `${step6Num}. CLOSE — One warm, specific closing line with some character. ` +
+      `Reference something personal from tonight's conversation — a memory he shared, something he's proud of, or what's ahead tomorrow. ` +
+      `Not "Sleep well." Not generic. No more questions after this. End there.\n\n` +
+
+      `RULES: No medication reminders. No music suggestions. No phone reminders. No checklists. ` +
+      `One step per message. Never ask a question in the closing line. ` +
+      `Never mention weather in connection with pickleball or any indoor activity.\n` +
+
+      todayCalendarBlock +
       tomorrowWeatherBlock +
-      tomorrowCalendarBlock;
+      tomorrowCalendarBlock +
+      tvEveningNote;
   }
 
   if (isWinddownNote) {

@@ -9,6 +9,7 @@ import {
   saveTonightMessage,
 } from "./winddownManager.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
+import { fetchTodayEvents } from "../google/calendar.js";
 import { logger } from "../lib/logger.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -25,34 +26,44 @@ async function generateOpeningMessage(companionName: string): Promise<string> {
     timeZone: tz,
     weekday: "long",
   });
-  const isPickleballDay = ["Monday", "Wednesday", "Friday"].includes(dayName);
-  const isSaturdayPickleball = dayName === "Saturday";
-  const tomorrowPickleballHint =
-    dayName === "Sunday" ? " Tomorrow's a Monday — pickleball day." :
-    dayName === "Tuesday" ? " Tomorrow's a Wednesday — pickleball morning." :
-    dayName === "Thursday" ? " Tomorrow's a Friday — pickleball day." :
-    dayName === "Friday" ? " Tomorrow's Saturday — Moody YMCA pickleball." :
-    "";
 
-  const contextHint =
-    isPickleballDay
-      ? `Today was a pickleball day (${dayName}).`
-      : isSaturdayPickleball
-      ? "Today was Saturday pickleball day at Moody YMCA."
-      : `Today was ${dayName}, a non-pickleball day — likely a run or workout.`;
+  const isPickleballDay = ["Monday", "Wednesday", "Friday", "Saturday"].includes(dayName);
+
+  // Fetch today's calendar events to ground the opening in specifics
+  let todayEventsContext = "";
+  try {
+    const evts = await fetchTodayEvents("David");
+    if (evts && evts.length > 0) {
+      // Filter to non-all-day, non-pickleball events worth referencing
+      const notable = evts
+        .filter((e) => !e.allDay && !/pickleball/i.test(e.summary))
+        .slice(0, 3)
+        .map((e) => e.summary);
+      if (notable.length > 0) {
+        todayEventsContext = `Today's calendar included: ${notable.join(", ")}.`;
+      }
+    }
+  } catch {
+    // non-fatal — continue without calendar context
+  }
 
   const prompt =
-    `You are ${companionName}, David Blakelock's warm personal AI companion. It's ${dayName} evening in Dallas. ` +
-    `${contextHint}${tomorrowPickleballHint} ` +
-    `Generate a warm, natural 2-3 sentence opening to start the evening wind-down. ` +
-    `Start with "Good evening, David." then ask genuinely how his day went. ` +
-    `Make it feel like a close friend checking in — warm, personal, never stiff. ` +
-    `Do NOT ask about stories or reminders yet. Just the check-in.`;
+    `You are ${companionName}, David Blakelock's warm personal AI companion. It's ${dayName} evening in Dallas, Texas.\n` +
+    (isPickleballDay
+      ? `David played pickleball this morning at the YMCA (indoor courts — weather doesn't affect it). `
+      : ``) +
+    (todayEventsContext ? `${todayEventsContext} ` : ``) +
+    `\nGenerate a warm, genuine 2–3 sentence opening to start the evening wind-down. ` +
+    `Start with "Good evening, David." then ask naturally how his day went. ` +
+    `If there are specific calendar events, reference one by name — e.g., "How did that lunch with Mike go?" ` +
+    `Make it feel like a close friend checking in — warm, personal, never stiff or robotic. ` +
+    `Do NOT mention pickleball weather (indoor courts). ` +
+    `Do NOT ask about stories, memories, or tomorrow yet. Just the warm evening check-in.`;
 
   try {
     const response = await anthropic.messages.create({
       model: "claude-opus-4-5",
-      max_tokens: 150,
+      max_tokens: 180,
       messages: [{ role: "user", content: prompt }],
     });
     const block = response.content[0];
@@ -61,21 +72,22 @@ async function generateOpeningMessage(companionName: string): Promise<string> {
     logger.warn({ err }, "Failed to generate wind-down opening, using fallback");
   }
 
+  // Fallback messages — brief, warm, personal to the day
   const fallbacks: Record<string, string> = {
     Monday:
-      "Good evening, David. Monday's behind you — how did pickleball go, and how was the rest of your day? I'd love to hear about it.",
+      "Good evening, David. Monday's wrapping up — hope it was a solid one after pickleball this morning. How did the rest of the day go?",
     Tuesday:
-      "Good evening, David. Hope Tuesday treated you well. How was your day?",
+      "Good evening, David. Hope Tuesday treated you well. I'm all yours — how was your day?",
     Wednesday:
-      "Good evening, David. Midweek — hope pickleball was good this morning. How did the rest of the day go?",
+      "Good evening, David. Mid-week already. Hope pickleball this morning got the day started right. How did the rest of it go?",
     Thursday:
-      "Good evening, David. How was your Thursday? I'm all ears.",
+      "Good evening, David. Thursday's almost done — how was your day? Anything worth talking about?",
     Friday:
-      "Good evening, David. End of the week — hope pickleball was a good one this morning. How did the day go?",
+      "Good evening, David. End of the week. Hope pickleball was a good one this morning. How did Friday treat you?",
     Saturday:
-      "Good evening, David. Saturday pickleball at Moody — hope it was a great one. How was the rest of your day?",
+      "Good evening, David. Hope Saturday pickleball at Moody's was a great one. How was the rest of your day?",
     Sunday:
-      "Good evening, David. Hope Sunday was a good one. How was your day?",
+      "Good evening, David. Hope Sunday was a good one for you. How was your day?",
   };
   return (
     fallbacks[dayName] ??
