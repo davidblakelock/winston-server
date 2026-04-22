@@ -50,6 +50,7 @@ import {
 } from "../stories/storyManager.js";
 import {
   isWinddownActive,
+  markFiredToday,
   saveWinddownNote,
   getLastNightNotes,
   formatNotesForMorningBriefing,
@@ -1589,7 +1590,20 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   }
 
   // ── Wind-down session: inject context and capture notes ──
-  const winddownActive = await isWinddownActive().catch(() => false);
+  // On-demand activation: if the user explicitly triggers "good evening" (via button tap or
+  // typing), activate the check-in for today regardless of the scheduled 9 PM time.
+  // The scheduled job and the button are two independent entry points — both should work.
+  let winddownActive = await isWinddownActive().catch(() => false);
+  if (isEveningGreeting && !winddownActive) {
+    try {
+      await markFiredToday();        // INSERT today's row (idempotent — no-op if already exists)
+      await setWinddownActive(true); // Ensure active = true (in case row existed but was deactivated)
+      winddownActive = true;
+      req.log.info("Evening check-in activated on-demand via evening greeting");
+    } catch (err) {
+      req.log.warn({ err }, "Failed to activate evening check-in on-demand");
+    }
+  }
   const isWinddownNote = winddownActive && WINDDOWN_NOTE_PATTERN.test(message);
   const isGoodnightMessage = /\b(goodnight|good\s+night|good\s+nite|sweet\s+dreams|see\s+you\s+tomorrow|talk\s+tomorrow)\b/i.test(message);
 

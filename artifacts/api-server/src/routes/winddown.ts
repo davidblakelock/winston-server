@@ -1,5 +1,11 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import { getSettings, updateSettings, getTonightMessage } from "../winddown/winddownManager.js";
+import {
+  getSettings,
+  updateSettings,
+  getTonightMessage,
+  markFiredToday,
+  setWinddownActive,
+} from "../winddown/winddownManager.js";
 
 const router: IRouter = Router();
 
@@ -21,6 +27,21 @@ router.get("/winddown/tonight-message", async (_req: Request, res: Response) => 
     res.json({ message, firedTonight: message !== null });
   } catch (err) {
     res.status(500).json({ error: "Failed to retrieve tonight's wind-down message" });
+  }
+});
+
+// Native app "Evening Check-In" button calls this to activate the check-in on-demand,
+// independent of the scheduled 9 PM push notification. Idempotent — safe to call multiple times.
+// Returns the pre-generated opening message if the scheduled job already fired tonight,
+// or null if the opening message hasn't been generated yet (chat route will handle it).
+router.post("/winddown/activate", async (_req: Request, res: Response) => {
+  try {
+    await markFiredToday();        // Ensures today's row exists (no-op if already present)
+    await setWinddownActive(true); // Ensures active = true (re-activates if previously deactivated)
+    const message = await getTonightMessage();
+    res.json({ activated: true, message });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to activate evening check-in" });
   }
 });
 
