@@ -84,10 +84,14 @@ function withMorningFlag(msg: Message): Message {
 }
 
 interface ReminderEvent {
-  id: number;
+  id: number | string;
   userName: string;
   reminderText: string;
   speakText: string;
+  isCalendarAlert?: boolean;
+  askForAddress?: boolean;
+  eventId?: string;
+  eventSummary?: string;
 }
 
 interface UpcomingReminder {
@@ -1193,18 +1197,30 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
       console.log("[REMINDER] fireReminderAlert called:", event);
 
       // Guard: skip if already spoken this session (e.g. both SSE and poll fired)
-      if (spokenReminderIds.current.has(event.id)) {
+      const idKey = String(event.id);
+      if (spokenReminderIds.current.has(idKey as unknown as number)) {
         console.log("[REMINDER] Already spoken this session, skipping:", event.id);
         return;
       }
-      spokenReminderIds.current.add(event.id);
+      spokenReminderIds.current.add(idKey as unknown as number);
 
       // Remove from upcoming reminders panel since it's now firing
-      setUpcomingReminders((prev) => prev.filter((r) => r.id !== event.id));
+      setUpcomingReminders((prev) => prev.filter((r) => String(r.id) !== idKey));
 
       const msgId = `reminder-${event.id}-${Date.now()}`;
-      const speakText = `Hey David, your reminder: ${event.reminderText}.`;
-      const displayContent = `Hey David — your reminder: ${event.reminderText}`;
+
+      let speakText: string;
+      let displayContent: string;
+
+      if (event.isCalendarAlert) {
+        // Calendar alerts carry their own fully-formed message — use it directly
+        speakText = event.speakText || event.reminderText;
+        displayContent = event.reminderText;
+      } else {
+        speakText = `Your reminder: ${event.reminderText}.`;
+        displayContent = `Your reminder: ${event.reminderText}`;
+      }
+
       setMessages((prev) => [
         ...prev,
         { id: msgId, role: "assistant", content: displayContent, isReminder: true },
@@ -1213,21 +1229,21 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
       console.log("[REMINDER] Calling speakReply with:", speakText);
       speakReply(msgId, speakText);
 
-      // Acknowledge immediately — the SSE already broadcasts to all connected devices
-      // simultaneously, so there is no need to wait. Delaying acknowledgment was causing
-      // the polling fallback on other devices to re-fire the same reminder.
-      const ackId = event.id;
-      console.log(`[ACKNOWLEDGE] Acknowledging id=${ackId}`);
-      fetch(`${CHAT_BASE}/api/reminders/${ackId}/acknowledge`, { method: "POST" })
-        .then(async (r) => {
-          if (!r.ok) {
-            const body = await r.text().catch(() => "");
-            console.error(`[ACKNOWLEDGE] Server error for id=${ackId} status=${r.status}:`, body);
-          } else {
-            console.log(`[ACKNOWLEDGE] id=${ackId} acknowledged OK`);
-          }
-        })
-        .catch((err) => console.error(`[ACKNOWLEDGE] Network error for id=${ackId}:`, err));
+      // Only acknowledge DB-backed reminders (numeric IDs)
+      const numericId = typeof event.id === "number" ? event.id : parseInt(String(event.id), 10);
+      if (!isNaN(numericId)) {
+        console.log(`[ACKNOWLEDGE] Acknowledging id=${numericId}`);
+        fetch(`${CHAT_BASE}/api/reminders/${numericId}/acknowledge`, { method: "POST" })
+          .then(async (r) => {
+            if (!r.ok) {
+              const body = await r.text().catch(() => "");
+              console.error(`[ACKNOWLEDGE] Server error for id=${numericId} status=${r.status}:`, body);
+            } else {
+              console.log(`[ACKNOWLEDGE] id=${numericId} acknowledged OK`);
+            }
+          })
+          .catch((err) => console.error(`[ACKNOWLEDGE] Network error for id=${numericId}:`, err));
+      }
     },
     [speakReply]
   );
@@ -1267,9 +1283,9 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
       console.log("[REMINDER] REMINDER_PUSH from service worker — id:", id, "text:", msg.reminderText);
       fireReminderAlertRef.current({
         id,
-        userName: "David",
+        userName: msg.userName ?? "",
         reminderText: msg.reminderText ?? "",
-        speakText: `Hey David, your reminder: ${msg.reminderText}.`,
+        speakText: msg.speakText ?? msg.reminderText ?? "",
       });
     };
     navigator.serviceWorker.addEventListener("message", handler);
@@ -1335,9 +1351,9 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
           console.log("[REMINDER] Reconnect poll: firing missed reminder:", reminder);
           fireReminderAlertRef.current({
             id: reminder.id,
-            userName: "David",
+            userName: "",
             reminderText: reminder.reminder_text,
-            speakText: `Hey David, your reminder: ${reminder.reminder_text}.`,
+            speakText: reminder.reminder_text,
           });
         }
       } catch { /* network unavailable — silent */ }
@@ -1664,9 +1680,9 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
           console.log("[REMINDER] Poll: firing missed reminder via fallback:", reminder);
           fireReminderAlertRef.current({
             id: reminder.id,
-            userName: "David",
+            userName: "",
             reminderText: reminder.reminder_text,
-            speakText: `Hey David, your reminder: ${reminder.reminder_text}.`,
+            speakText: reminder.reminder_text,
           });
         }
       } catch (err) {

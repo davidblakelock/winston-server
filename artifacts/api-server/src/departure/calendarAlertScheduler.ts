@@ -119,7 +119,7 @@ async function runCalendarAlertCheck(): Promise<void> {
 
 export function startCalendarAlertScheduler(): void {
   cron.schedule(
-    "0 8-21 * * *",
+    "*/15 8-21 * * *",
     async () => {
       try {
         await runCalendarAlertCheck();
@@ -129,5 +129,5 @@ export function startCalendarAlertScheduler(): void {
     },
     { timezone: TZ }
   );
-  logger.info("Calendar alert scheduler (2-hour window) started");
+  logger.info("Calendar alert scheduler (2-hour window, every 15 min) started");
 }

@@ -114,10 +114,14 @@ async function sendNewEventAlert(event: CalendarEvent, userName: string): Promis
   let pushBody: string;
 
   const departure = await getLeaveByTime(event, userName).catch(() => null);
+  const hasLocation = !!(event.location || event.description);
 
   if (departure) {
     speakText = `Hey, looks like you just added ${eventName} at ${eventTimeStr}. Based on traffic from home, you'd want to leave around ${departure.leaveTimeStr} — about ${Math.round(departure.driveMinutes)} minutes. I'll remind you when it's time.`;
     pushBody = `${eventName} at ${eventTimeStr} added. Leave home by ${departure.leaveTimeStr} (~${Math.round(departure.driveMinutes)} min drive).`;
+  } else if (!hasLocation) {
+    speakText = `Hey, I noticed you just added ${eventName} at ${eventTimeStr} to your calendar. It doesn't have an address — do you want to add one so I can give you departure reminders?`;
+    pushBody = `${eventName} at ${eventTimeStr} added. No address on file — tap to add one for departure reminders.`;
   } else {
     speakText = `Hey, I noticed you just added ${eventName} at ${eventTimeStr} to your calendar. Thought you'd want a heads up.`;
     pushBody = `${eventName} at ${eventTimeStr} added to your calendar.`;
@@ -129,6 +133,9 @@ async function sendNewEventAlert(event: CalendarEvent, userName: string): Promis
     reminderText: speakText,
     speakText,
     isCalendarAlert: true,
+    askForAddress: !hasLocation && !departure,
+    eventId: event.id,
+    eventSummary: eventName,
   });
 
   await sendPushToAll({
@@ -138,20 +145,12 @@ async function sendNewEventAlert(event: CalendarEvent, userName: string): Promis
     requireInteraction: false,
   }, userName).catch(() => {});
 
-  logger.info({ event: eventName, time: eventTimeStr, userName }, "Calendar sync: new event alert sent");
+  logger.info({ event: eventName, time: eventTimeStr, hasLocation, userName }, "Calendar sync: new event alert sent");
 }
-
-// ── Throttle: track last successful sync time (module-level) ──────────────────
-let lastSyncAt: number | null = null;
 
 // ── Main sync check ────────────────────────────────────────────────────────────
 
 async function runCalendarSyncForUser(userName: string): Promise<void> {
-  const now = Date.now();
-  if (lastSyncAt !== null && now - lastSyncAt < 55 * 60 * 1000) {
-    return;
-  }
-  lastSyncAt = now;
   let events: CalendarEvent[] | null;
   try {
     events = await fetchTodayEvents(userName);
@@ -210,11 +209,11 @@ export async function populateCalendarSyncState(events: CalendarEvent[]): Promis
   logger.info({ count: events.length }, "Calendar sync state: pre-populated from morning briefing");
 }
 
-// ── Scheduler: every 60 minutes, 8am–9pm CT ───────────────────────────────────
+// ── Scheduler: every 30 minutes, 8am–9pm CT ───────────────────────────────────
 
 export function startCalendarSyncScheduler(): void {
   cron.schedule(
-    "0 8-21 * * *",
+    "*/30 8-21 * * *",
     async () => {
       try {
         await runCalendarSync();
@@ -225,5 +224,5 @@ export function startCalendarSyncScheduler(): void {
     { timezone: TZ }
   );
 
-  logger.info("Calendar sync scheduler started");
+  logger.info("Calendar sync scheduler (every 30 min) started");
 }

@@ -69,6 +69,7 @@ function clearIfNewDay() {
 // ── Per-user check ────────────────────────────────────────────────────────────
 async function checkDepartureAlertsForUser(userName: string): Promise<void> {
   const profile = await getProfile(userName).catch(() => null);
+  const displayName = profile?.name ?? userName;
   const homeAddress = profile?.homeAddress ?? ((profile?.rawData as CollectedData)?.homeAddress) ?? "";
   const homeLat = (profile?.homeLatitude && profile.homeLatitude !== 0 ? profile.homeLatitude : null)
     ?? (profile?.latitude && profile.latitude !== 0 ? profile.latitude : null)
@@ -119,7 +120,8 @@ async function checkDepartureAlertsForUser(userName: string): Promise<void> {
       start,
       drive.durationMinutes,
       location,
-      drive.source === "google-maps"
+      drive.source === "google-maps",
+      displayName
     );
 
     const companionName = await getCompanionName(userName);

@@ -199,7 +199,8 @@ export function buildDepartureAlertMessage(
   eventStart: Date,
   driveMinutes: number,
   destination: string,
-  hasTrafficData: boolean
+  hasTrafficData: boolean,
+  displayName = "there"
 ): string {
   const timeStr = eventStart.toLocaleTimeString("en-US", {
     timeZone: "America/Chicago",
@@ -211,7 +212,7 @@ export function buildDepartureAlertMessage(
   const trafficNote = hasTrafficData ? "based on current traffic" : "estimated";
   const round = Math.round(driveMinutes / 5) * 5;
 
-  return `David, you should think about heading out for your ${timeStr} ${eventTitle} — it's about ${round} minutes from home (${trafficNote}), so you'll want to leave in the next few minutes.`;
+  return `Hey ${displayName}, time to head out for your ${timeStr} ${eventTitle} — it's about ${round} minutes from home (${trafficNote}).`;
 }
 
 // ── Extract location from calendar event ─────────────────────────────────────
