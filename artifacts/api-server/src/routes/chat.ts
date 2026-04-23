@@ -1452,23 +1452,31 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         const recipientName = pendingText.recipientName;
         setPendingText(null);
 
-        // Store on request so the native response handler can attach it to the JSON.
+        // Store composition context so we can inject it as a fake prior turn in
+        // the conversation — gives Claude in-conversation context for "send it".
+        (req as any)._smsCompositionContext = { recipientName, body };
+
+        // Store payload on request so the native response handler can attach it to the JSON.
         // SSE broadcast is kept for web clients that ARE connected.
         const smsPayload = { phone, body, recipient: recipientName };
         (req as any)._smsPayload = smsPayload;
         broadcastToUser(sessionUserName, "sms-compose", { type: "sms_compose", ...smsPayload });
 
         systemPrompt +=
-          `\n\n[Text Message Confirmed — Ready to Send]\n` +
+          `\n\n[SMS COMPOSER QUEUED — READ THIS CAREFULLY]\n` +
+          `⚠️ YOU HAVE NOT SENT THIS MESSAGE. YOU CANNOT SEND TEXT MESSAGES. ⚠️\n` +
+          `The app will open the Messages composer with this text pre-filled — ` +
+          `${displayName} must tap Send themselves. The message has NOT been delivered.\n\n` +
           `Recipient: ${recipientName}\n` +
-          `Phone: ${phone || "(no phone found — user will need to enter manually)"}\n` +
+          `Phone: ${phone || "(not found — user must enter it)"}\n` +
           `Body: "${body}"\n\n` +
-          `The message has been packaged and sent to the app to open the SMS composer. ` +
-          `Tell ${displayName} in ONE short sentence: ` +
-          `"Got it — your Messages app will open with that ready to send to ${recipientName}." ` +
-          `If no phone number was found, say instead: "Composed — your Messages app will open, ` +
-          `just fill in ${recipientName}'s number before you hit send." ` +
-          `Do NOT say you sent it — the user taps Send in the Messages app. Keep it brief.`;
+          `REQUIRED: Say EXACTLY one of these two sentences (nothing more):\n` +
+          (phone
+            ? `→ "Got it — your Messages app will open with that ready for you to send to ${recipientName}."\n`
+            : `→ "Composed — your Messages app will open with the text ready, just fill in ${recipientName}'s number before you tap Send."\n`) +
+          `\nFORBIDDEN WORDS/PHRASES: "sent", "I've sent", "I sent", "delivered", ` +
+          `"she should receive", "he should receive", "they should receive", "on its way", ` +
+          `"message sent", "text sent". Using any of these is factually wrong.`;
 
         req.log.info({ recipient: recipientName, hasPhone: !!phone }, "[T006] SMS packaged for native app");
       } else if (isSendCancellation(message)) {
@@ -2773,11 +2781,26 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       })
     : history;
 
+  // When an SMS confirmation just fired, inject the composition context as the
+  // preceding assistant turn so Claude understands what "send it" refers to —
+  // otherwise DB history from unrelated prior conversations confuses the model.
+  const smsDraftContext = (req as any)._smsCompositionContext as
+    | { recipientName: string; body: string }
+    | undefined;
+
   const messages: Anthropic.MessageParam[] = [
     ...filteredHistory.map((msg: { role: string; content: string }) => ({
       role: msg.role as "user" | "assistant",
       content: msg.content,
     })),
+    ...(smsDraftContext
+      ? [
+          {
+            role: "assistant" as const,
+            content: `Here's what I've drafted for ${smsDraftContext.recipientName}:\n\n"${smsDraftContext.body}"\n\nDoes that work, or would you like to change the tone or wording?`,
+          },
+        ]
+      : []),
     { role: "user", content: message },
   ];
 
