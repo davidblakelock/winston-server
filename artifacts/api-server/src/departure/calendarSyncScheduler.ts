@@ -4,7 +4,7 @@ import { sendPushToAll } from "../push/pushManager.js";
 import { logger } from "../lib/logger.js";
 import { getProfile, getActiveUsers, type CollectedData } from "../onboarding/onboardingManager.js";
 import { fetchTodayEvents, type CalendarEvent } from "../google/calendar.js";
-import { estimateDriveTime, extractEventLocation } from "./departureManager.js";
+import { estimateDriveTime, extractEventLocation, computeLeaveAt } from "./departureManager.js";
 import { query } from "../db.js";
 
 const TZ = "America/Chicago";
@@ -85,9 +85,7 @@ async function getLeaveByTime(
   if (!drive) return null;
 
   const eventStart = new Date(event.startIso);
-  const BUFFER_MINUTES = 10;
-  const leaveAtMs = eventStart.getTime() - (drive.durationMinutes + BUFFER_MINUTES) * 60000;
-  const leaveAt = new Date(leaveAtMs);
+  const leaveAt = computeLeaveAt(eventStart, drive.durationMinutes);
 
   const leaveTimeStr = leaveAt.toLocaleTimeString("en-US", {
     timeZone: TZ,

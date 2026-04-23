@@ -179,19 +179,34 @@ export async function estimateDriveTime(
 }
 
 // ── Departure alert timing ────────────────────────────────────────────────────
-// Leave time = event start − drive time − 10 min buffer
-const BUFFER_MINUTES = 10;
+// Alert fires driveMinutes + 30 minutes before the event, giving the user a
+// 30-minute heads-up before they need to walk out the door.
+//
+// Rules:
+//  • Short trips (drive ≤ 30 min): alert fires 30 min before leave time.
+//  • Long trips  (drive > 30 min): alert fires driveMinutes + 30 min before
+//    the event start — same formula, just results in an earlier absolute alert
+//    which is intentional for long drives.
+//
+// The scheduler runs every 2 min so we use a ±3 min window for reliability.
 
 export function shouldFireAlert(
   eventStart: Date,
   driveMinutes: number,
   now: Date = new Date()
 ): boolean {
-  const leaveAt = new Date(eventStart.getTime() - (driveMinutes + BUFFER_MINUTES) * 60000);
-  const minutesUntilLeave = (leaveAt.getTime() - now.getTime()) / 60000;
+  const minutesUntilEvent = (eventStart.getTime() - now.getTime()) / 60000;
 
-  // Fire when 0–5 minutes until leave time
-  return minutesUntilLeave >= 0 && minutesUntilLeave <= 5;
+  // Target: alert when (driveMinutes + 30) minutes remain until the event.
+  const target = driveMinutes + 30;
+
+  return minutesUntilEvent >= target - 3 && minutesUntilEvent <= target + 3;
+}
+
+// Compute the leave-by time for display purposes (drive + 10-min buffer).
+const BUFFER_MINUTES = 10;
+export function computeLeaveAt(eventStart: Date, driveMinutes: number): Date {
+  return new Date(eventStart.getTime() - (driveMinutes + BUFFER_MINUTES) * 60000);
 }
 
 export function buildDepartureAlertMessage(
@@ -202,17 +217,25 @@ export function buildDepartureAlertMessage(
   hasTrafficData: boolean,
   displayName = "there"
 ): string {
-  const timeStr = eventStart.toLocaleTimeString("en-US", {
+  const eventTimeStr = eventStart.toLocaleTimeString("en-US", {
     timeZone: "America/Chicago",
     hour: "numeric",
     minute: "2-digit",
     hour12: true,
   });
 
-  const trafficNote = hasTrafficData ? "based on current traffic" : "estimated";
+  const leaveAt = computeLeaveAt(eventStart, driveMinutes);
+  const leaveTimeStr = leaveAt.toLocaleTimeString("en-US", {
+    timeZone: "America/Chicago",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+
+  const trafficNote = hasTrafficData ? "with current traffic" : "estimated";
   const round = Math.round(driveMinutes / 5) * 5;
 
-  return `Hey ${displayName}, time to head out for your ${timeStr} ${eventTitle} — it's about ${round} minutes from home (${trafficNote}).`;
+  return `Hey ${displayName}, heads up — you have ${eventTitle} at ${eventTimeStr}. It's about ${round} minutes away (${trafficNote}), so you'll want to leave around ${leaveTimeStr}. That gives you about 30 minutes to get ready.`;
 }
 
 // ── Extract location from calendar event ─────────────────────────────────────

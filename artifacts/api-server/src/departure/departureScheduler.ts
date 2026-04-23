@@ -97,7 +97,9 @@ async function checkDepartureAlertsForUser(userName: string): Promise<void> {
     const start = new Date(event.startIso);
 
     const minutesUntilEvent = (start.getTime() - now.getTime()) / 60000;
-    if (minutesUntilEvent < 0 || minutesUntilEvent > 120) continue;
+    // Pre-filter: allow up to 4 hours out so long drives (up to ~3.5h) are covered.
+    // shouldFireAlert handles the precise timing check (driveMinutes + 30).
+    if (minutesUntilEvent < 0 || minutesUntilEvent > 240) continue;
 
     const location = extractEventLocation({
       summary: event.summary,
