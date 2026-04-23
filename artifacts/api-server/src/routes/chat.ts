@@ -175,6 +175,8 @@ import {
   setPendingText,
   isSendConfirmation,
   isSendCancellation,
+  setLastSmsPayload,
+  getLastSmsPayload,
   type MessageTone,
 } from "../text/textMessageComposer.js";
 import {
@@ -843,6 +845,11 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const pendingText = getPendingText();
   const isTextMessageRequest = !isMorningGreeting && TEXT_MESSAGE_PATTERN.test(message);
   const isTextFlowActive = !isMorningGreeting && pendingText !== null;
+  // Retry: user says something like "it didn't open" / "try again" within 5 min of last SMS dispatch
+  const SMS_RETRY_PATTERN = /\b(it\s+didn.?t\s+(open|work)|try\s+again|open\s+(messages|messaging|it)\s+again|send\s+it\s+again|retry|re-?send|messages\s+(didn.?t|didn.t)\s+open)\b/i;
+  const lastSmsPayload = getLastSmsPayload();
+  const isSmsRetryRequest = !isMorningGreeting && !isTextFlowActive && !isTextMessageRequest
+    && !!lastSmsPayload && SMS_RETRY_PATTERN.test(message);
 
   // ── Sleep reminder: gently note the time if after 11pm CT (once per night) ──
   const chicagoHour = new Date().toLocaleString("en-US", { timeZone: "America/Chicago", hour: "numeric", hour12: false });
@@ -1406,12 +1413,14 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         systemPrompt +=
           `\n\n[Text Message Composed for ${pendingText.recipientName}]\n` +
           `Message body${toneNote}:\n"${composed.body}"\n\n` +
-          `Read this message back to ${displayName} naturally, then ask if it looks right. ` +
-          `Say something like: "Here's what I've got for ${pendingText.recipientName} — [read message]. ` +
-          `Does that look right? Say yes and your Messages app will open pre-filled so you can tap Send." ` +
-          `If they want changes, they can say "make it more casual/formal" or describe edits. ` +
-          `IMPORTANT: You are NOT sending this — you are composing it. The user taps Send themselves in their Messages app. ` +
-          `Never say "I'll send that" or imply you are capable of sending texts.`;
+          `Read this message back to ${displayName} word for word, then ask if it looks right. ` +
+          `Say something like: "Here's what I've got: [read message verbatim]. ` +
+          `Does that work? Just say yes and I'll hand it off to your Messages app so you can tap Send." ` +
+          `If they want changes, they can describe edits or say "make it more casual/formal". ` +
+          `CRITICAL HONESTY RULES: ` +
+          `(1) You are composing the message — you are NOT sending it and you CANNOT send it. ` +
+          `(2) The Messages app will only open AFTER the user says yes — do NOT say it is opening now. ` +
+          `(3) Never say "I'll send that", "sending now", "opening Messages", or any variation that implies immediate action.`;
 
         req.log.info({ recipient: pendingText.recipientName, tone: effectiveTone }, "[T006] Message composed — awaiting confirmation");
       } catch (err) {
@@ -1443,9 +1452,12 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           systemPrompt +=
             `\n\n[Text Message Revised — ${toneNote} tone]\n` +
             `Message body:\n"${recomposed.body}"\n\n` +
-            `Read the revised message back naturally, then say something like: ` +
-            `"Does that work? Say yes and your Messages app will open pre-filled — you tap Send." ` +
-            `IMPORTANT: You are NOT sending this. The user taps Send themselves in their Messages app.`;
+            `Read the revised message back word for word, then ask: ` +
+            `"Does that work? Say yes and I'll hand it off to your Messages app." ` +
+            `CRITICAL HONESTY RULES: ` +
+            `(1) You are composing — you are NOT sending it and you CANNOT send it. ` +
+            `(2) The Messages app only opens AFTER the user says yes. Do NOT say it is opening now. ` +
+            `(3) Never say "sending now", "opening Messages", or imply immediate action.`;
         } catch (err) {
           req.log.warn({ err }, "[T006] Tone re-compose failed");
         }
@@ -1467,12 +1479,13 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
         const smsPayload = { phone, body, recipient: recipientName, smsUri };
         (req as any)._smsPayload = smsPayload;
+        setLastSmsPayload(smsPayload); // persist for retry within 5 min
         broadcastToUser(sessionUserName, "sms-compose", { type: "sms_compose", ...smsPayload });
 
         // Hardcode the verbal response — do NOT call Claude for this turn.
         const confirmationText = phone
-          ? `Got it — your Messages app will open with that pre-filled for ${recipientName}. Just tap Send.`
-          : `Composed — your Messages app will open with the text ready. Fill in ${recipientName}'s number and tap Send.`;
+          ? `Got it — I've sent the message over to your Messages app pre-filled for ${recipientName}. Tap Send when you're ready.`
+          : `Done — your Messages app should open with the text ready. Add ${recipientName}'s number and tap Send.`;
         (req as any)._hardcodedResponse = confirmationText;
 
         req.log.info({ recipient: recipientName, hasPhone: !!phone }, "[T006] SMS packaged — hardcoded response, skipping Claude");
@@ -1501,9 +1514,12 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           systemPrompt +=
             `\n\n[Text Message Revised]\n` +
             `Message body:\n"${revised.body}"\n\n` +
-            `Read the revised message back naturally, then say something like: ` +
-            `"Does that work? Say yes and your Messages app will open pre-filled — you tap Send." ` +
-            `IMPORTANT: You are NOT sending this. The user taps Send themselves in their Messages app.`;
+            `Read the revised message back word for word, then ask: ` +
+            `"Does that work? Say yes and I'll hand it off to your Messages app." ` +
+            `CRITICAL HONESTY RULES: ` +
+            `(1) You are composing — you are NOT sending it and you CANNOT send it. ` +
+            `(2) The Messages app only opens AFTER the user says yes. Do NOT say it is opening now. ` +
+            `(3) Never say "sending now", "opening Messages", or imply immediate action.`;
         } catch (err) {
           req.log.warn({ err }, "[T006] Revision failed");
         }
@@ -1563,6 +1579,17 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           `Ask the user what they'd like to say to ${targetName} and you'll compose it.`;
       }
     }
+  }
+
+  // ── T006-retry: user says "it didn't open" / "try again" after SMS dispatch ──
+  if (isSmsRetryRequest && lastSmsPayload) {
+    (req as any)._smsPayload = lastSmsPayload;
+    const retryText = lastSmsPayload.phone
+      ? `Let me try again — I've sent it over to your Messages app for ${lastSmsPayload.recipient}. Tap Send when it opens.`
+      : `Trying again — your Messages app should open with the text ready. Add ${lastSmsPayload.recipient}'s number and tap Send.`;
+    (req as any)._hardcodedResponse = retryText;
+    broadcastToUser(sessionUserName, "sms-compose", { type: "sms_compose", ...lastSmsPayload });
+    req.log.info({ recipient: lastSmsPayload.recipient }, "[T006-retry] Re-firing last SMS payload");
   }
 
   // ── Local events injection ──────────────────────────────────────────────────

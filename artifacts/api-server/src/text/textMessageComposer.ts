@@ -102,9 +102,12 @@ export async function composeTextMessage(opts: ComposeTextOptions): Promise<Comp
     `CRITICAL: Write in FIRST PERSON as ${senderName}. ` +
     `The message must sound like ${senderName} wrote it themselves — ` +
     `use "I", "me", "my". DO NOT write in third person. ` +
-    `DO NOT introduce yourself as an AI, assistant, or by any name. ` +
-    `DO NOT say "this is [name]" or "on behalf of". ` +
+    `DO NOT say "on behalf of" or claim to be an assistant. ` +
     `Write exactly as ${senderName} would text — natural, direct, personal.\n\n` +
+    `PRESERVE ALL CONTENT: If the user's intent mentions any specific names, nicknames, ` +
+    `references, or phrases they explicitly want included, copy them EXACTLY into the message. ` +
+    `Do NOT remove, replace, or paraphrase any proper nouns or specific references the user gave you. ` +
+    `Your only job is to shape the TONE and STRUCTURE — the content is the user's, keep it intact.\n\n` +
     `TONE: ${toneInstruction}\n\n` +
     `WHAT ${senderName.toUpperCase()} WANTS TO SAY:\n${userIntent}\n\n` +
     `Write ONLY the message body. No preamble. No explanation. No quotes around it. ` +
@@ -134,7 +137,19 @@ export interface PendingTextState {
   composedBody?: string;
 }
 
+export interface SmsPayload {
+  phone: string;
+  body: string;
+  recipient: string;
+  smsUri: string;
+}
+
 let _pendingText: PendingTextState | null = null;
+// Keeps the last dispatched SMS payload for up to 5 minutes so the user can
+// retry if the native app didn't open Messages successfully.
+let _lastSmsPayload: SmsPayload | null = null;
+let _lastSmsPayloadAt: number = 0;
+const SMS_RETRY_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
 
 export function getPendingText(): PendingTextState | null {
   return _pendingText;
@@ -147,6 +162,25 @@ export function setPendingText(state: PendingTextState | null): void {
   } else {
     logger.info("[TEXT] Pending state cleared");
   }
+}
+
+export function setLastSmsPayload(payload: SmsPayload): void {
+  _lastSmsPayload = payload;
+  _lastSmsPayloadAt = Date.now();
+  logger.info({ recipient: payload.recipient }, "[TEXT] Last SMS payload stored for retry");
+}
+
+export function getLastSmsPayload(): SmsPayload | null {
+  if (!_lastSmsPayload) return null;
+  if (Date.now() - _lastSmsPayloadAt > SMS_RETRY_WINDOW_MS) {
+    _lastSmsPayload = null;
+    return null;
+  }
+  return _lastSmsPayload;
+}
+
+export function clearLastSmsPayload(): void {
+  _lastSmsPayload = null;
 }
 
 // ── Confirmation detection ────────────────────────────────────────────────────
