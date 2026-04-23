@@ -1987,7 +1987,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       ? `Mention ${_familyNames.join(", ")} by name.`
       : "";
 
-    systemPrompt +=
+    // Skip the evening check-in system prompt when a text message flow is
+    // active — T006 context already in systemPrompt takes priority.
+    if (!isTextFlowActive) systemPrompt +=
       `\n\n[Evening Check-In — ACTIVE]\n` +
       `Write ONE complete, flowing evening check-in message. ` +
       `Do NOT ask a question and wait — deliver everything below in a single warm, natural message. ` +
