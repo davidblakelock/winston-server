@@ -1456,9 +1456,17 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         // the conversation — gives Claude in-conversation context for "send it".
         (req as any)._smsCompositionContext = { recipientName, body };
 
+        // Build an sms: URI for Android's standard messaging app.
+        // Format: sms:<phone>?body=<encoded>  (phone is optional — omit if blank)
+        // The Android app fires this as an Intent to open the SMS composer.
+        const encodedBody = encodeURIComponent(body);
+        const smsUri = phone
+          ? `sms:${phone}?body=${encodedBody}`
+          : `sms:?body=${encodedBody}`;
+
         // Store payload on request so the native response handler can attach it to the JSON.
         // SSE broadcast is kept for web clients that ARE connected.
-        const smsPayload = { phone, body, recipient: recipientName };
+        const smsPayload = { phone, body, recipient: recipientName, smsUri };
         (req as any)._smsPayload = smsPayload;
         broadcastToUser(sessionUserName, "sms-compose", { type: "sms_compose", ...smsPayload });
 
