@@ -10,6 +10,7 @@ import {
 import { authenticate, tryAuthenticate, NATIVE_USER } from "../auth/middleware.js";
 import { getProfilePlaces, getProfileItems } from "../profile/profileManager.js";
 import { getCuratedContacts } from "../google/contacts.js";
+import { query } from "../db.js";
 
 const router: IRouter = Router();
 
@@ -277,12 +278,45 @@ router.get("/navigation/places", async (req, res) => {
 // Returns home address and all people saved in profile_items with phone numbers
 // (resolved from curated contacts) for the emergency screen on the native app.
 router.get("/emergency/info", async (req, res) => {
+  // ── STEP 0: Log every auth-related header ──────────────────────────────────
+  logger.info({
+    msg: "[emergency/info] STEP-0 incoming headers",
+    hasApiKey: !!req.headers["x-api-key"],
+    apiKeyValue: req.headers["x-api-key"] ?? null,
+    hasUserName: !!req.headers["x-user-name"],
+    userNameHeader: req.headers["x-user-name"] ?? null,
+    hasAuthorization: !!req.headers["authorization"],
+    authorizationPrefix: req.headers["authorization"]
+      ? (req.headers["authorization"] as string).slice(0, 20) + "..."
+      : null,
+  });
+
   const userName = await authenticate(req, res);
   if (!userName) return;
+
+  // ── STEP 1: Log resolved auth username ────────────────────────────────────
+  logger.info({
+    msg: "[emergency/info] STEP-1 authenticated userName",
+    userName,
+  });
+
   try {
-    // Fetch the profile first to resolve the stored display name.
-    // Profile items and contacts are keyed by display name (e.g. "David"),
-    // not by login user_name (e.g. "davidblakelock") in legacy data.
+    // ── STEP 2: Raw profile lookup ─────────────────────────────────────────
+    const profileSql = `SELECT user_name, name, raw_data FROM user_profiles WHERE user_name = $1 LIMIT 1`;
+    logger.info({ msg: "[emergency/info] STEP-2 running profile query", sql: profileSql, params: [userName] });
+    const profileRaw = await query<{ user_name: string; name: string | null; raw_data: Record<string, unknown> }>(
+      profileSql, [userName]
+    ).catch((e) => { logger.error({ msg: "[emergency/info] STEP-2 profile query error", err: String(e) }); return { rows: [] }; });
+    logger.info({
+      msg: "[emergency/info] STEP-2 profile raw result",
+      rowCount: profileRaw.rows.length,
+      rows: profileRaw.rows.map(r => ({
+        user_name: r.user_name,
+        name: r.name,
+        rawDataName: (r.raw_data as any)?.name ?? null,
+      })),
+    });
+
     const userProfile = await getProfile(userName).catch(() => null);
     const rawData = userProfile?.rawData as CollectedData | undefined;
     const storedName: string =
@@ -291,12 +325,38 @@ router.get("/emergency/info", async (req, res) => {
       userName;
 
     logger.info({
-      msg: "[emergency/info] name resolution",
+      msg: "[emergency/info] STEP-3 name resolution",
       authUserName: userName,
       profileFound: !!userProfile,
       profileName: userProfile?.name ?? null,
       rawDataName: (rawData?.name as string | undefined) ?? null,
       resolvedStoredName: storedName,
+    });
+
+    // ── STEP 4: Raw profile_items query ───────────────────────────────────
+    const itemsSql = `SELECT id, category, name, detail, created_at FROM profile_items WHERE user_name = $1 AND category = $2 ORDER BY created_at ASC`;
+    logger.info({ msg: "[emergency/info] STEP-4 running profile_items query", sql: itemsSql, params: [storedName, "people"] });
+    const itemsRaw = await query<{ id: number; category: string; name: string; detail: string | null }>(
+      itemsSql, [storedName, "people"]
+    ).catch((e) => { logger.error({ msg: "[emergency/info] STEP-4 profile_items error", err: String(e) }); return { rows: [] }; });
+    logger.info({
+      msg: "[emergency/info] STEP-4 profile_items raw result",
+      queryUserName: storedName,
+      rowCount: itemsRaw.rows.length,
+      rows: itemsRaw.rows.map(r => ({ id: r.id, name: r.name, detail: r.detail?.slice(0, 60) ?? null })),
+    });
+
+    // ── STEP 5: curated contacts raw query ────────────────────────────────
+    const contactsSql = `SELECT display_name, phone FROM google_contacts WHERE user_name = $1 LIMIT 20`;
+    logger.info({ msg: "[emergency/info] STEP-5 running contacts query", sql: contactsSql, params: [storedName] });
+    const contactsRaw = await query<{ display_name: string; phone: string | null }>(
+      contactsSql, [storedName]
+    ).catch((e) => { logger.error({ msg: "[emergency/info] STEP-5 contacts query error", err: String(e) }); return { rows: [] }; });
+    logger.info({
+      msg: "[emergency/info] STEP-5 contacts raw result",
+      queryUserName: storedName,
+      rowCount: contactsRaw.rows.length,
+      rows: contactsRaw.rows.slice(0, 5).map(r => ({ name: r.display_name, hasPhone: !!r.phone })),
     });
 
     // Fetch people and contacts in parallel using the resolved stored name.
@@ -312,7 +372,7 @@ router.get("/emergency/info", async (req, res) => {
     ]);
 
     logger.info({
-      msg: "[emergency/info] query results",
+      msg: "[emergency/info] STEP-6 final counts",
       storedName,
       peopleCount: people.length,
       contactsCount: contacts.length,
