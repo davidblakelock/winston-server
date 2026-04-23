@@ -28,6 +28,7 @@ import {
 import { logger } from "../lib/logger.js";
 import { getBriefingPreferences, buildBriefingPrefsBlock } from "../briefingPreferences/briefingPreferencesManager.js";
 import { getStoredGarminData, formatGarminForBriefing } from "../garmin/garminService.js";
+import { getStoredFitData, formatFitForBriefing } from "../google/fit.js";
 
 // ── Departure times for calendar events ───────────────────────────────────────
 // Calculates leave-by time for each event that has a location.
@@ -153,6 +154,108 @@ async function fetchDallasPollenData(lat: number, lon: number): Promise<PollenRe
   } catch {
     return null;
   }
+}
+
+// ── Google Air Quality API ─────────────────────────────────────────────────────
+
+async function fetchGoogleAQI(lat: number, lon: number): Promise<number | null> {
+  const key = process.env.GOOGLE_AIR_QUALITY_API_KEY;
+  if (!key) return null;
+  try {
+    const res = await fetch(
+      `https://airquality.googleapis.com/v1/currentConditions:lookup?key=${key}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          location: { latitude: lat, longitude: lon },
+          universalAqi: false,
+          extraComputations: ["LOCAL_AQI_INDEX"],
+        }),
+        signal: AbortSignal.timeout(8000),
+      }
+    );
+    if (!res.ok) return null;
+    const data = await res.json() as {
+      indexes?: Array<{ code: string; aqi?: number }>;
+    };
+    const epaIndex = data.indexes?.find((i) => i.code === "usa_epa");
+    return epaIndex?.aqi ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// ── Google Pollen API ──────────────────────────────────────────────────────────
+
+async function fetchGooglePollen(
+  lat: number,
+  lon: number
+): Promise<{ tree: number; grass: number; weed: number } | null> {
+  const key = process.env.GOOGLE_POLLEN_API_KEY;
+  if (!key) return null;
+  try {
+    const res = await fetch(
+      `https://pollen.googleapis.com/v1/forecast:lookup?key=${key}&location.latitude=${lat}&location.longitude=${lon}&days=1`,
+      { signal: AbortSignal.timeout(8000) }
+    );
+    if (!res.ok) return null;
+    const data = await res.json() as {
+      dailyInfo?: Array<{
+        pollenTypeInfo?: Array<{
+          code: string;
+          indexInfo?: { value?: number };
+        }>;
+      }>;
+    };
+    const day = data.dailyInfo?.[0];
+    if (!day) return null;
+    const get = (code: string) =>
+      day.pollenTypeInfo?.find((p) => p.code === code)?.indexInfo?.value ?? 0;
+    return { tree: get("TREE"), grass: get("GRASS"), weed: get("WEED") };
+  } catch {
+    return null;
+  }
+}
+
+// Map Google pollen index (0–4) to gr/m³-equivalent values so pollenLevel() works
+function googlePollenIndexToGrM3(index: number): number {
+  return ([0, 5, 20, 60, 200] as const)[index] ?? 0;
+}
+
+// Primary pollen/AQI fetch — tries Google APIs first, falls back to Open-Meteo
+async function fetchPollenData(lat: number, lon: number): Promise<PollenResult | null> {
+  const hasGoogleAQI = !!process.env.GOOGLE_AIR_QUALITY_API_KEY;
+  const hasGooglePollen = !!process.env.GOOGLE_POLLEN_API_KEY;
+
+  if (hasGoogleAQI || hasGooglePollen) {
+    const [googleAQI, googlePollen] = await Promise.all([
+      hasGoogleAQI ? fetchGoogleAQI(lat, lon).catch(() => null) : Promise.resolve(null),
+      hasGooglePollen ? fetchGooglePollen(lat, lon).catch(() => null) : Promise.resolve(null),
+    ]);
+
+    if (googleAQI !== null || googlePollen !== null) {
+      const openMeteo =
+        googleAQI === null || googlePollen === null
+          ? await fetchDallasPollenData(lat, lon).catch(() => null)
+          : null;
+
+      return {
+        aqiMax: googleAQI ?? openMeteo?.aqiMax ?? 0,
+        treeMax: googlePollen
+          ? googlePollenIndexToGrM3(googlePollen.tree)
+          : (openMeteo?.treeMax ?? 0),
+        grassMax: googlePollen
+          ? googlePollenIndexToGrM3(googlePollen.grass)
+          : (openMeteo?.grassMax ?? 0),
+        ragweedMax: googlePollen
+          ? googlePollenIndexToGrM3(googlePollen.weed)
+          : (openMeteo?.ragweedMax ?? 0),
+      };
+    }
+  }
+
+  return fetchDallasPollenData(lat, lon);
 }
 
 function formatWeatherBlock(w: CachedWeather): string {
@@ -620,13 +723,18 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       getJournalCountThisWeek().catch(() => 0),
       getRecentJournalEntries(3).catch(() => []),
       getStoryCount().catch(() => 0),
-      fetchDallasPollenData(primaryLat, primaryLon).catch(() => null),
+      fetchPollenData(primaryLat, primaryLon).catch(() => null),
       runVenueScan().catch(() => ""),
       fetchDailyMotivation().catch(() => ""),
     ]);
 
     // Fetch Garmin health data (yesterday's stored data — no live API call needed)
     const garminData = await getStoredGarminData(userName).catch(() => null);
+
+    // Google Fit: step count / active minutes — used only when Garmin is not available
+    const fitData = !garminData
+      ? await getStoredFitData(userName).catch(() => null)
+      : null;
 
     // Collect secondary weather results (likely already resolved)
     const secondaryWeatherResults = await secondaryWeatherPromise;
@@ -700,13 +808,16 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       ...rawVenueConcerts.map((c) => `${c.artistOrEvent} ${c.venue}`), // venue concerts
     ];
 
+    // Only include AQI/pollen when notable — AQI >100 (Unhealthy for Sensitive Groups) or pollen high/very high (≥30 gr/m³-eq)
+    const POLLEN_HIGH_GRM3 = 30; // threshold for "high" in pollenLevel()
+    const AQI_NOTABLE = 100;
     const pollenBlock = pollenData
       ? (() => {
           const parts: string[] = [];
-          if (pollenData.aqiMax > 0) parts.push(`Air Quality (US AQI): ${pollenData.aqiMax} — ${aqiLabel(pollenData.aqiMax)}`);
-          if (pollenData.grassMax > 0) parts.push(`Grass pollen: ${pollenLevel(pollenData.grassMax)} (${pollenData.grassMax} gr/m³)`);
-          if (pollenData.ragweedMax > 0) parts.push(`Ragweed pollen: ${pollenLevel(pollenData.ragweedMax)} (${pollenData.ragweedMax} gr/m³)`);
-          if (pollenData.treeMax > 0) parts.push(`Tree/Alder pollen: ${pollenLevel(pollenData.treeMax)} (${pollenData.treeMax} gr/m³)`);
+          if (pollenData.aqiMax > AQI_NOTABLE) parts.push(`Air Quality (US AQI): ${pollenData.aqiMax} — ${aqiLabel(pollenData.aqiMax)}`);
+          if (pollenData.grassMax >= POLLEN_HIGH_GRM3) parts.push(`Grass pollen: ${pollenLevel(pollenData.grassMax)}`);
+          if (pollenData.ragweedMax >= POLLEN_HIGH_GRM3) parts.push(`Ragweed pollen: ${pollenLevel(pollenData.ragweedMax)}`);
+          if (pollenData.treeMax >= POLLEN_HIGH_GRM3) parts.push(`Tree pollen: ${pollenLevel(pollenData.treeMax)}`);
           return parts.length > 0 ? `\nAir Quality & Pollen today — ${parts.join(" | ")}` : "";
         })()
       : "";
@@ -824,8 +935,9 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       memoryBlock + dynamicProfileBlock + prefsBlock + notesBlock + peopleContextBlock + weatherBlock;
 
     const garminBlock = garminData ? formatGarminForBriefing(garminData) : "";
+    const fitBlock = fitData ? formatFitForBriefing(fitData) : "";
 
-    const suffix = garminBlock + tvMorningBlock + sportsBlock + billsMorningBlock + datesBlock +
+    const suffix = garminBlock + fitBlock + tvMorningBlock + sportsBlock + billsMorningBlock + datesBlock +
       sundaySummaryBlock + pickleballMorningBlock + recFollowUpBlock + motivationContextBlock +
       dallasEventsBlock + dedupedVenueConcertsBlock + dedupedNewsBlock + buildBriefingInstruction(primaryCity, localCtx.venues ?? []);
 

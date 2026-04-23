@@ -31,6 +31,8 @@ import { ensureContactsTable } from "./google/contacts";
 import { startGarminScheduler } from "./garmin/garminScheduler";
 import { ensureJournalInsightsTable, startJournalPatternScheduler } from "./journal/journalPatternAnalyzer";
 import { ensurePressureTable, startPressureScheduler } from "./weather/pressureScheduler";
+import { ensureTasksSyncTable } from "./google/tasks";
+import { ensureFitTable } from "./google/fit";
 
 const rawPort = process.env["PORT"];
 
@@ -65,6 +67,14 @@ app.listen(port, async (err) => {
     await ensureCalendarSyncTable();
   } catch (e) {
     logger.warn({ e }, "Table initialization warning");
+  }
+
+  try {
+    await ensureTasksSyncTable();
+    await ensureFitTable();
+    logger.info("[startup] google_tasks_sync and google_fit_data tables ready");
+  } catch (e) {
+    logger.warn({ e }, "Google Tasks/Fit table initialization warning");
   }
 
   // Isolated block so a failure above never skips this critical table

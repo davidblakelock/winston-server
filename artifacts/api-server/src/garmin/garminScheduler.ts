@@ -1,6 +1,8 @@
 import cron from "node-cron";
 import { logger } from "../lib/logger.js";
 import { getGarminConnectedUsers, fetchAndStoreGarminData } from "./garminService.js";
+import { fetchAndStoreFitData } from "../google/fit.js";
+import { getActiveUsers } from "../onboarding/onboardingManager.js";
 
 const TZ = "America/Chicago";
 
@@ -36,21 +38,56 @@ async function syncAllGarminUsers(): Promise<void> {
   }
 }
 
-let _syncedDate: string | null = null;
+let _garminSyncedDate: string | null = null;
+let _fitSyncedDate: string | null = null;
+
+async function syncAllFitUsers(): Promise<void> {
+  let users: Awaited<ReturnType<typeof getActiveUsers>> = [];
+  try {
+    users = await getActiveUsers();
+  } catch {
+    return;
+  }
+  for (const user of users) {
+    try {
+      const data = await fetchAndStoreFitData(user.userName);
+      if (data && data.steps > 0) {
+        logger.info(
+          { userName: user.userName, date: data.date, steps: data.steps, activeMinutes: data.activeMinutes },
+          "[Fit] Daily sync complete"
+        );
+      } else {
+        logger.info({ userName: user.userName }, "[Fit] No steps data from Google Fit (or Google not connected)");
+      }
+    } catch (err) {
+      logger.warn({ userName: user.userName, err }, "[Fit] Daily sync error");
+    }
+  }
+}
 
 export function startGarminScheduler(): void {
-  // Run at 6:00 AM Central every day — Garmin syncs from device overnight
   cron.schedule("* * * * *", async () => {
     try {
-      if (localTime() !== "06:00") return;
+      const t = localTime();
       const today = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
-      if (_syncedDate === today) return;
-      _syncedDate = today;
-      await syncAllGarminUsers();
+
+      // 5:00 AM — Google Fit sync (before morning briefing pre-generation)
+      if (t === "05:00" && _fitSyncedDate !== today) {
+        _fitSyncedDate = today;
+        syncAllFitUsers().catch((err) =>
+          logger.warn({ err }, "[Fit] Scheduler sync error")
+        );
+      }
+
+      // 6:00 AM — Garmin sync (device syncs overnight)
+      if (t === "06:00" && _garminSyncedDate !== today) {
+        _garminSyncedDate = today;
+        await syncAllGarminUsers();
+      }
     } catch (err) {
-      logger.error({ err }, "[Garmin] Scheduler error");
+      logger.error({ err }, "[Garmin/Fit] Scheduler error");
     }
   });
 
-  logger.info("[Garmin] Scheduler started — daily sync at 06:00 Central");
+  logger.info("[Garmin] Scheduler started — Garmin sync at 06:00, Fit sync at 05:00 Central");
 }

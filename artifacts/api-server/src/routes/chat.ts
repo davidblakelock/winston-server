@@ -155,6 +155,9 @@ import {
   searchRestaurants,
   extractCuisineFromMessage,
   formatPlacesForPrompt,
+  extractNearbyPlaceType,
+  searchNearbyPlaces,
+  formatNearbyPlacesForPrompt,
 } from "../google/places.js";
 import {
   collectSundayData,
@@ -190,6 +193,7 @@ import {
   type BriefingPreference,
 } from "../briefingPreferences/briefingPreferencesManager.js";
 import { preFetchMorningBriefing, buildCalendarDepartureTimes } from "../morning/briefingPregenerate.js";
+import { pushItemsToGoogleTasks } from "../google/tasks.js";
 import { populateCalendarSyncState } from "../departure/calendarSyncScheduler.js";
 import { logBriefingStories } from "../morning/storyDedup.js";
 import { getDallasItems, getLocalContentCity, type LocalContentItem } from "../morning/dallasContent.js";
@@ -355,6 +359,10 @@ const LOCAL_EVENTS_PATTERN = /\b(what'?s\s+happening|what'?s\s+going\s+on|things
 // Restaurant recommendations — "recommend a restaurant", "where should I eat", etc.
 const RESTAURANT_RECO_PATTERN =
   /\b(recommend\s+(?:a|some|any|me\s+a)\s+(?:restaurant|place\s+to\s+eat|spot|place\s+for\s+(?:dinner|lunch|breakfast))|suggest\s+(?:a|some)\s+(?:restaurant|place|spot)|where\s+should\s+(?:i|we)\s+(?:eat|go\s+(?:for\s+)?(?:dinner|lunch|breakfast))|good\s+(?:place|restaurant|spot)\s+(?:for\s+(?:dinner|lunch)|to\s+eat)|best\s+(?:restaurant|place|spot)\s+(?:in|near|around|for)|where\s+(?:can|to)\s+(?:i|we)\s+(?:eat|grab\s+(?:dinner|lunch|breakfast|food|a\s+bite))|(?:dinner|lunch|breakfast)\s+(?:recommendation|suggestion)|find\s+(?:me\s+)?(?:a|some)\s+(?:restaurant|place\s+to\s+eat)|what.?s\s+(?:a\s+)?good\s+(?:restaurant|place)\s+(?:in|near|around|for)|take\s+(?:me|us)\s+(?:somewhere|out)\s+(?:for|to)\s+(?:eat|dinner|lunch)|(?:restaurant|dining)\s+(?:recommendation|suggestion)|good\s+(?:italian|mexican|japanese|sushi|thai|indian|chinese|french|korean|vietnamese|mediterranean|bbq|steakhouse|seafood|pizza|burger|tex-mex|ramen)\s+(?:restaurant|place|spot|food))\b/i;
+
+// Nearby essential places — pharmacy, urgent care, hospital, grocery, gas, bank
+const NEARBY_PLACES_PATTERN =
+  /\b(where'?s?\s+(?:the\s+)?nearest|find\s+(?:an?\s+)?(?:nearby|near\s+me|closest)|closest|nearest|near\s+me)\s+(?:pharmacy|drugstore|urgent\s+care|hospital|emergency\s+room|grocery\s+store|groceries|supermarket|gas\s+station|gasoline|bank|atm)\b|\b(?:pharmacy|urgent\s+care|hospital|emergency\s+room|grocery\s+store|groceries|supermarket|gas\s+station|bank|atm)\s+(?:near\s+(?:me|here)|nearby|close\s+by)\b/i;
 
 // Important dates
 const DATE_ADD_PATTERN = /\b(('s\s+birthday|birthday\s+is|my\s+anniversary\s+with|our\s+anniversary\s+is|anniversary\s+with|birthday\s+is|remember\s+(that\s+)?(\w+\s+)?birthday|add\s+(a\s+)?(birthday|anniversary)))\b/i;
@@ -815,6 +823,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isBriefingPrefRequest = !isMorningGreeting && BRIEFING_PREF_PATTERN.test(message);
   const isLocalEventsRequest = !isMorningGreeting && !isCalendarRequest && LOCAL_EVENTS_PATTERN.test(message);
   const isRestaurantReco = !isMorningGreeting && !isLocalEventsRequest && RESTAURANT_RECO_PATTERN.test(message);
+  const isNearbyPlaces = !isMorningGreeting && !isRestaurantReco && NEARBY_PLACES_PATTERN.test(message);
   const isBillAdd = !isMorningGreeting && BILL_ADD_PATTERN.test(message);
   const isBillList = !isMorningGreeting && BILL_LIST_PATTERN.test(message);
   const isBillRemove = !isMorningGreeting && BILL_REMOVE_PATTERN.test(message);
@@ -1262,6 +1271,25 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       }
     } catch (err) {
       req.log.warn({ err }, "[Places] Search failed — continuing without live results");
+    }
+  }
+
+  // ── Google Places — nearby essential places (pharmacy, urgent care, etc.) ──
+  if (isNearbyPlaces) {
+    try {
+      const city = userProfile?.city ?? "Dallas";
+      const placeType = extractNearbyPlaceType(message);
+      if (placeType) {
+        const places = await searchNearbyPlaces(placeType, city, 3);
+        if (places.length > 0) {
+          systemPrompt += formatNearbyPlacesForPrompt(places, placeType, city);
+          req.log.info({ city, placeType, count: places.length }, "[Places] Nearby results injected");
+        } else {
+          req.log.info({ city, placeType }, "[Places] No nearby results — Claude will use knowledge");
+        }
+      }
+    } catch (err) {
+      req.log.warn({ err }, "[Places] Nearby search failed — continuing without live results");
     }
   }
 
@@ -2406,6 +2434,10 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         const listContext = buildListContext(result);
         systemPrompt = systemPrompt + listContext;
         req.log.info({ op, itemCount: result.currentItems.length }, "List operation executed");
+        // Sync newly added "to do" items to Google Tasks (fire-and-forget)
+        if (op.action === "add" && op.listName === "to do" && result.items.length > 0) {
+          pushItemsToGoogleTasks(sessionUserName, result.items).catch(() => {});
+        }
       } else {
         systemPrompt = systemPrompt +
           `\n\n[List Request — Could Not Parse]\nCould not determine which list or operation was requested. Ask the user to clarify (e.g., "Which list — shopping or to do?"). Do NOT guess or invent any list items.`;

@@ -1,6 +1,11 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { query } from "../db.js";
 import { authenticate } from "../auth/middleware.js";
+import {
+  fullTasksSync,
+  pullTasksFromGoogle,
+  pushItemsToGoogleTasks,
+} from "../google/tasks.js";
 
 const router: IRouter = Router();
 
@@ -29,12 +34,30 @@ router.get("/lists", async (req: Request, res: Response) => {
   }
 });
 
+// GET /api/tasks/sync — manual bidirectional sync with Google Tasks
+router.get("/tasks/sync", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  try {
+    const result = await fullTasksSync(userName);
+    res.json({ ok: true, fromGoogle: result.fromGoogle, toGoogle: result.toGoogle });
+  } catch (err) {
+    req.log.warn({ err }, "Tasks sync error");
+    res.status(500).json({ error: "Failed to sync Google Tasks" });
+  }
+});
+
 // GET /api/lists/:listName — fetch all items for a list
+// For the "to do" list, first merge any pending Google Tasks items
 router.get("/lists/:listName", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
   const { listName } = req.params;
   try {
+    // Silently pull Google Tasks into Winston before reading (fire-and-forget style but we await briefly)
+    if (listName === "to do" || listName === "to%20do") {
+      pullTasksFromGoogle(userName).catch(() => {});
+    }
     const { rows } = await query<{ id: number; item_text: string; created_at: string }>(
       `SELECT id, item_text, created_at
        FROM list_items
@@ -66,6 +89,10 @@ router.post("/lists/:listName", async (req: Request, res: Response) => {
        RETURNING id, item_text, created_at`,
       [userName, listName, item.trim()]
     );
+    // Sync to Google Tasks when adding to "to do" list
+    if (listName === "to do" && rows[0]) {
+      pushItemsToGoogleTasks(userName, [item.trim()]).catch(() => {});
+    }
     res.json({ item: rows[0] });
   } catch (err) {
     req.log.warn({ err }, "Lists POST error");
