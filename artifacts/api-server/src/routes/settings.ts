@@ -325,11 +325,13 @@ router.get("/emergency/info", async (req, res) => {
       userName;
 
     // Build a deduplicated list of candidate usernames for database queries.
-    // Data may have been written under `storedName` ("David"), `NATIVE_USER`
-    // ("davidblakelock"), or both depending on which auth path was used when
-    // the data was saved. Querying across all candidates means the endpoint
-    // returns correctly regardless of Bearer vs x-api-key auth.
-    const candidateNames = Array.from(new Set([storedName, NATIVE_USER]));
+    // Data may have been written under any of these:
+    //   - `storedName`  : resolved from profile.rawData.name (e.g. "David Blakelock")
+    //   - `userName`    : the raw auth username (e.g. "David" for Bearer, "davidblakelock" for x-api-key)
+    //   - `NATIVE_USER` : the canonical native username ("davidblakelock")
+    // Including all three ensures we find the data regardless of which auth path
+    // was used when the data was originally saved.
+    const candidateNames = Array.from(new Set([storedName, userName, NATIVE_USER]));
 
     logger.info({
       msg: "[emergency/info] STEP-3 name resolution",
