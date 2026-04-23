@@ -1504,7 +1504,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
                  targetName.toLowerCase().includes(p.name.split(" ")[0]?.toLowerCase() ?? "")
         );
         const relationship = profileMatch?.relationship ?? undefined;
-        const tone = detectToneFromRelationship(relationship);
+        // Fall back to checking the target name itself for professional roles
+        const tone = detectToneFromRelationship(relationship ?? targetName);
         const displayName = userProfile?.name ?? sessionUserName;
         const toneDesc = tone === "professional" ? "professional" : "casual and warm";
 
@@ -2068,6 +2069,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     !isDeleteCancel &&
     !isMedRequest &&
     !isJournalReview &&
+    !isTextMessageRequest &&
+    !isTextFlowActive &&
     wordCount >= 15;
 
   // ── Winddown journal: check if David is responding to a journal offer ──────
@@ -2091,6 +2094,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     !isDeleteConfirm &&
     !isDeleteCancel &&
     !isMedRequest &&
+    !isTextMessageRequest &&
+    !isTextFlowActive &&
     wordCount >= 10;
 
   if (isPotentialJournalResponse) {

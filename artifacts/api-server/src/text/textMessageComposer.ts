@@ -50,7 +50,9 @@ const TEXT_NAME_PATTERN = /^(?:text|send\s+(?:a\s+)?(?:text|message|sms)(?:\s+to
 export function extractTextTargetName(message: string): string | null {
   const m = TEXT_NAME_PATTERN.exec(message);
   if (!m) return null;
-  return m[1].trim();
+  const raw = m[1].trim();
+  // Strip leading "my " so "my doctor" → "doctor", "my boss" → "boss"
+  return raw.replace(/^my\s+/i, "").trim() || raw;
 }
 
 // ── Tone override detection ───────────────────────────────────────────────────
