@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
+import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -16,7 +17,7 @@ export interface Recommendation {
   followedUpDate: string | null;
 }
 
-export async function getPendingFollowUps(minDays = 2, maxDays = 21, userName = "David"): Promise<Recommendation[]> {
+export async function getPendingFollowUps(minDays = 2, maxDays = 21, userName = NATIVE_STORED_NAME): Promise<Recommendation[]> {
   const { rows } = await query<{
     id: number; type: string; name: string; context: string | null;
     date_recommended: string; followed_up: boolean; followed_up_date: string | null;
@@ -54,7 +55,7 @@ export async function dismissRecommendation(id: number): Promise<void> {
   await query(`UPDATE recommendations SET dismissed = true WHERE id = $1`, [id]);
 }
 
-export async function saveRecommendations(recs: Array<{ type: RecommendationType; name: string; context: string }>, userName = "David"): Promise<void> {
+export async function saveRecommendations(recs: Array<{ type: RecommendationType; name: string; context: string }>, userName = NATIVE_STORED_NAME): Promise<void> {
   if (!recs.length) return;
   for (const r of recs) {
     await query(

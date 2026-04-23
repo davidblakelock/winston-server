@@ -1,4 +1,5 @@
 import { query } from "../db.js";
+import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
 export type OliviaContactType = "mention" | "call" | "story_captured";
 
@@ -24,7 +25,7 @@ export async function ensureContactMentionsTable(): Promise<void> {
   await query(`
     CREATE TABLE IF NOT EXISTS contact_mentions (
       id SERIAL PRIMARY KEY,
-      user_name TEXT NOT NULL DEFAULT 'David',
+      user_name TEXT NOT NULL DEFAULT '${NATIVE_STORED_NAME}',
       contact_type TEXT NOT NULL,
       notes TEXT,
       contact_date DATE NOT NULL DEFAULT CURRENT_DATE,
@@ -33,7 +34,7 @@ export async function ensureContactMentionsTable(): Promise<void> {
   `).catch(() => {});
 }
 
-export async function recordOliviaContact(type: OliviaContactType, notes?: string, userName = "David"): Promise<void> {
+export async function recordOliviaContact(type: OliviaContactType, notes?: string, userName = NATIVE_STORED_NAME): Promise<void> {
   await query(
     `INSERT INTO contact_mentions (user_name, contact_type, notes, contact_date)
      VALUES ($1, $2, $3, CURRENT_DATE)`,
@@ -41,7 +42,7 @@ export async function recordOliviaContact(type: OliviaContactType, notes?: strin
   );
 }
 
-export async function getDaysSinceLastOliviaContact(userName = "David"): Promise<number | null> {
+export async function getDaysSinceLastOliviaContact(userName = NATIVE_STORED_NAME): Promise<number | null> {
   const { rows } = await query<{ days: string }>(
     `SELECT EXTRACT(DAY FROM (CURRENT_DATE - MAX(contact_date)))::int AS days
      FROM contact_mentions
@@ -52,7 +53,7 @@ export async function getDaysSinceLastOliviaContact(userName = "David"): Promise
   return parseInt(rows[0].days);
 }
 
-export async function getDaysSinceLastCall(userName = "David"): Promise<number | null> {
+export async function getDaysSinceLastCall(userName = NATIVE_STORED_NAME): Promise<number | null> {
   const { rows } = await query<{ days: string }>(
     `SELECT EXTRACT(DAY FROM (CURRENT_DATE - MAX(contact_date)))::int AS days
      FROM contact_mentions
@@ -63,7 +64,7 @@ export async function getDaysSinceLastCall(userName = "David"): Promise<number |
   return parseInt(rows[0].days);
 }
 
-export async function getOliviaContactsThisWeek(userName = "David"): Promise<number> {
+export async function getOliviaContactsThisWeek(userName = NATIVE_STORED_NAME): Promise<number> {
   const { rows } = await query<{ count: string }>(
     `SELECT COUNT(*) as count FROM contact_mentions
      WHERE user_name = $1
@@ -73,7 +74,7 @@ export async function getOliviaContactsThisWeek(userName = "David"): Promise<num
   return parseInt(rows[0].count);
 }
 
-export async function mentionedCallToday(userName = "David"): Promise<boolean> {
+export async function mentionedCallToday(userName = NATIVE_STORED_NAME): Promise<boolean> {
   const { rows } = await query<{ count: string }>(
     `SELECT COUNT(*) as count FROM contact_mentions
      WHERE user_name = $1 AND contact_type = 'call' AND contact_date = CURRENT_DATE`,

@@ -1,6 +1,7 @@
 import { google } from "googleapis";
 import { getAuthClient, getAuthClientForUser } from "./oauth.js";
 import { query } from "../db.js";
+import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
 export interface EmailSummary {
   from: string;
@@ -221,10 +222,11 @@ export function analyzeEmailForScam(email: {
  * Returns the last time David's emails were checked, or null if never tracked.
  * Used to show only NEW emails since the last check on manual email requests.
  */
-export async function getEmailLastChecked(): Promise<Date | null> {
+export async function getEmailLastChecked(userName = NATIVE_STORED_NAME): Promise<Date | null> {
   try {
     const { rows } = await query<{ last_checked_at: Date }>(
-      `SELECT last_checked_at FROM email_tracking WHERE user_name = 'David'`
+      `SELECT last_checked_at FROM email_tracking WHERE user_name = $1`,
+      [userName]
     );
     return rows.length > 0 ? new Date(rows[0].last_checked_at) : null;
   } catch {
@@ -236,11 +238,12 @@ export async function getEmailLastChecked(): Promise<Date | null> {
  * Updates the last-checked timestamp to now. Call immediately after a successful
  * on-demand email fetch so subsequent checks only show new messages.
  */
-export async function updateEmailLastChecked(): Promise<void> {
+export async function updateEmailLastChecked(userName = NATIVE_STORED_NAME): Promise<void> {
   try {
     await query(
-      `INSERT INTO email_tracking (user_name, last_checked_at) VALUES ('David', NOW())
-       ON CONFLICT (user_name) DO UPDATE SET last_checked_at = NOW()`
+      `INSERT INTO email_tracking (user_name, last_checked_at) VALUES ($1, NOW())
+       ON CONFLICT (user_name) DO UPDATE SET last_checked_at = NOW()`,
+      [userName]
     );
   } catch (err) {
     console.warn("[Gmail] Failed to update email_tracking:", err);

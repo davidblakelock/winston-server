@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
+import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -53,7 +54,7 @@ export function nextOccurrence(month: number, day: number, from: Date = new Date
   return thisYearStr >= todayStr ? thisYear : candidate(todayY + 1);
 }
 
-export async function getDates(userName = "David"): Promise<ImportantDate[]> {
+export async function getDates(userName = NATIVE_STORED_NAME): Promise<ImportantDate[]> {
   const { rows } = await query<{
     id: number; person_name: string; relationship: string | null;
     event_type: string; month: number; day: number; year: number | null; notes: string | null;
@@ -76,7 +77,7 @@ export async function getDates(userName = "David"): Promise<ImportantDate[]> {
   }));
 }
 
-export async function getUpcomingDates(daysAhead = 21, userName = "David"): Promise<UpcomingDate[]> {
+export async function getUpcomingDates(daysAhead = 21, userName = NATIVE_STORED_NAME): Promise<UpcomingDate[]> {
   const dates = await getDates(userName);
   const now = new Date();
 
@@ -102,7 +103,7 @@ export async function addDate(
   relationship?: string,
   year?: number,
   notes?: string,
-  userName = "David"
+  userName = NATIVE_STORED_NAME
 ): Promise<{ success: boolean; alreadyExists: boolean; date?: ImportantDate }> {
   const existing = await query(
     `SELECT id FROM important_dates
@@ -137,7 +138,7 @@ export async function addDate(
   };
 }
 
-export async function removeDate(nameQuery: string, eventType?: string, userName = "David"): Promise<boolean> {
+export async function removeDate(nameQuery: string, eventType?: string, userName = NATIVE_STORED_NAME): Promise<boolean> {
   const typeClause = eventType ? `AND event_type = '${eventType}'` : "";
   const { rows } = await query(
     `UPDATE important_dates SET active = false
@@ -190,7 +191,7 @@ Examples:
 }
 
 // ── Reminder messages ─────────────────────────────────────────────────────────
-export function buildDateReminderMessage(d: UpcomingDate, displayName = "David"): string {
+export function buildDateReminderMessage(d: UpcomingDate, displayName = NATIVE_STORED_NAME): string {
   const { personName, eventType, daysUntil, label, yearsCount } = d;
 
   const yearsStr = yearsCount && eventType === "anniversary"

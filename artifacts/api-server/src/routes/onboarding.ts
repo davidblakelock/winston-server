@@ -1,4 +1,5 @@
 import { Router, type IRouter } from "express";
+import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 import Anthropic from "@anthropic-ai/sdk";
 import {
   getProfile,
@@ -486,7 +487,7 @@ function computeNextScene(
   }
 }
 
-async function saveProfileItemsFromOnboarding(data: CollectedData, userName = "David"): Promise<void> {
+async function saveProfileItemsFromOnboarding(data: CollectedData, userName = NATIVE_STORED_NAME): Promise<void> {
   const ops: Array<Promise<unknown>> = [];
 
   // Save people

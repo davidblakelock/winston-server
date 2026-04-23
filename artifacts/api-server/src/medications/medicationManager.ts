@@ -1,4 +1,5 @@
 import { query } from "../db.js";
+import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
 export interface Medication {
   id: number;
@@ -8,7 +9,7 @@ export interface Medication {
   active: boolean;
 }
 
-export async function getMedications(userName = "David"): Promise<Medication[]> {
+export async function getMedications(userName = NATIVE_STORED_NAME): Promise<Medication[]> {
   const { rows } = await query<{
     id: number;
     name: string;
@@ -35,7 +36,7 @@ export async function addMedication(
   name: string,
   dosage?: string,
   reminderTime = "08:00",
-  userName = "David"
+  userName = NATIVE_STORED_NAME
 ): Promise<{ success: boolean; alreadyExists: boolean; medication?: Medication }> {
   const existing = await query(
     `SELECT id FROM medications WHERE user_name = $1 AND lower(name) = lower($2) AND active = true`,
@@ -65,7 +66,7 @@ export async function addMedication(
   };
 }
 
-export async function removeMedication(name: string, userName = "David"): Promise<boolean> {
+export async function removeMedication(name: string, userName = NATIVE_STORED_NAME): Promise<boolean> {
   const { rows } = await query(
     `UPDATE medications SET active = false
      WHERE user_name = $1 AND lower(name) LIKE lower($2) AND active = true
@@ -75,7 +76,7 @@ export async function removeMedication(name: string, userName = "David"): Promis
   return rows.length > 0;
 }
 
-export async function hasTakenMedicationsToday(userName = "David"): Promise<boolean> {
+export async function hasTakenMedicationsToday(userName = NATIVE_STORED_NAME): Promise<boolean> {
   const { rows } = await query(
     `SELECT 1 FROM medication_logs
      WHERE user_name = $1 AND log_date = CURRENT_DATE`,
@@ -84,7 +85,7 @@ export async function hasTakenMedicationsToday(userName = "David"): Promise<bool
   return rows.length > 0;
 }
 
-export async function logMedicationsTaken(meds: Medication[], userName = "David"): Promise<void> {
+export async function logMedicationsTaken(meds: Medication[], userName = NATIVE_STORED_NAME): Promise<void> {
   const names = meds.map((m) => m.name).join(", ");
   await query(
     `INSERT INTO medication_logs (user_name, log_date, medication_names)

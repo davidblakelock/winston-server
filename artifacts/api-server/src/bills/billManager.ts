@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
+import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -101,7 +102,7 @@ function daysBetween(a: Date, b: Date): number {
 }
 
 // ── CRUD ─────────────────────────────────────────────────────────────────────
-export async function getBills(userName = "David"): Promise<Bill[]> {
+export async function getBills(userName = NATIVE_STORED_NAME): Promise<Bill[]> {
   const { rows } = await query<{
     id: number;
     name: string;
@@ -135,7 +136,7 @@ export async function getBills(userName = "David"): Promise<Bill[]> {
   }));
 }
 
-export async function getUpcomingBills(daysAhead = 60, userName = "David"): Promise<UpcomingBill[]> {
+export async function getUpcomingBills(daysAhead = 60, userName = NATIVE_STORED_NAME): Promise<UpcomingBill[]> {
   const bills = await getBills(userName);
   const now = new Date();
 
@@ -163,7 +164,7 @@ export async function addBill(
   dueMonths: string | null,
   amount?: string,
   notes?: string,
-  userName = "David"
+  userName = NATIVE_STORED_NAME
 ): Promise<{ success: boolean; alreadyExists: boolean; bill?: Bill }> {
   const existing = await query(
     `SELECT id FROM financial_obligations
@@ -219,7 +220,7 @@ export async function addBill(
   };
 }
 
-export async function removeBill(nameQuery: string, userName = "David"): Promise<boolean> {
+export async function removeBill(nameQuery: string, userName = NATIVE_STORED_NAME): Promise<boolean> {
   const { rows } = await query(
     `UPDATE financial_obligations SET active = false
      WHERE user_name = $1 AND lower(name) LIKE lower($2) AND active = true
@@ -341,7 +342,7 @@ export function formatBillsForPrompt(bills: UpcomingBill[]): string {
     .join("\n");
 }
 
-export function buildBillReminderMessage(bill: UpcomingBill, displayName = "David"): string {
+export function buildBillReminderMessage(bill: UpcomingBill, displayName = NATIVE_STORED_NAME): string {
   const { name, daysUntilDue, dueDateLabel, amount } = bill;
   const amtPart = amount ? ` (${amount})` : "";
 

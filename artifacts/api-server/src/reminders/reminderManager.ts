@@ -1,5 +1,6 @@
 import { query } from "../db.js";
 import { broadcast } from "./sseStore.js";
+import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
 export interface ReminderInput {
   userName?: string;
@@ -31,7 +32,7 @@ export interface ReminderRow {
  *   immediately without a page refresh.
  */
 export async function createReminder(input: ReminderInput): Promise<ReminderRow> {
-  const resolvedUser = input.userName ?? "David";
+  const resolvedUser = input.userName ?? NATIVE_STORED_NAME;
   const resolvedTz   = input.timezone   ?? "America/Chicago";
 
   // ── Duplicate guard ──────────────────────────────────────────────────────────

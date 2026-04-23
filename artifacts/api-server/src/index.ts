@@ -8,6 +8,7 @@ import { ensureBriefingPreferencesTable } from "./briefingPreferences/briefingPr
 import { ensureUsersTable } from "./auth/passwordAuth";
 import { ensureMemoryTable } from "./memory/memoryManager";
 import { ensureProfileTable } from "./profile/profileManager";
+import { NATIVE_STORED_NAME } from "./auth/middleware";
 import { ensureOnboardingTable } from "./onboarding/onboardingManager";
 import { startMedicationScheduler } from "./medications/medicationScheduler";
 import { startMorningPushScheduler } from "./push/morningPushScheduler";
@@ -154,7 +155,7 @@ app.listen(port, async (err) => {
       { name: "Classic Jazz",      detail: "Loves classic jazz — bebop, big band, standards" },
     ];
     for (const pref of musicPrefs) {
-      await addProfileItem("music", pref.name, pref.detail, "David").catch(() => {});
+      await addProfileItem("music", pref.name, pref.detail, NATIVE_STORED_NAME).catch(() => {});
     }
     const favoriteVenues: Array<{ name: string; detail: string }> = [
       { name: "Kessler Theater",               detail: "Favorite Dallas music venue — intimate, eclectic bookings" },
@@ -166,7 +167,7 @@ app.listen(port, async (err) => {
       { name: "Jazz at the Meyerson",          detail: "Favorite jazz venue — Meyerson Symphony Center" },
     ];
     for (const venue of favoriteVenues) {
-      await addProfileItem("favorite_venues", venue.name, venue.detail, "David").catch(() => {});
+      await addProfileItem("favorite_venues", venue.name, venue.detail, NATIVE_STORED_NAME).catch(() => {});
     }
     // Clean up any stale 'David' rows left from before user_name was added
     logger.info("Music preferences and favorite venues seeded to profile_items");

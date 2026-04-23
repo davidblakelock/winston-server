@@ -19,6 +19,14 @@ export const NATIVE_API_KEY = "winston-native-2026";
  *  omit x-user-name will use this; new builds should send the header explicitly.
  */
 export const NATIVE_USER = "davidblakelock";
+/**
+ * The user_name key under which the primary user's data is stored across all
+ * Supabase tables (profile_items, google_auth, watched_shows, journal_entries, etc.).
+ * Historical convention: data was written under the display name before the login
+ * user_name was introduced. Centralised here so it can be changed in one place
+ * when a data migration normalises everything to NATIVE_USER.
+ */
+export const NATIVE_STORED_NAME = "David";
 
 function resolveNativeUser(req: Request): string {
   const headerUser = req.headers["x-user-name"];

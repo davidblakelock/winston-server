@@ -13,6 +13,7 @@ import {
   getAppUrl,
 } from "../auth/sessionAuth.js";
 import { registerUser, loginUser } from "../auth/passwordAuth.js";
+import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 // @ts-ignore — apple-signin-auth has no bundled types
 import appleSignin from "apple-signin-auth";
 
@@ -429,7 +430,7 @@ router.get("/auth/status", async (req: Request, res: Response) => {
     let userName: string | null = null;
     // Accept both Bearer session token and native-app API key
     if (apiKey === "winston-native-2026") {
-      userName = "David";
+      userName = NATIVE_STORED_NAME;
     } else if (authHeader?.startsWith("Bearer ")) {
       const session = await validateSession(authHeader.slice(7));
       if (session) userName = session.userName;
@@ -460,7 +461,7 @@ router.get("/auth/onboarding-status", async (req: Request, res: Response) => {
     let userName: string | null = null;
 
     if (apiKey === "winston-native-2026") {
-      userName = "David";
+      userName = NATIVE_STORED_NAME;
     } else if (authHeader?.startsWith("Bearer ")) {
       const session = await validateSession(authHeader.slice(7));
       if (session) userName = session.userName;

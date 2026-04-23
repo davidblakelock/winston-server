@@ -1,4 +1,5 @@
 import { query } from "../db.js";
+import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
 export interface UserProfile {
   id: number;
@@ -62,7 +63,7 @@ export async function ensureOnboardingTable(): Promise<void> {
   await query(`
     CREATE TABLE IF NOT EXISTS user_profiles (
       id serial PRIMARY KEY,
-      user_name text NOT NULL DEFAULT 'David',
+      user_name text NOT NULL DEFAULT '${NATIVE_STORED_NAME}',
       name text,
       city text,
       latitude float,
@@ -89,7 +90,7 @@ export async function ensureOnboardingTable(): Promise<void> {
   await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS home_longitude numeric(10,7)`);
 }
 
-export async function getProfile(userName = "David"): Promise<UserProfile | null> {
+export async function getProfile(userName = NATIVE_STORED_NAME): Promise<UserProfile | null> {
   const { rows } = await query<{
     id: number;
     name: string | null;
@@ -159,7 +160,7 @@ export async function updateProfileField(
   await query(`UPDATE user_profiles SET ${sets.join(", ")} WHERE user_name = $${idx}`, vals);
 }
 
-export async function upsertProfile(data: Partial<CollectedData>, userName = "David"): Promise<void> {
+export async function upsertProfile(data: Partial<CollectedData>, userName = NATIVE_STORED_NAME): Promise<void> {
   const existing = await getProfile(userName);
 
   if (!existing) {
@@ -212,11 +213,11 @@ export async function upsertProfile(data: Partial<CollectedData>, userName = "Da
   }
 }
 
-export async function completeOnboarding(userName = "David"): Promise<void> {
+export async function completeOnboarding(userName = NATIVE_STORED_NAME): Promise<void> {
   await query(`UPDATE user_profiles SET onboarding_completed = true WHERE user_name = $1`, [userName]);
 }
 
-export async function isOnboardingComplete(userName = "David"): Promise<boolean> {
+export async function isOnboardingComplete(userName = NATIVE_STORED_NAME): Promise<boolean> {
   const profile = await getProfile(userName);
   return profile?.onboardingCompleted ?? false;
 }

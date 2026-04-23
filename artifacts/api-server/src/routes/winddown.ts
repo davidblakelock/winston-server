@@ -9,7 +9,7 @@ import {
 } from "../winddown/winddownManager.js";
 import { generateOpeningMessage } from "../winddown/winddownScheduler.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
-import { tryAuthenticate } from "../auth/middleware.js";
+import { tryAuthenticate, NATIVE_STORED_NAME } from "../auth/middleware.js";
 
 const router: IRouter = Router();
 
@@ -44,7 +44,7 @@ router.post("/winddown/activate", async (req: Request, res: Response) => {
     await setWinddownActive(true); // Ensures active = true (re-activates if deactivated)
 
     // Resolve the authenticated user; fall back to primary user from active users list.
-    const sessionUserName = await tryAuthenticate(req) ?? "David";
+    const sessionUserName = await tryAuthenticate(req) ?? NATIVE_STORED_NAME;
 
     // Always generate fresh — the opening message includes tonight's story question,
     // calendar events, and all 6 check-in elements. Caching would serve stale content.

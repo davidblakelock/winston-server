@@ -1,4 +1,5 @@
 import { query } from "../db.js";
+import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
 export interface JournalEntry {
   id: number;
@@ -7,14 +8,14 @@ export interface JournalEntry {
   createdAt: string;
 }
 
-export async function saveJournalEntry(content: string): Promise<JournalEntry> {
+export async function saveJournalEntry(content: string, userName = NATIVE_STORED_NAME): Promise<JournalEntry> {
   const { rows } = await query<{
     id: number; entry_date: string; content: string; created_at: string;
   }>(
     `INSERT INTO journal_entries (user_name, content)
-     VALUES ('David', $1)
+     VALUES ($1, $2)
      RETURNING id, entry_date, content, created_at`,
-    [content]
+    [userName, content]
   );
   return {
     id: rows[0].id,
@@ -24,16 +25,17 @@ export async function saveJournalEntry(content: string): Promise<JournalEntry> {
   };
 }
 
-export async function getRecentJournalEntries(days = 7): Promise<JournalEntry[]> {
+export async function getRecentJournalEntries(days = 7, userName = NATIVE_STORED_NAME): Promise<JournalEntry[]> {
   const { rows } = await query<{
     id: number; entry_date: string; content: string; created_at: string;
   }>(
     `SELECT id, entry_date, content, created_at
      FROM journal_entries
-     WHERE user_name = 'David'
-       AND entry_date >= CURRENT_DATE - INTERVAL '${days} days'
+     WHERE user_name = $1
+       AND entry_date >= CURRENT_DATE - ($2 || ' days')::interval
      ORDER BY entry_date DESC, created_at DESC
-     LIMIT 20`
+     LIMIT 20`,
+    [userName, String(days)]
   );
   return rows.map((r) => ({
     id: r.id,
@@ -43,14 +45,15 @@ export async function getRecentJournalEntries(days = 7): Promise<JournalEntry[]>
   }));
 }
 
-export async function getAllJournalEntries(): Promise<JournalEntry[]> {
+export async function getAllJournalEntries(userName = NATIVE_STORED_NAME): Promise<JournalEntry[]> {
   const { rows } = await query<{
     id: number; entry_date: string; content: string; created_at: string;
   }>(
     `SELECT id, entry_date, content, created_at
      FROM journal_entries
-     WHERE user_name = 'David'
-     ORDER BY entry_date DESC, created_at DESC`
+     WHERE user_name = $1
+     ORDER BY entry_date DESC, created_at DESC`,
+    [userName]
   );
   return rows.map((r) => ({
     id: r.id,
@@ -60,19 +63,21 @@ export async function getAllJournalEntries(): Promise<JournalEntry[]> {
   }));
 }
 
-export async function hasJournalEntryTonight(): Promise<boolean> {
+export async function hasJournalEntryTonight(userName = NATIVE_STORED_NAME): Promise<boolean> {
   const { rows } = await query<{ count: string }>(
     `SELECT COUNT(*) as count FROM journal_entries
-     WHERE user_name = 'David' AND entry_date = CURRENT_DATE`
+     WHERE user_name = $1 AND entry_date = CURRENT_DATE`,
+    [userName]
   );
   return parseInt(rows[0].count) > 0;
 }
 
-export async function getJournalCountThisWeek(): Promise<number> {
+export async function getJournalCountThisWeek(userName = NATIVE_STORED_NAME): Promise<number> {
   const { rows } = await query<{ count: string }>(
     `SELECT COUNT(*) as count FROM journal_entries
-     WHERE user_name = 'David'
-       AND entry_date >= DATE_TRUNC('week', CURRENT_DATE)`
+     WHERE user_name = $1
+       AND entry_date >= DATE_TRUNC('week', CURRENT_DATE)`,
+    [userName]
   );
   return parseInt(rows[0].count);
 }

@@ -1,4 +1,5 @@
 import cron from "node-cron";
+import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 import { broadcast } from "../reminders/sseStore.js";
 import { sendPushToAll } from "../push/pushManager.js";
 import {
@@ -20,11 +21,11 @@ function getCurrentLocalTime(): string {
   });
 }
 
-function buildInitialMessage(medText: string, displayName = "David"): string {
+function buildInitialMessage(medText: string, displayName = NATIVE_STORED_NAME): string {
   return `Good morning, ${displayName} — don't forget to take ${medText} today. Take them with food if you can.`;
 }
 
-function buildFollowUpMessage(medText: string, displayName = "David"): string {
+function buildFollowUpMessage(medText: string, displayName = NATIVE_STORED_NAME): string {
   return `Just a gentle nudge, ${displayName} — have you taken ${medText} yet? Whenever you're ready.`;
 }
 

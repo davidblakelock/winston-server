@@ -17,6 +17,7 @@ import { sendPushToAll } from "../push/pushManager.js";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { getActiveUsers, getProfile, type CollectedData } from "../onboarding/onboardingManager.js";
+import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
 const anthropic = new Anthropic();
 const TZ = "America/Chicago";
@@ -389,7 +390,7 @@ async function sendConcertAlertsForUser(userName: string, companionName: string)
 
 // ── Main scan ─────────────────────────────────────────────────────────────────
 
-export async function runVenueScan(userName = "David"): Promise<string> {
+export async function runVenueScan(userName = NATIVE_STORED_NAME): Promise<string> {
   if (isCacheValid()) {
     logger.info("[VenueMonitor] Returning cached concert data");
     return _cache!.briefingBlock;
@@ -462,7 +463,7 @@ export function getVenueConcerts(): ConcertItem[] {
  * Build the briefing block from an already-filtered list of concerts.
  * Used by dedup integration to re-format after removing seen events.
  */
-export function buildVenueConcertsBlock(concerts: ConcertItem[], userName = "David", city = "Dallas"): string {
+export function buildVenueConcertsBlock(concerts: ConcertItem[], userName = NATIVE_STORED_NAME, city = "Dallas"): string {
   return formatConcertsForBriefing(concerts, DEFAULT_VENUES, userName, city);
 }
 
@@ -472,10 +473,10 @@ export function startVenueMonitorScheduler(): void {
   cron.schedule("30 5 * * *", async () => {
     try {
       const users = await getActiveUsers();
-      const primaryUser = users[0]?.userName ?? "David";
+      const primaryUser = users[0]?.userName ?? NATIVE_STORED_NAME;
       void runVenueScan(primaryUser);
     } catch {
-      void runVenueScan("David");
+      void runVenueScan(NATIVE_STORED_NAME);
     }
   }, { timezone: TZ });
 

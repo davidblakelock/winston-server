@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
+import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -32,7 +33,7 @@ export async function ensureProfileTable(): Promise<void> {
   await query(`
     CREATE TABLE IF NOT EXISTS profile_items (
       id serial PRIMARY KEY,
-      user_name text NOT NULL DEFAULT 'David',
+      user_name text NOT NULL DEFAULT '${NATIVE_STORED_NAME}',
       category varchar(50) NOT NULL,
       name text NOT NULL,
       detail text,
@@ -47,7 +48,7 @@ export async function ensureProfileTable(): Promise<void> {
         SELECT FROM information_schema.columns
         WHERE table_name = 'profile_items' AND column_name = 'user_name'
       ) THEN
-        ALTER TABLE profile_items ADD COLUMN user_name text NOT NULL DEFAULT 'David';
+        ALTER TABLE profile_items ADD COLUMN user_name text NOT NULL DEFAULT '${NATIVE_STORED_NAME}';
       END IF;
     END $$
   `).catch(() => {});
@@ -121,7 +122,7 @@ export async function addProfileItem(
   category: ProfileCategory,
   name: string,
   detail: string | null,
-  userName = "David"
+  userName = NATIVE_STORED_NAME
 ): Promise<ProfileItem> {
   // Validation: name must be a non-empty string
   const cleanName = name?.trim();
@@ -180,7 +181,7 @@ export async function addProfileItem(
 export async function removeProfileItem(
   category: ProfileCategory,
   name: string,
-  userName = "David"
+  userName = NATIVE_STORED_NAME
 ): Promise<boolean> {
   const { rowCount } = await query(
     `DELETE FROM profile_items WHERE user_name = $1 AND category = $2 AND LOWER(name) = LOWER($3)`,
@@ -191,7 +192,7 @@ export async function removeProfileItem(
 
 export async function getProfileItems(
   category?: ProfileCategory,
-  userName = "David"
+  userName = NATIVE_STORED_NAME
 ): Promise<ProfileItem[]> {
   const { rows } = category
     ? await query<{
@@ -340,7 +341,7 @@ function getCategoryLabel(category: ProfileCategory): string {
 }
 
 // Get places with addresses for navigation lookup
-export async function getProfilePlaces(userName = "David"): Promise<
+export async function getProfilePlaces(userName = NATIVE_STORED_NAME): Promise<
   Array<{ name: string; address: string }>
 > {
   const { rows } = await query<{ name: string; detail: string }>(

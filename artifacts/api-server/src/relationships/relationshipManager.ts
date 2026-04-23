@@ -1,5 +1,6 @@
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
+import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
 export interface TrackedPerson {
   name: string;
@@ -26,7 +27,7 @@ export async function ensureRelationshipTable(): Promise<void> {
   await query(`
     CREATE TABLE IF NOT EXISTS relationship_mentions (
       id SERIAL PRIMARY KEY,
-      user_name TEXT NOT NULL DEFAULT 'David',
+      user_name TEXT NOT NULL DEFAULT '${NATIVE_STORED_NAME}',
       person_name TEXT NOT NULL,
       relationship_type TEXT NOT NULL,
       mention_type TEXT NOT NULL DEFAULT 'mention', -- 'mention' | 'call' | 'visit'
@@ -47,7 +48,7 @@ export async function recordMention(
   relationshipType: string,
   mentionType: "mention" | "call" | "visit",
   notes?: string,
-  userName = "David"
+  userName = NATIVE_STORED_NAME
 ): Promise<void> {
   await query(
     `INSERT INTO relationship_mentions (user_name, person_name, relationship_type, mention_type, notes, mention_date)
@@ -57,7 +58,7 @@ export async function recordMention(
 }
 
 // ── Days since last mention ────────────────────────────────────────────────────
-export async function getDaysSinceLastMention(personName: string, userName = "David"): Promise<number | null> {
+export async function getDaysSinceLastMention(personName: string, userName = NATIVE_STORED_NAME): Promise<number | null> {
   const { rows } = await query<{ days: string | null }>(
     `SELECT EXTRACT(DAY FROM (CURRENT_DATE - MAX(mention_date)))::int AS days
      FROM relationship_mentions
@@ -69,7 +70,7 @@ export async function getDaysSinceLastMention(personName: string, userName = "Da
 }
 
 // ── Check for call-type mention today ─────────────────────────────────────────
-export async function mentionedCallToday(personName: string, userName = "David"): Promise<boolean> {
+export async function mentionedCallToday(personName: string, userName = NATIVE_STORED_NAME): Promise<boolean> {
   const { rows } = await query<{ count: string }>(
     `SELECT COUNT(*) as count FROM relationship_mentions
      WHERE user_name = $1 AND person_name = $2

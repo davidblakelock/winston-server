@@ -14,6 +14,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { logger } from "../lib/logger.js";
+import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -82,7 +83,7 @@ export interface ComposedMessage {
 }
 
 export async function composeTextMessage(opts: ComposeTextOptions): Promise<ComposedMessage> {
-  const { recipientName, relationship, tone, userIntent, senderName = "David" } = opts;
+  const { recipientName, relationship, tone, userIntent, senderName = NATIVE_STORED_NAME } = opts;
 
   const toneInstruction =
     tone === "professional"

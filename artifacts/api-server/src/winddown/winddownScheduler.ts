@@ -9,6 +9,7 @@ import {
   saveTonightMessage,
 } from "./winddownManager.js";
 import { getProfile, getActiveUsers, type CollectedData } from "../onboarding/onboardingManager.js";
+import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 import { fetchTodayEvents, fetchTomorrowEvents } from "../google/calendar.js";
 import {
   getNextStoryQuestion,
@@ -95,7 +96,7 @@ function buildFamilyNameList(people: ProfilePerson[]): string {
 
 export async function generateOpeningMessage(
   companionName: string,
-  userName = "David"
+  userName = NATIVE_STORED_NAME
 ): Promise<string> {
   const profile = await getProfile(userName).catch(() => null);
   const displayName = profile?.name ?? userName;

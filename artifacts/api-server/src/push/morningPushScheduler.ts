@@ -6,6 +6,7 @@ import { fetchEpisodesForDate } from "../tv/tvmaze.js";
 import { preFetchMorningNews, preFetchDailyMotivation } from "../news/newsManager.js";
 import { preFetchMorningBriefing } from "../morning/briefingPregenerate.js";
 import { getActiveUsers, type ActiveUser } from "../onboarding/onboardingManager.js";
+import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
 const DEFAULT_TZ = "America/Chicago";
 const DEFAULT_WAKE_TIME = "06:00";
@@ -129,7 +130,7 @@ async function startupPrefetch(): Promise<void> {
     users = await getActiveUsers();
   } catch (err) {
     logger.warn({ err }, "[MorningPush] Startup — failed to load users; defaulting to David");
-    users = [{ userName: "David", name: "David", city: "Dallas", timezone: DEFAULT_TZ, wakeTime: DEFAULT_WAKE_TIME, companionName: null }];
+    users = [{ userName: NATIVE_STORED_NAME, name: NATIVE_STORED_NAME, city: "Dallas", timezone: DEFAULT_TZ, wakeTime: DEFAULT_WAKE_TIME, companionName: null }];
   }
 
   const today = new Date().toLocaleDateString("en-CA", { timeZone: DEFAULT_TZ });
