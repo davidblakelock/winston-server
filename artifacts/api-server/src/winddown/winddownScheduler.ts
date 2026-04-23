@@ -15,9 +15,18 @@ import {
   setPendingPrompt,
   hasStoryCapturedTonight,
 } from "../stories/storyManager.js";
+import { getLatestJournalInsight } from "../journal/journalPatternAnalyzer.js";
 import { logger } from "../lib/logger.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+// ── Day-of-week helper ────────────────────────────────────────────────────────
+
+function isTodayStoryDay(storyDay: string, tz: string): boolean {
+  const now = new Date();
+  const localDayName = now.toLocaleDateString("en-US", { timeZone: tz, weekday: "long" }).toLowerCase();
+  return localDayName === storyDay.toLowerCase();
+}
 
 // ── Build a natural family-mention string from profile people ─────────────────
 
@@ -100,85 +109,98 @@ export async function generateOpeningMessage(
   const now = new Date();
   const dayName = now.toLocaleDateString("en-US", { timeZone: tz, weekday: "long" });
 
-  // Fetch today's calendar events
+  // Fetch calendar events
   let todayContext = "";
   try {
     const evts = await fetchTodayEvents(userName);
     if (evts && evts.length > 0) {
-      const notable = evts
-        .filter((e) => !e.allDay)
-        .slice(0, 3)
-        .map((e) => e.summary);
-      if (notable.length > 0) {
-        todayContext = `Today's calendar events: ${notable.join(", ")}.`;
-      }
+      const notable = evts.filter((e) => !e.allDay).slice(0, 3).map((e) => e.summary);
+      if (notable.length > 0) todayContext = `Today's calendar events: ${notable.join(", ")}.`;
     }
   } catch { /* non-fatal */ }
 
-  // Fetch tomorrow's calendar events
   let tomorrowContext = "";
   try {
     const evts = await fetchTomorrowEvents(userName);
     if (evts && evts.length > 0) {
-      const notable = evts
-        .filter((e) => !e.allDay)
-        .slice(0, 2)
-        .map((e) => {
-          const time = (e as { startTime?: string }).startTime
-            ? ` at ${(e as { startTime?: string }).startTime}`
-            : "";
-          return `${e.summary}${time}`;
-        });
-      if (notable.length > 0) {
-        tomorrowContext = `Tomorrow: ${notable.join(", ")}.`;
-      }
+      const notable = evts.filter((e) => !e.allDay).slice(0, 2).map((e) => {
+        const time = (e as { startTime?: string }).startTime
+          ? ` at ${(e as { startTime?: string }).startTime}` : "";
+        return `${e.summary}${time}`;
+      });
+      if (notable.length > 0) tomorrowContext = `Tomorrow: ${notable.join(", ")}.`;
     }
   } catch { /* non-fatal */ }
 
-  // Fetch tonight's story question
+  // T002: Story question — only on the configured day of week
+  const settings = await getSettings().catch(() => null);
+  const storyDay = settings?.storyDayOfWeek ?? "sunday";
+  const isStoryNight = isTodayStoryDay(storyDay, tz);
+
   let storyQuestion = "";
-  try {
-    const capturedTonight = await hasStoryCapturedTonight();
-    if (!capturedTonight) {
-      const storyQ = await getNextStoryQuestion();
-      if (storyQ) {
-        await setPendingPrompt(storyQ.question);
-        storyQuestion = storyQ.question;
-        logger.info({ questionId: storyQ.id, category: storyQ.category }, "Evening story question set");
+  if (isStoryNight) {
+    try {
+      const capturedTonight = await hasStoryCapturedTonight();
+      if (!capturedTonight) {
+        const storyQ = await getNextStoryQuestion();
+        if (storyQ) {
+          await setPendingPrompt(storyQ.question);
+          storyQuestion = storyQ.question;
+          logger.info({ questionId: storyQ.id, category: storyQ.category, dayName }, "Evening story question set");
+        }
       }
+    } catch (err) {
+      logger.warn({ err }, "Failed to fetch/set story question");
     }
-  } catch (err) {
-    logger.warn({ err }, "Failed to fetch/set story question");
+  } else {
+    logger.info({ dayName, storyDay }, "Skipping story question — not story night");
   }
 
-  const familyLine = familyContext
-    ? `${displayName}'s family: ${familyContext}.\n`
-    : "";
+  // T004: Fetch latest journal pattern insight
+  let journalInsight = "";
+  try {
+    const insight = await getLatestJournalInsight(userName);
+    if (insight) {
+      journalInsight = insight;
+      logger.info({ chars: insight.length }, "Journal insight available for evening check-in");
+    }
+  } catch (err) {
+    logger.warn({ err }, "Failed to fetch journal insight");
+  }
+
+  const familyLine = familyContext ? `${displayName}'s family: ${familyContext}.\n` : "";
+
+  // T003: Build prompt with "Thought for the night" as 7th element
+  const storyDayLabel = storyDay.charAt(0).toUpperCase() + storyDay.slice(1);
 
   const prompt =
     `You are ${companionName}, ${displayName}'s warm personal AI companion. It's ${dayName} evening in ${city}.\n\n` +
     familyLine +
-    (todayContext ? `${todayContext}\n` : ``) +
-    (tomorrowContext ? `${tomorrowContext}\n` : ``) +
-    (storyQuestion ? `Tonight's story question: "${storyQuestion}"\n` : ``) +
-    `\nWrite ONE complete, flowing evening check-in message — about 150–200 words. ` +
+    (todayContext ? `${todayContext}\n` : "") +
+    (tomorrowContext ? `${tomorrowContext}\n` : "") +
+    (storyQuestion ? `Tonight's memory question: "${storyQuestion}"\n` : "") +
+    (journalInsight ? `\n[Gentle journal observation — weave naturally if the moment is right]: ${journalInsight}\n` : "") +
+    `\nWrite ONE complete, flowing evening check-in message — about 170–220 words. ` +
     `Flowing warm prose. No headers. No numbered sections. One connected message.\n\n` +
-    `Cover these six elements in order, woven together naturally:\n\n` +
+    `Cover these elements in order, woven together naturally:\n\n` +
     `1. OPENER: Warm personal greeting to ${displayName}. Reference something real from today${todayContext ? " (use the calendar events)" : ""}. ` +
-    (familyContext ? `Mention ${familyContext} naturally where it fits — don't force every name.\n\n` : `\n\n`) +
+    (familyContext ? `Mention ${familyContext} naturally where it fits — don't force every name.\n\n` : "\n\n") +
     (storyQuestion
-      ? `2. STORY QUESTION: Include this word for word: "Here's something worth sitting with tonight${familyNames ? ` — something for ${familyNames} someday` : ""}: ${storyQuestion}"\n\n`
-      : `2. STORY QUESTION: Skip — no question available tonight.\n\n`) +
+      ? `2. MEMORY QUESTION (${storyDayLabel} tradition): Include this word for word: "Here's something worth sitting with tonight${familyNames ? ` — something for ${familyNames} someday` : ""}: ${storyQuestion}"\n\n`
+      : `2. MEMORY QUESTION: Skip — tonight is not ${storyDayLabel}. Do NOT include any memory question or reference to the weekly question.\n\n`) +
     `3. JOURNAL INVITE: Soft optional — something like: "If you want to add anything to your journal tonight, just talk and I'll capture it — or just say 'I don't journal' and we'll skip it."\n\n` +
-    `4. REFLECTION: One brief, genuine thought for before sleep. Not advice. Not a quote. Just warm and human.\n\n` +
-    `5. TOMORROW PREP: ${tomorrowContext ? `Mention what's ahead (${tomorrowContext}). ` : ``}Ask: "Anything you want to add to your list or calendar before we close out?"\n\n` +
-    `6. CLOSING: Warm goodnight to ${displayName}. ${familyNames ? `Mention ${familyNames}. ` : ""}One encouraging sentence.\n\n` +
+    (journalInsight
+      ? `4. JOURNAL OBSERVATION: If it feels natural and the conversation allows it, weave in this observation gently — like a caring friend who noticed something: "${journalInsight}" Don't force it. Only include it if it fits warmly.\n\n`
+      : `4. JOURNAL OBSERVATION: Skip — no pattern detected this week.\n\n`) +
+    `5. TOMORROW PREP: ${tomorrowContext ? `Mention what's ahead (${tomorrowContext}). ` : ""}Ask: "Anything you want to add to your list or calendar before we close out?"\n\n` +
+    `6. THOUGHT FOR THE NIGHT: End with a single, brief, genuinely thoughtful sentence. Not advice. Not a motivational quote. Not a platitude. Something a wise, warm friend might say at the end of a good conversation — something ${displayName} can quietly sit with before sleep. Make it specific to ${dayName} or the mood of this particular evening if you can. Vary it so it never feels repetitive.\n\n` +
+    `7. CLOSING: Warm goodnight to ${displayName}. ${familyNames ? `Mention ${familyNames}. ` : ""}One encouraging sentence.\n\n` +
     `Write this as one flowing piece of prose — no bullet points, no headers, no numbers.`;
 
   try {
     const response = await anthropic.messages.create({
       model: "claude-opus-4-5",
-      max_tokens: 500,
+      max_tokens: 600,
       messages: [{ role: "user", content: prompt }],
     });
     const block = response.content[0];
@@ -191,9 +213,9 @@ export async function generateOpeningMessage(
   const familyNote = familyNames ? ` Hope ${familyNames} had a good evening too.` : "";
   return (
     `Good evening, ${displayName}. Hope your ${dayName} was a solid one.${familyNote}\n\n` +
-    (storyQuestion
+    (storyQuestion && isStoryNight
       ? `Here's something worth sitting with tonight${familyNames ? ` — something for ${familyNames} someday` : ""}: ${storyQuestion}\n\n`
-      : ``) +
+      : "") +
     `If you want to add anything to your journal tonight, just talk and I'll capture it — or just say "I don't journal" and we'll skip it.\n\n` +
     `Take a breath. Whatever didn't get done today can wait.\n\n` +
     (tomorrowContext
@@ -237,9 +259,8 @@ export function startWinddownScheduler(): void {
       await markFiredToday();
       logger.info({ time: settings.scheduledTime }, "Wind-down initiated");
 
-      // Run for each active user (currently single-user; multi-user ready)
-      const users = await getActiveUsers().catch(() => [{ userName: "David" }]);
-      const primaryUser = users[0]?.userName ?? "David";
+      const users = await getActiveUsers().catch(() => [{ userName: "davidblakelock" }]);
+      const primaryUser = users[0]?.userName ?? "davidblakelock";
 
       const profile = await getProfile(primaryUser).catch(() => null);
       const companionName = profile?.companionName ?? "Your Companion";

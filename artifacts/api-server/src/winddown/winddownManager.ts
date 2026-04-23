@@ -3,6 +3,7 @@ import { query } from "../db.js";
 export interface WinddownSettings {
   enabled: boolean;
   scheduledTime: string;
+  storyDayOfWeek: string;
 }
 
 export interface WinddownNote {
@@ -18,12 +19,17 @@ export async function ensureWinddownTables(): Promise<void> {
       id serial PRIMARY KEY,
       enabled boolean NOT NULL DEFAULT true,
       scheduled_time varchar(5) NOT NULL DEFAULT '21:00',
+      story_day_of_week varchar(10) NOT NULL DEFAULT 'sunday',
       updated_at timestamptz NOT NULL DEFAULT NOW()
     )
   `);
+  // Migration: add story_day_of_week if missing from existing installations
   await query(`
-    INSERT INTO winddown_settings (id, enabled, scheduled_time)
-    VALUES (1, true, '21:00')
+    ALTER TABLE winddown_settings ADD COLUMN IF NOT EXISTS story_day_of_week varchar(10) NOT NULL DEFAULT 'sunday'
+  `).catch(() => {});
+  await query(`
+    INSERT INTO winddown_settings (id, enabled, scheduled_time, story_day_of_week)
+    VALUES (1, true, '21:00', 'sunday')
     ON CONFLICT (id) DO NOTHING
   `);
   await query(`
@@ -56,11 +62,15 @@ export async function ensureWinddownTables(): Promise<void> {
 }
 
 export async function getSettings(): Promise<WinddownSettings> {
-  const { rows } = await query<{ enabled: boolean; scheduled_time: string }>(
-    `SELECT enabled, scheduled_time FROM winddown_settings WHERE id = 1`
+  const { rows } = await query<{ enabled: boolean; scheduled_time: string; story_day_of_week: string }>(
+    `SELECT enabled, scheduled_time, story_day_of_week FROM winddown_settings WHERE id = 1`
   );
-  if (rows.length === 0) return { enabled: true, scheduledTime: "21:00" };
-  return { enabled: rows[0].enabled, scheduledTime: rows[0].scheduled_time };
+  if (rows.length === 0) return { enabled: true, scheduledTime: "21:00", storyDayOfWeek: "sunday" };
+  return {
+    enabled: rows[0].enabled,
+    scheduledTime: rows[0].scheduled_time,
+    storyDayOfWeek: rows[0].story_day_of_week ?? "sunday",
+  };
 }
 
 export async function updateSettings(
@@ -76,6 +86,10 @@ export async function updateSettings(
   if (settings.scheduledTime !== undefined) {
     fields.push(`scheduled_time = $${i++}`);
     values.push(settings.scheduledTime);
+  }
+  if (settings.storyDayOfWeek !== undefined) {
+    fields.push(`story_day_of_week = $${i++}`);
+    values.push(settings.storyDayOfWeek.toLowerCase());
   }
   fields.push(`updated_at = NOW()`);
   await query(

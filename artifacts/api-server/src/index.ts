@@ -28,6 +28,8 @@ import { initBriefingStoriesTable } from "./morning/storyDedup";
 import { addProfileItem } from "./profile/profileManager";
 import { ensureContactsTable } from "./google/contacts";
 import { startGarminScheduler } from "./garmin/garminScheduler";
+import { ensureJournalInsightsTable, startJournalPatternScheduler } from "./journal/journalPatternAnalyzer";
+import { ensurePressureTable, startPressureScheduler } from "./weather/pressureScheduler";
 
 const rawPort = process.env["PORT"];
 
@@ -104,6 +106,20 @@ app.listen(port, async (err) => {
     logger.warn({ e }, "Contacts table initialization warning");
   }
 
+  try {
+    await ensureJournalInsightsTable();
+    logger.info("[startup] journal_insights table ready");
+  } catch (e) {
+    logger.warn({ e }, "Journal insights table initialization warning");
+  }
+
+  try {
+    await ensurePressureTable();
+    logger.info("[startup] pressure_readings table ready");
+  } catch (e) {
+    logger.warn({ e }, "Pressure readings table initialization warning");
+  }
+
   startScheduler();
   startWinddownScheduler();
   startMedicationScheduler();
@@ -121,6 +137,8 @@ app.listen(port, async (err) => {
   startDallasProactiveScheduler();
   startVenueMonitorScheduler();
   startGarminScheduler();
+  startJournalPatternScheduler();
+  startPressureScheduler();
 
   // Seed David's music preferences into profile_items so they persist and
   // can be referenced in any conversation naturally.

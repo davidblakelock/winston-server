@@ -164,6 +164,19 @@ import { validateSession } from "../auth/sessionAuth.js";
 import { authenticate, tryAuthenticate } from "../auth/middleware.js";
 import { normalizeTtsText } from "../lib/ttsNormalize.js";
 import { getCachedBriefing, setCachedBriefing, getStaticBriefingContext } from "../morning/briefingCache.js";
+import { updateSettings as updateWinddownSettings } from "../winddown/winddownManager.js";
+import { analyzePressureDelta, formatPressureContext, formatPressureContextNoChange } from "../weather/pressureScheduler.js";
+import {
+  extractTextTargetName,
+  composeTextMessage,
+  detectToneFromRelationship,
+  detectToneOverride,
+  getPendingText,
+  setPendingText,
+  isSendConfirmation,
+  isSendCancellation,
+  type MessageTone,
+} from "../text/textMessageComposer.js";
 import {
   BRIEFING_PREF_PATTERN,
   extractBriefingPrefOp,
@@ -356,6 +369,18 @@ const EMERGENCY_PATTERN = /\b(ms\.?\s*peel\s+(i\s+(need|am|have|fell|can.t|canno
 
 // Journal
 const JOURNAL_REVIEW_PATTERN = /\b(read\s+(me\s+)?my\s+journal|show\s+(me\s+)?my\s+journal|journal\s+entries?|what\s+(did\s+i|have\s+i)\s+journal(ed)?|my\s+journal|review\s+my\s+journal|look\s+at\s+my\s+journal)\b/i;
+
+// T001: Morning briefing follow-up — fired when the cached briefing exists
+const BRIEFING_FOLLOWUP_PATTERN = /\b(tell\s+me\s+more(\s+about)?|more\s+about|dig\s+into|what'?s?\s+the\s+(full\s+)?(story|deal)|what\s+happened\s+(with|to)|elaborate\s+on|can\s+you\s+expand|more\s+details?\s+(on|about|from)|what\s+else\s+(about|on)|follow\s+up\s+on|anything\s+else\s+on|give\s+me\s+(more|the\s+full)|expand\s+on)\b/i;
+
+// T002: Story day change — "move my weekly story question to Wednesday"
+const STORY_DAY_CHANGE_PATTERN = /\b(move|change|switch|shift|reschedule|update)\s+(my\s+)?(weekly\s+)?(story\s+question|memory\s+(question|prompt)|weekly\s+question|journal\s+prompt)\s+(to|for)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
+
+// T005: Headache / body ache — check barometric pressure
+const HEADACHE_PATTERN = /\b(headache|head\s+ach(e|ing)|migraine|body\s+ach(e|es|ing)|joint\s+(pain|ach(e|ing))|pressure\s+headache|sinus\s+headache|feel(ing)?\s+(off|achy|not\s+great|under\s+the\s+weather)|my\s+head\s+(hurts?|is\s+killing|is\s+pounding)|skull\s+is\s+splitting)\b/i;
+
+// T006: Text message composition — "text [name]" or "send a message to [name]"
+const TEXT_MESSAGE_PATTERN = /^(?:text|send\s+(?:a\s+)?(?:text|message|sms)(?:\s+to)?|message)\s+([A-Za-z][A-Za-z'.]*(?:\s+[A-Za-z][A-Za-z'.]*)?)/i;
 
 // Olivia mentions and calls
 const OLIVIA_CALL_PATTERN = /\b(called?\s+olivia|talked?\s+(to\s+)?olivia|spoke\s+(with\s+)?olivia|olivia\s+and\s+i\s+(talked?|chatted?|spoke|called?)|just\s+(talked?|spoke|called?)\s+(to\s+|with\s+)?olivia|facetime(d)?\s+olivia|olivia\s+call)\b/i;
@@ -794,6 +819,21 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isOliviaCall = !isMorningGreeting && OLIVIA_CALL_PATTERN.test(message);
   const isOliviaMention = !isMorningGreeting && OLIVIA_MENTION_PATTERN.test(message);
 
+  // T001: Morning briefing follow-up — only fires when there is a cached briefing from today
+  const cachedBriefingText = !isMorningGreeting ? getCachedBriefing(sessionUserName) : null;
+  const isBriefingFollowUp = !isMorningGreeting && !!cachedBriefingText && BRIEFING_FOLLOWUP_PATTERN.test(message);
+
+  // T002: Story day change
+  const isStoryDayChange = !isMorningGreeting && STORY_DAY_CHANGE_PATTERN.test(message);
+
+  // T005: Headache / body ache — check pressure
+  const isHeadacheRequest = !isMorningGreeting && HEADACHE_PATTERN.test(message);
+
+  // T006: Text message intent OR pending text flow continuation
+  const pendingText = getPendingText();
+  const isTextMessageRequest = !isMorningGreeting && TEXT_MESSAGE_PATTERN.test(message);
+  const isTextFlowActive = !isMorningGreeting && pendingText !== null;
+
   // ── Sleep reminder: gently note the time if after 11pm CT (once per night) ──
   const chicagoHour = new Date().toLocaleString("en-US", { timeZone: "America/Chicago", hour: "numeric", hour12: false });
   const currentHourCT = parseInt(chicagoHour, 10);
@@ -926,7 +966,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         void logBriefingStories(sessionUserName, staticCtx.candidateStoryKeys);
         req.log.info({ chars: nativeBriefingText.length }, "Morning briefing fetched (native) and cached");
       }
-      res.json({ response: nativeBriefingText });
+      // T001: append follow-up invitation to native briefing
+      const nativeFollowUp = "\n\nAnything from this morning you'd like to dig into?";
+      res.json({ response: nativeBriefingText + nativeFollowUp });
       return;
     }
 
@@ -947,6 +989,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       }
     }
 
+    // T001: send follow-up invitation as a trailing text chunk before done
+    sendMorningSSE({ text: "\n\nAnything from this morning you'd like to dig into?" });
     sendMorningSSE({ done: true, isMorningBriefing: true });
     res.end();
 
@@ -1267,6 +1311,234 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       }
     } catch (err) {
       req.log.warn({ err }, "[BriefingPref] Failed to save preference");
+    }
+  }
+
+  // ── T001: Morning briefing follow-up ──────────────────────────────────────
+  // When the user asks for more details on something from the morning briefing,
+  // inject the full cached briefing text as context so Claude can dig deeper.
+  if (isBriefingFollowUp && cachedBriefingText) {
+    const displayName = userProfile?.name ?? sessionUserName;
+    systemPrompt +=
+      `\n\n[Morning Briefing — Full Context for Follow-Up]\n` +
+      `${displayName} received this morning briefing earlier today and is now asking for more details. ` +
+      `Here is the full briefing text they heard:\n\n` +
+      `---\n${cachedBriefingText}\n---\n\n` +
+      `The user is asking: "${message}"\n\n` +
+      `Respond as their companion — find the specific story, event, or topic they're asking about ` +
+      `and give them a richer, more detailed response. Use the briefing text above as your primary source. ` +
+      `If they're asking about something not in the briefing, say so honestly and offer to look it up. ` +
+      `Be warm and specific, not generic.`;
+    req.log.info({ chars: cachedBriefingText.length }, "[T001] Briefing follow-up — injecting cached briefing text");
+  }
+
+  // ── T002: Story day of week change ─────────────────────────────────────────
+  if (isStoryDayChange) {
+    try {
+      const dayMatch = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.exec(message);
+      if (dayMatch) {
+        const newDay = dayMatch[1].toLowerCase();
+        const newDayCapital = newDay.charAt(0).toUpperCase() + newDay.slice(1);
+        await updateWinddownSettings({ storyDayOfWeek: newDay });
+        systemPrompt +=
+          `\n\n[Story Day Preference Saved]\nThe user has changed their weekly memory question ` +
+          `from the previous day to ${newDayCapital}. ` +
+          `Reply with exactly this: "Done — I'll bring your memory question on ${newDayCapital} evenings from now on."`;
+        req.log.info({ newDay }, "[T002] Story day of week updated");
+      }
+    } catch (err) {
+      req.log.warn({ err }, "[T002] Failed to update story day");
+    }
+  }
+
+  // ── T005: Barometric pressure context for headache/body aches ─────────────
+  if (isHeadacheRequest) {
+    try {
+      const delta = await analyzePressureDelta(12);
+      if (delta) {
+        if (delta.significant) {
+          systemPrompt += formatPressureContext(delta);
+          req.log.info({ deltaInHg: delta.deltaInHg }, "[T005] Significant pressure change — injecting context");
+        } else if (delta.latestReading) {
+          systemPrompt += formatPressureContextNoChange(delta.latestReading);
+        }
+      }
+    } catch (err) {
+      req.log.warn({ err }, "[T005] Pressure analysis failed");
+    }
+  }
+
+  // ── T006: Text message composition flow ────────────────────────────────────
+  if (isTextFlowActive && pendingText) {
+    const displayName = userProfile?.name ?? sessionUserName;
+    const toneOverride = detectToneOverride(message);
+
+    if (pendingText.phase === "awaiting_intent") {
+      // User has told us what they want to say — compose the message
+      const effectiveTone: MessageTone = toneOverride ?? pendingText.tone;
+      try {
+        const composed = await composeTextMessage({
+          recipientName: pendingText.recipientName,
+          relationship: pendingText.relationship,
+          tone: effectiveTone,
+          userIntent: message,
+          senderName: displayName,
+        });
+
+        setPendingText({
+          ...pendingText,
+          phase: "awaiting_confirmation",
+          tone: effectiveTone,
+          composedBody: composed.body,
+        });
+
+        const toneNote = effectiveTone === "professional" ? " (professional tone)" : " (casual tone)";
+        systemPrompt +=
+          `\n\n[Text Message Composed for ${pendingText.recipientName}]\n` +
+          `Message body${toneNote}:\n"${composed.body}"\n\n` +
+          `Read this message back to ${displayName} naturally, then ask for confirmation. ` +
+          `Say something like: "Here's what I've got — [read message]. Want me to send that?" ` +
+          `If they want changes, they can say "make it more casual/formal" or describe edits. ` +
+          `Do NOT actually send — just confirm and wait. When they say yes, you will confirm it's ready to send.`;
+
+        req.log.info({ recipient: pendingText.recipientName, tone: effectiveTone }, "[T006] Message composed — awaiting confirmation");
+      } catch (err) {
+        req.log.warn({ err }, "[T006] Message composition failed");
+        setPendingText(null);
+        systemPrompt +=
+          `\n\n[Text Message — Composition Error]\nTell ${displayName} you had trouble composing that message and ask them to try again.`;
+      }
+    } else if (pendingText.phase === "awaiting_confirmation") {
+      if (toneOverride !== null) {
+        // User wants to change the tone — re-compose with existing body as base
+        const effectiveTone = toneOverride;
+        try {
+          const recomposed = await composeTextMessage({
+            recipientName: pendingText.recipientName,
+            relationship: pendingText.relationship,
+            tone: effectiveTone,
+            userIntent: pendingText.composedBody ?? message,
+            senderName: displayName,
+          });
+
+          setPendingText({
+            ...pendingText,
+            tone: effectiveTone,
+            composedBody: recomposed.body,
+          });
+
+          const toneNote = effectiveTone === "professional" ? "more professional" : "more casual";
+          systemPrompt +=
+            `\n\n[Text Message Revised — ${toneNote} tone]\n` +
+            `Message body:\n"${recomposed.body}"\n\n` +
+            `Read the revised message back naturally and ask for confirmation again.`;
+        } catch (err) {
+          req.log.warn({ err }, "[T006] Tone re-compose failed");
+        }
+      } else if (isSendConfirmation(message)) {
+        // User confirmed — return SMS data to native app and clear state
+        const phone = pendingText.recipientPhone ?? "";
+        const body = pendingText.composedBody ?? "";
+        setPendingText(null);
+
+        const smsPayload = { type: "sms_compose", phone, body, recipient: pendingText.recipientName };
+        broadcastToUser(sessionUserName, "sms-compose", smsPayload);
+
+        systemPrompt +=
+          `\n\n[Text Message Confirmed — Ready to Send]\n` +
+          `Recipient: ${pendingText.recipientName}\n` +
+          `Phone: ${phone || "(no phone found — user may need to enter manually)"}\n` +
+          `Body: "${body}"\n\n` +
+          `Tell ${displayName} you've got it ready. If a phone number was found, say: ` +
+          `"Done — opening your SMS app with that message for ${pendingText.recipientName}." ` +
+          `If no phone number was found, say: "I've composed the message but didn't find a phone number for ${pendingText.recipientName} — ` +
+          `I'll open your messages app and you can fill in their number." ` +
+          `Keep it brief and warm.`;
+
+        req.log.info({ recipient: pendingText.recipientName, hasPhone: !!phone }, "[T006] SMS confirmed and broadcast to native app");
+      } else if (isSendCancellation(message)) {
+        // User cancelled
+        setPendingText(null);
+        systemPrompt +=
+          `\n\n[Text Message Cancelled]\nThe user decided not to send the message. ` +
+          `Acknowledge warmly and briefly — "No problem, I've dropped it."`;
+      } else {
+        // Some other response — user might be editing the content
+        try {
+          const revised = await composeTextMessage({
+            recipientName: pendingText.recipientName,
+            relationship: pendingText.relationship,
+            tone: pendingText.tone,
+            userIntent: `Previous draft: "${pendingText.composedBody}". User's feedback/edit: "${message}"`,
+            senderName: displayName,
+          });
+
+          setPendingText({
+            ...pendingText,
+            composedBody: revised.body,
+          });
+
+          systemPrompt +=
+            `\n\n[Text Message Revised]\n` +
+            `Message body:\n"${revised.body}"\n\n` +
+            `Read the revised message back naturally and ask for confirmation.`;
+        } catch (err) {
+          req.log.warn({ err }, "[T006] Revision failed");
+        }
+      }
+    }
+  } else if (isTextMessageRequest) {
+    // Starting a new text message flow
+    const targetName = extractTextTargetName(message);
+    if (targetName) {
+      try {
+        // Look up contact for phone number and relationship
+        const contactResult = await searchContacts(targetName);
+        const contact = contactResult.contacts[0] ?? null;
+        const phone = contact?.phone ?? null;
+
+        // Check if the name matches anyone in the profile for relationship context
+        const profilePeopleAll = ((userProfile?.rawData as CollectedData)?.people ?? []) as Array<{ name: string; relationship?: string }>;
+        const profileMatch = profilePeopleAll.find(
+          (p) => p.name.toLowerCase().includes(targetName.toLowerCase()) ||
+                 targetName.toLowerCase().includes(p.name.split(" ")[0]?.toLowerCase() ?? "")
+        );
+        const relationship = profileMatch?.relationship ?? undefined;
+        const tone = detectToneFromRelationship(relationship);
+        const displayName = userProfile?.name ?? sessionUserName;
+        const toneDesc = tone === "professional" ? "professional" : "casual and warm";
+
+        setPendingText({
+          phase: "awaiting_intent",
+          recipientName: contact?.name ?? targetName,
+          recipientPhone: phone,
+          relationship,
+          tone,
+        });
+
+        const phoneNote = phone ? `I found ${contact?.name ?? targetName}'s number.` : `I didn't find a number for ${targetName} in your contacts, but I'll compose it and you can fill that in.`;
+        const relNote = relationship ? ` Since they're your ${relationship}, I'll keep it ${toneDesc}.` : ` I'll write it ${toneDesc}.`;
+
+        systemPrompt +=
+          `\n\n[Text Message Flow Started — Recipient: ${contact?.name ?? targetName}]\n` +
+          `${phoneNote}${relNote}\n\n` +
+          `Ask ${displayName} what they'd like to say — something like: ` +
+          `"${phoneNote.replace("I", "Got it — ")} What would you like to say?"`;
+
+        req.log.info({ targetName, hasPhone: !!phone, relationship, tone }, "[T006] Text message flow started");
+      } catch (err) {
+        req.log.warn({ err }, "[T006] Contact lookup failed");
+        setPendingText({
+          phase: "awaiting_intent",
+          recipientName: targetName,
+          recipientPhone: null,
+          tone: "casual",
+        });
+        systemPrompt +=
+          `\n\n[Text Message Flow — Contact Lookup Failed]\n` +
+          `Couldn't look up ${targetName} right now. ` +
+          `Ask the user what they'd like to say to ${targetName} and you'll compose it.`;
+      }
     }
   }
 
