@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
 import express from "express";
+import { logger } from "../lib/logger.js";
 import {
   getProfile,
   updateProfileField,
@@ -289,11 +290,33 @@ router.get("/emergency/info", async (req, res) => {
       userProfile?.name ??
       userName;
 
+    logger.info({
+      msg: "[emergency/info] name resolution",
+      authUserName: userName,
+      profileFound: !!userProfile,
+      profileName: userProfile?.name ?? null,
+      rawDataName: (rawData?.name as string | undefined) ?? null,
+      resolvedStoredName: storedName,
+    });
+
     // Fetch people and contacts in parallel using the resolved stored name.
     const [people, contacts] = await Promise.all([
-      getProfileItems("people", storedName).catch(() => []),
-      getCuratedContacts(storedName).catch(() => []),
+      getProfileItems("people", storedName).catch((e) => {
+        logger.error({ msg: "[emergency/info] getProfileItems error", err: String(e) });
+        return [];
+      }),
+      getCuratedContacts(storedName).catch((e) => {
+        logger.error({ msg: "[emergency/info] getCuratedContacts error", err: String(e) });
+        return [];
+      }),
     ]);
+
+    logger.info({
+      msg: "[emergency/info] query results",
+      storedName,
+      peopleCount: people.length,
+      contactsCount: contacts.length,
+    });
 
     // homeAddress lives as a first-class column on user_profiles.
     // Fall back to rawData.homeAddress for older records.
@@ -351,6 +374,7 @@ router.get("/emergency/info", async (req, res) => {
       }),
     });
   } catch (err) {
+    logger.error({ msg: "[emergency/info] unhandled error", err: String(err) });
     res.status(500).json({ error: "Failed to load emergency info" });
   }
 });
