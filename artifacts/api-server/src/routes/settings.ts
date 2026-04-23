@@ -7,7 +7,7 @@ import {
   type CollectedData,
 } from "../onboarding/onboardingManager.js";
 import { authenticate, tryAuthenticate, NATIVE_USER } from "../auth/middleware.js";
-import { getProfilePlaces } from "../profile/profileManager.js";
+import { getProfilePlaces, getProfileItems } from "../profile/profileManager.js";
 
 const router: IRouter = Router();
 
@@ -268,6 +268,32 @@ router.get("/navigation/places", async (req, res) => {
     res.json({ places: [...homePlaces, ...HARDCODED_PLACES, ...extra] });
   } catch {
     res.json({ places: HARDCODED_PLACES });
+  }
+});
+
+// ── GET /api/emergency/info ───────────────────────────────────────────────────
+// Returns home address (from onboarding rawData) and all people saved in
+// profile_items for the emergency screen on the native app.
+router.get("/emergency/info", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  try {
+    const [userProfile, people] = await Promise.all([
+      getProfile(userName).catch(() => null),
+      getProfileItems("people", userName).catch(() => []),
+    ]);
+    const homeAddress =
+      ((userProfile?.rawData as CollectedData)?.homeAddress) ?? null;
+    res.json({
+      homeAddress,
+      people: people.map((p) => ({
+        id: p.id,
+        name: p.name,
+        detail: p.detail ?? null,
+      })),
+    });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to load emergency info" });
   }
 });
 
