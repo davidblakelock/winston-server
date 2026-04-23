@@ -230,18 +230,20 @@ export async function removeCuratedContact(name: string, userName: string): Prom
 // ── Public search API ─────────────────────────────────────────────────────────
 // Always performs a live Google People API lookup — no local cache.
 
-export async function searchContacts(searchQuery: string): Promise<ContactSearchResult> {
+export async function searchContacts(searchQuery: string, userName?: string): Promise<ContactSearchResult> {
   try {
-    console.log(`[CONTACTS] Live search for: "${searchQuery}"`);
+    console.log(`[CONTACTS] Live search for: "${searchQuery}"${userName ? ` (user: ${userName})` : ""}`);
 
-    const tokenInfo = await getAccessToken();
+    const tokenInfo = userName
+      ? await getAccessTokenForUser(userName)
+      : await getAccessToken();
     if (!tokenInfo) {
-      logger.warn("[CONTACTS] searchContacts — no auth token available");
+      logger.warn(`[CONTACTS] searchContacts — no auth token available${userName ? ` for ${userName}` : ""}`);
       return { contacts: [], needsReauth: false, source: "none" };
     }
 
     if (!tokenInfo.hasContactsScope) {
-      logger.warn("[CONTACTS] contacts.readonly scope missing — David needs to reconnect Google");
+      logger.warn(`[CONTACTS] contacts.readonly scope missing${userName ? ` for ${userName}` : ""} — needs to reconnect Google`);
       return { contacts: [], needsReauth: true, source: "none" };
     }
 

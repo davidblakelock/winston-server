@@ -1493,7 +1493,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     if (targetName) {
       try {
         // Look up contact for phone number and relationship
-        const contactResult = await searchContacts(targetName);
+        const contactResult = await searchContacts(targetName, sessionUserName);
         const contact = contactResult.contacts[0] ?? null;
         const phone = contact?.phone ?? null;
 
@@ -2499,7 +2499,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       console.log(`[CONTACT SEARCH] rawQuery="${rawQuery}" finalQuery="${searchQuery}"`);
       if (searchQuery.length > 1) {
         console.log(`[CONTACT SEARCH] Calling Google People API live for: "${searchQuery}"`);
-        const result = await searchContacts(searchQuery).catch(() => ({ contacts: [], needsReauth: false, source: "none" as const }));
+        const result = await searchContacts(searchQuery, sessionUserName).catch(() => ({ contacts: [], needsReauth: false, source: "none" as const }));
         console.log(`[CONTACT SEARCH] Returned ${(result as {contacts:unknown[]}).contacts?.length ?? 0} result(s) from People API`);
 
         // ── Compound intent: find AND save in one request ────────────────────
@@ -2556,7 +2556,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
       if (explicitNameMatch?.[1]) {
         // Name was in the message — do a live lookup
-        const { contacts } = await searchContacts(explicitNameMatch[1].trim()).catch(() => ({ contacts: emptyContacts, needsReauth: false, source: "none" as const }));
+        const { contacts } = await searchContacts(explicitNameMatch[1].trim(), sessionUserName).catch(() => ({ contacts: emptyContacts, needsReauth: false, source: "none" as const }));
         if (contacts.length > 0) contactToSave = contacts[0];
       } else {
         // "Yes, save her/him/them" — extract name from last assistant message
@@ -2567,7 +2567,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           const verifiedMatch = lastAssistant.content.match(/(?:found|here(?:'s|\s+is))\s+([\w\s]+?)(?:'s|\s+in\s+your\s+contacts|\s+—|\.|,)/i);
           const candidateName = (bulletMatch?.[1] ?? verifiedMatch?.[1] ?? "").trim();
           if (candidateName.length > 2) {
-            const { contacts } = await searchContacts(candidateName).catch(() => ({ contacts: emptyContacts, needsReauth: false, source: "none" as const }));
+            const { contacts } = await searchContacts(candidateName, sessionUserName).catch(() => ({ contacts: emptyContacts, needsReauth: false, source: "none" as const }));
             if (contacts.length > 0) contactToSave = contacts[0];
           }
         }
@@ -2640,7 +2640,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
         // Tier 3: live Google Contacts API search
         if (!foundPhone) {
-          const searchResult = await searchContacts(callTargetName).catch(() => ({ contacts: [], needsReauth: false, source: "none" as const }));
+          const searchResult = await searchContacts(callTargetName, sessionUserName).catch(() => ({ contacts: [], needsReauth: false, source: "none" as const }));
           if (searchResult.contacts.length > 0) {
             const liveMatch = searchResult.contacts[0];
             foundPhone = liveMatch.phone ?? null;
