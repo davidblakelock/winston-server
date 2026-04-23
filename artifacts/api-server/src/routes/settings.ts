@@ -324,6 +324,13 @@ router.get("/emergency/info", async (req, res) => {
       userProfile?.name ??
       userName;
 
+    // Build a deduplicated list of candidate usernames for database queries.
+    // Data may have been written under `storedName` ("David"), `NATIVE_USER`
+    // ("davidblakelock"), or both depending on which auth path was used when
+    // the data was saved. Querying across all candidates means the endpoint
+    // returns correctly regardless of Bearer vs x-api-key auth.
+    const candidateNames = Array.from(new Set([storedName, NATIVE_USER]));
+
     logger.info({
       msg: "[emergency/info] STEP-3 name resolution",
       authUserName: userName,
@@ -331,49 +338,75 @@ router.get("/emergency/info", async (req, res) => {
       profileName: userProfile?.name ?? null,
       rawDataName: (rawData?.name as string | undefined) ?? null,
       resolvedStoredName: storedName,
+      candidateNames,
     });
 
-    // ── STEP 4: Raw profile_items query ───────────────────────────────────
-    const itemsSql = `SELECT id, category, name, detail, created_at FROM profile_items WHERE user_name = $1 AND category = $2 ORDER BY created_at ASC`;
-    logger.info({ msg: "[emergency/info] STEP-4 running profile_items query", sql: itemsSql, params: [storedName, "people"] });
+    // ── STEP 4: Raw profile_items query (all candidate usernames) ──────────
+    const itemsSql = `SELECT id, category, name, detail, created_at FROM profile_items WHERE user_name = ANY($1::text[]) AND category = $2 ORDER BY created_at ASC`;
+    logger.info({ msg: "[emergency/info] STEP-4 running profile_items query", sql: itemsSql, params: [candidateNames, "people"] });
     const itemsRaw = await query<{ id: number; category: string; name: string; detail: string | null }>(
-      itemsSql, [storedName, "people"]
+      itemsSql, [candidateNames, "people"]
     ).catch((e) => { logger.error({ msg: "[emergency/info] STEP-4 profile_items error", err: String(e) }); return { rows: [] }; });
     logger.info({
       msg: "[emergency/info] STEP-4 profile_items raw result",
-      queryUserName: storedName,
+      candidateNames,
       rowCount: itemsRaw.rows.length,
       rows: itemsRaw.rows.map(r => ({ id: r.id, name: r.name, detail: r.detail?.slice(0, 60) ?? null })),
     });
 
-    // ── STEP 5: curated contacts raw query ────────────────────────────────
-    const contactsSql = `SELECT display_name, phone FROM google_contacts WHERE user_name = $1 LIMIT 20`;
-    logger.info({ msg: "[emergency/info] STEP-5 running contacts query", sql: contactsSql, params: [storedName] });
+    // ── STEP 5: curated contacts raw query (all candidate usernames) ────────
+    const contactsSql = `SELECT display_name, phone FROM google_contacts WHERE user_name = ANY($1::text[]) LIMIT 20`;
+    logger.info({ msg: "[emergency/info] STEP-5 running contacts query", sql: contactsSql, params: [candidateNames] });
     const contactsRaw = await query<{ display_name: string; phone: string | null }>(
-      contactsSql, [storedName]
+      contactsSql, [candidateNames]
     ).catch((e) => { logger.error({ msg: "[emergency/info] STEP-5 contacts query error", err: String(e) }); return { rows: [] }; });
     logger.info({
       msg: "[emergency/info] STEP-5 contacts raw result",
-      queryUserName: storedName,
+      candidateNames,
       rowCount: contactsRaw.rows.length,
       rows: contactsRaw.rows.slice(0, 5).map(r => ({ name: r.display_name, hasPhone: !!r.phone })),
     });
 
-    // Fetch people and contacts in parallel using the resolved stored name.
-    const [people, contacts] = await Promise.all([
-      getProfileItems("people", storedName).catch((e) => {
-        logger.error({ msg: "[emergency/info] getProfileItems error", err: String(e) });
-        return [];
+    // Fetch people and contacts using raw SQL across all candidate names so
+    // we always find the data regardless of which username it was saved under.
+    const [peopleRows, contactRows] = await Promise.all([
+      query<{ id: number; category: string; name: string; detail: string | null }>(
+        `SELECT id, category, name, detail FROM profile_items WHERE user_name = ANY($1::text[]) AND category = 'people' ORDER BY created_at ASC`,
+        [candidateNames]
+      ).then(r => r.rows).catch((e) => {
+        logger.error({ msg: "[emergency/info] people fetch error", err: String(e) });
+        return [] as { id: number; category: string; name: string; detail: string | null }[];
       }),
-      getCuratedContacts(storedName).catch((e) => {
-        logger.error({ msg: "[emergency/info] getCuratedContacts error", err: String(e) });
-        return [];
+      query<{ display_name: string; phone: string | null }>(
+        `SELECT display_name, phone FROM google_contacts WHERE user_name = ANY($1::text[]) LIMIT 50`,
+        [candidateNames]
+      ).then(r => r.rows).catch((e) => {
+        logger.error({ msg: "[emergency/info] contacts fetch error", err: String(e) });
+        return [] as { display_name: string; phone: string | null }[];
       }),
     ]);
 
+    // Deduplicate people by name (in case the same person appears under both usernames)
+    const seenPeople = new Set<string>();
+    const people = peopleRows.filter(p => {
+      const key = p.name.trim().toLowerCase();
+      if (seenPeople.has(key)) return false;
+      seenPeople.add(key);
+      return true;
+    });
+
+    // Deduplicate contacts by display_name
+    const seenContacts = new Set<string>();
+    const contacts = contactRows.filter(c => {
+      const key = c.display_name.trim().toLowerCase();
+      if (seenContacts.has(key)) return false;
+      seenContacts.add(key);
+      return true;
+    }).map(c => ({ name: c.display_name, phone: c.phone }));
+
     logger.info({
       msg: "[emergency/info] STEP-6 final counts",
-      storedName,
+      candidateNames,
       peopleCount: people.length,
       contactsCount: contacts.length,
     });
