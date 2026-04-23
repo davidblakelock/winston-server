@@ -142,6 +142,9 @@ export interface SmsPayload {
   body: string;
   recipient: string;
   smsUri: string;
+  // Stored so the flow can be restarted for editing after send
+  relationship?: string;
+  tone?: MessageTone;
 }
 
 let _pendingText: PendingTextState | null = null;
@@ -149,7 +152,7 @@ let _pendingText: PendingTextState | null = null;
 // retry if the native app didn't open Messages successfully.
 let _lastSmsPayload: SmsPayload | null = null;
 let _lastSmsPayloadAt: number = 0;
-const SMS_RETRY_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
+const SMS_RETRY_WINDOW_MS = 30 * 60 * 1000; // 30 minutes — covers the time user spends in Messages app
 
 export function getPendingText(): PendingTextState | null {
   return _pendingText;

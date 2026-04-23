@@ -565,6 +565,8 @@ CONVERSATION FOCUS — CRITICAL: Never reference topics from earlier in the conv
 
 LISTS — STRICT RULE: You have no independent knowledge of what is on David's lists. If you are asked about a list and no [List …] context block appears above in this prompt, you MUST NOT guess or invent any items. Say exactly: "I had trouble reading your list — try checking the list screen directly." This applies even if you think you remember items from earlier in the conversation.
 
+TEXT MESSAGES — ABSOLUTE RULE: You can COMPOSE text messages for David, but you CANNOT send them, edit them independently, or do anything to his Messages app directly. The only actions you are capable of are: (1) drafting a message when [Text Message Composed] or [Text Message Revised] appears in your context above, and (2) handing the draft to David's Messages app for him to tap Send. If David asks you to edit, change, send, or do anything with a text message and NO [Text Message Composed] or [Text Message Revised] block appears in your current context, you MUST say: "That text was already handed off to your Messages app — I can't edit it there. Just say 'text [name]' and I'll compose a fresh one." NEVER say "Done", "Updated", "I've changed it", "Opening Messages", or imply any action was taken unless a [Text Message] context block is present.
+
 When you confirm a reminder has been set, reply with ONLY the confirmation — nothing else. No personality additions, no references to previous conversation topics, no extra commentary. Exact format: "Done — I'll remind you to [text] at [time]." For recurring: "Set — I'll remind you to [text] every [day/morning/etc] at [time]." That line alone, nothing before or after it.
 
 PRIVACY: If David ever asks about his privacy, how his data is handled, or whether Winston sells his information, reassure him clearly and warmly: Winston never sells his data — everything he shares stays private and is used only to make his experience better. Let him know the full Privacy Policy is always available in the app if he wants to read it.
@@ -845,11 +847,22 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const pendingText = getPendingText();
   const isTextMessageRequest = !isMorningGreeting && TEXT_MESSAGE_PATTERN.test(message);
   const isTextFlowActive = !isMorningGreeting && pendingText !== null;
-  // Retry: user says something like "it didn't open" / "try again" within 5 min of last SMS dispatch
+  // Retry: user says something like "it didn't open" / "try again" within 30 min of last SMS dispatch
   const SMS_RETRY_PATTERN = /\b(it\s+didn.?t\s+(open|work)|try\s+again|open\s+(messages|messaging|it)\s+again|send\s+it\s+again|retry|re-?send|messages\s+(didn.?t|didn.t)\s+open)\b/i;
   const lastSmsPayload = getLastSmsPayload();
   const isSmsRetryRequest = !isMorningGreeting && !isTextFlowActive && !isTextMessageRequest
     && !!lastSmsPayload && SMS_RETRY_PATTERN.test(message);
+
+  // Edit-after-send: user asks to change the message AFTER it was already dispatched.
+  // Catches: "edit that", "make it shorter", "change the message", "add James Bond to it", etc.
+  // Requires lastSmsPayload to be set (dispatched within 30 min) AND the message to contain
+  // edit-like words AND either "message"/"text" or the recipient's first name.
+  const SMS_EDIT_WORDS = /\b(edit|change|fix|update|redo|revise|rewrite|shorten|lengthen|shorter|longer|make\s+it|add\s+.{1,40}\s+(to|back)|remove|that('?s|\s+is)\s+not\s+right|wasn'?t\s+right|more\s+(casual|formal|professional|friendly|concise|brief)|less\s+(formal|stuffy)|different\s+(version|wording|way))\b/i;
+  const isSmsEditAfterSend = !isMorningGreeting && !isTextFlowActive && !isTextMessageRequest
+    && !isSmsRetryRequest && !!lastSmsPayload && SMS_EDIT_WORDS.test(message)
+    && (/(message|text)/i.test(message)
+        || (lastSmsPayload.recipient.split(" ")[0].length > 2
+            && message.toLowerCase().includes(lastSmsPayload.recipient.split(" ")[0].toLowerCase())));
 
   // ── Sleep reminder: gently note the time if after 11pm CT (once per night) ──
   const chicagoHour = new Date().toLocaleString("en-US", { timeZone: "America/Chicago", hour: "numeric", hour12: false });
@@ -1477,9 +1490,16 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           ? `sms:${phone}?body=${encodedBody}`
           : `sms:?body=${encodedBody}`;
 
-        const smsPayload = { phone, body, recipient: recipientName, smsUri };
+        const smsPayload = {
+          phone,
+          body,
+          recipient: recipientName,
+          smsUri,
+          relationship: pendingText.relationship,
+          tone: pendingText.tone,
+        };
         (req as any)._smsPayload = smsPayload;
-        setLastSmsPayload(smsPayload); // persist for retry within 5 min
+        setLastSmsPayload(smsPayload); // persist for edit/retry within 30 min
         broadcastToUser(sessionUserName, "sms-compose", { type: "sms_compose", ...smsPayload });
 
         // Hardcode the verbal response — do NOT call Claude for this turn.
@@ -1590,6 +1610,64 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     (req as any)._hardcodedResponse = retryText;
     broadcastToUser(sessionUserName, "sms-compose", { type: "sms_compose", ...lastSmsPayload });
     req.log.info({ recipient: lastSmsPayload.recipient }, "[T006-retry] Re-firing last SMS payload");
+  }
+
+  // ── T006-edit-after-send: user wants to edit the message after it was dispatched ──
+  // Restart the flow in awaiting_confirmation with the existing draft body so the
+  // user can edit it and re-confirm without starting over from scratch.
+  if (isSmsEditAfterSend && lastSmsPayload) {
+    const displayName = userProfile?.name ?? sessionUserName;
+    // Rehydrate pending state from the stored payload
+    setPendingText({
+      phase: "awaiting_confirmation",
+      recipientName: lastSmsPayload.recipient,
+      recipientPhone: lastSmsPayload.phone || null,
+      relationship: lastSmsPayload.relationship,
+      tone: lastSmsPayload.tone ?? "casual",
+      composedBody: lastSmsPayload.body,
+    });
+
+    // Now process the edit request exactly like an in-flow edit —
+    // compose a revised version using the user's feedback
+    const displayTone = lastSmsPayload.tone ?? "casual";
+    try {
+      const revised = await composeTextMessage({
+        recipientName: lastSmsPayload.recipient,
+        relationship: lastSmsPayload.relationship,
+        tone: displayTone,
+        userIntent: `Previous draft: "${lastSmsPayload.body}". User's edit request: "${message}"`,
+        senderName: displayName,
+      });
+
+      setPendingText({
+        phase: "awaiting_confirmation",
+        recipientName: lastSmsPayload.recipient,
+        recipientPhone: lastSmsPayload.phone || null,
+        relationship: lastSmsPayload.relationship,
+        tone: displayTone,
+        composedBody: revised.body,
+      });
+
+      systemPrompt +=
+        `\n\n[Text Message Revised — edit after send]\n` +
+        `Previous draft was already handed off to Messages app. User asked to edit it.\n` +
+        `Revised message body:\n"${revised.body}"\n\n` +
+        `Read the revised message back word for word, then ask: ` +
+        `"Does that work? Say yes and I'll hand it off to your Messages app again." ` +
+        `CRITICAL HONESTY RULES: ` +
+        `(1) You are composing — you are NOT sending it and you CANNOT send it. ` +
+        `(2) The Messages app only opens AFTER the user says yes. Do NOT say it is opening now. ` +
+        `(3) Never say "sending now", "opening Messages", or imply immediate action.`;
+
+      req.log.info({ recipient: lastSmsPayload.recipient }, "[T006-edit-after-send] Revised draft, restarted flow");
+    } catch (err) {
+      req.log.warn({ err }, "[T006-edit-after-send] Revision failed");
+      // Reset state on failure — don't leave a corrupted flow
+      setPendingText(null);
+      systemPrompt +=
+        `\n\n[Text Message Edit Failed]\n` +
+        `Tell ${displayName} honestly: "I had trouble revising that. Just say 'text ${lastSmsPayload.recipient}' and I'll start fresh."`;
+    }
   }
 
   // ── Local events injection ──────────────────────────────────────────────────
