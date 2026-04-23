@@ -1446,26 +1446,31 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           req.log.warn({ err }, "[T006] Tone re-compose failed");
         }
       } else if (isSendConfirmation(message)) {
-        // User confirmed — return SMS data to native app and clear state
+        // User confirmed — package SMS data for the native app response and clear state
         const phone = pendingText.recipientPhone ?? "";
         const body = pendingText.composedBody ?? "";
+        const recipientName = pendingText.recipientName;
         setPendingText(null);
 
-        const smsPayload = { type: "sms_compose", phone, body, recipient: pendingText.recipientName };
-        broadcastToUser(sessionUserName, "sms-compose", smsPayload);
+        // Store on request so the native response handler can attach it to the JSON.
+        // SSE broadcast is kept for web clients that ARE connected.
+        const smsPayload = { phone, body, recipient: recipientName };
+        (req as any)._smsPayload = smsPayload;
+        broadcastToUser(sessionUserName, "sms-compose", { type: "sms_compose", ...smsPayload });
 
         systemPrompt +=
           `\n\n[Text Message Confirmed — Ready to Send]\n` +
-          `Recipient: ${pendingText.recipientName}\n` +
-          `Phone: ${phone || "(no phone found — user may need to enter manually)"}\n` +
+          `Recipient: ${recipientName}\n` +
+          `Phone: ${phone || "(no phone found — user will need to enter manually)"}\n` +
           `Body: "${body}"\n\n` +
-          `Tell ${displayName} you've got it ready. If a phone number was found, say: ` +
-          `"Done — opening your SMS app with that message for ${pendingText.recipientName}." ` +
-          `If no phone number was found, say: "I've composed the message but didn't find a phone number for ${pendingText.recipientName} — ` +
-          `I'll open your messages app and you can fill in their number." ` +
-          `Keep it brief and warm.`;
+          `The message has been packaged and sent to the app to open the SMS composer. ` +
+          `Tell ${displayName} in ONE short sentence: ` +
+          `"Got it — your Messages app will open with that ready to send to ${recipientName}." ` +
+          `If no phone number was found, say instead: "Composed — your Messages app will open, ` +
+          `just fill in ${recipientName}'s number before you hit send." ` +
+          `Do NOT say you sent it — the user taps Send in the Messages app. Keep it brief.`;
 
-        req.log.info({ recipient: pendingText.recipientName, hasPhone: !!phone }, "[T006] SMS confirmed and broadcast to native app");
+        req.log.info({ recipient: recipientName, hasPhone: !!phone }, "[T006] SMS packaged for native app");
       } else if (isSendCancellation(message)) {
         // User cancelled
         setPendingText(null);
@@ -2787,7 +2792,10 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         nativeResp.content[0]?.type === "text" ? nativeResp.content[0].text : "";
       // [DIAG] Log the actual response text sent back to native app
       req.log.info({ responsePreview: nativeReply.slice(0, 300) }, "[DIAG:4] Native response sent");
-      res.json({ response: nativeReply, ...(navigationUrl ? { navigationUrl } : {}) });
+      const nativeResponseBody: Record<string, unknown> = { response: nativeReply };
+      if (navigationUrl) nativeResponseBody.navigationUrl = navigationUrl;
+      if ((req as any)._smsPayload) nativeResponseBody.smsPayload = (req as any)._smsPayload;
+      res.json(nativeResponseBody);
     } catch (err: unknown) {
       const errStatus = (err as Record<string, unknown>)?.status as number | undefined;
       req.log.error({ err, errStatus }, "Claude native error");
