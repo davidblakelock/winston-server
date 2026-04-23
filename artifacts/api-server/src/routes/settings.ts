@@ -8,6 +8,7 @@ import {
 } from "../onboarding/onboardingManager.js";
 import { authenticate, tryAuthenticate, NATIVE_USER } from "../auth/middleware.js";
 import { getProfilePlaces, getProfileItems } from "../profile/profileManager.js";
+import { getCuratedContacts } from "../google/contacts.js";
 
 const router: IRouter = Router();
 
@@ -272,25 +273,82 @@ router.get("/navigation/places", async (req, res) => {
 });
 
 // ── GET /api/emergency/info ───────────────────────────────────────────────────
-// Returns home address (from onboarding rawData) and all people saved in
-// profile_items for the emergency screen on the native app.
+// Returns home address and all people saved in profile_items with phone numbers
+// (resolved from curated contacts) for the emergency screen on the native app.
 router.get("/emergency/info", async (req, res) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
   try {
-    const [userProfile, people] = await Promise.all([
-      getProfile(userName).catch(() => null),
-      getProfileItems("people", userName).catch(() => []),
+    // Fetch the profile first to resolve the stored display name.
+    // Profile items and contacts are keyed by display name (e.g. "David"),
+    // not by login user_name (e.g. "davidblakelock") in legacy data.
+    const userProfile = await getProfile(userName).catch(() => null);
+    const rawData = userProfile?.rawData as CollectedData | undefined;
+    const storedName: string =
+      (rawData?.name as string | undefined) ??
+      userProfile?.name ??
+      userName;
+
+    // Fetch people and contacts in parallel using the resolved stored name.
+    const [people, contacts] = await Promise.all([
+      getProfileItems("people", storedName).catch(() => []),
+      getCuratedContacts(storedName).catch(() => []),
     ]);
+
+    // homeAddress lives as a first-class column on user_profiles.
+    // Fall back to rawData.homeAddress for older records.
     const homeAddress =
-      ((userProfile?.rawData as CollectedData)?.homeAddress) ?? null;
+      userProfile?.homeAddress ??
+      (rawData?.homeAddress as string | undefined) ??
+      null;
+
+    // Build a normalised name → phone lookup from curated contacts.
+    // Index by full name and by first name so partial matches work.
+    const phoneByName = new Map<string, string>();
+    for (const c of contacts) {
+      if (!c.phone) continue;
+      phoneByName.set(c.name.trim().toLowerCase(), c.phone);
+      const firstName = c.name.trim().split(/\s+/)[0].toLowerCase();
+      if (!phoneByName.has(firstName)) phoneByName.set(firstName, c.phone);
+    }
+
+    // Extract a phone number embedded in a detail string.
+    // Detail can contain a phone number at the start: "+16462994839 | email | address"
+    const extractPhoneFromDetail = (detail: string | null): string | null => {
+      if (!detail) return null;
+      const m = detail.match(/(\+?1?[\s\-.]?\(?\d{3}\)?[\s\-.]?\d{3}[\s\-.]?\d{4})/);
+      return m?.[1]?.trim() ?? null;
+    };
+
+    // Resolve relationship label from free-text detail.
+    // Detail is typically "relationship — extra info", e.g. "daughter — attends UT"
+    // or a pipe-separated string "+phone | email | address" where first token is the phone.
+    const extractRelationship = (detail: string | null): string | null => {
+      if (!detail) return null;
+      // If detail starts with a phone/email, it's the contact-data format — no relationship text.
+      if (/^(\+?[\d\s\-.(]+)/.test(detail.trim())) return null;
+      const part = detail.split(/[—\-–|]/)[0].trim();
+      return part || null;
+    };
+
     res.json({
       homeAddress,
-      people: people.map((p) => ({
-        id: p.id,
-        name: p.name,
-        detail: p.detail ?? null,
-      })),
+      people: people.map((p) => {
+        const nameLower = p.name.trim().toLowerCase();
+        const firstName = nameLower.split(/\s+/)[0];
+        const phone =
+          phoneByName.get(nameLower) ??
+          phoneByName.get(firstName) ??
+          extractPhoneFromDetail(p.detail) ??
+          null;
+        return {
+          id: p.id,
+          name: p.name,
+          relationship: extractRelationship(p.detail),
+          phone,
+          detail: p.detail ?? null,
+        };
+      }),
     });
   } catch (err) {
     res.status(500).json({ error: "Failed to load emergency info" });
