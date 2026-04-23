@@ -1450,47 +1450,32 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           req.log.warn({ err }, "[T006] Tone re-compose failed");
         }
       } else if (isSendConfirmation(message)) {
-        // User confirmed — package SMS data for the native app response and clear state
+        // User confirmed — package SMS data and bypass Claude entirely.
+        // Claude cannot reliably be instructed not to claim it sent the message,
+        // so we hardcode the confirmation response server-side.
         const phone = pendingText.recipientPhone ?? "";
         const body = pendingText.composedBody ?? "";
         const recipientName = pendingText.recipientName;
         setPendingText(null);
 
-        // Store composition context so we can inject it as a fake prior turn in
-        // the conversation — gives Claude in-conversation context for "send it".
-        (req as any)._smsCompositionContext = { recipientName, body };
-
         // Build an sms: URI for Android's standard messaging app.
         // Format: sms:<phone>?body=<encoded>  (phone is optional — omit if blank)
-        // The Android app fires this as an Intent to open the SMS composer.
         const encodedBody = encodeURIComponent(body);
         const smsUri = phone
           ? `sms:${phone}?body=${encodedBody}`
           : `sms:?body=${encodedBody}`;
 
-        // Store payload on request so the native response handler can attach it to the JSON.
-        // SSE broadcast is kept for web clients that ARE connected.
         const smsPayload = { phone, body, recipient: recipientName, smsUri };
         (req as any)._smsPayload = smsPayload;
         broadcastToUser(sessionUserName, "sms-compose", { type: "sms_compose", ...smsPayload });
 
-        systemPrompt +=
-          `\n\n[SMS COMPOSER QUEUED — READ THIS CAREFULLY]\n` +
-          `⚠️ YOU HAVE NOT SENT THIS MESSAGE. YOU CANNOT SEND TEXT MESSAGES. ⚠️\n` +
-          `The app will open the Messages composer with this text pre-filled — ` +
-          `${displayName} must tap Send themselves. The message has NOT been delivered.\n\n` +
-          `Recipient: ${recipientName}\n` +
-          `Phone: ${phone || "(not found — user must enter it)"}\n` +
-          `Body: "${body}"\n\n` +
-          `REQUIRED: Say EXACTLY one of these two sentences (nothing more):\n` +
-          (phone
-            ? `→ "Got it — your Messages app will open with that ready for you to send to ${recipientName}."\n`
-            : `→ "Composed — your Messages app will open with the text ready, just fill in ${recipientName}'s number before you tap Send."\n`) +
-          `\nFORBIDDEN WORDS/PHRASES: "sent", "I've sent", "I sent", "delivered", ` +
-          `"she should receive", "he should receive", "they should receive", "on its way", ` +
-          `"message sent", "text sent". Using any of these is factually wrong.`;
+        // Hardcode the verbal response — do NOT call Claude for this turn.
+        const confirmationText = phone
+          ? `Got it — your Messages app will open with that pre-filled for ${recipientName}. Just tap Send.`
+          : `Composed — your Messages app will open with the text ready. Fill in ${recipientName}'s number and tap Send.`;
+        (req as any)._hardcodedResponse = confirmationText;
 
-        req.log.info({ recipient: recipientName, hasPhone: !!phone }, "[T006] SMS packaged for native app");
+        req.log.info({ recipient: recipientName, hasPhone: !!phone }, "[T006] SMS packaged — hardcoded response, skipping Claude");
       } else if (isSendCancellation(message)) {
         // User cancelled
         setPendingText(null);
@@ -2820,6 +2805,16 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
   // ── Native mode: call Claude synchronously, return single JSON object ────
   if ((req as any)._nativeMode === true) {
+    // Short-circuit: if a hardcoded response is set (e.g. SMS confirmation),
+    // skip Claude entirely — Claude cannot reliably avoid lying about sending texts.
+    if ((req as any)._hardcodedResponse) {
+      const hardcoded = (req as any)._hardcodedResponse as string;
+      req.log.info({ responsePreview: hardcoded }, "[DIAG:4] Native response sent (hardcoded)");
+      const hardcodedBody: Record<string, unknown> = { response: hardcoded };
+      if ((req as any)._smsPayload) hardcodedBody.smsPayload = (req as any)._smsPayload;
+      res.json(hardcodedBody);
+      return;
+    }
     try {
       const nativeResp = await anthropic.messages.create({
         model: "claude-opus-4-5",
@@ -2861,6 +2856,30 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
   let reply = "";
   let streamError = false;
+
+  // Short-circuit: if a hardcoded response is set (e.g. SMS confirmation),
+  // skip Claude and stream the fixed text directly.
+  if ((req as any)._hardcodedResponse) {
+    const hardcoded = (req as any)._hardcodedResponse as string;
+    const smsPayload = (req as any)._smsPayload;
+    sendSSE({ text: hardcoded });
+    sendSSE({ done: true, messageId, ...(smsPayload ? { smsPayload } : {}) });
+    // Broadcast to other devices and let the standard post-SSE sync pick it up
+    broadcastToUser(sessionUserName, "chat_sync", {
+      role: "assistant",
+      content: hardcoded,
+      messageId,
+      createdAt: new Date().toISOString(),
+      senderDeviceId: deviceId ?? null,
+    });
+    broadcastToUser(sessionUserName, "speak_sync", {
+      text: hardcoded,
+      messageId,
+      initiated_by: deviceId ?? null,
+    });
+    res.end();
+    return;
+  }
 
   try {
     const stream = await anthropic.messages.create({

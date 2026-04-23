@@ -96,13 +96,18 @@ export async function composeTextMessage(opts: ComposeTextOptions): Promise<Comp
     : `The recipient is a contact of ${senderName}'s.`;
 
   const prompt =
-    `You are composing a text message for ${senderName} to send to ${recipientName}.\n` +
+    `Write a text message FROM ${senderName} TO ${recipientName}.\n` +
     `${relContext}\n\n` +
+    `CRITICAL: Write in FIRST PERSON as ${senderName}. ` +
+    `The message must sound like ${senderName} wrote it themselves — ` +
+    `use "I", "me", "my". DO NOT write in third person. ` +
+    `DO NOT introduce yourself as an AI, assistant, or by any name. ` +
+    `DO NOT say "this is [name]" or "on behalf of". ` +
+    `Write exactly as ${senderName} would text — natural, direct, personal.\n\n` +
     `TONE: ${toneInstruction}\n\n` +
     `WHAT ${senderName.toUpperCase()} WANTS TO SAY:\n${userIntent}\n\n` +
-    `Write ONLY the text message body — no preamble, no explanation, no quotes around it. ` +
-    `Keep it concise (1-4 sentences unless the content requires more). ` +
-    `Do NOT add a signature unless it feels very natural for the tone.`;
+    `Write ONLY the message body. No preamble. No explanation. No quotes around it. ` +
+    `Keep it concise (1-4 sentences). No signature.`;
 
   const response = await anthropic.messages.create({
     model: "claude-opus-4-5",
