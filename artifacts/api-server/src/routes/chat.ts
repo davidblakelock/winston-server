@@ -322,7 +322,17 @@ const TV_LIST_PATTERN = /\b(what\s+shows?\s+(am\s+i|are\s+we|do\s+i)\s+(watching
 const CONTACT_PATTERN = /\b(find|look\s+up|search|get|what(?:'?s)?|pull\s+up|add|do\s+you\s+have)\b.{0,60}\b(contact|phone|number|email|info(?:rmation)?)\b|\b(contact|phone|number|email|info(?:rmation)?)\b.{0,40}\bfor\b|\b(in\s+my\s+contacts?|from\s+my\s+contacts?|my\s+contacts?)\b|\b(find|look\s+up|search\s+for|pull\s+up)\b\s+(\w+(?:\s+\w+)+)/i;
 // Detects compound intent: "find X in my contacts AND add/save him/her to my profile/Winston"
 // These must be handled as a single sequential operation: lookup → save, never save-first.
-const COMPOUND_CONTACT_SAVE_PATTERN = /(?:find|look\s+up|search(?:\s+for)?|get)\s+.{1,60}\s+(?:in\s+(?:my\s+)?contacts?|from\s+(?:my\s+)?contacts?).{0,80}(?:add|save|put)\s+(?:him|her|them|it)\s+(?:to|in|into)\s+(?:my\s+)?(?:winston\s+)?(?:profile|contacts?|list)/i;
+const COMPOUND_CONTACT_SAVE_PATTERN = new RegExp(
+  // Form A: "Find X in my contacts and add him/her to my profile"
+  "(?:find|look\\s+up|search(?:\\s+for)?|get)\\s+.{1,60}\\s+(?:in\\s+(?:my\\s+)?contacts?|from\\s+(?:my\\s+)?contacts?).{0,80}(?:add|save|put)\\s+(?:him|her|them|it)\\s+(?:to|in|into)\\s+(?:my\\s+)?(?:winston\\s+)?(?:profile|contacts?|list)" +
+  "|" +
+  // Form B: "Add/Save/Remember X from/in my contacts" — intent is always find+save
+  "(?:add|save|remember)\\s+(?:[A-Za-z'.]+\\s+){0,3}[A-Za-z'.]+\\s+(?:from|in|to)\\s+(?:my\\s+)?(?:winston\\s+)?contacts?" +
+  "|" +
+  // Form C: "Add/Save X to my Winston contacts/profile"
+  "(?:add|save|remember)\\s+(?:[A-Za-z'.]+\\s+){0,3}[A-Za-z'.]+\\s+(?:to|in)\\s+(?:my\\s+)?(?:winston\\s+)?(?:contacts?|profile)",
+  "i"
+);
 // Detects when David explicitly wants to save a contact to his curated Winston list
 const SAVE_CONTACT_PATTERN = /\b(yes,?\s+)?(save|remember|add|keep)\s+(her|him|them|this\s+(contact|person))(\s+to\s+(my\s+)?(winston\s+)?(contacts?|list))?\b|\b(save|add)\s+((?:\w+\s+){1,3}\w+)\s+to\s+my\s+(winston\s+)?(contacts?|list)\b|\b(remember|save)\s+((?:\w+\s+){1,3}\w+)\s+in\s+my\s+(winston\s+)?(contacts?|list)\b/i;
 // Detects "call [name]", "phone [name]", "dial [name]", "ring [name]", "give [name] a call/ring"
@@ -2474,11 +2484,11 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         // P0a (compound find+save without "in my contacts"):
         //   "Find [Name] and add/save him/her to my profile/contacts/Winston"
         //   Must come before P0 so it wins when there's no "in my contacts" phrase
-        message.match(/(?:find|look\s+up|search(?:\s+for)?|get|pull\s+up)\s+((?:[A-Za-z'.]+\s+){0,3}[A-Za-z'.]+?)\s+and\s+(?:add|save|put)\s+(?:him|her|them)\b/i) ??
-        // P0 (compound): "Find [Name] in my contacts and add him to my profile"
+        message.match(/(?:find|look\s+up|search(?:\s+for)?|get|pull\s+up|add|save|remember)\s+((?:[A-Za-z'.]+\s+){0,3}[A-Za-z'.]+?)\s+and\s+(?:add|save|put)\s+(?:him|her|them)\b/i) ??
+        // P0 (compound): "Find/Add [Name] in/from my contacts and add him to my profile"
         //   → extract the name that comes between the action verb and "in/from my contacts"
         //   Allows periods so "Dr. John Smith", "Mr. Jones" etc. are captured correctly
-        message.match(/(?:find|look\s+up|search(?:\s+for)?|get|pull\s+up)\s+((?:[A-Za-z'.]+\s+){0,3}[A-Za-z'.]+)\s+(?:in|from)\s+(?:my\s+)?contacts?/i) ??
+        message.match(/(?:find|look\s+up|search(?:\s+for)?|get|pull\s+up|add|save|remember)\s+((?:[A-Za-z'.]+\s+){0,3}[A-Za-z'.]+)\s+(?:in|from)\s+(?:my\s+)?contacts?/i) ??
         // P1: "Do you have NAME's phone/email/number"
         message.match(/do\s+you\s+have\s+((?:\w+\s+){0,3}\w+)['']s\s+(?:phone|number|email|contact|info(?:rmation)?|address)/i) ??
         // P2: "Get me / Find me NAME's phone/email/information"
@@ -2486,14 +2496,14 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         // P3: "What's / What is NAME's phone/email"
         message.match(/what(?:['']s?|\s+is)\s+((?:\w+\s+){0,3}\w+)['']s\s+(?:phone|number|email|contact|info(?:rmation)?|address)/i) ??
         // P4: "find/look up/get NAME's phone" — action verb + possessive
-        message.match(/(?:find|look\s+up|search(?:\s+for)?|get|pull\s+up)\s+((?:\w+\s+){0,3}\w+)['']s\s+(?:phone|number|email|contact|info(?:rmation)?|address)/i) ??
-        // P5: "find/look up NAME" — action verb + plain name at end of message
-        message.match(/(?:find|look\s+up|search(?:\s+for)?|get|pull\s+up)\s+((?:\w+\s+){0,2}\w+)\s*$/i) ??
+        message.match(/(?:find|look\s+up|search(?:\s+for)?|get|pull\s+up|add|save)\s+((?:\w+\s+){0,3}\w+)['']s\s+(?:phone|number|email|contact|info(?:rmation)?|address)/i) ??
+        // P5: "find/look up/add NAME" — action verb + plain name at end of message
+        message.match(/(?:find|look\s+up|search(?:\s+for)?|get|pull\s+up|add|save|remember)\s+((?:\w+\s+){0,2}\w+)\s*$/i) ??
         // P6: "NAME's phone" at the very start of the message
         message.match(/^((?:\w+\s+){0,3}\w+?)['']s\s+(?:phone|number|email|contact|info(?:rmation)?|address)/i);
       const rawQuery = (
         (nameMatch?.[1])?.trim() ??
-        message.replace(/\b(find|look\s+up|search(\s+for)?|get|pull\s+up|in\s+my\s+contacts?|from\s+my\s+contacts?|my\s+contacts?|their?\s+(phone|email|number|contact)|please|for\s+me)\b/gi, "").trim()
+        message.replace(/\b(find|look\s+up|search(\s+for)?|get|pull\s+up|add|save|remember|in\s+my\s+contacts?|from\s+my\s+contacts?|to\s+my\s+(?:winston\s+)?contacts?|my\s+contacts?|their?\s+(phone|email|number|contact)|please|for\s+me)\b/gi, "").trim()
       ).replace(/\b(please|for\s+me|thanks?|thank\s+you|can\s+you|could\s+you)\b/gi, "").replace(/\s+/g, " ").trim();
       const searchQuery = rawQuery.slice(0, 60).trim();
       console.log(`[CONTACT SEARCH] rawQuery="${rawQuery}" finalQuery="${searchQuery}"`);
