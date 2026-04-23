@@ -1483,15 +1483,29 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         const recipientName = pendingText.recipientName;
         setPendingText(null);
 
-        // Build an sms: URI for Android's standard messaging app.
-        // Format: sms:<phone>?body=<encoded>  (phone is optional — omit if blank)
+        // Sanitize phone number into E.164-like format for the sms: URI.
+        // Google Contacts stores numbers with formatting chars like "(972) 555-0123"
+        // or "972-555-0123". iOS ignores those and falls back to showing the inbox
+        // rather than opening the right thread. Strip everything except digits and
+        // a leading +, then normalise 10-digit US numbers to +1XXXXXXXXXX.
+        const sanitizePhone = (raw: string): string => {
+          const stripped = raw.replace(/[^\d+]/g, "");
+          if (/^\d{10}$/.test(stripped)) return `+1${stripped}`;
+          if (/^1\d{10}$/.test(stripped)) return `+${stripped}`;
+          return stripped; // already has + prefix or is international
+        };
+        const cleanPhone = phone ? sanitizePhone(phone) : "";
+
+        // Build an sms: URI that iOS will resolve to the right conversation thread.
+        // sms:<phone>?body=<encoded> — iOS opens directly to that contact's thread.
+        // sms:?body=<encoded>        — iOS shows the inbox/new-compose (no recipient known).
         const encodedBody = encodeURIComponent(body);
-        const smsUri = phone
-          ? `sms:${phone}?body=${encodedBody}`
+        const smsUri = cleanPhone
+          ? `sms:${cleanPhone}?body=${encodedBody}`
           : `sms:?body=${encodedBody}`;
 
         const smsPayload = {
-          phone,
+          phone: cleanPhone,  // always sanitised E.164-like number
           body,
           recipient: recipientName,
           smsUri,
