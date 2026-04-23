@@ -1,0 +1,97 @@
+The /api/emergency/info endpoint returns people but without phone numbers. Please update it to include each person's phone number from the profile_items or raw_data where available. The emergency screen needs name, relationship, and phone number for each key contact
+
+6 minutes ago
+
+7 actions
+The people records don't have phone numbers in profile_items — they're free-text detail strings. Let me check where phone numbers live (the contacts system and raw_data):
+
+
+9 actions
+Phone numbers are in google_contacts. Let me check what's there and the raw_data structure:
+
+
+3 actions
+google_contacts is in Supabase. Let me check how the contacts module connects to it and query accordingly:
+
+
+3 actions
+The contacts table uses the same query from db.js — same connection. The table must exist now since the server is running. Let me check directly and also understand what getCuratedContacts returns so I can use it:
+
+
+3 actions
+Both homeAddress and people are coming back empty — the endpoint isn't reading from Supabase. Let me check what getProfile and getProfileItems actually return:
+
+
+3 actions
+Let me check what authenticate returns for the native API key and how it maps to userName:
+
+
+5 actions
+Let me check if Supabase is configured (or if it's falling back to local DB) and what the logs say:
+
+
+2 actions
+Good — Supabase is confirmed active. Let me check getProfile and what user_profiles looks like in Supabase:
+
+
+12 actions
+Now I have everything I need. The emergency endpoint has two problems:
+
+homeAddress — it's reading from rawData.homeAddress but the field is a direct top-level property userProfile.homeAddress
+Phone numbers — they're in google_contacts (via getCuratedContacts), not in profile_items
+Let me fix both:
+
+
+2 actions
+Now I'll fix the import to add getCuratedContacts, then rewrite the endpoint:
+
+
+8 actions
+Still empty — Supabase is being used and connecting fine, but the data isn't matching. Let me add temporary debug logging to see exactly what's coming back:
+
+
+5 actions
+The Supabase data might be stored under "David" (old default) rather than "davidblakelock". Let me probe both:
+
+
+8 actions
+Now I see what's happening — all profile data in Supabase is stored under user_name = "David" (old default), not "davidblakelock". Also, Susan's detail already contains her phone number directly in the detail field. Let me check how the chat route resolves the user name for profile lookups:
+
+
+3 actions
+Now the picture is completely clear — all profile data (profile_items, google_contacts) is stored under "David" (the display name), not "davidblakelock". The endpoint needs to resolve the display name from the profile and use it to query those tables. Also, Susan's phone is already embedded in her detail field, so I can extract phone numbers from detail too as a fallback.
+
+Let me update the endpoint to handle both:
+
+
+6 actions
+The endpoint is now working correctly. Every person comes back with their phone number:
+
+Susan Smart — +16462994839 (resolved from her detail field + contacts)
+Olivia — +1-214-903-3500 (resolved from curated contacts), relationship: "daughter"
+David Bonnet — 972-235-8311 (resolved from curated contacts), relationship: "doctor"
+The fix handled two things cleanly:
+
+User name resolution — profile items are stored under "David" (the display name), not "davidblakelock". The endpoint now looks up the display name from the profile and uses it to query both people and contacts.
+Phone lookup — first checks the curated contacts table by full name then first name, then falls back to extracting a phone number directly from the detail string (which Susan's record contains).
+The homeAddress is null because it hasn't been set in the profile yet — that's an onboarding data gap, not a bug in the endpoint.
+
+Deploying now:
+
+
+Planning emergency endpoint functionality
+Ready to deploy. Here's a summary of what was fixed:
+
+/api/emergency/info now returns for each person:
+
+name — full name
+relationship — extracted from the detail text (e.g. "daughter", "doctor")
+phone — resolved from curated contacts table first, then extracted from the detail string as fallback
+detail — the full raw detail string
+The key discovery was that profile data is stored under the display name "David" in Supabase (a historical convention from before multi-user support), so the endpoint now resolves that name from the profile before querying people and contacts.
+
+
+Checkpoint made
+just now
+
+Worked for 6 minutes
