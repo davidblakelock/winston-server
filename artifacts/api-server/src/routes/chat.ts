@@ -1406,10 +1406,12 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         systemPrompt +=
           `\n\n[Text Message Composed for ${pendingText.recipientName}]\n` +
           `Message body${toneNote}:\n"${composed.body}"\n\n` +
-          `Read this message back to ${displayName} naturally, then ask for confirmation. ` +
-          `Say something like: "Here's what I've got — [read message]. Want me to send that?" ` +
+          `Read this message back to ${displayName} naturally, then ask if it looks right. ` +
+          `Say something like: "Here's what I've got for ${pendingText.recipientName} — [read message]. ` +
+          `Does that look right? Say yes and your Messages app will open pre-filled so you can tap Send." ` +
           `If they want changes, they can say "make it more casual/formal" or describe edits. ` +
-          `Do NOT actually send — just confirm and wait. When they say yes, you will confirm it's ready to send.`;
+          `IMPORTANT: You are NOT sending this — you are composing it. The user taps Send themselves in their Messages app. ` +
+          `Never say "I'll send that" or imply you are capable of sending texts.`;
 
         req.log.info({ recipient: pendingText.recipientName, tone: effectiveTone }, "[T006] Message composed — awaiting confirmation");
       } catch (err) {
@@ -1441,7 +1443,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           systemPrompt +=
             `\n\n[Text Message Revised — ${toneNote} tone]\n` +
             `Message body:\n"${recomposed.body}"\n\n` +
-            `Read the revised message back naturally and ask for confirmation again.`;
+            `Read the revised message back naturally, then say something like: ` +
+            `"Does that work? Say yes and your Messages app will open pre-filled — you tap Send." ` +
+            `IMPORTANT: You are NOT sending this. The user taps Send themselves in their Messages app.`;
         } catch (err) {
           req.log.warn({ err }, "[T006] Tone re-compose failed");
         }
@@ -1512,7 +1516,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           systemPrompt +=
             `\n\n[Text Message Revised]\n` +
             `Message body:\n"${revised.body}"\n\n` +
-            `Read the revised message back naturally and ask for confirmation.`;
+            `Read the revised message back naturally, then say something like: ` +
+            `"Does that work? Say yes and your Messages app will open pre-filled — you tap Send." ` +
+            `IMPORTANT: You are NOT sending this. The user taps Send themselves in their Messages app.`;
         } catch (err) {
           req.log.warn({ err }, "[T006] Revision failed");
         }
