@@ -1,5 +1,5 @@
 import { query } from "../db.js";
-import { NATIVE_STORED_NAME } from "../auth/middleware.js";
+import { NATIVE_STORED_NAME, NATIVE_USER } from "../auth/middleware.js";
 
 export interface UserProfile {
   id: number;
@@ -90,34 +90,34 @@ export async function ensureOnboardingTable(): Promise<void> {
   await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS home_longitude numeric(10,7)`);
 }
 
-export async function getProfile(userName = NATIVE_STORED_NAME): Promise<UserProfile | null> {
-  const { rows } = await query<{
-    id: number;
-    name: string | null;
-    city: string | null;
-    latitude: number | null;
-    longitude: number | null;
-    timezone: string | null;
-    wake_time: string | null;
-    voice_id: string | null;
-    health_notes: string | null;
-    companion_name: string | null;
-    photo_url: string | null;
-    avatar_base64: string | null;
-    raw_data: Record<string, unknown>;
-    onboarding_completed: boolean;
-    created_at: Date;
-    age: number | null;
-    birthday: string | null;
-    neighborhood: string | null;
-    relationship_status: string | null;
-    home_address: string | null;
-    home_latitude: number | null;
-    home_longitude: number | null;
-  }>(`SELECT * FROM user_profiles WHERE user_name = $1 LIMIT 1`, [userName]);
+type ProfileRow = {
+  id: number;
+  user_name: string;
+  name: string | null;
+  city: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  timezone: string | null;
+  wake_time: string | null;
+  voice_id: string | null;
+  health_notes: string | null;
+  companion_name: string | null;
+  photo_url: string | null;
+  avatar_base64: string | null;
+  raw_data: Record<string, unknown>;
+  onboarding_completed: boolean;
+  created_at: Date;
+  age: number | null;
+  birthday: string | null;
+  neighborhood: string | null;
+  relationship_status: string | null;
+  home_address: string | null;
+  home_latitude: number | null;
+  home_longitude: number | null;
+};
 
-  if (rows.length === 0) return null;
-  const r = rows[0];
+function rowToProfile(r: ProfileRow): UserProfile {
+  const rawData = r.raw_data as { homeAddress?: string } | null;
   return {
     id: r.id,
     name: r.name,
@@ -138,10 +138,44 @@ export async function getProfile(userName = NATIVE_STORED_NAME): Promise<UserPro
     birthday: r.birthday ?? null,
     neighborhood: r.neighborhood ?? null,
     relationshipStatus: r.relationship_status ?? null,
-    homeAddress: r.home_address ?? (r.raw_data as { homeAddress?: string } | null)?.homeAddress ?? null,
+    homeAddress: r.home_address ?? rawData?.homeAddress ?? null,
     homeLatitude: r.home_latitude ?? null,
     homeLongitude: r.home_longitude ?? null,
   };
+}
+
+export async function getProfile(userName = NATIVE_STORED_NAME): Promise<UserProfile | null> {
+  // When the authenticated session username (NATIVE_USER) is used, also fetch the
+  // legacy NATIVE_STORED_NAME row and merge — preferring NATIVE_USER values where
+  // non-null, falling back to NATIVE_STORED_NAME for anything that was never migrated.
+  const userNamesToFetch = (userName === NATIVE_USER && NATIVE_USER !== NATIVE_STORED_NAME)
+    ? [userName, NATIVE_STORED_NAME]
+    : [userName];
+
+  const { rows } = await query<ProfileRow>(
+    `SELECT * FROM user_profiles WHERE user_name = ANY($1) LIMIT 2`,
+    [userNamesToFetch]
+  );
+
+  if (rows.length === 0) return null;
+
+  // Primary row is the one matching the requested userName; fallback is the other.
+  const primary = rows.find((r) => r.user_name === userName) ?? rows[0];
+  const fallback = rows.find((r) => r.user_name !== userName);
+
+  if (!fallback) return rowToProfile(primary);
+
+  // Merge: take primary value when non-null/non-empty, else take fallback.
+  const merged: ProfileRow = {
+    ...fallback,                              // start with fallback as base
+    ...Object.fromEntries(                   // overlay primary non-null values
+      Object.entries(primary).filter(([, v]) => v !== null && v !== undefined && v !== "")
+    ),
+    // rawData: merge the two JSON blobs, primary wins on conflict
+    raw_data: { ...(fallback.raw_data ?? {}), ...(primary.raw_data ?? {}) },
+  } as ProfileRow;
+
+  return rowToProfile(merged);
 }
 
 export async function updateProfileField(
