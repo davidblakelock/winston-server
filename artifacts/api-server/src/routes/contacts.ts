@@ -1,8 +1,209 @@
 import { Router, type Request, type Response } from "express";
 import { validateSession } from "../auth/sessionAuth.js";
 import { query } from "../db.js";
+import { authenticate } from "../auth/middleware.js";
 
 const router = Router();
+
+// ── Fuzzy name matching helpers ───────────────────────────────────────────────
+
+function normalizeName(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9 ]/g, "").trim();
+}
+
+function levenshtein(a: string, b: string): number {
+  const m = a.length, n = b.length;
+  const dp: number[][] = Array.from({ length: m + 1 }, (_, i) =>
+    Array.from({ length: n + 1 }, (__, j) => (i === 0 ? j : j === 0 ? i : 0))
+  );
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = a[i - 1] === b[j - 1]
+        ? dp[i - 1][j - 1]
+        : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+    }
+  }
+  return dp[m][n];
+}
+
+/** Returns true when two contact names are likely the same person. */
+function areLikelyDuplicates(nameA: string, nameB: string): boolean {
+  const a = normalizeName(nameA);
+  const b = normalizeName(nameB);
+  if (a === b) return true;
+
+  // One name's tokens are all present in the other (e.g. "Olivia" vs "Olivia Blakelock")
+  const tokA = a.split(" ").filter(Boolean);
+  const tokB = b.split(" ").filter(Boolean);
+  const aInB = tokA.every((t) => tokB.includes(t));
+  const bInA = tokB.every((t) => tokA.includes(t));
+  if (aInB || bInA) return true;
+
+  // Edit distance ≤ 2 on full normalized name (catches Bonnet/Bonnett)
+  if (levenshtein(a, b) <= 2) return true;
+
+  // Edit distance ≤ 1 on the longer token when first tokens match (Dr David Bonnet / David Bonnett)
+  if (tokA[0] === tokB[0] && tokA.length >= 2 && tokB.length >= 2) {
+    const lastA = tokA[tokA.length - 1];
+    const lastB = tokB[tokB.length - 1];
+    if (levenshtein(lastA, lastB) <= 2) return true;
+  }
+
+  return false;
+}
+
+/** Merge two detail strings: combine unique semicolon-separated facts. */
+function mergeDetails(a: string, b: string): string {
+  const parse = (s: string) =>
+    s.split("|").map((p) => p.trim()).filter(Boolean);
+  const combined = [...new Set([...parse(a), ...parse(b)])];
+  return combined.join(" | ");
+}
+
+interface ContactRow {
+  id: number;
+  name: string;
+  detail: string;
+  created_at: string;
+}
+
+export interface DuplicateGroup {
+  contacts: ContactRow[];
+  suggestedMerge: {
+    name: string;
+    detail: string;
+    keepId: number;
+    discardIds: number[];
+  };
+}
+
+// ── GET /api/contacts/duplicates ──────────────────────────────────────────────
+router.get("/contacts/duplicates", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const { rows } = await query<ContactRow>(
+    `SELECT id, name, detail, created_at FROM profile_items
+     WHERE user_name = $1 AND category = 'people'
+     ORDER BY created_at ASC`,
+    [userName]
+  );
+
+  // Build groups of duplicates using union-find
+  const parent = new Map<number, number>();
+  const getId = (id: number) => {
+    while (parent.get(id) !== undefined && parent.get(id) !== id) {
+      id = parent.get(id)!;
+    }
+    return id;
+  };
+  const union = (a: number, b: number) => {
+    const ra = getId(a), rb = getId(b);
+    if (ra !== rb) parent.set(rb, ra);
+  };
+
+  for (let i = 0; i < rows.length; i++) {
+    for (let j = i + 1; j < rows.length; j++) {
+      if (areLikelyDuplicates(rows[i].name, rows[j].name)) {
+        union(rows[i].id, rows[j].id);
+      }
+    }
+  }
+
+  // Collect groups
+  const groups = new Map<number, ContactRow[]>();
+  for (const row of rows) {
+    const root = getId(row.id);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root)!.push(row);
+  }
+
+  const duplicateGroups: DuplicateGroup[] = [];
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+
+    // Pick the richest name (longest, most complete) as canonical
+    const canonical = [...group].sort(
+      (a, b) => b.name.trim().length - a.name.trim().length
+    )[0];
+    const mergedDetail = group.reduce(
+      (acc, c) => mergeDetails(acc, c.detail),
+      ""
+    );
+
+    duplicateGroups.push({
+      contacts: group,
+      suggestedMerge: {
+        name: canonical.name.trim(),
+        detail: mergedDetail,
+        keepId: canonical.id,
+        discardIds: group.filter((c) => c.id !== canonical.id).map((c) => c.id),
+      },
+    });
+  }
+
+  res.json({ duplicates: duplicateGroups, total: duplicateGroups.length });
+});
+
+// ── POST /api/contacts/merge ──────────────────────────────────────────────────
+// Body: { keepId: number, discardIds: number[], mergedName?: string, mergedDetail?: string }
+router.post("/contacts/merge", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const { keepId, discardIds, mergedName, mergedDetail } =
+    req.body as {
+      keepId: number;
+      discardIds: number[];
+      mergedName?: string;
+      mergedDetail?: string;
+    };
+
+  if (!keepId || !discardIds?.length) {
+    res.status(400).json({ error: "keepId and discardIds are required" });
+    return;
+  }
+
+  // Verify all IDs belong to this user
+  const allIds = [keepId, ...discardIds];
+  const { rows: owned } = await query<{ id: number }>(
+    `SELECT id FROM profile_items WHERE id = ANY($1::int[]) AND user_name = $2`,
+    [allIds, userName]
+  );
+  if (owned.length !== allIds.length) {
+    res.status(403).json({ error: "one or more contact IDs not found for this user" });
+    return;
+  }
+
+  // Fetch all rows to build merged detail if not supplied
+  const { rows: contactRows } = await query<ContactRow>(
+    `SELECT id, name, detail FROM profile_items WHERE id = ANY($1::int[])`,
+    [allIds]
+  );
+
+  const finalDetail =
+    mergedDetail ??
+    contactRows.reduce((acc, c) => mergeDetails(acc, c.detail), "");
+  const keepRow = contactRows.find((r) => r.id === keepId)!;
+  const finalName = mergedName ?? keepRow.name.trim();
+
+  // Update the keeper
+  await query(
+    `UPDATE profile_items SET name = $1, detail = $2 WHERE id = $3`,
+    [finalName, finalDetail, keepId]
+  );
+
+  // Delete the discards
+  await query(
+    `DELETE FROM profile_items WHERE id = ANY($1::int[]) AND user_name = $2`,
+    [discardIds, userName]
+  );
+
+  res.json({
+    merged: { id: keepId, name: finalName, detail: finalDetail },
+    deleted: discardIds,
+  });
+});
 
 // ── GET /contacts/test ────────────────────────────────────────────────────────
 // Diagnostic endpoint — calls People API with the best available Google token.

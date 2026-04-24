@@ -1,10 +1,28 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import {
   X, Volume2, Play, Check, Loader2, User, Camera, Moon, Bell,
-  Upload, Trash2, Music2, Mail, CheckCircle2, AlertCircle, Link2, MapPin
+  Upload, Trash2, Music2, Mail, CheckCircle2, AlertCircle, Link2, MapPin,
+  Users, GitMerge, RefreshCw
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { isNotificationsSupported } from "@/hooks/useNotifications";
+
+interface ContactRow {
+  id: number;
+  name: string;
+  detail: string;
+  created_at: string;
+}
+
+interface DuplicateGroup {
+  contacts: ContactRow[];
+  suggestedMerge: {
+    name: string;
+    detail: string;
+    keepId: number;
+    discardIds: number[];
+  };
+}
 
 interface Voice {
   id: string;
@@ -158,6 +176,12 @@ export default function SettingsPanel({
   const [garminFormPassword, setGarminFormPassword] = useState("");
   const [garminConnecting, setGarminConnecting] = useState(false);
   const [garminError, setGarminError] = useState<string | null>(null);
+
+  const [duplicates, setDuplicates] = useState<DuplicateGroup[]>([]);
+  const [loadingDuplicates, setLoadingDuplicates] = useState(false);
+  const [mergingId, setMergingId] = useState<number | null>(null);
+  const [mergeError, setMergeError] = useState<string | null>(null);
+  const [mergedIds, setMergedIds] = useState<Set<number>>(new Set());
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -352,6 +376,57 @@ export default function SettingsPanel({
       setSavingHomeAddress(false);
     }
   }, [homeAddressInput]);
+
+  const loadDuplicates = useCallback(async () => {
+    setLoadingDuplicates(true);
+    setMergeError(null);
+    try {
+      const token = localStorage.getItem("winston_session_token") ?? "";
+      const res = await fetch(`${CHAT_BASE}/api/contacts/duplicates`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      const data = (await res.json()) as { duplicates?: DuplicateGroup[]; error?: string };
+      setDuplicates(data.duplicates ?? []);
+    } catch {
+      setMergeError("Failed to load contacts");
+    } finally {
+      setLoadingDuplicates(false);
+    }
+  }, []);
+
+  const mergeDuplicate = useCallback(async (group: DuplicateGroup) => {
+    setMergingId(group.suggestedMerge.keepId);
+    setMergeError(null);
+    try {
+      const token = localStorage.getItem("winston_session_token") ?? "";
+      const res = await fetch(`${CHAT_BASE}/api/contacts/merge`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({
+          keepId: group.suggestedMerge.keepId,
+          discardIds: group.suggestedMerge.discardIds,
+          mergedName: group.suggestedMerge.name,
+          mergedDetail: group.suggestedMerge.detail,
+        }),
+      });
+      if (res.ok) {
+        const allIds = new Set([group.suggestedMerge.keepId, ...group.suggestedMerge.discardIds]);
+        setMergedIds((prev) => new Set([...prev, ...allIds]));
+        setDuplicates((prev) => prev.filter((g) => g.suggestedMerge.keepId !== group.suggestedMerge.keepId));
+      } else {
+        setMergeError("Merge failed — please try again");
+      }
+    } catch {
+      setMergeError("Network error");
+    } finally {
+      setMergingId(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    void loadDuplicates();
+  }, [isOpen, loadDuplicates]);
 
   const onFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -613,6 +688,91 @@ export default function SettingsPanel({
             )}
             {homeAddressError && (
               <p className="text-xs text-red-400/80 mt-2">{homeAddressError}</p>
+            )}
+          </section>
+
+          <div className="border-t border-white/8" />
+
+          {/* ── Section 3b: Contact Deduplication ───────────────────── */}
+          <section>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 rounded-lg bg-primary/15">
+                  <Users className="h-3.5 w-3.5 text-primary" />
+                </div>
+                <h3 className="text-sm font-semibold text-foreground">Contact Duplicates</h3>
+              </div>
+              <button
+                onClick={() => void loadDuplicates()}
+                disabled={loadingDuplicates}
+                className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors"
+                title="Refresh"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${loadingDuplicates ? "animate-spin" : ""}`} />
+              </button>
+            </div>
+
+            {loadingDuplicates && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Scanning contacts…
+              </div>
+            )}
+
+            {!loadingDuplicates && duplicates.length === 0 && (
+              <p className="text-xs text-muted-foreground/70 leading-relaxed">
+                No duplicate contacts found. Winston automatically scans your saved people for similar names and helps you combine them.
+              </p>
+            )}
+
+            {!loadingDuplicates && duplicates.length > 0 && (
+              <div className="space-y-3">
+                <p className="text-xs text-muted-foreground/70 mb-2">
+                  {duplicates.length} duplicate {duplicates.length === 1 ? "pair" : "groups"} found. Review and merge each one.
+                </p>
+                {duplicates.map((group) => (
+                  <div
+                    key={group.suggestedMerge.keepId}
+                    className="rounded-xl border border-white/8 bg-white/3 p-3 space-y-2.5"
+                  >
+                    <div className="space-y-1.5">
+                      {group.contacts.map((c) => (
+                        <div key={c.id} className="flex gap-2">
+                          <span className={`text-xs font-medium min-w-0 truncate ${c.id === group.suggestedMerge.keepId ? "text-foreground" : "text-muted-foreground"}`}>
+                            {c.name}
+                          </span>
+                          {c.id === group.suggestedMerge.keepId && (
+                            <span className="text-[10px] text-primary/70 bg-primary/10 px-1.5 py-0.5 rounded-full flex-shrink-0">keep</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                    <div className="text-[11px] text-muted-foreground/60 leading-relaxed bg-black/20 rounded-lg p-2 font-mono">
+                      {group.suggestedMerge.detail || "No details to merge"}
+                    </div>
+                    <Button
+                      onClick={() => void mergeDuplicate(group)}
+                      disabled={mergingId === group.suggestedMerge.keepId}
+                      size="sm"
+                      className="w-full h-8 text-xs gap-1.5"
+                    >
+                      {mergingId === group.suggestedMerge.keepId
+                        ? <><Loader2 className="h-3 w-3 animate-spin" />Merging…</>
+                        : <><GitMerge className="h-3 w-3" />Merge into {group.suggestedMerge.name}</>
+                      }
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {mergeError && (
+              <p className="text-xs text-red-400/80 mt-2">{mergeError}</p>
+            )}
+            {mergedIds.size > 0 && duplicates.length === 0 && (
+              <p className="text-xs text-green-400/80 mt-2 flex items-center gap-1">
+                <Check className="h-3 w-3" />All duplicates merged
+              </p>
             )}
           </section>
 

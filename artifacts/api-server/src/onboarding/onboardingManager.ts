@@ -1,5 +1,5 @@
 import { query } from "../db.js";
-import { NATIVE_STORED_NAME, NATIVE_USER } from "../auth/middleware.js";
+import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
 export interface UserProfile {
   id: number;
@@ -138,6 +138,7 @@ function rowToProfile(r: ProfileRow): UserProfile {
     birthday: r.birthday ?? null,
     neighborhood: r.neighborhood ?? null,
     relationshipStatus: r.relationship_status ?? null,
+    // Dedicated column is authoritative; rawData.homeAddress is a legacy fallback
     homeAddress: r.home_address ?? rawData?.homeAddress ?? null,
     homeLatitude: r.home_latitude ?? null,
     homeLongitude: r.home_longitude ?? null,
@@ -145,37 +146,12 @@ function rowToProfile(r: ProfileRow): UserProfile {
 }
 
 export async function getProfile(userName = NATIVE_STORED_NAME): Promise<UserProfile | null> {
-  // When the authenticated session username (NATIVE_USER) is used, also fetch the
-  // legacy NATIVE_STORED_NAME row and merge — preferring NATIVE_USER values where
-  // non-null, falling back to NATIVE_STORED_NAME for anything that was never migrated.
-  const userNamesToFetch = (userName === NATIVE_USER && NATIVE_USER !== NATIVE_STORED_NAME)
-    ? [userName, NATIVE_STORED_NAME]
-    : [userName];
-
   const { rows } = await query<ProfileRow>(
-    `SELECT * FROM user_profiles WHERE user_name = ANY($1) LIMIT 2`,
-    [userNamesToFetch]
+    `SELECT * FROM user_profiles WHERE user_name = $1 LIMIT 1`,
+    [userName]
   );
-
   if (rows.length === 0) return null;
-
-  // Primary row is the one matching the requested userName; fallback is the other.
-  const primary = rows.find((r) => r.user_name === userName) ?? rows[0];
-  const fallback = rows.find((r) => r.user_name !== userName);
-
-  if (!fallback) return rowToProfile(primary);
-
-  // Merge: take primary value when non-null/non-empty, else take fallback.
-  const merged: ProfileRow = {
-    ...fallback,                              // start with fallback as base
-    ...Object.fromEntries(                   // overlay primary non-null values
-      Object.entries(primary).filter(([, v]) => v !== null && v !== undefined && v !== "")
-    ),
-    // rawData: merge the two JSON blobs, primary wins on conflict
-    raw_data: { ...(fallback.raw_data ?? {}), ...(primary.raw_data ?? {}) },
-  } as ProfileRow;
-
-  return rowToProfile(merged);
+  return rowToProfile(rows[0]);
 }
 
 export async function updateProfileField(
@@ -194,13 +170,37 @@ export async function updateProfileField(
   await query(`UPDATE user_profiles SET ${sets.join(", ")} WHERE user_name = $${idx}`, vals);
 }
 
+// Fields that have dedicated columns — these are always written to their column
+// AND stripped from the rawData blob so there is no duplication.
+const COLUMN_FIELDS = new Set([
+  "name", "city", "latitude", "longitude", "timezone", "wakeTime",
+  "voiceId", "healthNotes", "companionName", "homeAddress",
+  "age", "birthday", "neighborhood",
+  // maritalStatus maps to relationship_status column
+  "maritalStatus",
+]);
+
+function buildRawDataBlob(
+  existing: Record<string, unknown>,
+  incoming: Partial<CollectedData>
+): string {
+  // Merge incoming into existing, then strip out fields that live in dedicated columns
+  const merged: Record<string, unknown> = { ...existing, ...incoming };
+  for (const key of COLUMN_FIELDS) delete merged[key];
+  return JSON.stringify(merged);
+}
+
 export async function upsertProfile(data: Partial<CollectedData>, userName = NATIVE_STORED_NAME): Promise<void> {
   const existing = await getProfile(userName);
+  const rawBlob = buildRawDataBlob(existing?.rawData ?? {}, data);
 
   if (!existing) {
     await query(
-      `INSERT INTO user_profiles (user_name, name, city, latitude, longitude, timezone, wake_time, voice_id, health_notes, companion_name, home_address, raw_data, onboarding_completed)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,false)`,
+      `INSERT INTO user_profiles
+         (user_name, name, city, latitude, longitude, timezone, wake_time, voice_id,
+          health_notes, companion_name, home_address, age, birthday, neighborhood,
+          relationship_status, raw_data, onboarding_completed)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,false)`,
       [
         userName,
         data.name ?? null,
@@ -213,25 +213,32 @@ export async function upsertProfile(data: Partial<CollectedData>, userName = NAT
         data.healthNotes ?? null,
         data.companionName ?? null,
         data.homeAddress ?? null,
-        JSON.stringify(data),
+        data.age ?? null,
+        data.birthday ?? null,
+        data.neighborhood ?? null,
+        data.maritalStatus ?? null,
+        rawBlob,
       ]
     );
   } else {
-    const merged: Record<string, unknown> = { ...(existing.rawData ?? {}), ...data };
     await query(
       `UPDATE user_profiles SET
-        name = COALESCE($1, name),
-        city = COALESCE($2, city),
-        latitude = COALESCE($3, latitude),
-        longitude = COALESCE($4, longitude),
-        timezone = COALESCE($5, timezone),
-        wake_time = COALESCE($6, wake_time),
-        voice_id = COALESCE(voice_id, $7),
-        health_notes = COALESCE($8, health_notes),
-        companion_name = COALESCE(companion_name, $9),
-        home_address = COALESCE($10, home_address),
-        raw_data = $11
-       WHERE user_name = $12`,
+        name               = COALESCE($1,  name),
+        city               = COALESCE($2,  city),
+        latitude           = COALESCE($3,  latitude),
+        longitude          = COALESCE($4,  longitude),
+        timezone           = COALESCE($5,  timezone),
+        wake_time          = COALESCE($6,  wake_time),
+        voice_id           = COALESCE(voice_id, $7),
+        health_notes       = COALESCE($8,  health_notes),
+        companion_name     = COALESCE(companion_name, $9),
+        home_address       = COALESCE($10, home_address),
+        age                = COALESCE($11, age),
+        birthday           = COALESCE($12::date, birthday),
+        neighborhood       = COALESCE($13, neighborhood),
+        relationship_status= COALESCE($14, relationship_status),
+        raw_data           = $15
+       WHERE user_name = $16`,
       [
         data.name ?? null,
         data.city ?? null,
@@ -243,7 +250,11 @@ export async function upsertProfile(data: Partial<CollectedData>, userName = NAT
         data.healthNotes ?? null,
         data.companionName ?? null,
         data.homeAddress ?? null,
-        JSON.stringify(merged),
+        data.age ?? null,
+        data.birthday ?? null,
+        data.neighborhood ?? null,
+        data.maritalStatus ?? null,
+        rawBlob,
         userName,
       ]
     );

@@ -4,7 +4,7 @@
  * Two valid auth paths:
  *   1. x-api-key: winston-native-2026  →  native mobile app bypass.
  *      The caller MUST also supply x-user-name to identify the user.
- *      Falls back to "David" only for backward compatibility with older app builds.
+ *      Falls back to NATIVE_USER for backward compatibility with older app builds.
  *   2. Authorization: Bearer <token>   →  standard session token (any provider)
  *
  * Returns the resolved userName string, or sends a 401 and returns null.
@@ -14,26 +14,24 @@ import { validateSession } from "./sessionAuth.js";
 import { logger } from "../lib/logger.js";
 
 export const NATIVE_API_KEY = "winston-native-2026";
-/** Backward-compat default for native app routes that don't carry x-user-name.
- *  Points to the primary Google-authenticated account. Old native builds that
- *  omit x-user-name will use this; new builds should send the header explicitly.
+
+/**
+ * The single canonical username for the primary user.
+ * All database reads and writes use this name — no legacy aliases.
  */
 export const NATIVE_USER = "davidblakelock";
+
 /**
- * The user_name key under which the primary user's data is stored across all
- * Supabase tables (profile_items, google_auth, watched_shows, journal_entries, etc.).
- * Historical convention: data was written under the display name before the login
- * user_name was introduced. Centralised here so it can be changed in one place
- * when a data migration normalises everything to NATIVE_USER.
+ * @deprecated Use NATIVE_USER directly. Kept as an alias so import sites
+ * compile without change during the transition period.
  */
-export const NATIVE_STORED_NAME = "David";
+export const NATIVE_STORED_NAME = NATIVE_USER;
 
 function resolveNativeUser(req: Request): string {
   const headerUser = req.headers["x-user-name"];
   if (typeof headerUser === "string" && headerUser.trim()) {
     return headerUser.trim();
   }
-  // Backward compat: older native builds don't send x-user-name
   return NATIVE_USER;
 }
 
