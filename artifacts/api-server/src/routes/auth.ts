@@ -518,10 +518,11 @@ router.post("/auth/google/disconnect", async (req: Request, res: Response) => {
       res.status(401).json({ error: "Not authenticated" });
       return;
     }
-    // Clear both tables so stale/revoked tokens are fully removed
-    await Promise.all([
-      query("DELETE FROM google_auth WHERE user_name = $1", [userName]),
-      query("DELETE FROM user_integrations WHERE user_name = $1 AND provider = 'google'", [userName]),
+    // Clear both tables so stale/revoked tokens are fully removed.
+    // Use RETURNING to ensure the DELETE routes through exec_dml_ret (required for DML on Supabase).
+    await Promise.allSettled([
+      query("DELETE FROM google_auth WHERE user_name = $1 RETURNING user_name", [userName]),
+      query("DELETE FROM user_integrations WHERE user_name = $1 AND provider = 'google' RETURNING user_name", [userName]),
     ]);
     req.log.info({ userName }, "Google OAuth disconnected — google_auth + user_integrations cleared");
     res.json({ ok: true });

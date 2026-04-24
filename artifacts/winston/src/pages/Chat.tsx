@@ -284,7 +284,9 @@ function useGoogleAuth(): [GoogleAuthStatus, () => Promise<void>] {
     try {
       const token = localStorage.getItem("winston_session_token") ?? "";
       const res = await fetch(`${CHAT_BASE}/api/auth/status`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: token
+          ? { Authorization: `Bearer ${token}` }
+          : { "x-api-key": "winston-native-2026" },
       });
       const data = await res.json() as { connected: boolean; email?: string };
       setStatus({ connected: data.connected, email: data.email ?? null, loading: false });
@@ -1726,7 +1728,9 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
     try {
       await fetch(`${CHAT_BASE}/api/auth/google/disconnect`, {
         method: "POST",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: token
+          ? { Authorization: `Bearer ${token}` }
+          : { "x-api-key": "winston-native-2026" },
       });
     } catch { /* ignore network errors */ }
     await refreshGoogleAuth();
