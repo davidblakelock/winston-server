@@ -113,11 +113,36 @@ export async function getAuthClientForUser(
     );
     if (integrationRows.length > 0) {
       const row = integrationRows[0];
+      let refreshToken = row.refresh_token;
+
+      // If user_integrations has no refresh token, try to borrow one from google_auth
+      // so the access token can be auto-renewed without forcing the user to reconnect.
+      if (!refreshToken) {
+        try {
+          const { rows: gaRows } = await query<{ refresh_token: string }>(
+            `SELECT refresh_token FROM google_auth WHERE user_name = $1 AND refresh_token IS NOT NULL LIMIT 1`,
+            [userName]
+          );
+          if (gaRows[0]?.refresh_token) {
+            refreshToken = gaRows[0].refresh_token;
+            // Persist it so we don't need to fall back again next time
+            await query(
+              `UPDATE user_integrations SET refresh_token = $1, updated_at = NOW()
+               WHERE user_name = $2 AND provider = 'google' AND refresh_token IS NULL`,
+              [refreshToken, userName]
+            ).catch(() => {});
+            console.log(`[OAuth] getAuthClientForUser(${userName}) — back-filled missing refresh_token from google_auth`);
+          }
+        } catch {
+          // Non-fatal — continue without refresh token
+        }
+      }
+
       console.log(`[OAuth] getAuthClientForUser(${userName}) → user_integrations (${row.external_email ?? "unknown"})`);
       const oauth2Client = createOAuthClient();
       oauth2Client.setCredentials({
         access_token: row.access_token,
-        refresh_token: row.refresh_token ?? undefined,
+        refresh_token: refreshToken ?? undefined,
         expiry_date: row.token_expiry ? new Date(row.token_expiry).getTime() : undefined,
       });
       oauth2Client.on("tokens", async (tokens) => {
