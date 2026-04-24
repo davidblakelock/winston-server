@@ -12,6 +12,10 @@ import {
 import { fetchTodayEvents } from "../google/calendar.js";
 import { query } from "../db.js";
 
+// ── Schema migration: add user_name to departure_alert_log if missing ─────────
+query(`ALTER TABLE departure_alert_log ADD COLUMN IF NOT EXISTS user_name text NOT NULL DEFAULT 'davidblakelock'`)
+  .catch(() => {});
+
 const TZ = "America/Chicago";
 
 async function getCompanionName(userName: string): Promise<string> {
@@ -33,8 +37,8 @@ async function hasAlertBeenSent(eventTitle: string, eventDate: string, userName:
   try {
     const { rows } = await query<{ count: string }>(
       `SELECT COUNT(*) as count FROM departure_alert_log
-       WHERE event_title = $1 AND event_date = $2`,
-      [eventTitle, eventDate]
+       WHERE event_title = $1 AND event_date = $2 AND user_name = $3`,
+      [eventTitle, eventDate, userName]
     );
     return parseInt(rows[0]?.count ?? "0", 10) > 0;
   } catch {
@@ -48,10 +52,10 @@ async function markAlertSent(eventTitle: string, eventDate: string, userName: st
 
   try {
     await query(
-      `INSERT INTO departure_alert_log (event_title, event_date)
-       VALUES ($1, $2)
+      `INSERT INTO departure_alert_log (event_title, event_date, user_name)
+       VALUES ($1, $2, $3)
        ON CONFLICT DO NOTHING`,
-      [eventTitle, eventDate]
+      [eventTitle, eventDate, userName]
     );
   } catch {}
 }
@@ -160,7 +164,9 @@ async function checkDepartureAlertsForUser(userName: string): Promise<void> {
       title: `🚗 Leave now — ${event.summary}`,
       body: pushBody,
       tag: `departure-${userName}-${event.summary}`,
-      url: mapsUrl,
+      url: mapsUrl,          // used by web push click action
+      mapsUrl,               // passed to native app via Expo data so it can open Maps
+      notificationType: "departure",
       requireInteraction: true,
     }, userName).catch(() => {});
 

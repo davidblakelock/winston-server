@@ -133,19 +133,16 @@ router.post("/push/test", async (req, res) => {
     const userName = authedUser ?? bodyUserName ?? NATIVE_USER;
     logger.info({ userName }, "[PUSH] Test push requested");
 
-    const vapidKey = getVapidPublicKey();
-    if (!vapidKey) {
-      res.status(503).json({ error: "Push not configured — VAPID keys missing on server" });
-      return;
-    }
+    const [subs, expoTokens] = await Promise.all([
+      getSubscriptions(userName),
+      getExpoTokens(userName),
+    ]);
+    logger.info({ userName, webSubCount: subs.length, expoTokenCount: expoTokens.length }, "[PUSH] Channels found for test");
 
-    const subs = await getSubscriptions(userName);
-    logger.info({ userName, subCount: subs.length }, "[PUSH] Subscriptions found for test");
-
-    if (subs.length === 0) {
+    if (subs.length === 0 && expoTokens.length === 0) {
       res.status(404).json({
-        error: "No push subscriptions found for this user",
-        hint: "Open Winston in your browser, grant notification permission, then try again",
+        error: "No push channels registered for this user",
+        hint: "Open Winston in your browser (for web push) or in the native app (for Expo push), grant notification permission, then try again",
       });
       return;
     }
@@ -164,7 +161,13 @@ router.post("/push/test", async (req, res) => {
     );
 
     logger.info({ userName, ...result }, "[PUSH] Test push complete");
-    res.json({ success: true, sent: result.sent, failed: result.failed, total: subs.length });
+    res.json({
+      success: true,
+      sent: result.sent,
+      failed: result.failed,
+      webSubs: subs.length,
+      expoTokens: expoTokens.length,
+    });
   } catch (err) {
     logger.error({ err }, "[PUSH] Test push error");
     res.status(500).json({ error: "Test push failed" });
