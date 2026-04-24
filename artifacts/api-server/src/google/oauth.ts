@@ -9,6 +9,7 @@ export const IDENTITY_SCOPES = [
 ];
 
 // ── Full integration scopes (used for "Connect Google" in settings) ───────────
+// NOTE: fitness.activity.read was removed — Google Fit API was deprecated May 2024.
 export const SCOPES = [
   "openid",
   "https://www.googleapis.com/auth/userinfo.email",
@@ -17,7 +18,6 @@ export const SCOPES = [
   "https://www.googleapis.com/auth/calendar",
   "https://www.googleapis.com/auth/contacts.readonly",
   "https://www.googleapis.com/auth/tasks",
-  "https://www.googleapis.com/auth/fitness.activity.read",
 ];
 
 // ── Account preference SQL ─────────────────────────────────────────────────────
