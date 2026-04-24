@@ -36,6 +36,14 @@ const NATIVE_USER_ALIASES: Record<string, string> = {
   david: NATIVE_USER,
 };
 
+/**
+ * Resolve any legacy username alias to the canonical NATIVE_USER.
+ * Safe to call on any user-supplied name — unknown names pass through unchanged.
+ */
+export function resolveUserAlias(name: string): string {
+  return NATIVE_USER_ALIASES[name] ?? name;
+}
+
 function resolveNativeUser(req: Request): string {
   const headerUser = req.headers["x-user-name"];
   if (typeof headerUser === "string" && headerUser.trim()) {

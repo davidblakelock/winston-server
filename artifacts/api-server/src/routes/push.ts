@@ -13,7 +13,7 @@ import {
 } from "../push/pushManager.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
 import { logger } from "../lib/logger.js";
-import { authenticate, tryAuthenticate, NATIVE_USER } from "../auth/middleware.js";
+import { authenticate, tryAuthenticate, NATIVE_USER, resolveUserAlias } from "../auth/middleware.js";
 
 const router = Router();
 
@@ -181,7 +181,7 @@ router.post("/push/expo-token", async (req, res) => {
     userName?: string;
     deviceId?: string;
   };
-  const userName = authedUser ?? bodyUserName ?? NATIVE_USER;
+  const userName = authedUser ?? (resolveUserAlias(bodyUserName ?? "") || NATIVE_USER);
 
   if (!expoPushToken || typeof expoPushToken !== "string") {
     res.status(400).json({ error: "Missing expoPushToken" });
@@ -224,7 +224,8 @@ router.delete("/push/expo-token", async (req, res) => {
 router.get("/push/expo-status", async (req, res) => {
   try {
     const authedUser = await tryAuthenticate(req);
-    const userName = authedUser ?? (req.query.userName as string) ?? NATIVE_USER;
+    const rawQueryUser = req.query.userName as string | undefined;
+    const userName = authedUser ?? (rawQueryUser ? resolveUserAlias(rawQueryUser) : null) ?? NATIVE_USER;
     const tokens = await getExpoTokens(userName);
     res.json({ userName, tokenCount: tokens.length, tokens: tokens.map((t) => "…" + t.slice(-20)) });
   } catch (err) {
