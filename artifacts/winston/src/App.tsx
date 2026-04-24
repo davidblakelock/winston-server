@@ -11,6 +11,9 @@ import Lists from "@/pages/Lists";
 import SignIn from "@/pages/SignIn";
 import Demo from "@/pages/Demo";
 import { useAuth } from "@/hooks/useAuth";
+import Home from "@/pages/Home";
+import Privacy from "@/pages/Privacy";
+import Terms from "@/pages/Terms";
 
 const queryClient = new QueryClient();
 const API = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -392,6 +395,9 @@ function App() {
         <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
           <Switch>
             <Route path="/demo">{() => <Demo />}</Route>
+            <Route path="/home">{() => <Home />}</Route>
+            <Route path="/privacy">{() => <Privacy />}</Route>
+            <Route path="/terms">{() => <Terms />}</Route>
             <Route>{() => <AppWithAuth />}</Route>
           </Switch>
         </WouterRouter>
