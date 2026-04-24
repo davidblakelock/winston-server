@@ -32,48 +32,74 @@ export async function ensureCalendarSyncTable(): Promise<void> {
     )
   `);
 
-  // Migration: add user_name column for per-user isolation
   await query(`
     ALTER TABLE calendar_sync_state
     ADD COLUMN IF NOT EXISTS user_name TEXT NOT NULL DEFAULT 'davidblakelock'
   `).catch(() => {});
 
+  // Track the stored start time so we can detect when an event is moved
+  await query(`
+    ALTER TABLE calendar_sync_state
+    ADD COLUMN IF NOT EXISTS event_start_iso TEXT
+  `).catch(() => {});
+
   logger.info("calendar_sync_state table ready");
 }
 
+interface KnownEvent {
+  startIso: string | null;
+}
+
 /**
- * Returns the set of known event IDs for a given user + date.
- * Returns null on a DB error (so callers can skip the sync rather than
- * treating a query failure as "first sync of the day").
+ * Returns a map of { event_id → { startIso } } for today's known events.
+ * Returns null on DB error so callers skip the sync cycle rather than
+ * treating a query failure as "first sync of the day".
  */
-async function getKnownEventIds(dateStr: string, userName: string): Promise<Set<string> | null> {
+async function getKnownEvents(
+  dateStr: string,
+  userName: string
+): Promise<Map<string, KnownEvent> | null> {
   try {
-    const { rows } = await query<{ event_id: string }>(
-      `SELECT event_id FROM calendar_sync_state WHERE event_date = $1 AND user_name = $2`,
+    const { rows } = await query<{ event_id: string; event_start_iso: string | null }>(
+      `SELECT event_id, event_start_iso
+       FROM calendar_sync_state
+       WHERE event_date = $1 AND user_name = $2`,
       [dateStr, userName]
     );
-    return new Set(rows.map((r) => r.event_id));
+    return new Map(rows.map((r) => [r.event_id, { startIso: r.event_start_iso ?? null }]));
   } catch (err) {
-    logger.warn({ err, dateStr, userName }, "Calendar sync: getKnownEventIds query failed — skipping sync");
+    logger.warn({ err, dateStr, userName }, "Calendar sync: getKnownEvents query failed — skipping sync");
     return null;
   }
 }
 
+/**
+ * Upsert a row so the stored start_iso stays current.
+ * Uses RETURNING so db.ts routes it through exec_dml_ret (supports DML).
+ */
 async function markEventKnown(
   dateStr: string,
   eventId: string,
   summary: string,
   alertSent: boolean,
-  userName: string
+  userName: string,
+  startIso?: string | null
 ): Promise<void> {
   try {
     await query(
-      `INSERT INTO calendar_sync_state (event_date, event_id, event_summary, alert_sent, user_name)
-       VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (event_date, event_id) DO NOTHING`,
-      [dateStr, eventId, summary, alertSent, userName]
+      `INSERT INTO calendar_sync_state
+         (event_date, event_id, event_summary, alert_sent, user_name, event_start_iso)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (event_date, event_id) DO UPDATE
+         SET event_summary   = EXCLUDED.event_summary,
+             event_start_iso = EXCLUDED.event_start_iso,
+             seen_at         = NOW()
+       RETURNING event_id`,
+      [dateStr, eventId, summary, alertSent, userName, startIso ?? null]
     );
-  } catch {}
+  } catch (err) {
+    logger.warn({ err, dateStr, eventId, userName }, "Calendar sync: markEventKnown failed");
+  }
 }
 
 // ── Departure time helper ──────────────────────────────────────────────────────
@@ -166,50 +192,125 @@ async function sendNewEventAlert(event: CalendarEvent, userName: string): Promis
   );
 }
 
+// ── Moved-event alert ──────────────────────────────────────────────────────────
+
+async function sendMovedEventAlert(
+  event: CalendarEvent,
+  oldStartIso: string,
+  userName: string
+): Promise<void> {
+  const companionName = await getCompanionName(userName);
+  const eventName = event.summary;
+  const newTimeStr = event.start || "a new time";
+  const oldTimeStr = new Date(oldStartIso).toLocaleTimeString("en-US", {
+    timeZone: TZ,
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+
+  let speakText: string;
+  let pushBody: string;
+
+  const departure = await getLeaveByTime(event, userName).catch(() => null);
+
+  if (departure) {
+    speakText = `Hey, looks like ${eventName} was moved to ${newTimeStr}. Based on traffic, you'd want to leave home by ${departure.leaveTimeStr} — about ${Math.round(departure.driveMinutes)} minutes.`;
+    pushBody = `${eventName} moved to ${newTimeStr} (was ${oldTimeStr}). Leave by ${departure.leaveTimeStr} (~${Math.round(departure.driveMinutes)} min).`;
+  } else {
+    speakText = `Hey, heads up — ${eventName} was moved from ${oldTimeStr} to ${newTimeStr}.`;
+    pushBody = `${eventName} moved to ${newTimeStr} (was ${oldTimeStr}).`;
+  }
+
+  broadcastToUser(userName, "reminder", {
+    id: `moved-event-${event.id}-${Date.now()}`,
+    userName,
+    reminderText: speakText,
+    speakText,
+    isCalendarAlert: true,
+    eventId: event.id,
+    eventSummary: eventName,
+  });
+
+  await sendPushToAll({
+    title: `📅 Event Moved — ${companionName}`,
+    body: pushBody,
+    tag: `moved-event-${event.id}`,
+    requireInteraction: false,
+  }, userName).catch(() => {});
+
+  logger.info(
+    { event: eventName, oldTime: oldTimeStr, newTime: newTimeStr, userName },
+    "Calendar sync: moved event alert sent"
+  );
+}
+
 // ── Main sync check ────────────────────────────────────────────────────────────
 
 async function runCalendarSyncForUser(userName: string): Promise<void> {
   let events: CalendarEvent[] | null;
   try {
     events = await fetchTodayEvents(userName);
-  } catch {
+  } catch (err) {
+    logger.warn({ err, userName }, "Calendar sync: fetchTodayEvents threw — skipping cycle");
     return;
   }
 
-  if (!events || events.length === 0) return;
+  if (!events || events.length === 0) {
+    logger.info({ userName, eventsNull: events === null }, "Calendar sync: no future events — cycle complete");
+    return;
+  }
 
   const today = localDateStr();
-  const knownIds = await getKnownEventIds(today, userName);
+  const knownEvents = await getKnownEvents(today, userName);
 
-  // If the DB query failed, skip this cycle entirely rather than
-  // misinterpreting a query error as "first sync of the day".
-  if (knownIds === null) return;
+  if (knownEvents === null) return;
 
-  const isFirstSyncToday = knownIds.size === 0;
+  const isFirstSyncToday = knownEvents.size === 0;
+  let newCount = 0;
+  let movedCount = 0;
 
   for (const event of events) {
     if (!event.id) continue;
-    if (knownIds.has(event.id)) continue;
 
-    if (isFirstSyncToday) {
-      await markEventKnown(today, event.id, event.summary, true, userName);
-      logger.info({ event: event.summary, userName }, "Calendar sync: initial population (no alert)");
-    } else {
-      await markEventKnown(today, event.id, event.summary, true, userName);
-      await sendNewEventAlert(event, userName);
+    const known = knownEvents.get(event.id);
+
+    if (!known) {
+      // New event — silently populate on first sync, alert on subsequent
+      await markEventKnown(today, event.id, event.summary, !isFirstSyncToday, userName, event.startIso);
+      if (isFirstSyncToday) {
+        logger.info({ event: event.summary, startIso: event.startIso, userName }, "Calendar sync: initial population (no alert)");
+      } else {
+        newCount++;
+        await sendNewEventAlert(event, userName);
+      }
+    } else if (
+      !isFirstSyncToday &&
+      event.startIso &&
+      known.startIso &&
+      known.startIso !== event.startIso
+    ) {
+      // Same event ID but start time changed — event was moved
+      movedCount++;
+      await markEventKnown(today, event.id, event.summary, true, userName, event.startIso);
+      await sendMovedEventAlert(event, known.startIso, userName);
+    } else if (!known.startIso && event.startIso) {
+      // We have an existing row but no start_iso stored yet — backfill it silently
+      await markEventKnown(today, event.id, event.summary, true, userName, event.startIso);
     }
   }
 
-  if (!isFirstSyncToday) {
-    logger.info(
-      {
-        eventCount: events.length,
-        newEvents: events.filter((e) => !knownIds.has(e.id)).length,
-        userName,
-      },
-      "Calendar sync: check complete"
-    );
-  }
+  logger.info(
+    {
+      eventCount: events.length,
+      knownCount: knownEvents.size,
+      newEvents: newCount,
+      movedEvents: movedCount,
+      isFirstSyncToday,
+      userName,
+    },
+    "Calendar sync: check complete"
+  );
 }
 
 async function runCalendarSync(): Promise<void> {
@@ -233,7 +334,7 @@ export async function populateCalendarSyncState(
   const today = localDateStr();
   for (const event of events) {
     if (event.id) {
-      await markEventKnown(today, event.id, event.summary, true, userName);
+      await markEventKnown(today, event.id, event.summary, true, userName, event.startIso);
     }
   }
   logger.info({ count: events.length, userName }, "Calendar sync state: pre-populated from morning briefing");
