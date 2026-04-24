@@ -27,10 +27,20 @@ export const NATIVE_USER = "davidblakelock";
  */
 export const NATIVE_STORED_NAME = NATIVE_USER;
 
+/**
+ * Legacy usernames the native app may still have stored in SecureStore.
+ * Map them all to the canonical NATIVE_USER so no route sees a stale name.
+ */
+const NATIVE_USER_ALIASES: Record<string, string> = {
+  David: NATIVE_USER,
+  david: NATIVE_USER,
+};
+
 function resolveNativeUser(req: Request): string {
   const headerUser = req.headers["x-user-name"];
   if (typeof headerUser === "string" && headerUser.trim()) {
-    return headerUser.trim();
+    const name = headerUser.trim();
+    return NATIVE_USER_ALIASES[name] ?? name;
   }
   return NATIVE_USER;
 }
