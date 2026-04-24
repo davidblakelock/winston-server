@@ -1,6 +1,37 @@
 import { google } from "googleapis";
 import { query } from "../db.js";
 
+// ── Invalid-grant sentinel ─────────────────────────────────────────────────────
+// Thrown by calendar/gmail functions when Google revokes the refresh token.
+// Caught by schedulers so they can clear stale credentials and push-notify the user.
+export class GoogleInvalidGrantError extends Error {
+  constructor(public readonly userName: string) {
+    super("invalid_grant");
+    this.name = "GoogleInvalidGrantError";
+  }
+}
+
+export function isInvalidGrant(err: unknown): boolean {
+  const e = err as Record<string, unknown> | null;
+  if (!e) return false;
+  const msg = String(e.message ?? "");
+  const data = (e.response as Record<string, unknown> | undefined)?.data as Record<string, unknown> | undefined;
+  return (
+    msg === "invalid_grant" ||
+    String(data?.error ?? "") === "invalid_grant"
+  );
+}
+
+// Clear both Google credential stores for a user.
+// Uses RETURNING so the DELETE routes through exec_dml_ret (required for Supabase DML).
+export async function clearGoogleTokensForUser(userName: string): Promise<void> {
+  await Promise.allSettled([
+    query("DELETE FROM google_auth WHERE user_name = $1 RETURNING user_name", [userName]),
+    query("DELETE FROM user_integrations WHERE user_name = $1 AND provider = 'google' RETURNING user_name", [userName]),
+  ]);
+  console.log(`[OAuth] clearGoogleTokensForUser(${userName}) — stale tokens removed`);
+}
+
 // ── Identity-only scopes (used for sign-in — minimal permissions) ─────────────
 export const IDENTITY_SCOPES = [
   "openid",

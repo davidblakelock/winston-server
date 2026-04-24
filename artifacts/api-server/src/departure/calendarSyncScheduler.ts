@@ -4,8 +4,12 @@ import { sendPushToAll } from "../push/pushManager.js";
 import { logger } from "../lib/logger.js";
 import { getProfile, getActiveUsers, type CollectedData } from "../onboarding/onboardingManager.js";
 import { fetchTodayEvents, type CalendarEvent } from "../google/calendar.js";
+import { GoogleInvalidGrantError, clearGoogleTokensForUser } from "../google/oauth.js";
 import { estimateDriveTime, extractEventLocation, computeLeaveAt } from "./departureManager.js";
 import { query } from "../db.js";
+
+// Rate-limit the "Google disconnected" push to once per user per server lifecycle.
+const _invalidGrantNotifiedUsers = new Set<string>();
 
 const TZ = "America/Chicago";
 
@@ -252,6 +256,23 @@ async function runCalendarSyncForUser(userName: string): Promise<void> {
   try {
     events = await fetchTodayEvents(userName);
   } catch (err) {
+    if (err instanceof GoogleInvalidGrantError) {
+      logger.warn({ userName }, "Calendar sync: Google token revoked (invalid_grant) — clearing credentials");
+      // Clear stale tokens so UI immediately shows "Not connected" on next status check
+      await clearGoogleTokensForUser(userName).catch(() => {});
+      // Push-notify once per server restart so the user knows to reconnect
+      if (!_invalidGrantNotifiedUsers.has(userName)) {
+        _invalidGrantNotifiedUsers.add(userName);
+        const companionName = await getCompanionName(userName);
+        await sendPushToAll({
+          tag: "google-reconnect",
+          title: `${companionName} — Google Reconnect Needed`,
+          body: "Your Google connection expired. Open the app and reconnect Gmail & Calendar.",
+        }, userName).catch(() => {});
+        logger.info({ userName }, "Calendar sync: sent 'reconnect Google' push notification");
+      }
+      return;
+    }
     logger.warn({ err, userName }, "Calendar sync: fetchTodayEvents threw — skipping cycle");
     return;
   }

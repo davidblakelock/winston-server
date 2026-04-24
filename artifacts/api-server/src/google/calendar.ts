@@ -1,5 +1,5 @@
 import { google } from "googleapis";
-import { getAuthClient, getAuthClientForUser } from "./oauth.js";
+import { getAuthClient, getAuthClientForUser, isInvalidGrant, GoogleInvalidGrantError } from "./oauth.js";
 import { logger } from "../lib/logger.js";
 
 async function resolveAuthClient(userName?: string) {
@@ -122,6 +122,8 @@ function getLocalYMD(date: Date): string {
 /**
  * Fetch the list of all calendar IDs the user has access to.
  * Returns ["primary"] as fallback if the calendarList call fails.
+ * Throws a plain Error("invalid_grant") when the token is revoked — callers
+ * should convert this to GoogleInvalidGrantError with the userName.
  */
 async function getAllCalendarIds(
   calendar: ReturnType<typeof google.calendar>
@@ -135,6 +137,10 @@ async function getAllCalendarIds(
   } catch (err) {
     const code = (err as { code?: number; status?: number })?.code ?? (err as { status?: number })?.status;
     const message = (err as Error)?.message ?? String(err);
+    if (isInvalidGrant(err)) {
+      logger.warn({ code, message }, "Google Calendar: calendarList.list — invalid_grant (token revoked)");
+      throw new Error("invalid_grant");
+    }
     logger.warn({ code, message }, "Google Calendar: calendarList.list failed — falling back to primary");
     return ["primary"];
   }
@@ -152,10 +158,12 @@ async function fetchEventsFromAllCalendars(
   tomorrowStr: string,
   maxPerCalendar = 50
 ): Promise<CalendarEvent[]> {
+  // getAllCalendarIds throws Error("invalid_grant") when the token is revoked.
   const calendarIds = await getAllCalendarIds(calendar);
 
   const seen = new Set<string>();
   const allEvents: CalendarEvent[] = [];
+  let invalidGrantDetected = false;
 
   await Promise.all(
     calendarIds.map(async (calendarId) => {
@@ -193,10 +201,17 @@ async function fetchEventsFromAllCalendars(
       } catch (err) {
         const code = (err as { code?: number; status?: number })?.code ?? (err as { status?: number })?.status;
         const message = (err as Error)?.message ?? String(err);
-        logger.warn({ calendarId, code, message }, "Google Calendar: events.list failed — skipping calendar");
+        if (isInvalidGrant(err)) {
+          invalidGrantDetected = true;
+          logger.warn({ calendarId, code, message }, "Google Calendar: events.list — invalid_grant (token revoked)");
+        } else {
+          logger.warn({ calendarId, code, message }, "Google Calendar: events.list failed — skipping calendar");
+        }
       }
     })
   );
+
+  if (invalidGrantDetected) throw new Error("invalid_grant");
 
   // Sort merged events by start time
   allEvents.sort((a, b) => {
@@ -222,8 +237,16 @@ export async function fetchTodayEvents(userName?: string): Promise<CalendarEvent
   const timeMin = midnight.toISOString();
   const timeMax = new Date(midnight.getTime() + 86399999).toISOString();
 
-  const events = await fetchEventsFromAllCalendars(calendar, timeMin, timeMax, todayStr, tomorrowStr, 20);
-  return events.filter((event) => !isEventInPast(event));
+  try {
+    const events = await fetchEventsFromAllCalendars(calendar, timeMin, timeMax, todayStr, tomorrowStr, 20);
+    return events.filter((event) => !isEventInPast(event));
+  } catch (err) {
+    // Convert generic invalid_grant signal to typed error so scheduler can self-heal
+    if ((err as Error)?.message === "invalid_grant") {
+      throw new GoogleInvalidGrantError(userName ?? "unknown");
+    }
+    throw err;
+  }
 }
 
 export async function fetchTomorrowEvents(userName?: string): Promise<CalendarEvent[] | null> {
