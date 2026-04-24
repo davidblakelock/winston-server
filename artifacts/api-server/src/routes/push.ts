@@ -14,6 +14,8 @@ import {
 import { getProfile } from "../onboarding/onboardingManager.js";
 import { logger } from "../lib/logger.js";
 import { authenticate, tryAuthenticate, NATIVE_USER, resolveUserAlias } from "../auth/middleware.js";
+import { getAuthClientForUser } from "../google/oauth.js";
+import { fetchTodayEvents } from "../google/calendar.js";
 
 const router = Router();
 
@@ -235,6 +237,67 @@ router.get("/push/expo-status", async (req, res) => {
     logger.error({ err }, "[Expo Push] Status check error");
     res.status(500).json({ error: "Status check failed" });
   }
+});
+
+// GET /api/push/calendar-debug — full diagnostic of Google auth + calendar + departures
+router.get("/push/calendar-debug", async (req, res) => {
+  const authedUser = await tryAuthenticate(req);
+  const userName = authedUser ?? (req.query.userName as string | undefined) ?? NATIVE_USER;
+
+  const result: Record<string, unknown> = { userName, ts: new Date().toISOString() };
+
+  // Step 1: Can we get an auth client?
+  let authClient: Awaited<ReturnType<typeof getAuthClientForUser>> | null = null;
+  try {
+    authClient = await getAuthClientForUser(userName);
+    result.authClientOk = !!authClient;
+  } catch (err) {
+    result.authClientOk = false;
+    result.authClientError = (err as Error)?.message ?? String(err);
+    res.json(result);
+    return;
+  }
+
+  // Step 2: Explicitly refresh/check the access token
+  if (authClient) {
+    try {
+      const tokenResp = await authClient.getAccessToken();
+      result.accessTokenOk = !!tokenResp?.token;
+      result.accessTokenPrefix = tokenResp?.token ? tokenResp.token.slice(0, 20) + "…" : null;
+    } catch (err) {
+      result.accessTokenOk = false;
+      result.accessTokenError = (err as Error)?.message ?? String(err);
+    }
+  }
+
+  // Step 3: Fetch today's events (with all internal logging already active)
+  try {
+    const events = await fetchTodayEvents(userName);
+    result.eventsNull = events === null;
+    result.eventCount = events?.length ?? 0;
+    result.events = events?.map((e) => ({
+      id: e.id,
+      summary: e.summary,
+      start: e.start,
+      startIso: e.startIso,
+      hasLocation: !!(e.location || e.description),
+      allDay: e.allDay,
+    })) ?? [];
+  } catch (err) {
+    result.fetchEventsError = (err as Error)?.message ?? String(err);
+  }
+
+  // Step 4: Check Expo tokens
+  try {
+    const tokens = await getExpoTokens(userName);
+    result.expoTokenCount = tokens.length;
+    result.expoTokenTails = tokens.map((t) => "…" + t.slice(-20));
+  } catch (err) {
+    result.expoTokenError = (err as Error)?.message ?? String(err);
+  }
+
+  logger.info(result, "[CalendarDebug] Full diagnostic result");
+  res.json(result);
 });
 
 export default router;

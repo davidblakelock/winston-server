@@ -1,5 +1,6 @@
 import { google } from "googleapis";
 import { getAuthClient, getAuthClientForUser } from "./oauth.js";
+import { logger } from "../lib/logger.js";
 
 async function resolveAuthClient(userName?: string) {
   if (userName) return getAuthClientForUser(userName);
@@ -131,7 +132,10 @@ async function getAllCalendarIds(
       .map((cal) => cal.id)
       .filter((id): id is string => Boolean(id));
     return ids.length > 0 ? ids : ["primary"];
-  } catch {
+  } catch (err) {
+    const code = (err as { code?: number; status?: number })?.code ?? (err as { status?: number })?.status;
+    const message = (err as Error)?.message ?? String(err);
+    logger.warn({ code, message }, "Google Calendar: calendarList.list failed — falling back to primary");
     return ["primary"];
   }
 }
@@ -186,8 +190,10 @@ async function fetchEventsFromAllCalendars(
             allDay: !event.start?.dateTime,
           });
         }
-      } catch {
-        // Skip inaccessible calendars silently
+      } catch (err) {
+        const code = (err as { code?: number; status?: number })?.code ?? (err as { status?: number })?.status;
+        const message = (err as Error)?.message ?? String(err);
+        logger.warn({ calendarId, code, message }, "Google Calendar: events.list failed — skipping calendar");
       }
     })
   );

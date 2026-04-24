@@ -503,17 +503,27 @@ router.get("/auth/providers", (_req: Request, res: Response) => {
 router.post("/auth/google/disconnect", async (req: Request, res: Response) => {
   try {
     const authHeader = req.headers.authorization;
+    const nativeKey = req.headers["x-api-key"];
     let userName: string | null = null;
+
     if (authHeader?.startsWith("Bearer ")) {
       const session = await validateSession(authHeader.slice(7));
       if (session) userName = session.userName;
+    }
+    // Allow native key disconnect (davidblakelock / NATIVE_API_KEY)
+    if (!userName && nativeKey === process.env["NATIVE_API_KEY"]) {
+      userName = (req.body as { userName?: string })?.userName ?? process.env["NATIVE_USER"] ?? null;
     }
     if (!userName) {
       res.status(401).json({ error: "Not authenticated" });
       return;
     }
-    await query("DELETE FROM google_auth WHERE user_name = $1", [userName]);
-    req.log.info({ userName }, "Google OAuth disconnected (keeping app session)");
+    // Clear both tables so stale/revoked tokens are fully removed
+    await Promise.all([
+      query("DELETE FROM google_auth WHERE user_name = $1", [userName]),
+      query("DELETE FROM user_integrations WHERE user_name = $1 AND provider = 'google'", [userName]),
+    ]);
+    req.log.info({ userName }, "Google OAuth disconnected — google_auth + user_integrations cleared");
     res.json({ ok: true });
   } catch (err) {
     req.log.error({ err }, "Google disconnect error");
