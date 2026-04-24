@@ -23,25 +23,39 @@ function localDateStr(): string {
 export async function ensureCalendarSyncTable(): Promise<void> {
   await query(`
     CREATE TABLE IF NOT EXISTS calendar_sync_state (
-      event_date  DATE    NOT NULL,
-      event_id    TEXT    NOT NULL,
+      event_date    DATE    NOT NULL,
+      event_id      TEXT    NOT NULL,
       event_summary TEXT,
-      alert_sent  BOOLEAN NOT NULL DEFAULT FALSE,
-      seen_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      alert_sent    BOOLEAN NOT NULL DEFAULT FALSE,
+      seen_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       PRIMARY KEY (event_date, event_id)
     )
   `);
+
+  // Migration: add user_name column for per-user isolation
+  await query(`
+    ALTER TABLE calendar_sync_state
+    ADD COLUMN IF NOT EXISTS user_name TEXT NOT NULL DEFAULT 'davidblakelock'
+  `).catch(() => {});
+
+  logger.info("calendar_sync_state table ready");
 }
 
-async function getKnownEventIds(dateStr: string): Promise<Set<string>> {
+/**
+ * Returns the set of known event IDs for a given user + date.
+ * Returns null on a DB error (so callers can skip the sync rather than
+ * treating a query failure as "first sync of the day").
+ */
+async function getKnownEventIds(dateStr: string, userName: string): Promise<Set<string> | null> {
   try {
     const { rows } = await query<{ event_id: string }>(
-      `SELECT event_id FROM calendar_sync_state WHERE event_date = $1`,
-      [dateStr]
+      `SELECT event_id FROM calendar_sync_state WHERE event_date = $1 AND user_name = $2`,
+      [dateStr, userName]
     );
     return new Set(rows.map((r) => r.event_id));
-  } catch {
-    return new Set();
+  } catch (err) {
+    logger.warn({ err, dateStr, userName }, "Calendar sync: getKnownEventIds query failed — skipping sync");
+    return null;
   }
 }
 
@@ -49,14 +63,15 @@ async function markEventKnown(
   dateStr: string,
   eventId: string,
   summary: string,
-  alertSent: boolean
+  alertSent: boolean,
+  userName: string
 ): Promise<void> {
   try {
     await query(
-      `INSERT INTO calendar_sync_state (event_date, event_id, event_summary, alert_sent)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO calendar_sync_state (event_date, event_id, event_summary, alert_sent, user_name)
+       VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (event_date, event_id) DO NOTHING`,
-      [dateStr, eventId, summary, alertSent]
+      [dateStr, eventId, summary, alertSent, userName]
     );
   } catch {}
 }
@@ -77,7 +92,9 @@ async function getLeaveByTime(
   if (!location) return null;
 
   const profile = await getProfile(userName).catch(() => null);
-  const homeAddress = ((profile?.rawData as CollectedData)?.homeAddress) ?? "";
+  const homeAddress =
+    profile?.homeAddress ??
+    ((profile?.rawData as CollectedData)?.homeAddress) ?? "";
   const homeLat = profile?.latitude ?? 0;
   const homeLon = profile?.longitude ?? 0;
 
@@ -143,7 +160,10 @@ async function sendNewEventAlert(event: CalendarEvent, userName: string): Promis
     requireInteraction: false,
   }, userName).catch(() => {});
 
-  logger.info({ event: eventName, time: eventTimeStr, hasLocation, userName }, "Calendar sync: new event alert sent");
+  logger.info(
+    { event: eventName, time: eventTimeStr, hasLocation, userName },
+    "Calendar sync: new event alert sent"
+  );
 }
 
 // ── Main sync check ────────────────────────────────────────────────────────────
@@ -159,7 +179,12 @@ async function runCalendarSyncForUser(userName: string): Promise<void> {
   if (!events || events.length === 0) return;
 
   const today = localDateStr();
-  const knownIds = await getKnownEventIds(today);
+  const knownIds = await getKnownEventIds(today, userName);
+
+  // If the DB query failed, skip this cycle entirely rather than
+  // misinterpreting a query error as "first sync of the day".
+  if (knownIds === null) return;
+
   const isFirstSyncToday = knownIds.size === 0;
 
   for (const event of events) {
@@ -167,17 +192,21 @@ async function runCalendarSyncForUser(userName: string): Promise<void> {
     if (knownIds.has(event.id)) continue;
 
     if (isFirstSyncToday) {
-      await markEventKnown(today, event.id, event.summary, true);
-      logger.info({ event: event.summary }, "Calendar sync: initial population (no alert)");
+      await markEventKnown(today, event.id, event.summary, true, userName);
+      logger.info({ event: event.summary, userName }, "Calendar sync: initial population (no alert)");
     } else {
-      await markEventKnown(today, event.id, event.summary, true);
+      await markEventKnown(today, event.id, event.summary, true, userName);
       await sendNewEventAlert(event, userName);
     }
   }
 
   if (!isFirstSyncToday) {
     logger.info(
-      { eventCount: events.length, newEvents: events.filter((e) => !knownIds.has(e.id)).length, userName },
+      {
+        eventCount: events.length,
+        newEvents: events.filter((e) => !knownIds.has(e.id)).length,
+        userName,
+      },
       "Calendar sync: check complete"
     );
   }
@@ -195,23 +224,26 @@ async function runCalendarSync(): Promise<void> {
 
 // ── Public function for briefing to pre-populate ───────────────────────────────
 // Called by briefingPregenerate so events in the morning briefing are never
-// treated as "new" by the 30-minute sync scheduler.
+// treated as "new" by the sync scheduler.
 
-export async function populateCalendarSyncState(events: CalendarEvent[]): Promise<void> {
+export async function populateCalendarSyncState(
+  events: CalendarEvent[],
+  userName: string
+): Promise<void> {
   const today = localDateStr();
   for (const event of events) {
     if (event.id) {
-      await markEventKnown(today, event.id, event.summary, true);
+      await markEventKnown(today, event.id, event.summary, true, userName);
     }
   }
-  logger.info({ count: events.length }, "Calendar sync state: pre-populated from morning briefing");
+  logger.info({ count: events.length, userName }, "Calendar sync state: pre-populated from morning briefing");
 }
 
-// ── Scheduler: every 30 minutes, 8am–9pm CT ───────────────────────────────────
+// ── Scheduler: every 5 minutes, 7am–10pm CT ───────────────────────────────────
 
 export function startCalendarSyncScheduler(): void {
   cron.schedule(
-    "*/30 8-21 * * *",
+    "*/5 7-22 * * *",
     async () => {
       try {
         await runCalendarSync();
@@ -222,5 +254,5 @@ export function startCalendarSyncScheduler(): void {
     { timezone: TZ }
   );
 
-  logger.info("Calendar sync scheduler (every 30 min) started");
+  logger.info("Calendar sync scheduler (every 5 min, 7am–10pm CT) started");
 }

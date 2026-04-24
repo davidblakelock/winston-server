@@ -971,7 +971,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     if (liveEvents !== null) {
       const [departureTimes] = await Promise.all([
         buildCalendarDepartureTimes(liveEvents, homeAddress, primaryLat, primaryLon),
-        populateCalendarSyncState(liveEvents).catch(() => {}),
+        populateCalendarSyncState(liveEvents, sessionUserName).catch(() => {}),
       ]);
       liveCalendarBlock =
         `\n\n[VERIFIED — Google Calendar API — upcoming events from now through next 7 days (past events excluded)]\n` +
