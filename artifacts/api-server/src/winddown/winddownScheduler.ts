@@ -188,14 +188,14 @@ export async function generateOpeningMessage(
     (familyContext ? `Mention ${familyContext} naturally where it fits — don't force every name.\n\n` : "\n\n") +
     (storyQuestion
       ? `2. MEMORY QUESTION (${storyDayLabel} tradition): Include this word for word: "Here's something worth sitting with tonight${familyNames ? ` — something for ${familyNames} someday` : ""}: ${storyQuestion}"\n\n`
-      : `2. MEMORY QUESTION: Skip — tonight is not ${storyDayLabel}. Do NOT include any memory question or reference to the weekly question.\n\n`) +
-    `3. JOURNAL INVITE: Soft optional — something like: "If you want to add anything to your journal tonight, just talk and I'll capture it — or just say 'I don't journal' and we'll skip it."\n\n` +
+      : "") +
+    `${storyQuestion ? "3" : "2"}. JOURNAL INVITE: Soft optional — something like: "If you want to add anything to your journal tonight, just talk and I'll capture it — or just say 'I don't journal' and we'll skip it."\n\n` +
     (journalInsight
-      ? `4. JOURNAL OBSERVATION: If it feels natural and the conversation allows it, weave in this observation gently — like a caring friend who noticed something: "${journalInsight}" Don't force it. Only include it if it fits warmly.\n\n`
-      : `4. JOURNAL OBSERVATION: Skip — no pattern detected this week.\n\n`) +
-    `5. TOMORROW PREP: ${tomorrowContext ? `Mention what's ahead (${tomorrowContext}). ` : ""}Ask if there's anything they want to add to their shopping list, to-do list, or any reminders for tomorrow before we close out.\n\n` +
-    `6. THOUGHT FOR THE NIGHT: End with a single, brief, genuinely thoughtful sentence. Not advice. Not a motivational quote. Not a platitude. Something a wise, warm friend might say at the end of a good conversation — something ${displayName} can quietly sit with before sleep. Make it specific to ${dayName} or the mood of this particular evening if you can. Vary it so it never feels repetitive.\n\n` +
-    `7. CLOSING: Warm goodnight to ${displayName}. ${familyNames ? `Mention ${familyNames}. ` : ""}One encouraging sentence.\n\n` +
+      ? `${storyQuestion ? "4" : "3"}. JOURNAL OBSERVATION: If it feels natural and the conversation allows it, weave in this observation gently — like a caring friend who noticed something: "${journalInsight}" Don't force it. Only include it if it fits warmly.\n\n`
+      : "") +
+    `${storyQuestion ? "5" : journalInsight ? "4" : "3"}. TOMORROW PREP: ${tomorrowContext ? `Mention what's ahead (${tomorrowContext}). ` : ""}Ask them directly: "Is there anything you want to add to your shopping list or to-do list, or do you need me to set any reminders for tomorrow?" Use that exact phrasing — never collapse these into just "your lists".\n\n` +
+    `${storyQuestion ? "6" : journalInsight ? "5" : "4"}. THOUGHT FOR THE NIGHT: End with a single, brief, genuinely thoughtful sentence. Not advice. Not a motivational quote. Not a platitude. Something a wise, warm friend might say at the end of a good conversation — something ${displayName} can quietly sit with before sleep. Make it specific to ${dayName} or the mood of this particular evening if you can. Vary it so it never feels repetitive.\n\n` +
+    `${storyQuestion ? "7" : journalInsight ? "6" : "5"}. CLOSING: Warm goodnight to ${displayName}. ${familyNames ? `Mention ${familyNames}. ` : ""}One encouraging sentence.\n\n` +
     `Write this as one flowing piece of prose — no bullet points, no headers, no numbers.`;
 
   try {
@@ -220,8 +220,8 @@ export async function generateOpeningMessage(
     `If you want to add anything to your journal tonight, just talk and I'll capture it — or just say "I don't journal" and we'll skip it.\n\n` +
     `Take a breath. Whatever didn't get done today can wait.\n\n` +
     (tomorrowContext
-      ? `Tomorrow: ${tomorrowContext} Anything you want to add to your shopping list, to-do list, or any reminders for tomorrow before we close out?\n\n`
-      : `Anything you want to add to your shopping list, to-do list, or any reminders for tomorrow before we close out?\n\n`) +
+      ? `Tomorrow: ${tomorrowContext} Is there anything you want to add to your shopping list or to-do list, or do you need me to set any reminders for tomorrow?\n\n`
+      : `Is there anything you want to add to your shopping list or to-do list, or do you need me to set any reminders for tomorrow?\n\n`) +
     `Goodnight${familyNames ? ` — give ${familyNames} a hug from me` : ""}. You did good today.`
   );
 }

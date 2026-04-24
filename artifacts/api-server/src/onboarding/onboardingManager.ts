@@ -138,7 +138,7 @@ export async function getProfile(userName = NATIVE_STORED_NAME): Promise<UserPro
     birthday: r.birthday ?? null,
     neighborhood: r.neighborhood ?? null,
     relationshipStatus: r.relationship_status ?? null,
-    homeAddress: r.home_address ?? null,
+    homeAddress: r.home_address ?? (r.raw_data as { homeAddress?: string } | null)?.homeAddress ?? null,
     homeLatitude: r.home_latitude ?? null,
     homeLongitude: r.home_longitude ?? null,
   };
@@ -165,8 +165,8 @@ export async function upsertProfile(data: Partial<CollectedData>, userName = NAT
 
   if (!existing) {
     await query(
-      `INSERT INTO user_profiles (user_name, name, city, latitude, longitude, timezone, wake_time, voice_id, health_notes, companion_name, raw_data, onboarding_completed)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,false)`,
+      `INSERT INTO user_profiles (user_name, name, city, latitude, longitude, timezone, wake_time, voice_id, health_notes, companion_name, home_address, raw_data, onboarding_completed)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,false)`,
       [
         userName,
         data.name ?? null,
@@ -178,6 +178,7 @@ export async function upsertProfile(data: Partial<CollectedData>, userName = NAT
         data.voiceId ?? null,
         data.healthNotes ?? null,
         data.companionName ?? null,
+        data.homeAddress ?? null,
         JSON.stringify(data),
       ]
     );
@@ -194,8 +195,9 @@ export async function upsertProfile(data: Partial<CollectedData>, userName = NAT
         voice_id = COALESCE(voice_id, $7),
         health_notes = COALESCE($8, health_notes),
         companion_name = COALESCE(companion_name, $9),
-        raw_data = $10
-       WHERE user_name = $11`,
+        home_address = COALESCE($10, home_address),
+        raw_data = $11
+       WHERE user_name = $12`,
       [
         data.name ?? null,
         data.city ?? null,
@@ -206,6 +208,7 @@ export async function upsertProfile(data: Partial<CollectedData>, userName = NAT
         data.voiceId ?? null,
         data.healthNotes ?? null,
         data.companionName ?? null,
+        data.homeAddress ?? null,
         JSON.stringify(merged),
         userName,
       ]

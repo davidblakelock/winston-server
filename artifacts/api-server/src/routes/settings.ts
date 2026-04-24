@@ -4,6 +4,7 @@ import { logger } from "../lib/logger.js";
 import {
   getProfile,
   updateProfileField,
+  upsertProfile,
   VOICE_OPTIONS,
   type CollectedData,
 } from "../onboarding/onboardingManager.js";
@@ -107,6 +108,28 @@ router.patch("/settings/name", express.json({ limit: "1mb" }), async (req, res) 
 
   const audio = await generateTTS(voiceId, confirmText);
   res.json({ ok: true, companionName: name, audio });
+});
+
+// ── PATCH /api/settings/home-address ─────────────────────────────────────────
+router.patch("/settings/home-address", express.json({ limit: "1mb" }), async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const { homeAddress } = req.body as { homeAddress?: string };
+  if (!homeAddress?.trim()) { res.status(400).json({ error: "homeAddress required" }); return; }
+
+  await upsertProfile({ homeAddress: homeAddress.trim() }, userName);
+  logger.info({ userName, homeAddress: homeAddress.trim() }, "Home address updated");
+  res.json({ ok: true, homeAddress: homeAddress.trim() });
+});
+
+// ── GET /api/settings/home-address ───────────────────────────────────────────
+router.get("/settings/home-address", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const profile = await getProfile(userName);
+  res.json({ homeAddress: profile?.homeAddress ?? null });
 });
 
 // ── POST /api/profile/avatar ──────────────────────────────────────────────────

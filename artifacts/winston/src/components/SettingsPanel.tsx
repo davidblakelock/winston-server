@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import {
   X, Volume2, Play, Check, Loader2, User, Camera, Moon, Bell,
-  Upload, Trash2, Music2, Mail, CheckCircle2, AlertCircle, Link2
+  Upload, Trash2, Music2, Mail, CheckCircle2, AlertCircle, Link2, MapPin
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { isNotificationsSupported } from "@/hooks/useNotifications";
@@ -139,6 +139,11 @@ export default function SettingsPanel({
   const [savingName, setSavingName] = useState(false);
   const [nameSaved, setNameSaved] = useState(false);
 
+  const [homeAddressInput, setHomeAddressInput] = useState("");
+  const [savingHomeAddress, setSavingHomeAddress] = useState(false);
+  const [homeAddressSaved, setHomeAddressSaved] = useState(false);
+  const [homeAddressError, setHomeAddressError] = useState<string | null>(null);
+
   const [pendingAvatarDataUrl, setPendingAvatarDataUrl] = useState<string | null>(null);
   const [savingPhoto, setSavingPhoto] = useState(false);
   const [photoError, setPhotoError] = useState<string | null>(null);
@@ -166,6 +171,16 @@ export default function SettingsPanel({
     setNameSaved(false);
     setGoogleConnecting(false);
   }, [isOpen, currentVoiceId, currentCompanionName]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    fetch(`${CHAT_BASE}/api/settings/home-address`)
+      .then((r) => r.json())
+      .then((d: { homeAddress?: string | null }) => {
+        if (d.homeAddress) { setHomeAddressInput(d.homeAddress); }
+      })
+      .catch(() => {});
+  }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen || voices.length > 0) return;
@@ -311,6 +326,32 @@ export default function SettingsPanel({
       setSavingName(false);
     }
   }, [nameInput, currentCompanionName, onNameChange]);
+
+  const saveHomeAddress = useCallback(async () => {
+    const addr = homeAddressInput.trim();
+    if (!addr) return;
+    setSavingHomeAddress(true);
+    setHomeAddressError(null);
+    try {
+      const token = localStorage.getItem("winston_session_token") ?? "";
+      const res = await fetch(`${CHAT_BASE}/api/settings/home-address`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ homeAddress: addr }),
+      });
+      const data = (await res.json()) as { ok?: boolean; error?: string };
+      if (data.ok) {
+        setHomeAddressSaved(true);
+        setTimeout(() => setHomeAddressSaved(false), 2500);
+      } else {
+        setHomeAddressError(data.error ?? "Failed to save");
+      }
+    } catch {
+      setHomeAddressError("Network error — please try again");
+    } finally {
+      setSavingHomeAddress(false);
+    }
+  }, [homeAddressInput]);
 
   const onFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -536,7 +577,48 @@ export default function SettingsPanel({
 
           <div className="border-t border-white/8" />
 
-          {/* ── Section 3: Avatar ────────────────────────────────────── */}
+          {/* ── Section 3: Home Address ───────────────────────────────── */}
+          <section>
+            <div className="flex items-center gap-2 mb-4">
+              <div className="p-1.5 rounded-lg bg-primary/15">
+                <MapPin className="h-3.5 w-3.5 text-primary" />
+              </div>
+              <h3 className="text-sm font-semibold text-foreground">Home Address</h3>
+            </div>
+            <p className="text-xs text-muted-foreground mb-3 leading-relaxed">
+              Required for departure alerts. When you have a calendar appointment,
+              Winston calculates real-time drive time and notifies you when to leave.
+            </p>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={homeAddressInput}
+                onChange={(e) => { setHomeAddressInput(e.target.value); setHomeAddressSaved(false); setHomeAddressError(null); }}
+                onKeyDown={(e) => { if (e.key === "Enter") void saveHomeAddress(); }}
+                placeholder="e.g. 123 Main St, Dallas, TX 75201"
+                className="flex-1 bg-input border border-border rounded-xl px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-primary/40"
+              />
+              <Button
+                onClick={() => void saveHomeAddress()}
+                disabled={savingHomeAddress || !homeAddressInput.trim()}
+                className="px-4 h-10 text-sm flex-shrink-0"
+              >
+                {savingHomeAddress ? <Loader2 className="h-4 w-4 animate-spin" /> : homeAddressSaved ? <Check className="h-4 w-4" /> : "Save"}
+              </Button>
+            </div>
+            {homeAddressSaved && (
+              <p className="text-xs text-green-400/80 mt-2 flex items-center gap-1">
+                <Check className="h-3 w-3" />Address saved — departure alerts are now active
+              </p>
+            )}
+            {homeAddressError && (
+              <p className="text-xs text-red-400/80 mt-2">{homeAddressError}</p>
+            )}
+          </section>
+
+          <div className="border-t border-white/8" />
+
+          {/* ── Section 4: Avatar ────────────────────────────────────── */}
           <section>
             <div className="flex items-center gap-2 mb-4">
               <div className="p-1.5 rounded-lg bg-primary/15">

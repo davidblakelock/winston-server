@@ -78,7 +78,10 @@ async function checkDepartureAlertsForUser(userName: string): Promise<void> {
     ?? (profile?.longitude && profile.longitude !== 0 ? profile.longitude : null)
     ?? -96.7970;
 
-  if (!homeAddress) return;
+  if (!homeAddress) {
+    logger.warn({ userName }, "Departure check skipped — no home address in profile");
+    return;
+  }
 
   let events: Awaited<ReturnType<typeof fetchTodayEvents>>;
   try {
@@ -98,7 +101,6 @@ async function checkDepartureAlertsForUser(userName: string): Promise<void> {
 
     const minutesUntilEvent = (start.getTime() - now.getTime()) / 60000;
     // Pre-filter: allow up to 4 hours out so long drives (up to ~3.5h) are covered.
-    // shouldFireAlert handles the precise timing check (driveMinutes + 30).
     if (minutesUntilEvent < 0 || minutesUntilEvent > 240) continue;
 
     const location = extractEventLocation({
@@ -106,7 +108,10 @@ async function checkDepartureAlertsForUser(userName: string): Promise<void> {
       location: event.location,
       description: event.description,
     });
-    if (!location) continue;
+    if (!location) {
+      logger.info({ event: event.summary, userName }, "Departure check: event has no location — skipping");
+      continue;
+    }
 
     const alreadySent = await hasAlertBeenSent(event.summary, today, userName);
     if (alreadySent) continue;

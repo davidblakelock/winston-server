@@ -179,16 +179,12 @@ export async function estimateDriveTime(
 }
 
 // ── Departure alert timing ────────────────────────────────────────────────────
-// Alert fires driveMinutes + 30 minutes before the event, giving the user a
-// 30-minute heads-up before they need to walk out the door.
+// Alert fires as soon as the user enters the departure window:
+//   (drive time + 30-minute get-ready buffer)
 //
-// Rules:
-//  • Short trips (drive ≤ 30 min): alert fires 30 min before leave time.
-//  • Long trips  (drive > 30 min): alert fires driveMinutes + 30 min before
-//    the event start — same formula, just results in an earlier absolute alert
-//    which is intentional for long drives.
-//
-// The scheduler runs every 2 min so we use a ±3 min window for reliability.
+// Using a "fire once inside the window" approach rather than a ±3-min point-in-
+// time check so that a missed cron tick or brief server hiccup can never cause
+// the alert to be permanently skipped. hasAlertBeenSent prevents double-firing.
 
 export function shouldFireAlert(
   eventStart: Date,
@@ -197,10 +193,10 @@ export function shouldFireAlert(
 ): boolean {
   const minutesUntilEvent = (eventStart.getTime() - now.getTime()) / 60000;
 
-  // Target: alert when (driveMinutes + 30) minutes remain until the event.
+  // Fire the moment the user is inside the departure-prep window.
+  // Cap at +15 min over the ideal target so very-early scans don't fire.
   const target = driveMinutes + 30;
-
-  return minutesUntilEvent >= target - 3 && minutesUntilEvent <= target + 3;
+  return minutesUntilEvent >= 0 && minutesUntilEvent <= target + 15;
 }
 
 // Compute the leave-by time for display purposes (drive + 10-min buffer).
