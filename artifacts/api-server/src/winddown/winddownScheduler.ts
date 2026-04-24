@@ -17,6 +17,7 @@ import {
   hasStoryCapturedTonight,
 } from "../stories/storyManager.js";
 import { getLatestJournalInsight } from "../journal/journalPatternAnalyzer.js";
+import { getMoodForToday } from "../mood/moodManager.js";
 import { logger } from "../lib/logger.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -169,6 +170,18 @@ export async function generateOpeningMessage(
     logger.warn({ err }, "Failed to fetch journal insight");
   }
 
+  // Morning mood: reference how they said they were feeling this morning
+  let morningMood = "";
+  try {
+    const mood = await getMoodForToday(userName);
+    if (mood) {
+      morningMood = mood;
+      logger.info({ chars: mood.length }, "Morning mood available for evening check-in");
+    }
+  } catch (err) {
+    logger.warn({ err }, "Failed to fetch morning mood");
+  }
+
   const familyLine = familyContext ? `${displayName}'s family: ${familyContext}.\n` : "";
 
   // T003: Build prompt with "Thought for the night" as 7th element
@@ -179,6 +192,7 @@ export async function generateOpeningMessage(
     familyLine +
     (todayContext ? `${todayContext}\n` : "") +
     (tomorrowContext ? `${tomorrowContext}\n` : "") +
+    (morningMood ? `This morning, ${displayName} said they were feeling: "${morningMood.substring(0, 120)}". Gently reference this in your opener — e.g. "Sounds like you went into today feeling..." — and acknowledge how the day may have gone relative to that feeling.\n` : "") +
     (storyQuestion ? `Tonight's memory question: "${storyQuestion}"\n` : "") +
     (journalInsight ? `\n[Gentle journal observation — weave naturally if the moment is right]: ${journalInsight}\n` : "") +
     `\nWrite ONE complete, flowing evening check-in message — about 170–220 words. ` +

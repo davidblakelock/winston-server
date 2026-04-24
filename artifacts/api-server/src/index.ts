@@ -33,6 +33,10 @@ import { ensureJournalInsightsTable, startJournalPatternScheduler } from "./jour
 import { ensurePressureTable, startPressureScheduler } from "./weather/pressureScheduler";
 import { ensureTasksSyncTable } from "./google/tasks";
 import { ensureFitTable } from "./google/fit";
+import { ensureMoodTable } from "./mood/moodManager";
+import { ensureFollowupsTable } from "./followups/followupManager";
+import { ensureMemoryArchiveTable } from "./memory/memoryArchiveManager";
+import { ensureJournalSourceColumn } from "./routes/journal";
 
 const rawPort = process.env["PORT"];
 
@@ -75,6 +79,16 @@ app.listen(port, async (err) => {
     logger.info("[startup] google_tasks_sync and google_fit_data tables ready");
   } catch (e) {
     logger.warn({ e }, "Google Tasks/Fit table initialization warning");
+  }
+
+  try {
+    await ensureMoodTable();
+    await ensureFollowupsTable();
+    await ensureMemoryArchiveTable();
+    await ensureJournalSourceColumn();
+    logger.info("[startup] mood_checkins, conversation_followups, memory_archive, journal source column ready");
+  } catch (e) {
+    logger.warn({ e }, "New feature table initialization warning");
   }
 
   // Isolated block so a failure above never skips this critical table

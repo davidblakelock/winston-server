@@ -1,0 +1,12 @@
+Please build the following server-side features in one pass:
+
+Mood check-in — At the end of every morning briefing, James asks 'How are you feeling about the day ahead?' Store the response in a mood_checkins table with timestamp. Reference it in the evening check-in that same day.
+Proactive memory callbacks — When users mention something time-sensitive in conversation (upcoming events, family milestones, things they're trying), store it in a pending_followups table. Surface it naturally 2-3 days later. Example: 'You mentioned Olivia had a big exam this week — how did she do?' One follow-up per item, then mark resolved.
+Weekly Sunday reflection — Every Sunday morning, prepend a brief week in review to the morning briefing: calendar events from the past week, mood check-in patterns, anything notable mentioned in conversation. Then deliver the weekly story question.
+Journal API — Build these endpoints: GET /api/journal (paginated, most recent first), POST /api/journal (create entry, fields: text, source, timestamp), PUT /api/journal/:id (edit text), DELETE /api/journal/:id. Source can be 'voice', 'text', or 'evening-checkin'.
+Memory Archive API — Build these endpoints: GET /api/memories (grouped by category), POST /api/memories (manual entry), DELETE /api/memories/:id, PATCH /api/memories/:id/category (re-categorize). When a memory is saved, auto-assign category using Claude from: Childhood, Family, Career, Wisdom, Love, Faith, Adventure, Friends.
+Air Quality Index — Use Google Air Quality API for user's city. Pull daily at 5am. Include in morning briefing only when AQI above 100. Store key as GOOGLE_AIR_QUALITY_API_KEY.
+Pollen API — Use Google Pollen API for user's city. Pull daily at 5am. Include in morning briefing only when high or very high. Store key as GOOGLE_POLLEN_API_KEY.
+Google Fit — Steps and active minutes only (no sleep data — requires wearable). Pull daily at 5am. Inject into morning briefing when data exists. Use as fallback when Garmin not connected.
+Google Tasks sync — Bidirectional sync between Winston's to-do list and user's Google Tasks default list. When item added to Winston to-do, create in Google Tasks. When fetching to-do list, merge with Google Tasks items.
+Google Places expansion — Add intent detection for: 'nearest pharmacy', 'find urgent care near me', 'nearest grocery store', 'nearest gas station', 'nearest bank'. Return top 3 results with name, address, rating, distance

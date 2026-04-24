@@ -13,6 +13,7 @@ import { getUpcomingDates, formatDatesForPrompt } from "../dates/datesManager.js
 import { isTodayPickleballDay } from "../pickleball/pickleballManager.js";
 import { getPendingFollowUps, buildRecommendationFollowUpBlock } from "../recommendations/recommendationsManager.js";
 import { collectSundayData, buildSundaySummaryBlock } from "../sundaySummary/sundaySummaryManager.js";
+import { getPendingPersonalFollowups, buildPersonalFollowupsBlock } from "../followups/followupManager.js";
 import { getJournalCountThisWeek, getRecentJournalEntries } from "../journal/journalManager.js";
 import { getStoryCount } from "../stories/storyManager.js";
 import { getCachedWeather, type CachedWeather, TOMORROW_CONDITIONS } from "../weather/weatherCache.js";
@@ -523,7 +524,7 @@ function buildBriefingInstruction(city: string, savedVenues: string[]): string {
     : "your saved venues";
   return `
 
-  [MORNING BRIEFING — DELIVER ALL 16 SECTIONS IN THIS EXACT ORDER]
+  [MORNING BRIEFING — DELIVER ALL 17 SECTIONS IN THIS EXACT ORDER]
 
   Deliver the morning briefing as a single flowing conversation. No headers. No bullet points. No section labels. No phrases that announce what comes next. Sound like David's most trusted friend who just called — warm, sharp, personal, and always on point.
 
@@ -575,7 +576,9 @@ function buildBriefingInstruction(city: string, savedVenues: string[]): string {
 
   SECTION 16 — SUNDAY SPECIAL: Sundays ONLY — deliver a warm weekly recap just before Section 15: exercise this week, family archive stories captured, highlights, something to look forward to next week. Skip every other day of the week.
 
-  SECTION 15 — CLOSING: End the briefing on exactly ONE sentence. It should be warm, direct, and specific to David's day. If there is a "Your Partner" section in the profile context, naturally weave them into the closing — e.g., "Hope you and Susan get some good time together today" or "Tell Susan I said hi." This is the most natural place to mention the partner — make it feel genuine, not forced. Do NOT end with a question. Do NOT ask "Anything else before you head into your day?" or any variation of it. Do NOT invite follow-up. One sentence, then stop.
+  SECTION 15 — CLOSING: One warm sentence, direct and specific to David's day. Weave in his partner if natural. Do NOT end with a question. Do NOT say "Anything else before you head into your day?" One sentence only.
+
+  SECTION 17 — MOOD CHECK-IN: Always included, every morning, immediately after the closing. Ask exactly: "How are you feeling about the day ahead?" Nothing more — no elaboration, no examples. Just this one question on its own line.
 
   FORBIDDEN PHRASES AND CONTENT — never use:
   "Here is your morning briefing" or "Good morning, David, here is what you need to know"
@@ -708,7 +711,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       validSecondaryLocs.map((s) => getCachedWeather(s.city, s.lat, s.lon).catch(() => null))
     );
 
-    const [dallas, lastNightNotes, newsBlock, yesterdayEps, todayEps, sportsScores, upcomingBills, upcomingDates, sundayData, pendingFollowUps, dallasEvents, journalCountWeek, recentJournals, totalStories, pollenData, venueConcertsBlock, dailyMotivation] = await Promise.all([
+    const [dallas, lastNightNotes, newsBlock, yesterdayEps, todayEps, sportsScores, upcomingBills, upcomingDates, sundayData, pendingFollowUps, dallasEvents, journalCountWeek, recentJournals, totalStories, pollenData, venueConcertsBlock, dailyMotivation, personalFollowUps] = await Promise.all([
       getCachedWeather(primaryCity, primaryLat, primaryLon).catch(() => null),
       getLastNightNotes().catch(() => []),
       fetchMorningNews(userName).catch(() => ""),
@@ -717,7 +720,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       fetchSportsScores(userName).catch(() => null),
       getUpcomingBills(3, userName).catch(() => []),
       getUpcomingDates(21, userName).catch(() => []),
-      isSunday ? collectSundayData().catch(() => null) : Promise.resolve(null),
+      isSunday ? collectSundayData(userName).catch(() => null) : Promise.resolve(null),
       getPendingFollowUps(2, 14).catch(() => []),
       fetchDallasContent(localCtx).catch(() => ""),
       getJournalCountThisWeek().catch(() => 0),
@@ -726,6 +729,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       fetchPollenData(primaryLat, primaryLon).catch(() => null),
       runVenueScan().catch(() => ""),
       fetchDailyMotivation().catch(() => ""),
+      getPendingPersonalFollowups(userName).catch(() => []),
     ]);
 
     // Fetch Garmin health data (yesterday's stored data — no live API call needed)
@@ -937,8 +941,10 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     const garminBlock = garminData ? formatGarminForBriefing(garminData) : "";
     const fitBlock = fitData ? formatFitForBriefing(fitData) : "";
 
+    const personalFollowUpsBlock = buildPersonalFollowupsBlock(personalFollowUps);
+
     const suffix = garminBlock + fitBlock + tvMorningBlock + sportsBlock + billsMorningBlock + datesBlock +
-      sundaySummaryBlock + pickleballMorningBlock + recFollowUpBlock + motivationContextBlock +
+      sundaySummaryBlock + pickleballMorningBlock + recFollowUpBlock + personalFollowUpsBlock + motivationContextBlock +
       dallasEventsBlock + dedupedVenueConcertsBlock + dedupedNewsBlock + buildBriefingInstruction(primaryCity, localCtx.venues ?? []);
 
     // Log which static sections have data

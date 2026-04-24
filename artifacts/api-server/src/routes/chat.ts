@@ -199,6 +199,8 @@ import { logBriefingStories } from "../morning/storyDedup.js";
 import { getDallasItems, getLocalContentCity, type LocalContentItem } from "../morning/dallasContent.js";
 import { createReminder } from "../reminders/reminderManager.js";
 import { broadcastToUser } from "../reminders/sseStore.js";
+import { saveMoodCheckin } from "../mood/moodManager.js";
+import { extractAndSaveFollowups } from "../followups/followupManager.js";
 
 // ── Calendar location context helpers ──────────────────────────────────────
 // Short-lived per-user cache of today's events so we don't hit the Google API
@@ -3112,6 +3114,33 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     // Fire-and-forget. Only runs when message contains personal statements.
     // Saves durable facts (preferences, places, people) to profile_items.
     extractAndSaveConversationFacts(message, reply, sessionUserName).catch(() => {});
+
+    // ── Post-response: detect mood check-in response ────────────────────────
+    // If the previous assistant message asked the mood question, save this reply.
+    {
+      const MOOD_QUESTION = "how are you feeling about the day ahead";
+      const recentAssistant = [...history]
+        .reverse()
+        .find((m) => m.role === "assistant");
+      if (
+        recentAssistant &&
+        recentAssistant.content.toLowerCase().includes(MOOD_QUESTION) &&
+        message.trim().length > 2
+      ) {
+        saveMoodCheckin(message.trim(), sessionUserName).catch(() => {});
+      }
+    }
+
+    // ── Post-response: extract time-sensitive follow-up items ───────────────
+    // Fire-and-forget. Detects upcoming events, family milestones, etc.
+    {
+      const fullHistory = [
+        ...history,
+        { role: "user", content: message },
+        { role: "assistant", content: reply },
+      ];
+      extractAndSaveFollowups(fullHistory, sessionUserName).catch(() => {});
+    }
 
     // ── Post-response: mark recommendation as followed up ─────────────────
     if (detectFollowUpAcknowledgment(message)) {
