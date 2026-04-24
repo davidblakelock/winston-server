@@ -1,6 +1,6 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { query } from "../db.js";
-import { authenticate, NATIVE_STORED_NAME } from "../auth/middleware.js";
+import { authenticate } from "../auth/middleware.js";
 
 export const VALID_SOURCES = ["voice", "text", "evening-checkin"] as const;
 type JournalSource = (typeof VALID_SOURCES)[number];
@@ -16,8 +16,11 @@ const router: IRouter = Router();
 
 // GET /api/journal — paginated, most recent first
 router.get("/journal", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
   try {
-    const userName = (await authenticate(req, res).catch(() => null)) ?? NATIVE_STORED_NAME;
+    req.log?.info({ userName }, "[Journal] GET resolved user");
     const page = Math.max(1, parseInt(String(req.query.page ?? "1"), 10));
     const limit = Math.min(50, Math.max(1, parseInt(String(req.query.limit ?? "20"), 10)));
     const offset = (page - 1) * limit;
@@ -68,8 +71,11 @@ router.get("/journal", async (req: Request, res: Response) => {
 
 // POST /api/journal — create entry
 router.post("/journal", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
   try {
-    const userName = (await authenticate(req, res).catch(() => null)) ?? NATIVE_STORED_NAME;
+    req.log?.info({ userName }, "[Journal] POST resolved user");
     const { text, source, timestamp } = req.body as {
       text?: string;
       source?: string;
@@ -119,8 +125,10 @@ router.post("/journal", async (req: Request, res: Response) => {
 
 // PUT /api/journal/:id — edit text
 router.put("/journal/:id", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
   try {
-    const userName = (await authenticate(req, res).catch(() => null)) ?? NATIVE_STORED_NAME;
     const id = parseInt(req.params.id, 10);
     const { text } = req.body as { text?: string };
 
@@ -164,10 +172,11 @@ router.put("/journal/:id", async (req: Request, res: Response) => {
 
 // DELETE /api/journal/:id
 router.delete("/journal/:id", async (req: Request, res: Response) => {
-  try {
-    const userName = (await authenticate(req, res).catch(() => null)) ?? NATIVE_STORED_NAME;
-    const id = parseInt(req.params.id, 10);
+  const userName = await authenticate(req, res);
+  if (!userName) return;
 
+  try {
+    const id = parseInt(req.params.id, 10);
     const { rowCount } = await query(
       `DELETE FROM journal_entries WHERE id = $1 AND user_name = $2`,
       [id, userName]

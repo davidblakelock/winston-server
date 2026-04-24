@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import { authenticate, NATIVE_STORED_NAME } from "../auth/middleware.js";
+import { authenticate } from "../auth/middleware.js";
 import {
   saveMemoryToArchive,
   getMemoriesGroupedByCategory,
@@ -12,8 +12,11 @@ const router: IRouter = Router();
 
 // GET /api/memories — all memories grouped by category
 router.get("/memories", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
   try {
-    const userName = (await authenticate(req, res).catch(() => null)) ?? NATIVE_STORED_NAME;
+    req.log?.info({ userName }, "[Memories] GET resolved user");
     const grouped = await getMemoriesGroupedByCategory(userName);
     res.json({ memories: grouped, categories: VALID_CATEGORIES });
   } catch (err) {
@@ -24,8 +27,11 @@ router.get("/memories", async (req: Request, res: Response) => {
 
 // POST /api/memories — create entry (auto-categorize if category omitted)
 router.post("/memories", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
   try {
-    const userName = (await authenticate(req, res).catch(() => null)) ?? NATIVE_STORED_NAME;
+    req.log?.info({ userName }, "[Memories] POST resolved user");
     const { text, category } = req.body as { text?: string; category?: string };
 
     if (!text?.trim()) {
@@ -43,16 +49,16 @@ router.post("/memories", async (req: Request, res: Response) => {
 
 // DELETE /api/memories/:id
 router.delete("/memories/:id", async (req: Request, res: Response) => {
-  try {
-    const userName = (await authenticate(req, res).catch(() => null)) ?? NATIVE_STORED_NAME;
-    const id = parseInt(req.params.id, 10);
+  const userName = await authenticate(req, res);
+  if (!userName) return;
 
+  try {
+    const id = parseInt(req.params.id, 10);
     const deleted = await deleteMemoryEntry(id, userName);
     if (!deleted) {
       res.status(404).json({ error: "Memory not found" });
       return;
     }
-
     res.json({ ok: true });
   } catch (err) {
     req.log?.warn({ err }, "Memories DELETE error");
@@ -62,8 +68,10 @@ router.delete("/memories/:id", async (req: Request, res: Response) => {
 
 // PATCH /api/memories/:id/category — re-categorize
 router.patch("/memories/:id/category", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
   try {
-    const userName = (await authenticate(req, res).catch(() => null)) ?? NATIVE_STORED_NAME;
     const id = parseInt(req.params.id, 10);
     const { category } = req.body as { category?: string };
 
@@ -77,7 +85,6 @@ router.patch("/memories/:id/category", async (req: Request, res: Response) => {
       res.status(404).json({ error: "Memory not found or invalid category" });
       return;
     }
-
     res.json({ ok: true });
   } catch (err) {
     req.log?.warn({ err }, "Memories PATCH error");
