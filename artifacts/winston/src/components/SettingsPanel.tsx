@@ -74,6 +74,7 @@ interface SettingsPanelProps {
   googleEmail: string | null;
   onGoogleDisconnect: () => void;
   onGoogleConnect: () => void;
+  onRefreshGoogleStatus: () => Promise<void>;
 }
 
 const CHAT_BASE = (typeof import.meta !== "undefined" ? (import.meta.env.BASE_URL as string) : "/").replace(/\/$/, "");
@@ -147,6 +148,7 @@ export default function SettingsPanel({
   googleEmail,
   onGoogleDisconnect,
   onGoogleConnect,
+  onRefreshGoogleStatus,
 }: SettingsPanelProps) {
   const [voices, setVoices] = useState<Voice[]>([]);
   const [selectedVoiceId, setSelectedVoiceId] = useState<string | null>(currentVoiceId);
@@ -169,6 +171,7 @@ export default function SettingsPanel({
   const [providers, setProviders] = useState<{ google: boolean; microsoft: boolean; apple: boolean }>({ google: true, microsoft: false, apple: false });
 
   const [googleConnecting, setGoogleConnecting] = useState(false);
+  const [googleStatusRefreshing, setGoogleStatusRefreshing] = useState(false);
   const [garminConnected, setGarminConnected] = useState(false);
   const [garminEmail, setGarminEmail] = useState<string | null>(null);
   const [garminLastSync, setGarminLastSync] = useState<string | null>(null);
@@ -194,7 +197,10 @@ export default function SettingsPanel({
     setPhotoError(null);
     setNameSaved(false);
     setGoogleConnecting(false);
-  }, [isOpen, currentVoiceId, currentCompanionName]);
+    // Always refresh Google status from the server when the panel opens
+    setGoogleStatusRefreshing(true);
+    void onRefreshGoogleStatus().finally(() => setGoogleStatusRefreshing(false));
+  }, [isOpen, currentVoiceId, currentCompanionName, onRefreshGoogleStatus]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -977,13 +983,17 @@ export default function SettingsPanel({
                       <p className="text-xs text-muted-foreground">Gmail &amp; Calendar</p>
                     </div>
                   </div>
-                  {googleConnected ? (
+                  {googleStatusRefreshing ? (
+                    <span className="text-xs text-muted-foreground/40 font-medium px-2 py-0.5 rounded-full bg-white/5 border border-white/10 flex items-center gap-1">
+                      <Loader2 className="h-2.5 w-2.5 animate-spin" />Checking…
+                    </span>
+                  ) : googleConnected ? (
                     <span className="text-xs text-green-400 font-medium px-2 py-0.5 rounded-full bg-green-400/10 border border-green-400/20">Connected</span>
                   ) : (
                     <span className="text-xs text-muted-foreground/60 font-medium px-2 py-0.5 rounded-full bg-white/5 border border-white/10">Not connected</span>
                   )}
                 </div>
-                {googleConnected ? (
+                {!googleStatusRefreshing && googleConnected ? (
                   <div className="space-y-2">
                     {googleEmail && (
                       <div className="flex items-center gap-1.5">
@@ -992,13 +1002,17 @@ export default function SettingsPanel({
                       </div>
                     )}
                     <button
-                      onClick={onGoogleDisconnect}
+                      onClick={async () => {
+                        onGoogleDisconnect();
+                        setGoogleStatusRefreshing(true);
+                        await onRefreshGoogleStatus().finally(() => setGoogleStatusRefreshing(false));
+                      }}
                       className="w-full text-xs font-medium px-3 py-2 rounded-lg border border-red-500/20 bg-red-950/20 text-red-400/80 hover:bg-red-950/40 hover:border-red-500/30 transition-colors"
                     >
                       Disconnect
                     </button>
                   </div>
-                ) : (
+                ) : !googleStatusRefreshing ? (
                   <Button
                     className="w-full h-8 text-xs"
                     disabled={googleConnecting}
@@ -1013,7 +1027,7 @@ export default function SettingsPanel({
                       "Connect Gmail \u0026 Calendar"
                     )}
                   </Button>
-                )}
+                ) : null}
               </div>
 
               {/* Microsoft */}

@@ -2103,6 +2103,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         googleEmail={googleAuth.email}
         onGoogleDisconnect={() => void handleGoogleDisconnect()}
         onGoogleConnect={handleGoogleConnect}
+        onRefreshGoogleStatus={refreshGoogleAuth}
       />
 
       {/* Chat Area */}
