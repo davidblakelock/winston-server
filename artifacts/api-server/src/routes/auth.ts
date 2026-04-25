@@ -13,7 +13,7 @@ import {
   getAppUrl,
 } from "../auth/sessionAuth.js";
 import { registerUser, loginUser } from "../auth/passwordAuth.js";
-import { NATIVE_STORED_NAME } from "../auth/middleware.js";
+import { NATIVE_STORED_NAME, NATIVE_API_KEY, NATIVE_USER } from "../auth/middleware.js";
 // @ts-ignore — apple-signin-auth has no bundled types
 import appleSignin from "apple-signin-auth";
 
@@ -511,8 +511,8 @@ router.post("/auth/google/disconnect", async (req: Request, res: Response) => {
       if (session) userName = session.userName;
     }
     // Allow native key disconnect (davidblakelock / NATIVE_API_KEY)
-    if (!userName && nativeKey === process.env["NATIVE_API_KEY"]) {
-      userName = (req.body as { userName?: string })?.userName ?? process.env["NATIVE_USER"] ?? null;
+    if (!userName && nativeKey === NATIVE_API_KEY) {
+      userName = (req.body as { userName?: string })?.userName ?? NATIVE_USER;
     }
     if (!userName) {
       res.status(401).json({ error: "Not authenticated" });
