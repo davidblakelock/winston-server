@@ -62,16 +62,28 @@ export default function SignIn() {
   const [submitting, setSubmitting] = useState(false);
   const [emailError, setEmailError] = useState("");
 
+  // Google's OAuth page sets X-Frame-Options: DENY — it cannot load inside an iframe.
+  // If we're embedded in a frame (e.g. Replit preview), open a new tab instead of
+  // navigating the current frame (which would be silently blocked by the browser).
+  function openAuth(url: string) {
+    const inFrame = (() => { try { return window.self !== window.top; } catch { return true; } })();
+    if (inFrame) {
+      window.open(url, "_blank");
+    } else {
+      window.location.href = url;
+    }
+  }
+
   function handleGoogleSignIn() {
-    window.location.href = `${BASE}/api/auth/google?signin=1`;
+    openAuth(`${BASE}/api/auth/google?signin=1`);
   }
 
   function handleMicrosoftSignIn() {
-    window.location.href = `${BASE}/api/auth/microsoft`;
+    openAuth(`${BASE}/api/auth/microsoft`);
   }
 
   function handleAppleSignIn() {
-    window.location.href = `${BASE}/api/auth/apple`;
+    openAuth(`${BASE}/api/auth/apple`);
   }
 
   function handleDemoClick() {
