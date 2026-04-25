@@ -174,6 +174,8 @@ import {
   composeTextMessage,
   detectToneFromRelationship,
   detectToneOverride,
+  detectInlineTone,
+  toneLabel,
   getPendingText,
   setPendingText,
   isSendConfirmation,
@@ -402,7 +404,12 @@ const STORY_DAY_CHANGE_PATTERN = /\b(move|change|switch|shift|reschedule|update)
 const HEADACHE_PATTERN = /\b(headache|head\s+ach(e|ing)|migraine|body\s+ach(e|es|ing)|joint\s+(pain|ach(e|ing))|pressure\s+headache|sinus\s+headache|feel(ing)?\s+(off|achy|not\s+great|under\s+the\s+weather)|my\s+head\s+(hurts?|is\s+killing|is\s+pounding)|skull\s+is\s+splitting)\b/i;
 
 // T006: Text message composition — "text [name]" or "send a message to [name]"
-const TEXT_MESSAGE_PATTERN = /^(?:text|send\s+(?:a\s+)?(?:text|message|sms)(?:\s+to)?|message)\s+([A-Za-z][A-Za-z'.]*(?:\s+[A-Za-z][A-Za-z'.]*)?)/i;
+// Allows natural speech preambles: "hey text Sarah", "can you text Mom", "ok send a message to John"
+const TEXT_PREAMBLE = /^(?:(?:ok|okay|hey|hi|alright|uh|um|so|listen|actually|well|and|also|please|can\s+you|could\s+you|will\s+you|would\s+you|i\s+(?:need|want)\s+(?:you\s+)?to)[,\s]+)*/i;
+const TEXT_MESSAGE_PATTERN = new RegExp(
+  TEXT_PREAMBLE.source + /(?:text|send\s+(?:a\s+)?(?:text|message|sms)(?:\s+to)?|message)\s+[A-Za-z][A-Za-z'.]*(?:\s+[A-Za-z][A-Za-z'.]*)?/.source,
+  "i"
+);
 
 // Olivia mentions and calls
 const OLIVIA_CALL_PATTERN = /\b(called?\s+olivia|talked?\s+(to\s+)?olivia|spoke\s+(with\s+)?olivia|olivia\s+and\s+i\s+(talked?|chatted?|spoke|called?)|just\s+(talked?|spoke|called?)\s+(to\s+|with\s+)?olivia|facetime(d)?\s+olivia|olivia\s+call)\b/i;
@@ -1465,14 +1472,14 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           composedBody: composed.body,
         });
 
-        const toneNote = effectiveTone === "professional" ? " (professional tone)" : " (casual tone)";
+        const toneNote = ` (${toneLabel(effectiveTone)} tone)`;
         systemPrompt +=
           `\n\n[Text Message Composed for ${pendingText.recipientName}]\n` +
           `Message body${toneNote}:\n"${composed.body}"\n\n` +
           `Read this message back to ${displayName} word for word, then ask if it looks right. ` +
           `Say something like: "Here's what I've got: [read message verbatim]. ` +
           `Does that work? Just say yes and I'll hand it off to your Messages app so you can tap Send." ` +
-          `If they want changes, they can describe edits or say "make it more casual/formal". ` +
+          `If they want changes, they can describe edits or request a different tone (warm, friendly, playful, flirty, professional, formal, or casual). ` +
           `CRITICAL HONESTY RULES: ` +
           `(1) You are composing the message — you are NOT sending it and you CANNOT send it. ` +
           `(2) The Messages app will only open AFTER the user says yes — do NOT say it is opening now. ` +
@@ -1504,7 +1511,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
             composedBody: recomposed.body,
           });
 
-          const toneNote = effectiveTone === "professional" ? "more professional" : "more casual";
+          const toneNote = toneLabel(effectiveTone);
           systemPrompt +=
             `\n\n[Text Message Revised — ${toneNote} tone]\n` +
             `Message body:\n"${recomposed.body}"\n\n` +
@@ -1619,10 +1626,11 @@ const chatHandlerCore = async (req: Request, res: Response) => {
                  targetName.toLowerCase().includes(p.name.split(" ")[0]?.toLowerCase() ?? "")
         );
         const relationship = profileMatch?.relationship ?? undefined;
-        // Fall back to checking the target name itself for professional roles
-        const tone = detectToneFromRelationship(relationship ?? targetName);
+        // Check if the user specified a tone inline ("text Sarah in a flirty tone")
+        const inlineTone = detectInlineTone(message);
+        const tone: MessageTone = inlineTone ?? detectToneFromRelationship(relationship ?? targetName);
         const displayName = userProfile?.name ?? sessionUserName;
-        const toneDesc = tone === "professional" ? "professional" : "casual and warm";
+        const toneLbl = toneLabel(tone);
 
         setPendingText({
           phase: "awaiting_intent",
@@ -1633,11 +1641,11 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         });
 
         const phoneNote = phone ? `I found ${contact?.name ?? targetName}'s number.` : `I didn't find a number for ${targetName} in your contacts, but I'll compose it and you can fill that in.`;
-        const relNote = relationship ? ` Since they're your ${relationship}, I'll keep it ${toneDesc}.` : ` I'll write it ${toneDesc}.`;
+        const toneNote = inlineTone ? ` I'll keep it ${toneLbl}.` : (relationship ? ` Since they're your ${relationship}, I'll keep it ${toneLbl}.` : ` I'll write it ${toneLbl}.`);
 
         systemPrompt +=
           `\n\n[Text Message Flow Started — Recipient: ${contact?.name ?? targetName}]\n` +
-          `${phoneNote}${relNote}\n\n` +
+          `${phoneNote}${toneNote}\n\n` +
           `Ask ${displayName} what they'd like to say — something like: ` +
           `"${phoneNote.replace("I", "Got it — ")} What would you like to say?"`;
 
