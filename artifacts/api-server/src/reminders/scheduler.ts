@@ -1,6 +1,6 @@
 import cron from "node-cron";
 import { query } from "../db.js";
-import { broadcastToUser } from "./sseStore.js";
+import { broadcast, broadcastToUser } from "./sseStore.js";
 import { sendPushToAll } from "../push/pushManager.js";
 import { getAppUrl } from "../auth/sessionAuth.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
@@ -15,6 +15,7 @@ interface ReminderRow {
   recurring_time: string | null;
   timezone: string;
   status: string;
+  for_contact: string | null;
 }
 
 function nextOccurrence(timeStr: string, tz: string): Date {
@@ -81,8 +82,6 @@ export function startScheduler(): void {
         const speakText = `Hey ${reminder.user_name}, your reminder: ${reminder.reminder_text}.`;
 
         // ── 2. Broadcast via SSE to EVERY connected device for this user ──
-        // broadcastToUser loops all SSE connections mapped to this user so all
-        // open browser tabs / devices receive the event simultaneously.
         console.log("SCHEDULER: firing reminder id", reminder.id, "text:", reminder.reminder_text);
         broadcastToUser(reminder.user_name, "reminder", {
           id: reminder.id,
@@ -90,28 +89,74 @@ export function startScheduler(): void {
           reminderText: reminder.reminder_text,
           speakText,
         });
-
-        // Also sync all panels to remove this reminder immediately
         broadcastToUser(reminder.user_name, "reminder_sync", { action: "fired", id: reminder.id });
 
-        // ── 3. Send push notification to all registered devices ──
-        // Look up companion_name dynamically so the notification always uses the current name
+        // ── 3. Look up companion name (used in both paths below) ──────────
         const profile = await getProfile(reminder.user_name).catch(() => null);
         const companionName = profile?.companionName ?? "Your Companion";
 
+        // ── 4a. Contact push — if this reminder is FOR a contact with Winston ──
+        // Look up contact_push_links: finds the linked Winston user for the named contact.
+        // Uses case-insensitive prefix match so "Sarah" matches "sarah" or "Sarah Blakelock".
+        if (reminder.for_contact) {
+          try {
+            const { rows: links } = await query<{ linked_user_name: string; contact_name: string }>(
+              `SELECT linked_user_name, contact_name
+               FROM contact_push_links
+               WHERE owner_user_name = $1
+                 AND LOWER(contact_name) LIKE LOWER($2 || '%')
+               LIMIT 1`,
+              [reminder.user_name, reminder.for_contact]
+            );
+
+            if (links.length > 0) {
+              const link = links[0];
+              const contactBody = `${reminder.user_name} wanted to remind you — ${reminder.reminder_text}`;
+              logger.info(
+                { contactName: link.contact_name, linkedUser: link.linked_user_name },
+                "[Scheduler] Sending contact reminder push"
+              );
+              await sendPushToAll(
+                {
+                  title: `${companionName}`,
+                  body: contactBody,
+                  tag: `contact-reminder-${reminder.id}`,
+                  reminderId: reminder.id,
+                  notificationType: "contact-reminder",
+                  requireInteraction: true,
+                },
+                link.linked_user_name
+              );
+              logger.info(
+                { id: reminder.id, forContact: reminder.for_contact, linkedUser: link.linked_user_name },
+                "[Scheduler] Contact reminder sent"
+              );
+            } else {
+              logger.info(
+                { id: reminder.id, forContact: reminder.for_contact },
+                "[Scheduler] No push link found for contact — skipping contact push"
+              );
+            }
+          } catch (contactErr) {
+            logger.warn({ contactErr }, "[Scheduler] Contact push lookup failed");
+          }
+        }
+
+        // ── 4b. Always send the reminder push to the reminder owner ──────
         const appUrl = getAppUrl();
         const reminderUrl = `${appUrl}/?notification=reminder&text=${encodeURIComponent(reminder.reminder_text)}&reminderId=${reminder.id}`;
         await sendPushToAll({
-          title: `⏰ Reminder — ${companionName}`,
+          title: reminder.for_contact
+            ? `✅ Reminder sent to ${reminder.for_contact} — ${companionName}`
+            : `⏰ Reminder — ${companionName}`,
           body: reminder.reminder_text,
           tag: `reminder-${reminder.id}`,
           url: reminderUrl,
           reminderId: reminder.id,
-          companion_name: companionName,
-          requireInteraction: true,
+          requireInteraction: !reminder.for_contact,
         });
 
-        logger.info({ id: reminder.id, text: reminder.reminder_text }, "Reminder fired");
+        logger.info({ id: reminder.id, text: reminder.reminder_text, forContact: reminder.for_contact ?? "self" }, "Reminder fired");
 
         // ── 4. For recurring reminders: schedule next occurrence and reset to 'pending' ──
         if (reminder.recurring && reminder.recurring_time) {

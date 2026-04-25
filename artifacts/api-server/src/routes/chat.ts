@@ -291,7 +291,7 @@ function formatWeatherBlock(w: CachedWeather): string {
 // or on messages that contain "morning" mid-sentence (e.g. "update my morning preferences").
 const MORNING_PATTERN = /^(good\s+morning|mornin[g']?|morning\s+(briefing|summary|update)|daily\s+(briefing|summary|update)|give\s+me\s+(my\s+)?(morning\s+)?briefing|what('?s|\s+is)\s+(my\s+)?(morning\s+)?briefing|i\s+want\s+(my\s+)?(morning\s+)?briefing|wakin[g']?\s+up|just\s+woke)[\s!.,?]*/i;
 const EVENING_PATTERN = /\b(good\s+evening|evening\s+check[\s-]?in|check[\s-]?in\s+for\s+the\s+evening|start\s+(my\s+)?evening\s+check[\s-]?in|winding\s+down|wind\s+down|heading\s+to\s+bed|going\s+to\s+bed|getting\s+ready\s+for\s+bed|calling\s+it\s+a\s+night|turning\s+in|good\s+night|goodnite|end\s+of\s+the\s+day|wrapping\s+up|relaxing\s+(tonight|this\s+evening)|settling\s+in)\b/i;
-const REMINDER_PATTERN = /\b(remind\s+me|set\s+a?\s*reminder|reminder|don'?t\s+let\s+me\s+forget|make\s+sure\s+i|peel\s+remind|ms\.?\s*peel\s+remind)\b/i;
+const REMINDER_PATTERN = /\b(remind\s+(me|\w+)\s+to|set\s+a?\s*reminder(\s+for\s+\w+)?|reminder|don'?t\s+let\s+me\s+forget|make\s+sure\s+i|peel\s+remind|ms\.?\s*peel\s+remind)\b/i;
 const EMAIL_PATTERN = /\b(email|emails|mail|inbox|check\s+my\s+(email|mail|inbox)|any\s+(new\s+)?(emails?|messages?|mail)|what('?s|\s+is)\s+(in\s+)?(my\s+)?(email|inbox|mail)|do\s+i\s+have\s+(any\s+)?(email|mail|messages?))\b/i;
 const CALENDAR_PATTERN = /\b(calendar|schedule|agenda|appointments?|what('?s|\s+is)\s+(on\s+)?(my\s+)?(calendar|schedule|agenda|week)|(today|tomorrow|this\s+week|next\s+week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)'?s?\s+(schedule|events?|appointments?|look\s+like)|do\s+i\s+have\s+anything\s+(today|tomorrow|this\s+week|scheduled|on\s+my\s+calendar)|what\s+does\s+my\s+(day|week|morning|afternoon|evening)\s+look\s+like|what('?s|\s+is)\s+on\s+for\s+(today|tomorrow|this\s+week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|anything\s+(on\s+)?(today|tomorrow|this\s+week|my\s+calendar|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|busy\s+(today|tomorrow|this\s+week|monday|tuesday|wednesday|thursday|friday)|am\s+i\s+free\s+(today|tomorrow|this\s+(morning|afternoon|week)|monday|tuesday|wednesday|thursday|friday)|what\s+do\s+i\s+have\s+(today|tomorrow|this\s+week|this\s+morning|this\s+afternoon|on\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday))|do\s+i\s+have\s+(a\s+)?(meeting|lunch|dinner|appointment|call|interview|class|session|game)\s+(today|tomorrow|this\s+(morning|afternoon|week)|on\s+(monday|tuesday|wednesday|thursday|friday))|(when|what\s+time)\s+is\s+(my\s+)?(meeting|lunch|dinner|appointment|call|interview|class|session|game|next\s+appointment)|where\s+(am\s+i\s+(having|eating|meeting|going\s+for)|is\s+(my\s+|the\s+)?)\s*(lunch|dinner|breakfast|brunch|meeting|appointment|event)|what('?s|\s+is)\s+(my\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow)\s+(look\s+like|schedule|plans?)|what\s+are\s+my\s+plans?\s+(for\s+)?(today|tomorrow|this\s+week|tonight|this\s+(morning|afternoon|evening))|how\s+does\s+my\s+(day|week|morning|afternoon|schedule)\s+look)\b/i;
 // NOTE: "remind me" phrases are intentionally excluded here — they go through the reminder system, not the calendar.
@@ -458,6 +458,7 @@ interface ExtractedReminder {
   time: string;
   isRecurring: boolean;
   recurring: string | null;
+  forContact: string | null;
 }
 
 async function extractReminder(message: string): Promise<ExtractedReminder | null> {
@@ -490,16 +491,19 @@ async function extractReminder(message: string): Promise<ExtractedReminder | nul
 For relative times ("in 5 minutes", "in 1 hour", "in 30 minutes") add the offset to the EXACT current time shown above and output the result in 24-hour HH:MM format. Do not round to a convenient hour or half-hour.
 
 Return ONLY valid JSON with these fields:
-- reminderText: string — what to remind about (concise, e.g. "call Olivia")
+- reminderText: string — what to remind about (concise, e.g. "call dentist")
 - time: string — 24-hour HH:MM format (e.g. "15:00" for 3pm, "07:00" for 7am)
 - isRecurring: boolean
 - recurring: string or null — one of: "daily", "weekdays", "weekends", "weekly", or null
+- forContact: string or null — if the reminder is FOR another person (not the user themselves), their first name only (e.g. "Sarah"). Null if the reminder is for the user.
 
 Examples:
-"remind me to call Olivia at 3pm" → {"reminderText":"call Olivia","time":"15:00","isRecurring":false,"recurring":null}
-"remind me to take my medication every morning at 7am" → {"reminderText":"take my medication","time":"07:00","isRecurring":true,"recurring":"daily"}
-"remind me to walk Winston every weekday at 8am" → {"reminderText":"walk Winston","time":"08:00","isRecurring":true,"recurring":"weekdays"}
-"remind me in 5 minutes" (current time 14:30) → {"reminderText":"...","time":"14:35","isRecurring":false,"recurring":null}`,
+"remind me to call Olivia at 3pm" → {"reminderText":"call Olivia","time":"15:00","isRecurring":false,"recurring":null,"forContact":null}
+"remind Sarah to call the dentist at 3pm" → {"reminderText":"call the dentist","time":"15:00","isRecurring":false,"recurring":null,"forContact":"Sarah"}
+"set a reminder for Sarah to take her medication at 8am" → {"reminderText":"take her medication","time":"08:00","isRecurring":false,"recurring":null,"forContact":"Sarah"}
+"remind me to take my medication every morning at 7am" → {"reminderText":"take my medication","time":"07:00","isRecurring":true,"recurring":"daily","forContact":null}
+"remind me to walk Winston every weekday at 8am" → {"reminderText":"walk Winston","time":"08:00","isRecurring":true,"recurring":"weekdays","forContact":null}
+"remind me in 5 minutes" (current time 14:30) → {"reminderText":"...","time":"14:35","isRecurring":false,"recurring":null,"forContact":null}`,
     messages: [{ role: "user", content: message }],
   });
 
@@ -2417,18 +2421,29 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           recurring: extracted.recurring ?? null,
           recurringTime: extracted.isRecurring ? extracted.time : null,
           timezone: "America/Chicago",
+          forContact: extracted.forContact ?? null,
         });
 
         req.log.info({ extracted, fireAt }, "Reminder saved");
 
-        reminderConfirmation =
-          `\n\n[Reminder saved]\n` +
-          `Text: "${extracted.reminderText}"\n` +
-          `Time: ${timeLabel}\n` +
-          `Recurring: ${extracted.isRecurring ? extracted.recurring ?? "daily" : "no"}\n` +
-          `Reply with ONLY the confirmation. No other text, no personality, no references to anything else. ` +
-          `One line: "Done — I'll remind you to ${extracted.reminderText} at ${timeLabel}."` +
-          (extracted.isRecurring ? ` (adjust wording for recurring: "Set — I'll remind you...")` : "");
+        if (extracted.forContact) {
+          reminderConfirmation =
+            `\n\n[Reminder saved for contact]\n` +
+            `Contact: "${extracted.forContact}"\n` +
+            `Text: "${extracted.reminderText}"\n` +
+            `Time: ${timeLabel}\n` +
+            `If ${extracted.forContact} has Winston installed and is linked, they will receive a push notification at ${timeLabel}. ` +
+            `Reply with ONLY the confirmation. One line: "Done — I'll send ${extracted.forContact} a reminder to ${extracted.reminderText} at ${timeLabel}."`;
+        } else {
+          reminderConfirmation =
+            `\n\n[Reminder saved]\n` +
+            `Text: "${extracted.reminderText}"\n` +
+            `Time: ${timeLabel}\n` +
+            `Recurring: ${extracted.isRecurring ? extracted.recurring ?? "daily" : "no"}\n` +
+            `Reply with ONLY the confirmation. No other text, no personality, no references to anything else. ` +
+            `One line: "Done — I'll remind you to ${extracted.reminderText} at ${timeLabel}."` +
+            (extracted.isRecurring ? ` (adjust wording for recurring: "Set — I'll remind you...")` : "");
+        }
 
         systemPrompt = systemPrompt + reminderConfirmation;
       }

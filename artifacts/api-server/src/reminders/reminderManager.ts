@@ -2,6 +2,10 @@ import { query } from "../db.js";
 import { broadcast } from "./sseStore.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
+// Add for_contact column if it doesn't exist (idempotent)
+query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS for_contact text DEFAULT NULL`)
+  .catch(() => {});
+
 export interface ReminderInput {
   userName?: string;
   reminderText: string;
@@ -9,6 +13,7 @@ export interface ReminderInput {
   recurring?: string | null;
   recurringTime?: string | null;
   timezone?: string;
+  forContact?: string | null;
 }
 
 export interface ReminderRow {
@@ -20,6 +25,7 @@ export interface ReminderRow {
   recurring_time: string | null;
   timezone: string;
   status: string;
+  for_contact: string | null;
   last_fired_at: string | null;
   created_at: string;
 }
@@ -58,8 +64,8 @@ export async function createReminder(input: ReminderInput): Promise<ReminderRow>
   // ── Insert ───────────────────────────────────────────────────────────────────
   const { rows } = await query<ReminderRow>(
     `INSERT INTO reminders
-       (user_name, reminder_text, fire_at, recurring, recurring_time, timezone, status)
-       VALUES ($1, $2, $3, $4, $5, $6, 'pending')
+       (user_name, reminder_text, fire_at, recurring, recurring_time, timezone, status, for_contact)
+       VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7)
        RETURNING *`,
     [
       resolvedUser,
@@ -68,6 +74,7 @@ export async function createReminder(input: ReminderInput): Promise<ReminderRow>
       input.recurring    ?? null,
       input.recurringTime ?? null,
       resolvedTz,
+      input.forContact   ?? null,
     ]
   );
 

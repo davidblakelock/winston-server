@@ -16,6 +16,20 @@ query(`
   )
 `).catch((err) => logger.warn({ err }, "[Push] expo_push_tokens table init failed — may already exist"));
 
+// ── contact_push_links: links a contact name to another Winston user account ─
+// When David says "remind Sarah to call the dentist", the scheduler looks up
+// Sarah's linked_user_name and sends an Expo push to HER devices.
+query(`
+  CREATE TABLE IF NOT EXISTS contact_push_links (
+    id integer GENERATED ALWAYS AS IDENTITY NOT NULL PRIMARY KEY,
+    owner_user_name   text NOT NULL,
+    contact_name      text NOT NULL,
+    linked_user_name  text NOT NULL,
+    created_at        timestamptz DEFAULT now(),
+    UNIQUE(owner_user_name, linked_user_name)
+  )
+`).catch((err) => logger.warn({ err }, "[Push] contact_push_links table init failed — may already exist"));
+
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY ?? "";
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY ?? "";
 const VAPID_EMAIL = process.env.VAPID_EMAIL ?? "emma@winston.app";

@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { validateSession } from "../auth/sessionAuth.js";
 import { query } from "../db.js";
-import { authenticate } from "../auth/middleware.js";
+import { authenticate, NATIVE_STORED_NAME, NATIVE_API_KEY } from "../auth/middleware.js";
 
 const router = Router();
 
@@ -339,6 +339,153 @@ router.get("/contacts/test", async (req: Request, res: Response) => {
     });
   } catch (e: unknown) {
     return res.json({ error: (e as Error).message });
+  }
+});
+
+// ── Contact push links ────────────────────────────────────────────────────────
+// These endpoints allow a contact (e.g. Sarah) to link her Winston account to
+// an entry in another user's (David's) contact list, enabling David to send
+// push notifications directly to Sarah's device via reminders.
+
+// POST /api/contacts/push-link
+// Called by the contact (Sarah) to register themselves under another user's contacts.
+// Body: { ownerUserName: "davidblakelock", contactName: "Sarah" }
+router.post("/contacts/push-link", async (req: Request, res: Response) => {
+  try {
+    const authHeader = req.headers.authorization;
+    const apiKey = req.headers["x-api-key"] as string | undefined;
+    let linkedUserName: string | null = null;
+
+    if (apiKey === NATIVE_API_KEY) {
+      linkedUserName = NATIVE_STORED_NAME;
+    } else if (authHeader?.startsWith("Bearer ")) {
+      const session = await validateSession(authHeader.slice(7));
+      if (session) linkedUserName = session.userName;
+    }
+
+    if (!linkedUserName) {
+      res.status(401).json({ error: "authentication_required" });
+      return;
+    }
+
+    const { ownerUserName, contactName } = req.body as {
+      ownerUserName?: string;
+      contactName?: string;
+    };
+
+    if (!ownerUserName || !contactName) {
+      res.status(400).json({ error: "ownerUserName and contactName are required" });
+      return;
+    }
+
+    // Confirm the owner actually exists
+    const { rows: ownerRows } = await query<{ user_name: string }>(
+      "SELECT user_name FROM user_profiles WHERE user_name = $1 LIMIT 1",
+      [ownerUserName]
+    );
+    if (!ownerRows.length) {
+      res.status(404).json({ error: "Owner user not found" });
+      return;
+    }
+
+    await query(
+      `INSERT INTO contact_push_links (owner_user_name, contact_name, linked_user_name)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (owner_user_name, linked_user_name) DO UPDATE SET
+         contact_name = EXCLUDED.contact_name`,
+      [ownerUserName, contactName.trim(), linkedUserName]
+    );
+
+    res.json({ ok: true, ownerUserName, contactName: contactName.trim(), linkedUserName });
+  } catch (err) {
+    req.log.error({ err }, "[ContactPush] push-link POST error");
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
+// GET /api/contacts/push-links
+// Returns all push links for the authenticated user (as owner), so David can
+// see which of his contacts have Winston installed and are linked.
+router.get("/contacts/push-links", async (req: Request, res: Response) => {
+  try {
+    const authHeader = req.headers.authorization;
+    const apiKey = req.headers["x-api-key"] as string | undefined;
+    let ownerUserName: string | null = null;
+
+    if (apiKey === NATIVE_API_KEY) {
+      ownerUserName = NATIVE_STORED_NAME;
+    } else if (authHeader?.startsWith("Bearer ")) {
+      const session = await validateSession(authHeader.slice(7));
+      if (session) ownerUserName = session.userName;
+    }
+
+    if (!ownerUserName) {
+      res.status(401).json({ error: "authentication_required" });
+      return;
+    }
+
+    const { rows } = await query<{
+      id: number;
+      contact_name: string;
+      linked_user_name: string;
+      created_at: string;
+    }>(
+      `SELECT id, contact_name, linked_user_name, created_at
+       FROM contact_push_links
+       WHERE owner_user_name = $1
+       ORDER BY contact_name`,
+      [ownerUserName]
+    );
+
+    res.json({ links: rows });
+  } catch (err) {
+    req.log.error({ err }, "[ContactPush] push-links GET error");
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
+// DELETE /api/contacts/push-link
+// Called by either the owner (David) or the linked user (Sarah) to remove a link.
+// Body: { ownerUserName?, linkedUserName? } — at least one must match the caller.
+router.delete("/contacts/push-link", async (req: Request, res: Response) => {
+  try {
+    const authHeader = req.headers.authorization;
+    const apiKey = req.headers["x-api-key"] as string | undefined;
+    let callerUserName: string | null = null;
+
+    if (apiKey === NATIVE_API_KEY) {
+      callerUserName = NATIVE_STORED_NAME;
+    } else if (authHeader?.startsWith("Bearer ")) {
+      const session = await validateSession(authHeader.slice(7));
+      if (session) callerUserName = session.userName;
+    }
+
+    if (!callerUserName) {
+      res.status(401).json({ error: "authentication_required" });
+      return;
+    }
+
+    const { ownerUserName, linkedUserName } = req.body as {
+      ownerUserName?: string;
+      linkedUserName?: string;
+    };
+
+    // Caller must be either the owner or the linked user
+    if (callerUserName !== ownerUserName && callerUserName !== linkedUserName) {
+      res.status(403).json({ error: "forbidden" });
+      return;
+    }
+
+    await query(
+      `DELETE FROM contact_push_links
+       WHERE owner_user_name = $1 AND linked_user_name = $2`,
+      [ownerUserName ?? callerUserName, linkedUserName ?? callerUserName]
+    );
+
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error({ err }, "[ContactPush] push-link DELETE error");
+    res.status(500).json({ error: "internal_error" });
   }
 });
 
