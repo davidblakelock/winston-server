@@ -150,6 +150,12 @@ async function checkWeatherAlertsForUser(userName: string): Promise<void> {
       requireInteraction: true,
       notificationType: "weather-alert",
       companionMessage: `There's a ${eventTitle} in effect for ${alert.areaName ?? city}. ${body}`,
+      // Tell the native app to use device GPS when opening the weather screen
+      // so the user sees weather for wherever they currently are, not just home.
+      useCurrentLocation: true,
+      alertLat: lat,
+      alertLon: lon,
+      alertCity: city,
     }, userName);
 
     logger.info({ eventTitle, alertId, userName }, "[WeatherAlerts] Push sent");

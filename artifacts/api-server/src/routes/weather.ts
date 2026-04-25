@@ -37,6 +37,20 @@ async function geocodeCity(city: string): Promise<{ lat: number; lon: number } |
   }
 }
 
+async function reverseGeocodeCity(lat: number, lon: number): Promise<string | null> {
+  try {
+    const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`;
+    const res = await fetch(url, {
+      headers: { "User-Agent": "WinstonCompanion/1.0" },
+      signal: AbortSignal.timeout(5000),
+    });
+    const data = await res.json() as { address?: { city?: string; town?: string; village?: string; county?: string } };
+    return data.address?.city ?? data.address?.town ?? data.address?.village ?? data.address?.county ?? null;
+  } catch {
+    return null;
+  }
+}
+
 
 async function fetchPollen(lat: number, lon: number): Promise<PollenCardData | null> {
   const key = process.env.GOOGLE_WEATHER_API;
@@ -120,18 +134,36 @@ router.get("/weather/morning", async (req: Request, res: Response) => {
   try {
     const profile = await getProfile(userName).catch(() => null);
 
-    const primaryCity = profile?.city ?? "Dallas";
-    let primaryLat: number = profile?.latitude ?? 0;
-    let primaryLon: number = profile?.longitude ?? 0;
+    // Allow native app to pass current GPS coordinates (e.g. when opened from a weather-alert notification).
+    // If lat/lon query params are provided they take priority over the saved profile location.
+    const qLat = req.query.lat ? parseFloat(req.query.lat as string) : null;
+    const qLon = req.query.lon ? parseFloat(req.query.lon as string) : null;
+    const qCity = req.query.city ? (req.query.city as string) : null;
+    const usingGPS = qLat !== null && !isNaN(qLat) && qLon !== null && !isNaN(qLon);
 
-    if (!primaryLat || !primaryLon) {
-      const coords = await geocodeCity(primaryCity).catch(() => null);
-      if (coords) {
-        primaryLat = coords.lat;
-        primaryLon = coords.lon;
-      } else {
-        primaryLat = 32.7767;
-        primaryLon = -96.7970;
+    let primaryCity: string;
+    let primaryLat: number;
+    let primaryLon: number;
+
+    if (usingGPS) {
+      primaryLat = qLat!;
+      primaryLon = qLon!;
+      // Use provided city name, or reverse-geocode, or fall back to "Current Location"
+      primaryCity = qCity ?? await reverseGeocodeCity(primaryLat, primaryLon) ?? "Current Location";
+    } else {
+      primaryCity = profile?.city ?? "Dallas";
+      primaryLat = profile?.latitude ?? 0;
+      primaryLon = profile?.longitude ?? 0;
+
+      if (!primaryLat || !primaryLon) {
+        const coords = await geocodeCity(primaryCity).catch(() => null);
+        if (coords) {
+          primaryLat = coords.lat;
+          primaryLon = coords.lon;
+        } else {
+          primaryLat = 32.7767;
+          primaryLon = -96.7970;
+        }
       }
     }
 
@@ -172,6 +204,9 @@ router.get("/weather/morning", async (req: Request, res: Response) => {
       primary: primaryWeather ? { ...primaryWeather, pollen: pollenData } : null,
       secondary,
       fetchedAt: new Date().toISOString(),
+      // Tells the native app whether GPS coordinates were used (vs saved profile location)
+      gpsUsed: usingGPS,
+      ...(usingGPS ? { resolvedCity: primaryCity } : {}),
     });
   } catch (err) {
     req.log.warn({ err }, "Weather card fetch failed");

@@ -63,6 +63,11 @@ export interface PushPayload {
   notificationType?: string;       // e.g. "concert-alert", "reminder", "morning", "departure"
   companionMessage?: string;       // What the companion should say/display when notification is tapped
   eventDetails?: EventDetail[];    // For concert-alert: structured event info for the native app
+  // Weather-alert specific: tells native app to fetch weather for current GPS, not saved home location
+  useCurrentLocation?: boolean;
+  alertLat?: number;               // Lat where the alert was issued (home/profile location)
+  alertLon?: number;               // Lon where the alert was issued
+  alertCity?: string;              // City name for the alert area
 }
 
 export interface PushSubscriptionData {
@@ -302,6 +307,11 @@ async function sendExpoNotifications(
       ...(payload.eventDetails ? { eventDetails: payload.eventDetails } : {}),
       // mapsUrl is a Google Maps directions link — native app should open it via Linking.openURL
       ...(payload.mapsUrl ? { mapsUrl: payload.mapsUrl } : {}),
+      // Weather-alert: native app should acquire GPS and call /api/weather/morning?lat=X&lon=Y
+      ...(payload.useCurrentLocation ? { useCurrentLocation: true } : {}),
+      ...(payload.alertLat != null ? { alertLat: payload.alertLat } : {}),
+      ...(payload.alertLon != null ? { alertLon: payload.alertLon } : {}),
+      ...(payload.alertCity ? { alertCity: payload.alertCity } : {}),
     },
   }));
 
