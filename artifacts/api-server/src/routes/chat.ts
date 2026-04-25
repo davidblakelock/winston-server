@@ -102,7 +102,7 @@ import {
   isPartnerRelationship,
   type CollectedData,
 } from "../onboarding/onboardingManager.js";
-import { getCachedWeather, type CachedWeather, TOMORROW_CONDITIONS } from "../weather/weatherCache.js";
+import { getCachedWeather, type CachedWeather } from "../weather/weatherCache.js";
 import {
   getWatchedShows,
   addWatchedShow,
@@ -627,7 +627,7 @@ Information that came directly from a live API or database in this context windo
 • [VERIFIED — Google Calendar API] → calendar events, times, titles
 • [VERIFIED — Google Contacts API] → names, phone numbers, emails, addresses
 • [VERIFIED — Gmail API] → email subjects, senders, content
-• [VERIFIED — Tomorrow.io] → weather data
+• [VERIFIED — Google Weather API] → weather data
 • [VERIFIED — Alpha Vantage] → market prices
 • David's profile block above → facts David provided during setup
 State VERIFIED information as fact, using the EXACT data returned. Never modify, enrich, or add to it.

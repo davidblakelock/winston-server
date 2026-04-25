@@ -16,7 +16,7 @@ import { collectSundayData, buildSundaySummaryBlock } from "../sundaySummary/sun
 import { getPendingPersonalFollowups, buildPersonalFollowupsBlock } from "../followups/followupManager.js";
 import { getJournalCountThisWeek, getRecentJournalEntries } from "../journal/journalManager.js";
 import { getStoryCount } from "../stories/storyManager.js";
-import { getCachedWeather, type CachedWeather, TOMORROW_CONDITIONS } from "../weather/weatherCache.js";
+import { getCachedWeather, type CachedWeather } from "../weather/weatherCache.js";
 import { setStaticBriefingContext } from "./briefingCache.js";
 import { fetchDallasContent, getDallasItems, buildDallasBlock } from "./dallasContent.js";
 import { runVenueScan, getVenueConcerts, buildVenueConcertsBlock, getFavoriteVenueNames } from "./venueMonitor.js";
@@ -160,7 +160,7 @@ async function fetchDallasPollenData(lat: number, lon: number): Promise<PollenRe
 // ── Google Air Quality API ─────────────────────────────────────────────────────
 
 async function fetchGoogleAQI(lat: number, lon: number): Promise<number | null> {
-  const key = process.env.GOOGLE_AIR_QUALITY_API_KEY;
+  const key = process.env.GOOGLE_WEATHER_API;
   if (!key) return null;
   try {
     const res = await fetch(
@@ -193,7 +193,7 @@ async function fetchGooglePollen(
   lat: number,
   lon: number
 ): Promise<{ tree: number; grass: number; weed: number } | null> {
-  const key = process.env.GOOGLE_POLLEN_API_KEY;
+  const key = process.env.GOOGLE_WEATHER_API;
   if (!key) return null;
   try {
     const res = await fetch(
@@ -226,8 +226,8 @@ function googlePollenIndexToGrM3(index: number): number {
 
 // Primary pollen/AQI fetch — tries Google APIs first, falls back to Open-Meteo
 async function fetchPollenData(lat: number, lon: number): Promise<PollenResult | null> {
-  const hasGoogleAQI = !!process.env.GOOGLE_AIR_QUALITY_API_KEY;
-  const hasGooglePollen = !!process.env.GOOGLE_POLLEN_API_KEY;
+  const hasGoogleAQI = !!process.env.GOOGLE_WEATHER_API;
+  const hasGooglePollen = !!process.env.GOOGLE_WEATHER_API;
 
   if (hasGoogleAQI || hasGooglePollen) {
     const [googleAQI, googlePollen] = await Promise.all([
@@ -333,7 +333,7 @@ function buildContextualWeatherBlock(dallas: CachedWeather, secondary: Secondary
   // 5-day forecast block (days 1–5 after today)
   const fiveDayLines = dallas.forecastDays.length > 0
     ? dallas.forecastDays.map((d) => {
-        const condNote = d.conditionCode && TOMORROW_CONDITIONS[d.conditionCode] ? `, ${TOMORROW_CONDITIONS[d.conditionCode]}` : "";
+        const condNote = d.condition ? `, ${d.condition}` : "";
         const rainNote = d.precipChance >= 60 ? ` ☔${d.precipChance}%` : d.precipChance >= 35 ? ` 🌦${d.precipChance}%` : "";
         return `${d.dayName}: ${d.high}°/${d.low}°${condNote}${rainNote}`;
       }).join(" | ")
@@ -342,7 +342,7 @@ function buildContextualWeatherBlock(dallas: CachedWeather, secondary: Secondary
   const uvLine = `UV Index: ${dallas.uvIndex} now / peak ${dallas.uvIndexMax} (${uvLabel})`;
 
   return (
-    `\n\n[VERIFIED — Tomorrow.io Weather API — ${dallas.city}]\n` +
+    `\n\n[VERIFIED — Google Weather API — ${dallas.city}]\n` +
     `Now: ${dallas.temp}°F (feels like ${dallas.feelsLike}°F), ${dallas.condition}\n` +
     `Today: high ${dallas.high}°F / low ${dallas.low}°F | Rain chance: ${dallas.precipChance}% | Humidity: ${dallas.humidity}% | Wind: ${dallas.windSpeed} mph\n` +
     `${uvLine}\n` +
@@ -354,7 +354,7 @@ function buildContextualWeatherBlock(dallas: CachedWeather, secondary: Secondary
         ? w.forecastDays.map((d) => `${d.dayName}: ${d.high}°/${d.low}°${d.precipChance >= 40 ? ` ${d.precipChance}%rain` : ""}`).join(" | ")
         : "";
       return (
-        `\n[VERIFIED — Tomorrow.io Weather API — ${s.person.city} (for ${s.person.name})]\n` +
+        `\n[VERIFIED — Google Weather API — ${s.person.city} (for ${s.person.name})]\n` +
         `Now: ${w.temp}°F (feels like ${w.feelsLike}°F), ${w.condition} — high ${w.high}°F / low ${w.low}°F | ${w.precipChance}% precip | humidity ${w.humidity}%\n` +
         (days ? `Forecast: ${days}\n` : "")
       );
@@ -534,9 +534,9 @@ function buildBriefingInstruction(city: string, savedVenues: string[]): string {
 
   SECTION 1 — GREETING: "Good morning, David" followed by one warm personal sentence naming the day of the week. One sentence total.
 
-  SECTION 2 — WEATHER TODAY: Deliver a natural, conversational weather summary using the [VERIFIED — Tomorrow.io Weather API — ${city}] block. Include: current temperature and feels-like, today's high and low, conditions, rain chance, humidity, wind speed, and UV index. Keep it to 2–3 sentences — warm and informative, like a friend who checked the forecast. If UV is high (8+), mention it. If there is an Air Quality & Pollen block, weave pollen and AQI into the same breath — one concise sentence. Only skip this section if the [VERIFIED — Tomorrow.io Weather API — ${city}] block is missing entirely.
+  SECTION 2 — WEATHER TODAY: Deliver a natural, conversational weather summary using the [VERIFIED — Google Weather API — ${city}] block. Include: current temperature and feels-like, today's high and low, conditions, rain chance, humidity, wind speed, and UV index. Keep it to 2–3 sentences — warm and informative, like a friend who checked the forecast. If UV is high (8+), mention it. If there is an Air Quality & Pollen block, weave pollen and AQI into the same breath — one concise sentence. Only skip this section if the [VERIFIED — Google Weather API — ${city}] block is missing entirely.
 
-  SECTION 3 — FORECAST: Deliver a brief overview of the coming days using the Forecast data in the [VERIFIED — Tomorrow.io Weather API — ${city}] block. Mention any days with notable changes — rain, big temperature swings, heat. Keep it to 2 sentences max. Then, for every [VERIFIED — Tomorrow.io Weather API — <city> (for <name>)] block present, always mention that person's weather — one natural sentence per person, every single time, regardless of conditions. Example: "Over in Knoxville, Olivia's looking at a mild 68 with some cloud cover." These are family members — David always wants to know how their weather looks. Never skip a family member city. Skip this section only if no forecast data is available at all.
+  SECTION 3 — FORECAST: Deliver a brief overview of the coming days using the Forecast data in the [VERIFIED — Google Weather API — ${city}] block. Mention any days with notable changes — rain, big temperature swings, heat. Keep it to 2 sentences max. Then, for every [VERIFIED — Google Weather API — <city> (for <name>)] block present, always mention that person's weather — one natural sentence per person, every single time, regardless of conditions. Example: "Over in Knoxville, Olivia's looking at a mild 68 with some cloud cover." These are family members — David always wants to know how their weather looks. Never skip a family member city. Skip this section only if no forecast data is available at all.
 
   SECTION 4 — POLLEN / AIR QUALITY: SKIP THIS SECTION — pollen and AQI are already covered in Section 2.
 

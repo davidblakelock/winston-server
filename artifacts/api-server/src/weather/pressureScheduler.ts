@@ -1,5 +1,6 @@
 // ── Barometric Pressure Scheduler ────────────────────────────────────────────
-// Fetches barometric pressure from Tomorrow.io every 2 hours.
+// Fetches barometric pressure from the Google Weather API every 2 hours.
+// (The currentConditions:lookup response includes airPressure.meanSeaLevelMillibars)
 // Stores readings in pressure_readings table.
 // Exposes helpers to detect significant pressure changes for headache/body ache context.
 
@@ -32,7 +33,6 @@ export async function ensurePressureTable(): Promise<void> {
     CREATE INDEX IF NOT EXISTS pressure_readings_recorded_at_idx
     ON pressure_readings (recorded_at DESC)
   `);
-  // Keep only the last 30 days automatically
   await query(`
     DELETE FROM pressure_readings
     WHERE recorded_at < NOW() - INTERVAL '30 days'
@@ -40,32 +40,31 @@ export async function ensurePressureTable(): Promise<void> {
   logger.info("[PRESSURE] pressure_readings table ready");
 }
 
-// ── Fetch from Tomorrow.io ────────────────────────────────────────────────────
+// ── Fetch from Google Weather API ─────────────────────────────────────────────
 
 async function fetchCurrentPressure(): Promise<{ hpa: number; inHg: number } | null> {
-  const apiKey = process.env.TOMORROW_IO_API_KEY;
+  const apiKey = process.env.GOOGLE_WEATHER_API;
   if (!apiKey) {
-    logger.warn("[PRESSURE] TOMORROW_IO_API_KEY not configured");
+    logger.warn("[PRESSURE] GOOGLE_WEATHER_API not configured");
     return null;
   }
 
-  const location = `${DALLAS_LAT},${DALLAS_LON}`;
-  const url = `https://api.tomorrow.io/v4/weather/realtime?location=${location}&units=metric&fields=pressureSurfaceLevel&apikey=${apiKey}`;
+  const url = `https://weather.googleapis.com/v1/currentConditions:lookup?key=${apiKey}&location.latitude=${DALLAS_LAT}&location.longitude=${DALLAS_LON}&unitsSystem=IMPERIAL`;
 
   try {
     const resp = await fetch(url, { signal: AbortSignal.timeout(10000) });
     if (resp.status === 429) {
-      logger.warn("[PRESSURE] Tomorrow.io rate limit (429) — skipping this cycle");
+      logger.warn("[PRESSURE] Google Weather API rate limit (429) — skipping this cycle");
       return null;
     }
     if (!resp.ok) {
-      logger.warn({ status: resp.status }, "[PRESSURE] Tomorrow.io realtime error");
+      logger.warn({ status: resp.status }, "[PRESSURE] Google Weather API error");
       return null;
     }
     const data = await resp.json() as {
-      data?: { values?: { pressureSurfaceLevel?: number } };
+      airPressure?: { meanSeaLevelMillibars?: number };
     };
-    const hpa = data?.data?.values?.pressureSurfaceLevel;
+    const hpa = data?.airPressure?.meanSeaLevelMillibars;
     if (hpa == null || isNaN(hpa)) {
       logger.warn({ data }, "[PRESSURE] No pressure value in response");
       return null;
@@ -103,10 +102,9 @@ export function startPressureScheduler(): void {
     }
   });
 
-  // Run immediately on startup to get an initial reading
   recordPressure().catch((err) => logger.warn({ err }, "[PRESSURE] Initial reading failed"));
 
-  logger.info("[PRESSURE] Barometric pressure scheduler started (every 2 hours)");
+  logger.info("[PRESSURE] Barometric pressure scheduler started (every 2 hours, Google Weather API)");
 }
 
 // ── Retrieval helpers ─────────────────────────────────────────────────────────
@@ -133,8 +131,6 @@ export interface PressureDelta {
   significant: boolean;
 }
 
-// Returns a pressure delta analysis for the last N hours.
-// Significant = absolute change >= 0.2 inHg over 6-12 hours (headache-relevant threshold)
 export async function analyzePressureDelta(hoursBack = 12): Promise<PressureDelta | null> {
   const readings = await getRecentPressureReadings(hoursBack);
   if (readings.length < 2) return null;

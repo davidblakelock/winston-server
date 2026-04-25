@@ -7,27 +7,60 @@ import { query } from "../db.js";
 const DEFAULT_LAT = 32.7767;
 const DEFAULT_LON = -96.797;
 
-function buildNwsAlertsUrl(lat: number, lon: number): string {
-  return `https://api.weather.gov/alerts/active?point=${lat},${lon}&status=actual&message_type=alert`;
+// ── Google Weather publicAlerts endpoint ─────────────────────────────────────
+
+interface GoogleWeatherAlert {
+  alertId?: string;
+  alertTitle?: { text?: string; languageCode?: string };
+  eventType?: string;
+  areaName?: string;
 }
 
-const SEVERE_EVENTS = [
-  "Tornado Warning",
-  "Tornado Watch",
-  "Severe Thunderstorm Warning",
-  "Flash Flood Warning",
-  "Flash Flood Emergency",
-  "Winter Storm Warning",
-  "Ice Storm Warning",
-  "Extreme Cold Warning",
-  "Excessive Heat Warning",
-  "Dust Storm Warning",
+function buildAlertsUrl(lat: number, lon: number, apiKey: string): string {
+  return `https://weather.googleapis.com/v1/publicAlerts:lookup?key=${apiKey}&location.latitude=${lat}&location.longitude=${lon}`;
+}
+
+// ── Severe event types to push notifications for ──────────────────────────────
+// Using Google's eventType enum values (uppercase). All other alerts are silently skipped.
+const SEVERE_EVENT_TYPES = new Set([
+  "TORNADO",
+  "FLASH_FLOOD",
+  "SEVERE_THUNDERSTORM",
+  "WINTER_STORM",
+  "ICE_STORM",
+  "BLIZZARD",
+  "EXTREME_COLD",
+  "EXCESSIVE_HEAT",
+  "DUST_STORM",
+  "HURRICANE",
+  "TROPICAL_STORM",
+  "TSUNAMI",
+  "EARTHQUAKE",
+]);
+
+// Secondary keyword match on alertTitle.text for any event types not in the enum above
+const SEVERE_TITLE_KEYWORDS = [
+  "tornado",
+  "flash flood",
+  "severe thunderstorm",
+  "winter storm",
+  "ice storm",
+  "extreme cold",
+  "excessive heat",
+  "dust storm",
+  "hurricane",
+  "tropical storm",
+  "tsunami",
 ];
 
+function isSevereAlert(alert: GoogleWeatherAlert): boolean {
+  if (alert.eventType && SEVERE_EVENT_TYPES.has(alert.eventType)) return true;
+  const title = (alert.alertTitle?.text ?? "").toLowerCase();
+  return SEVERE_TITLE_KEYWORDS.some((kw) => title.includes(kw));
+}
+
 // ── Database-backed deduplication ─────────────────────────────────────────────
-// In-memory set is gone — all deduplication is now in the DB so server restarts
-// (deployments, crashes, etc.) never re-send an alert that was already pushed.
-// We also keep an in-process cache to avoid a DB round-trip on every poll.
+
 const _memCache = new Map<string, Set<string>>();
 
 async function initAlertLogTable(): Promise<void> {
@@ -44,11 +77,9 @@ async function initAlertLogTable(): Promise<void> {
 }
 
 async function wasAlreadySent(userName: string, alertId: string): Promise<boolean> {
-  // Fast in-process check first
   const cache = _memCache.get(userName);
   if (cache?.has(alertId)) return true;
 
-  // DB check — source of truth across restarts
   const { rows } = await query<{ id: number }>(
     `SELECT id FROM weather_alert_log WHERE user_name = $1 AND alert_id = $2 LIMIT 1`,
     [userName, alertId]
@@ -57,92 +88,77 @@ async function wasAlreadySent(userName: string, alertId: string): Promise<boolea
 }
 
 async function markSent(userName: string, alertId: string, event: string): Promise<void> {
-  // Write to DB
   await query(
     `INSERT INTO weather_alert_log (user_name, alert_id, event)
      VALUES ($1, $2, $3)
      ON CONFLICT (user_name, alert_id) DO NOTHING`,
     [userName, alertId, event]
   );
-  // Update in-process cache
   if (!_memCache.has(userName)) _memCache.set(userName, new Set());
   _memCache.get(userName)!.add(alertId);
 }
 
-interface NWSAlert {
-  id: string;
-  properties: {
-    event: string;
-    headline?: string;
-    description: string;
-    effective: string;
-    expires: string;
-    severity: string;
-    urgency: string;
-  };
-}
+// ── Per-user alert check ──────────────────────────────────────────────────────
 
 async function checkWeatherAlertsForUser(userName: string): Promise<void> {
+  const apiKey = process.env.GOOGLE_WEATHER_API;
+  if (!apiKey) {
+    logger.warn("[WeatherAlerts] GOOGLE_WEATHER_API not configured");
+    return;
+  }
+
   const profile = await getProfile(userName).catch(() => null);
   const lat = profile?.latitude ?? DEFAULT_LAT;
   const lon = profile?.longitude ?? DEFAULT_LON;
   const city = profile?.city ?? "your area";
 
-  const nwsUrl = buildNwsAlertsUrl(lat, lon);
-  const response = await fetch(nwsUrl, {
-    headers: { "User-Agent": "Winston-AI-Companion/1.0 (winston@winston.app)" },
+  const response = await fetch(buildAlertsUrl(lat, lon, apiKey), {
+    headers: { "User-Agent": "Winston-AI-Companion/1.0" },
     signal: AbortSignal.timeout(8000),
   });
 
-  if (!response.ok) return;
+  if (!response.ok) {
+    logger.warn({ status: response.status }, "[WeatherAlerts] Google API error");
+    return;
+  }
 
-  const data = (await response.json()) as { features: Array<{ id: string; properties: NWSAlert["properties"] }> };
-  const features = data.features ?? [];
+  const data = (await response.json()) as { weatherAlerts?: GoogleWeatherAlert[] };
+  const alerts = data.weatherAlerts ?? [];
 
-  for (const feature of features) {
-    const id = feature.id;
+  for (const alert of alerts) {
+    const alertId = alert.alertId;
+    if (!alertId) continue;
 
-    // Skip if already sent — DB-backed check survives server restarts
-    const alreadySent = await wasAlreadySent(userName, id).catch(() => false);
+    const alreadySent = await wasAlreadySent(userName, alertId).catch(() => false);
     if (alreadySent) continue;
 
-    const { event, headline, expires, severity, urgency } = feature.properties;
+    if (!isSevereAlert(alert)) continue;
 
-    const isSevere =
-      SEVERE_EVENTS.some((e) => event.toLowerCase().includes(e.toLowerCase())) ||
-      (severity === "Extreme" && urgency === "Immediate");
+    const eventTitle = alert.alertTitle?.text ?? alert.eventType ?? "Weather Alert";
 
-    if (!isSevere) continue;
-
-    const expiresAt = new Date(expires);
-    if (expiresAt < new Date()) continue;
-
-    // Mark sent BEFORE pushing — avoids duplicate if push itself is slow
-    await markSent(userName, id, event).catch((err) => {
-      logger.warn({ err, alertId: id }, "Failed to mark weather alert as sent — may duplicate");
+    // Mark sent BEFORE pushing to avoid duplicates if push is slow
+    await markSent(userName, alertId, eventTitle).catch((err) => {
+      logger.warn({ err, alertId }, "[WeatherAlerts] Failed to mark alert as sent — may duplicate");
     });
 
-    const body = headline
-      ? headline.replace(/^\w+,?\s*/, "").slice(0, 120)
-      : `${event} in effect for ${city}. Stay safe and check local conditions.`;
+    const body = `${eventTitle} in effect for ${alert.areaName ?? city}. Stay safe and check local conditions.`;
 
     await sendPushToAll({
-      title: `⚠️ Weather Alert: ${event}`,
+      title: `⚠️ Weather Alert: ${eventTitle}`,
       body,
-      tag: `weather-${userName}-${event.replace(/\s+/g, "-").toLowerCase()}`,
+      tag: `weather-${userName}-${eventTitle.replace(/\s+/g, "-").toLowerCase()}`,
       requireInteraction: true,
       notificationType: "weather-alert",
-      companionMessage: `There's a ${event} in effect for ${city}. ${body}`,
+      companionMessage: `There's a ${eventTitle} in effect for ${alert.areaName ?? city}. ${body}`,
     }, userName);
 
-    logger.info({ event, alertId: id, userName }, "Weather alert push sent");
+    logger.info({ eventTitle, alertId, userName }, "[WeatherAlerts] Push sent");
   }
 }
 
 export function startWeatherAlertScheduler(): void {
-  // Create the deduplication table before the first poll
   initAlertLogTable().catch((err) => {
-    logger.warn({ err }, "weather_alert_log table init failed — alert deduplication may not work across restarts");
+    logger.warn({ err }, "[WeatherAlerts] weather_alert_log table init failed");
   });
 
   cron.schedule("*/15 * * * *", async () => {
@@ -151,9 +167,9 @@ export function startWeatherAlertScheduler(): void {
       if (users.length === 0) return;
       await Promise.allSettled(users.map((u) => checkWeatherAlertsForUser(u.userName)));
     } catch (err) {
-      logger.debug({ err }, "Weather alert check failed (non-fatal)");
+      logger.debug({ err }, "[WeatherAlerts] Check failed (non-fatal)");
     }
   });
 
-  logger.info("Weather alert scheduler started");
+  logger.info("[WeatherAlerts] Scheduler started (Google Weather publicAlerts, every 15 min)");
 }

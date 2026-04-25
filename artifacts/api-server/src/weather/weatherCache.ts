@@ -1,24 +1,13 @@
-// ─── Shared Tomorrow.io weather cache ────────────────────────────────────────
+// ─── Shared Google Weather API cache ─────────────────────────────────────────
 // Single source of truth for all weather data in the app.
 // All callers (briefing, live chat, WeatherCard, wind-down) call getCachedWeather().
-// Tomorrow.io is called at most once per city per 3 hours across ALL callers.
-
-export const TOMORROW_CONDITIONS: Record<number, string> = {
-  1000: "clear skies", 1001: "cloudy", 1100: "mostly clear", 1101: "partly cloudy",
-  1102: "mostly cloudy", 2000: "foggy", 2100: "light fog", 4000: "drizzle",
-  4001: "rain", 4200: "light rain", 4201: "heavy rain", 5000: "snow",
-  5001: "flurries", 5100: "light snow", 5101: "heavy snow", 6000: "freezing drizzle",
-  6001: "freezing rain", 6200: "light freezing rain", 6201: "heavy freezing rain",
-  7000: "ice pellets", 7101: "heavy ice pellets", 7102: "light ice pellets",
-  8000: "thunderstorms",
-};
+// Google Weather API is called at most once per city per 3 hours across ALL callers.
 
 export interface ForecastDay {
   dayName: string;
   high: number;
   low: number;
   precipChance: number;
-  conditionCode: number | undefined;
   condition: string;
 }
 
@@ -34,6 +23,7 @@ export interface CachedWeather {
   windSpeed: number;
   uvIndex: number;
   uvIndexMax: number;
+  pressureHpa?: number;
   forecastDays: ForecastDay[];
   fetchedAt: Date;
 }
@@ -51,91 +41,114 @@ function cacheKey(lat: number, lon: number): string {
   return `${Math.round(lat * 1000)},${Math.round(lon * 1000)}`;
 }
 
-async function fetchFromTomorrowIo(city: string, lat: number, lon: number): Promise<CachedWeather> {
-  const apiKey = process.env.TOMORROW_IO_API_KEY;
-  if (!apiKey) throw new Error("TOMORROW_IO_API_KEY not configured");
+// ── Google Weather API response types ────────────────────────────────────────
 
-  const location = `${lat},${lon}`;
-  const [realtimeResp, forecastResp] = await Promise.all([
+interface GoogleCurrentConditions {
+  weatherCondition?: {
+    description?: { text?: string };
+  };
+  temperature?: { degrees?: number };
+  feelsLikeTemperature?: { degrees?: number };
+  relativeHumidity?: number;
+  uvIndex?: number;
+  precipitation?: {
+    probability?: { percent?: number };
+  };
+  wind?: {
+    speed?: { value?: number };
+  };
+  airPressure?: { meanSeaLevelMillibars?: number };
+  currentConditionsHistory?: {
+    maxTemperature?: { degrees?: number };
+    minTemperature?: { degrees?: number };
+  };
+}
+
+interface GoogleForecastDay {
+  displayDate?: { year?: number; month?: number; day?: number };
+  maxTemperature?: { degrees?: number };
+  minTemperature?: { degrees?: number };
+  daytimeForecast?: {
+    weatherCondition?: { description?: { text?: string } };
+    precipitation?: { probability?: { percent?: number } };
+    uvIndex?: number;
+  };
+}
+
+async function fetchFromGoogle(city: string, lat: number, lon: number): Promise<CachedWeather> {
+  const apiKey = process.env.GOOGLE_WEATHER_API;
+  if (!apiKey) throw new Error("GOOGLE_WEATHER_API not configured");
+
+  const loc = `location.latitude=${lat}&location.longitude=${lon}`;
+
+  const [currentResp, forecastResp] = await Promise.all([
     fetch(
-      `https://api.tomorrow.io/v4/weather/realtime?location=${location}&units=imperial&apikey=${apiKey}`,
+      `https://weather.googleapis.com/v1/currentConditions:lookup?key=${apiKey}&${loc}&unitsSystem=IMPERIAL`,
       { signal: AbortSignal.timeout(10000) }
     ),
     fetch(
-      `https://api.tomorrow.io/v4/weather/forecast?location=${location}&units=imperial&timesteps=1d&apikey=${apiKey}`,
+      `https://weather.googleapis.com/v1/forecast/days:lookup?key=${apiKey}&${loc}&days=8&unitsSystem=IMPERIAL`,
       { signal: AbortSignal.timeout(10000) }
     ),
   ]);
 
   const fetchedAt = new Date().toISOString();
-  console.log(`[WeatherCache] Tomorrow.io fetch (${city}) — realtime HTTP ${realtimeResp.status}, forecast HTTP ${forecastResp.status} at ${fetchedAt}`);
-  if (realtimeResp.status === 429 || forecastResp.status === 429) {
-    console.warn(`[WeatherCache] RATE LIMIT on Tomorrow.io (${city}) at ${fetchedAt} — HTTP 429`);
-  }
-  if (!realtimeResp.ok) throw new Error(`Tomorrow.io realtime error for ${city}: ${realtimeResp.status}`);
-  if (!forecastResp.ok) throw new Error(`Tomorrow.io forecast error for ${city}: ${forecastResp.status}`);
+  console.log(`[WeatherCache] Google fetch (${city}) — current HTTP ${currentResp.status}, forecast HTTP ${forecastResp.status} at ${fetchedAt}`);
 
-  const [realtime, forecast] = await Promise.all([
-    realtimeResp.json() as Promise<{
-      data: {
-        values: {
-          temperature: number;
-          temperatureApparent: number;
-          humidity: number;
-          windSpeed: number;
-          precipitationProbability: number;
-          uvIndex: number;
-          weatherCode: number;
-        };
-      };
-    }>,
-    forecastResp.json() as Promise<{
-      timelines: {
-        daily: Array<{
-          time: string;
-          values: {
-            temperatureMax: number;
-            temperatureMin: number;
-            precipitationProbabilityMax: number;
-            uvIndexMax: number;
-            weatherCodeDay?: number;
-          };
-        }>;
-      };
-    }>,
+  if (!currentResp.ok) throw new Error(`Google Weather currentConditions error for ${city}: ${currentResp.status}`);
+  if (!forecastResp.ok) throw new Error(`Google Weather forecast error for ${city}: ${forecastResp.status}`);
+
+  const [current, forecastData] = await Promise.all([
+    currentResp.json() as Promise<GoogleCurrentConditions>,
+    forecastResp.json() as Promise<{ forecastDays?: GoogleForecastDay[] }>,
   ]);
 
-  const current = realtime.data.values;
-  const today = forecast.timelines.daily[0]?.values;
+  const forecastDays = forecastData.forecastDays ?? [];
 
-  // Slice days 1–7 after today (index 0 = today); use whatever the API returns (free plan = up to 5-6)
-  const forecastDays: ForecastDay[] = forecast.timelines.daily.slice(1, 8).map((day) => {
-    const date = new Date(day.time);
-    const dayName = date.toLocaleDateString("en-US", { timeZone: "America/Chicago", weekday: "short" });
-    const conditionCode = day.values.weatherCodeDay;
+  // Day 0 = today (for high/low); Days 1–7 = upcoming forecast
+  const today = forecastDays[0];
+  const upcoming = forecastDays.slice(1, 8);
+
+  const high = Math.round(today?.maxTemperature?.degrees ?? current.currentConditionsHistory?.maxTemperature?.degrees ?? current.temperature?.degrees ?? 0);
+  const low = Math.round(today?.minTemperature?.degrees ?? current.currentConditionsHistory?.minTemperature?.degrees ?? current.temperature?.degrees ?? 0);
+  const uvIndexMax = today?.daytimeForecast?.uvIndex ?? current.uvIndex ?? 0;
+  // Use daily forecast precipitation chance (not just current-hour chance) for today's rain probability
+  const todayPrecipChance = Math.round(
+    today?.daytimeForecast?.precipitation?.probability?.percent ??
+    current.precipitation?.probability?.percent ??
+    0
+  );
+
+  const mappedForecastDays: ForecastDay[] = upcoming.map((day) => {
+    const d = day.displayDate;
+    let dayName = "—";
+    if (d?.year && d?.month && d?.day) {
+      const date = new Date(d.year, d.month - 1, d.day);
+      dayName = date.toLocaleDateString("en-US", { timeZone: "America/Chicago", weekday: "short" });
+    }
     return {
       dayName,
-      high: Math.round(day.values.temperatureMax),
-      low: Math.round(day.values.temperatureMin),
-      precipChance: Math.round(day.values.precipitationProbabilityMax),
-      conditionCode,
-      condition: conditionCode != null ? (TOMORROW_CONDITIONS[conditionCode] ?? "") : "",
+      high: Math.round(day.maxTemperature?.degrees ?? 0),
+      low: Math.round(day.minTemperature?.degrees ?? 0),
+      precipChance: Math.round(day.daytimeForecast?.precipitation?.probability?.percent ?? 0),
+      condition: day.daytimeForecast?.weatherCondition?.description?.text?.toLowerCase() ?? "",
     };
   });
 
   return {
     city,
-    temp: Math.round(current.temperature),
-    feelsLike: Math.round(current.temperatureApparent),
-    high: Math.round(today?.temperatureMax ?? current.temperature),
-    low: Math.round(today?.temperatureMin ?? current.temperature),
-    condition: TOMORROW_CONDITIONS[current.weatherCode] ?? "conditions unknown",
-    precipChance: Math.round(today?.precipitationProbabilityMax ?? current.precipitationProbability),
-    humidity: Math.round(current.humidity),
-    windSpeed: Math.round(current.windSpeed),
-    uvIndex: Math.round(current.uvIndex),
-    uvIndexMax: Math.round(today?.uvIndexMax ?? current.uvIndex),
-    forecastDays,
+    temp: Math.round(current.temperature?.degrees ?? 0),
+    feelsLike: Math.round(current.feelsLikeTemperature?.degrees ?? current.temperature?.degrees ?? 0),
+    high,
+    low,
+    condition: current.weatherCondition?.description?.text?.toLowerCase() ?? "conditions unknown",
+    precipChance: todayPrecipChance,
+    humidity: Math.round(current.relativeHumidity ?? 0),
+    windSpeed: Math.round(current.wind?.speed?.value ?? 0),
+    uvIndex: Math.round(current.uvIndex ?? 0),
+    uvIndexMax: Math.round(uvIndexMax),
+    pressureHpa: current.airPressure?.meanSeaLevelMillibars,
+    forecastDays: mappedForecastDays,
     fetchedAt: new Date(),
   };
 }
@@ -151,8 +164,8 @@ export async function getCachedWeather(city: string, lat: number, lon: number): 
     return entry.data;
   }
 
-  console.log(`[WeatherCache] MISS for ${city} — fetching from Tomorrow.io`);
-  const data = await fetchFromTomorrowIo(city, lat, lon);
+  console.log(`[WeatherCache] MISS for ${city} — fetching from Google Weather API`);
+  const data = await fetchFromGoogle(city, lat, lon);
   weatherCache.set(key, { data, expiresAt: now + TTL_MS });
   return data;
 }
