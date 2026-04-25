@@ -170,8 +170,7 @@ async function fetchGoogleAQI(lat: number, lon: number): Promise<number | null> 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           location: { latitude: lat, longitude: lon },
-          universalAqi: false,
-          extraComputations: ["LOCAL_AQI_INDEX"],
+          universalAqi: true,
         }),
         signal: AbortSignal.timeout(8000),
       }
@@ -180,8 +179,8 @@ async function fetchGoogleAQI(lat: number, lon: number): Promise<number | null> 
     const data = await res.json() as {
       indexes?: Array<{ code: string; aqi?: number }>;
     };
-    const epaIndex = data.indexes?.find((i) => i.code === "usa_epa");
-    return epaIndex?.aqi ?? null;
+    const idx = data.indexes?.find((i) => i.code === "uaqi" || i.code === "usa_epa");
+    return idx?.aqi ?? null;
   } catch {
     return null;
   }

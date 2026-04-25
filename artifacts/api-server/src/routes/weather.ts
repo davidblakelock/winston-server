@@ -39,18 +39,63 @@ async function geocodeCity(city: string): Promise<{ lat: number; lon: number } |
 
 
 async function fetchPollen(lat: number, lon: number): Promise<PollenCardData | null> {
+  const key = process.env.GOOGLE_WEATHER_API;
+  if (key) {
+    try {
+      const [pollenRes, aqiRes] = await Promise.all([
+        fetch(
+          `https://pollen.googleapis.com/v1/forecast:lookup?key=${key}&location.latitude=${lat}&location.longitude=${lon}&days=1`,
+          { signal: AbortSignal.timeout(8000) }
+        ),
+        fetch(
+          `https://airquality.googleapis.com/v1/currentConditions:lookup?key=${key}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ location: { latitude: lat, longitude: lon }, universalAqi: true }),
+            signal: AbortSignal.timeout(8000),
+          }
+        ),
+      ]);
+
+      const pollenData = pollenRes.ok
+        ? (await pollenRes.json() as {
+            dailyInfo?: Array<{
+              pollenTypeInfo?: Array<{ code: string; indexInfo?: { value?: number; category?: string } }>;
+            }>;
+          })
+        : null;
+      const aqiData = aqiRes.ok
+        ? (await aqiRes.json() as { indexes?: Array<{ code: string; aqi?: number }> })
+        : null;
+
+      const day = pollenData?.dailyInfo?.[0];
+      const getCategory = (code: string): string => {
+        const entry = day?.pollenTypeInfo?.find((p) => p.code === code);
+        const cat = entry?.indexInfo?.category?.toLowerCase();
+        if (!cat || cat === "unspecified") return "none";
+        return cat;
+      };
+
+      const aqi = aqiData?.indexes?.find((i) => i.code === "uaqi" || i.code === "usa_epa")?.aqi ?? null;
+
+      if (day || aqi !== null) {
+        return {
+          tree: getCategory("TREE"),
+          grass: getCategory("GRASS"),
+          ragweed: getCategory("WEED"),
+          aqi: aqi != null ? Math.round(aqi) : null,
+        };
+      }
+    } catch { /* fall through to Open-Meteo */ }
+  }
+
   try {
     const url = `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lon}&hourly=grass_pollen,ragweed_pollen,alder_pollen,us_aqi&timezone=America%2FChicago&forecast_days=1`;
     const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
     if (!resp.ok) return null;
     const data = await resp.json() as {
-      hourly: {
-        time: string[];
-        grass_pollen: number[];
-        ragweed_pollen: number[];
-        alder_pollen: number[];
-        us_aqi: number[];
-      };
+      hourly: { grass_pollen: number[]; ragweed_pollen: number[]; alder_pollen: number[]; us_aqi: number[] };
     };
     const grassMax = Math.max(0, ...data.hourly.grass_pollen.filter((v) => v != null));
     const ragweedMax = Math.max(0, ...data.hourly.ragweed_pollen.filter((v) => v != null));
