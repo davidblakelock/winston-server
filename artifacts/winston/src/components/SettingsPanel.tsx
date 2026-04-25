@@ -70,11 +70,11 @@ interface SettingsPanelProps {
 
   notif: NotifHook;
 
-  googleConnected: boolean;
-  googleEmail: string | null;
+  googleConnected?: boolean;
+  googleEmail?: string | null;
   onGoogleDisconnect: () => void;
   onGoogleConnect: () => void;
-  onRefreshGoogleStatus: () => Promise<void>;
+  onRefreshGoogleStatus?: () => Promise<void>;
 }
 
 const CHAT_BASE = (typeof import.meta !== "undefined" ? (import.meta.env.BASE_URL as string) : "/").replace(/\/$/, "");
@@ -144,11 +144,8 @@ export default function SettingsPanel({
   onWinddownSave,
   settingsSaving,
   notif,
-  googleConnected,
-  googleEmail,
   onGoogleDisconnect,
   onGoogleConnect,
-  onRefreshGoogleStatus,
 }: SettingsPanelProps) {
   const [voices, setVoices] = useState<Voice[]>([]);
   const [selectedVoiceId, setSelectedVoiceId] = useState<string | null>(currentVoiceId);
@@ -171,7 +168,8 @@ export default function SettingsPanel({
   const [providers, setProviders] = useState<{ google: boolean; microsoft: boolean; apple: boolean }>({ google: true, microsoft: false, apple: false });
 
   const [googleConnecting, setGoogleConnecting] = useState(false);
-  const [googleStatusRefreshing, setGoogleStatusRefreshing] = useState(false);
+  // Self-contained Google status — fetched directly, never trusts parent prop
+  const [googleStatus, setGoogleStatus] = useState<{ connected: boolean; email: string | null; loading: boolean }>({ connected: false, email: null, loading: true });
   const [garminConnected, setGarminConnected] = useState(false);
   const [garminEmail, setGarminEmail] = useState<string | null>(null);
   const [garminLastSync, setGarminLastSync] = useState<string | null>(null);
@@ -189,6 +187,21 @@ export default function SettingsPanel({
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const fetchGoogleStatus = useCallback(async () => {
+    setGoogleStatus({ connected: false, email: null, loading: true });
+    try {
+      const token = localStorage.getItem("winston_session_token") ?? "";
+      const headers: Record<string, string> = token
+        ? { Authorization: `Bearer ${token}` }
+        : { "x-api-key": "winston-native-2026" };
+      const res = await fetch(`${CHAT_BASE}/api/auth/status`, { headers });
+      const data = await res.json() as { connected: boolean; email?: string };
+      setGoogleStatus({ connected: data.connected, email: data.email ?? null, loading: false });
+    } catch {
+      setGoogleStatus({ connected: false, email: null, loading: false });
+    }
+  }, []);
+
   useEffect(() => {
     if (!isOpen) return;
     setSelectedVoiceId(currentVoiceId);
@@ -197,10 +210,20 @@ export default function SettingsPanel({
     setPhotoError(null);
     setNameSaved(false);
     setGoogleConnecting(false);
-    // Always refresh Google status from the server when the panel opens
-    setGoogleStatusRefreshing(true);
-    void onRefreshGoogleStatus().finally(() => setGoogleStatusRefreshing(false));
-  }, [isOpen, currentVoiceId, currentCompanionName, onRefreshGoogleStatus]);
+    // Always fetch Google status fresh from the server when the panel opens
+    void fetchGoogleStatus();
+  }, [isOpen, currentVoiceId, currentCompanionName]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Re-fetch Google status when window regains focus (handles popup OAuth flow completing)
+  useEffect(() => {
+    if (!isOpen) return;
+    const onFocus = () => { void fetchGoogleStatus(); };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") void fetchGoogleStatus();
+    });
+    return () => { window.removeEventListener("focus", onFocus); };
+  }, [isOpen, fetchGoogleStatus]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -983,36 +1006,35 @@ export default function SettingsPanel({
                       <p className="text-xs text-muted-foreground">Gmail &amp; Calendar</p>
                     </div>
                   </div>
-                  {googleStatusRefreshing ? (
+                  {googleStatus.loading ? (
                     <span className="text-xs text-muted-foreground/40 font-medium px-2 py-0.5 rounded-full bg-white/5 border border-white/10 flex items-center gap-1">
                       <Loader2 className="h-2.5 w-2.5 animate-spin" />Checking…
                     </span>
-                  ) : googleConnected ? (
+                  ) : googleStatus.connected ? (
                     <span className="text-xs text-green-400 font-medium px-2 py-0.5 rounded-full bg-green-400/10 border border-green-400/20">Connected</span>
                   ) : (
                     <span className="text-xs text-muted-foreground/60 font-medium px-2 py-0.5 rounded-full bg-white/5 border border-white/10">Not connected</span>
                   )}
                 </div>
-                {!googleStatusRefreshing && googleConnected ? (
+                {!googleStatus.loading && googleStatus.connected ? (
                   <div className="space-y-2">
-                    {googleEmail && (
+                    {googleStatus.email && (
                       <div className="flex items-center gap-1.5">
                         <CheckCircle2 className="h-3 w-3 text-green-400 flex-shrink-0" />
-                        <p className="text-xs text-muted-foreground truncate">{googleEmail}</p>
+                        <p className="text-xs text-muted-foreground truncate">{googleStatus.email}</p>
                       </div>
                     )}
                     <button
                       onClick={async () => {
                         onGoogleDisconnect();
-                        setGoogleStatusRefreshing(true);
-                        await onRefreshGoogleStatus().finally(() => setGoogleStatusRefreshing(false));
+                        await fetchGoogleStatus();
                       }}
                       className="w-full text-xs font-medium px-3 py-2 rounded-lg border border-red-500/20 bg-red-950/20 text-red-400/80 hover:bg-red-950/40 hover:border-red-500/30 transition-colors"
                     >
                       Disconnect
                     </button>
                   </div>
-                ) : !googleStatusRefreshing ? (
+                ) : !googleStatus.loading ? (
                   <Button
                     className="w-full h-8 text-xs"
                     disabled={googleConnecting}
