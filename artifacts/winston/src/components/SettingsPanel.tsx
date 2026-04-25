@@ -1041,6 +1041,23 @@ export default function SettingsPanel({
                     onClick={() => {
                       setGoogleConnecting(true);
                       onGoogleConnect();
+
+                      // Reset the spinner when the popup closes or postMessage arrives.
+                      // Without this the button stays stuck in "Opening Google…" forever.
+                      const safetyTimer = setTimeout(() => {
+                        setGoogleConnecting(false);
+                        void fetchGoogleStatus();
+                      }, 30_000);
+
+                      const onMsg = (e: MessageEvent) => {
+                        if (e.data === "google-connected" || e.data === "google-auth-error") {
+                          clearTimeout(safetyTimer);
+                          window.removeEventListener("message", onMsg);
+                          setGoogleConnecting(false);
+                          void fetchGoogleStatus();
+                        }
+                      };
+                      window.addEventListener("message", onMsg);
                     }}
                   >
                     {googleConnecting ? (

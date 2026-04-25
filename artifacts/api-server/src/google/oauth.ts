@@ -96,6 +96,15 @@ export function getRedirectUri(): string {
   if (process.env.GOOGLE_REDIRECT_URI) {
     return process.env.GOOGLE_REDIRECT_URI;
   }
+  // APP_URL is the canonical production domain — the ONLY URL registered in Google
+  // Cloud Console. REPLIT_DOMAINS also includes the Replit workspace dev domain
+  // (e.g. af745d13-xxx.spock.replit.dev) which is NOT registered, causing
+  // redirect_uri_mismatch errors when running in the dev workspace. Always prefer
+  // APP_URL so both the dev server and the production server use the same registered
+  // callback URL.
+  if (process.env.APP_URL) {
+    return `${process.env.APP_URL.replace(/\/$/, "")}/api/auth/callback`;
+  }
   const domains = process.env.REPLIT_DOMAINS;
   const devDomain = process.env.REPLIT_DEV_DOMAIN;
   const domain = (domains ? domains.split(",")[0] : devDomain) ?? "";
