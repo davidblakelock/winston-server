@@ -54,15 +54,29 @@ export function detectToneFromRelationship(relationship?: string): MessageTone {
 
 const PREAMBLE = /^(?:(?:ok|okay|hey|hi|alright|uh|um|so|listen|actually|well|and|also|please|can\s+you|could\s+you|will\s+you|would\s+you|i\s+(?:need|want)\s+(?:you\s+)?to)[,\s]+)*/i;
 
-const TEXT_TRIGGER = /(?:text|send\s+(?:a\s+)?(?:text|message|sms)(?:\s+to)?|message)\s+([A-Za-z][A-Za-z'.]*(?:\s+[A-Za-z][A-Za-z'.]*)?)/i;
+// Verb-first: "text Susan", "send a text to Susan", "message Susan" → name in group 1
+const TEXT_TRIGGER_VERB_FIRST = /(?:text|send\s+(?:a\s+)?(?:text|message|sms)(?:\s+to)?|message)\s+([A-Za-z][A-Za-z'.]*(?:\s+[A-Za-z][A-Za-z'.]*)?)/i;
+// Name-first: "send Susan a text", "shoot Mom a message" → name in group 1
+const TEXT_TRIGGER_NAME_FIRST = /(?:send|shoot|drop|give)\s+([A-Za-z][A-Za-z'.]*(?:\s+[A-Za-z][A-Za-z'.]*)?)\s+(?:a\s+)?(?:text|message|sms|note)/i;
 
 export function extractTextTargetName(message: string): string | null {
   const stripped = message.replace(PREAMBLE, "").trim();
-  const m = TEXT_TRIGGER.exec(stripped);
-  if (!m) return null;
-  const raw = m[1].trim();
-  // Strip leading "my " so "my doctor" → "doctor", "my boss" → "boss"
-  return raw.replace(/^my\s+/i, "").trim() || raw;
+
+  // Try verb-first: "text Susan", "send a text to Susan"
+  const m1 = TEXT_TRIGGER_VERB_FIRST.exec(stripped);
+  if (m1) {
+    const raw = m1[1].trim();
+    return raw.replace(/^my\s+/i, "").trim() || raw;
+  }
+
+  // Try name-first: "send Susan a text", "shoot Mom a message"
+  const m2 = TEXT_TRIGGER_NAME_FIRST.exec(stripped);
+  if (m2) {
+    const raw = m2[1].trim();
+    return raw.replace(/^my\s+/i, "").trim() || raw;
+  }
+
+  return null;
 }
 
 // ── Tone override detection ───────────────────────────────────────────────────

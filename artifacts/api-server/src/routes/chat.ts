@@ -406,8 +406,14 @@ const HEADACHE_PATTERN = /\b(headache|head\s+ach(e|ing)|migraine|body\s+ach(e|es
 // T006: Text message composition — "text [name]" or "send a message to [name]"
 // Allows natural speech preambles: "hey text Sarah", "can you text Mom", "ok send a message to John"
 const TEXT_PREAMBLE = /^(?:(?:ok|okay|hey|hi|alright|uh|um|so|listen|actually|well|and|also|please|can\s+you|could\s+you|will\s+you|would\s+you|i\s+(?:need|want)\s+(?:you\s+)?to)[,\s]+)*/i;
+// Verb-first: "text Susan", "send a text to Susan", "message Susan"
+const _TMP_VERB_FIRST = /(?:text|send\s+(?:a\s+)?(?:text|message|sms)(?:\s+to)?|message)\s+[A-Za-z][A-Za-z'.]*(?:\s+[A-Za-z][A-Za-z'.]*)?/;
+// Name-first: "send Susan a text", "shoot Susan a message", "drop Mom a note"
+const _TMP_NAME_FIRST = /(?:send|shoot|drop|give)\s+[A-Za-z][A-Za-z'.]*(?:\s+[A-Za-z][A-Za-z']*)?\s+(?:a\s+)?(?:text|message|sms|note)/;
 const TEXT_MESSAGE_PATTERN = new RegExp(
-  TEXT_PREAMBLE.source + /(?:text|send\s+(?:a\s+)?(?:text|message|sms)(?:\s+to)?|message)\s+[A-Za-z][A-Za-z'.]*(?:\s+[A-Za-z][A-Za-z'.]*)?/.source,
+  TEXT_PREAMBLE.source + _TMP_VERB_FIRST.source +
+  "|" +
+  TEXT_PREAMBLE.source + _TMP_NAME_FIRST.source,
   "i"
 );
 
@@ -1615,6 +1621,14 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     // Starting a new text message flow
     const targetName = extractTextTargetName(message);
     if (targetName) {
+      // Detect inline content — user may have included what to say in the same message.
+      // e.g. "text Susan and tell her I had a great time" → inline intent = "I had a great time"
+      // Strip the text trigger + name from the message, then strip junction words.
+      const INLINE_JUNCTION = /^[\s,]*(?:and\s+)?(?:tell(?:ing)?\s+(?:her|him|them)|say(?:ing)?|that|to\s+say|letting?\s+(?:her|him|them)\s+know|tell\s+(?:her|him|them))\s+/i;
+      const stripped_msg = message.replace(/^(?:.*?\s)?(?:text|send\s+(?:a\s+)?(?:text|message|sms)(?:\s+to)?|message|(?:send|shoot|drop|give)\s+[A-Za-z][A-Za-z'.]*(?:\s+[A-Za-z][A-Za-z'.]*)?\s+(?:a\s+)?(?:text|message|sms|note))\s+[A-Za-z][A-Za-z'.]*(?:\s+[A-Za-z][A-Za-z'.]*)?/i, "").trim();
+      const inlineIntent = stripped_msg.replace(INLINE_JUNCTION, "").trim();
+      const hasInlineContent = inlineIntent.length >= 10;
+
       try {
         // Look up contact for phone number and relationship
         const contactResult = await searchContacts(targetName, sessionUserName);
@@ -1634,24 +1648,67 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         const displayName = userProfile?.name ?? sessionUserName;
         const toneLbl = toneLabel(tone);
 
-        setPendingText({
-          phase: "awaiting_intent",
-          recipientName: contact?.name ?? targetName,
-          recipientPhone: phone,
-          relationship,
-          tone,
-        });
+        if (hasInlineContent) {
+          // User gave us the content in the same message — compose immediately
+          try {
+            const composed = await composeTextMessage({
+              recipientName: contact?.name ?? targetName,
+              relationship,
+              tone,
+              userIntent: inlineIntent,
+              senderName: displayName,
+            });
 
-        const phoneNote = phone ? `I found ${contact?.name ?? targetName}'s number.` : `I didn't find a number for ${targetName} in your contacts, but I'll compose it and you can fill that in.`;
-        const toneNote = inlineTone ? ` I'll keep it ${toneLbl}.` : (relationship ? ` Since they're your ${relationship}, I'll keep it ${toneLbl}.` : ` I'll write it ${toneLbl}.`);
+            setPendingText({
+              phase: "awaiting_confirmation",
+              recipientName: contact?.name ?? targetName,
+              recipientPhone: phone,
+              relationship,
+              tone,
+              composedBody: composed.body,
+            });
 
-        systemPrompt +=
-          `\n\n[Text Message Flow Started — Recipient: ${contact?.name ?? targetName}]\n` +
-          `${phoneNote}${toneNote}\n\n` +
-          `Ask ${displayName} what they'd like to say — something like: ` +
-          `"${phoneNote.replace("I", "Got it — ")} What would you like to say?"`;
+            const toneNote = ` (${toneLabel(tone)} tone)`;
+            systemPrompt +=
+              `\n\n[Text Message Composed for ${contact?.name ?? targetName}]\n` +
+              `Message body${toneNote}:\n"${composed.body}"\n\n` +
+              `Read this message back to ${displayName} word for word, then ask if it looks right. ` +
+              `Say something like: "Here's what I've got: [read message verbatim]. ` +
+              `Does that work? Just say yes and I'll hand it off to your Messages app so you can tap Send." ` +
+              `CRITICAL HONESTY RULES: ` +
+              `(1) You are composing the message — you are NOT sending it and you CANNOT send it. ` +
+              `(2) The Messages app will only open AFTER the user says yes — do NOT say it is opening now. ` +
+              `(3) Never say "I'll send that", "sending now", "opening Messages", or any variation that implies immediate action.`;
 
-        req.log.info({ targetName, hasPhone: !!phone, relationship, tone }, "[T006] Text message flow started");
+            req.log.info({ targetName: contact?.name ?? targetName, hasPhone: !!phone, tone, inlineContent: inlineIntent.slice(0, 60) }, "[T006] Inline content detected — composed immediately");
+          } catch (compErr) {
+            req.log.warn({ compErr }, "[T006] Inline composition failed — falling back to awaiting_intent");
+            setPendingText({ phase: "awaiting_intent", recipientName: contact?.name ?? targetName, recipientPhone: phone, relationship, tone });
+            systemPrompt +=
+              `\n\n[Text Message Flow Started — Recipient: ${contact?.name ?? targetName}]\n` +
+              `Ask ${displayName} what they'd like to say.`;
+          }
+        } else {
+          // No inline content — ask what they want to say
+          setPendingText({
+            phase: "awaiting_intent",
+            recipientName: contact?.name ?? targetName,
+            recipientPhone: phone,
+            relationship,
+            tone,
+          });
+
+          const phoneNote = phone ? `I found ${contact?.name ?? targetName}'s number.` : `I didn't find a number for ${targetName} in your contacts, but I'll compose it and you can fill that in.`;
+          const toneNote = inlineTone ? ` I'll keep it ${toneLbl}.` : (relationship ? ` Since they're your ${relationship}, I'll keep it ${toneLbl}.` : ` I'll write it ${toneLbl}.`);
+
+          systemPrompt +=
+            `\n\n[Text Message Flow Started — Recipient: ${contact?.name ?? targetName}]\n` +
+            `${phoneNote}${toneNote}\n\n` +
+            `Ask ${displayName} what they'd like to say — something like: ` +
+            `"${phoneNote.replace("I", "Got it — ")} What would you like to say?"`;
+
+          req.log.info({ targetName, hasPhone: !!phone, relationship, tone }, "[T006] Text message flow started — awaiting intent");
+        }
       } catch (err) {
         req.log.warn({ err }, "[T006] Contact lookup failed");
         setPendingText({
