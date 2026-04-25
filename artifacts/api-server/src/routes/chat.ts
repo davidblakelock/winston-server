@@ -595,7 +595,7 @@ CONVERSATION FOCUS — CRITICAL: Never reference topics from earlier in the conv
 
 LISTS — STRICT RULE: You have no independent knowledge of what is on David's lists. If you are asked about a list and no [List …] context block appears above in this prompt, you MUST NOT guess or invent any items. Say exactly: "I had trouble reading your list — try checking the list screen directly." This applies even if you think you remember items from earlier in the conversation.
 
-TEXT MESSAGES — ABSOLUTE RULE: You can COMPOSE text messages for David, but you CANNOT send them, edit them independently, or do anything to his Messages app directly. The only actions you are capable of are: (1) drafting a message when [Text Message Composed] or [Text Message Revised] appears in your context above, and (2) handing the draft to David's Messages app for him to tap Send. If David asks you to edit, change, send, or do anything with a text message and NO [Text Message Composed] or [Text Message Revised] block appears in your current context, you MUST say: "That text was already handed off to your Messages app — I can't edit it there. Just say 'text [name]' and I'll compose a fresh one." NEVER say "Done", "Updated", "I've changed it", "Opening Messages", or imply any action was taken unless a [Text Message] context block is present.
+TEXT MESSAGES — ABSOLUTE HONESTY RULE: You can COMPOSE text messages for David, but you ABSOLUTELY CANNOT send them. You have zero ability to send any message, open any app, or touch David's phone in any way. What you actually do: draft the message, read it back, and when David confirms, the app will ATTEMPT to open his Messages app with the text pre-filled — but you have no control over whether that succeeds. NEVER claim to have sent a message. NEVER say "I've sent it", "Done", "Sent", "I've opened Messages", or anything that implies you took an action on his phone. If David confirms and you hand off the draft, the correct response is something like "The message is ready — your Messages app should open with it pre-filled. Tap Send when you're ready. I can't send it directly." If David asks you to edit or send a text and NO [Text Message Composed] or [Text Message Revised] block is present in your context, say: "That text was already passed to your Messages app — I can't reach it there. Say 'text [name]' and I'll compose a fresh one."
 
 When you confirm a reminder has been set, reply with ONLY the confirmation — nothing else. No personality additions, no references to previous conversation topics, no extra commentary. Exact format: "Done — I'll remind you to [text] at [time]." For recurring: "Set — I'll remind you to [text] every [day/morning/etc] at [time]." That line alone, nothing before or after it.
 
@@ -1567,9 +1567,11 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         broadcastToUser(sessionUserName, "sms-compose", { type: "sms_compose", ...smsPayload });
 
         // Hardcode the verbal response — do NOT call Claude for this turn.
+        // HONESTY: James Bond composes and hands off — he does NOT send. The native
+        // app opens the SMS composer; the user taps Send themselves.
         const confirmationText = phone
-          ? `Got it — I've sent the message over to your Messages app pre-filled for ${recipientName}. Tap Send when you're ready.`
-          : `Done — your Messages app should open with the text ready. Add ${recipientName}'s number and tap Send.`;
+          ? `The message is composed and ready. Your Messages app should open now with it pre-filled for ${recipientName} — tap Send when you're ready. I can't send it directly; that part is yours.`
+          : `The message is composed and ready. Your Messages app should open now — add ${recipientName}'s number and tap Send. I can't send it directly; that part is yours.`;
         (req as any)._hardcodedResponse = confirmationText;
 
         req.log.info({ recipient: recipientName, hasPhone: !!phone }, "[T006] SMS packaged — hardcoded response, skipping Claude");
@@ -1670,8 +1672,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   if (isSmsRetryRequest && lastSmsPayload) {
     (req as any)._smsPayload = lastSmsPayload;
     const retryText = lastSmsPayload.phone
-      ? `Let me try again — I've sent it over to your Messages app for ${lastSmsPayload.recipient}. Tap Send when it opens.`
-      : `Trying again — your Messages app should open with the text ready. Add ${lastSmsPayload.recipient}'s number and tap Send.`;
+      ? `Trying again — your Messages app should open now with the text ready for ${lastSmsPayload.recipient}. Tap Send when it opens. I can't send it directly; that part is yours.`
+      : `Trying again — your Messages app should open now with the text ready. Add ${lastSmsPayload.recipient}'s number and tap Send. I can't send it directly; that part is yours.`;
     (req as any)._hardcodedResponse = retryText;
     broadcastToUser(sessionUserName, "sms-compose", { type: "sms_compose", ...lastSmsPayload });
     req.log.info({ recipient: lastSmsPayload.recipient }, "[T006-retry] Re-firing last SMS payload");
