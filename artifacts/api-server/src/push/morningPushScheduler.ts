@@ -90,10 +90,10 @@ async function runPerUserChecks(): Promise<void> {
     // 25 min before wake: pre-fetch news + motivation (once per user per day)
     if (localTime === newsTime && newsPrefetchDone.get(userName) !== today) {
       newsPrefetchDone.set(userName, today);
-      preFetchMorningNews().catch((err) =>
+      preFetchMorningNews(userName).catch((err) =>
         logger.warn({ err, userName }, "[MorningPush] News pre-fetch error")
       );
-      preFetchDailyMotivation().catch((err) =>
+      preFetchDailyMotivation(userName).catch((err) =>
         logger.warn({ err, userName }, "[MorningPush] Motivation pre-fetch error")
       );
     }

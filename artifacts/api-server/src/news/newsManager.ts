@@ -117,15 +117,28 @@ async function fetchEntertainmentNews(): Promise<string> {
   return text;
 }
 
-// ── Resolve user context (name + city) for the news prompt ───────────────────
+// ── Resolve user context (name + city + sports + interests) ──────────────────
 
-async function resolveNewsContext(userName?: string): Promise<{ displayName: string; city: string; state: string }> {
-  if (!userName) return { displayName: "the listener", city: "Dallas", state: "Texas" };
+interface NewsContext {
+  displayName: string;
+  city: string;
+  state: string;
+  sportsTeams: string[];
+  interests: string[];
+  musicGenres: string[];
+}
+
+async function resolveNewsContext(userName?: string): Promise<NewsContext> {
+  if (!userName) return { displayName: "the listener", city: "Dallas", state: "Texas", sportsTeams: [], interests: [], musicGenres: [] };
   const profile = await getProfile(userName).catch(() => null);
   const city = profile?.city ?? "Dallas";
-  const state = (profile?.rawData as { state?: string } | null)?.state ?? "Texas";
-  const displayName = profile?.name ?? userName;
-  return { displayName, city, state };
+  const raw = (profile?.rawData ?? {}) as Record<string, unknown>;
+  const state = (raw.state as string | undefined) ?? "Texas";
+  const displayName = (profile?.name ?? userName) as string;
+  const sportsTeams = (raw.sportsTeams as string[] | undefined) ?? [];
+  const interests = (raw.interests as string[] | undefined) ?? [];
+  const musicGenres = (raw.music as string[] | undefined) ?? [];
+  return { displayName, city, state, sportsTeams, interests, musicGenres };
 }
 
 // ── Core fetch (calls Claude with web_search) ─────────────────────────────────
@@ -133,7 +146,7 @@ async function resolveNewsContext(userName?: string): Promise<{ displayName: str
 async function fetchNewsFromClaude(userName?: string): Promise<string> {
   const tz = "America/Chicago";
   const now = new Date();
-  const { city, state } = await resolveNewsContext(userName);
+  const { city, state, sportsTeams, interests, musicGenres } = await resolveNewsContext(userName);
 
   const todayStr = now.toLocaleDateString("en-US", {
     timeZone: tz, weekday: "long", month: "long", day: "numeric", year: "numeric",
@@ -143,12 +156,42 @@ async function fetchNewsFromClaude(userName?: string): Promise<string> {
     timeZone: tz, weekday: "long", month: "long", day: "numeric",
   });
 
-  // ── Main headlines: 8 diverse categories, one story each ────────────────
+  // Build personalization lines for the prompt
+  const teamsLine = sportsTeams.length > 0
+    ? `The listener's sports teams are: ${sportsTeams.join(", ")}. ALWAYS check for news about these teams first.`
+    : `No specific sports teams on file — use the most significant US sports story.`;
+
+  const sportsExcludeTeams = sportsTeams.length > 0
+    ? `Avoid all other sports leagues and teams not listed above.`
+    : "";
+
+  // Build a "wildcard interests" line from non-YMCA interests + music
+  const cleanInterests = interests
+    .filter((i) => !/YMCA|pickleball|Monday|Wednesday|Friday|Saturday|morning/i.test(i))
+    .slice(0, 6);
+  const wildcardInterests = [...cleanInterests, ...musicGenres].slice(0, 8);
+  const wildcardLine = wildcardInterests.length > 0
+    ? `For the wildcard story, prefer topics the listener actually cares about: ${wildcardInterests.join(", ")}. A story about classic rock, jazz, boats, woodworking, or outdoor sports is far more relevant than one about soccer or celebrity gossip.`
+    : "";
+
+  // Explicit exclusions — never cover these unless in user's teams/interests
+  const sportsExclude = [
+    !sportsTeams.some((t) => /\b(lakers|nba|basketball)\b/i.test(t)) ? "NBA / basketball (including playoffs, standings, or trade rumors)" : null,
+    !sportsTeams.some((t) => /\b(mls|soccer|football|fifa|world.?cup)\b/i.test(t)) ? "MLS / FIFA / soccer / World Cup" : null,
+    !sportsTeams.some((t) => /\bgolf\b/i.test(t)) ? "golf tournament results" : null,
+  ].filter(Boolean).join("; ");
+
+  // ── Main headlines: 6 targeted categories ────────────────────────────────
   const mainPrompt = `Today is ${todayStr}. Yesterday was ${yesterdayStr}.
 
 You are curating a morning news briefing for a listener in ${city}, ${state}. Use web search to find real, current news. RECENCY IS CRITICAL — every story must be from ${todayStr} or ${yesterdayStr} only.
 
-DIVERSITY RULE — THIS IS MANDATORY: Return EXACTLY 8 stories. Each story must come from a DIFFERENT category listed below. NEVER run two stories about the same topic, country, company, person, or theme. If the biggest story today is about Iran, you get ONE Iran story — not two, not three. Pick one story per category and move on.
+LISTENER PROFILE:
+- Sports teams followed: ${sportsTeams.length > 0 ? sportsTeams.join(", ") : "none specified"}
+- Music interests: ${musicGenres.length > 0 ? musicGenres.join(", ") : "general"}
+- Other interests: pickleball, woodworking, boats, cooking, stock market, classic rock, jazz
+
+DIVERSITY RULE — MANDATORY: Return EXACTLY 6 stories. Each must come from a DIFFERENT category. NEVER run two stories about the same topic, country, company, person, or theme.
 
 FORMAT: Each story has TWO parts:
 1. A bold short title (3-7 words, bold using **asterisks**)
@@ -158,33 +201,31 @@ REQUIRED CATEGORIES — one story from each, in this order:
 
 CATEGORY 1 — WORLD NEWS: A major international story (non-US). Geopolitics, conflict, diplomacy, or a significant event outside the United States.
 
-CATEGORY 2 — US POLITICS: A domestic US political development — legislation, White House, Congress, Supreme Court, or federal agency action.
+CATEGORY 2 — US POLITICS OR ECONOMY: A domestic US political development OR a notable business/economic story — legislation, White House, Congress, corporate earnings, trade, or labor. Do NOT cover stock index performance.
 
-CATEGORY 3 — BUSINESS & ECONOMY: A notable business story — corporate earnings, mergers, economic data, trade, or labor. Do NOT cover stock index performance (S&P, Dow, Nasdaq) — that is in a separate section.
+CATEGORY 3 — TECHNOLOGY: One story about AI, software, a major tech company (Apple, Google, Microsoft, OpenAI, Meta, Amazon), or a significant product launch. Do NOT repeat a company that appeared in Category 2. Avoid covering the same AI company two days in a row if possible.
 
-CATEGORY 4 — TECHNOLOGY & AI: One story about AI, software, a major tech company (Apple, Google, Microsoft, OpenAI, Meta, Amazon), or a significant product launch.
+CATEGORY 4 — SPORTS (PERSONALIZED — MANDATORY):
+${teamsLine}
+Search explicitly: "${sportsTeams.map((t) => `"${t}" news today`).join(" OR ")}".
+Report the most recent game result, standings update, or official transaction for one of these teams.
+If none of these teams played in the last 48 hours, report the most important story from any of these teams — a roster move, injury update, or upcoming series.
+NEVER use this slot for: ${sportsExclude || "unrelated leagues"}.
+${sportsExcludeTeams}
 
-CATEGORY 5 — SCIENCE OR HEALTH: A discovery, medical breakthrough, space news, climate science finding, or public health development.
+CATEGORY 5 — ${city.toUpperCase()} LOCAL (MANDATORY — never skip): A story specifically about ${city} or the surrounding DFW area — local government, business, development, infrastructure, culture, events, or community. Must be genuinely local. If initial search misses, search explicitly: "${city} news today" or "${city} ${state} breaking news". Always find one.
 
-CATEGORY 6 — SPORTS: One major US sports story from the last 24 hours — a game result, standings update, trade, or significant team news. NBA, MLB, NHL, NFL, MLS, or college sports. Do NOT cover draft speculation, mock drafts, or offseason projection pieces — only confirmed results or official transactions.
+CATEGORY 6 — WILDCARD (INTEREST-RELEVANT): The most interesting story that fits none of the above AND is genuinely relevant to what this listener cares about.
+${wildcardLine}
+AVOID for wildcard: ${sportsExclude || "unrelated sports"}. Avoid celebrity gossip, tabloid content, or anything the average person would not find interesting.
 
-CATEGORY 7 — ${city.toUpperCase()} / ${state.toUpperCase()} LOCAL (MANDATORY — never skip, never omit): A story specifically about ${city} or the surrounding area — local government, business, development, crime, infrastructure, culture, events, or community. This must be a genuinely local story. A national story that happens to involve a state politician does NOT count. If your initial search doesn't surface a local story, search explicitly: "${city} news today", "${city} local news today", or "${city} ${state} breaking news". Always find one.
+STALENESS RULE: Only include stories from ${todayStr} or ${yesterdayStr}. Max 48 hours old.
 
-CATEGORY 8 — WILDCARD: The most interesting or surprising story that does not fit any of the above categories. Could be entertainment, environment, human interest, international business, or anything genuinely noteworthy.
-
-STALENESS RULE: Only include stories from ${todayStr} or ${yesterdayStr}. If a category has no fresh story, use the most recent story from that category that is within 48 hours.
-
-NO-REPEAT RULE: Before finalizing, check — do any two stories share the same country, company, person, or topic? If yes, replace one with a different story from that category.
+NO-REPEAT RULE: Before finalizing, check — do any two stories share the same company, person, or topic? If yes, replace one.
 
 Output in EXACTLY this format — no other text, no category labels:
 
 HEADLINES:
-**[Short Bold Title]**
-[One sentence with specific fact, number, or name.]
-
-**[Short Bold Title]**
-[One sentence with specific fact, number, or name.]
-
 **[Short Bold Title]**
 [One sentence with specific fact, number, or name.]
 
@@ -332,19 +373,31 @@ interface MotivationCache {
 }
 let _motivationCache: MotivationCache | null = null;
 
-async function fetchMotivationFromClaude(): Promise<string> {
+async function fetchMotivationFromClaude(userName?: string): Promise<string> {
   const now = new Date();
   const todayStr = now.toLocaleDateString("en-US", {
     timeZone: "America/Chicago", weekday: "long", month: "long", day: "numeric", year: "numeric",
   });
 
+  const ctx = await resolveNewsContext(userName).catch(() => null);
+  const teams = ctx?.sportsTeams ?? ["Texas Rangers", "Dallas Cowboys"];
+  const music = ctx?.musicGenres ?? ["classic rock", "jazz", "Jimmy Buffett"];
+
   const prompt =
     `Today is ${todayStr}. Search the web for something genuinely inspiring, thought-provoking, or fascinating ` +
-    `that is relevant to today. Look for things like: an inspiring story published today, a philosophical idea ` +
-    `trending right now, an unexpected scientific discovery, or a remarkable human achievement from the last 24-48 hours. ` +
-    `\n\nReturn ONE item only. Format:\n` +
+    `published in the last 24-48 hours.\n\n` +
+    `LISTENER CONTEXT: This person loves pickleball, woodworking, classic rock (Rolling Stones, Jackson Browne, Jimmy Buffett), ` +
+    `jazz, boats, cooking, and follows these sports teams: ${teams.join(", ")}. ` +
+    `They value family (daughter in college, girlfriend in Dallas), integrity, and quiet resilience.\n\n` +
+    `PREFERRED TOPICS for the inspiring thought: science or nature discovery, music history or artist news ` +
+    `(${music.slice(0, 3).join(", ")}), a Texas Rangers or Cowboys story worth celebrating, ` +
+    `remarkable human achievement, woodworking or craftsmanship, or wisdom from a respected figure.\n\n` +
+    `AVOID ENTIRELY: soccer, FIFA, World Cup, MLS, NBA, golf tournaments, celebrity gossip, tragedy, crime, ` +
+    `politics, or anything that requires following a sport or team not in the listener's list.\n\n` +
+    `Return ONE item only. Format:\n` +
     `TITLE: [5-8 word bold title]\n` +
-    `CONTENT: [2-3 sentences — what it is, why it's striking, and one sentence that feels personal or applicable to everyday life]\n` +
+    `CONTENT: [2-3 sentences — what it is, why it's striking, and one sentence that connects it to everyday life, ` +
+    `ideally referencing something the listener cares about — family, music, or their sport]\n` +
     `\nNo extra commentary. Only real, verified content — never fabricate.`;
 
   console.log(`[API] Claude web_search (daily motivation) — starting at ${now.toISOString()}`);
@@ -365,10 +418,10 @@ async function fetchMotivationFromClaude(): Promise<string> {
   return text;
 }
 
-export async function preFetchDailyMotivation(): Promise<void> {
+export async function preFetchDailyMotivation(userName?: string): Promise<void> {
   try {
     logger.info("Starting daily motivation pre-fetch");
-    const content = await fetchMotivationFromClaude();
+    const content = await fetchMotivationFromClaude(userName);
     _motivationCache = { content, fetchedAt: new Date() };
     logger.info({ chars: content.length }, "Daily motivation pre-fetched and cached");
   } catch (err) {
@@ -376,12 +429,12 @@ export async function preFetchDailyMotivation(): Promise<void> {
   }
 }
 
-export async function fetchDailyMotivation(): Promise<string> {
+export async function fetchDailyMotivation(userName?: string): Promise<string> {
   if (_motivationCache && Date.now() - _motivationCache.fetchedAt.getTime() < 6 * 60 * 60 * 1000) {
     return _motivationCache.content;
   }
   try {
-    const content = await fetchMotivationFromClaude();
+    const content = await fetchMotivationFromClaude(userName);
     _motivationCache = { content, fetchedAt: new Date() };
     return content;
   } catch (err) {

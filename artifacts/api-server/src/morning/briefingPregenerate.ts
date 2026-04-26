@@ -272,9 +272,12 @@ function buildContextualWeatherBlock(dallas: CachedWeather, secondary: Secondary
   const dayName = now.toLocaleDateString("en-US", { timeZone: tz, weekday: "long" });
   const pickleballDays = ["Monday", "Wednesday", "Friday", "Saturday"];
   const isPickleballDay = pickleballDays.includes(dayName);
-  const activityLabel = isPickleballDay ? "pickleball" : "a run";
+  // Pickleball is ALWAYS indoors (Semones YMCA / Moody's YMCA) — never affected by rain, wind, or cold.
+  // Only generate outdoor activity signals for non-pickleball days (Tue/Thu/Sun).
+  const isIndoorActivity = isPickleballDay;
+  const activityLabel = "a run"; // outdoor activity label — pickleball is always indoors
 
-  // Fix 7: Time-aware activity suggestions — if it's past 10am CT, David's morning
+  // Time-aware activity suggestions — if it's past 10am CT, David's morning
   // workout window has very likely passed. Don't suggest "go for a run" or "great for pickleball."
   const ctHour = parseInt(now.toLocaleTimeString("en-US", { timeZone: tz, hour: "numeric", hour12: false }), 10);
   const morningActivityPassed = ctHour >= 10;
@@ -298,30 +301,34 @@ function buildContextualWeatherBlock(dallas: CachedWeather, secondary: Secondary
   if (isStormy) signals.push(`SEVERE WEATHER — THUNDERSTORMS: mention this clearly`);
   else if (isSnowy) signals.push(`${dallas.condition} — unusual for ${dallas.city}, affects roads`);
 
-  // Activity-specific signals only shown if morning window hasn't passed (before 10am CT)
-  if (!morningActivityPassed) {
-    if (isRainy && likelyRain) signals.push(`Rain likely (${dallas.precipChance}%) — treadmill/indoor court for ${activityLabel}`);
-    else if (likelyRain) signals.push(`${dallas.precipChance}% rain chance — ${activityLabel} timing may be tricky`);
+  // Outdoor activity signals — only for non-pickleball days (pickleball is always indoors)
+  if (!morningActivityPassed && !isIndoorActivity) {
+    if (isRainy && likelyRain) signals.push(`Rain likely (${dallas.precipChance}%) — treadmill or indoor activity`);
+    else if (likelyRain) signals.push(`${dallas.precipChance}% rain chance — outdoor timing may be tricky`);
     else if (possibleRain) signals.push(`${dallas.precipChance}% rain chance — watch timing for ${activityLabel}`);
     if (isFoggy) signals.push(`Morning fog — affects running and early driving`);
-    if (isVeryHot) signals.push(`Extreme heat (high ${dallas.high}°F) — dangerous for ${activityLabel}, go very early`);
+    if (isVeryHot) signals.push(`Extreme heat (high ${dallas.high}°F) — dangerous outdoors, go very early`);
     else if (isHot) signals.push(`Hot day (high ${dallas.high}°F) — extra hydration for ${activityLabel}`);
     else if (isWarm) signals.push(`Warm day (high ${dallas.high}°F) — hydrate for ${activityLabel}`);
     if (isCold) signals.push(`Cold morning (${dallas.temp}°F feels ${dallas.feelsLike}°F) — dress in layers`);
     else if (isCool) signals.push(`Cool morning (${dallas.temp}°F) — light jacket to start`);
-    if (isHighWind) signals.push(`Winds at ${dallas.windSpeed} mph — gusty for outdoor ${activityLabel}`);
+    if (isHighWind) signals.push(`Winds at ${dallas.windSpeed} mph — gusty for outdoor activity`);
     if (isPerfect) signals.push(`PERFECT conditions for ${activityLabel}`);
+  } else if (!morningActivityPassed && isIndoorActivity) {
+    // Pickleball day — indoor courts, so only flag extreme driving heat
+    if (isVeryHot) signals.push(`Extreme heat outside today (${dallas.high}°F) — heads up for any outdoor errands`);
+    if (isFoggy) signals.push(`Morning fog — allow extra travel time`);
   }
 
   // UV warning is always relevant regardless of time
   if (!isStormy && !isRainy && uvMax >= 8) signals.push(`UV peak ${uvMax} (${uvLabel}) — sunscreen essential outdoors today`);
 
-  // Activity-aware alerts for upcoming pickleball days in the 5-day forecast
+  // Forecast alerts for upcoming pickleball days — only flag extreme heat (rain is irrelevant, it's indoors)
   const pickleballShortNames = ["Mon", "Wed", "Fri", "Sat"];
   for (const day of dallas.forecastDays) {
     if (pickleballShortNames.includes(day.dayName)) {
-      if (day.precipChance >= 60) signals.push(`⚠ ${day.dayName} pickleball: rain likely (${day.precipChance}%)`);
-      else if (day.high >= 98) signals.push(`⚠ ${day.dayName} pickleball: extreme heat (${day.high}°F)`);
+      if (day.high >= 98) signals.push(`⚠ ${day.dayName}: extreme heat (${day.high}°F) — travel to YMCA in AC`);
+      // NOTE: rain signals intentionally omitted — pickleball is always indoors
     }
   }
 
@@ -550,7 +557,7 @@ function buildBriefingInstruction(city: string, savedVenues: string[]): string {
 
   SECTION 8 — NEWS: A structured news sweep using the data in [VERIFIED — Web Search News — ...] block. Deliver in this exact format — each story on its own lines:
 
-    From [Headlines — bold title + one sentence summary each]: Read each story EXACTLY as formatted — bold title on one line, then the summary sentence on the next line. Do not merge them. Do not change the format. Read all 8 headlines. These already cover 8 distinct categories (world, US politics, business, tech, science, sports, ${city} local, wildcard) — do NOT reorder or drop any.
+    From [Headlines — bold title + one sentence summary each]: Read each story EXACTLY as formatted — bold title on one line, then the summary sentence on the next line. Do not merge them. Do not change the format. Read all 6 headlines. These cover 6 targeted categories (world, US politics/economy, tech, sports — David's teams, ${city} local, wildcard/interest) — do NOT reorder or drop any. The sports story is always about the Texas Rangers, Cowboys, Stars, or Mavericks — never the Lakers, NBA playoffs, FIFA, soccer, or MLS.
 
     From [Entertainment & Pop Culture] (if present): One item only. Bold title on one line, summary sentence on the next. Skip if absent.
 
@@ -606,11 +613,12 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     const isSunday = now.toLocaleDateString("en-US", { timeZone: "America/Chicago", weekday: "long" }) === "Sunday";
     const isPickleballMorning = isTodayPickleballDay();
 
-    const [recentMemories, allProfileItems, userProfile, seenHeadlines, briefingPrefs] = await Promise.all([
+    const [recentMemories, allProfileItems, userProfile, seenHeadlines, seenVenueHeadlines, briefingPrefs] = await Promise.all([
       getRecentMemories(7).catch(() => []),
       getProfileItems(undefined, userName).catch(() => []),
       getProfile(userName).catch(() => null),
-      getSeenHeadlines(userName, 3).catch(() => new Set<string>()),
+      getSeenHeadlines(userName, 3).catch(() => new Set<string>()),   // news/Dallas: 3-day window
+      getSeenHeadlines(userName, 14).catch(() => new Set<string>()),  // venue concerts: 14-day window (events repeat until show date)
       getBriefingPreferences(userName).catch(() => []),
     ]);
     const memoryBlock = formatMemoriesForContext(recentMemories);
@@ -686,13 +694,17 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       dietaryRestrictions: [],  // no field in rawData yet; reserved for future onboarding
     };
 
-    // Geocode secondary cities from profile before the main Promise.all
-    // Only include people in a different city than the user's home city.
-    // Trim all values — raw_data strings from onboarding may have trailing spaces.
+    // Geocode secondary cities from profile before the main Promise.all.
+    // IMPORTANT: Only include immediate family/partner — NEVER doctors, coworkers, friends, etc.
+    // This prevents irrelevant cities (e.g. doctor's office suburb) appearing in the briefing.
+    const FAMILY_RELS = /^(daughter|son|wife|husband|girlfriend|boyfriend|partner|fiancée?|fiancee?|mother|father|sister|brother|child|parent|aunt|uncle|cousin|grandm|grandp|grandma|grandpa|grandparent|mom|dad|stepson|stepdaughter|stepfather|stepmother)/i;
     const rawPeople = ((userProfile?.rawData as CollectedData)?.people ?? [])
       .filter((p) => {
         const city = p.city?.trim();
-        return city && city.length > 0 && city.toLowerCase() !== primaryCity.toLowerCase();
+        const rel = (p.relationship ?? "").trim();
+        const firstWord = rel.split(/\s+/)[0] ?? "";
+        const isFamily = FAMILY_RELS.test(firstWord);
+        return isFamily && city && city.length > 0 && city.toLowerCase() !== primaryCity.toLowerCase();
       })
       .slice(0, 4);
     const geocodedSecondary = await Promise.all(
@@ -727,7 +739,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       getStoryCount().catch(() => 0),
       fetchPollenData(primaryLat, primaryLon).catch(() => null),
       runVenueScan().catch(() => ""),
-      fetchDailyMotivation().catch(() => ""),
+      fetchDailyMotivation(userName).catch(() => ""),
       getPendingPersonalFollowups(userName).catch(() => []),
     ]);
 
@@ -788,10 +800,11 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       console.log(`[Dallas:briefing] ✓ Block OK — ${filteredDallasItems.length} items going into briefing`);
     }
 
-    // Venue concerts: filter by artistOrEvent + venue key, rebuild block
+    // Venue concerts: filter by artistOrEvent + venue key, rebuild block.
+    // Uses 14-day window (seenVenueHeadlines) so upcoming concerts don't re-appear daily.
     const rawVenueConcerts = getVenueConcerts();
     const filteredVenueConcerts = rawVenueConcerts.filter(
-      (c) => !isDuplicate(`${c.artistOrEvent} ${c.venue}`, seenHeadlines)
+      (c) => !isDuplicate(`${c.artistOrEvent} ${c.venue}`, seenVenueHeadlines)
     );
     const dedupedVenueConcertsBlock = buildVenueConcertsBlock(filteredVenueConcerts);
     logger.info(
@@ -883,7 +896,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     const sundaySummaryBlock = isSunday && sundayData ? buildSundaySummaryBlock(sundayData) : "";
 
     const pickleballMorningBlock = isPickleballMorning && !sundaySummaryBlock
-      ? `\n\n[Schedule Note]\nToday is a pickleball day for David (Mon/Wed/Fri/Sat schedule).`
+      ? `\n\n[Schedule Note]\nToday is a pickleball day for David (Mon/Wed/Fri at Semones YMCA; Sat at Moody's YMCA).\nCRITICAL — INDOOR VENUE RULE: Both Semones YMCA and Moody's YMCA are fully indoor facilities. Rain, wind, lightning, and outdoor weather have NO effect on play there. NEVER suggest checking the weather before pickleball, NEVER warn about rain affecting his pickleball game, and NEVER say "hope the weather holds" in relation to pickleball. The ONLY weather exception is if extreme heat makes travel uncomfortable — but even then, be measured.`
       : "";
 
     const recFollowUpBlock = pendingFollowUps.length > 0
