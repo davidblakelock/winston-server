@@ -271,7 +271,11 @@ export function startWinddownScheduler(): void {
       }
 
       console.log(`WINDDOWN: firing at ${localTime}`);
-      await markFiredToday();
+      // Mark fired FIRST to prevent double-fire on subsequent ticks within the 10-min window,
+      // but wrap it so a transient DB error doesn't abort the whole notification.
+      await markFiredToday().catch((err) =>
+        logger.warn({ err }, "Wind-down: markFiredToday failed — push will still be sent")
+      );
       logger.info({ time: settings.scheduledTime }, "Wind-down initiated");
 
       const users = await getActiveUsers().catch(() => [{ userName: "davidblakelock" }]);
@@ -292,7 +296,8 @@ export function startWinddownScheduler(): void {
         title: `🌙 Evening Check-In — ${companionName}`,
         body: `${companionName} is ready for your evening check-in. Tap to chat.`,
         tag: "winddown",
-        requireInteraction: false,
+        notificationType: "winddown",
+        requireInteraction: true,
       }, primaryUser).catch(() => {});
     } catch (err) {
       logger.error({ err }, "Wind-down scheduler error");

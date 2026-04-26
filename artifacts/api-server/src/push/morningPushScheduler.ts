@@ -10,6 +10,11 @@ import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
 const DEFAULT_TZ = "America/Chicago";
 const DEFAULT_WAKE_TIME = "06:00";
+// How many minutes before wake time to start pre-fetching.
+// 20 min gives Claude plenty of time to finish before the notification fires,
+// even after a cold server restart.
+const NEWS_LEAD_MINUTES = 25;
+const BRIEFING_LEAD_MINUTES = 20;
 
 // ── Local time helpers ─────────────────────────────────────────────────────────
 
@@ -77,12 +82,12 @@ async function runPerUserChecks(): Promise<void> {
   for (const user of users) {
     const { userName } = user;
     const wakeTime = user.wakeTime ?? DEFAULT_WAKE_TIME;
-    const preFetchTime = subtractMinutes(wakeTime, 5);
-    const newsTime = subtractMinutes(wakeTime, 10);
+    const preFetchTime = subtractMinutes(wakeTime, BRIEFING_LEAD_MINUTES);
+    const newsTime = subtractMinutes(wakeTime, NEWS_LEAD_MINUTES);
     const localTime = getCurrentTimeForUser(user);
     const today = getLocalDateForUser(user);
 
-    // 10 min before wake: pre-fetch news + motivation (once per user per day)
+    // 25 min before wake: pre-fetch news + motivation (once per user per day)
     if (localTime === newsTime && newsPrefetchDone.get(userName) !== today) {
       newsPrefetchDone.set(userName, today);
       preFetchMorningNews().catch((err) =>
@@ -93,7 +98,7 @@ async function runPerUserChecks(): Promise<void> {
       );
     }
 
-    // 5 min before wake: pre-generate full Claude briefing (once per user per day)
+    // 20 min before wake: pre-generate full Claude briefing (once per user per day)
     if (localTime === preFetchTime && prefetchDone.get(userName) !== today) {
       prefetchDone.set(userName, today);
       logger.info({ userName, preFetchTime }, "[MorningPush] Pre-generating briefing");
@@ -112,6 +117,7 @@ async function runPerUserChecks(): Promise<void> {
           title: `Good morning, ${displayName} ☀️`,
           body,
           tag: "morning-briefing",
+          notificationType: "morning-briefing",
           requireInteraction: true,
         }, userName);
         logger.info({ userName, wakeTime }, "[MorningPush] Morning push sent");
