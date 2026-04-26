@@ -986,11 +986,23 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       "Live email and calendar fetched for briefing delivery"
     );
 
-    // Build live Gmail block
-    const liveGmailBlock = liveEmails !== null && liveEmails.length > 0
-      ? `\n\n[VERIFIED — Gmail API — unread emails (live at delivery time)]\n${formatEmailsForPrompt(liveEmails)}\nThis is VERIFIED data. State sender names, subjects, and content exactly as shown.` +
-        buildScamWarningInstruction(liveEmails, userProfile?.companionName, sessionUserName)
-      : "";
+    // Build live Gmail block — always included so Section 5 is never silently skipped.
+    // If liveEmails is null, Google auth failed (not connected); Claude will say so.
+    // If liveEmails is [] (empty), inbox is clear; Claude will confirm that briefly.
+    // If liveEmails has items, Claude summarises the ones that matter.
+    let liveGmailBlock: string;
+    if (liveEmails === null) {
+      // Auth failed — Google not connected or token expired
+      liveGmailBlock = `\n\n[VERIFIED — Gmail API — status: NOT CONNECTED]\nGoogle is not connected or the token has expired. Tell David briefly: "I couldn't pull your email — Google may need to be reconnected in the app settings." Keep it to one sentence.`;
+    } else if (liveEmails.length === 0) {
+      // Inbox is clear
+      liveGmailBlock = `\n\n[VERIFIED — Gmail API — unread emails (live at delivery time)]\nInbox is clear — no unread messages right now. Mention this briefly and warmly in one short sentence — e.g. "Your inbox is clear this morning." Don't dwell on it.`;
+    } else {
+      // One or more unread emails
+      liveGmailBlock =
+        `\n\n[VERIFIED — Gmail API — unread emails (live at delivery time)]\n${formatEmailsForPrompt(liveEmails)}\nThis is VERIFIED data. State sender names, subjects, and content exactly as shown.` +
+        buildScamWarningInstruction(liveEmails, userProfile?.companionName, sessionUserName);
+    }
 
     // Build live calendar block with departure times
     let liveCalendarBlock = "";
