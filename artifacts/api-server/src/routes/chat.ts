@@ -1058,9 +1058,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         void logBriefingStories(sessionUserName, staticCtx.candidateStoryKeys);
         req.log.info({ chars: nativeBriefingText.length }, "Morning briefing fetched (native) and cached");
       }
-      // T001: append follow-up invitation to native briefing
-      const nativeFollowUp = "\n\nAnything from this morning you'd like to dig into?";
-      res.json({ response: nativeBriefingText + nativeFollowUp });
+      // "Anything from this morning you'd like to dig into?" is already delivered by the
+      // briefing instruction after the 10 news stories — do NOT append it again here.
+      res.json({ response: nativeBriefingText });
       return;
     }
 
@@ -1081,8 +1081,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       }
     }
 
-    // T001: send follow-up invitation as a trailing text chunk before done
-    sendMorningSSE({ text: "\n\nAnything from this morning you'd like to dig into?" });
+    // "Anything from this morning you'd like to dig into?" is delivered by the
+    // briefing instruction itself after the 10 news stories — do NOT append here.
     sendMorningSSE({ done: true, isMorningBriefing: true });
     res.end();
 

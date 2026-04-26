@@ -283,12 +283,13 @@ app.listen(port, async (err) => {
     );
     const dupCount = parseInt(dupRows[0]?.cnt ?? "0", 10);
     if (dupCount > 0) {
+      // RETURNING id is required so exec_dml_ret (not exec_sql) handles this DELETE in Supabase.
       await query(
         `DELETE FROM watched_shows WHERE id NOT IN (
            SELECT DISTINCT ON (user_name, lower(show_name)) id
            FROM watched_shows
            ORDER BY user_name, lower(show_name), id ASC
-         )`
+         ) RETURNING id`
       );
       logger.info({ removed: dupCount }, "Startup migration: removed duplicate watched_shows rows");
     } else {

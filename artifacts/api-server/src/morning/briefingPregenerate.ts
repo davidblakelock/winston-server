@@ -540,7 +540,7 @@ function buildBriefingInstruction(city: string, savedVenues: string[]): string {
 
   SECTION 1 — GREETING: "Good morning, David" followed by one warm personal sentence naming the day of the week. One sentence total.
 
-  SECTION 2 — WEATHER TODAY: Deliver a natural, conversational weather summary using the [VERIFIED — Google Weather API — ${city}] block. Include: current temperature and feels-like, today's high and low, conditions, rain chance, humidity, wind speed, and UV index. Keep it to 2–3 sentences — warm and informative, like a friend who checked the forecast. If UV is high (8+), mention it. If there is an Air Quality & Pollen block, weave pollen and AQI into the same breath — one concise sentence. Only skip this section if the [VERIFIED — Google Weather API — ${city}] block is missing entirely.
+  SECTION 2 — WEATHER TODAY: CRITICAL — this section is ALWAYS present and must NEVER be skipped. The [VERIFIED — Google Weather API — ${city}] block is always in this system prompt. Deliver a natural, conversational weather summary using it. Include: current temperature and feels-like, today's high and low, conditions, rain chance, humidity, wind speed, and UV index. Keep it to 2–3 sentences — warm and informative, like a friend who checked the forecast. If UV is high (8+), mention it. If there is an Air Quality & Pollen block, weave pollen and AQI into the same breath — one concise sentence.
 
   SECTION 3 — FORECAST: Deliver a brief overview of the coming days using the Forecast data in the [VERIFIED — Google Weather API — ${city}] block. Mention any days with notable changes — rain, big temperature swings, heat. Keep it to 2 sentences max. Then: CRITICAL — for every [VERIFIED — Google Weather API — <city> (for <name>)] block present, you MUST always mention that person's weather — one natural sentence per person, every single time, no exceptions, regardless of conditions. Example: "Over in Knoxville, Olivia's looking at a mild 68 with some cloud cover." These are David's family — he ALWAYS wants to know their weather. If there is a block for Knoxville (for Olivia), you MUST mention Olivia's weather every single briefing. NEVER skip a family member city. Skip this entire section only if absolutely no forecast data is available at all.
 
@@ -563,9 +563,9 @@ function buildBriefingInstruction(city: string, savedVenues: string[]): string {
 
   SECTION 8 — NEWS: A Top 10 news sweep using the [VERIFIED — Web Search News — ...] block. Stories 1-4 are global/world, 5-7 are national/US, 8-10 are local ${city}. They are pre-numbered 1–10 in the data block.
 
-    DELIVERY: Read each story as one fluid sentence — "1. [title] — [sentence]." Use the number, not "Number one" or "Number two." Keep moving. Pause naturally between stories. Do NOT merge stories. Do NOT skip any. Do NOT reorder.
+    DELIVERY: For EVERY story, deliver the number AND the bold title AND the one-sentence detail that follows the em dash. Say all three parts — do NOT just read the title alone. Format: "1. [Title] — [the detail sentence]." Use the number, not "Number one" or "Number two." Keep moving. Pause naturally between stories. Do NOT merge stories. Do NOT skip any story. Do NOT skip the detail sentence. Do NOT reorder.
 
-    After all 10: say exactly — "Anything from this morning you'd like to dig into?" — every day, no exceptions.
+    After all 10 stories: say exactly — "Anything from this morning you'd like to dig into?" — every day, no exceptions. This is the ONLY time you say this phrase in the entire briefing.
 
     From [Entertainment & Pop Culture] (if present): One item only, one sentence. Skip if absent.
 
@@ -944,7 +944,11 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       if (morningWorkoutDone) block += `• MORNING WORKOUT ALREADY DONE — do NOT suggest exercise, a walk, or outdoor activity in the closing. Reference what is ahead instead.\n`;
       block += `• Journal entries this week: ${journalCountWeek}\n`;
       if (recentJournalSnippet) block += `• Recent journal themes: "${recentJournalSnippet}"\n`;
-      block += `• Total family archive stories captured (all-time total — do NOT say David added stories, do NOT say they are new, just reference this as the running total if relevant): ${totalStories}\n`;
+      // Only surface archive total on Sundays — weekday briefings must never mention it.
+      // NEVER say David "added" stories, NEVER say stories came from anyone (e.g. "from Olivia").
+      if (isSunday && totalStories > 0) {
+        block += `• Family archive total: ${totalStories} stories. On Sundays ONLY, you may say exactly: "You've got ${totalStories} stories in your family archive." Do NOT say David added them, do NOT name anyone, do NOT say they are new.\n`;
+      }
 
       if (dailyMotivation) {
         // dailyMotivation is either a [Personal Override — Morning Note] block,
@@ -976,9 +980,13 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
 
     const personalFollowUpsBlock = buildPersonalFollowupsBlock(personalFollowUps);
 
+    // motivationContextBlock intentionally placed AFTER news so it comes last in the prompt.
+    // This reinforces the briefing instruction that Section 14 (motivation) is delivered at
+    // the very end — after weather, email, calendar, news, sports, and local content.
     const suffix = garminBlock + fitBlock + tvMorningBlock + sportsBlock + billsMorningBlock + datesBlock +
-      sundaySummaryBlock + pickleballMorningBlock + recFollowUpBlock + personalFollowUpsBlock + motivationContextBlock +
-      dallasEventsBlock + dedupedVenueConcertsBlock + dedupedNewsBlock + buildBriefingInstruction(primaryCity, localCtx.venues ?? []);
+      sundaySummaryBlock + pickleballMorningBlock + recFollowUpBlock + personalFollowUpsBlock +
+      dallasEventsBlock + dedupedVenueConcertsBlock + dedupedNewsBlock + motivationContextBlock +
+      buildBriefingInstruction(primaryCity, localCtx.venues ?? []);
 
     // Log which static sections have data
     const sectionLog: Record<string, boolean | string> = {

@@ -70,14 +70,19 @@ export async function logBriefingStories(userName: string, rawHeadlines: string[
     const key = normalizeKey(raw);
     if (key.length < 5) continue;
     try {
+      // RETURNING id routes this through exec_dml_ret on Supabase (plain INSERTs without
+      // RETURNING are wrapped as SELECT FROM (INSERT) r which Supabase rejects).
       await query(
         `INSERT INTO daily_briefing_stories (user_name, headline, story_date)
          VALUES ($1, $2, $3)
-         ON CONFLICT (user_name, headline, story_date) DO NOTHING`,
+         ON CONFLICT (user_name, headline, story_date) DO NOTHING
+         RETURNING id`,
         [userName, key, today]
       );
       logged++;
-    } catch { }
+    } catch (err) {
+      logger.warn({ err, key }, "[StoryDedup] Failed to log headline — skipping");
+    }
   }
   logger.info({ userName, logged, total: rawHeadlines.length }, "[StoryDedup] Logged briefing stories");
 }
