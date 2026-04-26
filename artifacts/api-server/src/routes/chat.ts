@@ -2635,6 +2635,11 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       const op = await extractProfileOperation(message);
       console.log(`[PROFILE PARSING] Extracted operation: ${JSON.stringify(op)}`);
       if (op) {
+        // TV shows are managed exclusively via watched_shows table (isTVAdd/isTVRemove paths).
+        // Skip profile_items write for "shows" to prevent duplicates across both tables.
+        if (op.category === "shows") {
+          req.log.info({ op }, "Profile op skipped — shows managed by watched_shows table");
+        } else {
         let resultContext = "";
 
         if (op.operation === "add" && op.name) {
@@ -2656,6 +2661,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         }
 
         systemPrompt = systemPrompt + resultContext;
+        } // end else (not shows category)
       }
     } catch (err) {
       req.log.warn({ err }, "Profile operation failed, continuing normally");

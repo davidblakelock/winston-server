@@ -241,10 +241,13 @@ function mapRow(r: {
 
 // Format all dynamic profile items for injection into system prompt
 export function formatProfileForContext(items: ProfileItem[], userName = "the user"): string {
-  if (items.length === 0) return "";
+  // "shows" is excluded here — watched_shows table is the single source of truth for TV shows.
+  // Including profile_items shows would create duplicates in the briefing context.
+  const filtered = items.filter((i) => i.category !== "shows");
+  if (filtered.length === 0) return "";
 
   const byCategory = new Map<string, ProfileItem[]>();
-  for (const item of items) {
+  for (const item of filtered) {
     const existing = byCategory.get(item.category) ?? [];
     existing.push(item);
     byCategory.set(item.category, existing);

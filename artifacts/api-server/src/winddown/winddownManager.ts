@@ -112,13 +112,13 @@ export async function hasFiredToday(): Promise<boolean> {
 export async function markFiredToday(): Promise<void> {
   const tz = "America/Chicago";
   const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
-  // Use WHERE NOT EXISTS instead of ON CONFLICT to avoid depending on a UNIQUE constraint
-  // that may be missing from older installations.
+  // RETURNING is required so this routes through exec_dml_ret (not exec_sql which can't handle DML).
   await query(
     `INSERT INTO winddown_state (trigger_date)
      SELECT $1 WHERE NOT EXISTS (
        SELECT 1 FROM winddown_state WHERE trigger_date = $1
-     )`,
+     )
+     RETURNING id`,
     [today]
   );
 }
@@ -137,13 +137,13 @@ export async function setWinddownActive(active: boolean): Promise<void> {
   const tz = "America/Chicago";
   const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
   await query(
-    `UPDATE winddown_state SET active = $1 WHERE trigger_date = $2`,
+    `UPDATE winddown_state SET active = $1 WHERE trigger_date = $2 RETURNING id`,
     [active, today]
   );
 }
 
 export async function saveWinddownNote(note: string): Promise<void> {
-  await query(`INSERT INTO winddown_notes (note) VALUES ($1)`, [note]);
+  await query(`INSERT INTO winddown_notes (note) VALUES ($1) RETURNING id`, [note]);
 }
 
 export async function getLastNightNotes(): Promise<WinddownNote[]> {
@@ -181,7 +181,7 @@ export async function saveTonightMessage(message: string): Promise<void> {
   const tz = "America/Chicago";
   const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
   await query(
-    `UPDATE winddown_state SET tonight_message = $1 WHERE trigger_date = $2`,
+    `UPDATE winddown_state SET tonight_message = $1 WHERE trigger_date = $2 RETURNING id`,
     [message, today]
   );
 }
@@ -200,7 +200,7 @@ export async function setJournalOfferPending(pending: boolean): Promise<void> {
   const tz = "America/Chicago";
   const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
   await query(
-    `UPDATE winddown_state SET journal_offer_pending = $1 WHERE trigger_date = $2`,
+    `UPDATE winddown_state SET journal_offer_pending = $1 WHERE trigger_date = $2 RETURNING id`,
     [pending, today]
   );
 }
@@ -219,7 +219,7 @@ export async function setJournalCaptured(captured: boolean): Promise<void> {
   const tz = "America/Chicago";
   const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
   await query(
-    `UPDATE winddown_state SET journal_captured = $1 WHERE trigger_date = $2`,
+    `UPDATE winddown_state SET journal_captured = $1 WHERE trigger_date = $2 RETURNING id`,
     [captured, today]
   );
 }
