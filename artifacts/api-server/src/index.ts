@@ -250,4 +250,23 @@ app.listen(port, async (err) => {
   // the Supabase exec_sql client silently ignores, stripping the WHERE guard and
   // unconditionally overwriting user-chosen companion names with 'Emma Peel' on every restart.
   logger.info("Startup migration: companion_name check complete (migration removed)");
+
+  // Migrate watched_shows rows stored under old user_name 'David' → 'davidblakelock'.
+  // This happened when the system used a short display name instead of the login ID.
+  try {
+    const { rows } = await query<{ cnt: string }>(
+      `SELECT COUNT(*) AS cnt FROM watched_shows WHERE user_name = 'David'`
+    );
+    const stale = parseInt(rows[0]?.cnt ?? "0", 10);
+    if (stale > 0) {
+      await query(
+        `UPDATE watched_shows SET user_name = 'davidblakelock' WHERE user_name = 'David'`
+      );
+      logger.info({ migratedCount: stale }, "Startup migration: watched_shows user_name 'David' → 'davidblakelock'");
+    } else {
+      logger.info("Startup migration: watched_shows user_name already clean");
+    }
+  } catch (e) {
+    logger.warn({ e }, "Startup migration warning: watched_shows user_name");
+  }
 });

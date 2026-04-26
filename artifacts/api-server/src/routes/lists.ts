@@ -25,10 +25,18 @@ router.get("/lists", async (req: Request, res: Response) => {
     const listCounts: Record<string, number> = {};
     for (const r of listRows) listCounts[r.list_name] = parseInt(r.item_count, 10);
 
-    // TV Shows — from watched_shows
+    // TV Shows — union of watched_shows (with network/status) + profile_items category='shows'
     const { rows: tvRows } = await query<{ cnt: string }>(
-      `SELECT COUNT(*) AS cnt FROM watched_shows WHERE user_name = $1`,
-      [userName]
+      `SELECT (
+         SELECT COUNT(*) FROM watched_shows WHERE user_name = ANY($1)
+       ) + (
+         SELECT COUNT(*) FROM profile_items
+         WHERE user_name = $2 AND category = 'shows'
+           AND lower(name) NOT IN (
+             SELECT lower(show_name) FROM watched_shows WHERE user_name = ANY($1)
+           )
+       ) AS cnt`,
+      [[userName, "David"], userName]
     );
     const tvCount = parseInt(tvRows[0]?.cnt ?? "0", 10);
 
@@ -71,14 +79,30 @@ router.get("/tasks/sync", async (req: Request, res: Response) => {
 router.get("/lists/tv-shows", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
+  // Disable client-side caching so stale empty responses don't mask fresh data
+  res.setHeader("Cache-Control", "no-store");
   try {
+    // Primary: watched_shows (has network/status metadata)
+    // Fallback: profile_items category='shows' (shows added via the profile system)
+    // Shows in both tables are deduped by lowercase name — watched_shows wins (richer data)
     const { rows } = await query<{ id: number; show_name: string; network: string | null; status: string | null }>(
       `SELECT id, show_name, network, status
        FROM watched_shows
-       WHERE user_name = $1
+       WHERE user_name = ANY($1)
+
+       UNION ALL
+
+       SELECT id, name AS show_name, NULL AS network, NULL AS status
+       FROM profile_items
+       WHERE user_name = $2 AND category = 'shows'
+         AND lower(name) NOT IN (
+           SELECT lower(show_name) FROM watched_shows WHERE user_name = ANY($1)
+         )
+
        ORDER BY show_name ASC`,
-      [userName]
+      [[userName, "David"], userName]
     );
+    req.log.info({ count: rows.length, userName }, "[TV Shows] Fetched watched shows");
     res.json({
       items: rows.map((r) => ({
         id: r.id,
