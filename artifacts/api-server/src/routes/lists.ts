@@ -9,24 +9,43 @@ import {
 
 const router: IRouter = Router();
 
-// GET /api/lists — fetch all list names (with item counts) for the user
+// GET /api/lists — always returns all 4 lists with real counts from their respective tables
 router.get("/lists", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
   try {
-    const { rows } = await query<{ list_name: string; item_count: string }>(
+    // Shopping and To Do — from list_items
+    const { rows: listRows } = await query<{ list_name: string; item_count: string }>(
       `SELECT list_name, COUNT(*) AS item_count
        FROM list_items
-       WHERE user_name = $1
-       GROUP BY list_name
-       ORDER BY list_name ASC`,
+       WHERE user_name = $1 AND list_name IN ('shopping', 'to do')
+       GROUP BY list_name`,
       [userName]
     );
+    const listCounts: Record<string, number> = {};
+    for (const r of listRows) listCounts[r.list_name] = parseInt(r.item_count, 10);
+
+    // TV Shows — from watched_shows
+    const { rows: tvRows } = await query<{ cnt: string }>(
+      `SELECT COUNT(*) AS cnt FROM watched_shows WHERE user_name = $1`,
+      [userName]
+    );
+    const tvCount = parseInt(tvRows[0]?.cnt ?? "0", 10);
+
+    // Restaurants — from profile_items
+    const { rows: restRows } = await query<{ cnt: string }>(
+      `SELECT COUNT(*) AS cnt FROM profile_items WHERE user_name = $1 AND category = 'restaurants'`,
+      [userName]
+    );
+    const restCount = parseInt(restRows[0]?.cnt ?? "0", 10);
+
     res.json({
-      lists: rows.map((r) => ({
-        listName: r.list_name,
-        itemCount: parseInt(r.item_count, 10),
-      })),
+      lists: [
+        { listName: "shopping",    displayName: "Shopping",     itemCount: listCounts["shopping"] ?? 0 },
+        { listName: "to do",       displayName: "To Do",        itemCount: listCounts["to do"] ?? 0 },
+        { listName: "tv-shows",    displayName: "TV Shows",     itemCount: tvCount },
+        { listName: "restaurants", displayName: "Restaurants",  itemCount: restCount },
+      ],
     });
   } catch (err) {
     req.log.warn({ err }, "Lists index GET error");
