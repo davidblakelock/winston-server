@@ -11,6 +11,7 @@ import { ensureProfileTable } from "./profile/profileManager";
 import { NATIVE_STORED_NAME } from "./auth/middleware";
 import { ensureOnboardingTable } from "./onboarding/onboardingManager";
 import { startMedicationScheduler } from "./medications/medicationScheduler";
+import { initMedicationReminderLogTable } from "./medications/medicationManager";
 import { startMorningPushScheduler } from "./push/morningPushScheduler";
 import { startWeatherAlertScheduler } from "./push/weatherAlertScheduler";
 import { startBillScheduler } from "./bills/billScheduler";
@@ -143,6 +144,15 @@ app.listen(port, async (err) => {
     logger.info("[startup] pressure_readings table ready");
   } catch (e) {
     logger.warn({ e }, "Pressure readings table initialization warning");
+  }
+
+  // Initialize medication reminder log table (DB-backed dedup so reminders don't
+  // re-fire when the server restarts mid-morning)
+  try {
+    await initMedicationReminderLogTable();
+    logger.info("[startup] medication_reminder_log table ready");
+  } catch (e) {
+    logger.warn({ e }, "medication_reminder_log table init warning");
   }
 
   startScheduler();

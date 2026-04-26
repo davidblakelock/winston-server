@@ -6,6 +6,9 @@ import {
   getMedications,
   hasTakenMedicationsToday,
   buildMedReminderText,
+  getMedicationRemindersEnabled,
+  hasMedicationReminderSentToday,
+  logMedicationReminderSent,
 } from "./medicationManager.js";
 import { getActiveUsers } from "../onboarding/onboardingManager.js";
 import { logger } from "../lib/logger.js";
@@ -29,14 +32,9 @@ function buildFollowUpMessage(medText: string, displayName = NATIVE_STORED_NAME)
   return `Just a gentle nudge, ${displayName} — have you taken ${medText} yet? Whenever you're ready.`;
 }
 
-// Track per-user fired dates to avoid double-firing within the same day
-const _initialFiredDate = new Map<string, string>();
-const _followUpFiredDate = new Map<string, string>();
-
 export function startMedicationScheduler(): void {
   cron.schedule("* * * * *", async () => {
     try {
-      const today = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
       const localTime = getCurrentLocalTime();
 
       const users = await getActiveUsers().catch(() => []);
@@ -47,6 +45,10 @@ export function startMedicationScheduler(): void {
         const userDisplay = displayName ?? userName;
         const companion = companionName ?? "Winston";
 
+        // Check mute preference first — skip everything if reminders are disabled
+        const remindersEnabled = await getMedicationRemindersEnabled(userName).catch(() => true);
+        if (!remindersEnabled) continue;
+
         const meds = await getMedications(userName).catch(() => []);
         if (!meds.length) continue;
 
@@ -54,8 +56,12 @@ export function startMedicationScheduler(): void {
         const reminderTimes = [...new Set(meds.map((m) => m.reminderTime))];
 
         for (const rt of reminderTimes) {
-          if (localTime === rt && _initialFiredDate.get(userName) !== today) {
-            const taken = await hasTakenMedicationsToday(userName);
+          if (localTime === rt) {
+            // DB-backed check — survives server restarts
+            const alreadySent = await hasMedicationReminderSentToday(userName, "initial").catch(() => false);
+            if (alreadySent) continue;
+
+            const taken = await hasTakenMedicationsToday(userName).catch(() => false);
             if (!taken) {
               const medText = buildMedReminderText(meds);
               broadcast("reminder", {
@@ -74,7 +80,8 @@ export function startMedicationScheduler(): void {
               }, userName).catch(() => {});
               logger.info({ time: rt, userName }, "Medication initial reminder fired");
             }
-            _initialFiredDate.set(userName, today);
+            // Mark as sent regardless of taken status — prevents re-firing if server restarts
+            await logMedicationReminderSent(userName, "initial").catch(() => {});
           }
         }
 
@@ -83,8 +90,12 @@ export function startMedicationScheduler(): void {
         const followUpH = (h + 1) % 24;
         const followUpTime = `${String(followUpH).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 
-        if (localTime === followUpTime && _followUpFiredDate.get(userName) !== today) {
-          const taken = await hasTakenMedicationsToday(userName);
+        if (localTime === followUpTime) {
+          // DB-backed check — survives server restarts
+          const alreadySent = await hasMedicationReminderSentToday(userName, "followup").catch(() => false);
+          if (alreadySent) continue;
+
+          const taken = await hasTakenMedicationsToday(userName).catch(() => false);
           if (!taken) {
             const medText = buildMedReminderText(meds);
             broadcast("reminder", {
@@ -103,7 +114,8 @@ export function startMedicationScheduler(): void {
             }, userName).catch(() => {});
             logger.info({ time: followUpTime, userName }, "Medication follow-up reminder fired");
           }
-          _followUpFiredDate.set(userName, today);
+          // Mark follow-up as sent — prevents re-firing if server restarts
+          await logMedicationReminderSent(userName, "followup").catch(() => {});
         }
       }
     } catch (err) {

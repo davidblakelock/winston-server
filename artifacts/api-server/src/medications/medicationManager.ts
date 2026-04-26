@@ -87,14 +87,116 @@ export async function hasTakenMedicationsToday(userName = NATIVE_STORED_NAME): P
 
 export async function logMedicationsTaken(meds: Medication[], userName = NATIVE_STORED_NAME): Promise<void> {
   const names = meds.map((m) => m.name).join(", ");
+  // RETURNING id is required so exec_dml_ret (not exec_sql) handles this on Supabase.
   await query(
     `INSERT INTO medication_logs (user_name, log_date, medication_names)
      VALUES ($1, CURRENT_DATE, $2)
      ON CONFLICT (user_name, log_date) DO UPDATE SET
        confirmed_at = NOW(),
-       medication_names = EXCLUDED.medication_names`,
+       medication_names = EXCLUDED.medication_names
+     RETURNING id`,
     [userName, names]
   );
+}
+
+// ── medication_reminder_log — DB-backed tracking of when reminders were sent ──
+// This replaces in-memory Maps which reset on every server restart.
+
+export async function initMedicationReminderLogTable(): Promise<void> {
+  await query(`
+    CREATE TABLE IF NOT EXISTS medication_reminder_log (
+      id          serial PRIMARY KEY,
+      user_name   text NOT NULL,
+      reminder_date date NOT NULL DEFAULT CURRENT_DATE,
+      reminder_type text NOT NULL,
+      sent_at     timestamptz NOT NULL DEFAULT NOW(),
+      UNIQUE (user_name, reminder_date, reminder_type)
+    )
+  `);
+  await query(
+    `CREATE INDEX IF NOT EXISTS idx_med_reminder_log_lookup
+     ON medication_reminder_log (user_name, reminder_date)`
+  );
+}
+
+export async function hasMedicationReminderSentToday(
+  userName: string,
+  type: "initial" | "followup"
+): Promise<boolean> {
+  const { rows } = await query(
+    `SELECT 1 FROM medication_reminder_log
+     WHERE user_name = $1
+       AND reminder_date = CURRENT_DATE
+       AND reminder_type = $2`,
+    [userName, type]
+  );
+  return rows.length > 0;
+}
+
+export async function logMedicationReminderSent(
+  userName: string,
+  type: "initial" | "followup"
+): Promise<void> {
+  // RETURNING id routes through exec_dml_ret on Supabase (required for DML).
+  await query(
+    `INSERT INTO medication_reminder_log (user_name, reminder_date, reminder_type)
+     VALUES ($1, CURRENT_DATE, $2)
+     ON CONFLICT (user_name, reminder_date, reminder_type) DO NOTHING
+     RETURNING id`,
+    [userName, type]
+  );
+}
+
+// ── Medication reminder mute preference ──────────────────────────────────────
+// Stored in profile_items as category='preferences', name='medication_reminders_enabled'.
+// When detail = 'false', all medication push notifications are silenced.
+
+// Medication reminders are ENABLED by default.
+// When the user mutes them, we insert a row with detail='muted'.
+// To re-enable, we delete that row.
+// This avoids needing a unique constraint on profile_items.
+
+export async function getMedicationRemindersEnabled(
+  userName = NATIVE_STORED_NAME
+): Promise<boolean> {
+  const { rows } = await query<{ detail: string | null }>(
+    `SELECT detail FROM profile_items
+     WHERE user_name = $1 AND category = 'preferences' AND name = 'medication_reminders_muted'
+     LIMIT 1`,
+    [userName]
+  );
+  // If a 'muted' row exists → reminders are disabled
+  return rows.length === 0;
+}
+
+export async function setMedicationRemindersEnabled(
+  enabled: boolean,
+  userName = NATIVE_STORED_NAME
+): Promise<void> {
+  if (enabled) {
+    // Re-enabling: remove the muted row. RETURNING id routes through exec_dml_ret on Supabase.
+    await query(
+      `DELETE FROM profile_items
+       WHERE user_name = $1 AND category = 'preferences' AND name = 'medication_reminders_muted'
+       RETURNING id`,
+      [userName]
+    );
+  } else {
+    // Muting: first remove any existing muted row, then insert fresh.
+    // Two-step to avoid needing a unique constraint on profile_items.
+    await query(
+      `DELETE FROM profile_items
+       WHERE user_name = $1 AND category = 'preferences' AND name = 'medication_reminders_muted'
+       RETURNING id`,
+      [userName]
+    ).catch(() => {});
+    await query(
+      `INSERT INTO profile_items (user_name, category, name, detail)
+       VALUES ($1, 'preferences', 'medication_reminders_muted', 'true')
+       RETURNING id`,
+      [userName]
+    );
+  }
 }
 
 

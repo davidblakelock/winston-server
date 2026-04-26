@@ -35,6 +35,8 @@ import {
   addMedication,
   buildMedReminderText,
   extractMedicationFromMessage,
+  setMedicationRemindersEnabled,
+  getMedicationRemindersEnabled,
 } from "../medications/medicationManager.js";
 import {
   getPendingPrompt,
@@ -432,6 +434,8 @@ const MED_TAKEN_PATTERN = /\b(taken|took\s+(my\s+)?(meds?|medications?|pills?|th
 const MED_ADD_PATTERN = /\b(add\s+(a\s+)?(?:new\s+)?medication\s+(?:called\s+)?|new\s+medication\s+(?:called\s+)?|start\s+taking\s+(?:a\s+)?(?:new\s+)?medication|add\s+.{2,40}\s+to\s+my\s+medications?)\b/i;
 const MED_LIST_PATTERN = /\b(what\s+medications?\s+(do\s+i\s+take|am\s+i\s+(on|taking)|are\s+mine)|my\s+medications?|medication\s+list|what\s+(meds?|pills?)\s+(do\s+i|am\s+i)|list\s+(my\s+)?meds?|what\s+do\s+i\s+take)\b/i;
 const MED_REMOVE_PATTERN = /\b(stop\s+taking|remove\s+.+\s+from\s+my\s+medications?|no\s+longer\s+taking|discontinued?)\b/i;
+const MED_MUTE_PATTERN = /\b(don'?t\s+(notify|remind|bug|alert|ping|bother)\s+me\s+(about|with|for)\s+(my\s+)?(meds?|medications?|pills?)|stop\s+(medication|med)\s+(reminders?|notifications?|alerts?|pings?)|disable\s+(medication|med)\s+(reminders?|notifications?)|no\s+more\s+(medication|med)\s+(reminders?|notifications?)|mute\s+(medication|med)\s+(reminders?|notifications?)|turn\s+off\s+(medication|med)\s+(reminders?|notifications?)|please\s+don'?t\s+(remind|notify)\s+me\s+(about\s+)?(my\s+)?(meds?|medications?|pills?))\b/i;
+const MED_UNMUTE_PATTERN = /\b(re\-?enable\s+(medication|med)\s+(reminders?|notifications?)|turn\s+on\s+(medication|med)\s+(reminders?|notifications?)|start\s+(medication|med)\s+(reminders?|notifications?)\s+again|remind\s+me\s+about\s+my\s+(meds?|medications?)\s+again|enable\s+(medication|med)\s+(reminders?|notifications?))\b/i;
 const PROFILE_PATTERN = /\b(ms\.?\s*peel\s+)?(add\s+a?\s*(new\s+)?(place|show|restaurant|person|interest|favorite)|i\s+(am|'m|am\s+currently|'m\s+currently)\s+(watching|reading)|add\s+.{1,60}\s+as\s+(a|one\s+of\s+my)\s+(favorite\s+)?(place|show|restaurant|restaurant\s+to|person|interest)|remove\s+.{1,60}\s+from\s+my\s+(places|shows|restaurants|people|interests|favorites|list|profile)|what\s+(places|shows|restaurants|people|interests)\s+(do\s+i\s+(have|have\s+saved)|am\s+i)|show\s+me\s+my\s+(places|shows|restaurants|people|interests)|what('?s|\s+is)\s+(in|on)\s+my\s+(profile|saved\s+places|watch\s+list)|(add|save|remember)\s+(my\s+)?(new\s+)?(doctor|dentist|vet|therapist|therapist|trainer|coach|lawyer|attorney|accountant|financial\s+advisor|pharmacist|specialist|provider|chiropractor|optometrist|ophthalmologist|dermatologist|cardiologist|surgeon|podiatrist|psychiatrist|psychologist|stylist|barber|mechanic|plumber|contractor|electrician|realtor|agent|banker|broker|notary|tutor|instructor|nutritionist|dietitian|personal\s+trainer)\b)\b/i;
 
 interface SavedLocation {
@@ -850,7 +854,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isMedAdd = MED_ADD_PATTERN.test(message);
   const isMedList = MED_LIST_PATTERN.test(message);
   const isMedRemove = MED_REMOVE_PATTERN.test(message);
-  const isMedRequest = isMedTaken || isMedAdd || isMedList || isMedRemove;
+  const isMedMute = MED_MUTE_PATTERN.test(message);
+  const isMedUnmute = MED_UNMUTE_PATTERN.test(message);
+  const isMedRequest = isMedTaken || isMedAdd || isMedList || isMedRemove || isMedMute || isMedUnmute;
   // "Tell me more about number 3" — dig into a specific Top 10 morning news story
   const newsDigMatch = !isMorningGreeting && NEWS_DIG_PATTERN.exec(message);
   const newsDigStoryNumber = newsDigMatch ? parseInt(newsDigMatch[1] ?? newsDigMatch[2] ?? "0", 10) : 0;
@@ -2809,6 +2815,33 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       }
     } catch (err) {
       req.log.warn({ err }, "Medication remove failed");
+    }
+  }
+
+  // ── Medications: mute / unmute reminders ──────────────────────────────────
+  if (isMedMute && !isMedTaken && !isMedAdd && !isMedRemove) {
+    try {
+      await setMedicationRemindersEnabled(false, sessionUserName);
+      systemPrompt += `\n\n[Medications — Reminders Muted]\nDavid has asked to stop receiving medication reminder notifications. It's been saved. Acknowledge naturally and warmly — something like "Got it — I'll stop reminding you about your medications. Just let me know if you'd like them turned back on." Keep it brief.`;
+      req.log.info({ userName: sessionUserName }, "Medication reminders muted");
+    } catch (err) {
+      req.log.warn({ err }, "Medication mute failed");
+    }
+  }
+
+  if (isMedUnmute && !isMedTaken && !isMedAdd && !isMedRemove && !isMedMute) {
+    try {
+      await setMedicationRemindersEnabled(true, sessionUserName);
+      const meds = await getMedications(sessionUserName).catch(() => []);
+      if (meds.length > 0) {
+        const medText = buildMedReminderText(meds);
+        systemPrompt += `\n\n[Medications — Reminders Re-enabled]\nDavid has re-enabled medication reminders. Confirm warmly — something like "Back on — I'll remind you about ${medText} as usual." Keep it brief.`;
+      } else {
+        systemPrompt += `\n\n[Medications — Reminders Re-enabled]\nDavid has re-enabled medication reminders. Confirm warmly.`;
+      }
+      req.log.info({ userName: sessionUserName }, "Medication reminders re-enabled");
+    } catch (err) {
+      req.log.warn({ err }, "Medication unmute failed");
     }
   }
 
