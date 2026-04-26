@@ -558,15 +558,19 @@ function buildBriefingInstruction(city: string, savedVenues: string[]): string {
 
   SECTION 9 — HEALTH SNAPSHOT: ONLY if a [VERIFIED — Garmin Connect — Yesterday's Health Data] block is present. Weave the data naturally into 2–3 sentences — casual and warm, like a friend who noticed. Lead with sleep if it's notable. Mention workout if one happened. Include resting HR or HRV if it's interesting (unusually high or low). Examples: "You got a solid 7.5 hours last night — looks like a good one, with nearly two hours of deep sleep." or "Nice workout yesterday — 85 minutes of pickleball, that's a big one." or "Your resting heart rate was 52 — solid." Keep it brief. SKIP entirely if no Garmin block is present.
 
-  SECTION 8 — NEWS: A structured news sweep using the data in [VERIFIED — Web Search News — ...] block. Deliver in this exact format — each story on its own lines:
+  SECTION 8 — NEWS: A Top 10 news sweep using the [VERIFIED — Web Search News — ...] block. Stories 1-4 are global/world, 5-7 are national/US, 8-10 are local ${city}. They are pre-numbered 1–10 in the data block.
 
-    From [Headlines — bold title + one sentence summary each]: Read each story EXACTLY as formatted — bold title on one line, then the summary sentence on the next line. Do not merge them. Do not change the format. Read all 6 headlines. These cover 6 targeted categories (world, US politics/economy, tech, sports — David's teams, ${city} local, wildcard/interest) — do NOT reorder or drop any. The sports story is always about the Texas Rangers, Cowboys, Stars, or Mavericks — never the Lakers, NBA playoffs, FIFA, soccer, or MLS.
+    DELIVERY: Read each story as one fluid sentence — "Number one: [bold title] — [sentence]." Keep moving. Pause naturally between stories. Do NOT merge stories. Do NOT skip any. Do NOT reorder.
 
-    From [Entertainment & Pop Culture] (if present): One item only. Bold title on one line, summary sentence on the next. Skip if absent.
+    After all 10: say exactly — "Anything from this morning you'd like to dig into?" — every day, no exceptions.
 
-    From [Watercooler Story] (if present): Introduce warmly — "oh, and here's one to share later —" then the story in two sentences max.
+    From [Entertainment & Pop Culture] (if present): One item only, one sentence. Skip if absent.
 
-    FORMATTING RULES: Each headline is on its own line, bold. Each summary sentence is on the next line. A blank line between stories. Never merge headlines and summaries. Never use "in other news" or "moving on." Short transitions between sections only: "also —", "and —", "meanwhile —". NEVER repeat a topic from Section 10 (Sports) — that section already covers sports game results.
+    From [Watercooler Story] (if present): Introduce warmly — "and here's one to share later —" then the story in two sentences max.
+
+    SPORTS RULE: Any sports story in this section must be about the Texas Rangers, Cowboys, Stars, or Mavericks — never the Lakers, NBA playoffs, FIFA, soccer, or MLS. NEVER repeat a topic from Section 10 (Sports) — that section already covers game results.
+
+    RATIO PREFERENCES: If the user has said "give me more local news" or "fewer global stories," honor that emphasis when delivering.
 
   SECTION 10 — SPORTS: Sports results from the last 24 hours only (teams from the user's profile). If no games were played, SKIP THIS SECTION ENTIRELY — do not say no games were played.
 
@@ -580,8 +584,15 @@ function buildBriefingInstruction(city: string, savedVenues: string[]): string {
 
   SECTION 13 — BIRTHDAYS AND IMPORTANT DATES: Any birthdays or anniversaries in the next 7 days. Name the person and the date specifically. SKIP if none.
 
-  SECTION 14 — MORNING MOTIVATION: Use the [VERIFIED — Web Search — Today's Inspiration] block if available. Lead with the inspiring thought or finding, then connect it personally to David's specific day — what he has ahead (a dinner, his pickleball game, a free afternoon). Keep it to 2-3 sentences. Warm and genuine — a friend sharing something interesting, not a motivational poster.
-    CRITICAL — Fix 5: If the [Morning Motivation Context] says "MORNING WORKOUT ALREADY DONE" — do NOT mention exercise, going for a walk, heading outside, or any outdoor activity. Reference only what is actually AHEAD in his day (upcoming dinner, free time, interesting event). Do NOT repeat anything that already happened this morning.
+  SECTION 14 — MORNING MOTIVATION: Three possible states — check the [Morning Motivation Context] block:
+
+    STATE A — [Personal Override — Morning Note] is present: Skip the external quote entirely. Deliver the personal observation warmly and specifically — e.g. "Olivia's birthday is in 11 days — anything special you're thinking of doing for her this year?" Keep it to 2 sentences. Personal and conversational.
+
+    STATE B — [VERIFIED — ZenQuotes — Today's Wisdom] is present: Two sub-parts are provided: (1) the raw quote, (2) the personalized "Delivery" text Claude already generated. Read the Delivery text naturally — it is already crafted for David's voice and day. Do NOT just read the raw quote. Do NOT add preamble like "here is your quote." Deliver it as written, warmly and naturally.
+
+    STATE C — Neither block present: Generate a warm, specific 2-3 sentence motivating thought from scratch — reference David's interests (pickleball, woodworking, classic rock, boats) or something from his day. No generic phrases. No "seize the day." Sound like a sharp, caring friend.
+
+    CRITICAL: If the [Morning Motivation Context] says "MORNING WORKOUT ALREADY DONE" — do NOT mention exercise, walking, or outdoor activity. Reference only what is AHEAD in his day.
 
   SECTION 16 — SUNDAY SPECIAL: Sundays ONLY — deliver a warm weekly recap just before Section 15: exercise this week, family archive stories captured, highlights, something to look forward to next week. Skip every other day of the week.
 
@@ -620,7 +631,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       getRecentMemories(7).catch(() => []),
       getProfileItems(undefined, userName).catch(() => []),
       getProfile(userName).catch(() => null),
-      getSeenHeadlines(userName, 3).catch(() => new Set<string>()),   // news/Dallas: 3-day window
+      getSeenHeadlines(userName, 7).catch(() => new Set<string>()),    // news/Dallas: 7-day window (no story repeats within a week)
       getSeenHeadlines(userName, 14).catch(() => new Set<string>()),  // venue concerts: 14-day window (events repeat until show date)
       getBriefingPreferences(userName).catch(() => []),
     ]);
@@ -931,10 +942,12 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       block += `• Total family archive stories captured: ${totalStories}\n`;
 
       if (dailyMotivation) {
-        block += `\n[VERIFIED — Web Search — Today's Inspiration]\n${dailyMotivation}\n`;
-        block += `Use the above inspiration as the foundation for Section 15. Personalize it with something specific to David's day — upcoming events, the people in his life. Keep it to 2-3 sentences. Warm, genuine, not preachy.`;
+        // dailyMotivation is either a [Personal Override — Morning Note] block,
+        // a [VERIFIED — ZenQuotes — Today's Wisdom] block, or a plain fallback thought.
+        // Section 14 in the briefing instruction knows how to handle each.
+        block += `\n${dailyMotivation}\n`;
       } else {
-        block += `Use this context to craft a specific, warm 2-3 sentence motivating thought — reference upcoming events or journal themes. Morning only — do NOT suggest evening activities or memory recording.`;
+        block += `No external quote or personal override today — generate a warm, specific 2-3 sentence motivating thought from scratch. Reference David's interests or something from his day.`;
       }
       return block;
     })();

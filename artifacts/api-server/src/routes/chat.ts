@@ -85,6 +85,7 @@ import {
 } from "../memory/memoryManager.js";
 import {
   fetchMorningNews,
+  getStoredHeadlines,
 } from "../news/newsManager.js";
 import {
   extractProfileOperation,
@@ -292,6 +293,10 @@ function formatWeatherBlock(w: CachedWeather): string {
 // Tightened: must be an EXPLICIT greeting or request — never fires on bare "morning" alone
 // or on messages that contain "morning" mid-sentence (e.g. "update my morning preferences").
 const MORNING_PATTERN = /^(good\s+morning|mornin[g']?|morning\s+(briefing|summary|update)|daily\s+(briefing|summary|update)|give\s+me\s+(my\s+)?(morning\s+)?briefing|what('?s|\s+is)\s+(my\s+)?(morning\s+)?briefing|i\s+want\s+(my\s+)?(morning\s+)?briefing|wakin[g']?\s+up|just\s+woke)[\s!.,?]*/i;
+
+// "Tell me more about number 3" / "Dig into story 5" / "More on number 7" / "Number 2"
+// Fired when user wants details on a specific Top 10 news story from the morning briefing.
+const NEWS_DIG_PATTERN = /\b(?:(?:tell\s+me\s+more|more\s+(?:about|on|details?)|dig\s+(?:into|deeper)|details?\s+on|expand\s+on|what\s+happened\s+with)\s+(?:(?:story|number|#|item)\s*)?(\d+)|(?:story|number|item|#)\s*(\d+)(?:\s+please)?$)/i;
 const EVENING_PATTERN = /\b(good\s+evening|evening\s+check[\s-]?in|check[\s-]?in\s+for\s+the\s+evening|start\s+(my\s+)?evening\s+check[\s-]?in|winding\s+down|wind\s+down|heading\s+to\s+bed|going\s+to\s+bed|getting\s+ready\s+for\s+bed|calling\s+it\s+a\s+night|turning\s+in|good\s+night|goodnite|end\s+of\s+the\s+day|wrapping\s+up|relaxing\s+(tonight|this\s+evening)|settling\s+in)\b/i;
 const REMINDER_PATTERN = /\b(remind\s+(me|\w+)\s+to|set\s+a?\s*reminder(\s+for\s+\w+)?|reminder|don'?t\s+let\s+me\s+forget|make\s+sure\s+i|peel\s+remind|ms\.?\s*peel\s+remind)\b/i;
 const EMAIL_PATTERN = /\b(email|emails|mail|inbox|check\s+my\s+(email|mail|inbox)|any\s+(new\s+)?(emails?|messages?|mail)|what('?s|\s+is)\s+(in\s+)?(my\s+)?(email|inbox|mail)|do\s+i\s+have\s+(any\s+)?(email|mail|messages?))\b/i;
@@ -846,6 +851,11 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isMedList = MED_LIST_PATTERN.test(message);
   const isMedRemove = MED_REMOVE_PATTERN.test(message);
   const isMedRequest = isMedTaken || isMedAdd || isMedList || isMedRemove;
+  // "Tell me more about number 3" — dig into a specific Top 10 morning news story
+  const newsDigMatch = !isMorningGreeting && NEWS_DIG_PATTERN.exec(message);
+  const newsDigStoryNumber = newsDigMatch ? parseInt(newsDigMatch[1] ?? newsDigMatch[2] ?? "0", 10) : 0;
+  const isNewsDig = newsDigStoryNumber >= 1 && newsDigStoryNumber <= 10 && getStoredHeadlines().length > 0;
+
   const isSportsRequest = !isMorningGreeting && SPORTS_PATTERN.test(message);
   const isMarketsRequest = !isMorningGreeting && MARKETS_PATTERN.test(message);
   const isBriefingPrefRequest = !isMorningGreeting && BRIEFING_PREF_PATTERN.test(message);
@@ -1081,6 +1091,60 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     }
 
     return; // Morning greeting fully handled — skip generic handler below
+  }
+
+  // ── "Tell me more about number N" — dig into a Top 10 morning news story ────
+  if (isNewsDig) {
+    const stories = getStoredHeadlines();
+    const story = stories.find((s) => s.number === newsDigStoryNumber);
+    if (story) {
+      req.log.info({ storyNumber: newsDigStoryNumber, title: story.title }, "[NewsDig] Fetching more details for story");
+      const isNativeNewsDig = req.headers["x-native-app"] === "true";
+      const now = new Date();
+      const todayStr = now.toLocaleDateString("en-US", { timeZone: "America/Chicago", weekday: "long", month: "long", day: "numeric", year: "numeric" });
+
+      try {
+        const digResponse = await anthropic.messages.create({
+          model: "claude-opus-4-5",
+          max_tokens: 500,
+          tools: [{ type: "web_search_20250305", name: "web_search" }],
+          messages: [{
+            role: "user",
+            content:
+              `Today is ${todayStr}. The user heard this story in their morning briefing and wants to know more:\n\n` +
+              `Story ${story.number}: "${story.title}"\nSummary they heard: ${story.summary}\n\n` +
+              `Use web search to find the latest reporting on this story. Return 3-5 sentences with: ` +
+              `(1) what exactly happened, with specific names, places, numbers, or quotes, ` +
+              `(2) the key background or why it matters, ` +
+              `(3) what's happening next or what to watch for. ` +
+              `Be specific and factual. Only report what you find in current news. Do not pad or speculate.`,
+          }],
+        });
+
+        const digText = digResponse.content
+          .filter((b) => b.type === "text")
+          .map((b) => (b as { type: "text"; text: string }).text)
+          .join("\n").trim();
+
+        if (isNativeNewsDig) {
+          res.json({ response: digText || `I couldn't find more details on story ${newsDigStoryNumber} right now.` });
+        } else {
+          res.setHeader("Content-Type", "text/event-stream");
+          res.setHeader("Cache-Control", "no-cache");
+          res.setHeader("Connection", "keep-alive");
+          const send = (d: Record<string, unknown>) => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(d)}\n\n`); };
+          (digText || `I couldn't find more details on story ${newsDigStoryNumber} right now.`).split(" ").forEach((word, i) => {
+            setTimeout(() => send({ text: (i === 0 ? "" : " ") + word }), i * 30);
+          });
+          setTimeout(() => { send({ done: true }); res.end(); }, (digText.split(" ").length + 1) * 30);
+        }
+      } catch (err) {
+        req.log.warn({ err }, "[NewsDig] Web search failed");
+        const errMsg = `I ran into a problem pulling more details on that story — try asking me again in a moment.`;
+        if (isNativeNewsDig) { res.json({ response: errMsg }); } else { res.json({ error: errMsg }); }
+      }
+      return;
+    }
   }
 
   if (isSportsRequest) {

@@ -1,0 +1,22 @@
+Please make the following two significant changes to the morning briefing:
+CHANGE 1 — Restructure news into Top 10 format
+Replace the current news section with a clean Top 10 format:
+
+Pull 10 news stories total, split as: 4 global/world news, 3 national news, 3 local news for the user's city
+Each story is ONE sentence maximum — headline style, not a paragraph
+Stories must match the user's interests stored in their profile (newsTopics, sportsTeams, interests)
+Sports stories must be specifically about the user's saved teams — never generic sports coverage
+No story should repeat within 7 days — use the existing story dedup system
+No story should appear more than once in a single briefing
+After delivering the top 10, James Bond says: 'Anything from this morning you'd like to dig into?'
+The user can say 'tell me more about number 3' and James Bond fetches full details
+The user can adjust the ratio via briefing preferences — 'give me more local news' or 'less global news'
+Source: Google News RSS filtered by user's city for local, and by user's interest topics for global/national
+
+CHANGE 2 — Replace current final thought with a personalized hybrid approach
+Step 1 — Fetch a daily quote from ZenQuotes API (https://zenquotes.io/api/today) — free, no API key needed, returns one high quality quote per day from philosophers, scientists, leaders throughout history.
+Step 2 — Pass the quote to Claude along with the user's calendar for today, their key people (name, relationship), and their interests.
+Step 3 — Claude delivers the quote naturally with a genuine personal connection to the user's real life. Example: 'Here's something worth carrying through your Wednesday: [quote] — [author]. You've got pickleball this morning and lunch with a friend — sounds like a pretty good start.'
+Step 4 — On days where there's something genuinely personal worth noting (upcoming birthday within 14 days, a calendar event worth acknowledging, something mentioned recently in journal), skip the external quote entirely and just deliver the personal observation instead. Example: 'Olivia's birthday is in 11 days — anything special you want to do for her this year?'
+Step 5 — Never filter by specific interests when choosing the quote — ZenQuotes wisdom categories are universal. Only exclude quote categories that the user has explicitly disabled in their briefing preferences.
+Please deploy when both changes are complete
