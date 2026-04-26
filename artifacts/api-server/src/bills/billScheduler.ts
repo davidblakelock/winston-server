@@ -89,7 +89,7 @@ async function checkBillReminders(): Promise<void> {
         title: `💳 Bill Reminder — ${companion}`,
         body: message,
         tag: `bill-${bill.id}`,
-        url: "/",
+        notificationType: "bill-reminder",
         requireInteraction: true,
       }, userName).catch(() => {});
 

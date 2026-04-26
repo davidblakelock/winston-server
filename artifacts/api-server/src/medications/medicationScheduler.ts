@@ -69,6 +69,7 @@ export function startMedicationScheduler(): void {
                 title: `💊 Medication Reminder — ${companion}`,
                 body: `Don't forget your ${medText} this morning. Take with food if you can.`,
                 tag: "medication-morning",
+                notificationType: "medication",
                 requireInteraction: true,
               }, userName).catch(() => {});
               logger.info({ time: rt, userName }, "Medication initial reminder fired");
@@ -97,7 +98,7 @@ export function startMedicationScheduler(): void {
               title: `💊 Gentle Nudge — ${companion}`,
               body: `Have you taken your ${medText} yet? Tap to confirm.`,
               tag: "medication-followup",
-              url: "/",
+              notificationType: "medication",
               requireInteraction: false,
             }, userName).catch(() => {});
             logger.info({ time: followUpTime, userName }, "Medication follow-up reminder fired");

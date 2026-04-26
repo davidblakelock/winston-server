@@ -116,6 +116,7 @@ async function checkDateReminders(): Promise<void> {
         title: `${d.eventType === "birthday" ? "🎂" : "💍"} Important Date — ${companion}`,
         body: message,
         tag: `date-${d.id}-${daysUntil}`,
+        notificationType: "date-reminder",
         requireInteraction: daysUntil <= 3,
       }, userName).catch(() => {});
 
