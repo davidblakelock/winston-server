@@ -542,7 +542,7 @@ function buildBriefingInstruction(city: string, savedVenues: string[]): string {
 
   SECTION 2 — WEATHER TODAY: Deliver a natural, conversational weather summary using the [VERIFIED — Google Weather API — ${city}] block. Include: current temperature and feels-like, today's high and low, conditions, rain chance, humidity, wind speed, and UV index. Keep it to 2–3 sentences — warm and informative, like a friend who checked the forecast. If UV is high (8+), mention it. If there is an Air Quality & Pollen block, weave pollen and AQI into the same breath — one concise sentence. Only skip this section if the [VERIFIED — Google Weather API — ${city}] block is missing entirely.
 
-  SECTION 3 — FORECAST: Deliver a brief overview of the coming days using the Forecast data in the [VERIFIED — Google Weather API — ${city}] block. Mention any days with notable changes — rain, big temperature swings, heat. Keep it to 2 sentences max. Then, for every [VERIFIED — Google Weather API — <city> (for <name>)] block present, always mention that person's weather — one natural sentence per person, every single time, regardless of conditions. Example: "Over in Knoxville, Olivia's looking at a mild 68 with some cloud cover." These are family members — David always wants to know how their weather looks. Never skip a family member city. Skip this section only if no forecast data is available at all.
+  SECTION 3 — FORECAST: Deliver a brief overview of the coming days using the Forecast data in the [VERIFIED — Google Weather API — ${city}] block. Mention any days with notable changes — rain, big temperature swings, heat. Keep it to 2 sentences max. Then: CRITICAL — for every [VERIFIED — Google Weather API — <city> (for <name>)] block present, you MUST always mention that person's weather — one natural sentence per person, every single time, no exceptions, regardless of conditions. Example: "Over in Knoxville, Olivia's looking at a mild 68 with some cloud cover." These are David's family — he ALWAYS wants to know their weather. If there is a block for Knoxville (for Olivia), you MUST mention Olivia's weather every single briefing. NEVER skip a family member city. Skip this entire section only if absolutely no forecast data is available at all.
 
   SECTION 4 — POLLEN / AIR QUALITY: SKIP THIS SECTION — pollen and AQI are already covered in Section 2.
 
@@ -551,7 +551,10 @@ function buildBriefingInstruction(city: string, savedVenues: string[]): string {
     • If the block says "Inbox is clear": one short, warm sentence — "Your inbox is clear this morning." Don't dwell on it, don't embellish.
     • If the block lists unread emails: summarise only the ones that matter — something requiring action, from someone important, or genuinely worth knowing. Skip confirmation emails, shipping notifications, promotional mail, and automated messages David doesn't need to act on. Never count the total number of unread messages. If all unread mail is noise with nothing worth surfacing, say "Nothing urgent in your inbox." in one sentence.
 
-  SECTION 6 — CALENDAR: Today's upcoming events only — nothing in the past, nothing more than 7 days out. Include departure time for any appointment with a location. If the day is clear, say so warmly in one sentence. Do NOT mention bills here — bills have their own section.
+  SECTION 6 — CALENDAR: Three possible states:
+    • If the [VERIFIED — Google Calendar API — status: NOT CONNECTED] block is present: say exactly — "I can't pull your calendar right now — Google may need to be reconnected in the app settings." One sentence only. Do NOT say the calendar is clear. Do NOT say you have nothing scheduled. NEVER fabricate calendar status.
+    • If the calendar block lists events: deliver today's upcoming events only — nothing in the past, nothing more than 7 days out. Include departure time for any appointment with a location. Do NOT mention bills here — bills have their own section.
+    • If the calendar block lists no events (genuinely clear): say so warmly in one sentence.
     WEATHER EXCEPTION — the only place weather is ever permitted: if today's calendar includes a specific outdoor physical activity (a run, a walk, a pickleball game) AND the weather signals block flags severe/dangerous conditions (thunderstorms, extreme heat, heavy rain) OR explicitly PERFECT conditions — weave ONE brief phrase naturally into the sentence for that event. Example: "You've got pickleball at 8 — perfect morning for it." or "Your run is at 7, but rain is likely." This is the ONLY weather reference permitted anywhere in the entire briefing. Do NOT use this exception if no outdoor activity is on today's calendar, or if conditions are ordinary. Do NOT mention temperature numbers, degrees, highs, lows, or any other weather specifics here — only the plain-language signal word (perfect / stormy / rain likely).
 
   SECTION 7 — BILLS DUE SOON: ONLY if a bill appears in the [VERIFIED — Bills Database — Due in Next 3 Days] block. Name the bill and amount. If that block is empty or absent, SKIP THIS SECTION ENTIRELY — do not mention bills at all, do not say nothing is due.
@@ -560,7 +563,7 @@ function buildBriefingInstruction(city: string, savedVenues: string[]): string {
 
   SECTION 8 — NEWS: A Top 10 news sweep using the [VERIFIED — Web Search News — ...] block. Stories 1-4 are global/world, 5-7 are national/US, 8-10 are local ${city}. They are pre-numbered 1–10 in the data block.
 
-    DELIVERY: Read each story as one fluid sentence — "Number one: [bold title] — [sentence]." Keep moving. Pause naturally between stories. Do NOT merge stories. Do NOT skip any. Do NOT reorder.
+    DELIVERY: Read each story as one fluid sentence — "1. [title] — [sentence]." Use the number, not "Number one" or "Number two." Keep moving. Pause naturally between stories. Do NOT merge stories. Do NOT skip any. Do NOT reorder.
 
     After all 10: say exactly — "Anything from this morning you'd like to dig into?" — every day, no exceptions.
 
@@ -568,7 +571,7 @@ function buildBriefingInstruction(city: string, savedVenues: string[]): string {
 
     From [Watercooler Story] (if present): Introduce warmly — "and here's one to share later —" then the story in two sentences max.
 
-    SPORTS RULE: Any sports story in this section must be about the Texas Rangers, Cowboys, Stars, or Mavericks — never the Lakers, NBA playoffs, FIFA, soccer, or MLS. NEVER repeat a topic from Section 10 (Sports) — that section already covers game results.
+    SPORTS RULE: Any sports story in this section must be about the Texas Rangers, Cowboys, Stars, or Mavericks — never the Lakers, NBA playoffs, FIFA, soccer, MLS, or World Cup. NEVER mention the FIFA World Cup, soccer trophies, or international soccer in any section. NEVER repeat a topic from Section 10 (Sports) — that section already covers game results.
 
     RATIO PREFERENCES: If the user has said "give me more local news" or "fewer global stories," honor that emphasis when delivering.
 
@@ -599,6 +602,8 @@ function buildBriefingInstruction(city: string, savedVenues: string[]): string {
   SECTION 15 — CLOSING: One warm sentence, direct and specific to David's day. Weave in his partner if natural. Do NOT end with a question. Do NOT say "Anything else before you head into your day?" One sentence only.
 
   SECTION 17 — MOOD CHECK-IN: Always included, every morning, immediately after the closing. Ask exactly: "How are you feeling about the day ahead?" Nothing more — no elaboration, no examples. Just this one question on its own line.
+
+  WEATHER ACCURACY RULE — NO EXCEPTIONS: State weather numbers ONLY as they appear in the [VERIFIED — Google Weather API] block. NEVER round up a precipitation chance, NEVER state a percentage that is not in the verified block, NEVER add words like "severe," "dangerous," or "heavy rain" unless the condition field itself says so. If the block says 20% precip, say 20% — not "likely rain" or "good chance of rain." The verified block is ground truth.
 
   FORBIDDEN PHRASES AND CONTENT — never use:
   "Here is your morning briefing" or "Good morning, David, here is what you need to know"
@@ -939,7 +944,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       if (morningWorkoutDone) block += `• MORNING WORKOUT ALREADY DONE — do NOT suggest exercise, a walk, or outdoor activity in the closing. Reference what is ahead instead.\n`;
       block += `• Journal entries this week: ${journalCountWeek}\n`;
       if (recentJournalSnippet) block += `• Recent journal themes: "${recentJournalSnippet}"\n`;
-      block += `• Total family archive stories captured: ${totalStories}\n`;
+      block += `• Total family archive stories captured (all-time total — do NOT say David added stories, do NOT say they are new, just reference this as the running total if relevant): ${totalStories}\n`;
 
       if (dailyMotivation) {
         // dailyMotivation is either a [Personal Override — Morning Note] block,

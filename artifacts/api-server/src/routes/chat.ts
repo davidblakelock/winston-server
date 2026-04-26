@@ -1025,6 +1025,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         `\n\n[VERIFIED — Google Calendar API — upcoming events from now through next 7 days (past events excluded)]\n` +
         `${formatCalendarForPrompt(liveEvents, "this week")}${departureTimes}\n\n` +
         `⚠ CALENDAR RULE — NO EXCEPTIONS: Use ONLY the exact event title shown above. NEVER substitute, infer, or enrich event titles with names or context from memory. Report every event title letter-for-letter as written. If you want to add context, frame it as a question (INFERRED tier), never a statement.`;
+    } else {
+      // Google Calendar auth failed — tell Claude explicitly so it does NOT say "calendar is clear"
+      liveCalendarBlock = `\n\n[VERIFIED — Google Calendar API — status: NOT CONNECTED]\nGoogle Calendar is not available — the token has expired or Google needs to be reconnected. CRITICAL RULE: Do NOT say David's calendar is clear or that he has nothing scheduled. Instead say exactly: "I can't pull your calendar right now — Google may need to be reconnected in the app settings." One sentence only.`;
     }
 
     // Update email last-checked timestamp so on-demand checks show only new mail
