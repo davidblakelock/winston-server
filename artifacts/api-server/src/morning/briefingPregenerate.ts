@@ -349,6 +349,7 @@ function buildContextualWeatherBlock(dallas: CachedWeather, secondary: Secondary
 
   return (
     `\n\n[VERIFIED — Google Weather API — ${dallas.city}]\n` +
+    `⚠ WEATHER ACCURACY RULE — NO EXCEPTIONS: State ONLY the exact numbers below. Do not round, embellish, or add any weather detail not explicitly in this block. If the block says 20% rain, say 20% — not "possible showers" or "chance of rain." If it says "partly cloudy," say exactly "partly cloudy." Any weather detail you state that is not in this block is fabricated and unacceptable.\n` +
     `Now: ${dallas.temp}°F (feels like ${dallas.feelsLike}°F), ${dallas.condition}\n` +
     `Today: high ${dallas.high}°F / low ${dallas.low}°F | Rain chance: ${dallas.precipChance}% | Humidity: ${dallas.humidity}% | Wind: ${dallas.windSpeed} mph\n` +
     `${uvLine}\n` +
@@ -551,10 +552,10 @@ function buildBriefingInstruction(city: string, savedVenues: string[]): string {
     • If the block says "Inbox is clear": one short, warm sentence — "Your inbox is clear this morning." Don't dwell on it, don't embellish.
     • If the block lists unread emails: summarise only the ones that matter — something requiring action, from someone important, or genuinely worth knowing. Skip confirmation emails, shipping notifications, promotional mail, and automated messages David doesn't need to act on. Never count the total number of unread messages. If all unread mail is noise with nothing worth surfacing, say "Nothing urgent in your inbox." in one sentence.
 
-  SECTION 6 — CALENDAR: Three possible states:
-    • If the [VERIFIED — Google Calendar API — status: NOT CONNECTED] block is present: say exactly — "I can't pull your calendar right now — Google may need to be reconnected in the app settings." One sentence only. Do NOT say the calendar is clear. Do NOT say you have nothing scheduled. NEVER fabricate calendar status.
-    • If the calendar block lists events: deliver today's upcoming events only — nothing in the past, nothing more than 7 days out. Include departure time for any appointment with a location. Do NOT mention bills here — bills have their own section.
-    • If the calendar block lists no events (genuinely clear): say so warmly in one sentence.
+  SECTION 6 — CALENDAR: Three possible states — read the [VERIFIED — Google Calendar API] block carefully to determine which state applies:
+    • STATE A — NOT CONNECTED: If the block contains "status: NOT CONNECTED" — say EXACTLY this one sentence and nothing else: "I can't pull your calendar right now — Google may need to be reconnected in the app settings." CRITICAL: Do NOT add "looks like a clear day", "you seem free", "nothing scheduled", or ANY qualifier about calendar status. The calendar is disconnected — you have NO information about it.
+    • STATE B — EVENTS PRESENT: If the block lists events — deliver today's upcoming events only (nothing in the past, nothing more than 7 days out). Include departure time for any appointment with a location. Do NOT mention bills here.
+    • STATE C — GENUINELY CLEAR (no events, calendar IS connected): If the block is present but lists no events — say warmly in one sentence that the day looks clear on the calendar.
     WEATHER EXCEPTION — the only place weather is ever permitted: if today's calendar includes a specific outdoor physical activity (a run, a walk, a pickleball game) AND the weather signals block flags severe/dangerous conditions (thunderstorms, extreme heat, heavy rain) OR explicitly PERFECT conditions — weave ONE brief phrase naturally into the sentence for that event. Example: "You've got pickleball at 8 — perfect morning for it." or "Your run is at 7, but rain is likely." This is the ONLY weather reference permitted anywhere in the entire briefing. Do NOT use this exception if no outdoor activity is on today's calendar, or if conditions are ordinary. Do NOT mention temperature numbers, degrees, highs, lows, or any other weather specifics here — only the plain-language signal word (perfect / stormy / rain likely).
 
   SECTION 7 — BILLS DUE SOON: ONLY if a bill appears in the [VERIFIED — Bills Database — Due in Next 3 Days] block. Name the bill and amount. If that block is empty or absent, SKIP THIS SECTION ENTIRELY — do not mention bills at all, do not say nothing is due.
@@ -578,8 +579,8 @@ function buildBriefingInstruction(city: string, savedVenues: string[]): string {
   SECTION 10 — SPORTS: Sports results from the last 24 hours only (teams from the user's profile). If no games were played, SKIP THIS SECTION ENTIRELY — do not say no games were played.
 
   SECTION 11 — LOCAL ${cityUpper}: ALWAYS INCLUDE THIS SECTION — it is never skipped. The [What's Happening in ${city}] block is always present below.
-    • If the block contains real items: deliver 1-2 items conversationally, one sentence each. Prioritize restaurant openings, music events at David's venues, and neighborhood news.
-    • If the block says "No new local events found": say exactly this and nothing more — "Nothing new on the ${city} events front this morning." Do not apologize, do not elaborate.
+    • If the block contains real items: deliver 1-2 items conversationally, one sentence each. Prioritize restaurant openings, music events at David's venues, and neighborhood news. These items may be restaurants, local news, or events — all are valid. Do NOT preface with "no new events" and then list items — if items exist, just deliver them.
+    • If the block says "No new local events found" or contains the NO HALLUCINATION RULE: say ONLY this one sentence — "Nothing new on the ${city} front this morning." Do NOT add anything else. Do NOT list items from your training data. Do NOT say "however" followed by a list. Zero verified items = zero items delivered.
 
   SECTION 12 — MUSIC EVENTS: Upcoming concerts at David's saved venues that match his taste — ${venueList}. Use the venue concerts block. If nothing upcoming or nothing found, skip this section entirely.
 
@@ -926,7 +927,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     // inject a fallback marker so Claude delivers the "no events" line rather than silently skipping.
     const dallasEventsBlock = dedupedDallasBlock.trim().length > 0
       ? dedupedDallasBlock
-      : `\n\n[What's Happening in ${primaryCity}]\nNo new local events found for today. In Section 11, say exactly: "Nothing new on the ${primaryCity} events front this morning." Do not skip this section silently.`;
+      : `\n\n[What's Happening in ${primaryCity}]\nNo new local events found for today.\nCRITICAL — NO HALLUCINATION RULE: There are ZERO verified local items to report. Say exactly one sentence: "Nothing new on the ${primaryCity} front this morning." Then move on immediately. Do NOT list any restaurants, events, news stories, or local content — your training data about ${primaryCity} is NOT verified and must never be used here. Do NOT say "however" or "but" and then list anything. Zero items means zero items.`;
 
     // morningWorkoutDone is always false at pre-generation time (5 AM) — no workout
     // has completed yet. This is computed from live calendar at delivery time if needed.

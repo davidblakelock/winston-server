@@ -95,10 +95,10 @@ export function buildSundaySummaryBlock(data: SundayData): string {
 
   if (data.storiesCount > 0) {
     parts.push(
-      `${data.storiesCount} stor${data.storiesCount === 1 ? "y" : "ies"} captured for Olivia`
+      `${data.storiesCount} stor${data.storiesCount === 1 ? "y" : "ies"} in the family archive this week`
     );
   } else {
-    parts.push("no stories captured for Olivia this week");
+    parts.push("no new stories in the family archive this week");
   }
 
   if (data.newPlaces.length > 0) {
@@ -132,7 +132,9 @@ export function buildSundaySummaryBlock(data: SundayData): string {
     `\n\n[Weekly Sunday Summary Data]\n${checklist}\n\n` +
     `Today is Sunday — open the briefing with a warm, celebratory weekly recap. ` +
     `Mention highlights from the week: any calendar events he had, how his mood trended, ` +
-    `stories captured for Olivia, new places explored. End with something to look forward to in the week ahead. ` +
+    `any new places explored, and how the family archive is growing. End with something to look forward to in the week ahead. ` +
+    `CRITICAL — STORY RULE: If the data says "X stories in the family archive this week", say ONLY something like "Your family archive is up to X stories." ` +
+    `Do NOT say David "added" or "captured" stories. Do NOT say the stories are for or from any specific person. Do NOT imply David actively did anything — the archive grows on its own. ` +
     `Tone: warm and personal, like a trusted friend reflecting on a good week together. ` +
     `Do NOT be clinical or list-like — weave it into conversation. Keep the whole Sunday summary to 4-5 sentences. ` +
     `Then deliver the weekly story question.`
