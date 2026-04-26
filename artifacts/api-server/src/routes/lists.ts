@@ -25,20 +25,23 @@ router.get("/lists", async (req: Request, res: Response) => {
     const listCounts: Record<string, number> = {};
     for (const r of listRows) listCounts[r.list_name] = parseInt(r.item_count, 10);
 
-    // TV Shows — union of watched_shows (with network/status) + profile_items category='shows'
-    const { rows: tvRows } = await query<{ cnt: string }>(
-      `SELECT (
-         SELECT COUNT(*) FROM watched_shows WHERE user_name = ANY($1)
-       ) + (
-         SELECT COUNT(*) FROM profile_items
-         WHERE user_name = $2 AND category = 'shows'
-           AND lower(name) NOT IN (
-             SELECT lower(show_name) FROM watched_shows WHERE user_name = ANY($1)
-           )
-       ) AS cnt`,
-      [[userName, "David"], userName]
+    // TV Shows — watched_shows is the single source of truth.
+    // Fall back to profile_items shows only if watched_shows is completely empty.
+    const { rows: wsCountRows } = await query<{ cnt: string }>(
+      `SELECT COUNT(*) AS cnt FROM watched_shows WHERE user_name = ANY($1)`,
+      [[userName, "David"]]
     );
-    const tvCount = parseInt(tvRows[0]?.cnt ?? "0", 10);
+    const wsCount = parseInt(wsCountRows[0]?.cnt ?? "0", 10);
+    let tvCount: number;
+    if (wsCount > 0) {
+      tvCount = wsCount;
+    } else {
+      const { rows: piCountRows } = await query<{ cnt: string }>(
+        `SELECT COUNT(*) AS cnt FROM profile_items WHERE user_name = $1 AND category = 'shows'`,
+        [userName]
+      );
+      tvCount = parseInt(piCountRows[0]?.cnt ?? "0", 10);
+    }
 
     // Restaurants — from profile_items
     const { rows: restRows } = await query<{ cnt: string }>(
@@ -82,26 +85,28 @@ router.get("/lists/tv-shows", async (req: Request, res: Response) => {
   // Disable client-side caching so stale empty responses don't mask fresh data
   res.setHeader("Cache-Control", "no-store");
   try {
-    // Primary: watched_shows (has network/status metadata)
-    // Fallback: profile_items category='shows' (shows added via the profile system)
-    // Shows in both tables are deduped by lowercase name — watched_shows wins (richer data)
-    const { rows } = await query<{ id: number; show_name: string; network: string | null; status: string | null }>(
+    // watched_shows is the single source of truth.
+    // Only fall back to profile_items if watched_shows has zero rows for this user —
+    // this prevents duplicates when the same show exists in both tables with slightly
+    // different names (e.g. "Lincoln Lawyer" vs "The Lincoln Lawyer").
+    const { rows: wsRows } = await query<{ id: number; show_name: string; network: string | null; status: string | null }>(
       `SELECT id, show_name, network, status
        FROM watched_shows
        WHERE user_name = ANY($1)
-
-       UNION ALL
-
-       SELECT id, name AS show_name, NULL AS network, NULL AS status
-       FROM profile_items
-       WHERE user_name = $2 AND category = 'shows'
-         AND lower(name) NOT IN (
-           SELECT lower(show_name) FROM watched_shows WHERE user_name = ANY($1)
-         )
-
        ORDER BY show_name ASC`,
-      [[userName, "David"], userName]
+      [[userName, "David"]]
     );
+    let rows = wsRows;
+    if (rows.length === 0) {
+      const { rows: piRows } = await query<{ id: number; show_name: string; network: string | null; status: string | null }>(
+        `SELECT id, name AS show_name, NULL AS network, NULL AS status
+         FROM profile_items
+         WHERE user_name = $1 AND category = 'shows'
+         ORDER BY name ASC`,
+        [userName]
+      );
+      rows = piRows;
+    }
     req.log.info({ count: rows.length, userName }, "[TV Shows] Fetched watched shows");
     res.json({
       items: rows.map((r) => ({
