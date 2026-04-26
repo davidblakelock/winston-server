@@ -269,4 +269,32 @@ app.listen(port, async (err) => {
   } catch (e) {
     logger.warn({ e }, "Startup migration warning: watched_shows user_name");
   }
+
+  // Remove duplicate watched_shows rows — keep only the oldest (lowest id) per user+show.
+  // Duplicates accumulate when the same show is mentioned in chat more than once.
+  try {
+    const { rows: dupRows } = await query<{ cnt: string }>(
+      `SELECT COUNT(*) AS cnt FROM watched_shows w
+       WHERE w.id NOT IN (
+         SELECT DISTINCT ON (user_name, lower(show_name)) id
+         FROM watched_shows
+         ORDER BY user_name, lower(show_name), id ASC
+       )`
+    );
+    const dupCount = parseInt(dupRows[0]?.cnt ?? "0", 10);
+    if (dupCount > 0) {
+      await query(
+        `DELETE FROM watched_shows WHERE id NOT IN (
+           SELECT DISTINCT ON (user_name, lower(show_name)) id
+           FROM watched_shows
+           ORDER BY user_name, lower(show_name), id ASC
+         )`
+      );
+      logger.info({ removed: dupCount }, "Startup migration: removed duplicate watched_shows rows");
+    } else {
+      logger.info("Startup migration: watched_shows has no duplicate rows");
+    }
+  } catch (e) {
+    logger.warn({ e }, "Startup migration warning: watched_shows dedup");
+  }
 });

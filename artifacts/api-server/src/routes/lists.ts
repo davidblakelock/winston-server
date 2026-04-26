@@ -26,9 +26,15 @@ router.get("/lists", async (req: Request, res: Response) => {
     for (const r of listRows) listCounts[r.list_name] = parseInt(r.item_count, 10);
 
     // TV Shows — watched_shows is the single source of truth.
+    // Use DISTINCT ON lower(show_name) so duplicate rows in watched_shows don't inflate the count.
     // Fall back to profile_items shows only if watched_shows is completely empty.
     const { rows: wsCountRows } = await query<{ cnt: string }>(
-      `SELECT COUNT(*) AS cnt FROM watched_shows WHERE user_name = ANY($1)`,
+      `SELECT COUNT(*) AS cnt FROM (
+         SELECT DISTINCT ON (lower(show_name)) id
+         FROM watched_shows
+         WHERE user_name = ANY($1)
+         ORDER BY lower(show_name), id ASC
+       ) sub`,
       [[userName, "David"]]
     );
     const wsCount = parseInt(wsCountRows[0]?.cnt ?? "0", 10);
@@ -86,14 +92,14 @@ router.get("/lists/tv-shows", async (req: Request, res: Response) => {
   res.setHeader("Cache-Control", "no-store");
   try {
     // watched_shows is the single source of truth.
-    // Only fall back to profile_items if watched_shows has zero rows for this user —
-    // this prevents duplicates when the same show exists in both tables with slightly
-    // different names (e.g. "Lincoln Lawyer" vs "The Lincoln Lawyer").
+    // DISTINCT ON lower(show_name) deduplicates rows where the same show was inserted
+    // multiple times (e.g. mentioned in chat more than once). The lowest id wins.
+    // Fall back to profile_items only if watched_shows has zero distinct rows.
     const { rows: wsRows } = await query<{ id: number; show_name: string; network: string | null; status: string | null }>(
-      `SELECT id, show_name, network, status
+      `SELECT DISTINCT ON (lower(show_name)) id, show_name, network, status
        FROM watched_shows
        WHERE user_name = ANY($1)
-       ORDER BY show_name ASC`,
+       ORDER BY lower(show_name), id ASC`,
       [[userName, "David"]]
     );
     let rows = wsRows;
