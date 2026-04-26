@@ -194,19 +194,30 @@ LISTENER PROFILE:
 
 STRUCTURE — Deliver EXACTLY 10 stories in this order:
 
-STORIES 1–4: GLOBAL / WORLD NEWS
-Four major international stories (non-US). Geopolitics, conflict, diplomacy, major events outside the United States. Each from a DIFFERENT region or country. No two stories about the same country or conflict.
+STORIES 1–2: GLOBAL / WORLD NEWS (2 stories only)
+Two significant international stories that directly affect the United States or are of genuinely major world importance.
+STRICT GLOBAL EXCLUSIONS — skip any story about:
+• FIFA, World Cup, soccer/football trophies, international soccer competitions
+• Colombia, Mali, Sudan, or other countries with no direct US relevance today
+• Regional conflicts with no US involvement or global significance
+• Sports leagues that are not the listener's followed teams
+Choose only stories with direct US relevance (trade, diplomacy, military, economy) or genuinely historic global significance.
 
-STORIES 5–7: NATIONAL (US) NEWS
-Three domestic US stories. Mix from these categories — each story from a DIFFERENT category:
-• US Politics / White House / Congress / legislation
-• US Economy / business / corporate / trade / labor
+STORIES 3–7: NATIONAL (US) NEWS (5 stories)
+Five domestic US stories. Mix from these categories — each story from a DIFFERENT category:
+• US Politics / White House / Congress / legislation / Supreme Court
+• US Economy / business / corporate / trade / labor / market news
 • Technology: AI, software, major tech company (Apple, Google, Microsoft, OpenAI, Meta, Amazon)
+• Health / science / environment (US-focused)
 • PERSONALIZED SPORTS (mandatory if news exists): ${teamsLine}
   Sports must be about one of the listener's teams ONLY. NEVER cover: ${sportsExclude || "unrelated leagues"}.
 
 STORIES 8–10: LOCAL NEWS — ${city.toUpperCase()}, ${state.toUpperCase()}
-Three stories specifically about ${city} or the DFW area — local government, business, development, infrastructure, culture, community events. Must be genuinely local to ${city}. If initial search is thin, search explicitly: "${city} news today", "${city} breaking news", "${city} ${state} news ${todayStr}". Always find three.
+Three stories specifically about ${city} or the DFW area — local government, business, development, infrastructure, culture, community events. Must be genuinely local to ${city}.
+LOCAL EXCLUSIONS — skip any story about:
+• Weather alerts, tornado warnings, or severe weather notices — weather is covered separately. Do NOT include any severe weather warnings, watches, or past weather events in local news.
+• Events that happened more than 24 hours ago
+If initial search is thin, search explicitly: "${city} news today", "${city} breaking news", "${city} ${state} news ${todayStr}". Always find three.
 
 FORMATTING — MANDATORY:
 • Number every story 1 through 10
@@ -221,10 +232,12 @@ OUTPUT FORMAT (follow exactly):
 
 ... (continue through 10)
 
-RULES:
+GLOBAL RULES:
 • All stories from ${todayStr} or ${yesterdayStr} only — max 48 hours old
 • No two stories about the same person, company, or topic
 • Sports stories only about the listener's followed teams: ${sportsTeams.join(", ") || "as specified"}
+• NEVER include FIFA, World Cup, soccer trophies, or international soccer in any section
+• NEVER include weather alerts, tornado warnings, or severe weather notices — weather has its own section
 • Only report real, verified stories — never fabricate`;
 
   console.log(`[API] Claude web_search (news headlines) — starting at ${new Date().toISOString()}`);
@@ -351,7 +364,7 @@ function formatNewsBlock(rawText: string, fetchedAt: Date): string {
   if (mainText) {
     sections.push(
       `[Top 10 Stories — numbered, bold title + one sentence each]\n` +
-      `(Stories 1-4 are global/world, 5-7 are national/US, 8-10 are local ${fetchedAt.toLocaleDateString("en-US", { timeZone: "America/Chicago", month: "long", day: "numeric" })})\n\n` +
+      `(Stories 1-2 are global/world with US relevance, 3-7 are national/US, 8-10 are local ${fetchedAt.toLocaleDateString("en-US", { timeZone: "America/Chicago", month: "long", day: "numeric" })})\n\n` +
       mainText
     );
   }

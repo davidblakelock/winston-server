@@ -297,8 +297,11 @@ function formatConcertsForBriefing(
     `\n\n[${city} Music Events — Favorite Venues (next 30 days)]\n` +
     lines.join("\n") +
     `\n\nFavorite venues: ${venues.map((v) => v.name).join(", ")}.\n` +
-    `Present relevant music events naturally to ${userName} — mention specific artists and dates. ` +
-    `Lead with anything within the next 7 days. If nothing matches their interests closely, skip this section.`
+    `RULES FOR PRESENTING THIS SECTION:\n` +
+    `• Only mention events that match David's music taste (classic rock, jazz, Jimmy Buffett, Rolling Stones, Jackson Browne). Skip indie rock, rap, hip-hop, EDM, or genres he doesn't follow.\n` +
+    `• NEVER mention generic promotional events or season passes (e.g. "Live Nation Summer of Live", "concert series announcements", "season ticket packages"). Only mention specific performers at specific venues with specific dates.\n` +
+    `• If an event matches his taste: 1 sentence, name the artist, venue, and date. Lead with anything within 7 days.\n` +
+    `• If nothing here matches his taste closely: skip this section entirely. Do not force a mention.`
   );
 }
 

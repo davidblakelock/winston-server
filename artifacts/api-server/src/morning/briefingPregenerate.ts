@@ -267,74 +267,10 @@ interface SecondaryWeatherEntry {
   weather: CachedWeather;
 }
 
-function buildContextualWeatherBlock(dallas: CachedWeather, secondary: SecondaryWeatherEntry[], now: Date): string {
-  const tz = "America/Chicago";
-  const dayName = now.toLocaleDateString("en-US", { timeZone: tz, weekday: "long" });
-  const pickleballDays = ["Monday", "Wednesday", "Friday", "Saturday"];
-  const isPickleballDay = pickleballDays.includes(dayName);
-  // Pickleball is ALWAYS indoors (Semones YMCA / Moody's YMCA) — never affected by rain, wind, or cold.
-  // Only generate outdoor activity signals for non-pickleball days (Tue/Thu/Sun).
-  const isIndoorActivity = isPickleballDay;
-  const activityLabel = "a run"; // outdoor activity label — pickleball is always indoors
-
-  // Time-aware activity suggestions — if it's past 10am CT, David's morning
-  // workout window has very likely passed. Don't suggest "go for a run" or "great for pickleball."
-  const ctHour = parseInt(now.toLocaleTimeString("en-US", { timeZone: tz, hour: "numeric", hour12: false }), 10);
-  const morningActivityPassed = ctHour >= 10;
+function buildContextualWeatherBlock(dallas: CachedWeather, secondary: SecondaryWeatherEntry[], _now: Date): string {
   const uvMax = dallas.uvIndexMax;
   const uvLabel = uvMax <= 2 ? "low" : uvMax <= 5 ? "moderate" : uvMax <= 7 ? "high" : uvMax <= 10 ? "very high" : "extreme";
-  const isStormy = /thunderstorm/.test(dallas.condition);
-  const isRainy = /rain|drizzle|shower/.test(dallas.condition);
-  const isSnowy = /snow|flurr|ice/.test(dallas.condition);
-  const isFoggy = /fog/.test(dallas.condition);
-  const likelyRain = dallas.precipChance >= 60;
-  const possibleRain = dallas.precipChance >= 35 && dallas.precipChance < 60;
-  const isVeryHot = dallas.high >= 98;
-  const isHot = dallas.high >= 93;
-  const isWarm = dallas.high >= 85;
-  const isCold = dallas.temp <= 40;
-  const isCool = dallas.temp <= 55;
-  const isHighWind = dallas.windSpeed >= 20;
-  const isPerfect = !isRainy && !likelyRain && !isStormy && dallas.temp >= 62 && dallas.high <= 87 && uvMax <= 7;
-  const signals: string[] = [];
-  // Severe weather always surfaces regardless of time
-  if (isStormy) signals.push(`SEVERE WEATHER — THUNDERSTORMS: mention this clearly`);
-  else if (isSnowy) signals.push(`${dallas.condition} — unusual for ${dallas.city}, affects roads`);
-
-  // Outdoor activity signals — only for non-pickleball days (pickleball is always indoors)
-  if (!morningActivityPassed && !isIndoorActivity) {
-    if (isRainy && likelyRain) signals.push(`Rain likely (${dallas.precipChance}%) — treadmill or indoor activity`);
-    else if (likelyRain) signals.push(`${dallas.precipChance}% rain chance — outdoor timing may be tricky`);
-    else if (possibleRain) signals.push(`${dallas.precipChance}% rain chance — watch timing for ${activityLabel}`);
-    if (isFoggy) signals.push(`Morning fog — affects running and early driving`);
-    if (isVeryHot) signals.push(`Extreme heat (high ${dallas.high}°F) — dangerous outdoors, go very early`);
-    else if (isHot) signals.push(`Hot day (high ${dallas.high}°F) — extra hydration for ${activityLabel}`);
-    else if (isWarm) signals.push(`Warm day (high ${dallas.high}°F) — hydrate for ${activityLabel}`);
-    if (isCold) signals.push(`Cold morning (${dallas.temp}°F feels ${dallas.feelsLike}°F) — dress in layers`);
-    else if (isCool) signals.push(`Cool morning (${dallas.temp}°F) — light jacket to start`);
-    if (isHighWind) signals.push(`Winds at ${dallas.windSpeed} mph — gusty for outdoor activity`);
-    if (isPerfect) signals.push(`PERFECT conditions for ${activityLabel}`);
-  } else if (!morningActivityPassed && isIndoorActivity) {
-    // Pickleball day — indoor courts, so only flag extreme driving heat
-    if (isVeryHot) signals.push(`Extreme heat outside today (${dallas.high}°F) — heads up for any outdoor errands`);
-    if (isFoggy) signals.push(`Morning fog — allow extra travel time`);
-  }
-
-  // UV warning is always relevant regardless of time
-  if (!isStormy && !isRainy && uvMax >= 8) signals.push(`UV peak ${uvMax} (${uvLabel}) — sunscreen essential outdoors today`);
-
-  // Forecast alerts for upcoming pickleball days — only flag extreme heat (rain is irrelevant, it's indoors)
-  const pickleballShortNames = ["Mon", "Wed", "Fri", "Sat"];
-  for (const day of dallas.forecastDays) {
-    if (pickleballShortNames.includes(day.dayName)) {
-      if (day.high >= 98) signals.push(`⚠ ${day.dayName}: extreme heat (${day.high}°F) — travel to YMCA in AC`);
-      // NOTE: rain signals intentionally omitted — pickleball is always indoors
-    }
-  }
-
-  const signalLines = signals.length > 0
-    ? `\nWeather signals:\n${signals.map((s) => `• ${s}`).join("\n")}`
-    : "";
+  // Weather signals removed — interpretive labels caused Claude to embellish beyond verified data.
 
   // 5-day forecast block (days 1–5 after today)
   const fiveDayLines = dallas.forecastDays.length > 0
@@ -354,7 +290,6 @@ function buildContextualWeatherBlock(dallas: CachedWeather, secondary: Secondary
     `Today: high ${dallas.high}°F / low ${dallas.low}°F | Rain chance: ${dallas.precipChance}% | Humidity: ${dallas.humidity}% | Wind: ${dallas.windSpeed} mph\n` +
     `${uvLine}\n` +
     (fiveDayLines ? `Forecast: ${fiveDayLines}\n` : "") +
-    (morningActivityPassed ? `[Morning activity window has passed — it is past 10am CT. Do NOT suggest David go for a run or to pickleball.]\n` : "") +
     secondary.map((s) => {
       const w = s.weather;
       const days = w.forecastDays.length > 0
@@ -365,8 +300,7 @@ function buildContextualWeatherBlock(dallas: CachedWeather, secondary: Secondary
         `Now: ${w.temp}°F (feels like ${w.feelsLike}°F), ${w.condition} — high ${w.high}°F / low ${w.low}°F | ${w.precipChance}% precip | humidity ${w.humidity}%\n` +
         (days ? `Forecast: ${days}\n` : "")
       );
-    }).join("") +
-    signalLines
+    }).join("")
   );
 }
 
@@ -562,7 +496,7 @@ function buildBriefingInstruction(city: string, savedVenues: string[]): string {
 
   SECTION 9 — HEALTH SNAPSHOT: ONLY if a [VERIFIED — Garmin Connect — Yesterday's Health Data] block is present. Weave the data naturally into 2–3 sentences — casual and warm, like a friend who noticed. Lead with sleep if it's notable. Mention workout if one happened. Include resting HR or HRV if it's interesting (unusually high or low). Examples: "You got a solid 7.5 hours last night — looks like a good one, with nearly two hours of deep sleep." or "Nice workout yesterday — 85 minutes of pickleball, that's a big one." or "Your resting heart rate was 52 — solid." Keep it brief. SKIP entirely if no Garmin block is present.
 
-  SECTION 8 — NEWS: A Top 10 news sweep using the [VERIFIED — Web Search News — ...] block. Stories 1-4 are global/world, 5-7 are national/US, 8-10 are local ${city}. They are pre-numbered 1–10 in the data block.
+  SECTION 8 — NEWS: A Top 10 news sweep using the [VERIFIED — Web Search News — ...] block. Stories 1-2 are global/world (with direct US relevance only), 3-7 are national/US, 8-10 are local ${city}. They are pre-numbered 1–10 in the data block.
 
     DELIVERY: For EVERY story, deliver the number AND the bold title AND the one-sentence detail that follows the em dash. Say all three parts — do NOT just read the title alone. Format: "1. [Title] — [the detail sentence]." Use the number, not "Number one" or "Number two." Keep moving. Pause naturally between stories. Do NOT merge stories. Do NOT skip any story. Do NOT skip the detail sentence. Do NOT reorder.
 
@@ -573,6 +507,8 @@ function buildBriefingInstruction(city: string, savedVenues: string[]): string {
     From [Watercooler Story] (if present): Introduce warmly — "and here's one to share later —" then the story in two sentences max.
 
     SPORTS RULE: Any sports story in this section must be about the Texas Rangers, Cowboys, Stars, or Mavericks — never the Lakers, NBA playoffs, FIFA, soccer, MLS, or World Cup. NEVER mention the FIFA World Cup, soccer trophies, or international soccer in any section. NEVER repeat a topic from Section 10 (Sports) — that section already covers game results.
+
+    WEATHER RULE: NEVER include weather alerts, tornado warnings, severe weather watches, or any past weather events in the news section. These are stale by briefing time. Weather has its own dedicated sections (2 and 3).
 
     RATIO PREFERENCES: If the user has said "give me more local news" or "fewer global stories," honor that emphasis when delivering.
 
@@ -844,6 +780,9 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       ...rawVenueConcerts.map((c) => `${c.artistOrEvent} ${c.venue}`), // venue concerts
     ];
 
+    // Remove totalStories from motivation block — reporting all-time count of old stories is confusing.
+    // Sunday summary already handles recent-week story count via getRecentStoryCount(7).
+
     // Only include AQI/pollen when notable — AQI >100 (Unhealthy for Sensitive Groups) or pollen high/very high (≥30 gr/m³-eq)
     const POLLEN_HIGH_GRM3 = 30; // threshold for "high" in pollenLevel()
     const AQI_NOTABLE = 100;
@@ -945,11 +884,9 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       if (morningWorkoutDone) block += `• MORNING WORKOUT ALREADY DONE — do NOT suggest exercise, a walk, or outdoor activity in the closing. Reference what is ahead instead.\n`;
       block += `• Journal entries this week: ${journalCountWeek}\n`;
       if (recentJournalSnippet) block += `• Recent journal themes: "${recentJournalSnippet}"\n`;
-      // Only surface archive total on Sundays — weekday briefings must never mention it.
-      // NEVER say David "added" stories, NEVER say stories came from anyone (e.g. "from Olivia").
-      if (isSunday && totalStories > 0) {
-        block += `• Family archive total: ${totalStories} stories. On Sundays ONLY, you may say exactly: "You've got ${totalStories} stories in your family archive." Do NOT say David added them, do NOT name anyone, do NOT say they are new.\n`;
-      }
+      // Story count intentionally NOT included — the Sunday summary block handles it via
+      // getRecentStoryCount(7). Reporting an all-time total causes confusion when stories
+      // are from weeks ago and the user hasn't recorded anything recently.
 
       if (dailyMotivation) {
         // dailyMotivation is either a [Personal Override — Morning Note] block,
