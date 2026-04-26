@@ -47,14 +47,102 @@ router.get("/tasks/sync", async (req: Request, res: Response) => {
   }
 });
 
+// ── TV Shows — MUST be before /lists/:listName wildcard ──────────────────────
+// GET /api/lists/tv-shows
+router.get("/lists/tv-shows", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  try {
+    const { rows } = await query<{ id: number; show_name: string; network: string | null; status: string | null }>(
+      `SELECT id, show_name, network, status
+       FROM watched_shows
+       WHERE user_name = $1
+       ORDER BY show_name ASC`,
+      [userName]
+    );
+    res.json({
+      items: rows.map((r) => ({
+        id: r.id,
+        item_text: r.show_name,
+        detail: r.network ?? null,
+        status: r.status ?? null,
+        created_at: new Date().toISOString(),
+      })),
+    });
+  } catch (err) {
+    req.log.warn({ err }, "TV Shows list GET error");
+    res.status(500).json({ error: "Failed to fetch TV shows" });
+  }
+});
+
+// DELETE /api/lists/tv-shows/:id
+router.delete("/lists/tv-shows/:id", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const { id } = req.params;
+  try {
+    await query(
+      `DELETE FROM watched_shows WHERE id = $1 AND user_name = $2`,
+      [id, userName]
+    );
+    res.json({ deleted: true });
+  } catch (err) {
+    req.log.warn({ err }, "TV Shows list DELETE error");
+    res.status(500).json({ error: "Failed to remove show" });
+  }
+});
+
+// ── Restaurants — MUST be before /lists/:listName wildcard ───────────────────
+// GET /api/lists/restaurants
+router.get("/lists/restaurants", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  try {
+    const { rows } = await query<{ id: number; name: string; detail: string | null; created_at: string }>(
+      `SELECT id, name, detail, created_at
+       FROM profile_items
+       WHERE user_name = $1 AND category = 'restaurants'
+       ORDER BY created_at DESC`,
+      [userName]
+    );
+    res.json({
+      items: rows.map((r) => ({
+        id: r.id,
+        item_text: r.name,
+        detail: r.detail ?? null,
+        created_at: r.created_at,
+      })),
+    });
+  } catch (err) {
+    req.log.warn({ err }, "Restaurants list GET error");
+    res.status(500).json({ error: "Failed to fetch restaurants" });
+  }
+});
+
+// DELETE /api/lists/restaurants/:id
+router.delete("/lists/restaurants/:id", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const { id } = req.params;
+  try {
+    await query(
+      `DELETE FROM profile_items WHERE id = $1 AND user_name = $2 AND category = 'restaurants'`,
+      [id, userName]
+    );
+    res.json({ deleted: true });
+  } catch (err) {
+    req.log.warn({ err }, "Restaurants list DELETE error");
+    res.status(500).json({ error: "Failed to remove restaurant" });
+  }
+});
+
+// ── Generic list_items — wildcard routes AFTER specific routes ────────────────
 // GET /api/lists/:listName — fetch all items for a list
-// For the "to do" list, first merge any pending Google Tasks items
 router.get("/lists/:listName", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
   const { listName } = req.params;
   try {
-    // Silently pull Google Tasks into Winston before reading (fire-and-forget style but we await briefly)
     if (listName === "to do" || listName === "to%20do") {
       pullTasksFromGoogle(userName).catch(() => {});
     }
@@ -89,7 +177,6 @@ router.post("/lists/:listName", async (req: Request, res: Response) => {
        RETURNING id, item_text, created_at`,
       [userName, listName, item.trim()]
     );
-    // Sync to Google Tasks when adding to "to do" list
     if (listName === "to do" && rows[0]) {
       pushItemsToGoogleTasks(userName, [item.trim()]).catch(() => {});
     }
