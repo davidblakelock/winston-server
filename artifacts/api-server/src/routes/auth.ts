@@ -474,19 +474,19 @@ router.get("/auth/status", async (req: Request, res: Response) => {
     }
 
     // Step 1: check whether any tokens exist at all
-    const { rows } = await query<{ email: string | null }>(
-      `SELECT email FROM user_integrations
+    const { rows } = await query<{ external_email: string | null }>(
+      `SELECT external_email FROM user_integrations
        WHERE user_name = $1 AND provider = 'google'
          AND (access_token IS NOT NULL OR refresh_token IS NOT NULL)
        LIMIT 1`,
       [userName]
     );
-    if (rows.length === 0 || !rows[0].email) {
+    if (rows.length === 0 || !rows[0].external_email) {
       authStatusCache.set(userName, { connected: false, ts: Date.now() });
       res.json({ connected: false });
       return;
     }
-    const email = rows[0].email;
+    const email = rows[0].external_email;
 
     // Step 2: get an auth client and make a real lightweight call to Google
     // to confirm the token is still valid (not just present in the DB).
