@@ -67,11 +67,8 @@ export default function Lists() {
   }
 
   useEffect(() => {
-    if (itemsByTab[activeTab] === null) {
-      void fetchItems(activeTab);
-    } else {
-      setLoading(false);
-    }
+    // Always re-fetch on tab change — ensures fresh data after any server-side update.
+    void fetchItems(activeTab);
     setInputValue("");
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);

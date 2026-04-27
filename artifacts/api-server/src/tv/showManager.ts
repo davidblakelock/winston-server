@@ -13,10 +13,10 @@ export interface WatchedShow {
 
 export async function getWatchedShows(userName = NATIVE_STORED_NAME): Promise<WatchedShow[]> {
   const result = await query(
-    `SELECT id, show_name, tvmaze_id, network, genres, status
+    `SELECT DISTINCT ON (lower(show_name)) id, show_name, tvmaze_id, network, genres, status
      FROM watched_shows
      WHERE user_name = $1
-     ORDER BY show_name ASC`,
+     ORDER BY lower(show_name) ASC, id ASC`,
     [userName]
   );
   return result.rows.map((r) => ({
