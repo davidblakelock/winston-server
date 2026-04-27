@@ -20,31 +20,39 @@ import appleSignin from "apple-signin-auth";
 const router = Router();
 
 // ── Google Sign-In ─────────────────────────────────────────────────────────────
-// GET /api/auth/google?signin=1  — full-page redirect sign-in flow
-// GET /api/auth/google            — popup calendar/gmail connect (existing behaviour)
+// GET /api/auth/google?signin=1        — full-page redirect sign-in flow
+// GET /api/auth/google                 — popup calendar/gmail connect (web)
+// GET /api/auth/google?redirect=native — native-app reconnect (deep-link return)
 router.get("/auth/google", (req: Request, res: Response) => {
   const isSignIn = req.query.signin === "1";
+  const isNativeConnect = req.query.redirect === "native";
   const oauth2Client = createOAuthClient();
   const url = oauth2Client.generateAuthUrl({
     access_type: "offline",
     // Identity sign-in: request minimal scopes (openid + email + profile only).
-    // Integration connect: request full scopes (calendar, gmail, contacts).
+    // Integration connect (web or native): full scopes (calendar, gmail, contacts).
     scope: isSignIn ? IDENTITY_SCOPES : SCOPES,
     prompt: "select_account consent",
-    // state carries whether this is a sign-in so the callback knows what to do
-    state: isSignIn ? "signin" : "connect",
+    // state carries the flow type through the OAuth round-trip:
+    //   "signin"         — web sign-in (full-page redirect)
+    //   "connect"        — web popup connect
+    //   "native-connect" — native app reconnect (returns via deep link)
+    state: isSignIn ? "signin" : isNativeConnect ? "native-connect" : "connect",
   });
   res.redirect(url);
 });
 
-// GET /api/auth/callback — Google OAuth callback (handles both sign-in and connect)
+// GET /api/auth/callback — Google OAuth callback (handles sign-in, web connect, and native connect)
 router.get("/auth/callback", async (req: Request, res: Response) => {
   const { code, error, state } = req.query;
   const isSignIn = state === "signin";
+  const isNativeConnect = state === "native-connect";
   const appUrl = getAppUrl(req.headers.host as string | undefined);
 
   if (error || !code) {
-    if (isSignIn) {
+    if (isNativeConnect) {
+      res.redirect("winstonnative://auth?error=true");
+    } else if (isSignIn) {
       res.redirect(`${appUrl}/?auth=error`);
     } else {
       res.send(`<!DOCTYPE html><html><body><script>
@@ -56,7 +64,7 @@ router.get("/auth/callback", async (req: Request, res: Response) => {
   }
 
   try {
-    req.log.info({ state, isSignIn }, "[AUTH] /auth/callback — Google OAuth callback received");
+    req.log.info({ state, isSignIn, isNativeConnect }, "[AUTH] /auth/callback — Google OAuth callback received");
 
     const oauth2Client = createOAuthClient();
     const { tokens } = await oauth2Client.getToken(code as string);
@@ -170,7 +178,15 @@ router.get("/auth/callback", async (req: Request, res: Response) => {
       req.log.info({ email, userName }, "[AUTH] /auth/callback — sign-in flow, skipping google_auth upsert");
     }
 
-    if (isSignIn) {
+    if (isNativeConnect) {
+      // ── Native app reconnect — create session and redirect via deep link ────
+      req.log.info({ userName, isNewUser }, "[AUTH] /auth/callback — native-connect: creating session for deep-link return");
+      const sessionToken = await createSession(userName, email, googleId, picture);
+      // Bust the auth-status cache so the app immediately sees connected: true
+      authStatusCache.delete(userName);
+      req.log.info({ userName }, "[AUTH] /auth/callback — redirecting to winstonnative://auth deep link");
+      res.redirect(`winstonnative://auth?token=${encodeURIComponent(sessionToken)}&connected=google`);
+    } else if (isSignIn) {
       // ── Create app session and redirect frontend with token ─────────────────
       req.log.info({ userName, isNewUser, hasPicture: !!picture }, "[AUTH] /auth/callback — creating app session for sign-in");
       const sessionToken = await createSession(userName, email, googleId, picture);
@@ -197,7 +213,9 @@ router.get("/auth/callback", async (req: Request, res: Response) => {
     }
   } catch (err) {
     req.log.error({ err }, "Google OAuth callback error");
-    if (isSignIn) {
+    if (isNativeConnect) {
+      res.redirect("winstonnative://auth?error=true");
+    } else if (isSignIn) {
       res.redirect(`${appUrl}/?auth=error`);
     } else {
       res.send(`<!DOCTYPE html><html><body><script>
