@@ -281,8 +281,17 @@ app.listen(port, async (err) => {
   }
 
   // Remove duplicate watched_shows rows — keep only the oldest (lowest id) per user+show.
-  // Duplicates accumulate when the same show is mentioned in chat more than once.
+  // Pass 1: deduplicate by exact (user_name, lower(show_name)).
+  // Pass 2: deduplicate by (user_name, tvmaze_id) — catches "Lincoln Lawyer" vs "The Lincoln Lawyer"
+  //         where TVmaze resolves both to the same show ID.
   try {
+    // Log all current shows for diagnostics
+    const { rows: allShows } = await query<{ user_name: string; show_name: string; tvmaze_id: number | null }>(
+      `SELECT user_name, show_name, tvmaze_id FROM watched_shows ORDER BY user_name, show_name`
+    );
+    logger.info({ shows: allShows.map((s) => `${s.user_name}|${s.show_name}|tvmaze=${s.tvmaze_id}`) }, "Startup migration: watched_shows inventory");
+
+    // Pass 1: deduplicate by (user_name, lower(show_name))
     const { rows: dupRows } = await query<{ cnt: string }>(
       `SELECT COUNT(*) AS cnt FROM watched_shows w
        WHERE w.id NOT IN (
@@ -293,7 +302,6 @@ app.listen(port, async (err) => {
     );
     const dupCount = parseInt(dupRows[0]?.cnt ?? "0", 10);
     if (dupCount > 0) {
-      // RETURNING id is required so exec_dml_ret (not exec_sql) handles this DELETE in Supabase.
       await query(
         `DELETE FROM watched_shows WHERE id NOT IN (
            SELECT DISTINCT ON (user_name, lower(show_name)) id
@@ -301,9 +309,35 @@ app.listen(port, async (err) => {
            ORDER BY user_name, lower(show_name), id ASC
          ) RETURNING id`
       );
-      logger.info({ removed: dupCount }, "Startup migration: removed duplicate watched_shows rows");
+      logger.info({ removed: dupCount }, "Startup migration: removed name-duplicate watched_shows rows");
     } else {
-      logger.info("Startup migration: watched_shows has no duplicate rows");
+      logger.info("Startup migration: watched_shows has no exact-name duplicates");
+    }
+
+    // Pass 2: deduplicate by (user_name, tvmaze_id) — catches same show stored under different spellings
+    const { rows: tvDupRows } = await query<{ cnt: string }>(
+      `SELECT COUNT(*) AS cnt FROM watched_shows w
+       WHERE tvmaze_id IS NOT NULL
+         AND w.id NOT IN (
+           SELECT DISTINCT ON (user_name, tvmaze_id) id
+           FROM watched_shows
+           WHERE tvmaze_id IS NOT NULL
+           ORDER BY user_name, tvmaze_id, id ASC
+         )`
+    );
+    const tvDupCount = parseInt(tvDupRows[0]?.cnt ?? "0", 10);
+    if (tvDupCount > 0) {
+      await query(
+        `DELETE FROM watched_shows WHERE tvmaze_id IS NOT NULL AND id NOT IN (
+           SELECT DISTINCT ON (user_name, tvmaze_id) id
+           FROM watched_shows
+           WHERE tvmaze_id IS NOT NULL
+           ORDER BY user_name, tvmaze_id, id ASC
+         ) RETURNING id`
+      );
+      logger.info({ removed: tvDupCount }, "Startup migration: removed tvmaze-id-duplicate watched_shows rows");
+    } else {
+      logger.info("Startup migration: watched_shows has no tvmaze-id duplicates");
     }
   } catch (e) {
     logger.warn({ e }, "Startup migration warning: watched_shows dedup");

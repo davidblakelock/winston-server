@@ -33,21 +33,47 @@ export async function addWatchedShow(
   rawName: string,
   userName = NATIVE_STORED_NAME
 ): Promise<{ success: boolean; showName: string; alreadyExists: boolean }> {
-  const existing = await query(
+  // Step 1: check by the raw name the user typed
+  const existingByRaw = await query(
     `SELECT id, show_name FROM watched_shows WHERE user_name = $1 AND lower(show_name) = lower($2)`,
     [userName, rawName]
   );
-  if (existing.rows.length > 0) {
-    return { success: false, showName: existing.rows[0].show_name, alreadyExists: true };
+  if (existingByRaw.rows.length > 0) {
+    return { success: false, showName: existingByRaw.rows[0].show_name, alreadyExists: true };
   }
 
+  // Step 2: look up TVmaze to get the canonical name + metadata
   const tvShow = await searchShow(rawName);
   const showName = tvShow?.name ?? rawName;
 
+  // Step 3: also check by the canonical TVmaze name (catches "Lincoln Lawyer" vs "The Lincoln Lawyer")
+  if (showName.toLowerCase() !== rawName.toLowerCase()) {
+    const existingByCanonical = await query(
+      `SELECT id, show_name FROM watched_shows WHERE user_name = $1 AND lower(show_name) = lower($2)`,
+      [userName, showName]
+    );
+    if (existingByCanonical.rows.length > 0) {
+      return { success: false, showName: existingByCanonical.rows[0].show_name, alreadyExists: true };
+    }
+  }
+
+  // Step 4: also check by TVmaze ID if we have one (most reliable dedup)
+  if (tvShow?.id) {
+    const existingById = await query(
+      `SELECT id, show_name FROM watched_shows WHERE user_name = $1 AND tvmaze_id = $2`,
+      [userName, tvShow.id]
+    );
+    if (existingById.rows.length > 0) {
+      return { success: false, showName: existingById.rows[0].show_name, alreadyExists: true };
+    }
+  }
+
+  // Step 5: safe to insert
   await query(
     `INSERT INTO watched_shows (user_name, show_name, tvmaze_id, network, genres, status)
      VALUES ($1, $2, $3, $4, $5, $6)
-     ON CONFLICT (user_name, show_name) DO NOTHING`,
+     ON CONFLICT (user_name, show_name) DO NOTHING
+     RETURNING id`,
     [
       userName,
       showName,
