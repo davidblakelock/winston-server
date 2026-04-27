@@ -29,7 +29,7 @@ createRoot(document.getElementById("root")!).render(
       Winston
     </h1>
     <p style={{ color: "#6b7280", fontSize: "0.95rem", margin: 0 }}>
-      Available on the native app only.
+      Winston is a native mobile app. Download it on Android to get started.
     </p>
   </div>
 );

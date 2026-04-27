@@ -1,180 +1,35 @@
+/**
+ * Push notification routes.
+ *
+ * Web push (browser/PWA via VAPID) has been retired. The routes in this file
+ * exclusively handle Expo push notifications for the native Android app.
+ *
+ * Removed routes (web push — no longer supported):
+ *   GET    /push/vapid-public-key
+ *   POST   /push/subscribe
+ *   DELETE /push/subscribe
+ *   GET    /push/status
+ *   POST   /push/test
+ *
+ * Active routes (Expo push — native app only):
+ *   POST   /push/expo-token       Register an Expo push token
+ *   DELETE /push/expo-token       Remove an Expo push token (logout / unsubscribe)
+ *   GET    /push/expo-status      Diagnostic: count registered Expo tokens
+ *   GET    /push/calendar-debug   Full diagnostic: Google auth + calendar + Expo tokens
+ */
+
 import { Router } from "express";
 import {
-  saveSubscription,
-  saveSubscriptionWithAction,
-  removeSubscription,
-  getSubscriptions,
-  sendPushToAll,
-  getVapidPublicKey,
   saveExpoToken,
   removeExpoToken,
   getExpoTokens,
-  type PushSubscriptionData,
 } from "../push/pushManager.js";
-import { getProfile } from "../onboarding/onboardingManager.js";
 import { logger } from "../lib/logger.js";
-import { authenticate, tryAuthenticate, NATIVE_USER, resolveUserAlias } from "../auth/middleware.js";
+import { tryAuthenticate, NATIVE_USER, resolveUserAlias } from "../auth/middleware.js";
 import { getAuthClientForUser } from "../google/oauth.js";
 import { fetchTodayEvents } from "../google/calendar.js";
 
 const router = Router();
-
-// GET /api/push/vapid-public-key — return the VAPID public key to the frontend
-router.get("/push/vapid-public-key", (_req, res) => {
-  const key = getVapidPublicKey();
-  logger.info({ configured: !!key }, "[PUSH] VAPID public key requested");
-  if (!key) {
-    res.status(503).json({ error: "Push notifications not configured — VAPID keys missing" });
-    return;
-  }
-  res.json({ publicKey: key });
-});
-
-// POST /api/push/subscribe — save a push subscription to Supabase
-router.post("/push/subscribe", async (req, res) => {
-  const body = req.body as {
-    endpoint?: string;
-    keys?: { p256dh?: string; auth?: string };
-    userName?: string;
-    deviceId?: string;
-  };
-
-  logger.info(
-    { endpointTail: body.endpoint?.slice(-40) ?? "MISSING", userName: body.userName, deviceId: body.deviceId },
-    "[PUSH STEP B1] Subscribe request received"
-  );
-
-  // STEP B2 — Resolve user: prefer auth header, fall back to body.userName (native compat)
-  const authedUser = await tryAuthenticate(req);
-  const { endpoint, keys, userName: bodyUserName, deviceId } = body;
-  const userName = authedUser ?? bodyUserName ?? NATIVE_USER;
-
-  if (!endpoint) {
-    logger.warn("[PUSH STEP B2] FAIL — Missing endpoint in request body");
-    res.status(400).json({ error: "Missing endpoint" });
-    return;
-  }
-  if (!keys?.p256dh || !keys?.auth) {
-    logger.warn({ hasP256dh: !!keys?.p256dh, hasAuth: !!keys?.auth }, "[PUSH STEP B2] FAIL — Missing subscription keys");
-    res.status(400).json({ error: "Missing subscription keys (p256dh / auth)" });
-    return;
-  }
-  logger.info("[PUSH STEP B2] Payload validated — endpoint, p256dh, auth all present");
-
-  try {
-    const sub: PushSubscriptionData = {
-      endpoint,
-      p256dh: keys.p256dh,
-      auth: keys.auth,
-    };
-
-    const userAgent = (req.headers["user-agent"] ?? "unknown").slice(0, 200);
-
-    // STEP B3 — Upsert into Supabase
-    logger.info(
-      { userName, endpointTail: endpoint.slice(-40), deviceId: deviceId ?? "none", userAgent: userAgent.slice(0, 100) },
-      "[PUSH STEP B3] Upserting subscription into Supabase push_subscriptions…"
-    );
-
-    const { id, action } = await saveSubscriptionWithAction(userName, sub, userAgent, deviceId);
-
-    // STEP B4 — Return result
-    logger.info(
-      { userName, deviceId: deviceId ?? "none", endpointTail: endpoint.slice(-40), id, action },
-      "[PUSH STEP B4] ✅ Subscription saved successfully"
-    );
-
-    res.json({ success: true, id, action });
-  } catch (err) {
-    logger.error({ err, endpoint: endpoint?.slice(-40), userName }, "[PUSH STEP B3] ❌ Supabase upsert failed");
-    res.status(500).json({ error: "Failed to save subscription to database" });
-  }
-});
-
-// DELETE /api/push/subscribe — remove a push subscription
-router.delete("/push/subscribe", async (req, res) => {
-  try {
-    const { endpoint } = req.body as { endpoint: string };
-    if (!endpoint) {
-      res.status(400).json({ error: "Missing endpoint" });
-      return;
-    }
-    logger.info({ endpointTail: endpoint.slice(-30) }, "[PUSH] Removing subscription");
-    await removeSubscription(endpoint);
-    logger.info({ endpointTail: endpoint.slice(-30) }, "[PUSH] Subscription removed");
-    res.json({ success: true });
-  } catch (err) {
-    logger.error({ err }, "[PUSH] Unsubscribe error");
-    res.status(500).json({ error: "Failed to remove subscription" });
-  }
-});
-
-// GET /api/push/status — check subscription count for current user (diagnostic)
-router.get("/push/status", async (req, res) => {
-  try {
-    const authedUser = await tryAuthenticate(req);
-    const userName = authedUser ?? (req.query.userName as string) ?? NATIVE_USER;
-    const subs = await getSubscriptions(userName);
-    logger.info({ userName, count: subs.length }, "[PUSH] Status check");
-    res.json({
-      userName,
-      subscriptionCount: subs.length,
-      endpoints: subs.map((s) => "…" + s.endpoint.slice(-30)),
-    });
-  } catch (err) {
-    logger.error({ err }, "[PUSH] Status check error");
-    res.status(500).json({ error: "Status check failed" });
-  }
-});
-
-// POST /api/push/test — send an immediate test push to all subscriptions for the user
-router.post("/push/test", async (req, res) => {
-  try {
-    const authedUser = await tryAuthenticate(req);
-    const { userName: bodyUserName } = req.body as { userName?: string };
-    const userName = authedUser ?? bodyUserName ?? NATIVE_USER;
-    logger.info({ userName }, "[PUSH] Test push requested");
-
-    const [subs, expoTokens] = await Promise.all([
-      getSubscriptions(userName),
-      getExpoTokens(userName),
-    ]);
-    logger.info({ userName, webSubCount: subs.length, expoTokenCount: expoTokens.length }, "[PUSH] Channels found for test");
-
-    if (subs.length === 0 && expoTokens.length === 0) {
-      res.status(404).json({
-        error: "No push channels registered for this user",
-        hint: "Open Winston in your browser (for web push) or in the native app (for Expo push), grant notification permission, then try again",
-      });
-      return;
-    }
-
-    const profile = await getProfile(userName).catch(() => null);
-    const companionNameForTest = profile?.companionName ?? "Your Companion";
-
-    const result = await sendPushToAll(
-      {
-        title: "Winston — Test Notification ✅",
-        body: `Push notifications are working. ${companionNameForTest} can reach you.`,
-        tag: "winston-test",
-        requireInteraction: false,
-      },
-      userName
-    );
-
-    logger.info({ userName, ...result }, "[PUSH] Test push complete");
-    res.json({
-      success: true,
-      sent: result.sent,
-      failed: result.failed,
-      webSubs: subs.length,
-      expoTokens: expoTokens.length,
-    });
-  } catch (err) {
-    logger.error({ err }, "[PUSH] Test push error");
-    res.status(500).json({ error: "Test push failed" });
-  }
-});
 
 // ── Expo Push Token endpoints ─────────────────────────────────────────────────
 
@@ -239,7 +94,7 @@ router.get("/push/expo-status", async (req, res) => {
   }
 });
 
-// GET /api/push/calendar-debug — full diagnostic of Google auth + calendar + departures
+// GET /api/push/calendar-debug — full diagnostic: Google auth + calendar + Expo tokens
 router.get("/push/calendar-debug", async (req, res) => {
   const authedUser = await tryAuthenticate(req);
   const userName = authedUser ?? (req.query.userName as string | undefined) ?? NATIVE_USER;
@@ -270,7 +125,7 @@ router.get("/push/calendar-debug", async (req, res) => {
     }
   }
 
-  // Step 3: Fetch today's events (with all internal logging already active)
+  // Step 3: Fetch today's events
   try {
     const events = await fetchTodayEvents(userName);
     result.eventsNull = events === null;
