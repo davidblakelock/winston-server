@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import express from "express";
 import { google } from "googleapis";
-import { createOAuthClient, getRedirectUri, SCOPES, IDENTITY_SCOPES } from "../google/oauth.js";
+import { createOAuthClient, getRedirectUri, SCOPES, IDENTITY_SCOPES, getAuthClientForUser, clearGoogleTokensForUser, isInvalidGrant } from "../google/oauth.js";
 import { query } from "../db.js";
 import {
   createSession,
@@ -422,6 +422,9 @@ router.post("/auth/session/logout", async (req: Request, res: Response) => {
 });
 
 // ── Google auth status (calendar/gmail connect — requires session) ────────────
+// Cache verification results for 5 minutes to avoid hammering Google's API.
+const authStatusCache = new Map<string, { connected: boolean; email?: string; ts: number }>();
+const AUTH_STATUS_TTL_MS = 5 * 60 * 1000;
 
 router.get("/auth/status", async (req: Request, res: Response) => {
   try {
@@ -439,15 +442,52 @@ router.get("/auth/status", async (req: Request, res: Response) => {
       res.json({ connected: false });
       return;
     }
-    const { rows } = await query<{ email: string | null; token_expiry: Date | null }>(
-      "SELECT email, token_expiry FROM google_auth WHERE user_name = $1 LIMIT 1",
+
+    // Return cached result if fresh
+    const cached = authStatusCache.get(userName);
+    if (cached && Date.now() - cached.ts < AUTH_STATUS_TTL_MS) {
+      res.json(cached.connected ? { connected: true, email: cached.email } : { connected: false });
+      return;
+    }
+
+    // Step 1: check whether any tokens exist at all
+    const { rows } = await query<{ email: string | null }>(
+      `SELECT email FROM user_integrations
+       WHERE user_name = $1 AND provider = 'google'
+         AND (access_token IS NOT NULL OR refresh_token IS NOT NULL)
+       LIMIT 1`,
       [userName]
     );
     if (rows.length === 0 || !rows[0].email) {
+      authStatusCache.set(userName, { connected: false, ts: Date.now() });
       res.json({ connected: false });
       return;
     }
-    res.json({ connected: true, email: rows[0].email });
+    const email = rows[0].email;
+
+    // Step 2: get an auth client and make a real lightweight call to Google
+    // to confirm the token is still valid (not just present in the DB).
+    const authClient = await getAuthClientForUser(userName);
+    if (!authClient) {
+      authStatusCache.set(userName, { connected: false, ts: Date.now() });
+      res.json({ connected: false });
+      return;
+    }
+
+    try {
+      const oauth2 = google.oauth2({ version: "v2", auth: authClient });
+      await oauth2.userinfo.get(); // lightweight — just checks token validity
+      authStatusCache.set(userName, { connected: true, email, ts: Date.now() });
+      res.json({ connected: true, email });
+    } catch (tokenErr) {
+      req.log.warn({ userName, err: tokenErr }, "[auth/status] Google token check failed — marking disconnected");
+      // If the token is revoked or expired and un-refreshable, clear it
+      if (isInvalidGrant(tokenErr)) {
+        await clearGoogleTokensForUser(userName).catch(() => {});
+      }
+      authStatusCache.set(userName, { connected: false, ts: Date.now() });
+      res.json({ connected: false });
+    }
   } catch {
     res.json({ connected: false });
   }
