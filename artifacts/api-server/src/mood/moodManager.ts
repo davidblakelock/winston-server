@@ -24,7 +24,8 @@ export async function saveMoodCheckin(
   await query(
     `INSERT INTO mood_checkins (user_name, mood_text, date)
      VALUES ($1, $2, CURRENT_DATE)
-     ON CONFLICT (user_name, date) DO UPDATE SET mood_text = EXCLUDED.mood_text`,
+     ON CONFLICT (user_name, date) DO UPDATE SET mood_text = EXCLUDED.mood_text
+     RETURNING user_name`,
     [userName, moodText]
   );
   logger.info({ userName, preview: moodText.substring(0, 60) }, "[Mood] Check-in saved");

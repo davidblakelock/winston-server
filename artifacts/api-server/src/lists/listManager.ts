@@ -82,7 +82,8 @@ export async function addItems(listName: string, items: string[], userName: stri
     await query(
       `INSERT INTO list_items (user_name, list_name, item_text)
        VALUES ($1, $2, $3)
-       ON CONFLICT (user_name, list_name, lower(item_text)) DO NOTHING`,
+       ON CONFLICT (user_name, list_name, lower(item_text)) DO NOTHING
+       RETURNING id`,
       [userName, listName, item.trim()]
     );
   }
@@ -94,7 +95,8 @@ export async function removeItems(listName: string, items: string[], userName: s
       `DELETE FROM list_items
        WHERE user_name = $1
          AND list_name = $2
-         AND lower(item_text) = lower($3)`,
+         AND lower(item_text) = lower($3)
+       RETURNING id`,
       [userName, listName, item.trim()]
     );
   }
@@ -102,7 +104,7 @@ export async function removeItems(listName: string, items: string[], userName: s
 
 export async function clearList(listName: string, userName: string): Promise<void> {
   await query(
-    `DELETE FROM list_items WHERE user_name = $1 AND list_name = $2`,
+    `DELETE FROM list_items WHERE user_name = $1 AND list_name = $2 RETURNING id`,
     [userName, listName]
   );
 }

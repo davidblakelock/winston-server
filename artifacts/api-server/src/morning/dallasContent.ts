@@ -645,7 +645,7 @@ async function saveToDb(items: LocalContentItem[]): Promise<void> {
   if (items.length === 0) return;
   const today = new Date().toISOString().slice(0, 10);
   try {
-    await query(`DELETE FROM daily_local_content WHERE fetch_date = '${today}'`);
+    await query(`DELETE FROM daily_local_content WHERE fetch_date = '${today}' RETURNING id`);
     for (const item of items.slice(0, 10)) {
       const esc = (s: string) => s.replace(/'/g, "''");
       const pub = item.publishedAt ? `'${item.publishedAt.toISOString()}'` : "NULL";
@@ -661,6 +661,7 @@ async function saveToDb(items: LocalContentItem[]): Promise<void> {
           '${today}',
           '${esc(item.keywordsMatched.join(", "))}'
         )
+        RETURNING id
       `);
     }
     logger.info(`[Dallas] Saved ${Math.min(items.length, 10)} items to daily_local_content`);

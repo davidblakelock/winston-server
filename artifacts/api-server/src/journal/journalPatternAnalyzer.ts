@@ -85,7 +85,8 @@ async function analyzeJournalForUser(userName: string): Promise<void> {
 
     await query(
       `INSERT INTO journal_insights (user_name, insight, pattern_tags, analysis_date)
-       VALUES ($1, $2, $3, CURRENT_DATE)`,
+       VALUES ($1, $2, $3, CURRENT_DATE)
+       RETURNING user_name`,
       [userName, parsed.insight, parsed.patterns.join(",")]
     );
 

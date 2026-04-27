@@ -108,7 +108,8 @@ export async function connectGarmin(
          garmin_email    = EXCLUDED.garmin_email,
          garmin_password = EXCLUDED.garmin_password,
          connected_at    = NOW(),
-         sync_error      = NULL`,
+         sync_error      = NULL
+       RETURNING user_name`,
       [userName, garminEmail, garminPassword]
     );
 
@@ -155,7 +156,7 @@ export async function fetchAndStoreGarminData(
   } catch (err) {
     evictSession(cacheKey);
     await query(
-      `UPDATE garmin_credentials SET sync_error = $1 WHERE user_name = $2`,
+      `UPDATE garmin_credentials SET sync_error = $1 WHERE user_name = $2 RETURNING user_name`,
       [(err instanceof Error ? err.message : "Login failed"), userName]
     );
     return null;
@@ -283,7 +284,8 @@ export async function fetchAndStoreGarminData(
          workouts             = EXCLUDED.workouts,
          raw_sleep            = EXCLUDED.raw_sleep,
          raw_heart            = EXCLUDED.raw_heart,
-         fetched_at           = NOW()`,
+         fetched_at           = NOW()
+       RETURNING user_name`,
       [
         userName,
         dateStr,
@@ -303,7 +305,7 @@ export async function fetchAndStoreGarminData(
 
     // Update last_sync
     await query(
-      `UPDATE garmin_credentials SET last_sync = NOW(), sync_error = NULL WHERE user_name = $1`,
+      `UPDATE garmin_credentials SET last_sync = NOW(), sync_error = NULL WHERE user_name = $1 RETURNING user_name`,
       [userName]
     );
 
@@ -335,7 +337,7 @@ export async function fetchAndStoreGarminData(
     evictSession(cacheKey);
     const errMsg = err instanceof Error ? err.message : "Fetch failed";
     await query(
-      `UPDATE garmin_credentials SET sync_error = $1 WHERE user_name = $2`,
+      `UPDATE garmin_credentials SET sync_error = $1 WHERE user_name = $2 RETURNING user_name`,
       [errMsg, userName]
     );
     logger.error({ userName, err }, "[Garmin] Fetch error");

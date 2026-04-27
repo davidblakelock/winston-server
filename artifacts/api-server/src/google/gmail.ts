@@ -242,7 +242,8 @@ export async function updateEmailLastChecked(userName = NATIVE_STORED_NAME): Pro
   try {
     await query(
       `INSERT INTO email_tracking (user_name, last_checked_at) VALUES ($1, NOW())
-       ON CONFLICT (user_name) DO UPDATE SET last_checked_at = NOW()`,
+       ON CONFLICT (user_name) DO UPDATE SET last_checked_at = NOW()
+       RETURNING user_name`,
       [userName]
     );
   } catch (err) {

@@ -46,7 +46,7 @@ export async function getPendingFollowUps(minDays = 2, maxDays = 21, userName = 
 
 export async function markFollowedUp(id: number): Promise<void> {
   await query(
-    `UPDATE recommendations SET followed_up = true, followed_up_date = CURRENT_DATE WHERE id = $1`,
+    `UPDATE recommendations SET followed_up = true, followed_up_date = CURRENT_DATE WHERE id = $1 RETURNING id`,
     [id]
   );
 }

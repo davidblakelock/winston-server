@@ -37,7 +37,8 @@ export async function ensureContactMentionsTable(): Promise<void> {
 export async function recordOliviaContact(type: OliviaContactType, notes?: string, userName = NATIVE_STORED_NAME): Promise<void> {
   await query(
     `INSERT INTO contact_mentions (user_name, contact_type, notes, contact_date)
-     VALUES ($1, $2, $3, CURRENT_DATE)`,
+     VALUES ($1, $2, $3, CURRENT_DATE)
+     RETURNING id`,
     [userName, type, notes || null]
   );
 }

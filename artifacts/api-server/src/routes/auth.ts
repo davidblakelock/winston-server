@@ -306,7 +306,8 @@ router.post("/auth/google/native", express.json({ limit: "1mb" }), async (req: R
                  refresh_token = COALESCE(EXCLUDED.refresh_token, google_auth.refresh_token),
                  token_expiry  = EXCLUDED.token_expiry,
                  scope         = EXCLUDED.scope,
-                 updated_at    = NOW()`,
+                 updated_at    = NOW()
+               RETURNING user_name`,
               [
                 userName, email,
                 tokens.access_token ?? null,
@@ -324,7 +325,8 @@ router.post("/auth/google/native", express.json({ limit: "1mb" }), async (req: R
                  token_expiry   = EXCLUDED.token_expiry,
                  scopes         = EXCLUDED.scopes,
                  external_email = EXCLUDED.external_email,
-                 updated_at     = NOW()`,
+                 updated_at     = NOW()
+               RETURNING user_name`,
               [
                 userName,
                 tokens.access_token ?? null,
@@ -356,7 +358,8 @@ router.post("/auth/google/native", express.json({ limit: "1mb" }), async (req: R
                    refresh_token = COALESCE(EXCLUDED.refresh_token, google_auth.refresh_token),
                    token_expiry  = EXCLUDED.token_expiry,
                    scope         = EXCLUDED.scope,
-                   updated_at    = NOW()`,
+                   updated_at    = NOW()
+                 RETURNING user_name`,
                 [
                   userName, email,
                   tokens.access_token ?? null,
@@ -601,7 +604,7 @@ router.post("/auth/logout", async (req: Request, res: Response) => {
       if (session) userName = session.userName;
     }
     if (userName) {
-      await query("DELETE FROM google_auth WHERE user_name = $1", [userName]);
+      await query("DELETE FROM google_auth WHERE user_name = $1 RETURNING user_name", [userName]);
       req.log.info({ userName }, "Google OAuth disconnected");
     }
     res.json({ ok: true });

@@ -31,6 +31,7 @@ export async function ensureWinddownTables(): Promise<void> {
     INSERT INTO winddown_settings (id, enabled, scheduled_time, story_day_of_week)
     VALUES (1, true, '21:00', 'sunday')
     ON CONFLICT (id) DO NOTHING
+    RETURNING id
   `);
   await query(`
     CREATE TABLE IF NOT EXISTS winddown_notes (
@@ -93,7 +94,7 @@ export async function updateSettings(
   }
   fields.push(`updated_at = NOW()`);
   await query(
-    `UPDATE winddown_settings SET ${fields.join(", ")} WHERE id = 1`,
+    `UPDATE winddown_settings SET ${fields.join(", ")} WHERE id = 1 RETURNING id`,
     values
   );
   return getSettings();

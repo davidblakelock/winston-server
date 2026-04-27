@@ -145,7 +145,8 @@ export async function storeFitData(userName: string, data: FitData): Promise<voi
      ON CONFLICT (user_name, date)
      DO UPDATE SET steps = EXCLUDED.steps,
                    active_minutes = EXCLUDED.active_minutes,
-                   synced_at = NOW()`,
+                   synced_at = NOW()
+     RETURNING user_name`,
     [userName, data.date, data.steps, data.activeMinutes]
   );
 }

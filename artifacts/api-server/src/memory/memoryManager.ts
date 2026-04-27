@@ -93,7 +93,7 @@ export async function saveMemory(
        summary = EXCLUDED.summary,
        message_count = EXCLUDED.message_count,
        updated_at = NOW()
-     RETURNING id`,
+     RETURNING conversation_date`,
     [today, summary, history.length]
   );
 

@@ -36,6 +36,7 @@ export async function ensurePressureTable(): Promise<void> {
   await query(`
     DELETE FROM pressure_readings
     WHERE recorded_at < NOW() - INTERVAL '30 days'
+    RETURNING id
   `).catch(() => {});
   logger.info("[PRESSURE] pressure_readings table ready");
 }
@@ -84,7 +85,7 @@ async function recordPressure(): Promise<void> {
   if (!reading) return;
 
   await query(
-    `INSERT INTO pressure_readings (pressure_hpa, pressure_inhg) VALUES ($1, $2)`,
+    `INSERT INTO pressure_readings (pressure_hpa, pressure_inhg) VALUES ($1, $2) RETURNING id`,
     [reading.hpa, reading.inHg]
   );
 

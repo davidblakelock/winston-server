@@ -31,7 +31,8 @@ async function markAlertSent(eventId: string, dateStr: string, userName: string)
     await query(
       `INSERT INTO proactive_message_log (user_name, message_type, sent_date)
        VALUES ($1, $2, $3)
-       ON CONFLICT (user_name, message_type, sent_date) DO NOTHING`,
+       ON CONFLICT (user_name, message_type, sent_date) DO NOTHING
+       RETURNING user_name`,
       [userName, `calendar-alert-${eventId}`, dateStr]
     );
   } catch (err) {

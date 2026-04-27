@@ -543,7 +543,8 @@ async function seedListsFromOnboarding(data: CollectedData, userName: string): P
   const UPSERT_SQL = `
     INSERT INTO list_items (user_name, list_name, item_text)
     VALUES ($1, $2, $3)
-    ON CONFLICT (user_name, list_name, lower(item_text)) DO NOTHING`;
+    ON CONFLICT (user_name, list_name, lower(item_text)) DO NOTHING
+    RETURNING id`;
 
   type ListSeed = { listName: string; items: string[] };
 

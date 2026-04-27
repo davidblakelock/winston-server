@@ -189,13 +189,13 @@ router.post("/contacts/merge", async (req: Request, res: Response) => {
 
   // Update the keeper
   await query(
-    `UPDATE profile_items SET name = $1, detail = $2 WHERE id = $3`,
+    `UPDATE profile_items SET name = $1, detail = $2 WHERE id = $3 RETURNING id`,
     [finalName, finalDetail, keepId]
   );
 
   // Delete the discards
   await query(
-    `DELETE FROM profile_items WHERE id = ANY($1::int[]) AND user_name = $2`,
+    `DELETE FROM profile_items WHERE id = ANY($1::int[]) AND user_name = $2 RETURNING id`,
     [discardIds, userName]
   );
 
@@ -392,7 +392,8 @@ router.post("/contacts/push-link", async (req: Request, res: Response) => {
       `INSERT INTO contact_push_links (owner_user_name, contact_name, linked_user_name)
        VALUES ($1, $2, $3)
        ON CONFLICT (owner_user_name, linked_user_name) DO UPDATE SET
-         contact_name = EXCLUDED.contact_name`,
+         contact_name = EXCLUDED.contact_name
+       RETURNING owner_user_name`,
       [ownerUserName, contactName.trim(), linkedUserName]
     );
 
@@ -478,7 +479,8 @@ router.delete("/contacts/push-link", async (req: Request, res: Response) => {
 
     await query(
       `DELETE FROM contact_push_links
-       WHERE owner_user_name = $1 AND linked_user_name = $2`,
+       WHERE owner_user_name = $1 AND linked_user_name = $2
+       RETURNING owner_user_name`,
       [ownerUserName ?? callerUserName, linkedUserName ?? callerUserName]
     );
 

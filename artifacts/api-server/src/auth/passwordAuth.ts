@@ -40,7 +40,8 @@ export async function registerUser(
 
   await query(
     `INSERT INTO users (email, password_hash, name, user_name)
-     VALUES ($1, $2, $3, $4)`,
+     VALUES ($1, $2, $3, $4)
+     RETURNING user_name`,
     [normalizedEmail, passwordHash, name.trim(), userName]
   );
 

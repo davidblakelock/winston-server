@@ -168,7 +168,8 @@ export async function getAuthClientForUser(
             // Persist it so we don't need to fall back again next time
             await query(
               `UPDATE user_integrations SET refresh_token = $1, updated_at = NOW()
-               WHERE user_name = $2 AND provider = 'google' AND refresh_token IS NULL`,
+               WHERE user_name = $2 AND provider = 'google' AND refresh_token IS NULL
+               RETURNING user_name`,
               [refreshToken, userName]
             ).catch(() => {});
             console.log(`[OAuth] getAuthClientForUser(${userName}) — back-filled missing refresh_token from google_auth`);
@@ -190,12 +191,14 @@ export async function getAuthClientForUser(
           // Keep both stores in sync on token refresh
           await query(
             `UPDATE user_integrations SET access_token = $1, token_expiry = $2, updated_at = NOW()
-             WHERE user_name = $3 AND provider = 'google'`,
+             WHERE user_name = $3 AND provider = 'google'
+             RETURNING user_name`,
             [tokens.access_token, tokens.expiry_date ? new Date(tokens.expiry_date) : null, userName]
           ).catch(() => {});
           await query(
             `UPDATE google_auth SET access_token = $1, token_expiry = $2, updated_at = NOW()
-             WHERE user_name = $3`,
+             WHERE user_name = $3
+             RETURNING user_name`,
             [tokens.access_token, tokens.expiry_date ? new Date(tokens.expiry_date) : null, userName]
           ).catch(() => {});
         }
@@ -223,7 +226,7 @@ export async function getAuthClientForUser(
     oauth2Client.on("tokens", async (tokens) => {
       if (tokens.access_token) {
         await query(
-          `UPDATE google_auth SET access_token = $1, token_expiry = $2, updated_at = NOW() WHERE user_name = $3`,
+          `UPDATE google_auth SET access_token = $1, token_expiry = $2, updated_at = NOW() WHERE user_name = $3 RETURNING user_name`,
           [tokens.access_token, tokens.expiry_date ? new Date(tokens.expiry_date) : null, auth.user_name]
         );
       }
@@ -264,7 +267,8 @@ export async function getAuthClient(): Promise<InstanceType<typeof google.auth.O
          SET access_token = $1,
              token_expiry = $2,
              updated_at   = NOW()
-         WHERE user_name = $3`,
+         WHERE user_name = $3
+         RETURNING user_name`,
         [tokens.access_token, tokens.expiry_date ? new Date(tokens.expiry_date) : null, auth.user_name]
       );
     }

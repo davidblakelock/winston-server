@@ -129,6 +129,7 @@ async function saveConcert(item: ConcertItem): Promise<void> {
           AND LOWER(artist_or_event) = LOWER('${esc(item.artistOrEvent)}')
           AND (event_date = ${eventDate} OR (event_date IS NULL AND '${esc(item.eventDateText)}' = event_date_text))
       )
+      RETURNING id
     `);
   } catch (err) {
     logger.warn({ err }, `[VenueMonitor] Failed to save concert: ${item.artistOrEvent} @ ${item.venue}`);
@@ -137,7 +138,7 @@ async function saveConcert(item: ConcertItem): Promise<void> {
 
 async function markNotified(id: number): Promise<void> {
   try {
-    await query(`UPDATE concerts_of_interest SET notified = TRUE WHERE id = $1`, [id]);
+    await query(`UPDATE concerts_of_interest SET notified = TRUE WHERE id = $1 RETURNING id`, [id]);
   } catch (err) {
     logger.warn({ err }, "[VenueMonitor] Failed to mark concert notified");
   }

@@ -40,7 +40,8 @@ async function markSent(userName: string, key: string): Promise<void> {
     await query(
       `INSERT INTO proactive_message_log (user_name, message_type, sent_date)
        VALUES ($1, $2, $3)
-       ON CONFLICT (user_name, message_type, sent_date) DO NOTHING`,
+       ON CONFLICT (user_name, message_type, sent_date) DO NOTHING
+       RETURNING user_name`,
       [userName, key, todayStr()]
     );
   } catch (err) {

@@ -147,7 +147,8 @@ export async function pushItemsToGoogleTasks(
         `INSERT INTO google_tasks_sync (user_name, item_text, task_id)
          VALUES ($1, $2, $3)
          ON CONFLICT (user_name, lower(item_text))
-         DO UPDATE SET task_id = EXCLUDED.task_id`,
+         DO UPDATE SET task_id = EXCLUDED.task_id
+         RETURNING user_name`,
         [userName, itemText, taskId]
       );
       logger.info({ userName, itemText, taskId }, "[Tasks] Pushed to Google Tasks");
@@ -173,7 +174,8 @@ export async function pullTasksFromGoogle(
     const result = await query(
       `INSERT INTO list_items (user_name, list_name, item_text)
        VALUES ($1, 'to do', $2)
-       ON CONFLICT (user_name, list_name, lower(item_text)) DO NOTHING`,
+       ON CONFLICT (user_name, list_name, lower(item_text)) DO NOTHING
+       RETURNING id`,
       [userName, title]
     );
 
@@ -183,7 +185,8 @@ export async function pullTasksFromGoogle(
       await query(
         `INSERT INTO google_tasks_sync (user_name, item_text, task_id)
          VALUES ($1, $2, $3)
-         ON CONFLICT (user_name, lower(item_text)) DO NOTHING`,
+         ON CONFLICT (user_name, lower(item_text)) DO NOTHING
+         RETURNING user_name`,
         [userName, title, task.id]
       );
     }

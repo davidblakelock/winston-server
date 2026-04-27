@@ -37,7 +37,8 @@ async function incrementStarterCount(userName: string): Promise<void> {
     `INSERT INTO conversation_starter_log (user_name, starter_date, count, last_sent_at)
      VALUES ($1, $2, 1, NOW())
      ON CONFLICT (user_name, starter_date)
-     DO UPDATE SET count = conversation_starter_log.count + 1, last_sent_at = NOW()`,
+     DO UPDATE SET count = conversation_starter_log.count + 1, last_sent_at = NOW()
+     RETURNING user_name`,
     [userName, today]
   );
 }

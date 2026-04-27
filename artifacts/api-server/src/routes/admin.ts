@@ -40,7 +40,8 @@ router.post("/admin/reset-profile", async (req: Request, res: Response) => {
          timezone             = NULL,
          wake_time            = NULL,
          health_notes         = NULL
-       WHERE user_name = $1`,
+       WHERE user_name = $1
+       RETURNING user_name`,
       [userName]
     );
 
@@ -48,8 +49,8 @@ router.post("/admin/reset-profile", async (req: Request, res: Response) => {
 
     if (doWipe) {
       // Destructive: only runs when caller explicitly passes the confirmation token
-      await query("DELETE FROM profile_items WHERE user_name = $1", [userName]);
-      await query("DELETE FROM list_items WHERE user_name = $1", [userName]);
+      await query("DELETE FROM profile_items WHERE user_name = $1 RETURNING id", [userName]);
+      await query("DELETE FROM list_items WHERE user_name = $1 RETURNING id", [userName]);
       req.log.warn({ userName }, "[ADMIN] reset-profile — profile_items and list_items DELETED (explicit wipe requested)");
 
       res.json({

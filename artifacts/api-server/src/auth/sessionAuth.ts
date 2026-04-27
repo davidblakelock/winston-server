@@ -145,11 +145,11 @@ export async function lookupOrCreateGoogleUser(
     logger.info({ googleId, userName }, "[AUTH] lookupOrCreateGoogleUser — KNOWN Google ID, using stored userName");
 
     if (picture) {
-      await query("UPDATE google_users SET picture = $2 WHERE google_id = $1", [googleId, picture]);
+      await query("UPDATE google_users SET picture = $2 WHERE google_id = $1 RETURNING google_id", [googleId, picture]);
     }
 
     if (existing[0].is_new_user) {
-      await query("UPDATE google_users SET is_new_user = false WHERE google_id = $1", [googleId]);
+      await query("UPDATE google_users SET is_new_user = false WHERE google_id = $1 RETURNING google_id", [googleId]);
       logger.info({ googleId, userName }, "[AUTH] lookupOrCreateGoogleUser — cleared is_new_user flag");
     }
 
@@ -210,7 +210,8 @@ export async function lookupOrCreateGoogleUser(
   await query(
     `INSERT INTO google_users (google_id, email, name, user_name, is_new_user, picture)
      VALUES ($1, $2, $3, $4, $5, $6)
-     ON CONFLICT (google_id) DO UPDATE SET picture = EXCLUDED.picture`,
+     ON CONFLICT (google_id) DO UPDATE SET picture = EXCLUDED.picture
+     RETURNING user_name`,
     [googleId, email, name, userName, isNewUser, picture ?? null]
   );
 
@@ -239,7 +240,7 @@ export async function lookupOrCreateMicrosoftUser(
   if (existing.length > 0) {
     const userName = existing[0].user_name;
     if (picture) {
-      await query("UPDATE microsoft_users SET picture = $2 WHERE microsoft_oid = $1", [microsoftOid, picture]).catch(() => {});
+      await query("UPDATE microsoft_users SET picture = $2 WHERE microsoft_oid = $1 RETURNING microsoft_oid", [microsoftOid, picture]).catch(() => {});
     }
     const { rows: profileRows } = await query<{ onboarding_completed: boolean }>(
       "SELECT onboarding_completed FROM user_profiles WHERE user_name = $1 LIMIT 1",
@@ -269,7 +270,8 @@ export async function lookupOrCreateMicrosoftUser(
   await query(
     `INSERT INTO microsoft_users (microsoft_oid, email, name, user_name, picture)
      VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT (microsoft_oid) DO NOTHING`,
+     ON CONFLICT (microsoft_oid) DO NOTHING
+     RETURNING user_name`,
     [microsoftOid, email, name, userName, picture ?? null]
   );
 
@@ -321,7 +323,8 @@ export async function lookupOrCreateAppleUser(
   await query(
     `INSERT INTO apple_users (apple_sub, email, name, user_name)
      VALUES ($1, $2, $3, $4)
-     ON CONFLICT (apple_sub) DO NOTHING`,
+     ON CONFLICT (apple_sub) DO NOTHING
+     RETURNING user_name`,
     [appleSub, email ?? null, name ?? null, userName]
   );
 
@@ -347,7 +350,8 @@ export async function createSession(
 
   await query(
     `INSERT INTO app_sessions (user_name, email, token, expires_at, google_id, picture)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING token`,
     [userName, email, token, expiresAt, googleId ?? null, picture ?? null]
   );
 
@@ -408,7 +412,7 @@ export async function validateSession(
 
 export async function revokeSession(token: string): Promise<void> {
   logger.info({ tokenPrefix: token.slice(0, 8) + "…" }, "[AUTH] revokeSession — deleting session");
-  await query("DELETE FROM app_sessions WHERE token = $1", [token]);
+  await query("DELETE FROM app_sessions WHERE token = $1 RETURNING token", [token]);
   logger.info({ tokenPrefix: token.slice(0, 8) + "…" }, "[AUTH] revokeSession — session deleted");
 }
 

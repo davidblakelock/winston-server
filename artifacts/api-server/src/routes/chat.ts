@@ -929,7 +929,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       );
       if (parseInt(sleepRows[0].count) === 0) {
         sleepReminderFired = true;
-        await query(`INSERT INTO sleep_reminder_log (user_name) VALUES ($1) ON CONFLICT (user_name, reminder_date) DO NOTHING`, [sessionUserName]);
+        await query(`INSERT INTO sleep_reminder_log (user_name) VALUES ($1) ON CONFLICT (user_name, reminder_date) DO NOTHING RETURNING user_name`, [sessionUserName]);
       }
     } catch { /* non-fatal */ }
   }

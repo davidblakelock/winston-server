@@ -79,7 +79,8 @@ export async function upsertBriefingPreference(
     `INSERT INTO briefing_preferences (user_name, pref_key, pref_value, updated_at)
      VALUES ($1, $2, $3, NOW())
      ON CONFLICT (user_name, pref_key)
-     DO UPDATE SET pref_value = EXCLUDED.pref_value, updated_at = NOW()`,
+     DO UPDATE SET pref_value = EXCLUDED.pref_value, updated_at = NOW()
+     RETURNING user_name`,
     [userName, key, value]
   );
 }
@@ -89,7 +90,7 @@ export async function resetBriefingPreference(
   key: PrefKey
 ): Promise<void> {
   await query(
-    `DELETE FROM briefing_preferences WHERE user_name = $1 AND pref_key = $2`,
+    `DELETE FROM briefing_preferences WHERE user_name = $1 AND pref_key = $2 RETURNING user_name`,
     [userName, key]
   );
 }

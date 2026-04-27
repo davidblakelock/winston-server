@@ -155,7 +155,8 @@ router.post("/reminders/:id/snooze", async (req: Request, res: Response) => {
   await query(
     `UPDATE reminders
         SET fire_at = $1, status = 'pending', last_fired_at = NULL
-      WHERE id = $2`,
+      WHERE id = $2
+      RETURNING id`,
     [snoozeUntil, id]
   );
   res.json({ success: true, snoozedUntil: snoozeUntil });
@@ -181,7 +182,7 @@ router.post("/reminders/:id/acknowledge", async (req: Request, res: Response) =>
     // Accept both 'fired' (legacy rows from before direct-complete) and 'completed'
     // (rows already finalised by the scheduler).  Idempotent either way.
     const result = await query(
-      `UPDATE reminders SET status = 'completed' WHERE id = $1 AND status IN ('fired', 'completed')`,
+      `UPDATE reminders SET status = 'completed' WHERE id = $1 AND status IN ('fired', 'completed') RETURNING id`,
       [numId]
     );
     console.log(`[ACKNOWLEDGE] id=${numId} rowsAffected=${result.rowCount}`);
@@ -209,7 +210,7 @@ router.post("/reminders/:id/complete", async (req: Request, res: Response) => {
   }
 
   await query(
-    `UPDATE reminders SET status = 'completed' WHERE id = $1 AND status IN ('pending', 'fired')`,
+    `UPDATE reminders SET status = 'completed' WHERE id = $1 AND status IN ('pending', 'fired') RETURNING id`,
     [numId]
   );
   res.json({ success: true });

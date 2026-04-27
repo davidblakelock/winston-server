@@ -52,7 +52,8 @@ export async function recordMention(
 ): Promise<void> {
   await query(
     `INSERT INTO relationship_mentions (user_name, person_name, relationship_type, mention_type, notes, mention_date)
-     VALUES ($1, $2, $3, $4, $5, CURRENT_DATE)`,
+     VALUES ($1, $2, $3, $4, $5, CURRENT_DATE)
+     RETURNING id`,
     [userName, personName, relationshipType, mentionType, notes ?? null]
   ).catch((err) => logger.warn({ err }, "recordMention failed"));
 }

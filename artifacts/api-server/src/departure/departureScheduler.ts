@@ -54,7 +54,8 @@ async function markAlertSent(eventTitle: string, eventDate: string, userName: st
     await query(
       `INSERT INTO departure_alert_log (event_title, event_date, user_name)
        VALUES ($1, $2, $3)
-       ON CONFLICT DO NOTHING`,
+       ON CONFLICT DO NOTHING
+       RETURNING id`,
       [eventTitle, eventDate, userName]
     );
   } catch {}

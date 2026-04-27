@@ -84,7 +84,8 @@ router.post("/demo/waitlist", async (req: Request, res: Response) => {
     await query(
       `INSERT INTO demo_waitlist (email, source)
        VALUES ($1, $2)
-       ON CONFLICT DO NOTHING`,
+       ON CONFLICT DO NOTHING
+       RETURNING email`,
       [trimmed, source]
     );
     logger.info({ email: trimmed, source }, "[DEMO] Waitlist signup");

@@ -232,7 +232,7 @@ export async function removeBill(nameQuery: string, userName = NATIVE_STORED_NAM
 
 export async function markReminded(id: number, date: string): Promise<void> {
   await query(
-    `UPDATE financial_obligations SET last_reminded_date = $1 WHERE id = $2`,
+    `UPDATE financial_obligations SET last_reminded_date = $1 WHERE id = $2 RETURNING id`,
     [date, id]
   );
 }

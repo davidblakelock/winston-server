@@ -127,7 +127,7 @@ router.post("/messages", async (req: Request, res: Response) => {
 
     for (const m of toSave) {
       await query(
-        "INSERT INTO chat_messages (user_name, role, content) VALUES ($1, $2, $3)",
+        "INSERT INTO chat_messages (user_name, role, content) VALUES ($1, $2, $3) RETURNING id",
         [userName, m.role, m.content.slice(0, 8000)] // cap at 8k chars
       );
       // Broadcast to all other devices for this user so chat stays in sync
@@ -143,7 +143,7 @@ router.post("/messages", async (req: Request, res: Response) => {
     // Layer 2 of conversation memory. Claude never auto-loads old messages; they are
     // only surfaced on demand via GET /api/messages/search.
     await query(
-      "DELETE FROM chat_messages WHERE user_name = $1 AND created_at < NOW() - INTERVAL '365 days'",
+      "DELETE FROM chat_messages WHERE user_name = $1 AND created_at < NOW() - INTERVAL '365 days' RETURNING id",
       [userName]
     ).catch(() => {});
 
@@ -160,7 +160,7 @@ router.delete("/messages", async (req: Request, res: Response) => {
     const userName = await getUserName(req);
     if (!userName) { res.status(401).json({ error: "unauthorized" }); return; }
 
-    await query("DELETE FROM chat_messages WHERE user_name = $1", [userName]);
+    await query("DELETE FROM chat_messages WHERE user_name = $1 RETURNING id", [userName]);
     res.json({ cleared: true });
   } catch (err) {
     req.log.error({ err }, "Messages clear error");

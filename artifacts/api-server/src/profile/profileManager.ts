@@ -145,7 +145,7 @@ export async function addProfileItem(
     // Upsert: update detail only if caller provided a non-null value
     if (cleanDetail !== null) {
       await query(
-        `UPDATE profile_items SET detail = $1 WHERE id = $2`,
+        `UPDATE profile_items SET detail = $1 WHERE id = $2 RETURNING id`,
         [cleanDetail, existing.rows[0].id]
       );
     }
@@ -184,7 +184,7 @@ export async function removeProfileItem(
   userName = NATIVE_STORED_NAME
 ): Promise<boolean> {
   const { rowCount } = await query(
-    `DELETE FROM profile_items WHERE user_name = $1 AND category = $2 AND LOWER(name) = LOWER($3)`,
+    `DELETE FROM profile_items WHERE user_name = $1 AND category = $2 AND LOWER(name) = LOWER($3) RETURNING id`,
     [userName, category, name]
   );
   return (rowCount ?? 0) > 0;

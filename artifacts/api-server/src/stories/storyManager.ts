@@ -23,6 +23,7 @@ export async function ensureStoryState(): Promise<void> {
     INSERT INTO story_state (id, current_cycle)
     VALUES (1, 1)
     ON CONFLICT (id) DO NOTHING
+    RETURNING id
   `);
 }
 
@@ -59,7 +60,7 @@ async function generateNewCycle(cycleNum: number): Promise<void> {
     .join(", ");
 
   await query(
-    `INSERT INTO story_queue (question_id, cycle_num, position) VALUES ${values}`
+    `INSERT INTO story_queue (question_id, cycle_num, position) VALUES ${values} RETURNING id`
   );
 
   logger.info({ cycleNum, count: questions.length }, "[STORY] New question cycle generated");
@@ -99,7 +100,7 @@ export async function getNextStoryQuestion(): Promise<StoryQuestion | null> {
   logger.info({ currentCycle, nextCycle }, "[STORY] Cycle exhausted, generating new cycle");
 
   await query(
-    "UPDATE story_state SET current_cycle = $1 WHERE id = 1",
+    "UPDATE story_state SET current_cycle = $1 WHERE id = 1 RETURNING id",
     [nextCycle]
   );
   await generateNewCycle(nextCycle);
@@ -131,7 +132,8 @@ export async function markQuestionAsked(questionId: number): Promise<void> {
   await query(
     `UPDATE story_queue
      SET asked_at = NOW()
-     WHERE question_id = $1 AND cycle_num = $2 AND asked_at IS NULL`,
+     WHERE question_id = $1 AND cycle_num = $2 AND asked_at IS NULL
+     RETURNING question_id`,
     [questionId, currentCycle]
   );
   logger.info({ questionId, currentCycle }, "[STORY] Question marked as asked");
@@ -174,7 +176,7 @@ export async function getPendingQuestionId(): Promise<number | null> {
 export async function setPendingQuestion(questionId: number, questionText: string): Promise<void> {
   await ensureStoryState();
   await query(
-    "UPDATE story_state SET pending_prompt = $1, prompt_sent_at = NOW(), pending_question_id = $2 WHERE id = 1",
+    "UPDATE story_state SET pending_prompt = $1, prompt_sent_at = NOW(), pending_question_id = $2 WHERE id = 1 RETURNING id",
     [questionText, questionId]
   );
 }
@@ -182,7 +184,7 @@ export async function setPendingQuestion(questionId: number, questionText: strin
 export async function clearPendingPrompt(): Promise<void> {
   await ensureStoryState();
   await query(
-    "UPDATE story_state SET pending_prompt = NULL, prompt_sent_at = NULL, pending_question_id = NULL WHERE id = 1"
+    "UPDATE story_state SET pending_prompt = NULL, prompt_sent_at = NULL, pending_question_id = NULL WHERE id = 1 RETURNING id"
   );
 }
 
@@ -196,7 +198,7 @@ export async function getRandomPrompt(): Promise<string> {
 export async function setPendingPrompt(prompt: string): Promise<void> {
   await ensureStoryState();
   await query(
-    "UPDATE story_state SET pending_prompt = $1, prompt_sent_at = NOW() WHERE id = 1",
+    "UPDATE story_state SET pending_prompt = $1, prompt_sent_at = NOW() WHERE id = 1 RETURNING id",
     [prompt]
   );
 }

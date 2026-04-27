@@ -94,7 +94,7 @@ async function getAccessToken(): Promise<{ token: string; hasContactsScope: bool
         if (refreshData.access_token) {
           const newExpiry = new Date(Date.now() + (refreshData.expires_in ?? 3600) * 1000);
           await query(
-            `UPDATE google_auth SET access_token = $1, token_expiry = $2, updated_at = NOW() WHERE user_name = $3`,
+            `UPDATE google_auth SET access_token = $1, token_expiry = $2, updated_at = NOW() WHERE user_name = $3 RETURNING user_name`,
             [refreshData.access_token, newExpiry, row.user_name]
           );
           logger.info(`[CONTACTS] Token refreshed for ${row.email ?? row.user_name}`);
@@ -197,7 +197,8 @@ export async function saveCuratedContact(contact: Contact, userName: string): Pr
   await query(
     `INSERT INTO google_contacts (user_name, resource_name, display_name, email, phone, address)
      VALUES ($1, $2, $3, $4, $5, $6)
-     ON CONFLICT DO NOTHING`,
+     ON CONFLICT DO NOTHING
+     RETURNING id`,
     [userName, contact.resourceName ?? null, contact.name, contact.email ?? null, contact.phone ?? null, contact.address ?? null]
   );
   logger.info(`[CONTACTS] Curated contact saved: ${contact.name} for ${userName}`);
@@ -343,7 +344,7 @@ async function getAccessTokenForUser(
       if (refreshData.access_token) {
         const newExpiry = new Date(Date.now() + (refreshData.expires_in ?? 3600) * 1000);
         await query(
-          `UPDATE google_auth SET access_token = $1, token_expiry = $2, updated_at = NOW() WHERE user_name = $3`,
+          `UPDATE google_auth SET access_token = $1, token_expiry = $2, updated_at = NOW() WHERE user_name = $3 RETURNING user_name`,
           [refreshData.access_token, newExpiry, userName]
         );
         return { token: refreshData.access_token, hasContactsScope };

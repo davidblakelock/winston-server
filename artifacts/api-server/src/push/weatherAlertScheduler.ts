@@ -91,7 +91,8 @@ async function markSent(userName: string, alertId: string, event: string): Promi
   await query(
     `INSERT INTO weather_alert_log (user_name, alert_id, event)
      VALUES ($1, $2, $3)
-     ON CONFLICT (user_name, alert_id) DO NOTHING`,
+     ON CONFLICT (user_name, alert_id) DO NOTHING
+     RETURNING user_name`,
     [userName, alertId, event]
   );
   if (!_memCache.has(userName)) _memCache.set(userName, new Set());

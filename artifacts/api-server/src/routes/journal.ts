@@ -178,7 +178,7 @@ router.delete("/journal/:id", async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id, 10);
     const { rowCount } = await query(
-      `DELETE FROM journal_entries WHERE id = $1 AND user_name = $2`,
+      `DELETE FROM journal_entries WHERE id = $1 AND user_name = $2 RETURNING id`,
       [id, userName]
     );
 

@@ -60,7 +60,8 @@ export async function extractAndSaveFollowups(
       const days = Math.min(Math.max(Number(f.days) || 2, 2), 3);
       await query(
         `INSERT INTO conversation_followups (user_name, topic, detail, follow_up_date)
-         VALUES ($1, $2, $3, CURRENT_DATE + ($4 || ' days')::interval)`,
+         VALUES ($1, $2, $3, CURRENT_DATE + ($4 || ' days')::interval)
+         RETURNING id`,
         [userName, f.topic.substring(0, 100), f.detail.substring(0, 300), String(days)]
       );
     }
@@ -106,7 +107,8 @@ export async function markFollowupResolved(id: number): Promise<void> {
   await query(
     `UPDATE conversation_followups
      SET resolved = TRUE, resolved_at = NOW()
-     WHERE id = $1`,
+     WHERE id = $1
+     RETURNING id`,
     [id]
   );
 }

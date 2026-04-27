@@ -123,7 +123,7 @@ export async function deleteMemoryEntry(
   userName: string
 ): Promise<boolean> {
   const { rowCount } = await query(
-    `DELETE FROM memory_archive WHERE id = $1 AND user_name = $2`,
+    `DELETE FROM memory_archive WHERE id = $1 AND user_name = $2 RETURNING id`,
     [id, userName]
   );
   return (rowCount ?? 0) > 0;
@@ -136,7 +136,7 @@ export async function recategorizeMemoryEntry(
 ): Promise<boolean> {
   if (!VALID_CATEGORIES.includes(category as MemoryCategory)) return false;
   const { rowCount } = await query(
-    `UPDATE memory_archive SET category = $1 WHERE id = $2 AND user_name = $3`,
+    `UPDATE memory_archive SET category = $1 WHERE id = $2 AND user_name = $3 RETURNING id`,
     [category, id, userName]
   );
   return (rowCount ?? 0) > 0;
