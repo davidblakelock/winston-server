@@ -21,6 +21,7 @@ import garminRouter from "./garmin";
 import adminRouter from "./admin";
 import journalRouter from "./journal";
 import memoriesRouter from "./memories";
+import conversationRouter from "./conversation";
 
 const router: IRouter = Router();
 
@@ -46,5 +47,6 @@ router.use(garminRouter);
 router.use(adminRouter);
 router.use(journalRouter);
 router.use(memoriesRouter);
+router.use(conversationRouter);
 
 export default router;
