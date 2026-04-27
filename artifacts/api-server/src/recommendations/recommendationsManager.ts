@@ -52,7 +52,7 @@ export async function markFollowedUp(id: number): Promise<void> {
 }
 
 export async function dismissRecommendation(id: number): Promise<void> {
-  await query(`UPDATE recommendations SET dismissed = true WHERE id = $1`, [id]);
+  await query(`UPDATE recommendations SET dismissed = true WHERE id = $1 RETURNING id`, [id]);
 }
 
 export async function saveRecommendations(recs: Array<{ type: RecommendationType; name: string; context: string }>, userName = NATIVE_STORED_NAME): Promise<void> {

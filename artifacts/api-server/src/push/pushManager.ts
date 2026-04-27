@@ -112,7 +112,7 @@ export async function saveSubscriptionWithAction(
 }
 
 export async function removeSubscription(endpoint: string): Promise<void> {
-  await query(`DELETE FROM push_subscriptions WHERE endpoint = $1`, [endpoint]);
+  await query(`DELETE FROM push_subscriptions WHERE endpoint = $1 RETURNING id`, [endpoint]);
 }
 
 export async function getSubscriptions(userName = NATIVE_USER): Promise<PushSubscriptionData[]> {
@@ -266,7 +266,7 @@ export async function saveExpoToken(
 }
 
 export async function removeExpoToken(expoPushToken: string): Promise<void> {
-  await query(`DELETE FROM expo_push_tokens WHERE expo_push_token = $1`, [expoPushToken]);
+  await query(`DELETE FROM expo_push_tokens WHERE expo_push_token = $1 RETURNING id`, [expoPushToken]);
 }
 
 export async function getExpoTokens(userName = NATIVE_USER): Promise<string[]> {

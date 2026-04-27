@@ -136,7 +136,7 @@ router.delete("/lists/tv-shows/:id", async (req: Request, res: Response) => {
   const { id } = req.params;
   try {
     await query(
-      `DELETE FROM watched_shows WHERE id = $1 AND user_name = $2`,
+      `DELETE FROM watched_shows WHERE id = $1 AND user_name = $2 RETURNING id`,
       [id, userName]
     );
     res.json({ deleted: true });
@@ -180,7 +180,7 @@ router.delete("/lists/restaurants/:id", async (req: Request, res: Response) => {
   const { id } = req.params;
   try {
     await query(
-      `DELETE FROM profile_items WHERE id = $1 AND user_name = $2 AND category = 'restaurants'`,
+      `DELETE FROM profile_items WHERE id = $1 AND user_name = $2 AND category = 'restaurants' RETURNING id`,
       [id, userName]
     );
     res.json({ deleted: true });
@@ -248,7 +248,7 @@ router.delete("/lists/:listName/:id", async (req: Request, res: Response) => {
   const { listName, id } = req.params;
   try {
     await query(
-      `DELETE FROM list_items WHERE id = $1 AND user_name = $2 AND list_name = $3`,
+      `DELETE FROM list_items WHERE id = $1 AND user_name = $2 AND list_name = $3 RETURNING id`,
       [id, userName, listName]
     );
     res.json({ deleted: true });

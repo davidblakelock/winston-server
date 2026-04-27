@@ -236,7 +236,8 @@ app.listen(port, async (err) => {
            FROM push_subscriptions
            WHERE device_id IS NOT NULL
            GROUP BY user_name, device_id
-         )`
+         )
+       RETURNING id`
     );
     logger.info("Startup migration: push_subscriptions duplicate rows cleaned");
   } catch (e) {
@@ -270,7 +271,7 @@ app.listen(port, async (err) => {
     const stale = parseInt(rows[0]?.cnt ?? "0", 10);
     if (stale > 0) {
       await query(
-        `UPDATE watched_shows SET user_name = 'davidblakelock' WHERE user_name = 'David'`
+        `UPDATE watched_shows SET user_name = 'davidblakelock' WHERE user_name = 'David' RETURNING id`
       );
       logger.info({ migratedCount: stale }, "Startup migration: watched_shows user_name 'David' → 'davidblakelock'");
     } else {

@@ -167,7 +167,7 @@ export async function updateProfileField(
   if (fields.avatarBase64 !== undefined) { sets.push(`avatar_base64 = $${idx++}`); vals.push(fields.avatarBase64); }
   if (sets.length === 0) return;
   vals.push(userName);
-  await query(`UPDATE user_profiles SET ${sets.join(", ")} WHERE user_name = $${idx}`, vals);
+  await query(`UPDATE user_profiles SET ${sets.join(", ")} WHERE user_name = $${idx} RETURNING user_name`, vals);
 }
 
 // Fields that have dedicated columns — these are always written to their column
@@ -262,7 +262,7 @@ export async function upsertProfile(data: Partial<CollectedData>, userName = NAT
 }
 
 export async function completeOnboarding(userName = NATIVE_STORED_NAME): Promise<void> {
-  await query(`UPDATE user_profiles SET onboarding_completed = true WHERE user_name = $1`, [userName]);
+  await query(`UPDATE user_profiles SET onboarding_completed = true WHERE user_name = $1 RETURNING user_name`, [userName]);
 }
 
 export async function isOnboardingComplete(userName = NATIVE_STORED_NAME): Promise<boolean> {

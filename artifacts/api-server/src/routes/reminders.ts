@@ -130,7 +130,7 @@ router.post("/reminders", async (req: Request, res: Response) => {
 // ── DELETE /api/reminders/:id — cancel a reminder by ID ──────────────────────
 router.delete("/reminders/:id", async (req: Request, res: Response) => {
   const id = parseInt(req.params.id, 10);
-  await query(`DELETE FROM reminders WHERE id = $1`, [id]);
+  await query(`DELETE FROM reminders WHERE id = $1 RETURNING id`, [id]);
   res.json({ success: true });
   broadcast("reminder_sync", { action: "deleted", id });
 });
@@ -139,7 +139,7 @@ router.delete("/reminders/:id", async (req: Request, res: Response) => {
 router.delete("/reminders/delete", async (req: Request, res: Response) => {
   const id = req.body?.id ?? req.query?.id;
   if (!id) { res.status(400).json({ error: "id required" }); return; }
-  await query(`DELETE FROM reminders WHERE id = $1`, [id]);
+  await query(`DELETE FROM reminders WHERE id = $1 RETURNING id`, [id]);
   res.json({ success: true });
   broadcast("reminder_sync", { action: "deleted", id: parseInt(String(id), 10) });
 });
