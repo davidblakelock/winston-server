@@ -143,7 +143,8 @@ router.get("/auth/callback", async (req: Request, res: Response) => {
            refresh_token = COALESCE(EXCLUDED.refresh_token, google_auth.refresh_token),
            token_expiry  = EXCLUDED.token_expiry,
            scope         = EXCLUDED.scope,
-           updated_at    = NOW()`,
+           updated_at    = NOW()
+         RETURNING user_name`,
         [
           userName,
           email,
@@ -163,7 +164,8 @@ router.get("/auth/callback", async (req: Request, res: Response) => {
            token_expiry   = EXCLUDED.token_expiry,
            scopes         = EXCLUDED.scopes,
            external_email = EXCLUDED.external_email,
-           updated_at     = NOW()`,
+           updated_at     = NOW()
+         RETURNING user_name`,
         [
           userName,
           tokens.access_token ?? null,
