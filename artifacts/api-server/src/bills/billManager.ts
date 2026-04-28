@@ -237,6 +237,39 @@ export async function markReminded(id: number, date: string): Promise<void> {
   );
 }
 
+// ── Bill payment log ──────────────────────────────────────────────────────────
+// Tracks when a user marks a bill as paid (from notification action button).
+query(`
+  CREATE TABLE IF NOT EXISTS bill_payment_log (
+    id          integer GENERATED ALWAYS AS IDENTITY NOT NULL PRIMARY KEY,
+    user_name   text NOT NULL,
+    bill_id     integer NOT NULL,
+    bill_name   text NOT NULL,
+    paid_date   date NOT NULL DEFAULT CURRENT_DATE,
+    logged_at   timestamptz NOT NULL DEFAULT now()
+  )
+`).catch(() => {});
+
+export async function markBillPaid(
+  billId: number,
+  billName: string,
+  userName = NATIVE_STORED_NAME
+): Promise<void> {
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+  // Log the payment
+  await query(
+    `INSERT INTO bill_payment_log (user_name, bill_id, bill_name, paid_date)
+     VALUES ($1, $2, $3, $4)
+     RETURNING id`,
+    [userName, billId, billName, today]
+  );
+  // Update last_reminded_date to suppress further reminders this cycle
+  await query(
+    `UPDATE financial_obligations SET last_reminded_date = $1 WHERE id = $2 RETURNING id`,
+    [today, billId]
+  );
+}
+
 // ── Claude extraction ─────────────────────────────────────────────────────────
 export interface ExtractedBill {
   name: string;

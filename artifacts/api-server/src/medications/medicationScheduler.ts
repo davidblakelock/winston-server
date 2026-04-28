@@ -73,7 +73,7 @@ export function startMedicationScheduler(): void {
               });
               sendPushToAll({
                 title: `💊 Medication Reminder — ${companion}`,
-                body: `Don't forget your ${medText} this morning. Take with food if you can.`,
+                body: `Time to take your ${medText}.`,
                 tag: "medication-morning",
                 notificationType: "medication",
                 // "medication-action" category shows "Taken ✓" and "Remind in 30 min" buttons.
@@ -109,8 +109,8 @@ export function startMedicationScheduler(): void {
               isMedication: true,
             });
             sendPushToAll({
-              title: `💊 Gentle Nudge — ${companion}`,
-              body: `Have you taken your ${medText} yet?`,
+              title: `💊 Medication Reminder — ${companion}`,
+              body: `Time to take your ${medText}.`,
               tag: "medication-followup",
               notificationType: "medication",
               categoryId: "medication-action",
