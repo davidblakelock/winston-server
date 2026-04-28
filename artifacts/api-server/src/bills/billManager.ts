@@ -237,42 +237,60 @@ export async function markReminded(id: number, date: string): Promise<void> {
   );
 }
 
-// ── Startup seed — restore known bills into Supabase if missing ───────────────
-// Supabase is the authoritative store, but local PostgreSQL may have stale data.
-// This runs once at startup to ensure the known bills are present in Supabase.
+// ── Startup bill audit — log ALL rows, migrate orphaned 'David' rows ──────────
+// Runs at startup to surface the true state of financial_obligations in Supabase
+// and migrate any rows still under the old user_name 'David'.
 (async () => {
   try {
-    const knownBills: Array<{
-      name: string; category: Category; frequency: Frequency;
-      dueDay: number; dueMonths: string | null; amount?: string;
-    }> = [
-      { name: "Amex",  category: "credit_card",   frequency: "monthly", dueDay: 15, dueMonths: null },
-      { name: "Rent",  category: "rent_mortgage",  frequency: "monthly", dueDay: 1,  dueMonths: null, amount: "$2950" },
-    ];
+    // 1. Dump every row so we can see what actually exists
+    const { rows: allRows } = await query<{
+      id: number; user_name: string; name: string; category: string;
+      frequency: string; due_day: number; amount: string | null; active: boolean;
+    }>(`SELECT id, user_name, name, category, frequency, due_day, amount, active
+        FROM financial_obligations
+        ORDER BY id`);
 
-    for (const bill of knownBills) {
-      const existing = await query(
-        `SELECT id FROM financial_obligations
-         WHERE user_name = $1 AND lower(name) = lower($2) AND active = true`,
-        [NATIVE_STORED_NAME, bill.name]
-      );
-      if (existing.rows.length > 0) {
-        console.log(`[BILLS SEED] "${bill.name}" already in Supabase — skipping`);
-        continue;
-      }
-      const leadDays = defaultLeadDays(bill.frequency);
-      await query(
-        `INSERT INTO financial_obligations
-           (user_name, name, category, amount, frequency, due_day, due_months, reminder_lead_days)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         RETURNING id`,
-        [NATIVE_STORED_NAME, bill.name, bill.category, bill.amount ?? null,
-         bill.frequency, bill.dueDay, bill.dueMonths, leadDays]
-      );
-      console.log(`[BILLS SEED] Inserted "${bill.name}" into Supabase`);
+    console.log(`[BILLS AUDIT] Total rows in financial_obligations: ${allRows.length}`);
+    for (const r of allRows) {
+      console.log(`[BILLS AUDIT]   id=${r.id} user="${r.user_name}" name="${r.name}" freq=${r.frequency} dueDay=${r.due_day} amount=${r.amount ?? "null"} active=${r.active}`);
     }
+
+    // 2. Migrate any rows still under the old user_name 'David'
+    const davidRows = allRows.filter((r) => r.user_name === "David");
+    if (davidRows.length > 0) {
+      await query(
+        `UPDATE financial_obligations SET user_name = $1 WHERE user_name = 'David' RETURNING id`,
+        [NATIVE_STORED_NAME]
+      );
+      console.log(`[BILLS AUDIT] Migrated ${davidRows.length} row(s) from user_name='David' to '${NATIVE_STORED_NAME}'`);
+    }
+
+    // 3. Remove the incorrectly-seeded Amex bill (user does not have Amex)
+    const amex = allRows.find(
+      (r) => r.user_name === NATIVE_STORED_NAME && r.name.toLowerCase() === "amex" && r.active
+    );
+    if (amex) {
+      await query(
+        `UPDATE financial_obligations SET active = false WHERE id = $1 RETURNING id`,
+        [amex.id]
+      );
+      console.log(`[BILLS AUDIT] Removed incorrect Amex bill (id=${amex.id}) — user does not have Amex`);
+    }
+
+    // 4. Ensure Rent has the correct notes (pay via Venmo to Wes Cole)
+    const rent = allRows.find(
+      (r) => r.name.toLowerCase() === "rent" && r.active
+    );
+    if (rent) {
+      await query(
+        `UPDATE financial_obligations SET notes = 'Pay via Venmo to Wes Cole', amount = '$2950', due_day = 1 WHERE id = $1 RETURNING id`,
+        [rent.id]
+      );
+      console.log(`[BILLS AUDIT] Updated Rent (id=${rent.id}) with Venmo/Wes Cole notes`);
+    }
+
   } catch (err) {
-    console.warn("[BILLS SEED] Seed failed (non-fatal):", (err as Error).message);
+    console.warn("[BILLS AUDIT] Failed (non-fatal):", (err as Error).message);
   }
 })();
 
