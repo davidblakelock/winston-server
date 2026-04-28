@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
+import { resolveUserAlias } from "./userAliases.js";
 
 export function generateToken(): string {
   return crypto.randomBytes(32).toString("hex");
@@ -394,8 +395,20 @@ export async function validateSession(
   // Prefer picture stored directly on the session, fall back to google_users JOIN
   const picture = rows[0].session_picture ?? rows[0].gu_picture ?? undefined;
 
+  // Resolve any legacy username alias (e.g. 'David' → 'davidblakelock') HERE,
+  // at the lowest possible level, so every caller — middleware, routes, WebSocket
+  // handlers — receives the canonical name without needing its own alias logic.
+  const rawUserName = rows[0].user_name;
+  const resolvedUserName = resolveUserAlias(rawUserName);
+  if (rawUserName !== resolvedUserName) {
+    logger.info(
+      { tokenPrefix, rawUserName, resolvedUserName },
+      "[AUTH] validateSession — legacy username alias resolved"
+    );
+  }
+
   const result = {
-    userName: rows[0].user_name,
+    userName: resolvedUserName,
     email: rows[0].email,
     googleId: rows[0].google_id ?? undefined,
     picture: picture || undefined,
