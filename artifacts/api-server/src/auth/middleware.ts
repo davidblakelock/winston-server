@@ -28,7 +28,7 @@ function resolveNativeUser(req: Request): string {
   const headerUser = req.headers["x-user-name"];
   if (typeof headerUser === "string" && headerUser.trim()) {
     const name = headerUser.trim();
-    return NATIVE_USER_ALIASES[name] ?? name;
+    return resolveUserAlias(name);
   }
   return NATIVE_USER;
 }
