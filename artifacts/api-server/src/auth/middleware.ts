@@ -12,37 +12,17 @@
 import type { Request, Response } from "express";
 import { validateSession } from "./sessionAuth.js";
 import { logger } from "../lib/logger.js";
+import { NATIVE_USER, resolveUserAlias } from "./userAliases.js";
+
+export { NATIVE_USER, resolveUserAlias };
 
 export const NATIVE_API_KEY = "winston-native-2026";
-
-/**
- * The single canonical username for the primary user.
- * All database reads and writes use this name — no legacy aliases.
- */
-export const NATIVE_USER = "davidblakelock";
 
 /**
  * @deprecated Use NATIVE_USER directly. Kept as an alias so import sites
  * compile without change during the transition period.
  */
 export const NATIVE_STORED_NAME = NATIVE_USER;
-
-/**
- * Legacy usernames the native app may still have stored in SecureStore.
- * Map them all to the canonical NATIVE_USER so no route sees a stale name.
- */
-const NATIVE_USER_ALIASES: Record<string, string> = {
-  David: NATIVE_USER,
-  david: NATIVE_USER,
-};
-
-/**
- * Resolve any legacy username alias to the canonical NATIVE_USER.
- * Safe to call on any user-supplied name — unknown names pass through unchanged.
- */
-export function resolveUserAlias(name: string): string {
-  return NATIVE_USER_ALIASES[name] ?? name;
-}
 
 function resolveNativeUser(req: Request): string {
   const headerUser = req.headers["x-user-name"];

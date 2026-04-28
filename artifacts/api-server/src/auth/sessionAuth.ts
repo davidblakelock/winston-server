@@ -341,11 +341,20 @@ export async function createSession(
   googleId?: string,
   picture?: string
 ): Promise<string> {
+  // Always store the canonical username — never a legacy alias.
+  const canonicalName = resolveUserAlias(userName);
+  if (canonicalName !== userName) {
+    logger.info(
+      { rawUserName: userName, canonicalName },
+      "[AUTH] createSession — resolved legacy alias before storing session"
+    );
+  }
+
   const token = generateToken();
   const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
 
   logger.info(
-    { userName, email, googleId: googleId ?? null, hasPicture: !!picture, tokenPrefix: token.slice(0, 8) + "…", expiresAt },
+    { userName: canonicalName, email, googleId: googleId ?? null, hasPicture: !!picture, tokenPrefix: token.slice(0, 8) + "…", expiresAt },
     "[AUTH] createSession — inserting new session into app_sessions"
   );
 
@@ -353,7 +362,7 @@ export async function createSession(
     `INSERT INTO app_sessions (user_name, email, token, expires_at, google_id, picture)
      VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING token`,
-    [userName, email, token, expiresAt, googleId ?? null, picture ?? null]
+    [canonicalName, email, token, expiresAt, googleId ?? null, picture ?? null]
   );
 
   logger.info({ userName, email, hasPicture: !!picture, tokenPrefix: token.slice(0, 8) + "…" }, "[AUTH] createSession — session created successfully");

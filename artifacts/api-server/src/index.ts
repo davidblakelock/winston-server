@@ -67,6 +67,13 @@ app.listen(port, async (err) => {
   // are found and renamed regardless of which feature saved them.
   try {
     const userDataTables = [
+      // Auth / session tables — most important: clean up the session store itself
+      "app_sessions",
+      "google_users",
+      "microsoft_users",
+      "apple_users",
+      "user_profiles",
+      // Feature data tables
       "financial_obligations",
       "reminders",
       "messages",
@@ -80,8 +87,10 @@ app.listen(port, async (err) => {
       "journal_entries",
       "dates_tracker",
       "push_tokens",
+      "push_subscriptions",
       "briefing_preferences",
       "tv_shows",
+      "watched_shows",
       "lists",
       "list_items",
       "relationships",
@@ -90,6 +99,7 @@ app.listen(port, async (err) => {
       "sunday_summaries",
       "winddown_schedules",
       "onboarding_state",
+      "bill_payment_log",
     ];
     let totalMigrated = 0;
     for (const table of userDataTables) {
