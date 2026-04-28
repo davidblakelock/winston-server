@@ -5,7 +5,7 @@ import { getWatchedShows } from "../tv/showManager.js";
 import { fetchEpisodesForDate } from "../tv/tvmaze.js";
 import { preFetchMorningNews, preFetchDailyMotivation } from "../news/newsManager.js";
 import { preFetchMorningBriefing } from "../morning/briefingPregenerate.js";
-import { getStaticBriefingContext } from "../morning/briefingCache.js";
+import { getStaticBriefingContext, loadStaticContextFromDb } from "../morning/briefingCache.js";
 import { getActiveUsers, type ActiveUser } from "../onboarding/onboardingManager.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
@@ -171,7 +171,18 @@ async function startupPrefetch(): Promise<void> {
     // Mark as done so the cron doesn't double-fire on the same calendar day
     prefetchDone.set(userName, today);
     newsPrefetchDone.set(userName, today);
-    logger.info({ userName }, "[MorningPush] Startup — pre-generating briefing");
+
+    // CRITICAL: Check DB for today's static context before spending tokens on regeneration.
+    // Every server restart used to unconditionally call preFetchMorningBriefing (6+ web_search
+    // Claude calls). If today's content is already in the DB, restore it to the in-memory cache
+    // and skip the expensive re-generation entirely.
+    const alreadyCached = await loadStaticContextFromDb(userName).catch(() => false);
+    if (alreadyCached) {
+      logger.info({ userName }, "[MorningPush] Startup — static context restored from DB, skipping pre-generation");
+      continue;
+    }
+
+    logger.info({ userName }, "[MorningPush] Startup — no DB cache found, pre-generating briefing");
     preFetchMorningBriefing(userName).catch((err) =>
       logger.warn({ err, userName }, "[MorningPush] Startup briefing error")
     );

@@ -169,7 +169,7 @@ import {
 import { validateSession } from "../auth/sessionAuth.js";
 import { authenticate, tryAuthenticate } from "../auth/middleware.js";
 import { normalizeTtsText } from "../lib/ttsNormalize.js";
-import { getCachedBriefing, setCachedBriefing, getStaticBriefingContext } from "../morning/briefingCache.js";
+import { getCachedBriefing, setCachedBriefing, getStaticBriefingContext, loadStaticContextFromDb } from "../morning/briefingCache.js";
 import { updateSettings as updateWinddownSettings } from "../winddown/winddownManager.js";
 import { analyzePressureDelta, formatPressureContext, formatPressureContextNoChange } from "../weather/pressureScheduler.js";
 import {
@@ -986,13 +986,21 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     let staticCtx = getStaticBriefingContext(sessionUserName);
 
     if (!staticCtx) {
-      req.log.info({ sessionUserName }, "Morning briefing static context missing — generating now (inline)");
-      try {
-        await preFetchMorningBriefing(sessionUserName);
+      // Before triggering an expensive full re-generation (6+ web_search Claude calls),
+      // check whether today's context is already persisted in the DB from an earlier run.
+      const restoredFromDb = await loadStaticContextFromDb(sessionUserName).catch(() => false);
+      if (restoredFromDb) {
         staticCtx = getStaticBriefingContext(sessionUserName);
-        req.log.info({ sessionUserName, ready: !!staticCtx }, "Inline morning briefing pre-generation complete");
-      } catch (err) {
-        req.log.warn({ err }, "Inline morning briefing pre-generation failed");
+        req.log.info({ sessionUserName }, "Morning briefing static context restored from DB — no regeneration needed");
+      } else {
+        req.log.info({ sessionUserName }, "Morning briefing static context missing — generating now (inline)");
+        try {
+          await preFetchMorningBriefing(sessionUserName);
+          staticCtx = getStaticBriefingContext(sessionUserName);
+          req.log.info({ sessionUserName, ready: !!staticCtx }, "Inline morning briefing pre-generation complete");
+        } catch (err) {
+          req.log.warn({ err }, "Inline morning briefing pre-generation failed");
+        }
       }
     }
 
