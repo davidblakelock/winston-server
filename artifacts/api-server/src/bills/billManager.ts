@@ -283,30 +283,27 @@ export async function markReminded(id: number, date: string): Promise<void> {
     const rent = allRows.find(
       (r) => r.user_name === NATIVE_STORED_NAME && r.name.toLowerCase() === "rent" && r.active
     );
-    // Treat null, undefined, or the literal string "NULL" (Supabase exec_sql artifact) as missing
+    // Correct values: amount=$2,950  due_day=28  notes=Venmo/Wes Cole
+    const RENT_AMOUNT = "$2,950";
+    const RENT_DUE_DAY = 28;
     const rentAmountMissing = !rent?.amount || rent.amount.toUpperCase() === "NULL";
-    if (rent && rentAmountMissing) {
-      // Retire the incomplete row
+    const rentNeedsRefresh = rent && (rentAmountMissing || rent.due_day !== RENT_DUE_DAY);
+    if (rentNeedsRefresh) {
+      // Retire the stale row and INSERT a fresh one — UPDATE is unreliable via exec_sql
       await query(
         `UPDATE financial_obligations SET active = false WHERE id = $1 RETURNING id`,
-        [rent.id]
+        [rent!.id]
       );
-      // Insert a fresh row with all correct values
       await query(
         `INSERT INTO financial_obligations
            (user_name, name, category, amount, frequency, due_day, due_months, reminder_lead_days, notes)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING id`,
-        [NATIVE_STORED_NAME, "Rent", "rent_mortgage", "$2,950", "monthly", 1, null, 3, "Pay via Venmo to Wes Cole"]
+        [NATIVE_STORED_NAME, "Rent", "rent_mortgage", RENT_AMOUNT, "monthly", RENT_DUE_DAY, null, 3, "Pay via Venmo to Wes Cole"]
       );
-      console.log(`[BILLS AUDIT] Re-seeded Rent with correct amount — old id=${rent.id} retired`);
+      console.log(`[BILLS AUDIT] Re-seeded Rent (dueDay=${RENT_DUE_DAY}, amount=${RENT_AMOUNT}) — old id=${rent!.id} retired`);
     } else if (rent) {
-      // Amount is already set — just make sure the payment note is correct
-      await query(
-        `UPDATE financial_obligations SET notes = 'Pay via Venmo to Wes Cole', due_day = 1 WHERE id = $1 RETURNING id`,
-        [rent.id]
-      );
-      console.log(`[BILLS AUDIT] Rent (id=${rent.id}) already has amount=${rent.amount} — notes ensured`);
+      console.log(`[BILLS AUDIT] Rent (id=${rent.id}) correct — amount=${rent.amount} dueDay=${rent.due_day}`);
     }
 
     // 5. Seed missing bills — only insert if not already present
@@ -322,8 +319,8 @@ export async function markReminded(id: number, date: string): Promise<void> {
         name: "Rent",
         category: "rent_mortgage",
         frequency: "monthly",
-        dueDay: 1,
-        amount: "$2950",
+        dueDay: 28,
+        amount: "$2,950",
         notes: "Pay via Venmo to Wes Cole",
       },
       {
