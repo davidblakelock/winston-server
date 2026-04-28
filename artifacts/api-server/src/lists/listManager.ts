@@ -38,7 +38,7 @@ export async function extractListOp(message: string, contextListName?: string): 
     : "";
 
   const extraction = await anthropic.messages.create({
-    model: "claude-haiku-4-5",
+    model: "claude-haiku-4-5-20251001",
     max_tokens: 256,
     system: `Extract a list management operation from the user's message.
 Return ONLY a JSON object with this shape:

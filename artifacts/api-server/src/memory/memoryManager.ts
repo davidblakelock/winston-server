@@ -59,7 +59,7 @@ export async function generateMemorySummary(
 
   try {
     const response = await anthropic.messages.create({
-      model: "claude-haiku-4-5",
+      model: "claude-haiku-4-5-20251001",
       max_tokens: 250,
       messages: [{ role: "user", content: prompt }],
     });
@@ -263,7 +263,7 @@ export async function extractAndSaveConversationFacts(
 
   try {
     const response = await anthropic.messages.create({
-      model: "claude-haiku-4-5",
+      model: "claude-haiku-4-5-20251001",
       max_tokens: 300,
       system: `You extract durable personal facts from a user's message that are worth saving to their profile.
 

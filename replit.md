@@ -13,8 +13,14 @@ Winston is a personal AI companion app with a dark-themed chat interface. Users 
 - `ELEVENLABS_API_KEY` — ElevenLabs text-to-speech
 - `ELEVENLABS_VOICE_ID` — ElevenLabs voice ID
 
+### Anthropic Model Policy
+- **Default model**: `claude-haiku-4-5-20251001` — use for all extraction, parsing, formatting, summarization, scheduled tasks, and simple generation
+- **Complex reasoning only**: `claude-sonnet-4-6` — use only when multi-step reasoning or high-quality output is required (morning briefing delivery, calendar parsing, evening check-in, text composition, profile analysis, web_search-based news)
+- **Opus is banned in production** — never use any Opus model
+- Import from `src/lib/models.ts` (`MODEL_HAIKU`, `MODEL_SONNET`) instead of hardcoding strings
+
 ### Features
-- Chat with Claude Opus (personalized Emma Peel system prompt, fully multi-user — no hardcoded names)
+- Chat with Claude AI (personalized companion system prompt, fully multi-user — no hardcoded names)
 - Auto text-to-speech via ElevenLabs with browser TTS fallback
 - Typing indicator, replay button, voice input (STT via ElevenLabs Scribe)
 - Morning briefings: weather (dynamic city from profile), Gmail, Google Calendar

@@ -537,7 +537,7 @@ async function musicWebSearch(ctx: UserLocalContext): Promise<LocalContentItem[]
   logger.info(`[LocalContent] Running music events web search for ${city}`);
   try {
     const result = await anthropic.messages.create({
-      model: "claude-haiku-4-5",
+      model: "claude-haiku-4-5-20251001",
       max_tokens: 600,
       tools: [{ type: "web_search_20250305" as "web_search_20250305", name: "web_search", max_uses: 2 }],
       system: `You are a local music events researcher for ${city}. Search for upcoming jazz, outdoor concerts, and live music events in ${city} this week and next week. Focus on venues such as: ${venueHints}. Return ONLY a JSON array (no markdown, no explanation) with up to 4 objects, each having: headline (string), summary (1–2 sentence string), url (string), source (string).`,
@@ -579,7 +579,7 @@ async function webSearchFallback(ctx: UserLocalContext): Promise<LocalContentIte
   logger.info(`[LocalContent] Running web search fallback for ${city}`);
   try {
     const result = await anthropic.messages.create({
-      model: "claude-haiku-4-5",
+      model: "claude-haiku-4-5-20251001",
       max_tokens: 600,
       tools: [{ type: "web_search_20250305" as "web_search_20250305", name: "web_search", max_uses: 3 }],
       system: `You are a local content researcher for ${city}. Search for recent news (within the last 72 hours) about new restaurant openings and events in ${city}. Return ONLY a JSON array (no markdown, no explanation) with up to 3 objects, each having: headline (string), summary (1–2 sentence string), url (string), source (string).`,

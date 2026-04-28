@@ -354,7 +354,7 @@ async function extractOnboardingData(
   const recentHistory = history.slice(-4).map((m) => `${m.role}: ${m.content}`).join("\n");
 
   const extraction = await anthropic.messages.create({
-    model: "claude-haiku-4-5",
+    model: "claude-haiku-4-5-20251001",
     max_tokens: 512,
     system: `You extract structured profile data from a user message in an onboarding conversation.
 Current scene: ${scene}. Already collected: ${JSON.stringify(current)}.
