@@ -77,7 +77,9 @@ export async function authenticate(
     return null;
   }
 
-  return session.userName;
+  // Apply alias resolution here too — the session may have been created when
+  // the user's name was still 'David' (the old legacy value).
+  return resolveUserAlias(session.userName);
 }
 
 /**
@@ -94,5 +96,7 @@ export async function tryAuthenticate(req: Request): Promise<string | null> {
   if (!authHeader?.startsWith("Bearer ")) return null;
 
   const session = await validateSession(authHeader.slice(7)).catch(() => null);
-  return session?.userName ?? null;
+  if (!session) return null;
+  // Resolve alias so Bearer-token auth paths see 'davidblakelock', not 'David'.
+  return resolveUserAlias(session.userName);
 }

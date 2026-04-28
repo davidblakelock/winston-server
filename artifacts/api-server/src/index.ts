@@ -61,6 +61,62 @@ app.listen(port, async (err) => {
 
   logger.info({ port }, "Server listening");
 
+  // ── One-time: migrate any rows still stored under legacy user_name 'David' ──
+  // The session may have been created before the canonical name was set to
+  // 'davidblakelock'. We sweep every user-data table on startup so stale rows
+  // are found and renamed regardless of which feature saved them.
+  try {
+    const userDataTables = [
+      "financial_obligations",
+      "reminders",
+      "messages",
+      "memory_items",
+      "profile_items",
+      "medications",
+      "medication_schedules",
+      "medication_reminder_log",
+      "mood_checkins",
+      "conversation_followups",
+      "journal_entries",
+      "dates_tracker",
+      "push_tokens",
+      "briefing_preferences",
+      "tv_shows",
+      "lists",
+      "list_items",
+      "relationships",
+      "contact_mentions",
+      "recommendations",
+      "sunday_summaries",
+      "winddown_schedules",
+      "onboarding_state",
+    ];
+    let totalMigrated = 0;
+    for (const table of userDataTables) {
+      try {
+        const result = await query(
+          `UPDATE ${table} SET user_name = 'davidblakelock'
+            WHERE user_name IN ('David', 'david')
+            RETURNING id`,
+          []
+        );
+        if (result.rows.length > 0) {
+          logger.info(`[USER-MIGRATE] ${table}: renamed ${result.rows.length} row(s) from 'David' → 'davidblakelock'`);
+          totalMigrated += result.rows.length;
+        }
+      } catch {
+        // Table may not exist yet — non-fatal
+      }
+    }
+    if (totalMigrated > 0) {
+      logger.info(`[USER-MIGRATE] Total rows renamed: ${totalMigrated}`);
+    } else {
+      logger.info("[USER-MIGRATE] No legacy 'David' rows found — nothing to migrate");
+    }
+  } catch (err) {
+    logger.warn({ err }, "[USER-MIGRATE] Migration sweep failed (non-fatal)");
+  }
+
   try {
     await ensureWinddownTables();
     await ensureBriefingPreferencesTable();

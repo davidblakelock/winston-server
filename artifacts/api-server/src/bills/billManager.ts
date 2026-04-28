@@ -289,6 +289,59 @@ export async function markReminded(id: number, date: string): Promise<void> {
       console.log(`[BILLS AUDIT] Updated Rent (id=${rent.id}) with Venmo/Wes Cole notes`);
     }
 
+    // 5. Seed missing bills — only insert if not already present
+    const canonical = allRows
+      .filter((r) => r.user_name === NATIVE_STORED_NAME && r.active)
+      .map((r) => r.name.toLowerCase());
+
+    const missingBills: Array<{
+      name: string; category: Category; frequency: Frequency;
+      dueDay: number; amount?: string; notes?: string;
+    }> = [
+      {
+        name: "Rent",
+        category: "rent_mortgage",
+        frequency: "monthly",
+        dueDay: 1,
+        amount: "$2950",
+        notes: "Pay via Venmo to Wes Cole",
+      },
+      {
+        name: "Olivia Allowance",
+        category: "other",
+        frequency: "monthly",
+        dueDay: 1,
+        amount: "$400",
+        notes: "Pay via Venmo to Christi Blakelock",
+      },
+      {
+        name: "USAA Credit Card",
+        category: "credit_card",
+        frequency: "monthly",
+        dueDay: 1,
+      },
+    ];
+
+    for (const bill of missingBills) {
+      if (canonical.includes(bill.name.toLowerCase())) {
+        console.log(`[BILLS AUDIT] "${bill.name}" already present — skipping`);
+        continue;
+      }
+      const leadDays = defaultLeadDays(bill.frequency);
+      await query(
+        `INSERT INTO financial_obligations
+           (user_name, name, category, amount, frequency, due_day, due_months, reminder_lead_days, notes)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         RETURNING id`,
+        [
+          NATIVE_STORED_NAME, bill.name, bill.category,
+          bill.amount ?? null, bill.frequency, bill.dueDay,
+          null, leadDays, bill.notes ?? null,
+        ]
+      );
+      console.log(`[BILLS AUDIT] Seeded missing bill "${bill.name}"`);
+    }
+
   } catch (err) {
     console.warn("[BILLS AUDIT] Failed (non-fatal):", (err as Error).message);
   }
