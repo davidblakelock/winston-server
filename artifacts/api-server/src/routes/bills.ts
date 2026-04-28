@@ -33,6 +33,42 @@ router.post("/bills/mark-paid", express.json({ limit: "1mb" }), async (req, res)
   }
 });
 
+// ── POST /api/bills/paid — alias for /bills/mark-paid (native notification) ───
+// Called by the native app when the user taps "Paid ✓" on a bill notification.
+// Accepts billId directly in the body (no billName required — looks it up).
+// Runs in the background — the app does not need to open.
+router.post("/bills/paid", express.json({ limit: "1mb" }), async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const body = req.body as {
+    billId?: number;
+    notificationData?: { billId?: number; data?: { billId?: number } };
+  };
+  const rawId =
+    body.billId ??
+    body.notificationData?.billId ??
+    body.notificationData?.data?.billId;
+
+  if (!rawId || typeof rawId !== "number") {
+    res.status(400).json({ error: "billId (number) is required" });
+    return;
+  }
+
+  try {
+    // Look up the bill name so we can log it meaningfully
+    const bills = await getBills(userName);
+    const bill = bills.find((b) => b.id === rawId);
+    const name = bill?.name ?? `Bill #${rawId}`;
+    await markBillPaid(rawId, name, userName);
+    req.log.info({ userName, billId: rawId, billName: name }, "[BILLS] Paid via /bills/paid notification action");
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error({ err }, "[BILLS] POST /bills/paid error");
+    res.status(500).json({ error: "Failed to mark bill as paid" });
+  }
+});
+
 // ── POST /api/bills/remind-tomorrow ──────────────────────────────────────────
 // Called by the native app when the user taps "Remind Me Tomorrow" on the bill
 // notification action button. Creates a one-off reminder for 9 AM tomorrow.

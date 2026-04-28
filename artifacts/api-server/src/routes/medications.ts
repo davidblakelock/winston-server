@@ -150,6 +150,26 @@ router.post("/medications/snooze-reminder", express.json({ limit: "1mb" }), asyn
   }
 });
 
+// ── POST /api/medications/taken — alias called by native notification action ───
+// Identical to /api/medications/confirm-taken.
+// The native app calls this path when the user taps "Taken ✓" on the
+// medication push notification action button (background, app stays closed).
+router.post("/medications/taken", express.json({ limit: "1mb" }), async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  try {
+    const meds = await getMedications(userName);
+    if (meds.length > 0) {
+      await logMedicationsTaken(meds, userName);
+    }
+    req.log.info({ userName, medCount: meds.length }, "[MEDS] Taken confirmed via /medications/taken");
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error({ err }, "[MEDS] POST /medications/taken error");
+    res.status(500).json({ error: "Failed to log medications as taken" });
+  }
+});
+
 // ── DELETE /api/medications/:name ─────────────────────────────────────────────
 // Soft-deletes (deactivates) a medication by name (partial match).
 // Response: { ok: true, removed: boolean }

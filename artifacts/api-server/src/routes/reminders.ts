@@ -237,4 +237,69 @@ router.post("/reminders/mark-done", async (req: Request, res: Response) => {
   res.json({ success: true, found });
 });
 
+// ── POST /api/reminders/done — alias for /reminders/mark-done ─────────────────
+// Called by the native app notification action button ("Done ✓" on reminder).
+// Accepts reminderId either directly or nested inside notificationData.
+// Runs in the background — the app does not need to open.
+router.post("/reminders/done", async (req: Request, res: Response) => {
+  // reminderId may be top-level or inside the Expo notificationData envelope
+  const body = req.body ?? {};
+  const raw =
+    body.reminderId ??
+    body.id ??
+    body.notificationData?.reminderId ??
+    body.notificationData?.data?.reminderId;
+
+  if (!raw) {
+    res.status(400).json({ error: "reminderId required" });
+    return;
+  }
+  const id = parseInt(String(raw), 10);
+  if (isNaN(id)) {
+    res.status(400).json({ error: "reminderId must be numeric" });
+    return;
+  }
+  const found = await markReminderDone(id);
+  console.log(`[REMINDERS/DONE] id=${id} found=${found}`);
+  res.json({ success: true, found });
+});
+
+// ── POST /api/reminders/snooze — body-based snooze from notification action ───
+// Called by the native app when the user taps "Snooze" on a reminder push.
+// This is a body-based variant of /reminders/:id/snooze so the app doesn't
+// need to build a dynamic URL from notification data.
+// Body: { reminderId?, id?, minutes?, notificationData? }
+// notificationData mirrors the Expo push data payload and may contain reminderId.
+router.post("/reminders/snooze", async (req: Request, res: Response) => {
+  const body = req.body ?? {};
+  const raw =
+    body.reminderId ??
+    body.id ??
+    body.notificationData?.reminderId ??
+    body.notificationData?.data?.reminderId;
+
+  if (!raw) {
+    res.status(400).json({ error: "reminderId required" });
+    return;
+  }
+  const id = parseInt(String(raw), 10);
+  if (isNaN(id)) {
+    res.status(400).json({ error: "reminderId must be numeric" });
+    return;
+  }
+
+  const minutes = typeof body.minutes === "number" ? body.minutes : 10;
+  const snoozeUntil = new Date(Date.now() + minutes * 60 * 1000);
+
+  await query(
+    `UPDATE reminders
+        SET fire_at = $1, status = 'pending', last_fired_at = NULL
+      WHERE id = $2
+      RETURNING id`,
+    [snoozeUntil, id]
+  );
+  console.log(`[REMINDERS/SNOOZE] id=${id} minutes=${minutes} until=${snoozeUntil.toISOString()}`);
+  res.json({ success: true, snoozedUntil: snoozeUntil });
+});
+
 export default router;
