@@ -164,7 +164,7 @@ export async function generateOpeningMessage(
     const insight = await getLatestJournalInsight(userName);
     if (insight) {
       journalInsight = insight;
-      logger.info({ chars: insight.length }, "Journal insight available for evening check-in");
+      logger.info({ chars: insight.length }, "Journal insight available for evening wind-down");
     }
   } catch (err) {
     logger.warn({ err }, "Failed to fetch journal insight");
@@ -176,7 +176,7 @@ export async function generateOpeningMessage(
     const mood = await getMoodForToday(userName);
     if (mood) {
       morningMood = mood;
-      logger.info({ chars: mood.length }, "Morning mood available for evening check-in");
+      logger.info({ chars: mood.length }, "Morning mood available for evening wind-down");
     }
   } catch (err) {
     logger.warn({ err }, "Failed to fetch morning mood");
@@ -195,7 +195,7 @@ export async function generateOpeningMessage(
     (morningMood ? `This morning, ${displayName} said they were feeling: "${morningMood.substring(0, 120)}". Gently reference this in your opener — e.g. "Sounds like you went into today feeling..." — and acknowledge how the day may have gone relative to that feeling.\n` : "") +
     (storyQuestion ? `Tonight's memory question: "${storyQuestion}"\n` : "") +
     (journalInsight ? `\n[Gentle journal observation — weave naturally if the moment is right]: ${journalInsight}\n` : "") +
-    `\nWrite ONE complete, flowing evening check-in message — about 170–220 words. ` +
+    `\nWrite ONE complete, flowing evening wind-down message — about 170–220 words. ` +
     `Flowing warm prose. No headers. No numbered sections. One connected message.\n\n` +
     `Cover these elements in order, woven together naturally:\n\n` +
     `1. OPENER: Warm personal greeting to ${displayName}. Reference something real from today${todayContext ? " (use the calendar events)" : ""}. ` +
@@ -293,8 +293,8 @@ export function startWinddownScheduler(): void {
       broadcastToUser(primaryUser, "winddown-start", { message });
 
       sendPushToAll({
-        title: `🌙 Evening Check-In — ${companionName}`,
-        body: `${companionName} is ready for your evening check-in. Tap to chat.`,
+        title: `🌙 Evening Wind-Down — ${companionName}`,
+        body: `${companionName} is ready for your evening wind-down. Tap to chat.`,
         tag: "winddown",
         notificationType: "winddown",
         requireInteraction: true,

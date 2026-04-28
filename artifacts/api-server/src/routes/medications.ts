@@ -5,7 +5,9 @@ import {
   getMedications,
   addMedication,
   removeMedication,
+  logMedicationsTaken,
 } from "../medications/medicationManager.js";
+import { createReminder } from "../reminders/reminderManager.js";
 
 const router: IRouter = Router();
 
@@ -97,6 +99,55 @@ router.post("/medications/bulk", express.json({ limit: "1mb" }), async (req, res
   }
 
   res.json({ ok: true, added, skipped });
+});
+
+// ── POST /api/medications/confirm-taken ──────────────────────────────────────
+// Called by the native app when the user taps "Taken ✓" on the medication
+// notification action button. Logs all active medications as taken for today.
+// This runs as a background request — the app does NOT need to open.
+// Response: { ok: true }
+router.post("/medications/confirm-taken", express.json({ limit: "1mb" }), async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  try {
+    const meds = await getMedications(userName);
+    if (meds.length > 0) {
+      await logMedicationsTaken(meds, userName);
+    }
+    req.log.info({ userName, medCount: meds.length }, "[MEDS] Confirmed taken via notification action");
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error({ err }, "[MEDS] POST /medications/confirm-taken error");
+    res.status(500).json({ error: "Failed to log medications as taken" });
+  }
+});
+
+// ── POST /api/medications/snooze-reminder ─────────────────────────────────────
+// Called by the native app when the user taps "Remind me in 30 min" on the
+// medication notification action button. Creates a one-off reminder 30 minutes
+// from now. This runs as a background request — the app does NOT need to open.
+// Response: { ok: true, reminderId: number }
+router.post("/medications/snooze-reminder", express.json({ limit: "1mb" }), async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  try {
+    const meds = await getMedications(userName);
+    const medText = meds.length > 0
+      ? meds.map((m) => m.name).join(", ")
+      : "your medications";
+    const fireAt = new Date(Date.now() + 30 * 60 * 1000);
+    const reminder = await createReminder({
+      userName,
+      reminderText: `Take ${medText}`,
+      fireAt,
+      timezone: "America/Chicago",
+    });
+    req.log.info({ userName, fireAt, reminderId: reminder.id }, "[MEDS] Snooze reminder created via notification action");
+    res.json({ ok: true, reminderId: reminder.id });
+  } catch (err) {
+    req.log.error({ err }, "[MEDS] POST /medications/snooze-reminder error");
+    res.status(500).json({ error: "Failed to create snooze reminder" });
+  }
 });
 
 // ── DELETE /api/medications/:name ─────────────────────────────────────────────

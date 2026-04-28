@@ -76,6 +76,9 @@ export function startMedicationScheduler(): void {
                 body: `Don't forget your ${medText} this morning. Take with food if you can.`,
                 tag: "medication-morning",
                 notificationType: "medication",
+                // "medication-action" category shows "Taken ✓" and "Remind in 30 min" buttons.
+                // Native app must register this category via Notifications.setNotificationCategoryAsync.
+                categoryId: "medication-action",
                 requireInteraction: true,
               }, userName).catch(() => {});
               logger.info({ time: rt, userName }, "Medication initial reminder fired");
@@ -107,9 +110,10 @@ export function startMedicationScheduler(): void {
             });
             sendPushToAll({
               title: `💊 Gentle Nudge — ${companion}`,
-              body: `Have you taken your ${medText} yet? Tap to confirm.`,
+              body: `Have you taken your ${medText} yet?`,
               tag: "medication-followup",
               notificationType: "medication",
+              categoryId: "medication-action",
               requireInteraction: false,
             }, userName).catch(() => {});
             logger.info({ time: followUpTime, userName }, "Medication follow-up reminder fired");

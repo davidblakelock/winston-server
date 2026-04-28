@@ -115,7 +115,7 @@ export function startJournalPatternScheduler(): void {
   logger.info("[JOURNAL INSIGHTS] Weekly scheduler started (Sundays 6 AM CT)");
 }
 
-// ── Retrieval — for injection into morning briefing and evening check-in ──────
+// ── Retrieval — for injection into morning briefing and evening wind-down ──────
 
 export async function getLatestJournalInsight(userName: string): Promise<string | null> {
   const { rows } = await query<{ insight: string; analysis_date: string }>(

@@ -6,7 +6,7 @@
  *                    scheduled tasks, simple generation). Fast and cheap.
  *   - MODEL_SONNET — only when complex reasoning, multi-step planning, or high-quality
  *                    creative output is required (morning briefing delivery, calendar
- *                    parsing, evening check-in, text composition, profile analysis).
+ *                    parsing, evening wind-down, text composition, profile analysis).
  *
  * Never use Opus in production.
  */

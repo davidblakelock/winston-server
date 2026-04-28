@@ -55,6 +55,12 @@ export interface PushPayload {
   alertLat?: number;               // Lat where the alert was issued (home/profile location)
   alertLon?: number;               // Lon where the alert was issued
   alertCity?: string;              // City name for the alert area
+  // Notification action category — maps to a registered Expo notification category on the native app.
+  // e.g. "medication-action" shows "Taken ✓" and "Remind in 30 min" buttons.
+  categoryId?: string;
+  // Optional auto-trigger message — native app sends this text on the user's behalf when tapped,
+  // so the briefing/conversation starts immediately without manual input.
+  autoSendMessage?: string;
 }
 
 /**
@@ -132,6 +138,9 @@ async function sendExpoNotifications(
     sound: "default",
     priority: "high",
     channelId: "default",
+    // categoryId maps to a registered Expo notification category on the native app —
+    // enables OS-level action buttons (e.g. "Taken ✓", "Remind in 30 min").
+    ...(payload.categoryId ? { categoryId: payload.categoryId } : {}),
     data: {
       // NOTE: do NOT include payload.url (web app URL) here — it causes the native
       // Android app to open the web app in a browser when the notification is tapped.
@@ -148,6 +157,8 @@ async function sendExpoNotifications(
       ...(payload.alertLat != null ? { alertLat: payload.alertLat } : {}),
       ...(payload.alertLon != null ? { alertLon: payload.alertLon } : {}),
       ...(payload.alertCity ? { alertCity: payload.alertCity } : {}),
+      // autoSendMessage: native app sends this text automatically when tapped (no user typing).
+      ...(payload.autoSendMessage ? { autoSendMessage: payload.autoSendMessage } : {}),
     },
   }));
 

@@ -117,11 +117,11 @@ async function runPerUserChecks(): Promise<void> {
 
     // At or shortly after wake time: send push once the briefing static context is confirmed
     // ready. Retry every minute for up to 10 minutes in case the server restarted after
-    // pre-generation and the in-memory cache was wiped — avoids delivering a "not ready"
-    // notification when the user taps it.
+    // pre-generation and the in-memory cache was wiped — avoids delivering a notification
+    // before the briefing is available to stream when the user taps it.
     const minsSince = minutesSinceWake(localTime, wakeTime);
     if (minsSince >= 0 && minsSince <= 10 && morningPushDone.get(userName) !== today) {
-      const staticCtx = getStaticBriefingContext(userName);
+      let staticCtx = getStaticBriefingContext(userName);
       if (!staticCtx && minsSince < 10) {
         // Pre-generation may still be running after a cold restart. Wait until next minute.
         logger.info(
@@ -129,7 +129,26 @@ async function runPerUserChecks(): Promise<void> {
           "[MorningPush] Briefing not ready at wake time — will retry next minute"
         );
       } else {
-        // Static context is ready (or we've waited 10 min — send regardless as fallback).
+        if (!staticCtx) {
+          // 10-minute window elapsed but briefing still isn't cached — generate it inline
+          // right now so it is guaranteed to be ready before the notification fires.
+          // The user tapping "morning-briefing" should NEVER encounter a loading state.
+          logger.warn(
+            { userName, minsSince },
+            "[MorningPush] Briefing still not ready after 10 min — generating inline before push"
+          );
+          try {
+            await preFetchMorningBriefing(userName);
+            // Attempt to reload from DB into in-memory cache
+            await loadStaticContextFromDb(userName).catch(() => false);
+            staticCtx = getStaticBriefingContext(userName);
+            logger.info({ userName, cached: !!staticCtx }, "[MorningPush] Inline pre-gen complete");
+          } catch (genErr) {
+            logger.error({ genErr, userName }, "[MorningPush] Inline pre-gen failed — sending push anyway");
+          }
+        }
+
+        // Static context is now ready (or inline generation failed — send with what we have).
         morningPushDone.set(userName, today);
         try {
           const body = await buildMorningBody(user);
@@ -139,6 +158,9 @@ async function runPerUserChecks(): Promise<void> {
             body,
             tag: "morning-briefing",
             notificationType: "morning-briefing",
+            // autoSendMessage: native app sends "good morning" automatically when tapped,
+            // so the briefing starts immediately without the user having to type anything.
+            autoSendMessage: "good morning",
             requireInteraction: true,
           }, userName);
           logger.info(

@@ -239,13 +239,13 @@ const PREF_INSTRUCTIONS: Record<PrefKey, Record<PrefValue, string>> = {
     off:   "EVENING CHECK-IN: Do NOT ask any story or memory questions for Olivia tonight.",
     less:  "EVENING CHECK-IN: Only ask a story question if the evening conversation is calm and unhurried.",
     more:  "EVENING CHECK-IN: Prioritise the memory question for Olivia — make it a warm central moment.",
-    on:    "Ask story questions during evening check-in as normal.",
+    on:    "Ask story questions during evening wind-down as normal.",
   },
   journal: {
     off:   "EVENING CHECK-IN: Do NOT offer a journal prompt tonight.",
     less:  "EVENING CHECK-IN: Only offer journaling if David seems reflective and in the mood.",
     more:  "EVENING CHECK-IN: Actively invite David to journal — frame it as an important habit.",
-    on:    "Offer journal prompts during evening check-in as normal.",
+    on:    "Offer journal prompts during evening wind-down as normal.",
   },
   news: {
     off:   "SKIP Section 8 (News) entirely — do not mention any news headlines or stories.",
