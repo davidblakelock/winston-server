@@ -48,14 +48,17 @@ export function computeNextDueDate(bill: Bill, from: Date = new Date()): Date {
   const [todayY, todayM, todayD] = todayStr.split("-").map(Number);
 
   function clampDay(year: number, month: number, day: number): Date {
-    const maxDay = new Date(year, month, 0).getDate();
-    return new Date(year, month - 1, Math.min(day, maxDay));
+    // Use noon UTC so that toLocaleDateString("America/Chicago") always returns
+    // the correct calendar date — midnight UTC would be the previous evening CDT.
+    const maxDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    return new Date(Date.UTC(year, month - 1, Math.min(day, maxDay), 12));
   }
 
   if (bill.frequency === "monthly") {
     let candidate = clampDay(todayY, todayM, bill.dueDay);
-    if (candidate.getFullYear() < todayY ||
-        (candidate.getFullYear() === todayY && candidate.getMonth() + 1 === todayM && bill.dueDay <= todayD)) {
+    // Use getUTC* since clampDay now creates noon-UTC dates
+    if (candidate.getUTCFullYear() < todayY ||
+        (candidate.getUTCFullYear() === todayY && candidate.getUTCMonth() + 1 === todayM && bill.dueDay <= todayD)) {
       const nextM = todayM === 12 ? 1 : todayM + 1;
       const nextY = todayM === 12 ? todayY + 1 : todayY;
       candidate = clampDay(nextY, nextM, bill.dueDay);
@@ -95,10 +98,14 @@ function formatDueDateLabel(d: Date): string {
 }
 
 function daysBetween(a: Date, b: Date): number {
-  const msPerDay = 86400000;
-  const aDay = new Date(a.getFullYear(), a.getMonth(), a.getDate());
-  const bDay = new Date(b.getFullYear(), b.getMonth(), b.getDate());
-  return Math.round((bDay.getTime() - aDay.getTime()) / msPerDay);
+  const tz = "America/Chicago";
+  // Compare Chicago calendar dates, not raw UTC timestamps, so midnight-hour
+  // wall-clock differences don't shift the count by ±1.
+  const aStr = a.toLocaleDateString("en-CA", { timeZone: tz });
+  const bStr = b.toLocaleDateString("en-CA", { timeZone: tz });
+  const [aY, aM, aD] = aStr.split("-").map(Number);
+  const [bY, bM, bD] = bStr.split("-").map(Number);
+  return Math.round((Date.UTC(bY, bM - 1, bD) - Date.UTC(aY, aM - 1, aD)) / 86400000);
 }
 
 // ── CRUD ─────────────────────────────────────────────────────────────────────
