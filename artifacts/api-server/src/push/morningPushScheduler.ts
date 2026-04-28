@@ -5,6 +5,7 @@ import { getWatchedShows } from "../tv/showManager.js";
 import { fetchEpisodesForDate } from "../tv/tvmaze.js";
 import { preFetchMorningNews, preFetchDailyMotivation } from "../news/newsManager.js";
 import { preFetchMorningBriefing } from "../morning/briefingPregenerate.js";
+import { getStaticBriefingContext } from "../morning/briefingCache.js";
 import { getActiveUsers, type ActiveUser } from "../onboarding/onboardingManager.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
@@ -39,6 +40,13 @@ function subtractMinutes(timeStr: string, mins: number): string {
   const h = Math.floor(totalMin / 60).toString().padStart(2, "0");
   const m = (totalMin % 60).toString().padStart(2, "0");
   return `${h}:${m}`;
+}
+
+// Returns how many minutes localTime is past wakeTime (negative if before).
+function minutesSinceWake(localTime: string, wakeTime: string): number {
+  const [lh, lm] = localTime.split(":").map(Number);
+  const [wh, wm] = wakeTime.split(":").map(Number);
+  return (lh * 60 + lm) - (wh * 60 + wm);
 }
 
 // ── Per-user state tracking ────────────────────────────────────────────────────
@@ -107,22 +115,39 @@ async function runPerUserChecks(): Promise<void> {
       );
     }
 
-    // At wake time: send morning push (once per user per day)
-    if (localTime === wakeTime && morningPushDone.get(userName) !== today) {
-      morningPushDone.set(userName, today);
-      try {
-        const body = await buildMorningBody(user);
-        const displayName = user.name ?? userName;
-        await sendPushToAll({
-          title: `Good morning, ${displayName} ☀️`,
-          body,
-          tag: "morning-briefing",
-          notificationType: "morning-briefing",
-          requireInteraction: true,
-        }, userName);
-        logger.info({ userName, wakeTime }, "[MorningPush] Morning push sent");
-      } catch (err) {
-        logger.error({ err, userName }, "[MorningPush] Failed to send morning push");
+    // At or shortly after wake time: send push once the briefing static context is confirmed
+    // ready. Retry every minute for up to 10 minutes in case the server restarted after
+    // pre-generation and the in-memory cache was wiped — avoids delivering a "not ready"
+    // notification when the user taps it.
+    const minsSince = minutesSinceWake(localTime, wakeTime);
+    if (minsSince >= 0 && minsSince <= 10 && morningPushDone.get(userName) !== today) {
+      const staticCtx = getStaticBriefingContext(userName);
+      if (!staticCtx && minsSince < 10) {
+        // Pre-generation may still be running after a cold restart. Wait until next minute.
+        logger.info(
+          { userName, minsSince },
+          "[MorningPush] Briefing not ready at wake time — will retry next minute"
+        );
+      } else {
+        // Static context is ready (or we've waited 10 min — send regardless as fallback).
+        morningPushDone.set(userName, today);
+        try {
+          const body = await buildMorningBody(user);
+          const displayName = user.name ?? userName;
+          await sendPushToAll({
+            title: `Good morning, ${displayName} ☀️`,
+            body,
+            tag: "morning-briefing",
+            notificationType: "morning-briefing",
+            requireInteraction: true,
+          }, userName);
+          logger.info(
+            { userName, wakeTime, minsSince, briefingReady: !!staticCtx },
+            "[MorningPush] Morning push sent"
+          );
+        } catch (err) {
+          logger.error({ err, userName }, "[MorningPush] Failed to send morning push");
+        }
       }
     }
   }

@@ -938,15 +938,25 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     const isNativeMorning = (req as any)._nativeMode === true;
 
     // ── Check for pre-built static context ──
-    const staticCtx = getStaticBriefingContext(sessionUserName);
+    // If absent (e.g. server restarted after pre-gen ran and wiped the in-memory cache),
+    // generate it synchronously NOW so the user gets the real briefing — not a "try again"
+    // message. The pre-generation typically takes 60–90 seconds on a cold server start.
+    let staticCtx = getStaticBriefingContext(sessionUserName);
 
     if (!staticCtx) {
-      // Static context not ready — trigger background pre-generation for THIS user
-      req.log.info({ sessionUserName }, "Morning briefing static context missing — triggering background pre-generation");
-      preFetchMorningBriefing(sessionUserName).catch((err) =>
-        req.log.warn({ err }, "Background morning briefing pre-generation failed")
-      );
-      const notReadyText = `Your morning briefing isn't ready yet — I'm pulling everything together right now. Give me about 2 minutes and say good morning again. I'll have it all waiting for you.`;
+      req.log.info({ sessionUserName }, "Morning briefing static context missing — generating now (inline)");
+      try {
+        await preFetchMorningBriefing(sessionUserName);
+        staticCtx = getStaticBriefingContext(sessionUserName);
+        req.log.info({ sessionUserName, ready: !!staticCtx }, "Inline morning briefing pre-generation complete");
+      } catch (err) {
+        req.log.warn({ err }, "Inline morning briefing pre-generation failed");
+      }
+    }
+
+    if (!staticCtx) {
+      // Generation failed entirely — very unusual. Give a short honest message.
+      const notReadyText = `I ran into an issue pulling your briefing together — please try again in a moment.`;
       if (isNativeMorning) {
         res.json({ response: notReadyText });
         return;
