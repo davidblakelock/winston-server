@@ -237,6 +237,45 @@ export async function markReminded(id: number, date: string): Promise<void> {
   );
 }
 
+// ── Startup seed — restore known bills into Supabase if missing ───────────────
+// Supabase is the authoritative store, but local PostgreSQL may have stale data.
+// This runs once at startup to ensure the known bills are present in Supabase.
+(async () => {
+  try {
+    const knownBills: Array<{
+      name: string; category: Category; frequency: Frequency;
+      dueDay: number; dueMonths: string | null; amount?: string;
+    }> = [
+      { name: "Amex",  category: "credit_card",   frequency: "monthly", dueDay: 15, dueMonths: null },
+      { name: "Rent",  category: "rent_mortgage",  frequency: "monthly", dueDay: 1,  dueMonths: null, amount: "$2950" },
+    ];
+
+    for (const bill of knownBills) {
+      const existing = await query(
+        `SELECT id FROM financial_obligations
+         WHERE user_name = $1 AND lower(name) = lower($2) AND active = true`,
+        [NATIVE_STORED_NAME, bill.name]
+      );
+      if (existing.rows.length > 0) {
+        console.log(`[BILLS SEED] "${bill.name}" already in Supabase — skipping`);
+        continue;
+      }
+      const leadDays = defaultLeadDays(bill.frequency);
+      await query(
+        `INSERT INTO financial_obligations
+           (user_name, name, category, amount, frequency, due_day, due_months, reminder_lead_days)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING id`,
+        [NATIVE_STORED_NAME, bill.name, bill.category, bill.amount ?? null,
+         bill.frequency, bill.dueDay, bill.dueMonths, leadDays]
+      );
+      console.log(`[BILLS SEED] Inserted "${bill.name}" into Supabase`);
+    }
+  } catch (err) {
+    console.warn("[BILLS SEED] Seed failed (non-fatal):", (err as Error).message);
+  }
+})();
+
 // ── Bill payment log ──────────────────────────────────────────────────────────
 // Tracks when a user marks a bill as paid (from notification action button).
 query(`

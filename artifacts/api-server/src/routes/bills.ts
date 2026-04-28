@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import express from "express";
 import { authenticate } from "../auth/middleware.js";
-import { markBillPaid, getBills } from "../bills/billManager.js";
+import { markBillPaid, getBills, addBill, type Category, type Frequency } from "../bills/billManager.js";
 import { createReminder } from "../reminders/reminderManager.js";
 
 const router: IRouter = Router();
@@ -79,6 +79,42 @@ router.post("/bills/remind-tomorrow", express.json({ limit: "1mb" }), async (req
   } catch (err) {
     req.log.error({ err }, "[BILLS] POST /bills/remind-tomorrow error");
     res.status(500).json({ error: "Failed to create tomorrow reminder" });
+  }
+});
+
+// ── GET /api/bills — list all tracked bills for the authenticated user ─────────
+router.get("/bills", express.json({ limit: "1mb" }), async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  try {
+    const bills = await getBills(userName);
+    res.json({ bills });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// ── POST /api/bills — create a bill directly (no chat parsing required) ───────
+router.post("/bills", express.json({ limit: "1mb" }), async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const { name, category, frequency, dueDay, dueMonths, amount, notes } = req.body as {
+    name: string; category: Category; frequency: Frequency;
+    dueDay: number; dueMonths?: string | null; amount?: string; notes?: string;
+  };
+  if (!name || !category || !frequency || !dueDay) {
+    res.status(400).json({ error: "name, category, frequency, dueDay are required" });
+    return;
+  }
+  try {
+    const result = await addBill(name, category, frequency, dueDay, dueMonths ?? null, amount, notes, userName);
+    if (result.alreadyExists) {
+      res.json({ ok: true, alreadyExists: true });
+    } else {
+      res.json({ ok: true, bill: result.bill });
+    }
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
   }
 });
 
