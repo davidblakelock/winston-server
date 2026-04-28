@@ -2,7 +2,7 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import { randomUUID } from "crypto";
 import { query } from "../db.js";
 import { addClient, removeClient, broadcast, registerClientUser } from "../reminders/sseStore.js";
-import { createReminder } from "../reminders/reminderManager.js";
+import { createReminder, markReminderDone } from "../reminders/reminderManager.js";
 import { validateSession } from "../auth/sessionAuth.js";
 
 const router: IRouter = Router();
@@ -216,6 +216,25 @@ router.post("/reminders/:id/complete", async (req: Request, res: Response) => {
   res.json({ success: true });
   // Broadcast so all open panels on all devices remove this reminder immediately
   broadcast("reminder_sync", { action: "completed", id: numId });
+});
+
+// ── POST /api/reminders/mark-done — background action from push notification ──
+// Called by the native app when the user taps the "Done ✓" action button on a
+// reminder notification. This runs in the background — the app does not open.
+// Accepts reminderId in the body (Expo sends the data payload fields).
+router.post("/reminders/mark-done", async (req: Request, res: Response) => {
+  const reminderId = req.body?.reminderId ?? req.body?.id;
+  if (!reminderId) {
+    res.status(400).json({ error: "reminderId required" });
+    return;
+  }
+  const id = parseInt(String(reminderId), 10);
+  if (isNaN(id)) {
+    res.status(400).json({ error: "reminderId must be numeric" });
+    return;
+  }
+  const found = await markReminderDone(id);
+  res.json({ success: true, found });
 });
 
 export default router;

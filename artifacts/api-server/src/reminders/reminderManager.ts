@@ -6,6 +6,10 @@ import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS for_contact text DEFAULT NULL`)
   .catch(() => {});
 
+// Fix legacy user_name default from 'David' to canonical 'davidblakelock'
+query(`ALTER TABLE reminders ALTER COLUMN user_name SET DEFAULT 'davidblakelock'`)
+  .catch(() => {});
+
 export interface ReminderInput {
   userName?: string;
   reminderText: string;
@@ -84,4 +88,22 @@ export async function createReminder(input: ReminderInput): Promise<ReminderRow>
   broadcast("reminder_sync", { action: "created", reminder: newReminder });
 
   return newReminder;
+}
+
+/**
+ * Mark a reminder as done (completed) from a notification action button.
+ * This is a background operation — the app does not need to open.
+ * For recurring reminders, the scheduler has already rescheduled the next
+ * occurrence before this is called, so we only mark the current fired instance.
+ * Works on any status so it's safe to call even if already completed.
+ */
+export async function markReminderDone(id: number): Promise<boolean> {
+  const { rows } = await query(
+    `UPDATE reminders SET status = 'completed' WHERE id = $1 RETURNING id`,
+    [id]
+  );
+  if (rows.length > 0) {
+    broadcast("reminder_sync", { action: "completed", id });
+  }
+  return rows.length > 0;
 }

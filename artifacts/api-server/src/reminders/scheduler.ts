@@ -2,9 +2,9 @@ import cron from "node-cron";
 import { query } from "../db.js";
 import { broadcast, broadcastToUser } from "./sseStore.js";
 import { sendPushToAll } from "../push/pushManager.js";
-import { getAppUrl } from "../auth/sessionAuth.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
 import { logger } from "../lib/logger.js";
+import { nextOccurrenceForPattern } from "./recurringUtils.js";
 
 interface ReminderRow {
   id: number;
@@ -18,36 +18,6 @@ interface ReminderRow {
   for_contact: string | null;
 }
 
-function nextOccurrence(timeStr: string, tz: string): Date {
-  const [desiredH, desiredM] = timeStr.split(":").map(Number);
-  const now = new Date();
-
-  const fmt = new Intl.DateTimeFormat("en-US", {
-    timeZone: tz,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
-  const p = Object.fromEntries(fmt.formatToParts(now).map((x) => [x.type, x.value]));
-  const tzYear  = parseInt(p.year,   10);
-  const tzMonth = parseInt(p.month,  10) - 1;
-  const tzDay   = parseInt(p.day,    10);
-  const tzHour  = parseInt(p.hour,   10);
-  const tzMin   = parseInt(p.minute, 10);
-
-  const localNowMs = Date.UTC(tzYear, tzMonth, tzDay, tzHour, tzMin, 0);
-  const offsetMs   = now.getTime() - localNowMs;
-
-  let candidateMs = Date.UTC(tzYear, tzMonth, tzDay, desiredH, desiredM, 0);
-  if (candidateMs <= localNowMs) {
-    candidateMs += 24 * 60 * 60 * 1000;
-  }
-
-  return new Date(candidateMs + offsetMs);
-}
 
 export function startScheduler(): void {
   cron.schedule("* * * * *", async () => {
@@ -143,25 +113,34 @@ export function startScheduler(): void {
         }
 
         // ── 4b. Always send the reminder push to the reminder owner ──────
-        const appUrl = getAppUrl();
-        const reminderUrl = `${appUrl}/?notification=reminder&text=${encodeURIComponent(reminder.reminder_text)}&reminderId=${reminder.id}`;
+        // NOTE: no URL included — the native app handles taps via notificationType.
         await sendPushToAll({
           title: reminder.for_contact
             ? `✅ Reminder sent to ${reminder.for_contact} — ${companionName}`
             : `⏰ Reminder — ${companionName}`,
           body: reminder.reminder_text,
           tag: `reminder-${reminder.id}`,
-          url: reminderUrl,
           reminderId: reminder.id,
+          notificationType: "reminder",
+          // "reminder-action" category shows a "Done ✓" action button.
+          // Native app must register this category via Notifications.setNotificationCategoryAsync.
+          // The action calls POST /api/reminders/mark-done { reminderId } in the background.
+          categoryId: "reminder-action",
           requireInteraction: !reminder.for_contact,
         }, reminder.user_name);
 
         logger.info({ id: reminder.id, text: reminder.reminder_text, forContact: reminder.for_contact ?? "self" }, "Reminder fired");
 
-        // ── 4. For recurring reminders: schedule next occurrence and reset to 'pending' ──
+        // ── 5. Recurring reminders: schedule next occurrence and reset to 'pending' ──
         if (reminder.recurring && reminder.recurring_time) {
-          const nextFire = nextOccurrence(reminder.recurring_time, reminder.timezone);
-          const { rows: updated } = await query<ReminderRow>(
+          const nextFire = nextOccurrenceForPattern(
+            reminder.recurring,
+            reminder.recurring_time,
+            reminder.timezone || "America/Chicago",
+            new Date() // compute from now so we always get the truly next occurrence
+          );
+
+          const { rows: rescheduleRows } = await query<ReminderRow>(
             `UPDATE reminders
                 SET fire_at = $1, status = 'pending', last_fired_at = NOW()
               WHERE id = $2
@@ -169,9 +148,13 @@ export function startScheduler(): void {
             [nextFire, reminder.id]
           );
           // Tell all open panels about the rescheduled occurrence immediately
-          if (updated[0]) {
-            broadcast("reminder_sync", { action: "created", reminder: updated[0] });
+          if (rescheduleRows[0]) {
+            broadcast("reminder_sync", { action: "created", reminder: rescheduleRows[0] });
           }
+          logger.info(
+            { id: reminder.id, pattern: reminder.recurring, nextFire },
+            "[Scheduler] Recurring reminder rescheduled"
+          );
         }
         // One-time reminders stay as 'completed' — they won't be selected again
       }

@@ -203,6 +203,7 @@ import { populateCalendarSyncState } from "../departure/calendarSyncScheduler.js
 import { logBriefingStories } from "../morning/storyDedup.js";
 import { getDallasItems, getLocalContentCity, type LocalContentItem } from "../morning/dallasContent.js";
 import { createReminder } from "../reminders/reminderManager.js";
+import { nextOccurrenceForPattern, humanReadableRecurring } from "../reminders/recurringUtils.js";
 import { broadcastToUser } from "../reminders/sseStore.js";
 import { saveMoodCheckin } from "../mood/moodManager.js";
 import { extractAndSaveFollowups } from "../followups/followupManager.js";
@@ -540,7 +541,19 @@ Return ONLY valid JSON with these fields:
 - reminderText: string — what to remind about (concise, e.g. "call dentist")
 - time: string or null — 24-hour HH:MM format if an explicit or relative time is given (e.g. "15:00" for 3pm, "07:00" for 7am). Return null if NO time is mentioned at all — do NOT guess or use the current time.
 - isRecurring: boolean
-- recurring: string or null — one of: "daily", "weekdays", "weekends", "weekly", or null
+- recurring: string or null — one of:
+    null                   (one-time reminder)
+    "daily"                (every day)
+    "weekdays"             (Monday through Friday)
+    "weekends"             (Saturday and Sunday)
+    "weekly"               (same day each week — use ONLY when a specific day is not mentioned)
+    "weekly:<days>"        (specific days — comma-separated 3-letter codes: mon,tue,wed,thu,fri,sat,sun)
+                           e.g. every Tuesday and Thursday → "weekly:tue,thu"
+                           e.g. every Monday → "weekly:mon"
+                           e.g. every Mon, Wed, Fri → "weekly:mon,wed,fri"
+    "monthly:<day>"        (every month on that day number)
+                           e.g. every month on the 15th → "monthly:15"
+                           e.g. the first of every month → "monthly:1"
 - forContact: string or null — if the reminder is FOR another person (not the user themselves), their first name only (e.g. "Sarah"). Null if the reminder is for the user.
 
 Examples:
@@ -549,6 +562,9 @@ Examples:
 "set a reminder for Sarah to take her medication at 8am" → {"reminderText":"take her medication","time":"08:00","isRecurring":false,"recurring":null,"forContact":"Sarah"}
 "remind me to take my medication every morning at 7am" → {"reminderText":"take my medication","time":"07:00","isRecurring":true,"recurring":"daily","forContact":null}
 "remind me to walk Winston every weekday at 8am" → {"reminderText":"walk Winston","time":"08:00","isRecurring":true,"recurring":"weekdays","forContact":null}
+"remind me every Tuesday and Thursday at 6am to stretch" → {"reminderText":"stretch","time":"06:00","isRecurring":true,"recurring":"weekly:tue,thu","forContact":null}
+"remind me every Monday at 9am" → {"reminderText":"...","time":"09:00","isRecurring":true,"recurring":"weekly:mon","forContact":null}
+"remind me on the 15th of every month at noon to pay rent" → {"reminderText":"pay rent","time":"12:00","isRecurring":true,"recurring":"monthly:15","forContact":null}
 "remind me in 5 minutes" (current time 14:30) → {"reminderText":"...","time":"14:35","isRecurring":false,"recurring":null,"forContact":null}
 "remind me to take my medicine" (no time given) → {"reminderText":"take my medicine","time":null,"isRecurring":false,"recurring":null,"forContact":null}`,
     messages: [{ role: "user", content: message }],
@@ -2643,7 +2659,19 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           resolvedTime = extracted.time;
         }
 
-        const fireAt = computeFireAt(resolvedTime, "America/Chicago");
+        // For recurring reminders with specific day patterns (weekly:tue,thu, monthly:15, etc.)
+        // use nextOccurrenceForPattern to compute the FIRST correct fire date.
+        // For one-time or "daily"/"weekdays"/"weekends" reminders, computeFireAt is sufficient.
+        const recurringPattern = extracted.recurring;
+        const needsPatternScheduling =
+          extracted.isRecurring &&
+          recurringPattern &&
+          (recurringPattern.startsWith("weekly:") || recurringPattern.startsWith("monthly:"));
+
+        const fireAt = needsPatternScheduling
+          ? nextOccurrenceForPattern(recurringPattern!, resolvedTime, "America/Chicago")
+          : computeFireAt(resolvedTime, "America/Chicago");
+
         const [hh, mm] = resolvedTime.split(":").map(Number);
         const displayTime = new Date(0);
         displayTime.setHours(hh, mm);
@@ -2653,17 +2681,21 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           hour12: true,
         });
 
+        const recurringLabel = extracted.isRecurring && recurringPattern
+          ? humanReadableRecurring(recurringPattern)
+          : null;
+
         await createReminder({
           userName: sessionUserName,
           reminderText: extracted.reminderText,
           fireAt,
-          recurring: extracted.recurring ?? null,
+          recurring: recurringPattern ?? null,
           recurringTime: extracted.isRecurring ? resolvedTime : null,
           timezone: "America/Chicago",
           forContact: extracted.forContact ?? null,
         });
 
-        req.log.info({ extracted, resolvedTime, fireAt, noTimeGiven }, "Reminder saved");
+        req.log.info({ extracted, resolvedTime, fireAt, noTimeGiven, recurringLabel }, "Reminder saved");
 
         if (extracted.forContact) {
           reminderConfirmation =
@@ -2674,16 +2706,18 @@ const chatHandlerCore = async (req: Request, res: Response) => {
             `If ${extracted.forContact} has Winston installed and is linked, they will receive a push notification at ${timeLabel}. ` +
             `Reply with ONLY the confirmation. One line: "Done — I'll send ${extracted.forContact} a reminder to ${extracted.reminderText} at ${timeLabel}."`;
         } else {
+          const recurringPhrase = recurringLabel ? ` ${recurringLabel}` : "";
           reminderConfirmation =
             `\n\n[Reminder saved]\n` +
             `Text: "${extracted.reminderText}"\n` +
             `Time: ${timeLabel}${noTimeGiven ? " (defaulted to 30 min from now — user gave no explicit time)" : ""}\n` +
-            `Recurring: ${extracted.isRecurring ? extracted.recurring ?? "daily" : "no"}\n` +
+            `Recurring: ${recurringLabel ?? "no"}\n` +
             `Reply with ONLY the confirmation. No other text, no personality, no references to anything else. ` +
             (noTimeGiven
               ? `One line: "Done — I'll remind you to ${extracted.reminderText} at ${timeLabel}. Let me know if you'd like a different time."`
-              : `One line: "Done — I'll remind you to ${extracted.reminderText} at ${timeLabel}."` +
-                (extracted.isRecurring ? ` (adjust wording for recurring: "Set — I'll remind you...")` : ""));
+              : extracted.isRecurring
+                ? `One line: "Set — I'll remind you to ${extracted.reminderText}${recurringPhrase} at ${timeLabel}."`
+                : `One line: "Done — I'll remind you to ${extracted.reminderText} at ${timeLabel}."`);
         }
 
         systemPrompt = systemPrompt + reminderConfirmation;
@@ -2732,7 +2766,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       } else {
         const lines = pending.map((r, i) => {
           const contact = r.for_contact ? ` (for ${r.for_contact})` : "";
-          const recur = r.recurring ? ` [${r.recurring}]` : "";
+          const recur = r.recurring ? ` [${humanReadableRecurring(r.recurring)}]` : "";
           return `${i + 1}. ${r.reminder_text}${contact}${recur} — ${formatFireAt(r.fire_at)}`;
         });
         reminderListBlock =
