@@ -142,7 +142,13 @@ async function checkWeatherAlertsForUser(userName: string): Promise<void> {
       logger.warn({ err, alertId }, "[WeatherAlerts] Failed to mark alert as sent — may duplicate");
     });
 
-    const body = `${eventTitle} in effect for ${alert.areaName ?? city}. Stay safe and check local conditions.`;
+    const areaLabel = alert.areaName ?? city;
+    const body = `${eventTitle} in effect for ${areaLabel}. Stay safe and check local conditions.`;
+
+    // autoSendMessage causes the native app to immediately send this text as
+    // the user's message when the notification is tapped — opens the chat and
+    // asks Winston about the alert without any manual typing needed.
+    const autoSendMessage = `There's a ${eventTitle} in effect for ${areaLabel}. What should I know? Are there any actions I should take?`;
 
     await sendPushToAll({
       title: `⚠️ Weather Alert: ${eventTitle}`,
@@ -150,7 +156,8 @@ async function checkWeatherAlertsForUser(userName: string): Promise<void> {
       tag: `weather-${userName}-${eventTitle.replace(/\s+/g, "-").toLowerCase()}`,
       requireInteraction: true,
       notificationType: "weather-alert",
-      companionMessage: `There's a ${eventTitle} in effect for ${alert.areaName ?? city}. ${body}`,
+      companionMessage: `There's a ${eventTitle} in effect for ${areaLabel}. ${body}`,
+      autoSendMessage,
       // Tell the native app to use device GPS when opening the weather screen
       // so the user sees weather for wherever they currently are, not just home.
       useCurrentLocation: true,
