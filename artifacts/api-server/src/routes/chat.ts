@@ -321,7 +321,10 @@ const MORNING_PATTERN = /^(good\s+morning|mornin[g']?|morning\s+(briefing|summar
 // Fired when user wants details on a specific Top 10 news story from the morning briefing.
 const NEWS_DIG_PATTERN = /\b(?:(?:tell\s+me\s+more|more\s+(?:about|on|details?)|dig\s+(?:into|deeper)|details?\s+on|expand\s+on|what\s+happened\s+with)\s+(?:(?:story|number|#|item)\s*)?(\d+)|(?:story|number|item|#)\s*(\d+)(?:\s+please)?$)/i;
 const EVENING_PATTERN = /\b(good\s+evening|evening\s+check[\s-]?in|check[\s-]?in\s+for\s+the\s+evening|start\s+(my\s+)?evening\s+check[\s-]?in|winding\s+down|wind\s+down|heading\s+to\s+bed|going\s+to\s+bed|getting\s+ready\s+for\s+bed|calling\s+it\s+a\s+night|turning\s+in|good\s+night|goodnite|end\s+of\s+the\s+day|wrapping\s+up|relaxing\s+(tonight|this\s+evening)|settling\s+in)\b/i;
-const REMINDER_PATTERN = /\b(remind\s+(me|\w+)\s+to|set\s+a?\s*reminder(\s+for\s+\w+)?|reminder|don'?t\s+let\s+me\s+forget|make\s+sure\s+i|peel\s+remind|ms\.?\s*peel\s+remind)\b/i;
+// LIST_REMINDERS_PATTERN must come before REMINDER_PATTERN in evaluation order so
+// "what are my reminders?" is never mistakenly routed to the reminder-creation path.
+const LIST_REMINDERS_PATTERN = /\b(what\s+(are\s+)?(my\s+)?(active\s+|pending\s+|upcoming\s+|current\s+)?reminders?|show\s+(me\s+)?(my\s+)?(active\s+|pending\s+|upcoming\s+|current\s+)?reminders?|list\s+(my\s+)?(active\s+|pending\s+|upcoming\s+|current\s+)?reminders?|do\s+i\s+have\s+(any\s+)?(active\s+|pending\s+|upcoming\s+)?reminders?|any\s+(active\s+|pending\s+|upcoming\s+)?reminders?|reminders?\s+do\s+i\s+have)\b/i;
+const REMINDER_PATTERN = /\b(remind\s+(me|\w+)\s+to|set\s+a?\s*reminder(\s+for\s+\w+)?|don'?t\s+let\s+me\s+forget|make\s+sure\s+i|peel\s+remind|ms\.?\s*peel\s+remind)\b/i;
 const EMAIL_PATTERN = /\b(email|emails|mail|inbox|check\s+my\s+(email|mail|inbox)|any\s+(new\s+)?(emails?|messages?|mail)|what('?s|\s+is)\s+(in\s+)?(my\s+)?(email|inbox|mail)|do\s+i\s+have\s+(any\s+)?(email|mail|messages?))\b/i;
 const CALENDAR_PATTERN = /\b(calendar|schedule|agenda|appointments?|what('?s|\s+is)\s+(on\s+)?(my\s+)?(calendar|schedule|agenda|week)|(today|tomorrow|this\s+week|next\s+week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)'?s?\s+(schedule|events?|appointments?|look\s+like)|do\s+i\s+have\s+anything\s+(today|tomorrow|this\s+week|scheduled|on\s+my\s+calendar)|what\s+does\s+my\s+(day|week|morning|afternoon|evening)\s+look\s+like|what('?s|\s+is)\s+on\s+for\s+(today|tomorrow|this\s+week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|anything\s+(on\s+)?(today|tomorrow|this\s+week|my\s+calendar|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|busy\s+(today|tomorrow|this\s+week|monday|tuesday|wednesday|thursday|friday)|am\s+i\s+free\s+(today|tomorrow|this\s+(morning|afternoon|week)|monday|tuesday|wednesday|thursday|friday)|what\s+do\s+i\s+have\s+(today|tomorrow|this\s+week|this\s+morning|this\s+afternoon|on\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday))|do\s+i\s+have\s+(a\s+)?(meeting|lunch|dinner|appointment|call|interview|class|session|game)\s+(today|tomorrow|this\s+(morning|afternoon|week)|on\s+(monday|tuesday|wednesday|thursday|friday))|(when|what\s+time)\s+is\s+(my\s+)?(meeting|lunch|dinner|appointment|call|interview|class|session|game|next\s+appointment)|where\s+(am\s+i\s+(having|eating|meeting|going\s+for)|is\s+(my\s+|the\s+)?)\s*(lunch|dinner|breakfast|brunch|meeting|appointment|event)|what('?s|\s+is)\s+(my\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow)\s+(look\s+like|schedule|plans?)|what\s+are\s+my\s+plans?\s+(for\s+)?(today|tomorrow|this\s+week|tonight|this\s+(morning|afternoon|evening))|how\s+does\s+my\s+(day|week|morning|afternoon|schedule)\s+look)\b/i;
 // NOTE: "remind me" phrases are intentionally excluded here — they go through the reminder system, not the calendar.
@@ -498,7 +501,7 @@ function buildMapsUrl(address: string): string {
 
 interface ExtractedReminder {
   reminderText: string;
-  time: string;
+  time: string | null; // null when the user gave no explicit time
   isRecurring: boolean;
   recurring: string | null;
   forContact: string | null;
@@ -535,7 +538,7 @@ For relative times ("in 5 minutes", "in 1 hour", "in 30 minutes") add the offset
 
 Return ONLY valid JSON with these fields:
 - reminderText: string — what to remind about (concise, e.g. "call dentist")
-- time: string — 24-hour HH:MM format (e.g. "15:00" for 3pm, "07:00" for 7am)
+- time: string or null — 24-hour HH:MM format if an explicit or relative time is given (e.g. "15:00" for 3pm, "07:00" for 7am). Return null if NO time is mentioned at all — do NOT guess or use the current time.
 - isRecurring: boolean
 - recurring: string or null — one of: "daily", "weekdays", "weekends", "weekly", or null
 - forContact: string or null — if the reminder is FOR another person (not the user themselves), their first name only (e.g. "Sarah"). Null if the reminder is for the user.
@@ -546,7 +549,8 @@ Examples:
 "set a reminder for Sarah to take her medication at 8am" → {"reminderText":"take her medication","time":"08:00","isRecurring":false,"recurring":null,"forContact":"Sarah"}
 "remind me to take my medication every morning at 7am" → {"reminderText":"take my medication","time":"07:00","isRecurring":true,"recurring":"daily","forContact":null}
 "remind me to walk Winston every weekday at 8am" → {"reminderText":"walk Winston","time":"08:00","isRecurring":true,"recurring":"weekdays","forContact":null}
-"remind me in 5 minutes" (current time 14:30) → {"reminderText":"...","time":"14:35","isRecurring":false,"recurring":null,"forContact":null}`,
+"remind me in 5 minutes" (current time 14:30) → {"reminderText":"...","time":"14:35","isRecurring":false,"recurring":null,"forContact":null}
+"remind me to take my medicine" (no time given) → {"reminderText":"take my medicine","time":null,"isRecurring":false,"recurring":null,"forContact":null}`,
     messages: [{ role: "user", content: message }],
   });
 
@@ -842,7 +846,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isEveningGreeting = !isMorningGreeting && EVENING_PATTERN.test(message);
   // [DIAG] Log pattern detection for Evening Check-In debugging
   req.log.info({ message, isMorningGreeting, isEveningGreeting }, "[DIAG:1] Pattern detection");
-  const isReminderRequest = REMINDER_PATTERN.test(message);
+  // Checked first so "what are my reminders?" doesn't bleed into the creation path.
+  const isReminderListRequest = LIST_REMINDERS_PATTERN.test(message);
+  const isReminderRequest = !isReminderListRequest && REMINDER_PATTERN.test(message);
   let isListRequest = LIST_PATTERN.test(message);
   const activeListFromHistory = !isListRequest ? detectActiveListFromHistory(history) : null;
   const isCasualListAdd = !isListRequest && CASUAL_LIST_ADD_PATTERN.test(message) && activeListFromHistory !== null;
@@ -2616,8 +2622,29 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       const extracted = await extractReminder(message);
 
       if (extracted) {
-        const fireAt = computeFireAt(extracted.time, "America/Chicago");
-        const [hh, mm] = extracted.time.split(":").map(Number);
+        // If no explicit time was given, default to 30 minutes from now so the
+        // reminder fires soon rather than being silently pushed to tomorrow.
+        let resolvedTime: string;
+        let noTimeGiven = false;
+        if (!extracted.time) {
+          noTimeGiven = true;
+          const soon = new Date(Date.now() + 30 * 60 * 1000);
+          const ctFmtNow = new Intl.DateTimeFormat("en-US", {
+            timeZone: "America/Chicago",
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: false,
+          });
+          const ctPartsNow = Object.fromEntries(
+            ctFmtNow.formatToParts(soon).map((x) => [x.type, x.value])
+          );
+          resolvedTime = `${ctPartsNow.hour}:${ctPartsNow.minute}`;
+        } else {
+          resolvedTime = extracted.time;
+        }
+
+        const fireAt = computeFireAt(resolvedTime, "America/Chicago");
+        const [hh, mm] = resolvedTime.split(":").map(Number);
         const displayTime = new Date(0);
         displayTime.setHours(hh, mm);
         const timeLabel = displayTime.toLocaleTimeString("en-US", {
@@ -2631,36 +2658,92 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           reminderText: extracted.reminderText,
           fireAt,
           recurring: extracted.recurring ?? null,
-          recurringTime: extracted.isRecurring ? extracted.time : null,
+          recurringTime: extracted.isRecurring ? resolvedTime : null,
           timezone: "America/Chicago",
           forContact: extracted.forContact ?? null,
         });
 
-        req.log.info({ extracted, fireAt }, "Reminder saved");
+        req.log.info({ extracted, resolvedTime, fireAt, noTimeGiven }, "Reminder saved");
 
         if (extracted.forContact) {
           reminderConfirmation =
             `\n\n[Reminder saved for contact]\n` +
             `Contact: "${extracted.forContact}"\n` +
             `Text: "${extracted.reminderText}"\n` +
-            `Time: ${timeLabel}\n` +
+            `Time: ${timeLabel}${noTimeGiven ? " (defaulted — no time specified)" : ""}\n` +
             `If ${extracted.forContact} has Winston installed and is linked, they will receive a push notification at ${timeLabel}. ` +
             `Reply with ONLY the confirmation. One line: "Done — I'll send ${extracted.forContact} a reminder to ${extracted.reminderText} at ${timeLabel}."`;
         } else {
           reminderConfirmation =
             `\n\n[Reminder saved]\n` +
             `Text: "${extracted.reminderText}"\n` +
-            `Time: ${timeLabel}\n` +
+            `Time: ${timeLabel}${noTimeGiven ? " (defaulted to 30 min from now — user gave no explicit time)" : ""}\n` +
             `Recurring: ${extracted.isRecurring ? extracted.recurring ?? "daily" : "no"}\n` +
             `Reply with ONLY the confirmation. No other text, no personality, no references to anything else. ` +
-            `One line: "Done — I'll remind you to ${extracted.reminderText} at ${timeLabel}."` +
-            (extracted.isRecurring ? ` (adjust wording for recurring: "Set — I'll remind you...")` : "");
+            (noTimeGiven
+              ? `One line: "Done — I'll remind you to ${extracted.reminderText} at ${timeLabel}. Let me know if you'd like a different time."`
+              : `One line: "Done — I'll remind you to ${extracted.reminderText} at ${timeLabel}."` +
+                (extracted.isRecurring ? ` (adjust wording for recurring: "Set — I'll remind you...")` : ""));
         }
 
         systemPrompt = systemPrompt + reminderConfirmation;
       }
     } catch (err) {
       req.log.warn({ err }, "Reminder extraction failed, continuing normally");
+    }
+  }
+
+  if (isReminderListRequest) {
+    try {
+      const { rows: pending } = await query<{
+        id: number;
+        reminder_text: string;
+        fire_at: string;
+        recurring: string | null;
+        for_contact: string | null;
+      }>(
+        `SELECT id, reminder_text, fire_at, recurring, for_contact
+           FROM reminders
+          WHERE user_name = $1
+            AND status = 'pending'
+          ORDER BY fire_at ASC`,
+        [sessionUserName]
+      );
+
+      const tz = "America/Chicago";
+      const formatFireAt = (isoStr: string) => {
+        const d = new Date(isoStr);
+        return d.toLocaleString("en-US", {
+          timeZone: tz,
+          weekday: "short",
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+          hour12: true,
+        });
+      };
+
+      let reminderListBlock: string;
+      if (pending.length === 0) {
+        reminderListBlock =
+          `\n\n[Active Reminders]\nNo pending reminders. ` +
+          `Reply naturally: "You don't have any active reminders right now."`;
+      } else {
+        const lines = pending.map((r, i) => {
+          const contact = r.for_contact ? ` (for ${r.for_contact})` : "";
+          const recur = r.recurring ? ` [${r.recurring}]` : "";
+          return `${i + 1}. ${r.reminder_text}${contact}${recur} — ${formatFireAt(r.fire_at)}`;
+        });
+        reminderListBlock =
+          `\n\n[Active Reminders — ${pending.length} pending]\n${lines.join("\n")}\n` +
+          `Read these back naturally and conversationally. Don't just list them verbatim — weave them into a brief reply.`;
+      }
+
+      systemPrompt = systemPrompt + reminderListBlock;
+      req.log.info({ count: pending.length }, "Reminder list injected into prompt");
+    } catch (err) {
+      req.log.warn({ err }, "Reminder list fetch failed, continuing normally");
     }
   }
 

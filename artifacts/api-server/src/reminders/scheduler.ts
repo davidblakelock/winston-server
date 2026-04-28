@@ -154,7 +154,7 @@ export function startScheduler(): void {
           url: reminderUrl,
           reminderId: reminder.id,
           requireInteraction: !reminder.for_contact,
-        });
+        }, reminder.user_name);
 
         logger.info({ id: reminder.id, text: reminder.reminder_text, forContact: reminder.for_contact ?? "self" }, "Reminder fired");
 
