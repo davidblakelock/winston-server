@@ -138,11 +138,18 @@ async function checkDepartureAlertsForUser(userName: string): Promise<void> {
 
     const companionName = await getCompanionName(userName);
 
+    // Universal Google Maps navigation URL — opens native Maps app on iOS/Android
+    // when tapped via Linking.openURL; falls back to browser on web.
     const mapsUrl =
       `https://www.google.com/maps/dir/?api=1` +
       `&origin=${encodeURIComponent(homeAddress)}` +
       `&destination=${encodeURIComponent(location)}` +
       `&travelmode=driving`;
+
+    // Compact deep-link variant: more likely to trigger the native Maps app
+    // directly on iOS and Android without a browser redirect.
+    const mapsDeepLink =
+      `https://maps.google.com/?daddr=${encodeURIComponent(location)}&dirflg=d`;
 
     const eventTimeStr = start.toLocaleTimeString("en-US", {
       timeZone: TZ,
@@ -150,8 +157,9 @@ async function checkDepartureAlertsForUser(userName: string): Promise<void> {
       minute: "2-digit",
       hour12: true,
     });
-    const roundedMins = Math.round(drive.durationMinutes / 5) * 5;
-    const pushBody = `~${roundedMins} min drive · ${eventTimeStr}${location.length < 60 ? ` · ${location}` : ""}`;
+    const roundedMins = Math.round(drive.durationMinutes / 5) * 5 || 5;
+    const trafficLabel = drive.source === "google-maps" ? "w/ traffic" : "est.";
+    const pushBody = `${roundedMins} min ${trafficLabel} · Leave now for ${eventTimeStr}${location.length < 50 ? ` · ${location}` : ""}`;
 
     broadcastToUser(userName, "reminder", {
       id: `departure-${event.summary}-${Date.now()}`,
@@ -159,15 +167,19 @@ async function checkDepartureAlertsForUser(userName: string): Promise<void> {
       reminderText: message,
       speakText: message,
       isDeparture: true,
+      mapsUrl,
     });
 
     await sendPushToAll({
       title: `🚗 Leave now — ${event.summary}`,
       body: pushBody,
       tag: `departure-${userName}-${event.summary}`,
-      url: mapsUrl,          // used by web push click action
-      mapsUrl,               // passed to native app via Expo data so it can open Maps
+      url: mapsUrl,             // web push click action
+      mapsUrl,                  // native app: open via Linking.openURL on tap
+      mapsDeepLink,             // compact Maps deep-link (preferred on mobile)
+      destination: location,    // raw destination for native app to build its own URL
       notificationType: "departure",
+      categoryId: "departure-action",  // native app registered category for tap → Maps
       requireInteraction: true,
     }, userName).catch(() => {});
 

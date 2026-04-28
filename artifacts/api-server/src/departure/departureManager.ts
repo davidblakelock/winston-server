@@ -179,12 +179,23 @@ export async function estimateDriveTime(
 }
 
 // ── Departure alert timing ────────────────────────────────────────────────────
-// Alert fires as soon as the user enters the departure window:
-//   (drive time + 30-minute get-ready buffer)
+// The alert fires when the user should START preparing to leave:
+//   ideal leave time  = event start − drive time − PREP_MINUTES
+//   fire window       = [ideal leave time − WINDOW_EARLY, ideal leave time + WINDOW_LATE]
 //
-// Using a "fire once inside the window" approach rather than a ±3-min point-in-
-// time check so that a missed cron tick or brief server hiccup can never cause
-// the alert to be permanently skipped. hasAlertBeenSent prevents double-firing.
+// With a 2-min cron cadence and DB dedup, a 12-min window guarantees one fire
+// even across a missed tick or brief server hiccup, without firing too early.
+//
+//  Example: 15-min drive to a 2:00 PM appointment, prep=10 min
+//    ideal leave = 1:35 PM
+//    fires between 1:31 PM and 1:39 PM  ← tight, timely alert
+//    (old code fired at 1:00 PM — one full hour early)
+
+const PREP_MINUTES  = 10;  // get-ready time added on top of drive time
+const WINDOW_EARLY  = 4;   // fire up to 4 min before the ideal leave time
+const WINDOW_LATE   = 8;   // fire up to 8 min after  (handles cron jitter)
+
+export const DEPARTURE_PREP_MINUTES = PREP_MINUTES;
 
 export function shouldFireAlert(
   eventStart: Date,
@@ -192,17 +203,14 @@ export function shouldFireAlert(
   now: Date = new Date()
 ): boolean {
   const minutesUntilEvent = (eventStart.getTime() - now.getTime()) / 60000;
-
-  // Fire the moment the user is inside the departure-prep window.
-  // Cap at +15 min over the ideal target so very-early scans don't fire.
-  const target = driveMinutes + 30;
-  return minutesUntilEvent >= 0 && minutesUntilEvent <= target + 15;
+  // minutesUntilLeave < 0 means ideal leave time has passed; still fire up to
+  // WINDOW_LATE minutes after so a briefly-missed cron tick is recovered.
+  const minutesUntilLeave = minutesUntilEvent - driveMinutes - PREP_MINUTES;
+  return minutesUntilLeave >= -WINDOW_LATE && minutesUntilLeave <= WINDOW_EARLY;
 }
 
-// Compute the leave-by time for display purposes (drive + 10-min buffer).
-const BUFFER_MINUTES = 10;
 export function computeLeaveAt(eventStart: Date, driveMinutes: number): Date {
-  return new Date(eventStart.getTime() - (driveMinutes + BUFFER_MINUTES) * 60000);
+  return new Date(eventStart.getTime() - (driveMinutes + PREP_MINUTES) * 60000);
 }
 
 export function buildDepartureAlertMessage(
@@ -229,9 +237,9 @@ export function buildDepartureAlertMessage(
   });
 
   const trafficNote = hasTrafficData ? "with current traffic" : "estimated";
-  const round = Math.round(driveMinutes / 5) * 5;
+  const round = Math.round(driveMinutes / 5) * 5 || 5;
 
-  return `Hey ${displayName}, heads up — you have ${eventTitle} at ${eventTimeStr}. It's about ${round} minutes away (${trafficNote}), so you'll want to leave around ${leaveTimeStr}. That gives you about 30 minutes to get ready.`;
+  return `Hey ${displayName}, heads up — you have ${eventTitle} at ${eventTimeStr}. It's about ${round} min away (${trafficNote}). Leave by ${leaveTimeStr} and you'll be there with time to spare.`;
 }
 
 // ── Extract location from calendar event ─────────────────────────────────────

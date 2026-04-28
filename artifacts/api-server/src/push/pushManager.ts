@@ -43,7 +43,9 @@ export interface PushPayload {
   icon?: string;
   badge?: string;
   url?: string;
-  mapsUrl?: string;                // For departure alerts — passed to native app to trigger Maps navigation
+  mapsUrl?: string;                // For departure alerts — full directions URL (origin → destination)
+  mapsDeepLink?: string;           // Compact Maps deep-link, preferred on mobile: maps.google.com/?daddr=...
+  destination?: string;            // Raw destination address so native app can build its own Maps URL
   reminderId?: number;
   requireInteraction?: boolean;
   silent?: boolean;
@@ -150,8 +152,11 @@ async function sendExpoNotifications(
       ...(payload.notificationType ? { notificationType: payload.notificationType } : {}),
       ...(payload.companionMessage ? { companionMessage: payload.companionMessage } : {}),
       ...(payload.eventDetails ? { eventDetails: payload.eventDetails } : {}),
-      // mapsUrl is a Google Maps directions link — native app should open it via Linking.openURL
+      // Departure alert Maps fields — native app should call Linking.openURL(mapsDeepLink ?? mapsUrl)
+      // when notificationType === "departure" and the notification is tapped.
       ...(payload.mapsUrl ? { mapsUrl: payload.mapsUrl } : {}),
+      ...(payload.mapsDeepLink ? { mapsDeepLink: payload.mapsDeepLink } : {}),
+      ...(payload.destination ? { destination: payload.destination } : {}),
       // Weather-alert: native app should acquire GPS and call /api/weather/morning?lat=X&lon=Y
       ...(payload.useCurrentLocation ? { useCurrentLocation: true } : {}),
       ...(payload.alertLat != null ? { alertLat: payload.alertLat } : {}),
