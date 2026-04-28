@@ -1320,7 +1320,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         const furtherOutText = furtherOut.length
           ? `\n\nTracked but more than 60 days away: ${furtherOut.map((b) => b.name).join(", ")}`
           : "";
-        systemPrompt += `\n\n[Financial Obligations — AUTHORITATIVE CURRENT STATE FROM SUPABASE]\nDisregard any bills mentioned earlier in this conversation — this is the live list:\n${upcomingText}${furtherOutText}\nRead ONLY these bills back to David in a warm, conversational way — chronological order, mentioning how many days until each one. Highlight anything due soon (within 7 days) first. Do not mention any bill not listed above.`;
+        systemPrompt += `\n\n[Financial Obligations — AUTHORITATIVE CURRENT STATE FROM SUPABASE]\nDisregard any bills mentioned earlier in this conversation — this is the live list:\n${upcomingText}${furtherOutText}\n\nInstructions for reading this back:\n• List each bill with its due date and amount. If a "Pay:" note is shown, include how it gets paid (e.g. "via Venmo to Wes Cole") — that detail matters to David.\n• Mention days until due matter-of-factly. Do NOT dramatize routine due dates or say things like "keep this top of mind" or "deadline is close" for normal upcoming bills.\n• Do NOT offer to set up reminders — bill reminders are already automatic. Just confirm what's tracked.\n• Keep the response brief and friendly. Two to four sentences total is ideal.\n• Do not mention any bill not listed above.`;
       }
     } catch (err) {
       req.log.warn({ err }, "Bill list failed");

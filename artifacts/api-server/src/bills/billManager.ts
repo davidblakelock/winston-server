@@ -473,14 +473,13 @@ export function formatBillsForPrompt(bills: UpcomingBill[]): string {
 
   return bills
     .map((b) => {
-      const amt = b.amount ? ` (${b.amount})` : "";
-      const urgency =
-        b.daysUntilDue === 0 ? " — DUE TODAY" :
-        b.daysUntilDue === 1 ? " — due TOMORROW" :
-        b.daysUntilDue <= 3 ? ` — due in ${b.daysUntilDue} days` :
-        b.daysUntilDue <= 7 ? ` — due in ${b.daysUntilDue} days` :
-        ` — due in ${b.daysUntilDue} days`;
-      return `• ${b.name}${amt}: ${b.dueDateLabel}${urgency}`;
+      const amt = b.amount ? ` — ${b.amount}` : "";
+      const due =
+        b.daysUntilDue === 0 ? "due TODAY" :
+        b.daysUntilDue === 1 ? "due TOMORROW" :
+        `due ${b.dueDateLabel} (${b.daysUntilDue} days)`;
+      const notesLine = b.notes ? `\n  Pay: ${b.notes}` : "";
+      return `• ${b.name}${amt} — ${due}${notesLine}`;
     })
     .join("\n");
 }
