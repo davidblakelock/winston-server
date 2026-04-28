@@ -292,6 +292,27 @@ function formatWeatherBlock(w: CachedWeather): string {
 }
 
 
+// ── Model routing ─────────────────────────────────────────────────────────
+// Haiku: fast, mechanical intents (reminder CRUD, list ops, navigation, calls).
+// Sonnet: everything nuanced — conversation, composition, briefings, calendar, etc.
+const MODEL_HAIKU  = "claude-haiku-4-5-20251001";
+const MODEL_SONNET = "claude-sonnet-4-6";
+
+// Build an array of system blocks with prompt caching on the stable portion.
+// Anthropic caches the first block (persona + profile) for 5 minutes, saving
+// tokens on the large static context that is sent with every request.
+type SystemBlock = { type: "text"; text: string; cache_control?: { type: "ephemeral" } };
+function buildSystemBlocks(stable: string, dynamic: string): SystemBlock[] {
+  const blocks: SystemBlock[] = [];
+  if (stable.length > 0) {
+    blocks.push({ type: "text", text: stable, cache_control: { type: "ephemeral" } });
+  }
+  if (dynamic.length > 0) {
+    blocks.push({ type: "text", text: dynamic });
+  }
+  return blocks;
+}
+
 // Tightened: must be an EXPLICIT greeting or request — never fires on bare "morning" alone
 // or on messages that contain "morning" mid-sentence (e.g. "update my morning preferences").
 const MORNING_PATTERN = /^(good\s+morning|mornin[g']?|morning\s+(briefing|summary|update)|daily\s+(briefing|summary|update)|give\s+me\s+(my\s+)?(morning\s+)?briefing|what('?s|\s+is)\s+(my\s+)?(morning\s+)?briefing|i\s+want\s+(my\s+)?(morning\s+)?briefing|wakin[g']?\s+up|just\s+woke)[\s!.,?]*/i;
@@ -506,7 +527,7 @@ async function extractReminder(message: string): Promise<ExtractedReminder | nul
   const nowCT = `${ctParts.year}-${ctParts.month}-${ctParts.day} ${ctParts.hour}:${ctParts.minute} ${ctParts.timeZoneName ?? "CT"}`;
 
   const extraction = await anthropic.messages.create({
-    model: "claude-opus-4-5",
+    model: MODEL_HAIKU,
     max_tokens: 256,
     system: `You extract reminder details from natural language. Current time in Dallas, TX: ${nowCT} (24-hour clock).
 
@@ -811,7 +832,10 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     (userProfile?.rawData ?? {}) as CollectedData
   );
 
-  let systemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + profileContextBlock + memoryBlock + dynamicProfileBlock + prefsBlock;
+  // Stable: persona + full profile context — cached by Anthropic for 5 min across requests.
+  const stableSystem = corePrompt + profileContextBlock;
+  // Dynamic: current time, recent memories, preference blocks — changes each request.
+  let systemPrompt = getCurrentDateTimeBlock() + "\n" + memoryBlock + dynamicProfileBlock + prefsBlock;
   let reminderConfirmation = "";
 
   const isMorningGreeting = MORNING_PATTERN.test(message);
@@ -916,6 +940,24 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     && (/(message|text)/i.test(message)
         || (lastSmsPayload.recipient.split(" ")[0].length > 2
             && message.toLowerCase().includes(lastSmsPayload.recipient.split(" ")[0].toLowerCase())));
+
+  // ── Model selection ───────────────────────────────────────────────────────
+  // Simple/mechanical intents get Haiku (fast + cheap). Everything nuanced
+  // — conversation, morning briefing, text composition, calendar, etc. — gets Sonnet.
+  const _isSimpleIntent =
+    isReminderRequest ||
+    isListRequest ||
+    isCallRequest ||
+    isBillAdd || isBillList || isBillRemove ||
+    isDateAdd || isDateList || isDateRemove ||
+    isMedRequest ||
+    isStoryDayChange ||
+    isTVAdd || isTVRemove || isTVList ||
+    isOliviaCall ||
+    NAVIGATION_PATTERN.test(message);
+  const selectedModel = _isSimpleIntent && !isMorningGreeting && !isEveningGreeting
+    ? MODEL_HAIKU
+    : MODEL_SONNET;
 
   // ── Sleep reminder: gently note the time if after 11pm CT (once per night) ──
   const chicagoHour = new Date().toLocaleString("en-US", { timeZone: "America/Chicago", hour: "numeric", hour12: false });
@@ -1062,9 +1104,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     if (isNativeMorning) {
       // ── Native: collect full briefing text, return as JSON ──
       const nativeBriefing = await anthropic.messages.create({
-        model: "claude-opus-4-5",
+        model: MODEL_SONNET,
         max_tokens: 1800,
-        system: fullSystemPrompt,
+        system: buildSystemBlocks(staticCtx.preamble, liveGmailBlock + liveCalendarBlock + staticCtx.suffix),
         messages: [{ role: "user", content: "good morning" }],
       });
       const nativeBriefingText =
@@ -1084,9 +1126,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     // The frontend accumulates via: fullText += data.text (already handles this).
     let fullBriefingText = "";
     const stream = anthropic.messages.stream({
-      model: "claude-opus-4-5",
+      model: MODEL_SONNET,
       max_tokens: 1800,
-      system: fullSystemPrompt,
+      system: buildSystemBlocks(staticCtx.preamble, liveGmailBlock + liveCalendarBlock + staticCtx.suffix),
       messages: [{ role: "user", content: "good morning" }],
     });
 
@@ -1124,7 +1166,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
       try {
         const digResponse = await anthropic.messages.create({
-          model: "claude-opus-4-5",
+          model: MODEL_SONNET,
           max_tokens: 500,
           tools: [{ type: "web_search_20250305", name: "web_search" }],
           messages: [{
@@ -3189,9 +3231,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     }
     try {
       const nativeResp = await anthropic.messages.create({
-        model: "claude-opus-4-5",
+        model: selectedModel,
         max_tokens: 1024,
-        system: systemPrompt,
+        system: buildSystemBlocks(stableSystem, systemPrompt),
         messages,
       });
       const nativeReply =
@@ -3255,9 +3297,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
   try {
     const stream = await anthropic.messages.create({
-      model: "claude-opus-4-5",
+      model: selectedModel,
       max_tokens: isMorningGreeting ? 1800 : 1024,
-      system: systemPrompt,
+      system: buildSystemBlocks(stableSystem, systemPrompt),
       messages,
       stream: true,
     });
