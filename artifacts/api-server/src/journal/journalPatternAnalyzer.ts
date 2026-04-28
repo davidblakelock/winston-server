@@ -67,7 +67,7 @@ async function analyzeJournalForUser(userName: string): Promise<void> {
 
   try {
     const response = await anthropic.messages.create({
-      model: "claude-opus-4-5",
+      model: "claude-haiku-4-5",
       max_tokens: 300,
       messages: [{ role: "user", content: prompt }],
     });

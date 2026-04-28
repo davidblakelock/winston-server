@@ -67,7 +67,7 @@ export async function extractProfileOperation(
   message: string
 ): Promise<ProfileOperation | null> {
   const extraction = await anthropic.messages.create({
-    model: "claude-opus-4-5",
+    model: "claude-sonnet-4-6",
     max_tokens: 200,
     system: `You extract profile management operations from natural language for a personal AI companion.
 

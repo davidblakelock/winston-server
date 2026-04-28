@@ -183,7 +183,7 @@ router.post("/onboarding/chat", async (req, res) => {
 
     // ── Emma's conversational response ──
     const emmaResponse = await anthropic.messages.create({
-      model: "claude-opus-4-5",
+      model: "claude-sonnet-4-6",
       max_tokens: 512,
       system: systemPrompt,
       messages,
@@ -354,7 +354,7 @@ async function extractOnboardingData(
   const recentHistory = history.slice(-4).map((m) => `${m.role}: ${m.content}`).join("\n");
 
   const extraction = await anthropic.messages.create({
-    model: "claude-opus-4-5",
+    model: "claude-haiku-4-5",
     max_tokens: 512,
     system: `You extract structured profile data from a user message in an onboarding conversation.
 Current scene: ${scene}. Already collected: ${JSON.stringify(current)}.

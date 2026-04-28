@@ -78,7 +78,7 @@ export async function extractRecommendationsFromResponse(
 
   try {
     const result = await anthropic.messages.create({
-      model: "claude-opus-4-5",
+      model: "claude-sonnet-4-6",
       max_tokens: 256,
       system: `Extract specific recommendations from this assistant response. Return ONLY valid JSON array.
 

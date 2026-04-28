@@ -134,7 +134,7 @@ export async function extractBriefingPrefOp(
   message: string
 ): Promise<BriefingPrefOp | null> {
   const result = await anthropic.messages.create({
-    model: "claude-opus-4-5",
+    model: "claude-haiku-4-5",
     max_tokens: 128,
     system: `Extract a briefing preference change from the user's message.
 

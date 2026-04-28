@@ -254,7 +254,7 @@ export async function extractBillFromMessage(
   const now = new Date().toLocaleString("en-US", { timeZone: "America/Chicago" });
 
   const result = await anthropic.messages.create({
-    model: "claude-opus-4-5",
+    model: "claude-haiku-4-5",
     max_tokens: 384,
     temperature: 0,
     system: `You extract financial obligation details from natural language. Current date/time: ${now}.

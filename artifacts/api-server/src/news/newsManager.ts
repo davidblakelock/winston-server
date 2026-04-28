@@ -89,7 +89,7 @@ async function fetchWatercoolerStories(): Promise<string> {
   console.log(`[API] Claude web_search (watercooler) — starting at ${new Date().toISOString()}`);
 
   const response = await anthropic.messages.create({
-    model: "claude-opus-4-5",
+    model: "claude-haiku-4-5",
     max_tokens: 400,
     tools: [{ type: "web_search_20250305", name: "web_search" }],
     messages: [{ role: "user", content: prompt }],
@@ -135,7 +135,7 @@ async function fetchEntertainmentNews(): Promise<string> {
   console.log(`[API] Claude web_search (entertainment) — starting at ${new Date().toISOString()}`);
 
   const response = await anthropic.messages.create({
-    model: "claude-opus-4-5",
+    model: "claude-haiku-4-5",
     max_tokens: 400,
     tools: [{ type: "web_search_20250305", name: "web_search" }],
     messages: [{ role: "user", content: prompt }],
@@ -244,7 +244,7 @@ GLOBAL RULES:
 
   const [mainResponse, watercoolerText, entertainmentText] = await Promise.all([
     anthropic.messages.create({
-      model: "claude-opus-4-5",
+      model: "claude-sonnet-4-6",
       max_tokens: 2000,
       tools: [{ type: "web_search_20250305", name: "web_search" }],
       messages: [{ role: "user", content: mainPrompt }],
@@ -459,7 +459,7 @@ async function fetchMotivationFromClaude(userName?: string): Promise<string> {
     console.log(`[Motivation] Personal override — upcoming: ${items}`);
 
     const response = await anthropic.messages.create({
-      model: "claude-opus-4-5",
+      model: "claude-haiku-4-5",
       max_tokens: 200,
       messages: [{ role: "user", content: personalPrompt }],
     });
@@ -497,7 +497,7 @@ async function fetchMotivationFromClaude(userName?: string): Promise<string> {
     console.log(`[Motivation] ZenQuotes + Claude personalization`);
 
     const response = await anthropic.messages.create({
-      model: "claude-opus-4-5",
+      model: "claude-haiku-4-5",
       max_tokens: 250,
       messages: [{ role: "user", content: personalizationPrompt }],
     });
@@ -522,7 +522,7 @@ async function fetchMotivationFromClaude(userName?: string): Promise<string> {
   console.log(`[Motivation] Fallback — Claude original thought`);
 
   const response = await anthropic.messages.create({
-    model: "claude-opus-4-5",
+    model: "claude-haiku-4-5",
     max_tokens: 200,
     messages: [{ role: "user", content: fallbackPrompt }],
   });

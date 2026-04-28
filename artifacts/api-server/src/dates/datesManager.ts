@@ -161,7 +161,7 @@ export interface ExtractedDate {
 
 export async function extractDateFromMessage(message: string): Promise<ExtractedDate | null> {
   const result = await anthropic.messages.create({
-    model: "claude-opus-4-5",
+    model: "claude-haiku-4-5",
     max_tokens: 256,
     system: `Extract birthday/anniversary info from natural language.
 

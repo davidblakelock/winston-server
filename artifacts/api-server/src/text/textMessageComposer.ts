@@ -214,7 +214,7 @@ export async function composeTextMessage(opts: ComposeTextOptions): Promise<Comp
     `Keep it concise (1-4 sentences). No signature.`;
 
   const response = await anthropic.messages.create({
-    model: "claude-opus-4-5",
+    model: "claude-sonnet-4-6",
     max_tokens: 300,
     messages: [{ role: "user", content: prompt }],
   });
