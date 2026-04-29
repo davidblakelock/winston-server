@@ -727,7 +727,7 @@ WHAT YOU CAN DO — Answer naturally when David asks "What can you do?" or "What
 • Navigation — say "take me to the gym" and you'll open Google Maps with directions. You know all his regular places.
 • Lists — shopping lists, to-do lists. Add, read, or clear them anytime.
 • Medications — track his medications and remind him when it's time to take them.
-• Evening wind-down — each evening at a time he sets, you check in, ask how his day went, and capture a memory in his story book.
+• Evening check-in — each evening at a time he sets, you check in, ask how his day went, and capture a memory in his story book.
 • Memory book — every story he shares gets saved. One day they'll be compiled into a memory book for loved ones. He can ask to hear them back anytime.
 • Bills — track bill due dates and send reminders before they're due.
 • Birthdays and anniversaries — save important dates and get reminded well ahead of time.
@@ -815,13 +815,13 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
   let message: string;
   if (winddownRequest) {
-    // Explicit evening wind-down request from the native app button — always treat as evening
+    // Explicit evening check-in request from the native app button — always treat as evening
     // regardless of time of day so the check-in works anytime.
     message = "good evening";
   } else if (isAutoGreeting) {
     // Use Dallas local time (UTC-6 CDT). After noon, always use "good evening" so the
-    // Evening Wind-Down button works at any time of day — "good afternoon" never triggered
-    // winddown activation and had no useful function of its own.
+    // Evening Check-In button works at any time of day — "good afternoon" never triggered
+    // evening check-in activation and had no useful function of its own.
     const nowUtc = new Date();
     const dallasHour = (nowUtc.getUTCHours() - 6 + 24) % 24;
     message = dallasHour >= 5 && dallasHour < 12 ? "good morning" : "good evening";
@@ -2237,9 +2237,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       await markFiredToday();        // INSERT today's row (idempotent — no-op if already exists)
       await setWinddownActive(true); // Ensure active = true (in case row existed but was deactivated)
       winddownActive = true;
-      req.log.info("Evening wind-down activated on-demand via evening greeting");
+      req.log.info("Evening check-in activated on-demand via evening greeting");
     } catch (err) {
-      req.log.warn({ err }, "Failed to activate evening wind-down on-demand");
+      req.log.warn({ err }, "Failed to activate evening check-in on-demand");
     }
   }
   // [DIAG] Log winddown state after possible activation
@@ -2405,8 +2405,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     // Skip the evening wind-down system prompt when a text message flow is
     // active — T006 context already in systemPrompt takes priority.
     if (!isTextFlowActive) systemPrompt +=
-      `\n\n[Evening Wind-Down — ACTIVE]\n` +
-      `Write ONE complete, flowing evening wind-down message. ` +
+      `\n\n[Evening Check-In — ACTIVE]\n` +
+      `Write ONE complete, flowing evening check-in message. ` +
       `Do NOT ask a question and wait — deliver everything below in a single warm, natural message. ` +
       `This is not a back-and-forth checklist. It reads like a thoughtful note from a trusted friend ` +
       `who knows ${_windDownDisplayName}'s whole life. Aim for about 150–200 words total. ` +
@@ -2465,11 +2465,11 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   if (isWinddownNote) {
     try {
       await saveWinddownNote(message);
-      req.log.info({ note: message.substring(0, 60) }, "Wind-down note saved");
+      req.log.info({ note: message.substring(0, 60) }, "Evening check-in note saved");
       systemPrompt +=
         `\n\n[Check-In Note Saved]\nDavid's note has been saved and will appear in tomorrow's morning briefing: "${message.substring(0, 120)}"\nAcknowledge warmly that you've got it noted for tomorrow morning.`;
     } catch (err) {
-      req.log.warn({ err }, "Wind-down note save failed");
+      req.log.warn({ err }, "Evening check-in note save failed");
     }
   }
 
@@ -2636,7 +2636,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     try {
       const entries = await getRecentJournalEntries(30);
       if (entries.length === 0) {
-        systemPrompt += `\n\n[Journal — No Entries Yet]\nDavid has no journal entries yet. Let him know warmly — and remind him that during his evening wind-down, he can add journal entries anytime.`;
+        systemPrompt += `\n\n[Journal — No Entries Yet]\nDavid has no journal entries yet. Let him know warmly — and remind him that during his evening check-in, he can add journal entries anytime.`;
       } else {
         systemPrompt += `\n\n[David's Journal — Last 30 Days]\n${formatJournalForPrompt(entries)}\n\nRead these back to David warmly and privately. This is his personal reflection space. Acknowledge what he shared. If there are many entries, summarize the themes warmly. Treat these with care.`;
       }

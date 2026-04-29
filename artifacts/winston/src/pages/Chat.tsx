@@ -2157,7 +2157,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
               {msg.isWinddown && (
                 <p className="text-[11px] font-semibold tracking-widest uppercase text-indigo-400/70 mb-2 flex items-center gap-1.5">
                   <Moon className="h-3 w-3" />
-                  Evening Wind-Down
+                  Evening Check-In
                 </p>
               )}
               {msg.isMorningBriefing && <WeatherCard />}

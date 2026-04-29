@@ -164,7 +164,7 @@ export async function generateOpeningMessage(
     const insight = await getLatestJournalInsight(userName);
     if (insight) {
       journalInsight = insight;
-      logger.info({ chars: insight.length }, "Journal insight available for evening wind-down");
+      logger.info({ chars: insight.length }, "Journal insight available for evening check-in");
     }
   } catch (err) {
     logger.warn({ err }, "Failed to fetch journal insight");
@@ -176,7 +176,7 @@ export async function generateOpeningMessage(
     const mood = await getMoodForToday(userName);
     if (mood) {
       morningMood = mood;
-      logger.info({ chars: mood.length }, "Morning mood available for evening wind-down");
+      logger.info({ chars: mood.length }, "Morning mood available for evening check-in");
     }
   } catch (err) {
     logger.warn({ err }, "Failed to fetch morning mood");
@@ -195,7 +195,7 @@ export async function generateOpeningMessage(
     (morningMood ? `This morning, ${displayName} said they were feeling: "${morningMood.substring(0, 120)}". Gently reference this in your opener — e.g. "Sounds like you went into today feeling..." — and acknowledge how the day may have gone relative to that feeling.\n` : "") +
     (storyQuestion ? `Tonight's memory question: "${storyQuestion}"\n` : "") +
     (journalInsight ? `\n[Gentle journal observation — weave naturally if the moment is right]: ${journalInsight}\n` : "") +
-    `\nWrite ONE complete, flowing evening wind-down message — about 170–220 words. ` +
+    `\nWrite ONE complete, flowing evening check-in message — about 170–220 words. ` +
     `Flowing warm prose. No headers. No numbered sections. One connected message.\n\n` +
     `Cover these elements in order, woven together naturally:\n\n` +
     `1. OPENER: Warm personal greeting to ${displayName}. Reference something real from today${todayContext ? " (use the calendar events)" : ""}. ` +
@@ -221,7 +221,7 @@ export async function generateOpeningMessage(
     const block = response.content[0];
     if (block.type === "text") return block.text.trim();
   } catch (err) {
-    logger.warn({ err }, "Failed to generate wind-down opening, using fallback");
+    logger.warn({ err }, "Failed to generate evening check-in opening, using fallback");
   }
 
   // Fallback
@@ -266,17 +266,17 @@ export function startWinddownScheduler(): void {
 
       if (minutesPast < 0 || minutesPast >= 10) return;
       if (await hasFiredToday()) {
-        console.log(`WINDDOWN: already fired today — skipping`);
+        console.log(`EVENING_CHECK_IN: already fired today — skipping`);
         return;
       }
 
-      console.log(`WINDDOWN: firing at ${localTime}`);
+      console.log(`EVENING_CHECK_IN: firing at ${localTime}`);
       // Mark fired FIRST to prevent double-fire on subsequent ticks within the 10-min window,
       // but wrap it so a transient DB error doesn't abort the whole notification.
       await markFiredToday().catch((err) =>
-        logger.warn({ err }, "Wind-down: markFiredToday failed — push will still be sent")
+        logger.warn({ err }, "Evening check-in: markFiredToday failed — push will still be sent")
       );
-      logger.info({ time: settings.scheduledTime }, "Wind-down initiated");
+      logger.info({ time: settings.scheduledTime }, "Evening check-in initiated");
 
       const users = await getActiveUsers().catch(() => [{ userName: "davidblakelock" }]);
       const primaryUser = users[0]?.userName ?? "davidblakelock";
@@ -287,22 +287,23 @@ export function startWinddownScheduler(): void {
       const message = await generateOpeningMessage(companionName, primaryUser);
 
       await saveTonightMessage(message).catch((err) =>
-        logger.warn({ err }, "Failed to save tonight's wind-down message")
+        logger.warn({ err }, "Failed to save tonight's check-in message")
       );
 
       broadcastToUser(primaryUser, "winddown-start", { message });
 
       sendPushToAll({
-        title: `🌙 Evening Wind-Down — ${companionName}`,
-        body: `${companionName} is ready for your evening wind-down. Tap to chat.`,
+        title: `🌙 Evening Check-In — ${companionName}`,
+        body: `Time for your Evening Check-In — how did your day go?`,
         tag: "winddown",
         notificationType: "winddown",
         requireInteraction: true,
+        autoSendMessage: "Evening Check-In",
       }, primaryUser).catch(() => {});
     } catch (err) {
-      logger.error({ err }, "Wind-down scheduler error");
+      logger.error({ err }, "Evening check-in scheduler error");
     }
   });
 
-  logger.info("Wind-down scheduler started");
+  logger.info("Evening check-in scheduler started");
 }

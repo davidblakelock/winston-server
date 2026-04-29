@@ -900,14 +900,14 @@ export default function SettingsPanel({
               <div className="p-1.5 rounded-lg bg-primary/15">
                 <Moon className="h-3.5 w-3.5 text-primary" />
               </div>
-              <h3 className="text-sm font-semibold text-foreground">Evening Wind-Down</h3>
+              <h3 className="text-sm font-semibold text-foreground">Evening Check-In</h3>
             </div>
             <p className="text-xs text-muted-foreground mb-4 leading-relaxed">
               Each evening at your chosen time, {currentCompanionName} will check in — asking about your day, capturing notes for tomorrow, and inviting a memory.
             </p>
 
             <div className="flex items-center justify-between mb-4">
-              <span className="text-sm text-foreground">Enable evening wind-down</span>
+              <span className="text-sm text-foreground">Enable evening check-in</span>
               <button
                 onClick={() => onWinddownChange({ ...winddownSettings, enabled: !winddownSettings.enabled })}
                 className={`relative w-11 h-6 rounded-full transition-colors duration-200 focus:outline-none ${winddownSettings.enabled ? "bg-primary" : "bg-white/10"}`}
@@ -933,7 +933,7 @@ export default function SettingsPanel({
               disabled={settingsSaving}
             >
               {settingsSaving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-              {settingsSaving ? "Saving…" : "Save wind-down settings"}
+              {settingsSaving ? "Saving…" : "Save check-in settings"}
             </Button>
           </section>
 

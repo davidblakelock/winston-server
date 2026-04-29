@@ -18,7 +18,7 @@ router.get("/winddown/settings", async (_req: Request, res: Response) => {
     const settings = await getSettings();
     res.json(settings);
   } catch (err) {
-    res.status(500).json({ error: "Failed to get wind-down settings" });
+    res.status(500).json({ error: "Failed to get evening check-in settings" });
   }
 });
 
@@ -34,7 +34,7 @@ router.get("/winddown/tonight-message", async (_req: Request, res: Response) => 
   }
 });
 
-// Native app "Evening Wind-Down" button calls this to activate on-demand,
+// Native app "Evening Check-In" button calls this to activate on-demand,
 // independent of the scheduled 9 PM push notification. Idempotent — safe to call multiple times.
 // Generates and returns an opening message immediately if the scheduler hasn't fired yet,
 // so the native app always gets a real AI-generated opening, not a null/fallback.
@@ -55,7 +55,7 @@ router.post("/winddown/activate", async (req: Request, res: Response) => {
 
     res.json({ activated: true, message });
   } catch (err) {
-    res.status(500).json({ error: "Failed to activate evening wind-down" });
+    res.status(500).json({ error: "Failed to activate evening check-in" });
   }
 });
 
@@ -77,7 +77,7 @@ router.put("/winddown/settings", async (req: Request, res: Response) => {
     const settings = await updateSettings({ enabled, scheduledTime });
     res.json(settings);
   } catch (err) {
-    res.status(500).json({ error: "Failed to update check-in settings" });
+    res.status(500).json({ error: "Failed to update evening check-in settings" });
   }
 });
 
