@@ -455,7 +455,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
   const [messages, setMessages] = useState<Message[]>([]);
   const [messagesLoaded, setMessagesLoaded] = useState(false);
   const [pendingNotification, setPendingNotification] = useState<{
-    type: "morning" | "reminder" | "concert-alert";
+    type: "morning" | "reminder" | "concert-alert" | "auto-send";
     text?: string;
     id?: number;
     companionMessage?: string;
@@ -1012,6 +1012,9 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
     if (notif.type === "morning") {
       // Auto-trigger "good morning" so the companion delivers the full briefing
       setTimeout(() => submitText("good morning"), 600);
+    } else if (notif.type === "auto-send" && notif.text) {
+      // Generic auto-send (weather alerts, etc.)
+      setTimeout(() => submitText(notif.text!), 600);
     } else if (notif.type === "concert-alert" && notif.companionMessage) {
       // Display the companion's concert message and speak it
       const msgId = `concert-alert-${Date.now()}`;
@@ -1072,7 +1075,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
           const store = tx.objectStore("pending");
           const getReq = store.get("reminder");
           getReq.onsuccess = () => {
-            const pending = getReq.result as { reminderText?: string; reminderId?: number; notificationType?: string; companionMessage?: string } | undefined;
+            const pending = getReq.result as { reminderText?: string; reminderId?: number; notificationType?: string; companionMessage?: string; autoSendMessage?: string } | undefined;
             if (!pending) return;
             store.delete("reminder"); // consume so it never fires twice
 
@@ -1083,6 +1086,20 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
             if (notifType === "concert-alert" && compMsg) {
               console.log("[CHAT] NOTIFICATION_TAP: concert-alert from IDB");
               setPendingNotification((prev) => prev ?? { type: "concert-alert", companionMessage: compMsg });
+              return;
+            }
+
+            // Morning briefing: auto-send "good morning" to trigger briefing
+            if (notifType === "morning-briefing") {
+              console.log("[CHAT] NOTIFICATION_TAP: morning-briefing — queuing auto-send");
+              setPendingNotification((prev) => prev ?? { type: "morning" });
+              return;
+            }
+
+            // Auto-send: any notification with an autoSendMessage (weather alerts, etc.)
+            if (pending.autoSendMessage) {
+              console.log("[CHAT] NOTIFICATION_TAP: autoSendMessage —", pending.autoSendMessage);
+              setPendingNotification((prev) => prev ?? { type: "auto-send", text: pending.autoSendMessage });
               return;
             }
 
@@ -1120,7 +1137,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         const store = tx.objectStore("pending");
         const getReq = store.get("reminder");
         getReq.onsuccess = () => {
-          const pending = getReq.result as { reminderText?: string; notificationType?: string; companionMessage?: string } | undefined;
+          const pending = getReq.result as { reminderText?: string; notificationType?: string; companionMessage?: string; autoSendMessage?: string } | undefined;
           if (!pending) return;
           store.delete("reminder"); // consume immediately so it never fires twice
 
@@ -1129,10 +1146,19 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
             setPendingNotification((prev) => prev ?? { type: "concert-alert", companionMessage: pending.companionMessage });
             return;
           }
+          // Morning briefing: auto-send "good morning" to trigger the briefing
+          if (pending.notificationType === "morning-briefing") {
+            setPendingNotification((prev) => prev ?? { type: "morning" });
+            return;
+          }
+          // Auto-send: any notification with an autoSendMessage
+          if (pending.autoSendMessage) {
+            setPendingNotification((prev) => prev ?? { type: "auto-send", text: pending.autoSendMessage });
+            return;
+          }
           // Standard reminder
           if (pending.reminderText) {
             const text = pending.reminderText;
-            // Only set if URL params didn't already give us a pendingNotification
             setPendingNotification((prev) => prev ?? { type: "reminder", text });
           }
         };

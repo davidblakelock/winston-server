@@ -100,6 +100,7 @@ import {
 } from "../profile/profileManager.js";
 import {
   getProfile,
+  upsertProfile,
   buildSystemPromptFromProfile,
   buildProfileContext,
   isPartnerRelationship,
@@ -460,6 +461,7 @@ const MED_ADD_PATTERN = /\b(add\s+(a\s+)?(?:new\s+)?medication\s+(?:called\s+)?|
 const MED_LIST_PATTERN = /\b(what\s+medications?\s+(do\s+i\s+take|am\s+i\s+(on|taking)|are\s+mine)|my\s+medications?|medication\s+list|what\s+(meds?|pills?)\s+(do\s+i|am\s+i)|list\s+(my\s+)?meds?|what\s+do\s+i\s+take)\b/i;
 const MED_REMOVE_PATTERN = /\b(stop\s+taking|remove\s+.+\s+from\s+my\s+medications?|no\s+longer\s+taking|discontinued?)\b/i;
 const MED_MUTE_PATTERN = /\b(don'?t\s+(notify|remind|bug|alert|ping|bother)\s+me\s+(about|with|for)\s+(my\s+)?(meds?|medications?|pills?)|stop\s+(medication|med)\s+(reminders?|notifications?|alerts?|pings?)|disable\s+(medication|med)\s+(reminders?|notifications?)|no\s+more\s+(medication|med)\s+(reminders?|notifications?)|mute\s+(medication|med)\s+(reminders?|notifications?)|turn\s+off\s+(medication|med)\s+(reminders?|notifications?)|please\s+don'?t\s+(remind|notify)\s+me\s+(about\s+)?(my\s+)?(meds?|medications?|pills?))\b/i;
+const WAKE_TIME_PATTERN = /\b(change\s+(my\s+)?wake[\s-]?up?\s+time|update\s+(my\s+)?wake[\s-]?up?\s+time|set\s+(my\s+)?wake[\s-]?up?\s+time|wake[\s-]?up?\s+time\s+(is|at|to|changed?|set)|i\s+wake\s+up\s+(at|around)|my\s+wake[\s-]?up?\s+time|morning\s+push\s+time|change\s+(my\s+)?(morning\s+)?(alarm|wake[\s-]?up?|notification)\s+to)\b/i;
 const MED_UNMUTE_PATTERN = /\b(re\-?enable\s+(medication|med)\s+(reminders?|notifications?)|turn\s+on\s+(medication|med)\s+(reminders?|notifications?)|start\s+(medication|med)\s+(reminders?|notifications?)\s+again|remind\s+me\s+about\s+my\s+(meds?|medications?)\s+again|enable\s+(medication|med)\s+(reminders?|notifications?))\b/i;
 const PROFILE_PATTERN = /\b(ms\.?\s*peel\s+)?(add\s+a?\s*(new\s+)?(place|show|restaurant|person|interest|favorite)|i\s+(am|'m|am\s+currently|'m\s+currently)\s+(watching|reading)|add\s+.{1,60}\s+as\s+(a|one\s+of\s+my)\s+(favorite\s+)?(place|show|restaurant|restaurant\s+to|person|interest)|remove\s+.{1,60}\s+from\s+my\s+(places|shows|restaurants|people|interests|favorites|list|profile)|what\s+(places|shows|restaurants|people|interests)\s+(do\s+i\s+(have|have\s+saved)|am\s+i)|show\s+me\s+my\s+(places|shows|restaurants|people|interests)|what('?s|\s+is)\s+(in|on)\s+my\s+(profile|saved\s+places|watch\s+list)|(add|save|remember)\s+(my\s+)?(new\s+)?(doctor|dentist|vet|therapist|therapist|trainer|coach|lawyer|attorney|accountant|financial\s+advisor|pharmacist|specialist|provider|chiropractor|optometrist|ophthalmologist|dermatologist|cardiologist|surgeon|podiatrist|psychiatrist|psychologist|stylist|barber|mechanic|plumber|contractor|electrician|realtor|agent|banker|broker|notary|tutor|instructor|nutritionist|dietitian|personal\s+trainer)\b)\b/i;
 
@@ -903,6 +905,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isMedMute = MED_MUTE_PATTERN.test(message);
   const isMedUnmute = MED_UNMUTE_PATTERN.test(message);
   const isMedRequest = isMedTaken || isMedAdd || isMedList || isMedRemove || isMedMute || isMedUnmute;
+  const isWakeTimeChange = WAKE_TIME_PATTERN.test(message);
   // "Tell me more about number 3" — dig into a specific Top 10 morning news story
   const newsDigMatch = !isMorningGreeting && NEWS_DIG_PATTERN.exec(message);
   const newsDigStoryNumber = newsDigMatch ? parseInt(newsDigMatch[1] ?? newsDigMatch[2] ?? "0", 10) : 0;
@@ -3025,6 +3028,33 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       req.log.info({ userName: sessionUserName }, "Medication reminders re-enabled");
     } catch (err) {
       req.log.warn({ err }, "Medication unmute failed");
+    }
+  }
+
+  // ── Wake time change ──────────────────────────────────────────────────────
+  // Handles: "change my wake up time to 7am", "I wake up at 6:30", etc.
+  if (isWakeTimeChange) {
+    try {
+      // Parse a time from the message — matches "7am", "6:30am", "7:30", "07:00", etc.
+      const timeMatch = message.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i);
+      if (timeMatch) {
+        let hours = parseInt(timeMatch[1], 10);
+        const minutes = parseInt(timeMatch[2] ?? "0", 10);
+        const meridiem = (timeMatch[3] ?? "").toLowerCase();
+        if (meridiem === "pm" && hours !== 12) hours += 12;
+        if (meridiem === "am" && hours === 12) hours = 0;
+        const newWakeTime = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+        await upsertProfile(sessionUserName, { wakeTime: newWakeTime });
+        const displayTime = new Date(`2000-01-01T${newWakeTime}`).toLocaleTimeString("en-US", {
+          hour: "numeric", minute: minutes > 0 ? "2-digit" : undefined, hour12: true,
+        });
+        systemPrompt += `\n\n[Wake Time Updated]\nWake-up time has been updated to ${displayTime} (${newWakeTime}). The morning briefing notification will now arrive at this time. Confirm naturally and briefly — e.g. "Done — I'll send your morning briefing at ${displayTime} from now on."`;
+        req.log.info({ newWakeTime, userName: sessionUserName }, "[WAKE TIME] Updated via chat");
+      } else {
+        systemPrompt += `\n\n[Wake Time — Time Not Parsed]\nCouldn't extract a specific time from the message. Ask the user to clarify — e.g. "What time would you like your morning briefing?"`;
+      }
+    } catch (err) {
+      req.log.warn({ err }, "[WAKE TIME] Update failed");
     }
   }
 
