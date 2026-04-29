@@ -11,24 +11,10 @@ import {
 import { getProfile, getActiveUsers, type CollectedData } from "../onboarding/onboardingManager.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 import { fetchTodayEvents, fetchTomorrowEvents } from "../google/calendar.js";
-import {
-  getNextStoryQuestion,
-  setPendingPrompt,
-  hasStoryCapturedTonight,
-} from "../stories/storyManager.js";
-import { getLatestJournalInsight } from "../journal/journalPatternAnalyzer.js";
 import { getMoodForToday } from "../mood/moodManager.js";
 import { logger } from "../lib/logger.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
-// ── Day-of-week helper ────────────────────────────────────────────────────────
-
-function isTodayStoryDay(storyDay: string, tz: string): boolean {
-  const now = new Date();
-  const localDayName = now.toLocaleDateString("en-US", { timeZone: tz, weekday: "long" }).toLowerCase();
-  return localDayName === storyDay.toLowerCase();
-}
 
 // ── Build a natural family-mention string from profile people ─────────────────
 
@@ -111,7 +97,7 @@ export async function generateOpeningMessage(
   const now = new Date();
   const dayName = now.toLocaleDateString("en-US", { timeZone: tz, weekday: "long" });
 
-  // Fetch calendar events
+  // Today's calendar events — ground the opener in something real
   let todayContext = "";
   try {
     const evts = await fetchTodayEvents(userName);
@@ -121,101 +107,51 @@ export async function generateOpeningMessage(
     }
   } catch { /* non-fatal */ }
 
+  // Tomorrow's calendar events — for the look-ahead
   let tomorrowContext = "";
   try {
     const evts = await fetchTomorrowEvents(userName);
     if (evts && evts.length > 0) {
-      const notable = evts.filter((e) => !e.allDay).slice(0, 2).map((e) => {
+      const notable = evts.filter((e) => !e.allDay).slice(0, 3).map((e) => {
         const time = (e as { startTime?: string }).startTime
           ? ` at ${(e as { startTime?: string }).startTime}` : "";
         return `${e.summary}${time}`;
       });
-      if (notable.length > 0) tomorrowContext = `Tomorrow: ${notable.join(", ")}.`;
+      if (notable.length > 0) tomorrowContext = notable.join(", ");
     }
   } catch { /* non-fatal */ }
 
-  // T002: Story question — only on the configured day of week
-  const settings = await getSettings().catch(() => null);
-  const storyDay = settings?.storyDayOfWeek ?? "sunday";
-  const isStoryNight = isTodayStoryDay(storyDay, tz);
-
-  let storyQuestion = "";
-  if (isStoryNight) {
-    try {
-      const capturedTonight = await hasStoryCapturedTonight();
-      if (!capturedTonight) {
-        const storyQ = await getNextStoryQuestion();
-        if (storyQ) {
-          await setPendingPrompt(storyQ.question);
-          storyQuestion = storyQ.question;
-          logger.info({ questionId: storyQ.id, category: storyQ.category, dayName }, "Evening story question set");
-        }
-      }
-    } catch (err) {
-      logger.warn({ err }, "Failed to fetch/set story question");
-    }
-  } else {
-    logger.info({ dayName, storyDay }, "Skipping story question — not story night");
-  }
-
-  // T004: Fetch latest journal pattern insight
-  let journalInsight = "";
-  try {
-    const insight = await getLatestJournalInsight(userName);
-    if (insight) {
-      journalInsight = insight;
-      logger.info({ chars: insight.length }, "Journal insight available for evening check-in");
-    }
-  } catch (err) {
-    logger.warn({ err }, "Failed to fetch journal insight");
-  }
-
-  // Morning mood: reference how they said they were feeling this morning
+  // Morning mood — gentle opener hook
   let morningMood = "";
   try {
     const mood = await getMoodForToday(userName);
-    if (mood) {
-      morningMood = mood;
-      logger.info({ chars: mood.length }, "Morning mood available for evening check-in");
-    }
-  } catch (err) {
-    logger.warn({ err }, "Failed to fetch morning mood");
-  }
+    if (mood) morningMood = mood;
+  } catch { /* non-fatal */ }
 
   const familyLine = familyContext ? `${displayName}'s family: ${familyContext}.\n` : "";
-
-  // T003: Build prompt with "Thought for the night" as 7th element
-  const storyDayLabel = storyDay.charAt(0).toUpperCase() + storyDay.slice(1);
 
   const prompt =
     `You are ${companionName}, ${displayName}'s warm personal AI companion. It's ${dayName} evening in ${city}.\n\n` +
     familyLine +
     (todayContext ? `${todayContext}\n` : "") +
-    (tomorrowContext ? `${tomorrowContext}\n` : "") +
-    (morningMood ? `This morning, ${displayName} said they were feeling: "${morningMood.substring(0, 120)}". Gently reference this in your opener — e.g. "Sounds like you went into today feeling..." — and acknowledge how the day may have gone relative to that feeling.\n` : "") +
-    (storyQuestion ? `Tonight's memory question: "${storyQuestion}"\n` : "") +
-    (journalInsight ? `\n[Gentle journal observation — weave naturally if the moment is right]: ${journalInsight}\n` : "") +
-    `\nWrite ONE complete, flowing evening check-in message — about 170–220 words. ` +
-    `Flowing warm prose. No headers. No numbered sections. One connected message.\n\n` +
-    `Cover these elements in order, woven together naturally:\n\n` +
-    `1. OPENER: Warm personal greeting to ${displayName}. Reference something real from today${todayContext ? " (use the calendar events)" : ""}. ` +
-    (familyContext ? `Mention ${familyContext} naturally where it fits — don't force every name.\n\n` : "\n\n") +
-    (storyQuestion
-      ? `2. MEMORY QUESTION (${storyDayLabel} tradition): Include this word for word: "Here's something worth sitting with tonight${familyNames ? ` — something for ${familyNames} someday` : ""}: ${storyQuestion}"\n\n`
-      : "") +
-    `${storyQuestion ? "3" : "2"}. JOURNAL INVITE: Soft optional — something like: "If you want to add anything to your journal tonight, just talk and I'll capture it — or just say 'I don't journal' and we'll skip it."\n\n` +
-    (journalInsight
-      ? `${storyQuestion ? "4" : "3"}. JOURNAL OBSERVATION: If it feels natural and the conversation allows it, weave in this observation gently — like a caring friend who noticed something: "${journalInsight}" Don't force it. Only include it if it fits warmly.\n\n`
-      : "") +
-    `${storyQuestion ? "5" : journalInsight ? "4" : "3"}. TOMORROW PREP: ${tomorrowContext ? `Mention what's ahead (${tomorrowContext}). ` : ""}Ask them directly: "Is there anything you want to add to your shopping list or to-do list, or do you need me to set any reminders for tomorrow?" Use that exact phrasing — never collapse these into just "your lists".\n\n` +
-    `${storyQuestion ? "6" : journalInsight ? "5" : "4"}. THOUGHT FOR THE NIGHT: End with a single, brief, genuinely thoughtful sentence. Not advice. Not a motivational quote. Not a platitude. Something a wise, warm friend might say at the end of a good conversation — something ${displayName} can quietly sit with before sleep. Make it specific to ${dayName} or the mood of this particular evening if you can. Vary it so it never feels repetitive.\n\n` +
-    `${storyQuestion ? "7" : journalInsight ? "6" : "5"}. CLOSING: Warm goodnight to ${displayName}. ${familyNames ? `Mention ${familyNames}. ` : ""}One encouraging sentence.\n\n` +
-    `Write this as one flowing piece of prose — no bullet points, no headers, no numbers.`;
+    (tomorrowContext ? `Tomorrow's calendar: ${tomorrowContext}\n` : "") +
+    (morningMood ? `This morning ${displayName} mentioned feeling: "${morningMood.substring(0, 120)}". Acknowledge the day relative to that feeling in your opener.\n` : "") +
+    `\nWrite ONE warm, natural evening check-in message — about 150–180 words. ` +
+    `Flowing prose. No headers. No numbers. One connected message.\n\n` +
+    `Cover these naturally, woven together:\n\n` +
+    `1. OPENER: Warm greeting to ${displayName}. Reference something from today${todayContext ? " (use the calendar events)" : " — ask warmly how things went"}. ` +
+    (familyContext ? `Weave in ${familyContext} where it feels natural.\n\n` : "\n\n") +
+    `2. HOW WAS THE DAY: Ask genuinely how the day went — make it personal, not generic.\n\n` +
+    `3. TOMORROW LOOK-AHEAD: ${tomorrowContext ? `Briefly mention what's coming up tomorrow (${tomorrowContext}). ` : "Note the calendar looks clear tomorrow. "}Then ask: "Is there anything you want to add to your shopping list, to-do list, or any reminders for tomorrow?"\n\n` +
+    `4. EVENING THOUGHT: One calming sentence — something grounding and warm for before sleep. Not advice. Not a quote. Something a trusted friend would say. Specific to this ${dayName}.\n\n` +
+    `5. REFLECTIONS: A light invite — something like: "If there's anything on your mind from today you want to capture, just say it." Keep it brief and optional.\n\n` +
+    `6. CLOSING: Warm goodnight to ${displayName}.${familyNames ? ` Mention ${familyNames}.` : ""}\n\n` +
+    `Write as one flowing message — no bullet points, no headers, no numbers.`;
 
   try {
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-6",
-      max_tokens: 600,
+      max_tokens: 500,
       messages: [{ role: "user", content: prompt }],
     });
     const block = response.content[0];
@@ -225,18 +161,13 @@ export async function generateOpeningMessage(
   }
 
   // Fallback
-  const familyNote = familyNames ? ` Hope ${familyNames} had a good evening too.` : "";
+  const familyNote = familyNames ? ` Hope ${familyNames} had a good one too.` : "";
   return (
-    `Good evening, ${displayName}. Hope your ${dayName} was a solid one.${familyNote}\n\n` +
-    (storyQuestion && isStoryNight
-      ? `Here's something worth sitting with tonight${familyNames ? ` — something for ${familyNames} someday` : ""}: ${storyQuestion}\n\n`
-      : "") +
-    `If you want to add anything to your journal tonight, just talk and I'll capture it — or just say "I don't journal" and we'll skip it.\n\n` +
-    `Take a breath. Whatever didn't get done today can wait.\n\n` +
-    (tomorrowContext
-      ? `Tomorrow: ${tomorrowContext} Is there anything you want to add to your shopping list or to-do list, or do you need me to set any reminders for tomorrow?\n\n`
-      : `Is there anything you want to add to your shopping list or to-do list, or do you need me to set any reminders for tomorrow?\n\n`) +
-    `Goodnight${familyNames ? ` — give ${familyNames} a hug from me` : ""}. You did good today.`
+    `Good evening, ${displayName}. How did your ${dayName} go?${familyNote}\n\n` +
+    (tomorrowContext ? `Coming up tomorrow: ${tomorrowContext}. ` : "") +
+    `Is there anything you want to add to your shopping list, to-do list, or any reminders for tomorrow?\n\n` +
+    `If there's anything on your mind from today you want to capture, just say it.\n\n` +
+    `Goodnight${familyNames ? ` — take care of ${familyNames}` : ""}. Rest well.`
   );
 }
 

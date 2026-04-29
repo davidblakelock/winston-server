@@ -41,13 +41,6 @@ import {
   parseTimeToHHMM,
 } from "../medications/medicationManager.js";
 import {
-  getPendingPrompt,
-  setPendingPrompt,
-  clearPendingPrompt,
-  getPendingQuestionId,
-  hasStoryCapturedTonight,
-  getNextStoryQuestion,
-  saveStory,
   getStories,
   getStoryCount,
   formatStoriesForPrompt,
@@ -59,17 +52,10 @@ import {
   getLastNightNotes,
   formatNotesForMorningBriefing,
   setWinddownActive,
-  setJournalOfferPending,
-  isJournalOfferPending,
-  setJournalCaptured,
-  hasJournalCapturedTonight,
 } from "../winddown/winddownManager.js";
 import {
-  saveJournalEntry,
-  getAllJournalEntries,
   getRecentJournalEntries,
   formatJournalForPrompt,
-  hasJournalEntryTonight,
 } from "../journal/journalManager.js";
 import {
   recordOliviaContact,
@@ -432,8 +418,6 @@ const JOURNAL_REVIEW_PATTERN = /\b(read\s+(me\s+)?my\s+journal|show\s+(me\s+)?my
 // T001: Morning briefing follow-up — fired when the cached briefing exists
 const BRIEFING_FOLLOWUP_PATTERN = /\b(tell\s+me\s+more(\s+about)?|more\s+about|dig\s+into|what'?s?\s+the\s+(full\s+)?(story|deal)|what\s+happened\s+(with|to)|elaborate\s+on|can\s+you\s+expand|more\s+details?\s+(on|about|from)|what\s+else\s+(about|on)|follow\s+up\s+on|anything\s+else\s+on|give\s+me\s+(more|the\s+full)|expand\s+on)\b/i;
 
-// T002: Story day change — "move my weekly story question to Wednesday"
-const STORY_DAY_CHANGE_PATTERN = /\b(move|change|switch|shift|reschedule|update)\s+(my\s+)?(weekly\s+)?(story\s+question|memory\s+(question|prompt)|weekly\s+question|journal\s+prompt)\s+(to|for)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
 
 // T005: Headache / body ache — check barometric pressure
 const HEADACHE_PATTERN = /\b(headache|head\s+ach(e|ing)|migraine|body\s+ach(e|es|ing)|joint\s+(pain|ach(e|ing))|pressure\s+headache|sinus\s+headache|feel(ing)?\s+(off|achy|not\s+great|under\s+the\s+weather)|my\s+head\s+(hurts?|is\s+killing|is\s+pounding)|skull\s+is\s+splitting)\b/i;
@@ -727,8 +711,7 @@ WHAT YOU CAN DO — Answer naturally when David asks "What can you do?" or "What
 • Navigation — say "take me to the gym" and you'll open Google Maps with directions. You know all his regular places.
 • Lists — shopping lists, to-do lists. Add, read, or clear them anytime.
 • Medications — track his medications and remind him when it's time to take them.
-• Evening check-in — each evening at a time he sets, you check in, ask how his day went, and capture a memory in his story book.
-• Memory book — every story he shares gets saved. One day they'll be compiled into a memory book for loved ones. He can ask to hear them back anytime.
+• Evening check-in — each evening at a time he sets, you check in, ask how his day went, preview the next day, and help him capture any thoughts before he sleeps.
 • Bills — track bill due dates and send reminders before they're due.
 • Birthdays and anniversaries — save important dates and get reminded well ahead of time.
 • Departure alerts — tell him when it's time to leave for an appointment, accounting for drive time.
@@ -943,8 +926,6 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const cachedBriefingText = !isMorningGreeting ? getCachedBriefing(sessionUserName) : null;
   const isBriefingFollowUp = !isMorningGreeting && !!cachedBriefingText && BRIEFING_FOLLOWUP_PATTERN.test(message);
 
-  // T002: Story day change
-  const isStoryDayChange = !isMorningGreeting && STORY_DAY_CHANGE_PATTERN.test(message);
 
   // T005: Headache / body ache — check pressure
   const isHeadacheRequest = !isMorningGreeting && HEADACHE_PATTERN.test(message);
@@ -980,7 +961,6 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     isBillAdd || isBillList || isBillRemove ||
     isDateAdd || isDateList || isDateRemove ||
     isMedRequest ||
-    isStoryDayChange ||
     isTVAdd || isTVRemove || isTVList ||
     isOliviaCall ||
     NAVIGATION_PATTERN.test(message);
@@ -1592,24 +1572,6 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     req.log.info({ chars: cachedBriefingText.length }, "[T001] Briefing follow-up — injecting cached briefing text");
   }
 
-  // ── T002: Story day of week change ─────────────────────────────────────────
-  if (isStoryDayChange) {
-    try {
-      const dayMatch = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.exec(message);
-      if (dayMatch) {
-        const newDay = dayMatch[1].toLowerCase();
-        const newDayCapital = newDay.charAt(0).toUpperCase() + newDay.slice(1);
-        await updateWinddownSettings({ storyDayOfWeek: newDay });
-        systemPrompt +=
-          `\n\n[Story Day Preference Saved]\nThe user has changed their weekly memory question ` +
-          `from the previous day to ${newDayCapital}. ` +
-          `Reply with exactly this: "Done — I'll bring your memory question on ${newDayCapital} evenings from now on."`;
-        req.log.info({ newDay }, "[T002] Story day of week updated");
-      }
-    } catch (err) {
-      req.log.warn({ err }, "[T002] Failed to update story day");
-    }
-  }
 
   // ── T005: Barometric pressure context for headache/body aches ─────────────
   if (isHeadacheRequest) {
@@ -2402,49 +2364,46 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       ? `Mention ${_familyNames.join(", ")} by name.`
       : "";
 
-    // Skip the evening wind-down system prompt when a text message flow is
+    // Skip the evening check-in system prompt when a text message flow is
     // active — T006 context already in systemPrompt takes priority.
     if (!isTextFlowActive) systemPrompt +=
       `\n\n[Evening Check-In — ACTIVE]\n` +
-      `Write ONE complete, flowing evening check-in message. ` +
-      `Do NOT ask a question and wait — deliver everything below in a single warm, natural message. ` +
-      `This is not a back-and-forth checklist. It reads like a thoughtful note from a trusted friend ` +
-      `who knows ${_windDownDisplayName}'s whole life. Aim for about 150–200 words total. ` +
-      `Weave the six elements below together naturally — they should feel like one piece, not six sections.\n\n` +
+      `Write ONE warm, natural evening check-in message. ` +
+      `This is a genuine end-of-day conversation — not a checklist, not a structured report. ` +
+      `Think of it as a trusted friend checking in at the end of a long day. ` +
+      `Aim for about 150–180 words. Flowing prose. No headers, no numbers.\n\n` +
 
-      `ELEMENT 1 — PERSONAL OPENER:\n` +
-      `Start with a warm greeting that references something real from today. ` +
-      `Check [Today's Calendar] — if an event is listed, name it. ` +
+      `ELEMENT 1 — OPENER:\n` +
+      `Warm greeting to ${_windDownDisplayName}. ` +
+      `Reference something real from today — check [Today's Calendar]. ` +
       (_familyMentionStr ? `${_familyMentionStr} ` : ``) +
-      `NEVER invent events not in the calendar.\n\n` +
+      `Never invent events not in the calendar.\n\n` +
 
-      `ELEMENT 2 — STORY QUESTION:\n` +
-      `Include the question from [Tonight's Story Question] as a warm invitation. ` +
-      `Frame it exactly like this: ` +
-      `"Here's something worth sitting with tonight${_storyPersonStr ? ` — something for ${_storyPersonStr} someday` : ""}: [question]" ` +
-      `Use the exact question text. Don't reframe or paraphrase it.\n\n` +
+      `ELEMENT 2 — HOW WAS THE DAY:\n` +
+      `Ask warmly and genuinely how the day went. Make it personal — not "how was your day?" ` +
+      `but something specific to what you know about them.\n\n` +
 
-      `ELEMENT 3 — JOURNAL INVITE:\n` +
-      `A soft, optional invite — something like: ` +
-      `"If you want to add anything to your journal tonight, just talk and I'll capture it — or just say 'I don't journal' and we'll skip it."\n\n` +
-
-      `ELEMENT 4 — REFLECTION:\n` +
-      `One brief, genuine thought for before sleep — something grounding or worth sitting with. ` +
-      `Not advice. Not a quote. Just a warm, human observation that fits the tone of the day.\n\n` +
-
-      `ELEMENT 5 — TOMORROW PREP:\n` +
-      `Quick look at [Tomorrow's Calendar] — name 1–2 events with times if they exist. ` +
-      `Then ask: "Anything you want to add to your list or calendar before we close out?" ` +
+      `ELEMENT 3 — TOMORROW LOOK-AHEAD:\n` +
+      `Glance at [Tomorrow's Calendar] — briefly mention 1–2 events with times if they exist. ` +
       `${weatherNote
-        ? `If there's an outdoor activity tomorrow, one short weather note is fine: ${weatherNote} Never connect weather to indoor activities.`
-        : `No weather data — skip weather.`}\n\n` +
+        ? `Include a brief weather note: ${weatherNote} Skip weather for indoor activities.`
+        : `No weather data — skip weather entirely.`} ` +
+      `Then ask: "Anything you want to add to your shopping list, to-do list, or any reminders for tomorrow?"\n\n` +
+
+      `ELEMENT 4 — EVENING THOUGHT:\n` +
+      `One calming, grounding sentence for before sleep. ` +
+      `Not advice. Not a quote. Something a warm friend would say — specific to this evening.\n\n` +
+
+      `ELEMENT 5 — REFLECTIONS INVITE:\n` +
+      `A light, optional close — something like: ` +
+      `"If there's anything on your mind from today you want to capture, just say it." ` +
+      `Keep it brief. This is an open door, not a prompt.\n\n` +
 
       `ELEMENT 6 — CLOSING:\n` +
-      `Warm goodnight to ${_windDownDisplayName}. ${_closingFamilyStr} One encouraging sentence. Done.\n\n` +
+      `Warm goodnight to ${_windDownDisplayName}. ${_closingFamilyStr} Done.\n\n` +
 
-      `RULES: Do NOT structure the output with headers or numbers. ` +
-      `Write it as flowing prose — one connected message. ` +
-      `No medication reminders. No music suggestions. No phone reminders.\n` +
+      `RULES: Flowing prose only — no headers, no bullets, no numbers. ` +
+      `No medication reminders. No music suggestions.\n` +
 
       todayCalendarBlock +
       tomorrowWeatherBlock +
@@ -2479,131 +2438,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     } catch {}
   }
 
-  // ── Story capture: check if David is responding to a pending story prompt ──
-  const pendingPrompt = await getPendingPrompt().catch(() => null);
-  const pendingQuestionId = await getPendingQuestionId().catch(() => null);
   const wordCount = message.trim().split(/\s+/).length;
-  const isPotentialStoryResponse =
-    pendingPrompt !== null &&
-    winddownActive &&
-    !isEveningGreeting &&
-    !isReminderRequest &&
-    !isListRequest &&
-    !isEmailRequest &&
-    !isCalendarRequest &&
-    !isStoryRead &&
-    !isStoryCount &&
-    !isTVAdd &&
-    !isTVRemove &&
-    !isTVRequest &&
-    !isCalendarWriteOp &&
-    !isDeleteConfirm &&
-    !isDeleteCancel &&
-    !isMedRequest &&
-    !isJournalReview &&
-    !isTextMessageRequest &&
-    !isTextFlowActive &&
-    wordCount >= 15;
-
-  // ── Winddown journal: check if David is responding to a journal offer ──────
-  const journalOfferPending = await isJournalOfferPending().catch(() => false);
-  const hasJournalTonight = await hasJournalCapturedTonight().catch(() => false);
-  const isPotentialJournalResponse =
-    journalOfferPending &&
-    !hasJournalTonight &&
-    winddownActive &&
-    !isEveningGreeting &&
-    !isReminderRequest &&
-    !isListRequest &&
-    !isEmailRequest &&
-    !isCalendarRequest &&
-    !isStoryRead &&
-    !isStoryCount &&
-    !isTVAdd &&
-    !isTVRemove &&
-    !isTVRequest &&
-    !isCalendarWriteOp &&
-    !isDeleteConfirm &&
-    !isDeleteCancel &&
-    !isMedRequest &&
-    !isTextMessageRequest &&
-    !isTextFlowActive &&
-    wordCount >= 10;
-
-  if (isPotentialJournalResponse) {
-    try {
-      await saveJournalEntry(message);
-      await setJournalOfferPending(false);
-      await setJournalCaptured(true);
-      req.log.info({ words: wordCount }, "Journal entry captured");
-      systemPrompt +=
-        `\n\n[Journal Entry Saved]\nDavid just made a journal entry (${wordCount} words). It has been saved privately.\nRespond with warmth — acknowledge what he shared, reflect a small observation if it feels right, and let him know it's been captured. Keep it brief and warm. Then gently guide toward goodnight.`;
-    } catch (err) {
-      req.log.warn({ err }, "Journal entry save failed");
-    }
-  }
-
-  if (isPotentialStoryResponse && pendingPrompt) {
-    try {
-      await saveStory(pendingPrompt, message, pendingQuestionId);
-      await clearPendingPrompt();
-      req.log.info({ prompt: pendingPrompt.substring(0, 80), words: wordCount, questionId: pendingQuestionId }, "Story captured");
-      const _storyDisplayName = userProfile?.name ?? sessionUserName;
-      const _storyPerson = profilePeople.find((p: { relationship?: string }) => {
-        const rel = (p.relationship ?? "").toLowerCase();
-        return ["daughter","son","child"].includes(rel);
-      })?.name ?? null;
-      systemPrompt +=
-        `\n\n[Memory Saved]\n${_storyDisplayName} just responded to tonight's story question: "${pendingPrompt}"\n` +
-        `Their response (${wordCount} words) has been saved${_storyPerson ? ` as a memory for ${_storyPerson}` : " in the memory book"}.\n` +
-        `Respond with genuine warmth — reflect on something specific they shared. 2–3 sentences. Let it land.\n` +
-        `Then gently ask if they'd like to add anything to their journal tonight: "Want to capture anything else before we close out? Just talk — I'll save it."`;
-      // Enable journal capture after story is saved
-      const journalPromptsEnabled = await isJournalPromptsEnabled(sessionUserName).catch(() => true);
-      if (!hasJournalTonight && journalPromptsEnabled) {
-        await setJournalOfferPending(true).catch(() => {});
-      }
-    } catch (err) {
-      req.log.warn({ err }, "Story save failed");
-    }
-  }
-
-  // ── Evening wind-down: queue tonight's story question from the 120-question bank ──
-  if (winddownActive && !pendingPrompt && !isPotentialStoryResponse) {
-    try {
-      const capturedTonight = await hasStoryCapturedTonight();
-      if (!capturedTonight) {
-        const storyQ = await getNextStoryQuestion();
-        if (storyQ) {
-          await setPendingPrompt(storyQ.question);
-          req.log.info({ questionId: storyQ.id, category: storyQ.category, prompt: storyQ.question.substring(0, 80) }, "Evening story question queued");
-          const _sqPerson = profilePeople.find((p: { relationship?: string }) => {
-            const rel = (p.relationship ?? "").toLowerCase();
-            return ["daughter","son","child"].includes(rel);
-          })?.name ?? null;
-          systemPrompt +=
-            `\n\n[Tonight's Story Question]\nCategory: ${storyQ.category}\nQuestion: "${storyQ.question}"\n\n` +
-            `Include this in the check-in message as ELEMENT 2. ` +
-            `Frame it exactly as: "Here's something worth sitting with tonight${_sqPerson ? ` — something for ${_sqPerson} someday` : ""}: [question]" ` +
-            `Use the exact question text above. Do not paraphrase. ` +
-            `When the user responds with 15+ words, their answer will be saved automatically.`;
-        }
-      }
-    } catch (err) {
-      req.log.warn({ err }, "Evening story question queue failed");
-    }
-  } else if (winddownActive && pendingPrompt && !isPotentialStoryResponse) {
-    // Story question already queued — include it in the check-in message
-    const _sqPerson2 = profilePeople.find((p: { relationship?: string }) => {
-      const rel = (p.relationship ?? "").toLowerCase();
-      return ["daughter","son","child"].includes(rel);
-    })?.name ?? null;
-    systemPrompt +=
-      `\n\n[Tonight's Story Question — Already Queued]\n` +
-      `"${pendingPrompt}"\n` +
-      `Include this as ELEMENT 2 in the check-in message: ` +
-      `"Here's something worth sitting with tonight${_sqPerson2 ? ` — something for ${_sqPerson2} someday` : ""}: [question]"`;
-  }
 
   // ── Story retrieval ──
   if (isStoryRead) {

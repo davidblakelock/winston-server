@@ -14,8 +14,6 @@ import { isTodayPickleballDay } from "../pickleball/pickleballManager.js";
 import { getPendingFollowUps, buildRecommendationFollowUpBlock } from "../recommendations/recommendationsManager.js";
 import { collectSundayData, buildSundaySummaryBlock } from "../sundaySummary/sundaySummaryManager.js";
 import { getPendingPersonalFollowups, buildPersonalFollowupsBlock } from "../followups/followupManager.js";
-import { getJournalCountThisWeek, getRecentJournalEntries } from "../journal/journalManager.js";
-import { getStoryCount } from "../stories/storyManager.js";
 import { getCachedWeather, type CachedWeather } from "../weather/weatherCache.js";
 import { setStaticBriefingContext } from "./briefingCache.js";
 import { fetchDallasContent, getDallasItems, buildDallasBlock } from "./dallasContent.js";
@@ -678,7 +676,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       validSecondaryLocs.map((s) => getCachedWeather(s.city, s.lat, s.lon).catch(() => null))
     );
 
-    const [dallas, lastNightNotes, newsBlock, yesterdayEps, todayEps, sportsScores, upcomingBills, upcomingDates, sundayData, pendingFollowUps, dallasEvents, journalCountWeek, recentJournals, totalStories, pollenData, venueConcertsBlock, dailyMotivation, personalFollowUps] = await Promise.all([
+    const [dallas, lastNightNotes, newsBlock, yesterdayEps, todayEps, sportsScores, upcomingBills, upcomingDates, sundayData, pendingFollowUps, dallasEvents, pollenData, venueConcertsBlock, dailyMotivation, personalFollowUps] = await Promise.all([
       getCachedWeather(primaryCity, primaryLat, primaryLon).catch(() => null),
       getLastNightNotes().catch(() => []),
       fetchMorningNews(userName).catch(() => ""),
@@ -690,9 +688,6 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       isSunday ? collectSundayData(userName).catch(() => null) : Promise.resolve(null),
       getPendingFollowUps(2, 14).catch(() => []),
       fetchDallasContent(localCtx).catch(() => ""),
-      getJournalCountThisWeek().catch(() => 0),
-      getRecentJournalEntries(3).catch(() => []),
-      getStoryCount().catch(() => 0),
       fetchPollenData(primaryLat, primaryLon).catch(() => null),
       runVenueScan().catch(() => ""),
       fetchDailyMotivation(userName).catch(() => ""),
@@ -779,9 +774,6 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       ...rawDallasItems.map((i) => i.headline),                        // Dallas local
       ...rawVenueConcerts.map((c) => `${c.artistOrEvent} ${c.venue}`), // venue concerts
     ];
-
-    // Remove totalStories from motivation block — reporting all-time count of old stories is confusing.
-    // Sunday summary already handles recent-week story count via getRecentStoryCount(7).
 
     // Only include AQI/pollen when notable — AQI >100 (Unhealthy for Sensitive Groups) or pollen high/very high (≥30 gr/m³-eq)
     const POLLEN_HIGH_GRM3 = 30; // threshold for "high" in pollenLevel()
@@ -876,17 +868,9 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       const tz = "America/Chicago";
       const dayName = now.toLocaleDateString("en-US", { timeZone: tz, weekday: "long" });
       const isPickleballDay = ["Monday", "Wednesday", "Friday", "Saturday"].includes(dayName);
-      const recentJournalSnippet = recentJournals.length > 0
-        ? recentJournals.slice(0, 2).map(j => j.content.substring(0, 150)).join(" / ")
-        : "";
       let block = `\n\n[Morning Motivation Context]\n`;
       block += `• Today is ${dayName}${isPickleballDay ? " — a pickleball day" : ""}\n`;
       if (morningWorkoutDone) block += `• MORNING WORKOUT ALREADY DONE — do NOT suggest exercise, a walk, or outdoor activity in the closing. Reference what is ahead instead.\n`;
-      block += `• Journal entries this week: ${journalCountWeek}\n`;
-      if (recentJournalSnippet) block += `• Recent journal themes: "${recentJournalSnippet}"\n`;
-      // Story count intentionally NOT included — the Sunday summary block handles it via
-      // getRecentStoryCount(7). Reporting an all-time total causes confusion when stories
-      // are from weeks ago and the user hasn't recorded anything recently.
 
       if (dailyMotivation) {
         // dailyMotivation is either a [Personal Override — Morning Note] block,
