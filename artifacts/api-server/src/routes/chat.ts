@@ -2206,7 +2206,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   }
   // [DIAG] Log winddown state after possible activation
   req.log.info({ winddownActive, isEveningGreeting }, "[DIAG:2] Winddown state after activation check");
-  const isWinddownNote = winddownActive && WINDDOWN_NOTE_PATTERN.test(message);
+  const isCheckinNoResponse = winddownActive && message === "__CHECKIN_NO_RESPONSE__";
+  const isWinddownNote = winddownActive && !isCheckinNoResponse && WINDDOWN_NOTE_PATTERN.test(message);
   const isGoodnightMessage = /\b(goodnight|good\s+night|good\s+nite|sweet\s+dreams|see\s+you\s+tomorrow|talk\s+tomorrow)\b/i.test(message);
 
   if (winddownActive) {
@@ -2366,7 +2367,21 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
     // Skip the evening check-in system prompt when a text message flow is
     // active — T006 context already in systemPrompt takes priority.
-    if (!isTextFlowActive) systemPrompt +=
+    // Also handle the auto-listen no-response case with a brief witty skip line.
+    if (!isTextFlowActive && isCheckinNoResponse) {
+      systemPrompt +=
+        `\n\n[Evening Check-In — Auto-Listen: No Response]\n` +
+        `David's device was listening for 6 seconds and picked up nothing — he may be distracted, ` +
+        `resting, or simply quiet. Give a brief dry acknowledgment and move naturally to the next ` +
+        `check-in element (or a warm close if it feels like he's done for the night).\n` +
+        `Tone: James Bond calibrated — understated wit, never pushy or fussy. 1–2 sentences max.\n` +
+        `Examples of the register (generate your own — do NOT use these verbatim):\n` +
+        `• "Noted. A man's silence can say a great deal."\n` +
+        `• "Fair enough — I'll take that as a 'fine'."\n` +
+        `• "Moving on, then. The evening won't wait forever."\n` +
+        `Match the tone, find a fresh line.\n` +
+        todayCalendarBlock + tomorrowCalendarBlock;
+    } else if (!isTextFlowActive) systemPrompt +=
       `\n\n[Evening Check-In — ACTIVE]\n` +
       `Write ONE warm, natural evening check-in message. ` +
       `This is a genuine end-of-day conversation — not a checklist, not a structured report. ` +

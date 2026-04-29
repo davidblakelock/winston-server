@@ -10,6 +10,7 @@ import SettingsPanel from "@/components/SettingsPanel";
 import { WeatherCard } from "@/components/WeatherCard";
 
 const EMERGENCY_REGEX = /\b(ms\.?\s*peel\s+(i\s+(need|am|have|fell|can.t|cannot)|call\s+911|help\s+me)|call\s+911|i.ve\s+fallen|i\s+fell\s+(down|and)|i.m\s+not\s+(feeling|ok)|i\s+think\s+i.m\s+(having|going)|chest\s+pain|can.t\s+breathe|emergency|i\s+need\s+(help|an?\s+ambulance)|heart\s+attack|stroke|i.ve\s+been\s+(hurt|injured))\b/i;
+const CHECKIN_END_RE = /\b(good[\s-]?night|sleep\s+well|sweet\s+dreams|rest\s+well|until\s+tomorrow|talk\s+tomorrow|that'?s\s+all\s+for\s+tonight)\b/i;
 
 // ─── Client-side navigation detection ────────────────────────────────────────
 // We detect navigation intent HERE (in the click handler) so window.open() is
@@ -240,7 +241,7 @@ function useVoiceRecorder(onTranscript: (text: string) => void) {
           if (!resp.ok) throw new Error("Transcription failed");
 
           const { text } = await resp.json() as { text: string };
-          if (text?.trim()) onTranscript(text.trim());
+          onTranscript(text?.trim() ?? "");
         } catch (err) {
           console.error("Transcription error:", err);
         } finally {
@@ -504,6 +505,11 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
   const ownedMessageIds = useRef<Set<string>>(new Set());
   const pendingSyncQueue = useRef<Array<{ id: string; role: "user" | "assistant"; content: string }>>([]);
 
+  const checkinModeRef = useRef(false);
+  const checkinSkipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const startCheckinListenRef = useRef<(() => void) | null>(null);
+  const submitCheckinSkipRef = useRef<() => void>(() => {});
+
   const ttsMutation = useTextToSpeech();
   const browserTTS = useBrowserTTS();
   const [googleAuth, refreshGoogleAuth] = useGoogleAuth();
@@ -675,7 +681,14 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
       if (playingId === messageId) { console.log("[AUDIO] toggling off — same messageId, stopping"); setPlayingId(null); return; }
       console.log("[AUDIO] creating Audio object with data URI, mimeType:", mimeType);
       const audio = new Audio(`data:${mimeType};base64,${base64}`);
-      audio.onended = () => { console.log("[AUDIO] audio.onended fired"); setPlayingId(null); };
+      audio.onended = () => {
+        console.log("[AUDIO] audio.onended fired");
+        setPlayingId(null);
+        if (checkinModeRef.current) {
+          console.log("[CHECKIN] Audio ended — auto-starting listen");
+          startCheckinListenRef.current?.();
+        }
+      };
       audio.onerror = (e) => {
         console.warn("[AUDIO] playElevenLabsAudio onerror:", e);
         setPlayingId(null);
@@ -926,6 +939,14 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
 
       const onComplete = (reply: string, navUrl?: string, serverMsgId?: string) => {
         if (serverMsgId) ownedMessageIds.current.add(serverMsgId);
+        if (checkinModeRef.current && CHECKIN_END_RE.test(reply)) {
+          checkinModeRef.current = false;
+          if (checkinSkipTimerRef.current) {
+            clearTimeout(checkinSkipTimerRef.current);
+            checkinSkipTimerRef.current = null;
+          }
+          console.log("[CHECKIN] Goodnight detected — disabling auto-listen");
+        }
         speakReply(assistantMsgId, reply);
         const resolvedNavUrl = navUrl ?? immediateNavUrl ?? undefined;
         if (resolvedNavUrl) {
@@ -997,9 +1018,62 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
     [messages, isStreaming, streamChat, speakReply]
   );
 
-  const { recordingState, startRecording } = useVoiceRecorder((transcript) => {
-    submitText(transcript);
+  const { recordingState, startRecording, stopRecording } = useVoiceRecorder((transcript) => {
+    if (checkinSkipTimerRef.current) {
+      clearTimeout(checkinSkipTimerRef.current);
+      checkinSkipTimerRef.current = null;
+    }
+    if (!transcript && checkinModeRef.current) {
+      submitCheckinSkipRef.current();
+    } else if (transcript) {
+      submitText(transcript);
+    }
   });
+
+  const submitCheckinSkip = useCallback(() => {
+    if (!checkinModeRef.current) return;
+    const assistantMsgId = `checkin-skip-${Date.now()}`;
+    setMessages((prev) => [
+      ...prev,
+      { id: assistantMsgId, role: "assistant" as const, content: "…" },
+    ]);
+    streamChat(
+      "__CHECKIN_NO_RESPONSE__",
+      [],
+      assistantMsgId,
+      (reply) => {
+        if (CHECKIN_END_RE.test(reply)) {
+          checkinModeRef.current = false;
+          console.log("[CHECKIN] End signal in skip reply — disabling auto-listen");
+        }
+        speakReply(assistantMsgId, reply);
+      },
+      () => {
+        setMessages((prev) =>
+          prev.map((m) => m.id === assistantMsgId ? { ...m, content: "Moving on…" } : m)
+        );
+      },
+    );
+  }, [streamChat, speakReply]);
+
+  useEffect(() => { submitCheckinSkipRef.current = submitCheckinSkip; }, [submitCheckinSkip]);
+
+  const startCheckinListen = useCallback(() => {
+    if (!checkinModeRef.current) return;
+    if (checkinSkipTimerRef.current) {
+      clearTimeout(checkinSkipTimerRef.current);
+      checkinSkipTimerRef.current = null;
+    }
+    console.log("[CHECKIN] Auto-listen starting — 6s no-response timer set");
+    void startRecording();
+    checkinSkipTimerRef.current = setTimeout(() => {
+      checkinSkipTimerRef.current = null;
+      console.log("[CHECKIN] 6s elapsed with no response — triggering skip");
+      stopRecording();
+    }, 6000);
+  }, [startRecording, stopRecording]);
+
+  useEffect(() => { startCheckinListenRef.current = startCheckinListen; }, [startCheckinListen]);
 
   // Handle deep-link navigation from tapped push notifications
   useEffect(() => {
@@ -1205,6 +1279,8 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
   // ── SSE: reminders + wind-down start ──
   const fireWinddownStart = useCallback(
     (message: string) => {
+      checkinModeRef.current = true;
+      console.log("[CHECKIN] Mode enabled — evening check-in started");
       const msgId = `winddown-${Date.now()}`;
       setMessages((prev) => [
         ...prev,
