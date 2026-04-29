@@ -372,7 +372,7 @@ const CALL_PATTERN = /\b(call|phone|dial|ring)\s+(?!me\b|you\b|us\b|911\b|them\b
 const WINDDOWN_NOTE_PATTERN = /\b(remember\s+(to|that)|note\s+(for\s+tomorrow|this\s+down)|write\s+(this|that)\s+down|add\s+(this\s+)?to\s+(my\s+)?morning\s+briefing|don'?t\s+let\s+me\s+forget\s+(to|that)|make\s+sure\s+i\s+(remember|know)|for\s+tomorrow\s+(i\s+need\s+to|remind\s+me))\b/i;
 const SPORTS_PATTERN = /\b(rangers|cowboys|score|scores|how\s+did\s+(they|the\s+(rangers|cowboys))\s+do|did\s+(they|the\s+(rangers|cowboys))\s+(win|lose|play)|last\s+night'?s?\s+(game|score)|(rangers|cowboys)\s+(score|win|lose|lost|beat|game|result|update)|check\s+(the\s+)?(rangers|cowboys)|what('?s|\s+is)\s+the\s+(rangers|cowboys|score|game)|any\s+(rangers|cowboys)\s+(news|game|score))\b/i;
 const BILL_ADD_PATTERN = /\b(my\s+\w.{1,40}(bill|payment|insurance|premium|subscription|rent|mortgage|registration|fee|taxes?)\s+is\s+due|add\s+(a\s+)?(bill|payment|financial\s+obligation|reminder\s+for)|track\s+(my\s+)?(bill|payment|insurance|rent|subscription)|remind\s+me\s+(about|when|before)\s+(my\s+)?\w.{1,30}(bill|payment|due|insurance|premium|subscription|rent|mortgage|registration|fee|taxes?)|(is\s+due|renews?)\s+(on|every|each|the)\s+(the\s+)?\d{1,2}(st|nd|rd|th)?|quarterly\s+taxes?\s+are?\s+due|due\s+(on\s+)?(the\s+)?\d{1,2}(st|nd|rd|th)?\b|(rent|mortgage|insurance|premium|subscription)\s+is?\s*(due|paid|owed)|(send|pay|transfer|give)\s+.{1,40}(allowance|payment|money)\s+.{0,30}(on\s+the\s+\d{1,2}(st|nd|rd|th)?|every\s+month|monthly|each\s+month|via\s+(venmo|zelle|paypal|cash\s+app))|\ballowance\b.{0,40}(on\s+the\s+\d{1,2}(st|nd|rd|th)?|every\s+month|monthly|via\s+(venmo|zelle|paypal)))\b/i;
-const BILL_LIST_PATTERN = /\b(what\s+bills|bills?\s+(do\s+i\s+have|coming\s+up|upcoming|are\s+due)|show\s+(me\s+)?(my\s+)?bills?|(my\s+)?upcoming\s+(bills?|payments?|obligations?|financial)|what\s+(financial\s+)?(obligations?|payments?)\s+(do\s+i|am\s+i)|list\s+(my\s+)?(bills?|payments?|obligations?|financial\s+obligations?))\b/i;
+const BILL_LIST_PATTERN = /\b(what\s+bills|bills?\s+(do\s+i\s+have|coming\s+up|upcoming|are\s+due|are\s+(?:you\s+)?tracking|(?:you'?re?|\s+are)\s+tracking)|show\s+(?:\w+\s+){0,4}bills?|(my\s+)?upcoming\s+(bills?|payments?|obligations?|financial)|what\s+(financial\s+)?(obligations?|payments?)\s+(do\s+i|am\s+i)|list\s+(my\s+)?(bills?|payments?|obligations?|financial\s+obligations?)|tell\s+me\s+(?:about\s+)?(?:my\s+)?(?:bills?|financial\s+obligations?)|what\s+(?:are\s+you|do\s+you)\s+tracking)\b/i;
 const BILL_REMOVE_PATTERN = /\b(remove\s+(my\s+)?\w.{1,40}(bill|payment|insurance|subscription|reminder|obligation)|stop\s+tracking\s+(my\s+)?\w.{1,40}|delete\s+(my\s+)?\w.{1,40}(bill|payment|reminder)|cancel\s+(my\s+)?\w.{1,40}(bill|reminder))\b/i;
 
 // Markets / stocks
@@ -2947,6 +2947,11 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   // ── Google Contacts search ────────────────────────────────────────────────
   if (isContactRequest) {
     console.log(`[CONTACT INTENT DETECTED] message="${message}" compound=${isCompoundContactAndSave}`);
+    // Prevent profile "People" items from bleeding into this response.
+    // formatProfileForContext includes all profile_items["people"] in every system prompt;
+    // when saving/searching a contact the AI sees those entries and volunteers info about them.
+    // This override tells Claude to ignore that section for this single response.
+    systemPrompt += `\n\n[Contact Operation — People-Profile Suppression]\nDavid's profile context above may list saved "People" entries. For THIS response, completely disregard that "People" section. Do NOT volunteer, summarise, or reference any person from the profile items list. Your response must address ONLY the specific contact name mentioned in David's current message.`;
     try {
       // Name extraction — tried in priority order (most specific → most general)
       const nameMatch =
@@ -2998,7 +3003,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
             (found.address ? ` | Address: ${found.address}` : "") + "\n" +
             `Action taken: Saved to David's Winston curated contacts AND added to his profile.\n` +
             `Respond with: "Found [Name] in your contacts — I've added them to your Winston profile. ` +
-            `[Share phone/email if present.] Just ask next time and I'll have the info ready."`
+            `[Share phone/email if present.] Just ask next time and I'll have the info ready."\n` +
+            `CRITICAL: Mention ONLY ${found.name} in your response. Do NOT mention or reference any other contacts from earlier in this conversation.`
           );
           req.log.info({ name: found.name }, "[CONTACTS] Compound lookup+save complete");
         } else if (isCompoundContactAndSave && (!result.contacts || result.contacts.length === 0)) {
@@ -3024,6 +3030,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
   // ── Save contact to curated Winston list ───────────────────────────────────
   if (isSaveContactRequest) {
+    systemPrompt += `\n\n[Contact Operation — People-Profile Suppression]\nDavid's profile context above may list saved "People" entries. For THIS response, completely disregard that "People" section. Do NOT volunteer, summarise, or reference any person from the profile items list. Your response must address ONLY the specific contact name mentioned in David's current message.`;
     try {
       // Try to extract an explicit name from the current message first
       // e.g. "save Eric Blackstone to my contacts"
@@ -3054,7 +3061,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
       if (contactToSave) {
         await saveCuratedContact(contactToSave, sessionUserName);
-        systemPrompt += `\n\n[Contact Saved to Winston Curated List]\n"${contactToSave.name}" has been saved to David's Winston contacts.${contactToSave.phone ? ` Phone: ${contactToSave.phone}.` : ""}${contactToSave.email ? ` Email: ${contactToSave.email}.` : ""}\nConfirm naturally: "Got it — I've saved [Name] to your Winston contacts. I'll remember them for next time."`;
+        systemPrompt += `\n\n[Contact Saved to Winston Curated List]\n"${contactToSave.name}" has been saved to David's Winston contacts.${contactToSave.phone ? ` Phone: ${contactToSave.phone}.` : ""}${contactToSave.email ? ` Email: ${contactToSave.email}.` : ""}\nConfirm naturally: "Got it — I've saved [Name] to your Winston contacts. I'll remember them for next time."\nCRITICAL: Mention ONLY "${contactToSave.name}" in your response. Do NOT mention or reference any other contacts from earlier in this conversation.`;
         req.log.info({ name: contactToSave.name }, "[CONTACTS] Contact saved to curated list");
       } else {
         systemPrompt += `\n\n[Contact Save — Name Not Found]\nWas unable to identify which contact to save from this message. Ask the user who specifically they'd like to save: "Who would you like me to add to your Winston contacts?"`;
@@ -3210,13 +3217,13 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   // that contain that same data type. This prevents Claude from reading stale
   // values out of history when the underlying Supabase data has changed.
   const LIST_DATA_PATTERN    = /\b\d+\.\s+\S|(?:shopping|to[\s\-]?do|grocery|errand|task)\s+list\b|on\s+(?:your|the)\s+(?:shopping|to[\s\-]?do|grocery|errand|task)\s+list\b|(?:your|the)\s+(?:shopping|to[\s\-]?do|grocery|errand|task)\s+list\s+(?:has|have|is|are|currently|contains?|includes?)/i;
-  const CONTACT_DATA_PATTERN = /\bPhone\s*:\s*[\d\s()+-]+|Email\s*:\s*\S+@\S+|\b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b|found\s+\w[\w\s]+in your contacts|@\w+\.(com|net|org|io)\b/i;
+  const CONTACT_DATA_PATTERN = /\bPhone\s*:\s*[\d\s()+-]+|Email\s*:\s*\S+@\S+|\b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b|found\s+\w[\w\s]+in your contacts|@\w+\.(com|net|org|io)\b|\[VERIFIED\s+[—–-]\s+Google\s+Contacts|(?:I'?ve?\s+)?saved\s+.{2,60}\s+to\s+(?:your|David'?s?)\s+(?:Winston\s+)?contacts|(?:I'?ve?\s+)?added\s+.{2,60}\s+to\s+(?:your|his|David'?s?)\s+(?:Winston\s+)?(?:contacts?|profile)|Got\s+it\s+[—–-]\s+I'?ve?\s+saved|I'?ve?\s+saved\s+.{2,60}\s+to\s+your\b/i;
   const MED_DATA_PATTERN     = /\[Medications — David's List\]|you(?:'re| are) (?:currently )?(?:taking|on)\b|\b(?:mg|dosage|dose)\b.*\b(?:daily|once|twice|morning|night)\b|\bmedication list\b/i;
   const BILL_DATA_PATTERN    = /\[Financial Obligations\]|due (?:on (?:the )?\d+|in \d+ days?)|\$[\d,.]+ (?:is )?due|tracked bills|upcoming bills|bill.*due date/i;
 
   const scrubPatterns: Array<{ active: boolean; pattern: RegExp; label: string }> = [
     { active: isListRequest,              pattern: LIST_DATA_PATTERN,    label: "[LISTS]" },
-    { active: isContactRequest || isCallRequest, pattern: CONTACT_DATA_PATTERN, label: "[CONTACTS]" },
+    { active: isContactRequest || isCallRequest || isSaveContactRequest, pattern: CONTACT_DATA_PATTERN, label: "[CONTACTS]" },
     { active: isMedList,                  pattern: MED_DATA_PATTERN,     label: "[MEDS]" },
     { active: isBillList,                 pattern: BILL_DATA_PATTERN,    label: "[BILLS]" },
   ];
