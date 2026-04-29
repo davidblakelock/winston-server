@@ -104,6 +104,26 @@ async function checkDateReminders(): Promise<void> {
 
       const message = buildDateReminderMessage(upcoming, userDisplay);
 
+      // Build a personalized autoSendMessage so tapping the notification opens
+      // the app and Winston immediately responds with planning/message help.
+      const name = d.personName;
+      const isBirthday = d.eventType === "birthday";
+      let autoSendMessage: string;
+      if (daysUntil === 7) {
+        autoSendMessage = isBirthday
+          ? `${name}'s birthday is in 7 days — can you help me plan something?`
+          : `My anniversary with ${name} is in 7 days — can you help me plan something special?`;
+      } else if (daysUntil === 2) {
+        autoSendMessage = isBirthday
+          ? `${name}'s birthday is in 2 days — have I done anything about it yet?`
+          : `My anniversary with ${name} is in 2 days — have I done anything about it yet?`;
+      } else {
+        // daysUntil === 0 — day of
+        autoSendMessage = isBirthday
+          ? `Today is ${name}'s birthday — help me send them a birthday message.`
+          : `Today is my anniversary with ${name} — help me make it a special day.`;
+      }
+
       broadcast("reminder", {
         id: `date-${d.id}-${daysUntil}-${Date.now()}`,
         userName,
@@ -113,11 +133,12 @@ async function checkDateReminders(): Promise<void> {
       });
 
       await sendPushToAll({
-        title: `${d.eventType === "birthday" ? "🎂" : "💍"} Important Date — ${companion}`,
+        title: `${isBirthday ? "🎂" : "💍"} Important Date — ${companion}`,
         body: message,
         tag: `date-${d.id}-${daysUntil}`,
         notificationType: "date-reminder",
         requireInteraction: daysUntil <= 3,
+        autoSendMessage,
       }, userName).catch(() => {});
 
       await markReminderSent(d.id, daysUntil, today);
