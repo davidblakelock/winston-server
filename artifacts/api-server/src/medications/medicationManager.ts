@@ -238,7 +238,20 @@ export function extractMedicationFromMessage(message: string): {
   return { name, dosage, reminderTime };
 }
 
-function parseTimeToHHMM(raw: string): string {
+export async function updateMedicationReminderTime(
+  newTime: string,
+  userName = NATIVE_STORED_NAME
+): Promise<number> {
+  const { rows } = await query<{ id: number }>(
+    `UPDATE medications SET reminder_time = $1
+     WHERE user_name = $2 AND active = true
+     RETURNING id`,
+    [newTime, userName]
+  );
+  return rows.length;
+}
+
+export function parseTimeToHHMM(raw: string): string {
   const match = raw.match(/(\d{1,2})(?::(\d{2}))?\s*([ap]m)?/i);
   if (!match) return "08:00";
   let h = parseInt(match[1], 10);

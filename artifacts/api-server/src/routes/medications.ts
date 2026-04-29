@@ -123,8 +123,8 @@ router.post("/medications/confirm-taken", express.json({ limit: "1mb" }), async 
 });
 
 // ── POST /api/medications/snooze-reminder ─────────────────────────────────────
-// Called by the native app when the user taps "Remind me in 30 min" on the
-// medication notification action button. Creates a one-off reminder 30 minutes
+// Called by the native app when the user taps "Remind me in 1 hour" on the
+// medication notification action button. Creates a one-off reminder 60 minutes
 // from now. This runs as a background request — the app does NOT need to open.
 // Response: { ok: true, reminderId: number }
 router.post("/medications/snooze-reminder", express.json({ limit: "1mb" }), async (req, res) => {
@@ -135,14 +135,14 @@ router.post("/medications/snooze-reminder", express.json({ limit: "1mb" }), asyn
     const medText = meds.length > 0
       ? meds.map((m) => m.name).join(", ")
       : "your medications";
-    const fireAt = new Date(Date.now() + 30 * 60 * 1000);
+    const fireAt = new Date(Date.now() + 60 * 60 * 1000);
     const reminder = await createReminder({
       userName,
       reminderText: `Take ${medText}`,
       fireAt,
       timezone: "America/Chicago",
     });
-    req.log.info({ userName, fireAt, reminderId: reminder.id }, "[MEDS] Snooze reminder created via notification action");
+    req.log.info({ userName, fireAt, reminderId: reminder.id }, "[MEDS] 1-hour snooze reminder created via notification action");
     res.json({ ok: true, reminderId: reminder.id });
   } catch (err) {
     req.log.error({ err }, "[MEDS] POST /medications/snooze-reminder error");

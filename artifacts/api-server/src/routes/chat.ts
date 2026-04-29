@@ -37,6 +37,8 @@ import {
   extractMedicationFromMessage,
   setMedicationRemindersEnabled,
   getMedicationRemindersEnabled,
+  updateMedicationReminderTime,
+  parseTimeToHHMM,
 } from "../medications/medicationManager.js";
 import {
   getPendingPrompt,
@@ -462,6 +464,7 @@ const MED_LIST_PATTERN = /\b(what\s+medications?\s+(do\s+i\s+take|am\s+i\s+(on|t
 const MED_REMOVE_PATTERN = /\b(stop\s+taking|remove\s+.+\s+from\s+my\s+medications?|no\s+longer\s+taking|discontinued?)\b/i;
 const MED_MUTE_PATTERN = /\b(don'?t\s+(notify|remind|bug|alert|ping|bother)\s+me\s+(about|with|for)\s+(my\s+)?(meds?|medications?|pills?)|stop\s+(medication|med)\s+(reminders?|notifications?|alerts?|pings?)|disable\s+(medication|med)\s+(reminders?|notifications?)|no\s+more\s+(medication|med)\s+(reminders?|notifications?)|mute\s+(medication|med)\s+(reminders?|notifications?)|turn\s+off\s+(medication|med)\s+(reminders?|notifications?)|please\s+don'?t\s+(remind|notify)\s+me\s+(about\s+)?(my\s+)?(meds?|medications?|pills?))\b/i;
 const WAKE_TIME_PATTERN = /\b(change\s+(my\s+)?wake[\s-]?up?\s+time|update\s+(my\s+)?wake[\s-]?up?\s+time|set\s+(my\s+)?wake[\s-]?up?\s+time|wake[\s-]?up?\s+time\s+(is|at|to|changed?|set)|i\s+wake\s+up\s+(at|around)|my\s+wake[\s-]?up?\s+time|morning\s+push\s+time|change\s+(my\s+)?(morning\s+)?(alarm|wake[\s-]?up?|notification)\s+to)\b/i;
+const MED_TIME_PATTERN = /\b(change|update|set|move|reschedule)\s+(my\s+)?(med(?:ication)?s?|pill)\s+(reminder\s+)?(time\s+)?(to|at|for)\b|\b(med(?:ication)?|pill)\s+(reminder\s+)?(time|schedule)\s+(is|at|to|changed?|set)\b/i;
 const MED_UNMUTE_PATTERN = /\b(re\-?enable\s+(medication|med)\s+(reminders?|notifications?)|turn\s+on\s+(medication|med)\s+(reminders?|notifications?)|start\s+(medication|med)\s+(reminders?|notifications?)\s+again|remind\s+me\s+about\s+my\s+(meds?|medications?)\s+again|enable\s+(medication|med)\s+(reminders?|notifications?))\b/i;
 const PROFILE_PATTERN = /\b(ms\.?\s*peel\s+)?(add\s+a?\s*(new\s+)?(place|show|restaurant|person|interest|favorite)|i\s+(am|'m|am\s+currently|'m\s+currently)\s+(watching|reading)|add\s+.{1,60}\s+as\s+(a|one\s+of\s+my)\s+(favorite\s+)?(place|show|restaurant|restaurant\s+to|person|interest)|remove\s+.{1,60}\s+from\s+my\s+(places|shows|restaurants|people|interests|favorites|list|profile)|what\s+(places|shows|restaurants|people|interests)\s+(do\s+i\s+(have|have\s+saved)|am\s+i)|show\s+me\s+my\s+(places|shows|restaurants|people|interests)|what('?s|\s+is)\s+(in|on)\s+my\s+(profile|saved\s+places|watch\s+list)|(add|save|remember)\s+(my\s+)?(new\s+)?(doctor|dentist|vet|therapist|therapist|trainer|coach|lawyer|attorney|accountant|financial\s+advisor|pharmacist|specialist|provider|chiropractor|optometrist|ophthalmologist|dermatologist|cardiologist|surgeon|podiatrist|psychiatrist|psychologist|stylist|barber|mechanic|plumber|contractor|electrician|realtor|agent|banker|broker|notary|tutor|instructor|nutritionist|dietitian|personal\s+trainer)\b)\b/i;
 
@@ -904,7 +907,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isMedRemove = MED_REMOVE_PATTERN.test(message);
   const isMedMute = MED_MUTE_PATTERN.test(message);
   const isMedUnmute = MED_UNMUTE_PATTERN.test(message);
-  const isMedRequest = isMedTaken || isMedAdd || isMedList || isMedRemove || isMedMute || isMedUnmute;
+  const isMedTimeChange = MED_TIME_PATTERN.test(message);
+  const isMedRequest = isMedTaken || isMedAdd || isMedList || isMedRemove || isMedMute || isMedUnmute || isMedTimeChange;
   const isWakeTimeChange = WAKE_TIME_PATTERN.test(message);
   // "Tell me more about number 3" — dig into a specific Top 10 morning news story
   const newsDigMatch = !isMorningGreeting && NEWS_DIG_PATTERN.exec(message);
@@ -3028,6 +3032,33 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       req.log.info({ userName: sessionUserName }, "Medication reminders re-enabled");
     } catch (err) {
       req.log.warn({ err }, "Medication unmute failed");
+    }
+  }
+
+  // ── Medications: change reminder time ────────────────────────────────────
+  // Handles: "change my medication reminder to 8am", "set med reminder for 9:30am", etc.
+  if (isMedTimeChange && !isMedTaken && !isMedAdd && !isMedRemove) {
+    try {
+      const timeMatch = message.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i);
+      if (timeMatch) {
+        const newTime = parseTimeToHHMM(timeMatch[0]);
+        const updatedCount = await updateMedicationReminderTime(newTime, sessionUserName);
+        const displayTime = new Date(`2000-01-01T${newTime}`).toLocaleTimeString("en-US", {
+          hour: "numeric",
+          minute: parseInt(newTime.split(":")[1] ?? "0", 10) > 0 ? "2-digit" : undefined,
+          hour12: true,
+        });
+        if (updatedCount > 0) {
+          systemPrompt += `\n\n[Medication Reminder Time Updated]\nAll of David's medication reminders have been updated to ${displayTime} (${newTime}). Confirm naturally and briefly — e.g. "Done — I'll remind you about your medications at ${displayTime} from now on."`;
+          req.log.info({ newTime, updatedCount, userName: sessionUserName }, "[MEDS] Reminder time updated via chat");
+        } else {
+          systemPrompt += `\n\n[Medication Reminder Time — No Meds Found]\nDavid has no active medications to update the time for. Let him know gently and offer to add one.`;
+        }
+      } else {
+        systemPrompt += `\n\n[Medication Reminder Time — Time Not Parsed]\nCouldn't extract a specific time from the message. Ask the user to clarify — e.g. "What time would you like your medication reminder?"`;
+      }
+    } catch (err) {
+      req.log.warn({ err }, "[MEDS] Reminder time update failed");
     }
   }
 

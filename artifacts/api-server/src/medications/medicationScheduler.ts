@@ -76,7 +76,7 @@ export function startMedicationScheduler(): void {
                 body: `Time to take your ${medText}.`,
                 tag: "medication-morning",
                 notificationType: "medication",
-                // "medication-action" category shows "Taken ✓" and "Remind in 30 min" buttons.
+                // "medication-action" category shows "Taken ✓" and "Remind in 1 hour" buttons.
                 // Native app must register this category via Notifications.setNotificationCategoryAsync.
                 categoryId: "medication-action",
                 requireInteraction: true,
