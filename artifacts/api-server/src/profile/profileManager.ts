@@ -91,6 +91,11 @@ Rules:
 - "add a place called Chelsea Corner at 6315 La Vista" → {"operation":"add","category":"places","name":"Chelsea Corner","detail":"6315 La Vista Drive Dallas Texas"}
 - "I'm watching The Diplomat" → {"operation":"add","category":"shows","name":"The Diplomat","detail":null}
 - "add Tate's Pizza as a favorite restaurant" → {"operation":"add","category":"restaurants","name":"Tate's Pizza","detail":null}
+- "add Nobu to my restaurants" → {"operation":"add","category":"restaurants","name":"Nobu","detail":null}
+- "add Nobu to my favorite restaurants" → {"operation":"add","category":"restaurants","name":"Nobu","detail":null}
+- "save Lucia as a restaurant" → {"operation":"add","category":"restaurants","name":"Lucia","detail":null}
+- "add Klyde Warren Park to my places" → {"operation":"add","category":"places","name":"Klyde Warren Park","detail":null}
+- "add hiking to my interests" → {"operation":"add","category":"interests","name":"hiking","detail":null}
 - "remove Chelsea Corner from my places" → {"operation":"remove","category":"places","name":"Chelsea Corner","detail":null}
 - "what places do I have saved" → {"operation":"read","category":"places","name":null,"detail":null}
 - "what shows am I watching" → {"operation":"read","category":"shows","name":null,"detail":null}

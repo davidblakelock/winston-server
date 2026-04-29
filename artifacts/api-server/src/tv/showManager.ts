@@ -109,7 +109,10 @@ export function extractShowName(message: string, action: "add" | "remove"): stri
     match =
       message.match(/(?:i\s+started\s+watching|i'?m\s+(?:now\s+)?watching|i\s+am\s+watching|started\s+watching)\s+(.+?)(?:\s*[.!,]|$)/i) ??
       message.match(/add\s+(.+?)\s+to\s+my\s+(?:shows?|watch\s+list)/i) ??
-      message.match(/(?:i\s+picked\s+up|i\s+started)\s+(.+?)(?:\s*[.!,]|$)/i);
+      message.match(/(?:i\s+picked\s+up|i\s+just\s+started)\s+(.+?)(?:\s*[.!,]|$)/i) ??
+      message.match(/i'?m\s+(?:binging|binge\s+watching|checking\s+out|giving|trying)\s+(.+?)(?:\s*[.!,]|$)/i) ??
+      message.match(/i\s+(?:want(?:ed)?\s+to|decided\s+to|plan(?:ning)?\s+to|(?:am\s+)?going\s+to|about\s+to)\s+(?:start\s+)?watch(?:ing)?\s+(.+?)(?:\s*[.!,]|$)/i) ??
+      message.match(/i'?m\s+(?:going|planning)\s+to\s+(?:start\s+)?watch(?:ing)?\s+(.+?)(?:\s*[.!,]|$)/i);
   } else {
     match =
       message.match(/(?:i\s+finished|i\s+stopped\s+watching|i'?m\s+done\s+with|done\s+watching|finished\s+watching)\s+(.+?)(?:\s*[.!,]|$)/i) ??
