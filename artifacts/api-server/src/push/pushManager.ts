@@ -57,6 +57,13 @@ export interface PushPayload {
   alertLat?: number;               // Lat where the alert was issued (home/profile location)
   alertLon?: number;               // Lon where the alert was issued
   alertCity?: string;              // City name for the alert area
+  // Full NWS alert details — native app shows these in the weather screen when notification is tapped
+  alertHeadline?: string;
+  alertDescription?: string;
+  alertInstruction?: string;
+  alertEvent?: string;
+  alertArea?: string;
+  alertExpires?: string;
   // Notification action category — maps to a registered Expo notification category on the native app.
   // e.g. "medication-action" shows "Taken ✓" and "Remind in 30 min" buttons.
   categoryId?: string;
@@ -157,11 +164,18 @@ async function sendExpoNotifications(
       ...(payload.mapsUrl ? { mapsUrl: payload.mapsUrl } : {}),
       ...(payload.mapsDeepLink ? { mapsDeepLink: payload.mapsDeepLink } : {}),
       ...(payload.destination ? { destination: payload.destination } : {}),
-      // Weather-alert: native app should acquire GPS and call /api/weather/morning?lat=X&lon=Y
+      // Weather-alert: native app should navigate to the weather screen on tap
       ...(payload.useCurrentLocation ? { useCurrentLocation: true } : {}),
       ...(payload.alertLat != null ? { alertLat: payload.alertLat } : {}),
       ...(payload.alertLon != null ? { alertLon: payload.alertLon } : {}),
       ...(payload.alertCity ? { alertCity: payload.alertCity } : {}),
+      // Full NWS alert details for display in the native weather screen
+      ...(payload.alertHeadline ? { alertHeadline: payload.alertHeadline } : {}),
+      ...(payload.alertDescription ? { alertDescription: payload.alertDescription } : {}),
+      ...(payload.alertInstruction ? { alertInstruction: payload.alertInstruction } : {}),
+      ...(payload.alertEvent ? { alertEvent: payload.alertEvent } : {}),
+      ...(payload.alertArea ? { alertArea: payload.alertArea } : {}),
+      ...(payload.alertExpires ? { alertExpires: payload.alertExpires } : {}),
       // autoSendMessage: native app sends this text automatically when tapped (no user typing).
       ...(payload.autoSendMessage ? { autoSendMessage: payload.autoSendMessage } : {}),
     },

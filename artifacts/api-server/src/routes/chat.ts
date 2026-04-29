@@ -2281,7 +2281,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         `rather than a flat "how was your day?"`;
     }
 
-    // ── Fetch tonight + tomorrow's weather for user's city ───────────────────
+    // ── Fetch extended weather forecast for user's city ───────────────────────
     let tomorrowWeatherBlock = "";
     let tomorrowHasOutdoor = false;
     let tomorrowWeatherData: { high: number | null; condition: string | null; precip: number; tonightLow: string } | null = null;
@@ -2297,17 +2297,22 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       const tomorrowPrecip = tomorrow?.precipChance ?? 0;
       tomorrowWeatherData = { high: tomorrowHigh, condition: tomorrowCondition, precip: tomorrowPrecip, tonightLow };
 
+      // Build extended forecast lines for all available days
+      const forecastLines = weatherData.forecastDays.map((d) =>
+        `${d.dayName}${d.date ? ` (${d.date})` : ""}: high ${d.high}°F / low ${d.low}°F, ${d.condition}` +
+        (d.precipChance > 20 ? `, ${d.precipChance}% precip` : "")
+      ).join("\n");
+
       tomorrowWeatherBlock =
-        `\n\n[Weather — ${_weatherCity} Tonight and Tomorrow]\n` +
+        `\n\n[Weather — ${_weatherCity} — Current Conditions & Extended Forecast]\n` +
+        `Now: ${weatherData.temp}°F (feels like ${weatherData.feelsLike}°F), ${weatherData.condition} — today high ${weatherData.high}°F / low ${weatherData.low}°F\n` +
         `Tonight's low: ${tonightLow}.\n` +
-        (tomorrowHigh && tomorrowCondition
-          ? `Tomorrow: high ${tomorrowHigh}°F, ${tomorrowCondition}${tomorrowPrecip > 30 ? `, ${tomorrowPrecip}% chance of rain` : ""}.`
-          : "") +
-        `\nUSAGE RULES:\n` +
-        `• Mention weather naturally in Step 5 as one conversational sentence.\n` +
+        (forecastLines ? `\nUpcoming forecast:\n${forecastLines}` : "") +
+        `\n\nUSAGE RULES:\n` +
+        `• You now have the full extended forecast. If David asks "what's the weather on Friday?" or any specific day, answer directly from the forecast above.\n` +
         `• INDOOR ACTIVITIES (gym workouts, indoor courts) — weather is irrelevant, do NOT connect weather to these.\n` +
         `• OUTDOOR ACTIVITIES (a run, golf, an outdoor event) — DO mention relevant conditions briefly.\n` +
-        `• If tomorrow only has indoor or office activities, just note the overnight low and tomorrow's high naturally: "Should cool down nicely tonight — tomorrow's looking like a [condition] day."\n` +
+        `• If tomorrow only has indoor or office activities, just note the overnight low and tomorrow's high naturally.\n` +
         `• Never mention specific weather numbers in context of indoor activities.`;
     } catch { /* non-fatal — skip weather if API unavailable */ }
 

@@ -5,6 +5,7 @@
 
 export interface ForecastDay {
   dayName: string;
+  date: string;      // ISO date string e.g. "2026-05-02"
   high: number;
   low: number;
   precipChance: number;
@@ -87,7 +88,7 @@ async function fetchFromGoogle(city: string, lat: number, lon: number): Promise<
       { signal: AbortSignal.timeout(10000) }
     ),
     fetch(
-      `https://weather.googleapis.com/v1/forecast/days:lookup?key=${apiKey}&${loc}&days=8&unitsSystem=IMPERIAL`,
+      `https://weather.googleapis.com/v1/forecast/days:lookup?key=${apiKey}&${loc}&days=10&unitsSystem=IMPERIAL`,
       { signal: AbortSignal.timeout(10000) }
     ),
   ]);
@@ -105,9 +106,9 @@ async function fetchFromGoogle(city: string, lat: number, lon: number): Promise<
 
   const forecastDays = forecastData.forecastDays ?? [];
 
-  // Day 0 = today (for high/low); Days 1–7 = upcoming forecast
+  // Day 0 = today (for high/low); Days 1–9 = upcoming 9-day forecast
   const today = forecastDays[0];
-  const upcoming = forecastDays.slice(1, 8);
+  const upcoming = forecastDays.slice(1);
 
   const high = Math.round(today?.maxTemperature?.degrees ?? current.currentConditionsHistory?.maxTemperature?.degrees ?? current.temperature?.degrees ?? 0);
   const low = Math.round(today?.minTemperature?.degrees ?? current.currentConditionsHistory?.minTemperature?.degrees ?? current.temperature?.degrees ?? 0);
@@ -122,12 +123,15 @@ async function fetchFromGoogle(city: string, lat: number, lon: number): Promise<
   const mappedForecastDays: ForecastDay[] = upcoming.map((day) => {
     const d = day.displayDate;
     let dayName = "—";
+    let dateStr = "";
     if (d?.year && d?.month && d?.day) {
-      const date = new Date(d.year, d.month - 1, d.day);
-      dayName = date.toLocaleDateString("en-US", { timeZone: "America/Chicago", weekday: "short" });
+      const dateObj = new Date(d.year, d.month - 1, d.day);
+      dayName = dateObj.toLocaleDateString("en-US", { timeZone: "America/Chicago", weekday: "long" });
+      dateStr = `${d.year}-${String(d.month).padStart(2, "0")}-${String(d.day).padStart(2, "0")}`;
     }
     return {
       dayName,
+      date: dateStr,
       high: Math.round(day.maxTemperature?.degrees ?? 0),
       low: Math.round(day.minTemperature?.degrees ?? 0),
       precipChance: Math.round(day.daytimeForecast?.precipitation?.probability?.percent ?? 0),

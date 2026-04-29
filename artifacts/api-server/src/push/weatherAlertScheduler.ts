@@ -1,3 +1,13 @@
+// ── Weather Alert Scheduler ───────────────────────────────────────────────────
+// Polls the NOAA/NWS public alerts API every 15 minutes.
+// NWS API is free, no API key required, returns stable URN alert IDs,
+// and includes full headline + description + instruction text.
+//
+// Deduplication: each alert URN is stored in weather_alert_log once per user.
+// A notification is ONLY sent when a new alertId (URN) is seen for the first time.
+// The scheduler NEVER re-fires the same alert — even if it polls 100 times while
+// the alert is active.
+
 import cron from "node-cron";
 import { sendPushToAll } from "./pushManager.js";
 import { logger } from "../lib/logger.js";
@@ -7,59 +17,67 @@ import { query } from "../db.js";
 const DEFAULT_LAT = 32.7767;
 const DEFAULT_LON = -96.797;
 
-// ── Google Weather publicAlerts endpoint ─────────────────────────────────────
+// ── NWS API types ─────────────────────────────────────────────────────────────
 
-interface GoogleWeatherAlert {
-  alertId?: string;
-  alertTitle?: { text?: string; languageCode?: string };
-  eventType?: string;
-  areaName?: string;
+interface NWSAlertProperties {
+  id: string;          // URN — stable, unique per event
+  event: string;       // e.g. "Tornado Warning"
+  headline?: string;   // e.g. "Tornado Warning issued April 29 at 6PM CDT"
+  description?: string;
+  instruction?: string;
+  severity: string;    // "Extreme" | "Severe" | "Moderate" | "Minor" | "Unknown"
+  urgency: string;     // "Immediate" | "Expected" | "Future" | "Past" | "Unknown"
+  certainty: string;   // "Observed" | "Likely" | "Possible" | "Unlikely"
+  areaDesc?: string;   // e.g. "Dallas County"
+  expires?: string;    // ISO date-time string
+  status?: string;     // "Actual" | "Exercise" | "System" | "Test" | "Draft"
+  messageType?: string;// "Alert" | "Update" | "Cancel"
 }
 
-function buildAlertsUrl(lat: number, lon: number, apiKey: string): string {
-  return `https://weather.googleapis.com/v1/publicAlerts:lookup?key=${apiKey}&location.latitude=${lat}&location.longitude=${lon}`;
+interface NWSFeature {
+  id: string;
+  properties: NWSAlertProperties;
 }
 
-// ── Severe event types to push notifications for ──────────────────────────────
-// Using Google's eventType enum values (uppercase). All other alerts are silently skipped.
-const SEVERE_EVENT_TYPES = new Set([
-  "TORNADO",
-  "FLASH_FLOOD",
-  "SEVERE_THUNDERSTORM",
-  "WINTER_STORM",
-  "ICE_STORM",
-  "BLIZZARD",
-  "EXTREME_COLD",
-  "EXCESSIVE_HEAT",
-  "DUST_STORM",
-  "HURRICANE",
-  "TROPICAL_STORM",
-  "TSUNAMI",
-  "EARTHQUAKE",
+// ── Severity filter ───────────────────────────────────────────────────────────
+// Notify for: Extreme severity OR (Severe + Immediate urgency).
+// Also always notify for specific life-threatening event types regardless.
+
+const ALWAYS_NOTIFY_EVENTS = new Set([
+  "Tornado Warning",
+  "Tornado Emergency",
+  "Flash Flood Emergency",
+  "Flash Flood Warning",
+  "Severe Thunderstorm Warning",
+  "Winter Storm Warning",
+  "Ice Storm Warning",
+  "Blizzard Warning",
+  "Excessive Heat Warning",
+  "Extreme Cold Warning",
+  "Dust Storm Warning",
+  "Hurricane Warning",
+  "Hurricane Watch",
+  "Tropical Storm Warning",
+  "Tsunami Warning",
+  "Tsunami Watch",
 ]);
 
-// Secondary keyword match on alertTitle.text for any event types not in the enum above
-const SEVERE_TITLE_KEYWORDS = [
-  "tornado",
-  "flash flood",
-  "severe thunderstorm",
-  "winter storm",
-  "ice storm",
-  "extreme cold",
-  "excessive heat",
-  "dust storm",
-  "hurricane",
-  "tropical storm",
-  "tsunami",
-];
-
-function isSevereAlert(alert: GoogleWeatherAlert): boolean {
-  if (alert.eventType && SEVERE_EVENT_TYPES.has(alert.eventType)) return true;
-  const title = (alert.alertTitle?.text ?? "").toLowerCase();
-  return SEVERE_TITLE_KEYWORDS.some((kw) => title.includes(kw));
+function isSevereAlert(props: NWSAlertProperties): boolean {
+  // Skip test/exercise messages
+  if (props.status && props.status !== "Actual") return false;
+  // Skip cancellations (messageType "Cancel" means the alert was lifted)
+  if (props.messageType === "Cancel") return false;
+  // Always notify for life-threatening event types
+  if (ALWAYS_NOTIFY_EVENTS.has(props.event)) return true;
+  // Extreme severity → always notify
+  if (props.severity === "Extreme") return true;
+  // Severe + Immediate urgency → notify
+  if (props.severity === "Severe" && props.urgency === "Immediate") return true;
+  return false;
 }
 
 // ── Database-backed deduplication ─────────────────────────────────────────────
+// Keyed on the stable NWS alert URN. Once stored, never re-fires.
 
 const _memCache = new Map<string, Set<string>>();
 
@@ -99,76 +117,102 @@ async function markSent(userName: string, alertId: string, event: string): Promi
   _memCache.get(userName)!.add(alertId);
 }
 
+// ── NWS API fetch ─────────────────────────────────────────────────────────────
+
+async function fetchNWSAlerts(lat: number, lon: number): Promise<NWSFeature[]> {
+  // NWS requires 4 decimal places of precision and a descriptive User-Agent
+  const url = `https://api.weather.gov/alerts/active?point=${lat.toFixed(4)},${lon.toFixed(4)}`;
+
+  const response = await fetch(url, {
+    headers: {
+      "User-Agent": "WinstonAICompanion/1.0 (https://winston-companion--davidblakelock.replit.app)",
+      "Accept": "application/geo+json",
+    },
+    signal: AbortSignal.timeout(10000),
+  });
+
+  if (!response.ok) {
+    logger.warn({ status: response.status, url }, "[WeatherAlerts] NWS API error");
+    return [];
+  }
+
+  const data = (await response.json()) as { features?: NWSFeature[] };
+  return data.features ?? [];
+}
+
 // ── Per-user alert check ──────────────────────────────────────────────────────
 
 async function checkWeatherAlertsForUser(userName: string): Promise<void> {
-  const apiKey = process.env.GOOGLE_WEATHER_API;
-  if (!apiKey) {
-    logger.warn("[WeatherAlerts] GOOGLE_WEATHER_API not configured");
-    return;
-  }
-
   const profile = await getProfile(userName).catch(() => null);
   const lat = profile?.latitude ?? DEFAULT_LAT;
   const lon = profile?.longitude ?? DEFAULT_LON;
   const city = profile?.city ?? "your area";
 
-  const response = await fetch(buildAlertsUrl(lat, lon, apiKey), {
-    headers: { "User-Agent": "Winston-AI-Companion/1.0" },
-    signal: AbortSignal.timeout(8000),
-  });
-
-  if (!response.ok) {
-    logger.warn({ status: response.status }, "[WeatherAlerts] Google API error");
+  let features: NWSFeature[];
+  try {
+    features = await fetchNWSAlerts(lat, lon);
+  } catch (err) {
+    logger.warn({ err }, "[WeatherAlerts] NWS fetch failed");
     return;
   }
 
-  const data = (await response.json()) as { weatherAlerts?: GoogleWeatherAlert[] };
-  const alerts = data.weatherAlerts ?? [];
+  for (const feature of features) {
+    const props = feature.properties;
+    const alertId = props.id;
 
-  for (const alert of alerts) {
-    const alertId = alert.alertId;
     if (!alertId) continue;
+    if (!isSevereAlert(props)) continue;
 
     const alreadySent = await wasAlreadySent(userName, alertId).catch(() => false);
     if (alreadySent) continue;
 
-    if (!isSevereAlert(alert)) continue;
-
-    const eventTitle = alert.alertTitle?.text ?? alert.eventType ?? "Weather Alert";
-
-    // Mark sent BEFORE pushing to avoid duplicates if push is slow
-    await markSent(userName, alertId, eventTitle).catch((err) => {
+    // Mark sent BEFORE pushing to avoid duplicates if push is slow or retried
+    await markSent(userName, alertId, props.event).catch((err) => {
       logger.warn({ err, alertId }, "[WeatherAlerts] Failed to mark alert as sent — may duplicate");
     });
 
-    const areaLabel = alert.areaName ?? city;
-    const body = `${eventTitle} in effect for ${areaLabel}. Stay safe and check local conditions.`;
+    const areaLabel = props.areaDesc ?? city;
+    const headline = props.headline ?? `${props.event} in effect for ${areaLabel}`;
 
-    // autoSendMessage causes the native app to immediately send this text as
-    // the user's message when the notification is tapped — opens the chat and
-    // asks Winston about the alert without any manual typing needed.
-    const autoSendMessage = `There's a ${eventTitle} in effect for ${areaLabel}. What should I know? Are there any actions I should take?`;
+    // Include the full NWS description + instruction so the native app can show it
+    const fullAlertText = [
+      headline,
+      props.description ? `\n${props.description.trim()}` : "",
+      props.instruction ? `\nINSTRUCTIONS: ${props.instruction.trim()}` : "",
+    ].filter(Boolean).join("");
+
+    // Short body for the notification banner (push char limit ~110 chars)
+    const notifBody = headline.length > 110 ? `${headline.slice(0, 107)}…` : headline;
 
     await sendPushToAll({
-      title: `⚠️ Weather Alert: ${eventTitle}`,
-      body,
-      tag: `weather-${userName}-${eventTitle.replace(/\s+/g, "-").toLowerCase()}`,
+      title: `⚠️ ${props.event}`,
+      body: notifBody,
+      tag: `weather-${userName}-${alertId.replace(/[^a-zA-Z0-9]/g, "-")}`,
       requireInteraction: true,
       notificationType: "weather-alert",
-      companionMessage: `There's a ${eventTitle} in effect for ${areaLabel}. ${body}`,
-      autoSendMessage,
-      // Tell the native app to use device GPS when opening the weather screen
-      // so the user sees weather for wherever they currently are, not just home.
-      useCurrentLocation: true,
+      // Full NWS text for the native weather screen
+      alertHeadline: headline,
+      alertDescription: props.description ?? "",
+      alertInstruction: props.instruction ?? "",
+      alertEvent: props.event,
+      alertArea: areaLabel,
+      alertExpires: props.expires ?? "",
+      // autoSendMessage causes the app to immediately send this as the user's message
+      // when the notification is tapped — Winston gives contextual safety guidance.
+      autoSendMessage: `There's a ${props.event} in effect for ${areaLabel}. What should I know and are there any actions I should take?`,
+      companionMessage: fullAlertText,
+      // Open to the weather screen at the user's saved location
+      useCurrentLocation: false,
       alertLat: lat,
       alertLon: lon,
       alertCity: city,
     }, userName);
 
-    logger.info({ eventTitle, alertId, userName }, "[WeatherAlerts] Push sent");
+    logger.info({ event: props.event, alertId, area: areaLabel, userName }, "[WeatherAlerts] Push sent");
   }
 }
+
+// ── Scheduler (every 15 minutes) ─────────────────────────────────────────────
 
 export function startWeatherAlertScheduler(): void {
   initAlertLogTable().catch((err) => {
@@ -185,5 +229,5 @@ export function startWeatherAlertScheduler(): void {
     }
   });
 
-  logger.info("[WeatherAlerts] Scheduler started (Google Weather publicAlerts, every 15 min)");
+  logger.info("[WeatherAlerts] Scheduler started (NWS public alerts API, every 15 min, dedup by alert URN)");
 }
