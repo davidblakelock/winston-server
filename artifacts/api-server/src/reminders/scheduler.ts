@@ -16,6 +16,8 @@ interface ReminderRow {
   timezone: string;
   status: string;
   for_contact: string | null;
+  push_category_id: string | null;
+  push_data: string | null;
 }
 
 
@@ -114,6 +116,12 @@ export function startScheduler(): void {
 
         // ── 4b. Always send the reminder push to the reminder owner ──────
         // NOTE: no URL included — the native app handles taps via notificationType.
+        // If the reminder has a push_category_id (e.g. "bill-action" for bill snoozes),
+        // use that instead of the default "reminder-action". Extra push fields from
+        // push_data (e.g. companionMessage with billId) are merged in.
+        const extraPushData: Record<string, unknown> = reminder.push_data
+          ? (() => { try { return JSON.parse(reminder.push_data) as Record<string, unknown>; } catch { return {}; } })()
+          : {};
         await sendPushToAll({
           title: reminder.for_contact
             ? `✅ Reminder sent to ${reminder.for_contact} — ${companionName}`
@@ -122,11 +130,9 @@ export function startScheduler(): void {
           tag: `reminder-${reminder.id}`,
           reminderId: reminder.id,
           notificationType: "reminder",
-          // "reminder-action" category shows a "Done ✓" action button.
-          // Native app must register this category via Notifications.setNotificationCategoryAsync.
-          // The action calls POST /api/reminders/mark-done { reminderId } in the background.
-          categoryId: "reminder-action",
+          categoryId: reminder.push_category_id ?? "reminder-action",
           requireInteraction: !reminder.for_contact,
+          ...extraPushData,
         }, reminder.user_name);
 
         logger.info({ id: reminder.id, text: reminder.reminder_text, forContact: reminder.for_contact ?? "self" }, "Reminder fired");

@@ -108,6 +108,8 @@ router.post("/bills/remind-tomorrow", express.json({ limit: "1mb" }), async (req
       reminderText: `Your ${name}${amtPart} payment — have you paid it yet?`,
       fireAt,
       timezone: "America/Chicago",
+      pushCategoryId: "bill-action",
+      pushData: { companionMessage: JSON.stringify({ billId, billName: name, amount: amount ?? "" }) },
     });
 
     req.log.info({ userName, billId, reminderId: reminder.id }, "[BILLS] Remind-tomorrow reminder created via notification action");

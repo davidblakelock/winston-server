@@ -253,7 +253,8 @@ export async function markReminded(id: number, date: string): Promise<void> {
     const { rows: allRows } = await query<{
       id: number; user_name: string; name: string; category: string;
       frequency: string; due_day: number; amount: string | null; active: boolean;
-    }>(`SELECT id, user_name, name, category, frequency, due_day, amount, active
+      notes: string | null;
+    }>(`SELECT id, user_name, name, category, frequency, due_day, amount, active, notes
         FROM financial_obligations
         ORDER BY id`);
 
@@ -306,11 +307,25 @@ export async function markReminded(id: number, date: string): Promise<void> {
            (user_name, name, category, amount, frequency, due_day, due_months, reminder_lead_days, notes)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING id`,
-        [NATIVE_STORED_NAME, "Rent", "rent_mortgage", RENT_AMOUNT, "monthly", RENT_DUE_DAY, null, 3, "Pay via Venmo to Wes Cole"]
+        [NATIVE_STORED_NAME, "Rent", "rent_mortgage", RENT_AMOUNT, "monthly", RENT_DUE_DAY, null, 3, "Venmo to Wes Cole"]
       );
       console.log(`[BILLS AUDIT] Re-seeded Rent (dueDay=${RENT_DUE_DAY}, amount=${RENT_AMOUNT}) — old id=${rent!.id} retired`);
     } else if (rent) {
       console.log(`[BILLS AUDIT] Rent (id=${rent.id}) correct — amount=${rent.amount} dueDay=${rent.due_day}`);
+    }
+
+    // 4.5. Fix bills with old "Pay via " prefix in notes — strip the redundant prefix.
+    // Notes should be e.g. "Venmo to Wes Cole", not "Pay via Venmo to Wes Cole".
+    const billsWithOldNotes = allRows.filter(
+      (r) => r.user_name === NATIVE_STORED_NAME && r.active && r.notes?.startsWith("Pay via ")
+    );
+    for (const b of billsWithOldNotes) {
+      const fixedNotes = b.notes!.replace(/^Pay via /, "");
+      await query(
+        `UPDATE financial_obligations SET notes = $1 WHERE id = $2 RETURNING id`,
+        [fixedNotes, b.id]
+      );
+      console.log(`[BILLS AUDIT] Fixed notes for "${b.name}" (id=${b.id}): "${b.notes}" → "${fixedNotes}"`);
     }
 
     // 5. Seed missing bills — only insert if not already present
@@ -328,7 +343,7 @@ export async function markReminded(id: number, date: string): Promise<void> {
         frequency: "monthly",
         dueDay: 28,
         amount: "$2,950",
-        notes: "Pay via Venmo to Wes Cole",
+        notes: "Venmo to Wes Cole",
       },
       {
         name: "Olivia Allowance",
@@ -336,7 +351,7 @@ export async function markReminded(id: number, date: string): Promise<void> {
         frequency: "monthly",
         dueDay: 1,
         amount: "$400",
-        notes: "Pay via Venmo to Christi Blakelock",
+        notes: "Venmo to Christi Blakelock",
       },
       {
         name: "USAA Credit Card",

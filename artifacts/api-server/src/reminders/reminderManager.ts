@@ -6,6 +6,13 @@ import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS for_contact text DEFAULT NULL`)
   .catch(() => {});
 
+// Add push override columns — allow specific reminder types (e.g. bill snooze) to
+// fire with a custom categoryId and extra push data instead of the generic "reminder-action".
+query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS push_category_id text DEFAULT NULL`)
+  .catch(() => {});
+query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS push_data text DEFAULT NULL`)
+  .catch(() => {});
+
 // Fix legacy user_name default from 'David' to canonical 'davidblakelock'
 query(`ALTER TABLE reminders ALTER COLUMN user_name SET DEFAULT 'davidblakelock'`)
   .catch(() => {});
@@ -18,6 +25,10 @@ export interface ReminderInput {
   recurringTime?: string | null;
   timezone?: string;
   forContact?: string | null;
+  /** Override the push notification category (default: "reminder-action"). */
+  pushCategoryId?: string | null;
+  /** Extra push payload fields to merge in (e.g. companionMessage with billId). Stored as JSON text. */
+  pushData?: Record<string, unknown> | null;
 }
 
 export interface ReminderRow {
@@ -32,6 +43,8 @@ export interface ReminderRow {
   for_contact: string | null;
   last_fired_at: string | null;
   created_at: string;
+  push_category_id: string | null;
+  push_data: string | null;
 }
 
 /**
@@ -68,17 +81,19 @@ export async function createReminder(input: ReminderInput): Promise<ReminderRow>
   // ── Insert ───────────────────────────────────────────────────────────────────
   const { rows } = await query<ReminderRow>(
     `INSERT INTO reminders
-       (user_name, reminder_text, fire_at, recurring, recurring_time, timezone, status, for_contact)
-       VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7)
+       (user_name, reminder_text, fire_at, recurring, recurring_time, timezone, status, for_contact, push_category_id, push_data)
+       VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9)
        RETURNING *`,
     [
       resolvedUser,
       input.reminderText,
       input.fireAt,
-      input.recurring    ?? null,
-      input.recurringTime ?? null,
+      input.recurring      ?? null,
+      input.recurringTime  ?? null,
       resolvedTz,
-      input.forContact   ?? null,
+      input.forContact     ?? null,
+      input.pushCategoryId ?? null,
+      input.pushData       != null ? JSON.stringify(input.pushData) : null,
     ]
   );
 

@@ -144,7 +144,9 @@ async function checkBillReminders(): Promise<void> {
         body: message,
         tag: `bill-${bill.id}`,
         notificationType: "bill-reminder",
+        categoryId: "bill-action",
         requireInteraction: true,
+        companionMessage: JSON.stringify({ billId: bill.id, billName: bill.name, amount: bill.amount ?? "" }),
       }, userName).catch(() => {});
 
       await markReminded(bill.id, today);
