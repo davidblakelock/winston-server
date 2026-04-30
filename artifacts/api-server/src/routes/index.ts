@@ -23,6 +23,7 @@ import adminRouter from "./admin";
 import journalRouter from "./journal";
 import memoriesRouter from "./memories";
 import conversationRouter from "./conversation";
+import mydayRouter from "./myday";
 
 const router: IRouter = Router();
 
@@ -50,5 +51,6 @@ router.use(adminRouter);
 router.use(journalRouter);
 router.use(memoriesRouter);
 router.use(conversationRouter);
+router.use(mydayRouter);
 
 export default router;

@@ -65,6 +65,7 @@ interface Message {
   audioBase64?: string;
   mimeType?: string;
   isReminder?: boolean;
+  reminderId?: number;
   navigationUrl?: string;
   navigationDestination?: string;
   isWinddown?: boolean;
@@ -1122,6 +1123,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
           role: "assistant" as const,
           content: `${greeting}: ${notif.text}`,
           isReminder: true,
+          reminderId: notif.id,
         },
       ]);
       speakReply(msgId, `${greeting}: ${notif.text}`);
@@ -1325,9 +1327,16 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         displayContent = `Your reminder: ${event.reminderText}`;
       }
 
+      const numericReminderId = typeof event.id === "number" ? event.id : parseInt(String(event.id ?? ""), 10);
       setMessages((prev) => [
         ...prev,
-        { id: msgId, role: "assistant", content: displayContent, isReminder: true },
+        {
+          id: msgId,
+          role: "assistant",
+          content: displayContent,
+          isReminder: true,
+          reminderId: !isNaN(numericReminderId) ? numericReminderId : undefined,
+        },
       ]);
 
       console.log("[REMINDER] Calling speakReply with:", speakText);
@@ -2238,6 +2247,27 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
               )}
               {msg.isMorningBriefing && <WeatherCard />}
               <div className="whitespace-pre-wrap font-sans">{msg.content}</div>
+
+              {msg.isReminder && (
+                <div className="mt-3 pt-2.5 border-t border-primary/15">
+                  <button
+                    onClick={() => {
+                      setMessages((prev) => prev.filter((m) => m.id !== msg.id));
+                      if (msg.reminderId != null) {
+                        fetch(`${CHAT_BASE}/api/reminders/done`, {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ reminderId: msg.reminderId }),
+                        }).catch(() => {});
+                      }
+                    }}
+                    className="inline-flex items-center gap-1.5 text-[13px] font-medium text-primary/80 hover:text-primary transition-colors"
+                  >
+                    <Check className="h-3.5 w-3.5" />
+                    Done
+                  </button>
+                </div>
+              )}
 
               {/* Navigation card — shown for messages that triggered directions */}
               {msg.role === "assistant" && msg.navigationUrl && (
