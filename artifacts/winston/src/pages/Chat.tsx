@@ -65,6 +65,7 @@ interface Message {
   audioBase64?: string;
   mimeType?: string;
   isReminder?: boolean;
+  isMedication?: boolean;
   reminderId?: number;
   navigationUrl?: string;
   navigationDestination?: string;
@@ -91,6 +92,7 @@ interface ReminderEvent {
   reminderText: string;
   speakText: string;
   isCalendarAlert?: boolean;
+  isMedication?: boolean;
   askForAddress?: boolean;
   eventId?: string;
   eventSummary?: string;
@@ -1335,6 +1337,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
           role: "assistant",
           content: displayContent,
           isReminder: true,
+          isMedication: !!event.isMedication,
           reminderId: !isNaN(numericReminderId) ? numericReminderId : undefined,
         },
       ]);
@@ -2249,23 +2252,56 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
               <div className="whitespace-pre-wrap font-sans">{msg.content}</div>
 
               {msg.isReminder && (
-                <div className="mt-3 pt-2.5 border-t border-primary/15">
-                  <button
-                    onClick={() => {
-                      setMessages((prev) => prev.filter((m) => m.id !== msg.id));
-                      if (msg.reminderId != null) {
-                        fetch(`${CHAT_BASE}/api/reminders/done`, {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ reminderId: msg.reminderId }),
-                        }).catch(() => {});
-                      }
-                    }}
-                    className="inline-flex items-center gap-1.5 text-[13px] font-medium text-primary/80 hover:text-primary transition-colors"
-                  >
-                    <Check className="h-3.5 w-3.5" />
-                    Done
-                  </button>
+                <div className="mt-3 pt-2.5 border-t border-primary/15 flex items-center gap-4 flex-wrap">
+                  {msg.isMedication ? (
+                    <>
+                      <button
+                        onClick={() => {
+                          setMessages((prev) => prev.filter((m) => m.id !== msg.id));
+                          fetch(`${CHAT_BASE}/api/medications/taken`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({}),
+                          }).catch(() => {});
+                        }}
+                        className="inline-flex items-center gap-1.5 text-[13px] font-medium text-primary/80 hover:text-primary transition-colors"
+                      >
+                        <Check className="h-3.5 w-3.5" />
+                        Taken
+                      </button>
+                      <button
+                        onClick={() => {
+                          setMessages((prev) => prev.filter((m) => m.id !== msg.id));
+                          fetch(`${CHAT_BASE}/api/medications/snooze-reminder`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({}),
+                          }).catch(() => {});
+                        }}
+                        className="inline-flex items-center gap-1.5 text-[13px] font-medium text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        <Clock className="h-3.5 w-3.5" />
+                        Remind in 1 hour
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        setMessages((prev) => prev.filter((m) => m.id !== msg.id));
+                        if (msg.reminderId != null) {
+                          fetch(`${CHAT_BASE}/api/reminders/done`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ reminderId: msg.reminderId }),
+                          }).catch(() => {});
+                        }
+                      }}
+                      className="inline-flex items-center gap-1.5 text-[13px] font-medium text-primary/80 hover:text-primary transition-colors"
+                    >
+                      <Check className="h-3.5 w-3.5" />
+                      Done
+                    </button>
+                  )}
                 </div>
               )}
 

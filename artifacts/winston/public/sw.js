@@ -92,7 +92,7 @@ self.addEventListener("push", (event) => {
   } else if (payload.categoryId === "medication-action") {
     options.actions = [
       { action: "taken", title: "Taken ✓" },
-      { action: "remind-30", title: "Remind in 30 min" },
+      { action: "remind-1h", title: "Remind in 1 hour" },
     ];
   } else if (payload.categoryId === "reminder-action") {
     options.actions = [{ action: "done", title: "Done ✓" }];
@@ -138,6 +138,18 @@ self.addEventListener("notificationclick", (event) => {
 
       if (action === "taken") {
         await fetch(`${base}/api/medications/taken`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+          },
+          body: JSON.stringify({}),
+        }).catch(() => {});
+        return;
+      }
+
+      if (action === "remind-1h") {
+        await fetch(`${base}/api/medications/snooze-reminder`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
