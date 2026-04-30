@@ -294,7 +294,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
     [onComplete, playAudio]
   );
 
-  // Emma speaks first on mount
+  // Companion speaks first on mount
   useEffect(() => {
     if (initialized.current) return;
     initialized.current = true;

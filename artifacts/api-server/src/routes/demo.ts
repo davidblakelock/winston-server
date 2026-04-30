@@ -6,7 +6,7 @@ const router: IRouter = Router();
 
 const EMMA_VOICE_ID = "56bWURjYFHyYyVf490Dp";
 
-// ── POST /api/demo/speak — public, no auth, always Emma Peel's voice ──────────
+// ── POST /api/demo/speak — public, no auth, uses demo voice ──────────────────
 
 router.post("/demo/speak", async (req: Request, res: Response) => {
   const { text } = req.body as { text?: string };

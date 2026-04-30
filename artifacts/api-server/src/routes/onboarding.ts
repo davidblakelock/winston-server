@@ -225,7 +225,7 @@ router.post("/onboarding/chat", async (req, res) => {
     // ── Generate TTS audio ──
     let audioBase64: string | undefined;
     let mimeType: string | undefined;
-    // Default to "Emma" (Friendly American Female) for new users who haven't selected a voice yet.
+    // Default to Friendly American Female voice for new users who haven't selected a voice yet.
     // Never fall back to the env ELEVENLABS_VOICE_ID — that is David's personal voice.
     const ONBOARDING_DEFAULT_VOICE_ID = "56bWURjYFHyYyVf490Dp"; // Emma — Friendly American Female
     const voiceId = updatedData.voiceId ?? ONBOARDING_DEFAULT_VOICE_ID;
@@ -259,7 +259,7 @@ router.post("/onboarding/chat", async (req, res) => {
     }
 
     // ── Handle scene 9 completion ──
-    // Complete when Emma has delivered the first briefing in scene 9
+    // Complete when companion has delivered the first briefing in scene 9
     const isComplete = scene === 9 && !!reply;
 
     if (isComplete) {

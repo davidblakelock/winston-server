@@ -67,7 +67,7 @@ export async function saveRecommendations(recs: Array<{ type: RecommendationType
   }
 }
 
-// ── Extract recommendations from Emma's response ──────────────────────────────
+// ── Extract recommendations from companion's response ─────────────────────────
 export async function extractRecommendationsFromResponse(
   response: string
 ): Promise<Array<{ type: RecommendationType; name: string; context: string }>> {
@@ -85,7 +85,7 @@ export async function extractRecommendationsFromResponse(
 Each item:
 - type: "restaurant" | "show" | "place" | "activity" | "book" | "other"
 - name: string (specific name of the thing recommended)
-- context: string (brief reason / what Emma said about it, max 100 chars)
+- context: string (brief reason / what the companion said about it, max 100 chars)
 
 Return [] if no specific named recommendations are made.
 Only extract NAMED specific things, not generic advice.`,
@@ -108,7 +108,7 @@ Only extract NAMED specific things, not generic advice.`,
   }
 }
 
-// ── Format follow-up context for Emma ─────────────────────────────────────────
+// ── Format follow-up context for companion ────────────────────────────────────
 export function buildRecommendationFollowUpBlock(recs: Recommendation[]): string {
   if (!recs.length) return "";
 

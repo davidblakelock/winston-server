@@ -283,7 +283,7 @@ export function formatProfileForContext(items: ProfileItem[], userName = "the us
   );
 }
 
-// Build result context for Emma's response after an operation
+// Build result context for companion's response after an operation
 export function buildProfileResultContext(
   op: ProfileOperation,
   items: ProfileItem[],

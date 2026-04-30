@@ -91,7 +91,7 @@ export function EmergencyOverlay({ onDismiss }: EmergencyOverlayProps) {
           </Button>
         </div>
 
-        {/* Emma reassurance */}
+        {/* Reassurance text */}
         <p className="mt-4 text-center text-xs text-white/30 italic">
           Stay calm. Help is on the way.
         </p>

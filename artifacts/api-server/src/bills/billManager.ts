@@ -506,7 +506,7 @@ Output: {"name":"Quarterly Taxes","category":"quarterly_tax","frequency":"quarte
   }
 }
 
-// ── Formatting for Emma context ───────────────────────────────────────────────
+// ── Formatting for companion context ─────────────────────────────────────────
 export function formatBillsForPrompt(bills: UpcomingBill[]): string {
   if (!bills.length) return "No upcoming financial obligations in the next 60 days.";
 

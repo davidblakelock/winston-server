@@ -870,7 +870,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
           return;
         }
 
-        // Fresh session — ask Emma to greet (streamed)
+        // Fresh session — ask companion to greet (streamed)
         const greetingId = `greeting-${Date.now()}`;
         setMessages([{ id: greetingId, role: "assistant", content: "…" }]);
 

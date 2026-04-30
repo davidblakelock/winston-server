@@ -130,9 +130,9 @@ export async function getRecentMemories(days = 7): Promise<ConversationMemory[]>
 
 // Format memories for injection into the system prompt.
 // Memories from the last 72 hours (3 days) are marked as active follow-up context —
-// Emma can and should ask natural follow-up questions about them.
+// the companion can and should ask natural follow-up questions about them.
 // Memories older than 72 hours are included as background context only —
-// Emma knows them but must NOT proactively ask follow-up questions about them
+// the companion knows them but must NOT proactively ask follow-up questions about them
 // unless David brings the topic up first. This prevents stale check-ins about
 // events from last week (knee injuries, dinners, trips that are long past).
 export function formatMemoriesForContext(memories: ConversationMemory[]): string {
