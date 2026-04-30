@@ -84,7 +84,7 @@ export async function buildCalendarDepartureTimes(events: CalendarEvent[], homeA
 
   if (items.length === 0) return "";
   return (
-    `\n\n[Departure Times — when David needs to leave home for today's events]\n` +
+    `\n\n[Departure Times — when to leave home for today's events]\n` +
     items.join("\n") +
     `\n(These are calculated from home at ${homeAddress || "home"})`
   );
@@ -375,11 +375,11 @@ function getCurrentDateTimeBlock(): string {
     `Day type: ${isWeekend ? "weekend" : "weekday"}.\n` +
     `Yesterday was ${yesterdayName}. Tomorrow is ${tomorrowName}.\n` +
     `Use ONLY these values when referring to days. "Yesterday" means ${yesterdayName}. "Tomorrow" means ${tomorrowName}.\n` +
-    `When David asks what time or day it is, answer directly using exactly the values above.\n`
+    `When asked what time or day it is, answer directly using exactly the values above.\n`
   );
 }
 
-function buildPeopleContextBlock(rawData: CollectedData): string {
+function buildPeopleContextBlock(rawData: CollectedData, displayName?: string): string {
   type PersonEntry = {
     name?: string;
     relationship?: string;
@@ -420,7 +420,7 @@ function buildPeopleContextBlock(rawData: CollectedData): string {
     const parts: string[] = [`${name} — ${rel}${isPartner ? " (Your Partner)" : ""}`];
     if (city) parts.push(`based in ${city}`);
     if (birthday) parts.push(`birthday: ${birthday}`);
-    if (anniversary) parts.push(`David & ${name.split(" ")[0]} anniversary: ${anniversary}`);
+    if (anniversary) parts.push(`${displayName?.split(" ")[0] ?? "your"} & ${name.split(" ")[0]} anniversary: ${anniversary}`);
     if (details) parts.push(details);
 
     lines.push(`• ${parts.join(", ")}`);
@@ -440,12 +440,12 @@ function buildPeopleContextBlock(rawData: CollectedData): string {
   }
 
   const petsBlock = petLines.length > 0
-    ? `\n\n[David's Pets]\n` + petLines.join("\n") +
+    ? `\n\n[Pets]\n` + petLines.join("\n") +
       `\n• Mention pets naturally and warmly when appropriate — e.g. "Hope ${allPets[0]?.name} is keeping you company today." Don't force it into every briefing — once or twice a week is plenty.`
     : "";
 
   return (
-    `\n\n[People in David's Life — Reference naturally in the briefing]\n` +
+    `\n\n[Key People — Reference naturally in the briefing]\n` +
     (lines.length > 0 ? lines.join("\n") : "(no people recorded)") + "\n\n" +
     `HOW TO USE THIS:\n` +
     `• Olivia — always mention her weather in Section 3 if her [VERIFIED weather] block is present. Even just one warm sentence: "Over in Knoxville, Olivia's got a breezy 65 today."\n` +
@@ -456,7 +456,7 @@ function buildPeopleContextBlock(rawData: CollectedData): string {
   );
 }
 
-function buildBriefingInstruction(city: string, savedVenues: string[]): string {
+function buildBriefingInstruction(city: string, savedVenues: string[], displayName?: string): string {
   const cityUpper = city.toUpperCase();
   const venueList = savedVenues.length > 0
     ? savedVenues.join(", ")
@@ -465,17 +465,17 @@ function buildBriefingInstruction(city: string, savedVenues: string[]): string {
 
   [MORNING BRIEFING — DELIVER ALL 17 SECTIONS IN THIS EXACT ORDER]
 
-  Deliver the morning briefing as a single flowing conversation. No headers. No bullet points. No section labels. No phrases that announce what comes next. Sound like David's most trusted friend who just called — warm, sharp, personal, and always on point.
+  Deliver the morning briefing as a single flowing conversation. No headers. No bullet points. No section labels. No phrases that announce what comes next. Sound like the user's most trusted friend who just called — warm, sharp, personal, and always on point.
 
   CORE PHILOSOPHY: Every piece of information is condensed, essential, and actionable. Cut anything that does not earn its place. The entire briefing should take 3 to 5 minutes at a natural conversational pace.
 
   DELIVER THESE SECTIONS IN THIS EXACT ORDER — skip only where explicitly instructed:
 
-  SECTION 1 — GREETING: "Good morning, David" followed by one warm personal sentence naming the day of the week. One sentence total.
+  SECTION 1 — GREETING: "Good morning, ${displayName ?? "there"}" followed by one warm personal sentence naming the day of the week. One sentence total.
 
   SECTION 2 — WEATHER TODAY: CRITICAL — this section is ALWAYS present and must NEVER be skipped. The [VERIFIED — Google Weather API — ${city}] block is always in this system prompt. Deliver a natural, conversational weather summary using it. Include: current temperature and feels-like, today's high and low, conditions, rain chance, humidity, wind speed, and UV index. Keep it to 2–3 sentences — warm and informative, like a friend who checked the forecast. If UV is high (8+), mention it. If there is an Air Quality & Pollen block, weave pollen and AQI into the same breath — one concise sentence.
 
-  SECTION 3 — FORECAST: Deliver a brief overview of the coming days using the Forecast data in the [VERIFIED — Google Weather API — ${city}] block. Mention any days with notable changes — rain, big temperature swings, heat. Keep it to 2 sentences max. Then: CRITICAL — for every [VERIFIED — Google Weather API — <city> (for <name>)] block present, you MUST always mention that person's weather — one natural sentence per person, every single time, no exceptions, regardless of conditions. Example: "Over in Knoxville, Olivia's looking at a mild 68 with some cloud cover." These are David's family — he ALWAYS wants to know their weather. If there is a block for Knoxville (for Olivia), you MUST mention Olivia's weather every single briefing. NEVER skip a family member city. Skip this entire section only if absolutely no forecast data is available at all.
+  SECTION 3 — FORECAST: Deliver a brief overview of the coming days using the Forecast data in the [VERIFIED — Google Weather API — ${city}] block. Mention any days with notable changes — rain, big temperature swings, heat. Keep it to 2 sentences max. Then: CRITICAL — for every [VERIFIED — Google Weather API — <city> (for <name>)] block present, you MUST always mention that person's weather — one natural sentence per person, every single time, no exceptions, regardless of conditions. Example: "Over in Knoxville, Olivia's looking at a mild 68 with some cloud cover." These are family members the user cares about — they ALWAYS want to know their weather. If there is a block for Knoxville (for Olivia), you MUST mention Olivia's weather every single briefing. NEVER skip a family member city. Skip this entire section only if absolutely no forecast data is available at all.
 
   SECTION 4 — POLLEN / AIR QUALITY: SKIP THIS SECTION — pollen and AQI are already covered in Section 2.
 
@@ -847,7 +847,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     const sundaySummaryBlock = isSunday && sundayData ? buildSundaySummaryBlock(sundayData) : "";
 
     const pickleballMorningBlock = isPickleballMorning && !sundaySummaryBlock
-      ? `\n\n[Schedule Note]\nToday is a pickleball day for David (Mon/Wed/Fri at Semones YMCA; Sat at Moody's YMCA).\nCRITICAL — INDOOR VENUE RULE: Both Semones YMCA and Moody's YMCA are fully indoor facilities. Rain, wind, lightning, and outdoor weather have NO effect on play there. NEVER suggest checking the weather before pickleball, NEVER warn about rain affecting his pickleball game, and NEVER say "hope the weather holds" in relation to pickleball. The ONLY weather exception is if extreme heat makes travel uncomfortable — but even then, be measured.`
+      ? `\n\n[Schedule Note]\nToday is a pickleball day (Mon/Wed/Fri at Semones YMCA; Sat at Moody's YMCA).\nCRITICAL — INDOOR VENUE RULE: Both Semones YMCA and Moody's YMCA are fully indoor facilities. Rain, wind, lightning, and outdoor weather have NO effect on play there. NEVER suggest checking the weather before pickleball, NEVER warn about rain affecting pickleball, and NEVER say "hope the weather holds" in relation to pickleball. The ONLY weather exception is if extreme heat makes travel uncomfortable — but even then, be measured.`
       : "";
 
     const recFollowUpBlock = pendingFollowUps.length > 0
@@ -878,7 +878,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
         // Section 14 in the briefing instruction knows how to handle each.
         block += `\n${dailyMotivation}\n`;
       } else {
-        block += `No external quote or personal override today — generate a warm, specific 2-3 sentence motivating thought from scratch. Reference David's interests or something from his day.`;
+        block += `No external quote or personal override today — generate a warm, specific 2-3 sentence motivating thought from scratch. Reference the user's interests or something from their day.`;
       }
       return block;
     })();
@@ -888,7 +888,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       (userProfile?.rawData ?? {}) as CollectedData
     );
 
-    const peopleContextBlock = buildPeopleContextBlock((userProfile?.rawData ?? {}) as CollectedData);
+    const peopleContextBlock = buildPeopleContextBlock((userProfile?.rawData ?? {}) as CollectedData, userProfile?.name ?? undefined);
 
     // ── Split the system prompt into preamble (before email+calendar slot) ──────
     // and suffix (after email+calendar slot, through MASTER_BRIEFING_INSTRUCTION).
@@ -908,7 +908,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     const suffix = garminBlock + fitBlock + tvMorningBlock + sportsBlock + billsMorningBlock + datesBlock +
       sundaySummaryBlock + pickleballMorningBlock + recFollowUpBlock + personalFollowUpsBlock +
       dallasEventsBlock + dedupedVenueConcertsBlock + dedupedNewsBlock + motivationContextBlock +
-      buildBriefingInstruction(primaryCity, localCtx.venues ?? []);
+      buildBriefingInstruction(primaryCity, localCtx.venues ?? [], userProfile?.name ?? undefined);
 
     // Log which static sections have data
     const sectionLog: Record<string, boolean | string> = {

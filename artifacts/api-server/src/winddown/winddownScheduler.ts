@@ -209,8 +209,8 @@ export function startWinddownScheduler(): void {
       );
       logger.info({ time: settings.scheduledTime }, "Evening check-in initiated");
 
-      const users = await getActiveUsers().catch(() => [{ userName: "davidblakelock" }]);
-      const primaryUser = users[0]?.userName ?? "davidblakelock";
+      const users = await getActiveUsers().catch(() => [{ userName: NATIVE_STORED_NAME }]);
+      const primaryUser = users[0]?.userName ?? NATIVE_STORED_NAME;
 
       const profile = await getProfile(primaryUser).catch(() => null);
       const companionName = profile?.companionName ?? "Your Companion";

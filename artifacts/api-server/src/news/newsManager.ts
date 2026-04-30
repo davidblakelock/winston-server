@@ -40,6 +40,7 @@ export function getStoredHeadlines(): ParsedStory[] {
 
 interface NewsContext {
   displayName: string;
+  companionName: string;
   city: string;
   state: string;
   sportsTeams: string[];
@@ -48,16 +49,17 @@ interface NewsContext {
 }
 
 async function resolveNewsContext(userName?: string): Promise<NewsContext> {
-  if (!userName) return { displayName: "the listener", city: "Dallas", state: "Texas", sportsTeams: [], interests: [], musicGenres: [] };
+  if (!userName) return { displayName: "the listener", companionName: "your companion", city: "Dallas", state: "Texas", sportsTeams: [], interests: [], musicGenres: [] };
   const profile = await getProfile(userName).catch(() => null);
   const city = profile?.city ?? "Dallas";
   const raw = (profile?.rawData ?? {}) as Record<string, unknown>;
   const state = (raw.state as string | undefined) ?? "Texas";
   const displayName = (profile?.name ?? userName) as string;
+  const companionName = (profile?.companionName as string | undefined) ?? "your companion";
   const sportsTeams = (raw.sportsTeams as string[] | undefined) ?? [];
   const interests = (raw.interests as string[] | undefined) ?? [];
   const musicGenres = (raw.music as string[] | undefined) ?? [];
-  return { displayName, city, state, sportsTeams, interests, musicGenres };
+  return { displayName, companionName, city, state, sportsTeams, interests, musicGenres };
 }
 
 // ── Watercooler: ONE fascinating story from the last 24h ─────────────────────
@@ -442,8 +444,9 @@ async function fetchMotivationFromClaude(userName?: string): Promise<string> {
   const isPickleballDay = isTodayPickleballDay();
 
   const ctx = await resolveNewsContext(userName).catch(() => null);
-  const displayName = ctx?.displayName ?? "David";
-  const teams = ctx?.sportsTeams ?? ["Texas Rangers", "Dallas Cowboys"];
+  const displayName = ctx?.displayName ?? "the listener";
+  const companionName = ctx?.companionName ?? "your companion";
+  const teams = ctx?.sportsTeams ?? [];
   const music = ctx?.musicGenres ?? ["classic rock", "jazz"];
 
   // ── Step 1: Check for personal override (upcoming birthday/anniversary within 14 days) ──
@@ -462,7 +465,7 @@ async function fetchMotivationFromClaude(userName?: string): Promise<string> {
     }).join("; ");
 
     const personalPrompt =
-      `Today is ${todayStr}. You are James Bond, ${displayName}'s trusted morning companion.\n\n` +
+      `Today is ${todayStr}. You are ${companionName}, ${displayName}'s trusted morning companion.\n\n` +
       `UPCOMING PERSONAL DATES: ${items}\n\n` +
       `Write a warm, genuine 2-3 sentence personal observation about this — specific, thoughtful, and personal. ` +
       `If it's a birthday, you might mention something to do for them or acknowledge the relationship. ` +
@@ -492,7 +495,7 @@ async function fetchMotivationFromClaude(userName?: string): Promise<string> {
       : `Today is a non-pickleball day for ${displayName}.`;
 
     const personalizationPrompt =
-      `Today is ${todayStr} (${dayName}). You are James Bond, ${displayName}'s trusted morning companion.\n\n` +
+      `Today is ${todayStr} (${dayName}). You are ${companionName}, ${displayName}'s trusted morning companion.\n\n` +
       `TODAY'S QUOTE: "${zenQuote.q}" — ${zenQuote.a}\n\n` +
       `CONTEXT ABOUT ${displayName.toUpperCase()}:\n` +
       `• ${activityNote}\n` +
@@ -526,7 +529,7 @@ async function fetchMotivationFromClaude(userName?: string): Promise<string> {
 
   // ── Step 3: Fallback — Claude original thought ──
   const fallbackPrompt =
-    `Today is ${todayStr}. You are James Bond, ${displayName}'s morning companion.\n\n` +
+    `Today is ${todayStr}. You are ${companionName}, ${displayName}'s morning companion.\n\n` +
     `${displayName}'s interests: pickleball (indoor YMCA), woodworking, boats, classic rock (Rolling Stones, Jackson Browne, Jimmy Buffett), jazz, cooking. Teams: ${teams.join(", ")}.\n\n` +
     `Write a warm, specific 2-3 sentence motivating thought for ${dayName}. ` +
     `Reference something he actually cares about. No generic phrases. No "seize the day." ` +

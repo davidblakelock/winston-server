@@ -171,7 +171,7 @@ export function formatMemoriesForContext(memories: ConversationMemory[]): string
     }
   }
 
-  let result = `\n\n[Conversation Memory — what you remember from recent conversations with David]\n`;
+  let result = `\n\n[Conversation Memory — what you remember from recent conversations with the user]\n`;
 
   if (recent.length > 0) {
     result +=
@@ -181,18 +181,18 @@ export function formatMemoriesForContext(memories: ConversationMemory[]): string
       `Reference them when relevant (e.g., "Did you end up calling Olivia?"). ` +
       `Don't recite them robotically or all at once. Let them inform how you engage, not dominate it.\n` +
       `HEALTH RULE: NEVER proactively ask about a health complaint, pain, injury, or soreness ` +
-      `(knee pain, back pain, feeling sick, etc.) mentioned more than 5 days ago unless David brings it up himself. ` +
-      `This includes the knee — do not ask "How's your knee?" unless David mentions it first today.\n`;
+      `(knee pain, back pain, feeling sick, etc.) mentioned more than 5 days ago unless the user brings it up themselves. ` +
+      `Do not ask follow-up health questions unless the user mentions it first today.\n`;
   }
 
   if (older.length > 0) {
     result +=
       `\n[Background context — older than 5 days — DO NOT use for proactive follow-up]\n` +
       older.join("\n\n") +
-      `\n\nIMPORTANT: These older memories inform your understanding of David's life and history, ` +
+      `\n\nIMPORTANT: These older memories inform your understanding of the user's life and history, ` +
       `but you must NOT proactively ask follow-up questions about them. ` +
-      `Only reference older context if David brings up the topic himself ` +
-      `or if it is directly relevant to what he is currently discussing. ` +
+      `Only reference older context if the user brings up the topic themselves ` +
+      `or if it is directly relevant to what they are currently discussing. ` +
       `NEVER ask about old health complaints, injuries, or minor issues from this section.\n`;
   }
 

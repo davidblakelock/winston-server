@@ -299,10 +299,10 @@ function formatConcertsForBriefing(
     lines.join("\n") +
     `\n\nFavorite venues: ${venues.map((v) => v.name).join(", ")}.\n` +
     `RULES FOR PRESENTING THIS SECTION:\n` +
-    `• Only mention events that match David's music taste (classic rock, jazz, Jimmy Buffett, Rolling Stones, Jackson Browne). Skip indie rock, rap, hip-hop, EDM, or genres he doesn't follow.\n` +
+    `• Only mention events that match the user's music taste (classic rock, jazz, Jimmy Buffett, Rolling Stones, Jackson Browne). Skip indie rock, rap, hip-hop, EDM, or genres they don't follow.\n` +
     `• NEVER mention generic promotional events or season passes (e.g. "Live Nation Summer of Live", "concert series announcements", "season ticket packages"). Only mention specific performers at specific venues with specific dates.\n` +
-    `• If an event matches his taste: 1 sentence, name the artist, venue, and date. Lead with anything within 7 days.\n` +
-    `• If nothing here matches his taste closely: skip this section entirely. Do not force a mention.`
+    `• If an event matches their taste: 1 sentence, name the artist, venue, and date. Lead with anything within 7 days.\n` +
+    `• If nothing here matches their taste closely: skip this section entirely. Do not force a mention.`
   );
 }
 

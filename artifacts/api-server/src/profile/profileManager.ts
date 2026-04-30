@@ -310,7 +310,7 @@ export function buildProfileResultContext(
     } else {
       return (
         `\n\n[Profile Note]\nCouldn't find "${op.name}" in ${catLabel} to remove — it may not be saved. ` +
-        `Let David know gently.`
+        `Let the user know gently.`
       );
     }
   }
@@ -320,7 +320,7 @@ export function buildProfileResultContext(
     if (items.length === 0) {
       return (
         `\n\n[Profile Read — ${catLabel}]\nNo items saved in ${catLabel} yet. ` +
-        `Let David know he hasn't added anything to that category yet.`
+        `Let the user know they haven't added anything to that category yet.`
       );
     }
     const list = items
@@ -328,8 +328,8 @@ export function buildProfileResultContext(
       .join(", ");
     return (
       `\n\n[Profile Read — ${catLabel}]\n` +
-      `David's saved ${catLabel.toLowerCase()}: ${list}\n` +
-      `Read these back to him naturally and conversationally.`
+      `The user's saved ${catLabel.toLowerCase()}: ${list}\n` +
+      `Read these back naturally and conversationally.`
     );
   }
 

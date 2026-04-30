@@ -11,9 +11,10 @@ import {
 } from "./departureManager.js";
 import { fetchTodayEvents } from "../google/calendar.js";
 import { query } from "../db.js";
+import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
 // ── Schema migration: add user_name to departure_alert_log if missing ─────────
-query(`ALTER TABLE departure_alert_log ADD COLUMN IF NOT EXISTS user_name text NOT NULL DEFAULT 'davidblakelock'`)
+query(`ALTER TABLE departure_alert_log ADD COLUMN IF NOT EXISTS user_name text NOT NULL DEFAULT '${NATIVE_STORED_NAME}'`)
   .catch(() => {});
 
 const TZ = "America/Chicago";

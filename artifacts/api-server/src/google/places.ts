@@ -256,6 +256,6 @@ export function formatPlacesForPrompt(places: PlaceResult[], city: string, cuisi
   return (
     `\n\n[Google Places — Live Results: ${label}]\n` +
     lines.join("\n") +
-    `\n\nUse these live results to make your recommendation. Reference specific names, ratings, and why each fits David's taste based on his profile. Be specific and conversational — don't just list them. Always offer to check availability or pull up a number.`
+    `\n\nUse these live results to make your recommendation. Reference specific names, ratings, and why each fits the user's taste based on their profile. Be specific and conversational — don't just list them. Always offer to check availability or pull up a number.`
   );
 }

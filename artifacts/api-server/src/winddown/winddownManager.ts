@@ -172,7 +172,7 @@ export function formatNotesForMorningBriefing(notes: WinddownNote[]): string {
   if (notes.length === 0) return "";
   const items = notes.map((n) => `• ${n.note}`).join("\n");
   return (
-    `\n\n[Notes David asked you to mention this morning — from last night's check-in]\n` +
+    `\n\n[Notes the user asked you to mention this morning — from last night's check-in]\n` +
     items +
     `\nMention these naturally early in your morning briefing.`
   );

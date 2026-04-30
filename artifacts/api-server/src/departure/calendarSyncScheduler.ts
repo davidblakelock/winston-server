@@ -7,6 +7,7 @@ import { fetchTodayEvents, type CalendarEvent } from "../google/calendar.js";
 import { GoogleInvalidGrantError, clearGoogleTokensForUser } from "../google/oauth.js";
 import { estimateDriveTime, extractEventLocation, computeLeaveAt } from "./departureManager.js";
 import { query } from "../db.js";
+import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
 // Rate-limit the "Google disconnected" push to once per user per server lifecycle.
 const _invalidGrantNotifiedUsers = new Set<string>();
@@ -38,7 +39,7 @@ export async function ensureCalendarSyncTable(): Promise<void> {
 
   await query(`
     ALTER TABLE calendar_sync_state
-    ADD COLUMN IF NOT EXISTS user_name TEXT NOT NULL DEFAULT 'davidblakelock'
+    ADD COLUMN IF NOT EXISTS user_name TEXT NOT NULL DEFAULT '${NATIVE_STORED_NAME}'
   `).catch(() => {});
 
   // Track the stored start time so we can detect when an event is moved

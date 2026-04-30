@@ -750,7 +750,7 @@ function getCurrentDateTimeBlock(): string {
     `Today is ${dayName}, ${monthName} ${day}, ${year}.\n` +
     `Current time: ${time} Central Time (${partOfDay}).\n` +
     `Day type: ${isWeekend ? "weekend" : "weekday"}.\n` +
-    `When David asks what time or day it is, answer directly using exactly the values above.\n`
+    `When asked what time or day it is, answer directly using exactly the values above.\n`
   );
 }
 
@@ -1078,7 +1078,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     let liveGmailBlock: string;
     if (liveEmails === null) {
       // Auth failed — Google not connected or token expired
-      liveGmailBlock = `\n\n[VERIFIED — Gmail API — status: NOT CONNECTED]\nGoogle is not connected or the token has expired. Tell David briefly: "I couldn't pull your email — Google may need to be reconnected in the app settings." Keep it to one sentence.`;
+      liveGmailBlock = `\n\n[VERIFIED — Gmail API — status: NOT CONNECTED]\nGoogle is not connected or the token has expired. Tell the user: "I couldn't pull your email — Google may need to be reconnected in the app settings." Keep it to one sentence.`;
     } else if (liveEmails.length === 0) {
       // Inbox is clear
       liveGmailBlock = `\n\n[VERIFIED — Gmail API — unread emails (live at delivery time)]\nInbox is clear — no unread messages right now. Mention this briefly and warmly in one short sentence — e.g. "Your inbox is clear this morning." Don't dwell on it.`;
@@ -1387,7 +1387,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         const formattedList = upcoming.length
           ? formatDatesForPrompt(upcoming)
           : allDates.map((d) => `• ${d.personName}: ${d.eventType} on ${d.month}/${d.day}`).join("\n");
-        systemPrompt += `\n\n[Important Dates — All saved]\n${formattedList}\n\nRead these back to David warmly and conversationally. If something is coming up soon, highlight it.`;
+        systemPrompt += `\n\n[Important Dates — All saved]\n${formattedList}\n\nRead these back warmly and conversationally. If something is coming up soon, highlight it.`;
       }
     } catch (err) {
       req.log.warn({ err }, "Date list failed");
@@ -2027,13 +2027,13 @@ const chatHandlerCore = async (req: Request, res: Response) => {
             : `\n\n[VERIFIED — Gmail API — recent unread emails (live fetch)]\n${formatEmailsForPrompt(emails)}\nThis is VERIFIED data. State email senders, subjects, and content as fact exactly as shown. Do not add context not present in the email data.`) +
           buildImportantEmailInstruction(emails, userProfile?.companionName, sessionUserName)
         : emails === null
-          ? "\n\n[Gmail — not connected. Let David know he can connect Google in the app header.]"
+          ? "\n\n[Gmail — not connected. Let the user know they can connect Google in the app header.]"
           : "";
 
       const calendarBlock = events !== undefined && events !== null
-        ? `\n\n[VERIFIED — Google Calendar API — next 7 days]\n${formatCalendarForPrompt(events, "this week")}\n\nCONFIDENCE RULES FOR THIS DATA:\n• VERIFIED: Use the exact event title, time, and date as shown above — state these as fact.\n• INFERRED: If you want to add context (e.g., who the appointment might be with), frame it as a question — never a statement. Say: "I see 'Acme Corp Meeting' on Thursday — is that the one you mentioned?" NOT "You have a meeting with John from Acme Thursday."\n• ASSUMED: Do not state who an appointment is with, whether it recurs, or any other detail not explicitly in the title above.\n\nAnswer David's question about his schedule conversationally — do NOT read out a list of bullet points. Speak naturally. If he asked about today, focus on today. If he asked about the week, give a flowing narrative overview. If the calendar is clear, say so warmly.`
+        ? `\n\n[VERIFIED — Google Calendar API — next 7 days]\n${formatCalendarForPrompt(events, "this week")}\n\nCONFIDENCE RULES FOR THIS DATA:\n• VERIFIED: Use the exact event title, time, and date as shown above — state these as fact.\n• INFERRED: If you want to add context (e.g., who the appointment might be with), frame it as a question — never a statement. Say: "I see 'Acme Corp Meeting' on Thursday — is that the one you mentioned?" NOT "You have a meeting with John from Acme Thursday."\n• ASSUMED: Do not state who an appointment is with, whether it recurs, or any other detail not explicitly in the title above.\n\nAnswer the user's question about their schedule conversationally — do NOT read out a list of bullet points. Speak naturally. If they asked about today, focus on today. If they asked about the week, give a flowing narrative overview. If the calendar is clear, say so warmly.`
         : events === null
-          ? "\n\n[Google Calendar — not connected. Let David know he can connect Google in the app header.]"
+          ? "\n\n[Google Calendar — not connected. Let the user know they can connect Google in the app header.]"
           : "";
 
       systemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + memoryBlock + gmailBlock + calendarBlock;
@@ -2050,7 +2050,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         await deleteCalendarEvent(pd.eventId, sessionUserName);
         clearPendingDelete();
         systemPrompt +=
-          `\n\n[Calendar Event Deleted]\n"${pd.summary}" on ${pd.dateLabel} has been permanently removed from David's Google Calendar.\nConfirm warmly and briefly — e.g. "Done — I've cancelled your ${pd.summary} on ${pd.dateLabel}."`;
+          `\n\n[Calendar Event Deleted]\n"${pd.summary}" on ${pd.dateLabel} has been permanently removed from the user's Google Calendar.\nConfirm warmly and briefly — e.g. "Done — I've cancelled your ${pd.summary} on ${pd.dateLabel}."`;
         req.log.info({ eventId: pd.eventId, summary: pd.summary }, "Calendar event deleted");
       } catch (err) {
         clearPendingDelete();
@@ -2093,15 +2093,15 @@ const chatHandlerCore = async (req: Request, res: Response) => {
               allDay: parsed.allDay,
             });
             let calendarCreateMsg =
-              `\n\n[Calendar Event Created]\n"${confirmation}" has been added to David's Google Calendar.\nConfirm warmly and specifically — read it back exactly: "I've added ${confirmation}."`;
+              `\n\n[Calendar Event Created]\n"${confirmation}" has been added to the user's Google Calendar.\nConfirm warmly and specifically — read it back exactly: "I've added ${confirmation}."`;
             if (parsed.location) {
               calendarCreateMsg +=
                 `\n\nThis event has a location: "${parsed.location}". After confirming the event was added, automatically offer TWO things (both in the same message, not separately):\n` +
-                `1. DEPARTURE ALERT: "Want me to set a departure alert? I can calculate the drive time from home and remind you when to leave." If David says yes, calculate approximate drive time from David's home in Dallas, TX and set a reminder to leave in time.\n` +
-                `2. SAVED PLACE: "Want me to save ${parsed.location} to your saved places so you don't need the address next time?" If David says yes, save the location name and address to his Winston profile.\n` +
+                `1. DEPARTURE ALERT: "Want me to set a departure alert? I can calculate the drive time from home and remind you when to leave." If they say yes, calculate approximate drive time from the user's home and set a reminder to leave in time.\n` +
+                `2. SAVED PLACE: "Want me to save ${parsed.location} to your saved places so you don't need the address next time?" If they say yes, save the location name and address to their Winston profile.\n` +
                 `Offer BOTH options in a single natural sentence, e.g. "Want me to set a departure alert and save ${parsed.location.split(",")[0]} to your saved places?"`;
             } else {
-              calendarCreateMsg += ` Then ask if he'd also like a reminder for it.`;
+              calendarCreateMsg += ` Then ask if they'd also like a reminder for it.`;
             }
             systemPrompt += calendarCreateMsg;
             req.log.info({ title: parsed.title, date: parsed.date }, "Calendar event created");
@@ -2126,7 +2126,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         const event = await findEventForUpdate(parsed.searchKeywords);
 
         if (!event) {
-          console.log(`[CALENDAR] event not found for keywords: "${parsed.searchKeywords}" — telling David`);
+          console.log(`[CALENDAR] event not found for keywords: "${parsed.searchKeywords}" — telling user`);
           systemPrompt += `\n\n[Calendar Modify — Event Not Found]\nTell the user you couldn't find "${parsed.searchKeywords}" in their calendar. Ask them to double-check the event name or tell you the date it's on.`;
         } else {
           console.log(`[CALENDAR] found event id: ${event.id} — "${event.summary}" on ${event.isoDate}`);
@@ -2151,7 +2151,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
               location: parsed.newLocation ?? event.location,
             });
             systemPrompt +=
-              `\n\n[Calendar Event Updated]\n"${event.summary}" has been moved/updated using events.patch (NOT insert).\nConfirm specifically: "Done — ${confirmation} is all set." Read the new details back to David.`;
+              `\n\n[Calendar Event Updated]\n"${event.summary}" has been moved/updated using events.patch (NOT insert).\nConfirm specifically: "Done — ${confirmation} is all set." Read the new details back naturally.`;
             req.log.info({ eventId: event.id, summary: event.summary }, "Calendar event updated via events.patch");
           } else {
             systemPrompt += `\n\n[Calendar Update Failed]\nTell the user the update failed and suggest they try again or edit in Google Calendar directly.`;
@@ -2272,7 +2272,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         `Tonight's low: ${tonightLow}.\n` +
         (forecastLines ? `\nUpcoming forecast:\n${forecastLines}` : "") +
         `\n\nUSAGE RULES:\n` +
-        `• You now have the full extended forecast. If David asks "what's the weather on Friday?" or any specific day, answer directly from the forecast above.\n` +
+        `• You now have the full extended forecast. If asked about a specific day's weather, answer directly from the forecast above.\n` +
         `• INDOOR ACTIVITIES (gym workouts, indoor courts) — weather is irrelevant, do NOT connect weather to these.\n` +
         `• OUTDOOR ACTIVITIES (a run, golf, an outdoor event) — DO mention relevant conditions briefly.\n` +
         `• If tomorrow only has indoor or office activities, just note the overnight low and tomorrow's high naturally.\n` +
@@ -2371,10 +2371,10 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     if (!isTextFlowActive && isCheckinNoResponse) {
       systemPrompt +=
         `\n\n[Evening Check-In — Auto-Listen: No Response]\n` +
-        `David's device was listening for 6 seconds and picked up nothing — he may be distracted, ` +
+        `${userProfile?.name ?? "The user"}'s device was listening for 6 seconds and picked up nothing — they may be distracted, ` +
         `resting, or simply quiet. Give a brief dry acknowledgment and move naturally to the next ` +
-        `check-in element (or a warm close if it feels like he's done for the night).\n` +
-        `Tone: James Bond calibrated — understated wit, never pushy or fussy. 1–2 sentences max.\n` +
+        `check-in element (or a warm close if it feels like they're done for the night).\n` +
+        `Tone: understated wit, never pushy or fussy. 1–2 sentences max.\n` +
         `Examples of the register (generate your own — do NOT use these verbatim):\n` +
         `• "Noted. A man's silence can say a great deal."\n` +
         `• "Fair enough — I'll take that as a 'fine'."\n` +
@@ -2486,9 +2486,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     try {
       const entries = await getRecentJournalEntries(30);
       if (entries.length === 0) {
-        systemPrompt += `\n\n[Journal — No Entries Yet]\nDavid has no journal entries yet. Let him know warmly — and remind him that during his evening check-in, he can add journal entries anytime.`;
+        systemPrompt += `\n\n[Journal — No Entries Yet]\nThe user has no journal entries yet. Let them know warmly — and remind them that during the evening check-in, they can add journal entries anytime.`;
       } else {
-        systemPrompt += `\n\n[David's Journal — Last 30 Days]\n${formatJournalForPrompt(entries)}\n\nRead these back to David warmly and privately. This is his personal reflection space. Acknowledge what he shared. If there are many entries, summarize the themes warmly. Treat these with care.`;
+        systemPrompt += `\n\n[Journal — Last 30 Days]\n${formatJournalForPrompt(entries)}\n\nRead these back warmly and privately. This is the user's personal reflection space. Acknowledge what they shared. If there are many entries, summarize the themes warmly. Treat these with care.`;
       }
     } catch (err) {
       req.log.warn({ err }, "Journal review failed");
@@ -2716,7 +2716,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         if (result.alreadyExists) {
           systemPrompt += `\n\n[TV Watch List — Already Watching]\nThe user already has "${result.showName}" on their watch list. Confirm this warmly.`;
         } else {
-          systemPrompt += `\n\n[TV Watch List — Show Added]\n"${result.showName}" has been added to David's watch list. Confirm warmly, maybe comment on it being a good choice.`;
+          systemPrompt += `\n\n[TV Watch List — Show Added]\n"${result.showName}" has been added to the user's watch list. Confirm warmly, maybe comment on it being a good choice.`;
         }
         req.log.info({ showName: result.showName, added: !result.alreadyExists }, "TV show add");
       }
@@ -2732,9 +2732,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       if (showName) {
         const removed = await removeWatchedShow(showName);
         if (removed) {
-          systemPrompt += `\n\n[TV Watch List — Show Removed]\n"${removed}" has been removed from David's watch list. Acknowledge naturally — maybe ask if he finished it or just moved on.`;
+          systemPrompt += `\n\n[TV Watch List — Show Removed]\n"${removed}" has been removed from the user's watch list. Acknowledge naturally — maybe ask if they finished it or just moved on.`;
         } else {
-          systemPrompt += `\n\n[TV Watch List — Not Found]\nCouldn't find "${showName}" on David's watch list. Let him know gently.`;
+          systemPrompt += `\n\n[TV Watch List — Not Found]\nCouldn't find "${showName}" on the user's watch list. Let them know gently.`;
         }
         req.log.info({ showName, removed }, "TV show remove");
       }
@@ -2762,7 +2762,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
             tonightEps.map((ep) => `• ${formatEpisodeForPrompt(ep)}`).join("\n") +
             `\n\nTell the user what's on tonight from his watch list conversationally — e.g. "You've got a new Shrinking tonight at 9 on Apple TV."`;
         } else {
-          systemPrompt += `\n\n[TV Tonight — Nothing New]\nNone of David's watched shows have new episodes tonight. Let him know warmly, maybe suggest it's a good night for an older episode or some reading.`;
+          systemPrompt += `\n\n[TV Tonight — Nothing New]\nNone of the user's watched shows have new episodes tonight. Let them know warmly, maybe suggest it's a good night for an older episode or some reading.`;
         }
       }
 
@@ -2809,11 +2809,11 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       if (extracted) {
         const result = await addMedication(extracted.name, extracted.dosage, extracted.reminderTime, sessionUserName);
         if (result.alreadyExists) {
-          systemPrompt += `\n\n[Medications — Already Listed]\n"${extracted.name}" is already on David's medication list. Let him know gently.`;
+          systemPrompt += `\n\n[Medications — Already Listed]\n"${extracted.name}" is already on the user's medication list. Let them know gently.`;
         } else if (result.medication) {
           const timeDisplay = result.medication.reminderTime;
           const dosageNote = result.medication.dosage ? ` (${result.medication.dosage})` : "";
-          systemPrompt += `\n\n[Medications — Added]\n"${result.medication.name}"${dosageNote} has been added to David's daily medication reminders at ${timeDisplay}. Confirm warmly and concisely.`;
+          systemPrompt += `\n\n[Medications — Added]\n"${result.medication.name}"${dosageNote} has been added to the user's daily medication reminders at ${timeDisplay}. Confirm warmly and concisely.`;
           req.log.info({ name: result.medication.name }, "Medication added");
         }
       } else {
@@ -2830,10 +2830,10 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       const meds = await getMedications(sessionUserName);
       const taken = await hasTakenMedicationsToday(sessionUserName);
       if (meds.length === 0) {
-        systemPrompt += `\n\n[Medications — None Set Up]\nDavid has no medications configured yet. Let him know and offer to add one.`;
+        systemPrompt += `\n\n[Medications — None Set Up]\nThe user has no medications configured yet. Let them know and offer to add one.`;
       } else {
         const medDetails = meds.map((m) => `• ${m.name}${m.dosage ? ` ${m.dosage}` : ""} — ${m.reminderTime}`).join("\n");
-        systemPrompt += `\n\n[Medications — David's List — AUTHORITATIVE CURRENT STATE FROM SUPABASE]\nDisregard any medications mentioned earlier in this conversation — this is the live list:\n${medDetails}\nStatus today: ${taken ? "✅ Confirmed taken" : "⏳ Not yet confirmed"}\nRead ONLY these medications back. Do not mention any medication not listed above.`;
+        systemPrompt += `\n\n[Medications — Current List — AUTHORITATIVE CURRENT STATE FROM SUPABASE]\nDisregard any medications mentioned earlier in this conversation — this is the live list:\n${medDetails}\nStatus today: ${taken ? "✅ Confirmed taken" : "⏳ Not yet confirmed"}\nRead ONLY these medications back. Do not mention any medication not listed above.`;
       }
     } catch (err) {
       req.log.warn({ err }, "Medication list failed");
@@ -2852,9 +2852,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         const { removeMedication } = await import("../medications/medicationManager.js");
         const removed = await removeMedication(removeMatch[1].trim(), sessionUserName);
         if (removed) {
-          systemPrompt += `\n\n[Medications — Removed]\n"${removeMatch[1].trim()}" has been removed from David's medication reminders. Confirm naturally.`;
+          systemPrompt += `\n\n[Medications — Removed]\n"${removeMatch[1].trim()}" has been removed from the user's medication reminders. Confirm naturally.`;
         } else {
-          systemPrompt += `\n\n[Medications — Not Found]\nCouldn't find "${removeMatch[1].trim()}" in David's medication list. Let him know gently.`;
+          systemPrompt += `\n\n[Medications — Not Found]\nCouldn't find "${removeMatch[1].trim()}" in the user's medication list. Let them know gently.`;
         }
         req.log.info({ name: removeMatch[1].trim(), removed }, "Medication remove");
       }
@@ -2904,10 +2904,10 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           hour12: true,
         });
         if (updatedCount > 0) {
-          systemPrompt += `\n\n[Medication Reminder Time Updated]\nAll of David's medication reminders have been updated to ${displayTime} (${newTime}). Confirm naturally and briefly — e.g. "Done — I'll remind you about your medications at ${displayTime} from now on."`;
+          systemPrompt += `\n\n[Medication Reminder Time Updated]\nAll medication reminders have been updated to ${displayTime} (${newTime}). Confirm naturally and briefly — e.g. "Done — I'll remind you about your medications at ${displayTime} from now on."`;
           req.log.info({ newTime, updatedCount, userName: sessionUserName }, "[MEDS] Reminder time updated via chat");
         } else {
-          systemPrompt += `\n\n[Medication Reminder Time — No Meds Found]\nDavid has no active medications to update the time for. Let him know gently and offer to add one.`;
+          systemPrompt += `\n\n[Medication Reminder Time — No Meds Found]\nNo active medications found to update the time for. Let the user know gently and offer to add one.`;
         }
       } else {
         systemPrompt += `\n\n[Medication Reminder Time — Time Not Parsed]\nCouldn't extract a specific time from the message. Ask the user to clarify — e.g. "What time would you like your medication reminder?"`;
@@ -2951,7 +2951,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     // formatProfileForContext includes all profile_items["people"] in every system prompt;
     // when saving/searching a contact the AI sees those entries and volunteers info about them.
     // This override tells Claude to ignore that section for this single response.
-    systemPrompt += `\n\n[Contact Operation — People-Profile Suppression]\nDavid's profile context above may list saved "People" entries. For THIS response, completely disregard that "People" section. Do NOT volunteer, summarise, or reference any person from the profile items list. Your response must address ONLY the specific contact name mentioned in David's current message.`;
+    systemPrompt += `\n\n[Contact Operation — People-Profile Suppression]\nThe profile context above may list saved "People" entries. For THIS response, completely disregard that "People" section. Do NOT volunteer, summarise, or reference any person from the profile items list. Your response must address ONLY the specific contact name mentioned in the user's current message.`;
     try {
       // Name extraction — tried in priority order (most specific → most general)
       const nameMatch =
@@ -3001,7 +3001,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
             (found.phone ? ` | Phone: ${found.phone}` : "") +
             (found.email ? ` | Email: ${found.email}` : "") +
             (found.address ? ` | Address: ${found.address}` : "") + "\n" +
-            `Action taken: Saved to David's Winston curated contacts AND added to his profile.\n` +
+            `Action taken: Saved to the user's Winston curated contacts AND added to their profile.\n` +
             `Respond with: "Found [Name] in your contacts — I've added them to your Winston profile. ` +
             `[Share phone/email if present.] Just ask next time and I'll have the info ready."\n` +
             `CRITICAL: Mention ONLY ${found.name} in your response. Do NOT mention or reference any other contacts from earlier in this conversation.`
@@ -3030,7 +3030,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
   // ── Save contact to curated Winston list ───────────────────────────────────
   if (isSaveContactRequest) {
-    systemPrompt += `\n\n[Contact Operation — People-Profile Suppression]\nDavid's profile context above may list saved "People" entries. For THIS response, completely disregard that "People" section. Do NOT volunteer, summarise, or reference any person from the profile items list. Your response must address ONLY the specific contact name mentioned in David's current message.`;
+    systemPrompt += `\n\n[Contact Operation — People-Profile Suppression]\nThe profile context above may list saved "People" entries. For THIS response, completely disregard that "People" section. Do NOT volunteer, summarise, or reference any person from the profile items list. Your response must address ONLY the specific contact name mentioned in the user's current message.`;
     try {
       // Try to extract an explicit name from the current message first
       // e.g. "save Eric Blackstone to my contacts"
@@ -3061,7 +3061,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
       if (contactToSave) {
         await saveCuratedContact(contactToSave, sessionUserName);
-        systemPrompt += `\n\n[Contact Saved to Winston Curated List]\n"${contactToSave.name}" has been saved to David's Winston contacts.${contactToSave.phone ? ` Phone: ${contactToSave.phone}.` : ""}${contactToSave.email ? ` Email: ${contactToSave.email}.` : ""}\nConfirm naturally: "Got it — I've saved [Name] to your Winston contacts. I'll remember them for next time."\nCRITICAL: Mention ONLY "${contactToSave.name}" in your response. Do NOT mention or reference any other contacts from earlier in this conversation.`;
+        systemPrompt += `\n\n[Contact Saved to Winston Curated List]\n"${contactToSave.name}" has been saved to the user's Winston contacts.${contactToSave.phone ? ` Phone: ${contactToSave.phone}.` : ""}${contactToSave.email ? ` Email: ${contactToSave.email}.` : ""}\nConfirm naturally: "Got it — I've saved [Name] to your Winston contacts. I'll remember them for next time."\nCRITICAL: Mention ONLY "${contactToSave.name}" in your response. Do NOT mention or reference any other contacts from earlier in this conversation.`;
         req.log.info({ name: contactToSave.name }, "[CONTACTS] Contact saved to curated list");
       } else {
         systemPrompt += `\n\n[Contact Save — Name Not Found]\nWas unable to identify which contact to save from this message. Ask the user who specifically they'd like to save: "Who would you like me to add to your Winston contacts?"`;
@@ -3176,7 +3176,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     systemPrompt =
       systemPrompt +
       `\n\n[Navigation request detected]\n` +
-      `David is asking for directions to: ${displayName}\n` +
+      `The user is asking for directions to: ${displayName}\n` +
       `Address: ${navLocation.address}\n` +
       `Google Maps is opening automatically. Your response should be a single short sentence confirming this, e.g. "Opening directions to ${displayName} now." Do not add anything else.`;
     req.log.info({ location: navLocation.name, url: navigationUrl }, "Navigation triggered");
@@ -3194,9 +3194,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
             .map((h) => `[${h.date}] ${h.role === "user" ? (userProfile?.name ?? sessionUserName) : (userProfile?.companionName ?? "assistant")}: ${h.excerpt}`)
             .join("\n\n");
           systemPrompt +=
-            `\n\n[Transcript Search — David asked about: "${searchTerm}"]\n` +
+            `\n\n[Transcript Search — "${searchTerm}"]\n` +
             `These are matching excerpts from past conversations (up to 90 days back):\n\n${hitText}\n\n` +
-            `Surface these excerpts naturally and directly. Quote from them when David asks what he said. ` +
+            `Surface these excerpts naturally and directly. Quote from them when asked what was said. ` +
             `Do not fabricate anything not shown above.`;
           req.log.info({ searchTerm, hits: hits.length }, "[TRANSCRIPT] Search results injected");
         } else {
@@ -3217,8 +3217,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   // that contain that same data type. This prevents Claude from reading stale
   // values out of history when the underlying Supabase data has changed.
   const LIST_DATA_PATTERN    = /\b\d+\.\s+\S|(?:shopping|to[\s\-]?do|grocery|errand|task)\s+list\b|on\s+(?:your|the)\s+(?:shopping|to[\s\-]?do|grocery|errand|task)\s+list\b|(?:your|the)\s+(?:shopping|to[\s\-]?do|grocery|errand|task)\s+list\s+(?:has|have|is|are|currently|contains?|includes?)/i;
-  const CONTACT_DATA_PATTERN = /\bPhone\s*:\s*[\d\s()+-]+|Email\s*:\s*\S+@\S+|\b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b|found\s+\w[\w\s]+in your contacts|@\w+\.(com|net|org|io)\b|\[VERIFIED\s+[—–-]\s+Google\s+Contacts|(?:I'?ve?\s+)?saved\s+.{2,60}\s+to\s+(?:your|David'?s?)\s+(?:Winston\s+)?contacts|(?:I'?ve?\s+)?added\s+.{2,60}\s+to\s+(?:your|his|David'?s?)\s+(?:Winston\s+)?(?:contacts?|profile)|Got\s+it\s+[—–-]\s+I'?ve?\s+saved|I'?ve?\s+saved\s+.{2,60}\s+to\s+your\b/i;
-  const MED_DATA_PATTERN     = /\[Medications — David's List\]|you(?:'re| are) (?:currently )?(?:taking|on)\b|\b(?:mg|dosage|dose)\b.*\b(?:daily|once|twice|morning|night)\b|\bmedication list\b/i;
+  const CONTACT_DATA_PATTERN = /\bPhone\s*:\s*[\d\s()+-]+|Email\s*:\s*\S+@\S+|\b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b|found\s+\w[\w\s]+in your contacts|@\w+\.(com|net|org|io)\b|\[VERIFIED\s+[—–-]\s+Google\s+Contacts|(?:I'?ve?\s+)?saved\s+.{2,60}\s+to\s+(?:your|the\s+user's)\s+(?:Winston\s+)?contacts|(?:I'?ve?\s+)?added\s+.{2,60}\s+to\s+(?:your|their)\s+(?:Winston\s+)?(?:contacts?|profile)|Got\s+it\s+[—–-]\s+I'?ve?\s+saved|I'?ve?\s+saved\s+.{2,60}\s+to\s+your\b/i;
+  const MED_DATA_PATTERN     = /\[Medications —|you(?:'re| are) (?:currently )?(?:taking|on)\b|\b(?:mg|dosage|dose)\b.*\b(?:daily|once|twice|morning|night)\b|\bmedication list\b/i;
   const BILL_DATA_PATTERN    = /\[Financial Obligations\]|due (?:on (?:the )?\d+|in \d+ days?)|\$[\d,.]+ (?:is )?due|tracked bills|upcoming bills|bill.*due date/i;
 
   const scrubPatterns: Array<{ active: boolean; pattern: RegExp; label: string }> = [
@@ -3298,8 +3298,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       res.status(500).json({
         error:
           errStatus === 529
-            ? "I'm sorry, David — Claude's servers are a little busy right now. Give me a moment and try again."
-            : "I'm sorry, David — I had trouble thinking through that. Please try again.",
+            ? "I'm sorry — Claude's servers are a little busy right now. Give me a moment and try again."
+            : "I'm sorry — I had trouble thinking through that. Please try again.",
       });
     }
     return;
@@ -3372,8 +3372,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       error: true,
       reply:
         errStatus === 529
-          ? "I'm sorry, David — Claude's servers are a little busy right now. Give me a moment and try again."
-          : "I'm sorry, David — I had trouble thinking through that. Please try again.",
+          ? "I'm sorry — Claude's servers are a little busy right now. Give me a moment and try again."
+          : "I'm sorry — I had trouble thinking through that. Please try again.",
     });
   }
 

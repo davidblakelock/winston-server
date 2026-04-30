@@ -10,7 +10,8 @@ import { getRecentJournalEntries, formatJournalForPrompt } from "./journalManage
 import { getActiveUsers } from "../onboarding/onboardingManager.js";
 import { logger } from "../lib/logger.js";
 
-const NATIVE_USER = process.env.NATIVE_USER ?? "davidblakelock";
+import { NATIVE_STORED_NAME } from "../auth/middleware.js";
+const NATIVE_USER = NATIVE_STORED_NAME;
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // ── Table setup ───────────────────────────────────────────────────────────────

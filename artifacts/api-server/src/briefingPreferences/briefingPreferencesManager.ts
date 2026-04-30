@@ -243,8 +243,8 @@ const PREF_INSTRUCTIONS: Record<PrefKey, Record<PrefValue, string>> = {
   },
   journal: {
     off:   "EVENING CHECK-IN: Do NOT offer a journal prompt tonight.",
-    less:  "EVENING CHECK-IN: Only offer journaling if David seems reflective and in the mood.",
-    more:  "EVENING CHECK-IN: Actively invite David to journal — frame it as an important habit.",
+    less:  "EVENING CHECK-IN: Only offer journaling if the user seems reflective and in the mood.",
+    more:  "EVENING CHECK-IN: Actively invite the user to journal — frame it as an important habit.",
     on:    "Offer journal prompts during evening check-in as normal.",
   },
   news: {

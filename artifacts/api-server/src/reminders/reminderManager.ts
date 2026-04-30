@@ -13,8 +13,8 @@ query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS push_category_id text DEFA
 query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS push_data text DEFAULT NULL`)
   .catch(() => {});
 
-// Fix legacy user_name default from 'David' to canonical 'davidblakelock'
-query(`ALTER TABLE reminders ALTER COLUMN user_name SET DEFAULT 'davidblakelock'`)
+// Fix legacy user_name default from 'David' to canonical stored username
+query(`ALTER TABLE reminders ALTER COLUMN user_name SET DEFAULT '${NATIVE_STORED_NAME}'`)
   .catch(() => {});
 
 export interface ReminderInput {

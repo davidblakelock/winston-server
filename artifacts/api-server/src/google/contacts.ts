@@ -488,8 +488,8 @@ export function formatContactsForPrompt(result: ContactSearchResult, searchName:
   if (result.needsReauth) {
     return (
       `\n\n[Google Contacts — Reconnection Required]\n` +
-      `David's Google account does not currently include contacts permission. ` +
-      `Tell David exactly this: "To look up contacts I'll need you to quickly reconnect your Google account — ` +
+      `The user's Google account does not currently include contacts permission. ` +
+      `Tell them exactly this: "To look up contacts I'll need you to quickly reconnect your Google account — ` +
       `just go to Settings and tap Reconnect Google. It only takes a minute and you won't lose anything." ` +
       `Do NOT say you "don't have access" — frame it as a quick one-time reconnect that fixes it permanently.`
     );
@@ -499,7 +499,7 @@ export function formatContactsForPrompt(result: ContactSearchResult, searchName:
     return (
       `\n\n[VERIFIED — Google Contacts Live Search: "${searchName}" — NO RESULTS]\n` +
       `The Google Contacts API was searched live and returned ZERO results for "${searchName}". ` +
-      `There is NO contact with this name in David's Google Contacts. This is VERIFIED. ` +
+      `There is NO contact with this name in the user's Google Contacts. This is VERIFIED. ` +
       `You MUST NOT generate, invent, guess, or infer any phone number, email, or contact detail. ` +
       `Say: "I searched your Google Contacts and couldn't find anyone named ${searchName}. Want me to add them manually?"`
     );
@@ -520,16 +520,16 @@ export function formatContactsForPrompt(result: ContactSearchResult, searchName:
       `${lines[0]}\n` +
       `Source: Google People API (live lookup — not cached). State the contact's name, phone, and email exactly as shown. ` +
       `Do not add, modify, or infer any details not present here.\n` +
-      `After sharing this info, ask David: "Want me to remember ${c.name} in your Winston contacts for next time?"`
+      `After sharing this info, ask: "Want me to remember ${c.name} in your Winston contacts for next time?"`
     );
   }
 
   return (
     `\n\n[VERIFIED — Google Contacts Live Search — Multiple Matches for "${searchName}"]\n` +
     `${lines.join("\n")}\n` +
-    `Source: Google People API (live lookup). Ask David which one he means — ` +
+    `Source: Google People API (live lookup). Ask which one they mean — ` +
     `"I found a few people named ${searchName.split(" ")[0]} — which one did you mean?" ` +
-    `Do NOT share phone or email until David confirms which person. ` +
-    `Once he confirms, ask if he wants to save them to his Winston contacts.`
+    `Do NOT share phone or email until the user confirms which person. ` +
+    `Once they confirm, ask if they want to save them to their Winston contacts.`
   );
 }
