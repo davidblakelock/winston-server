@@ -534,16 +534,23 @@ function deduplicate(items: LocalContentItem[]): LocalContentItem[] {
 async function musicWebSearch(ctx: UserLocalContext): Promise<LocalContentItem[]> {
   const city = ctx.city;
   const venueHints = ctx.venues?.slice(0, 4).join(", ") ?? `${city} music venues`;
-  logger.info(`[LocalContent] Running music events web search for ${city}`);
+  // Build a genre-specific search focused on what the user actually likes
+  const genreList = ctx.musicGenres?.length
+    ? ctx.musicGenres.join(", ")
+    : "jazz, classic rock, live music";
+  // Expand to searchable genre keywords for the query
+  const genreTerms = ctx.musicGenres?.flatMap(expandMusicPreference).slice(0, 6).join(", ")
+    ?? "jazz, classic rock";
+  logger.info(`[LocalContent] Running music events web search for ${city} — genres: ${genreList}`);
   try {
     const result = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
       max_tokens: 600,
       tools: [{ type: "web_search_20250305" as "web_search_20250305", name: "web_search", max_uses: 2 }],
-      system: `You are a local music events researcher for ${city}. Search for upcoming jazz, outdoor concerts, and live music events in ${city} this week and next week. Focus on venues such as: ${venueHints}. Return ONLY a JSON array (no markdown, no explanation) with up to 4 objects, each having: headline (string), summary (1–2 sentence string), url (string), source (string).`,
+      system: `You are a local music events researcher for ${city}. The listener's music preferences are: ${genreList}. Search for upcoming live music events in ${city} this week and next week that match these preferences. Focus on venues: ${venueHints}. ONLY include events that match the listener's taste — skip pop, country, hip-hop, rap, heavy metal, EDM, or any genre not listed in their preferences. Return ONLY a JSON array (no markdown, no explanation) with up to 4 objects, each having: headline (string), summary (1–2 sentence string), url (string), source (string).`,
       messages: [{
         role: "user",
-        content: `Search: ${city} live music concerts this week. Also: ${venueHints} upcoming events concerts.`,
+        content: `Search: ${city} ${genreTerms} concerts events this week. Also: ${venueHints} upcoming events.`,
       }],
     });
 

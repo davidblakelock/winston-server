@@ -76,15 +76,18 @@ async function fetchWatercoolerStories(): Promise<string> {
   const prompt =
     `Today is ${todayStr}. Use web search to find ONE genuinely fascinating, unexpected, or conversation-worthy story ` +
     `published after ${cutoffStr} — within the last 24 hours ONLY. ` +
-    `\n\nFocus on: science discoveries, record-breaking achievements, fascinating human interest, ` +
-    `unexpected animal behavior, surprising scientific findings, things that make people say "wait, really?" ` +
+    `\n\nFocus on variety — pick from any of these categories: record-breaking achievements, ` +
+    `surprising historical or archaeological discoveries, unusual animal behavior, unexpected tech or science firsts, ` +
+    `remarkable human interest stories, viral real-world moments, quirky cultural events, ` +
+    `sports records or upsets, music or entertainment surprises (no deaths). ` +
+    `Rotate across categories — do NOT default to science every time. ` +
     `\n\nSTRICTLY AVOID: politics, crime, violence, tragedy, death, accidents, disasters, controversy. ` +
     `\n\nReturn EXACTLY ONE story in TWO sentences maximum. ` +
     `Sentence 1: What happened (specific, vivid, surprising). ` +
     `Sentence 2: Why it's fascinating or what makes it remarkable. ` +
     `No headers, no bullet points, no commentary — just the two sentences. ` +
-    `If you cannot find a qualifying story from the last 24 hours, search for "amazing science discovery today", ` +
-    `"fascinating story today", "incredible achievement today". Do not use a story older than 24 hours.`;
+    `If you cannot find a qualifying story from the last 24 hours, search for "amazing story today", ` +
+    `"record broken today", "incredible achievement today". Do not use a story older than 24 hours.`;
 
   console.log(`[API] Claude web_search (watercooler) — starting at ${new Date().toISOString()}`);
 
@@ -107,7 +110,7 @@ async function fetchWatercoolerStories(): Promise<string> {
 
 // ── Entertainment: major deaths, upcoming releases, cultural moments ──────────
 
-async function fetchEntertainmentNews(): Promise<string> {
+async function fetchEntertainmentNews(userMusicGenres?: string[], userInterests?: string[]): Promise<string> {
   const now = new Date();
   const todayStr = now.toLocaleDateString("en-US", {
     timeZone: "America/Chicago", weekday: "long", month: "long", day: "numeric", year: "numeric",
@@ -121,6 +124,15 @@ async function fetchEntertainmentNews(): Promise<string> {
     timeZone: "America/Chicago", month: "long", day: "numeric",
   });
 
+  // Build an exclusion note based on the user's actual interests
+  const likedGenres = (userMusicGenres ?? []).join(", ") || "classic rock, jazz";
+  const avoidNote =
+    `\n\nLISTENER PREFERENCES: The listener enjoys ${likedGenres}. ` +
+    `SKIP deaths or news about: classical music conductors, classical composers, opera singers, ` +
+    `or any genre/figure the listener clearly has no connection to. ` +
+    `Only include a death if it would genuinely resonate with someone who likes ${likedGenres} ` +
+    `or if it is truly historic (e.g. major film star, household name).`;
+
   const prompt =
     `Today is ${todayStr}. Use web search to find 2 notable entertainment or pop culture items. ` +
     `Focus exclusively on: (1) major celebrity or public figure deaths in the past 48 hours, ` +
@@ -130,7 +142,8 @@ async function fetchEntertainmentNews(): Promise<string> {
     `Search terms: "celebrity death today", "movie opening this month", "awards news today", "entertainment news ${todayStr}". ` +
     `Only use stories from ${cutoffStr} or later for deaths/awards; upcoming releases can be within 30 days. ` +
     `If only 1 qualifying story exists, return only 1. If none qualify, return "NONE". ` +
-    `\n\nReturn as bullet points: • [one sentence]. No headers, no tier labels.`;
+    `\n\nReturn as bullet points: • [one sentence]. No headers, no tier labels.` +
+    avoidNote;
 
   console.log(`[API] Claude web_search (entertainment) — starting at ${new Date().toISOString()}`);
 
@@ -209,8 +222,8 @@ Five domestic US stories. Mix from these categories — each story from a DIFFER
 • US Economy / business / corporate / trade / labor / market news
 • Technology: AI, software, major tech company (Apple, Google, Microsoft, OpenAI, Meta, Amazon)
 • Health / science / environment (US-focused)
-• PERSONALIZED SPORTS (mandatory if news exists): ${teamsLine}
-  Sports must be about one of the listener's teams ONLY. NEVER cover: ${sportsExclude || "unrelated leagues"}.
+• Personalized wildcard: A US story relevant to the listener's interests — music (${musicGenres.join(", ") || "classic rock, jazz"}), woodworking, boats, cooking, stock market, or any other significant national story not covered above
+IMPORTANT: NO sports stories in Stories 1–10. Sports belongs exclusively to the dedicated Sports section delivered separately. Do NOT include any sports result, game, trade, draft, or team news in the Top 10 — not even for the listener's followed teams.
 
 STORIES 8–10: LOCAL NEWS — ${city.toUpperCase()}, ${state.toUpperCase()}
 Three stories specifically about ${city} or the DFW area — local government, business, development, infrastructure, culture, community events. Must be genuinely local to ${city}.
@@ -235,7 +248,7 @@ OUTPUT FORMAT (follow exactly):
 GLOBAL RULES:
 • All stories from ${todayStr} or ${yesterdayStr} only — max 48 hours old
 • No two stories about the same person, company, or topic
-• Sports stories only about the listener's followed teams: ${sportsTeams.join(", ") || "as specified"}
+• NEVER include any sports stories in Stories 1–10 — sports is covered in a dedicated section
 • NEVER include FIFA, World Cup, soccer trophies, or international soccer in any section
 • NEVER include weather alerts, tornado warnings, or severe weather notices — weather has its own section
 • Only report real, verified stories — never fabricate`;
@@ -253,7 +266,7 @@ GLOBAL RULES:
       logger.warn({ err }, "Watercooler fetch failed — skipping");
       return "";
     }),
-    fetchEntertainmentNews().catch((err) => {
+    fetchEntertainmentNews(musicGenres, cleanInterests).catch((err) => {
       logger.warn({ err }, "Entertainment fetch failed — skipping");
       return "";
     }),

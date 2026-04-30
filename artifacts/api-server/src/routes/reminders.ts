@@ -262,6 +262,7 @@ router.post("/reminders/done", async (req: Request, res: Response) => {
   const found = await markReminderDone(id);
   console.log(`[REMINDERS/DONE] id=${id} found=${found}`);
   res.json({ success: true, found });
+  if (found) broadcast("reminder_sync", { action: "completed", id });
 });
 
 // ── POST /api/reminders/snooze — body-based snooze from notification action ───
