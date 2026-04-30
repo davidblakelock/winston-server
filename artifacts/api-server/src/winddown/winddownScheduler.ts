@@ -144,7 +144,7 @@ export async function generateOpeningMessage(
     `2. HOW WAS THE DAY: Ask genuinely how the day went — make it personal, not generic.\n\n` +
     `3. TOMORROW LOOK-AHEAD: ${tomorrowContext ? `Briefly mention what's coming up tomorrow (${tomorrowContext}). ` : "Note the calendar looks clear tomorrow. "}Then ask: "Is there anything you want to add to your shopping list, to-do list, or any reminders for tomorrow?"\n\n` +
     `4. EVENING THOUGHT: One calming sentence — something grounding and warm for before sleep. Not advice. Not a quote. Something a trusted friend would say. Specific to this ${dayName}.\n\n` +
-    `5. REFLECTIONS: A light invite — something like: "If there's anything on your mind from today you want to capture, just say it." Keep it brief and optional.\n\n` +
+    `5. REFLECTIONS: A light invite — something like: "Anything on your mind you want to talk through before you wind down?" Keep it brief and optional.\n\n` +
     `6. CLOSING: Warm goodnight to ${displayName}.${familyNames ? ` Mention ${familyNames}.` : ""}\n\n` +
     `Write as one flowing message — no bullet points, no headers, no numbers.`;
 
@@ -166,7 +166,7 @@ export async function generateOpeningMessage(
     `Good evening, ${displayName}. How did your ${dayName} go?${familyNote}\n\n` +
     (tomorrowContext ? `Coming up tomorrow: ${tomorrowContext}. ` : "") +
     `Is there anything you want to add to your shopping list, to-do list, or any reminders for tomorrow?\n\n` +
-    `If there's anything on your mind from today you want to capture, just say it.\n\n` +
+    `Anything on your mind tonight? I'm here.\n\n` +
     `Goodnight${familyNames ? ` — take care of ${familyNames}` : ""}. Rest well.`
   );
 }

@@ -2475,7 +2475,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     try {
       const count = await getStoryCount();
       systemPrompt +=
-        `\n\n[Memory Book — Story Count]\nThe user has captured ${count} ${count === 1 ? "story" : "stories"} in their memory book so far. Tell them warmly and with encouragement.`;
+        `\n\n[Memory Archive — Count]\nThere are ${count} ${count === 1 ? "entry" : "entries"} in the memory archive. Tell the user warmly.`;
     } catch (err) {
       req.log.warn({ err }, "Story count failed");
     }
