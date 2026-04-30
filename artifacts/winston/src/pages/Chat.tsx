@@ -899,7 +899,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
   }, [speakReply, streamChat]);
 
   const submitText = useCallback(
-    (text: string) => {
+    (text: string, options?: { silent?: boolean }) => {
       if (!text.trim() || isStreaming) return;
 
       if (EMERGENCY_REGEX.test(text.trim())) {
@@ -927,7 +927,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
 
       setMessages((prev) => [
         ...prev,
-        userMsg,
+        ...(options?.silent ? [] : [userMsg]),
         { id: assistantMsgId, role: "assistant", content: "…" },
       ]);
       setInput("");
@@ -1084,8 +1084,8 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
     window.history.replaceState({}, "", window.location.pathname);
 
     if (notif.type === "morning") {
-      // Auto-trigger "good morning" so the companion delivers the full briefing
-      setTimeout(() => submitText("good morning"), 600);
+      // Auto-trigger "good morning" silently — briefing streams in without a user bubble
+      setTimeout(() => submitText("good morning", { silent: true }), 600);
     } else if (notif.type === "auto-send" && notif.text) {
       // Generic auto-send (weather alerts, etc.)
       setTimeout(() => submitText(notif.text!), 600);

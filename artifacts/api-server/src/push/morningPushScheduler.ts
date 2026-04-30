@@ -59,8 +59,7 @@ const morningPushDone: Map<string, string> = new Map();
 // ── Push body ──────────────────────────────────────────────────────────────────
 
 async function buildMorningBody(user: ActiveUser): Promise<string> {
-  const companionName = user.companionName ?? "Winston";
-  const base = `${companionName} is ready for your morning briefing. Say good morning to start.`;
+  const base = `Your morning briefing is ready — tap to open.`;
   try {
     const watchedShows = await getWatchedShows();
     const watchedIds = watchedShows.filter((s) => s.tvmazeId).map((s) => s.tvmazeId!);
@@ -68,7 +67,7 @@ async function buildMorningBody(user: ActiveUser): Promise<string> {
     if (todayEps.length > 0) {
       const show = todayEps[0];
       const extra = todayEps.length > 1 ? ` (+${todayEps.length - 1} more)` : "";
-      return `${base} Also — new ${show.showName} tonight${extra}!`;
+      return `Your morning briefing is ready — tap to open. New ${show.showName} tonight${extra}!`;
     }
   } catch {
     // ignore — use base body
