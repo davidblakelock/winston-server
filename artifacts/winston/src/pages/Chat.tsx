@@ -459,7 +459,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
   const [messages, setMessages] = useState<Message[]>([]);
   const [messagesLoaded, setMessagesLoaded] = useState(false);
   const [pendingNotification, setPendingNotification] = useState<{
-    type: "morning" | "reminder" | "concert-alert" | "auto-send";
+    type: "morning" | "reminder" | "concert-alert" | "auto-send" | "medication-reminder";
     text?: string;
     id?: number;
     companionMessage?: string;
@@ -1104,6 +1104,19 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         },
       ]);
       speakReply(msgId, notif.companionMessage!);
+    } else if (notif.type === "medication-reminder") {
+      // Medication notification tap — show action card with Taken/Remind buttons immediately
+      const msgId = `med-tap-${Date.now()}`;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: msgId,
+          role: "assistant" as const,
+          content: "Time to take your medications. Have you taken them yet?",
+          isMedication: true,
+        },
+      ]);
+      speakReply(msgId, "Time to take your medications. Have you taken them yet?");
     } else if (notif.type === "reminder" && notif.text) {
       // Dedup: if SSE or push already fired this reminder, don't show it twice
       if (notif.id != null && spokenReminderIds.current.has(notif.id)) {
@@ -1174,6 +1187,13 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
               return;
             }
 
+            // Medication reminder: show action card with Taken / Remind buttons
+            if (notifType === "medication") {
+              console.log("[CHAT] NOTIFICATION_TAP: medication — showing action card");
+              setPendingNotification((prev) => prev ?? { type: "medication-reminder" });
+              return;
+            }
+
             // Auto-send: any notification with an autoSendMessage (weather alerts, etc.)
             if (pending.autoSendMessage) {
               console.log("[CHAT] NOTIFICATION_TAP: autoSendMessage —", pending.autoSendMessage);
@@ -1227,6 +1247,11 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
           // Morning briefing: auto-send "good morning" to trigger the briefing
           if (pending.notificationType === "morning-briefing") {
             setPendingNotification((prev) => prev ?? { type: "morning" });
+            return;
+          }
+          // Medication reminder: show action card with Taken/Remind buttons immediately
+          if (pending.notificationType === "medication") {
+            setPendingNotification((prev) => prev ?? { type: "medication-reminder" });
             return;
           }
           // Auto-send: any notification with an autoSendMessage

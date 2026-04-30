@@ -1,21 +1,21 @@
 /**
  * Push notification routes.
  *
- * Web push (browser/PWA via VAPID) has been retired. The routes in this file
- * exclusively handle Expo push notifications for the native Android app.
+ * Two channels are supported:
+ *   1. Web push (browser/PWA via VAPID) — handled by the service worker (sw.js)
+ *      which shows OS-level notifications with action buttons ("Taken ✓", etc.)
+ *   2. Expo push — native Android app
  *
- * Removed routes (web push — no longer supported):
- *   GET    /push/vapid-public-key
- *   POST   /push/subscribe
- *   DELETE /push/subscribe
- *   GET    /push/status
- *   POST   /push/test
+ * Web push routes:
+ *   GET    /push/vapid-public-key  Return server's VAPID public key
+ *   POST   /push/subscribe         Register a browser push subscription
+ *   DELETE /push/subscribe         Remove a browser push subscription
  *
- * Active routes (Expo push — native app only):
- *   POST   /push/expo-token       Register an Expo push token
- *   DELETE /push/expo-token       Remove an Expo push token (logout / unsubscribe)
- *   GET    /push/expo-status      Diagnostic: count registered Expo tokens
- *   GET    /push/calendar-debug   Full diagnostic: Google auth + calendar + Expo tokens
+ * Expo push routes:
+ *   POST   /push/expo-token        Register an Expo push token
+ *   DELETE /push/expo-token        Remove an Expo push token
+ *   GET    /push/expo-status       Diagnostic: count registered Expo tokens
+ *   GET    /push/calendar-debug    Full diagnostic: Google auth + calendar + Expo tokens
  */
 
 import { Router } from "express";
@@ -23,6 +23,9 @@ import {
   saveExpoToken,
   removeExpoToken,
   getExpoTokens,
+  getVapidPublicKey,
+  saveWebPushSubscription,
+  removeWebPushSubscription,
 } from "../push/pushManager.js";
 import { logger } from "../lib/logger.js";
 import { tryAuthenticate, NATIVE_USER, resolveUserAlias } from "../auth/middleware.js";
@@ -30,6 +33,61 @@ import { getAuthClientForUser } from "../google/oauth.js";
 import { fetchTodayEvents } from "../google/calendar.js";
 
 const router = Router();
+
+// ── Web Push (VAPID) endpoints ────────────────────────────────────────────────
+
+// GET /push/vapid-public-key — return the server's VAPID public key for subscription
+router.get("/push/vapid-public-key", (_req, res) => {
+  const publicKey = getVapidPublicKey();
+  if (!publicKey) {
+    res.status(503).json({ error: "VAPID not configured on server" });
+    return;
+  }
+  res.json({ publicKey });
+});
+
+// POST /push/subscribe — register a browser web push subscription
+router.post("/push/subscribe", async (req, res) => {
+  const authedUser = await tryAuthenticate(req);
+  const { endpoint, keys, userName: bodyUserName, deviceId } = req.body as {
+    endpoint?: string;
+    keys?: { p256dh?: string; auth?: string };
+    userName?: string;
+    deviceId?: string;
+  };
+  const userName = authedUser ?? (resolveUserAlias(bodyUserName ?? "") || NATIVE_USER);
+
+  if (!endpoint || !keys?.p256dh || !keys?.auth) {
+    res.status(400).json({ error: "Missing endpoint or keys (p256dh/auth)" });
+    return;
+  }
+
+  try {
+    const { id, action } = await saveWebPushSubscription(userName, endpoint, keys.p256dh, keys.auth, deviceId);
+    logger.info({ userName, deviceId, endpointTail: endpoint.slice(-30), id, action }, "[WebPush] Subscription saved");
+    res.json({ success: true, id, action });
+  } catch (err) {
+    logger.error({ err }, "[WebPush] Failed to save subscription");
+    res.status(500).json({ error: "Failed to save web push subscription" });
+  }
+});
+
+// DELETE /push/subscribe — remove a browser web push subscription
+router.delete("/push/subscribe", async (req, res) => {
+  const { endpoint } = req.body as { endpoint?: string };
+  if (!endpoint) {
+    res.status(400).json({ error: "Missing endpoint" });
+    return;
+  }
+  try {
+    await removeWebPushSubscription(endpoint);
+    logger.info({ endpointTail: endpoint.slice(-30) }, "[WebPush] Subscription removed");
+    res.json({ success: true });
+  } catch (err) {
+    logger.error({ err }, "[WebPush] Failed to remove subscription");
+    res.status(500).json({ error: "Failed to remove web push subscription" });
+  }
+});
 
 // ── Expo Push Token endpoints ─────────────────────────────────────────────────
 

@@ -1,6 +1,26 @@
+import webpush from "web-push";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { NATIVE_USER } from "../auth/middleware.js";
+
+// ── VAPID configuration ───────────────────────────────────────────────────────
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY ?? "";
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY ?? "";
+
+if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
+  webpush.setVapidDetails(
+    "mailto:support@winston-companion.app",
+    VAPID_PUBLIC_KEY,
+    VAPID_PRIVATE_KEY
+  );
+  logger.info("[Push] VAPID configured — web push enabled");
+} else {
+  logger.warn("[Push] VAPID keys missing — web push disabled");
+}
+
+export function getVapidPublicKey(): string | null {
+  return VAPID_PUBLIC_KEY || null;
+}
 
 // ── Ensure expo_push_tokens table exists (idempotent) ────────────────────────
 query(`
@@ -14,6 +34,20 @@ query(`
     updated_at timestamptz DEFAULT now()
   )
 `).catch((err) => logger.warn({ err }, "[Push] expo_push_tokens table init failed — may already exist"));
+
+// ── Ensure web_push_subscriptions table exists (idempotent) ──────────────────
+query(`
+  CREATE TABLE IF NOT EXISTS web_push_subscriptions (
+    id integer GENERATED ALWAYS AS IDENTITY NOT NULL PRIMARY KEY,
+    user_name text NOT NULL,
+    endpoint text NOT NULL UNIQUE,
+    p256dh text NOT NULL,
+    auth text NOT NULL,
+    device_id text,
+    created_at timestamptz DEFAULT now(),
+    updated_at timestamptz DEFAULT now()
+  )
+`).catch((err) => logger.warn({ err }, "[Push] web_push_subscriptions table init failed — may already exist"));
 
 // ── contact_push_links: links a contact name to another Winston user account ─
 // When David says "remind Sarah to call the dentist", the scheduler looks up
@@ -72,24 +106,122 @@ export interface PushPayload {
   autoSendMessage?: string;
 }
 
+// ── Web Push Subscription management ─────────────────────────────────────────
+
+export async function saveWebPushSubscription(
+  userName: string,
+  endpoint: string,
+  p256dh: string,
+  auth: string,
+  deviceId?: string
+): Promise<{ id: number | null; action: "inserted" | "updated" }> {
+  const { rows } = await query<{ id: number; xmax: string }>(
+    `INSERT INTO web_push_subscriptions (user_name, endpoint, p256dh, auth, device_id, updated_at)
+     VALUES ($1, $2, $3, $4, $5, now())
+     ON CONFLICT (endpoint) DO UPDATE SET
+       user_name  = EXCLUDED.user_name,
+       p256dh     = EXCLUDED.p256dh,
+       auth       = EXCLUDED.auth,
+       device_id  = EXCLUDED.device_id,
+       updated_at = now()
+     RETURNING id, xmax::text`,
+    [userName, endpoint, p256dh, auth, deviceId ?? null]
+  );
+  const row = rows[0];
+  if (!row) return { id: null, action: "inserted" };
+  return { id: row.id, action: row.xmax === "0" ? "inserted" : "updated" };
+}
+
+export async function removeWebPushSubscription(endpoint: string): Promise<void> {
+  await query(`DELETE FROM web_push_subscriptions WHERE endpoint = $1 RETURNING id`, [endpoint]);
+}
+
+interface WebPushRow {
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+}
+
+async function getWebPushSubscriptions(userName = NATIVE_USER): Promise<WebPushRow[]> {
+  const { rows } = await query<WebPushRow>(
+    `SELECT endpoint, p256dh, auth FROM web_push_subscriptions WHERE user_name = $1`,
+    [userName]
+  );
+  return rows;
+}
+
+async function sendWebPushNotifications(
+  payload: PushPayload,
+  userName = NATIVE_USER
+): Promise<{ sent: number; failed: number }> {
+  if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) return { sent: 0, failed: 0 };
+
+  const subs = await getWebPushSubscriptions(userName);
+  if (!subs.length) return { sent: 0, failed: 0 };
+
+  const notifPayload = JSON.stringify({
+    title: payload.title,
+    body: payload.body,
+    tag: payload.tag,
+    requireInteraction: payload.requireInteraction ?? false,
+    notificationType: payload.notificationType ?? null,
+    autoSendMessage: payload.autoSendMessage ?? null,
+    reminderText: payload.body,
+    reminderId: payload.reminderId ?? null,
+    companionMessage: payload.companionMessage ?? null,
+    categoryId: payload.categoryId ?? null,
+  });
+
+  let sent = 0;
+  let failed = 0;
+
+  await Promise.all(
+    subs.map(async (sub) => {
+      try {
+        await webpush.sendNotification(
+          { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+          notifPayload
+        );
+        sent++;
+      } catch (err) {
+        failed++;
+        const statusCode = (err as { statusCode?: number }).statusCode;
+        logger.warn({ endpointTail: sub.endpoint.slice(-30), statusCode }, "[WebPush] Send failed");
+        if (statusCode === 404 || statusCode === 410) {
+          await removeWebPushSubscription(sub.endpoint).catch(() => {});
+          logger.info({ endpointTail: sub.endpoint.slice(-30) }, "[WebPush] Removed expired subscription");
+        }
+      }
+    })
+  );
+
+  return { sent, failed };
+}
+
 /**
- * Send a push notification through all registered Expo push tokens for the
- * given user. Web push (browser/PWA) has been retired — Expo is the sole
- * notification channel for Winston.
+ * Send a push notification through all registered channels for the given user:
+ * - Expo push (native Android app)
+ * - Web push / VAPID (browser PWA — enables service worker action buttons)
  */
 export async function sendPushToAll(
   payload: PushPayload,
   userName = NATIVE_USER
 ): Promise<{ sent: number; failed: number }> {
-  const result = await sendExpoNotifications(payload, userName).catch((err) => {
-    logger.warn({ err }, "[Push] Expo notification send failed");
-    return { sent: 0, failed: 0 };
-  });
+  const [expoResult, webResult] = await Promise.all([
+    sendExpoNotifications(payload, userName).catch((err) => {
+      logger.warn({ err }, "[Push] Expo notification send failed");
+      return { sent: 0, failed: 0 };
+    }),
+    sendWebPushNotifications(payload, userName).catch((err) => {
+      logger.warn({ err }, "[Push] Web push send failed");
+      return { sent: 0, failed: 0 };
+    }),
+  ]);
   logger.info(
-    { expoSent: result.sent, expoFailed: result.failed, tag: payload.tag },
+    { expoSent: expoResult.sent, expoFailed: expoResult.failed, webSent: webResult.sent, webFailed: webResult.failed, tag: payload.tag },
     "[Push] sendPushToAll complete"
   );
-  return result;
+  return { sent: expoResult.sent + webResult.sent, failed: expoResult.failed + webResult.failed };
 }
 
 // ── Expo Push Token management ────────────────────────────────────────────────

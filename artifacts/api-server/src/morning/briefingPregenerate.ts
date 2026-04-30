@@ -806,7 +806,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
                     .join(" | ")
                 : "";
             return (
-              `\n[VERIFIED — Tomorrow.io Weather API — ${s.person.city} (for ${s.person.name})]\n` +
+              `\n[VERIFIED — Google Weather API — ${s.person.city} (for ${s.person.name})]\n` +
               `Now: ${w.temp}°F (feels like ${w.feelsLike}°F), ${w.condition} — high ${w.high}°F / low ${w.low}°F | ${w.precipChance}% precip | humidity ${w.humidity}%\n` +
               (days ? `Forecast: ${days}\n` : "")
             );
