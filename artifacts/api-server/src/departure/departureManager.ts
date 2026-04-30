@@ -80,7 +80,7 @@ async function geocode(address: string): Promise<{ lat: number; lon: number } | 
 
   try {
     const res = await fetch(url, {
-      headers: { "User-Agent": "EmmaCompanion/1.0 (personal assistant)" },
+      headers: { "User-Agent": "WinstonCompanion/1.0 (personal assistant)" },
       signal: AbortSignal.timeout(5000),
     });
     const data = await res.json() as Array<{ lat: string; lon: string }>;

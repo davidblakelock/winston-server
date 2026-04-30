@@ -661,7 +661,7 @@ export default function SettingsPanel({
                 value={nameInput}
                 onChange={(e) => { setNameInput(e.target.value); setNameSaved(false); }}
                 onKeyDown={(e) => { if (e.key === "Enter") void saveName(); }}
-                placeholder="e.g. Emma Peel, Alex, James Bond"
+                placeholder="e.g. Alex, Jordan, James Bond"
                 className="flex-1 bg-input border border-border rounded-xl px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-primary/40"
               />
               <Button

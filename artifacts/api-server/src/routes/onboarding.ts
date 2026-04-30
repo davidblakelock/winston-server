@@ -161,7 +161,7 @@ router.post("/onboarding/chat", async (req, res) => {
   try {
     const systemPrompt = buildOnboardingSystemPrompt(scene, collectedData);
 
-    // Build message array — if first message, Emma speaks unprompted
+    // Build message array — if first message, companion speaks unprompted
     const messages: Anthropic.MessageParam[] = [
       ...history.map((m) => ({
         role: m.role as "user" | "assistant",
@@ -173,15 +173,16 @@ router.post("/onboarding/chat", async (req, res) => {
       messages.push({ role: "user", content: message });
     }
 
-    // If no history and no message, Emma speaks first
+    // If no history and no message, companion speaks first
     if (messages.length === 0) {
+      const companionLabel = (collectedData as CollectedData).companionName ?? "your companion";
       messages.push({
         role: "user",
-        content: "[Emma: Please deliver your opening welcome message now.]",
+        content: `[${companionLabel}: Please deliver your opening welcome message now.]`,
       });
     }
 
-    // ── Emma's conversational response ──
+    // ── Companion's conversational response ──
     const emmaResponse = await anthropic.messages.create({
       model: "claude-sonnet-4-6",
       max_tokens: 512,
