@@ -228,6 +228,8 @@ router.post("/lists/:listName", async (req: Request, res: Response) => {
     const { rows } = await query<{ id: number; item_text: string; created_at: string }>(
       `INSERT INTO list_items (user_name, list_name, item_text)
        VALUES ($1, $2, $3)
+       ON CONFLICT ON CONSTRAINT list_items_uq
+       DO UPDATE SET item_text = EXCLUDED.item_text
        RETURNING id, item_text, created_at`,
       [userName, listName, item.trim()]
     );

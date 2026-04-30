@@ -18,7 +18,7 @@ const TAB_CONFIG: { key: Tab; label: string; readOnly: boolean; emptyText: strin
   { key: "shopping",    label: "Shopping",    readOnly: false, emptyText: "Shopping list is empty." },
   { key: "to do",      label: "To Do",       readOnly: false, emptyText: "No to-dos yet." },
   { key: "tv-shows",   label: "TV Shows",    readOnly: true,  emptyText: "No shows on your watch list." },
-  { key: "restaurants",label: "Restaurants", readOnly: true,  emptyText: "No restaurants saved yet." },
+  { key: "restaurants",label: "Restaurants", readOnly: false, emptyText: "No restaurants saved yet." },
 ];
 
 function apiPath(tab: Tab): string {
