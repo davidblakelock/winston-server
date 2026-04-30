@@ -196,6 +196,11 @@ import { nextOccurrenceForPattern, humanReadableRecurring } from "../reminders/r
 import { broadcastToUser } from "../reminders/sseStore.js";
 import { saveMoodCheckin } from "../mood/moodManager.js";
 import { extractAndSaveFollowups } from "../followups/followupManager.js";
+import {
+  saveMydayEntry,
+  getTodayMydayEntry,
+  extractMydayContent,
+} from "../myday/mydayManager.js";
 
 // ── Calendar location context helpers ──────────────────────────────────────
 // Short-lived per-user cache of today's events so we don't hit the Google API
@@ -374,6 +379,13 @@ const SPORTS_PATTERN = /\b(rangers|cowboys|score|scores|how\s+did\s+(they|the\s+
 const BILL_ADD_PATTERN = /\b(my\s+\w.{1,40}(bill|payment|insurance|premium|subscription|rent|mortgage|registration|fee|taxes?)\s+is\s+due|add\s+(a\s+)?(bill|payment|financial\s+obligation|reminder\s+for)|track\s+(my\s+)?(bill|payment|insurance|rent|subscription)|remind\s+me\s+(about|when|before)\s+(my\s+)?\w.{1,30}(bill|payment|due|insurance|premium|subscription|rent|mortgage|registration|fee|taxes?)|(is\s+due|renews?)\s+(on|every|each|the)\s+(the\s+)?\d{1,2}(st|nd|rd|th)?|quarterly\s+taxes?\s+are?\s+due|due\s+(on\s+)?(the\s+)?\d{1,2}(st|nd|rd|th)?\b|(rent|mortgage|insurance|premium|subscription)\s+is?\s*(due|paid|owed)|(send|pay|transfer|give)\s+.{1,40}(allowance|payment|money)\s+.{0,30}(on\s+the\s+\d{1,2}(st|nd|rd|th)?|every\s+month|monthly|each\s+month|via\s+(venmo|zelle|paypal|cash\s+app))|\ballowance\b.{0,40}(on\s+the\s+\d{1,2}(st|nd|rd|th)?|every\s+month|monthly|via\s+(venmo|zelle|paypal)))\b/i;
 const BILL_LIST_PATTERN = /\b(what\s+bills|bills?\s+(do\s+i\s+have|coming\s+up|upcoming|are\s+due|are\s+(?:you\s+)?tracking|(?:you'?re?|\s+are)\s+tracking)|show\s+(?:\w+\s+){0,4}bills?|(my\s+)?upcoming\s+(bills?|payments?|obligations?|financial)|what\s+(financial\s+)?(obligations?|payments?)\s+(do\s+i|am\s+i)|list\s+(my\s+)?(bills?|payments?|obligations?|financial\s+obligations?)|tell\s+me\s+(?:about\s+)?(?:my\s+)?(?:bills?|financial\s+obligations?)|what\s+(?:are\s+you|do\s+you)\s+tracking)\b/i;
 const BILL_REMOVE_PATTERN = /\b(remove\s+(my\s+)?\w.{1,40}(bill|payment|insurance|subscription|reminder|obligation)|stop\s+tracking\s+(my\s+)?\w.{1,40}|delete\s+(my\s+)?\w.{1,40}(bill|payment|reminder)|cancel\s+(my\s+)?\w.{1,40}(bill|reminder))\b/i;
+
+// My Day — save or retrieve the daily personal log entry
+// NOTE: MYDAY_GET must come before MYDAY_ADD so "what did I add to my day" routes to read, not write.
+const MYDAY_GET_PATTERN =
+  /\b(what\s+(?:did\s+i|have\s+i)\s+(?:write|wrote|add(?:ed)?|note(?:d)?|log(?:ged)?|put|save(?:d)?|capture(?:d)?)\s+(?:today|in\s+my\s+day|to\s+my\s+day)|show\s+(?:me\s+)?(?:my\s+(?:day(?:'?s?\s*(?:log|recap|notes?)?)?|daily\s*(?:log|recap))|today'?s?\s*(?:log|recap|entries?|notes?))|read\s+(?:me\s+)?(?:my\s+(?:day(?:'?s?\s*(?:log|recap)?)?)|today'?s?\s*(?:log|entries?))|what(?:'?s|\s+is)\s+in\s+my\s+(?:day(?:'?s?\s*(?:log|recap)?)?)|my\s+(?:day\s+)?(?:log|recap|summary)\s+for\s+today|what(?:'?s|\s+did\s+i\s+put)\s+in\s+my\s+day\s+(?:log|today))\b/i;
+const MYDAY_ADD_PATTERN =
+  /\b(add\s+(?:this|that)?\s*to\s+my\s+(?:day(?:'?s?\s*(?:log|recap|notes?)?)?|daily\s*(?:log|recap))|log\s+(?:this|that|it)\s+(?:to|for|in)\s+(?:my\s+)?(?:day|today'?s?\s*(?:log)?)|jot\s+(?:this|that)\s+down(?:\s+for\s+today)?|save\s+(?:this|that)\s+to\s+my\s+(?:day(?:'?s?\s*(?:log|recap)?)?|daily\s*(?:log|recap))|capture\s+(?:this|that)\s+for\s+today|note\s+that\b|note\s+this\s+down\s+for\s+today|remember\s+that\s+for\s+today|add\s+to\s+today'?s?\s*(?:log|recap|entries?|notes?))\b/i;
 
 // Markets / stocks
 const MARKETS_PATTERN = /\b(market(s)?|s&p|s&p\s*500|dow|nasdaq|stock(s)?|spy|dia|qqq|uso|oil\s+price|crude|financial\s+update|market\s+update|how('?s|\s+are)\s+(the\s+)?market(s)?|what('?s|\s+are)\s+(the\s+)?(market(s)?|stock(s)?|index|indices)|market\s+check|check\s+(the\s+)?market(s)?|market\s+open|wall\s+street)\b/i;
@@ -712,6 +724,7 @@ WHAT YOU CAN DO — Answer naturally when David asks "What can you do?" or "What
 • Lists — shopping lists, to-do lists. Add, read, or clear them anytime.
 • Medications — track his medications and remind him when it's time to take them.
 • Evening check-in — each evening at a time he sets, you check in, ask how his day went, preview the next day, and help him capture any thoughts before he sleeps.
+• My Day log — David can say things like "note that I finished the report" or "add to my day: great workout" and you'll save it to his personal daily log. He can also ask "what did I write today?" to hear it back. During the evening check-in, you'll naturally reference what he logged during the day.
 • Bills — track bill due dates and send reminders before they're due.
 • Birthdays and anniversaries — save important dates and get reminded well ahead of time.
 • Departure alerts — tell him when it's time to leave for an appointment, accounting for drive time.
@@ -907,6 +920,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isBillAdd = !isMorningGreeting && BILL_ADD_PATTERN.test(message);
   const isBillList = !isMorningGreeting && BILL_LIST_PATTERN.test(message);
   const isBillRemove = !isMorningGreeting && BILL_REMOVE_PATTERN.test(message);
+  // My Day — GET must be checked before ADD (prevents "what did I add today" routing to write path)
+  const isMydayGet = !isMorningGreeting && MYDAY_GET_PATTERN.test(message);
+  const isMydayAdd = !isMorningGreeting && !isMydayGet && MYDAY_ADD_PATTERN.test(message);
   const isDateAdd = !isMorningGreeting && DATE_ADD_PATTERN.test(message);
   const isDateList = !isMorningGreeting && DATE_LIST_PATTERN.test(message);
   const isDateRemove = !isMorningGreeting && DATE_REMOVE_PATTERN.test(message);
@@ -959,6 +975,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     isListRequest ||
     isCallRequest ||
     isBillAdd || isBillList || isBillRemove ||
+    isMydayAdd || isMydayGet ||
     isDateAdd || isDateList || isDateRemove ||
     isMedRequest ||
     isTVAdd || isTVRemove || isTVList ||
@@ -1337,6 +1354,36 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       }
     } catch (err) {
       req.log.warn({ err }, "Bill remove failed");
+    }
+  }
+
+  // ── My Day — save today's log entry ─────────────────────────────────────────
+  if (isMydayAdd) {
+    try {
+      const content = extractMydayContent(message);
+      const entry = await saveMydayEntry(sessionUserName, content);
+      req.log.info({ date: entry.entry_date, length: content.length }, "My Day entry saved");
+      systemPrompt +=
+        `\n\n[My Day — Entry Saved]\nThe following note has been saved to today's My Day log (${entry.entry_date}):\n"${entry.content}"\nAcknowledge warmly and briefly — something like "Got it, I've added that to your day." Don't repeat the content back verbatim unless it's very short.`;
+    } catch (err) {
+      req.log.warn({ err }, "My Day save failed");
+      systemPrompt += `\n\n[My Day — Save Error]\nTell the user you had trouble saving that note and ask them to try again.`;
+    }
+  }
+
+  // ── My Day — read today's log entry ─────────────────────────────────────────
+  if (isMydayGet) {
+    try {
+      const entry = await getTodayMydayEntry(sessionUserName);
+      if (!entry) {
+        systemPrompt += `\n\n[My Day — No Entry Yet]\nThe user hasn't added anything to their My Day log today. Let them know warmly — and let them know they can say things like "note that I finished the Henderson report" or "add to my day: had a great workout" to save notes throughout the day.`;
+      } else {
+        systemPrompt += `\n\n[My Day — Today's Log]\nDate: ${entry.entry_date}\n\n${entry.content}\n\nRead this back warmly. This is the user's personal daily log — treat it with care. If it's long, summarize the key things and offer to go into detail.`;
+      }
+      req.log.info({ hasEntry: !!entry }, "My Day entry retrieved");
+    } catch (err) {
+      req.log.warn({ err }, "My Day get failed");
+      systemPrompt += `\n\n[My Day — Read Error]\nTell the user you had trouble reading their day log and ask them to try again.`;
     }
   }
 
@@ -2234,6 +2281,19 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       }
     } catch { /* non-fatal */ }
 
+    // ── Fetch today's My Day log entry for evening context ───────────────────
+    let todayMydayBlock = "";
+    try {
+      const mydayEntry = await getTodayMydayEntry(sessionUserName);
+      if (mydayEntry?.content) {
+        todayMydayBlock =
+          `\n\n[My Day — Today's Personal Log — use as richer context for the check-in]\n` +
+          `${mydayEntry.content}\n` +
+          `Reference this naturally if it fits — e.g. comment on something they logged, or ask how it went. ` +
+          `Do NOT read the whole log back verbatim; treat it as private context only.`;
+      }
+    } catch { /* non-fatal */ }
+
     // ── Profile-based fallback when Google Calendar is unavailable ───────────
     if (!todayCalendarBlock) {
       const windDownDisplayName = userProfile?.name ?? sessionUserName;
@@ -2421,6 +2481,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       `No medication reminders. No music suggestions.\n` +
 
       todayCalendarBlock +
+      todayMydayBlock +
       tomorrowWeatherBlock +
       tomorrowCalendarBlock +
       tvEveningNote;
@@ -2429,6 +2490,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     req.log.info({
       hasTodayCalendar: !!todayCalendarBlock,
       todayCalendarBlock: todayCalendarBlock.slice(0, 300),
+      hasMydayEntry: !!todayMydayBlock,
       hasTomorrowCalendar: !!tomorrowCalendarBlock,
       tomorrowCalendarBlock: tomorrowCalendarBlock.slice(0, 200),
       hasWeather: !!tomorrowWeatherBlock,
