@@ -74,6 +74,75 @@ router.get("/myday", async (req: Request, res: Response) => {
   res.json(rows);
 });
 
+// ── PUT /api/myday/:id — update the content of an existing entry ──────────────
+router.put("/myday/:id", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id) || id <= 0) {
+    res.status(400).json({ error: "id must be a positive integer" });
+    return;
+  }
+
+  const { content } = req.body as { content?: string };
+  if (!content || typeof content !== "string" || !content.trim()) {
+    res.status(400).json({ error: "content is required" });
+    return;
+  }
+
+  const { rows } = await query<{
+    id: number;
+    entry_date: string;
+    content: string;
+    created_at: string;
+    updated_at: string;
+  }>(
+    `UPDATE myday_entries
+     SET content = $1, updated_at = now()
+     WHERE id = $2 AND user_name = $3
+     RETURNING id, entry_date, content, created_at, updated_at`,
+    [content.trim(), id, userName]
+  );
+
+  if (!rows.length) {
+    res.status(404).json({ error: "Entry not found" });
+    return;
+  }
+
+  res.json(rows[0]);
+});
+
+// ── DELETE /api/myday/:id — delete an entry by ID ────────────────────────────
+router.delete("/myday/:id", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id) || id <= 0) {
+    res.status(400).json({ error: "id must be a positive integer" });
+    return;
+  }
+
+  const { rows } = await query<{
+    id: number;
+    entry_date: string;
+    content: string;
+  }>(
+    `DELETE FROM myday_entries
+     WHERE id = $1 AND user_name = $2
+     RETURNING id, entry_date, content`,
+    [id, userName]
+  );
+
+  if (!rows.length) {
+    res.status(404).json({ error: "Entry not found" });
+    return;
+  }
+
+  res.json(rows[0]);
+});
+
 // ── GET /api/myday/:date — entry for a specific date (YYYY-MM-DD) ─────────────
 router.get("/myday/:date", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
