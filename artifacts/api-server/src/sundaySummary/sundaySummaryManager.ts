@@ -136,7 +136,6 @@ export function buildSundaySummaryBlock(data: SundayData): string {
     `CRITICAL — STORY RULE: If the data says "X stories in the family archive this week", say ONLY something like "Your family archive is up to X stories." ` +
     `Do NOT say David "added" or "captured" stories. Do NOT say the stories are for or from any specific person. Do NOT imply David actively did anything — the archive grows on its own. ` +
     `Tone: warm and personal, like a trusted friend reflecting on a good week together. ` +
-    `Do NOT be clinical or list-like — weave it into conversation. Keep the whole Sunday summary to 4-5 sentences. ` +
-    `Then deliver the weekly story question.`
+    `Do NOT be clinical or list-like — weave it into conversation. Keep the whole Sunday summary to 4-5 sentences.`
   );
 }

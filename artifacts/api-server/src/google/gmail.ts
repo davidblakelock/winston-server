@@ -9,14 +9,6 @@ export interface EmailSummary {
   subject: string;
   snippet: string;
   date: string;
-  suspicion: ScamAnalysis | null;
-}
-
-export interface ScamAnalysis {
-  isSuspicious: boolean;
-  riskLevel: "high" | "medium" | "low";
-  flags: string[];
-  summary: string;
 }
 
 function decodeHeader(encoded: string): string {
@@ -325,16 +317,7 @@ export async function fetchAndSummarizeEmails(maxResults = 15, since?: Date, use
     const snippet = detail.data.snippet ?? "";
     const date = get("Date");
 
-    const suspicion = analyzeEmailForScam({ from, fromEmail, subject, snippet });
-
-    emails.push({
-      from,
-      fromEmail,
-      subject,
-      snippet,
-      date,
-      suspicion: suspicion.isSuspicious ? suspicion : null,
-    });
+    emails.push({ from, fromEmail, subject, snippet, date });
   }
 
   const fetchDurationMs = Date.now() - fetchStart.getTime();
@@ -413,16 +396,7 @@ export async function fetchRecentEmails(maxResults = 10): Promise<EmailSummary[]
     const snippet = detail.data.snippet ?? "";
     const date = get("Date");
 
-    const suspicion = analyzeEmailForScam({ from, fromEmail, subject, snippet });
-
-    emails.push({
-      from,
-      fromEmail,
-      subject,
-      snippet,
-      date,
-      suspicion: suspicion.isSuspicious ? suspicion : null,
-    });
+    emails.push({ from, fromEmail, subject, snippet, date });
   }
 
   // ── Diagnostic: log fetch summary ─────────────────────────────────────────
@@ -438,75 +412,27 @@ export async function fetchRecentEmails(maxResults = 10): Promise<EmailSummary[]
 
 export function formatEmailsForPrompt(emails: EmailSummary[]): string {
   if (emails.length === 0) return "Inbox is clear — no unread messages.";
-
-  const lines: string[] = [];
-  const suspicious = emails.filter((e) => e.suspicion?.isSuspicious);
-  const clean = emails.filter((e) => !e.suspicion?.isSuspicious);
-
-  if (suspicious.length > 0) {
-    lines.push(`⚠️ SUSPICIOUS EMAILS DETECTED (${suspicious.length}):`);
-    for (const e of suspicious) {
-      const risk = e.suspicion!.riskLevel.toUpperCase();
-      const flagList = e.suspicion!.flags.join("; ");
-      lines.push(`  [${risk} RISK] From: ${e.from} <${e.fromEmail}> | Subject: ${e.subject}`);
-      lines.push(`  Red flags: ${flagList}`);
-      lines.push(`  Preview: ${e.snippet.slice(0, 100)}`);
-    }
-    lines.push("");
+  const lines: string[] = ["UNREAD EMAILS:"];
+  for (let i = 0; i < emails.length; i++) {
+    const e = emails[i];
+    lines.push(`${i + 1}. From: ${e.from} | Subject: ${e.subject} | ${e.snippet.slice(0, 120)}`);
   }
-
-  if (clean.length > 0) {
-    lines.push("LEGITIMATE EMAILS:");
-    for (let i = 0; i < clean.length; i++) {
-      const e = clean[i];
-      lines.push(`${i + 1}. From: ${e.from} | Subject: ${e.subject} | ${e.snippet.slice(0, 120)}`);
-    }
-  }
-
   return lines.join("\n");
 }
 
-export function buildScamWarningInstruction(
+export function buildImportantEmailInstruction(
   emails: EmailSummary[],
-  companionName?: string | null,
-  userName?: string | null
+  _companionName?: string | null,
+  _userName?: string | null,
 ): string {
-  const suspicious = emails.filter((e) => e.suspicion?.isSuspicious);
-  if (suspicious.length === 0) return "";
-
-  const companion = companionName ?? "your companion";
-  const user = userName ?? "the user";
-
-  const highRisk = suspicious.filter((e) => e.suspicion?.riskLevel === "high");
-  const mediumRisk = suspicious.filter((e) => e.suspicion?.riskLevel === "medium");
-
-  let instruction = `\n\n[⚠️ SCAM / PHISHING ALERT — CRITICAL INSTRUCTIONS]\n`;
-  instruction += `${suspicious.length} suspicious email${suspicious.length > 1 ? "s" : ""} detected in ${user}'s inbox.\n\n`;
-
-  if (highRisk.length > 0) {
-    instruction += `HIGH-RISK emails (do NOT let ${user} click links or reply):\n`;
-    for (const e of highRisk) {
-      instruction += `• "${e.subject}" from ${e.from} (${e.fromEmail}) — ${e.suspicion!.flags.slice(0, 2).join("; ")}\n`;
-    }
-    instruction += "\n";
-  }
-
-  if (mediumRisk.length > 0) {
-    instruction += `POTENTIALLY SUSPICIOUS emails (flag with caution):\n`;
-    for (const e of mediumRisk) {
-      instruction += `• "${e.subject}" from ${e.from} — ${e.suspicion!.flags[0]}\n`;
-    }
-    instruction += "\n";
-  }
-
-  instruction +=
-    `HOW TO HANDLE — speak as ${companion}, ${user}'s protective companion:\n` +
-    `1. Flag suspicious emails FIRST, before summarizing the rest — start with "${user}, I want to flag something."\n` +
-    `2. Be warm and protective, NOT alarmist. You're a caring friend alerting them, not a security system.\n` +
-    `3. For HIGH RISK: tell them clearly — don't click any links, don't reply, don't call any phone numbers in the email. They can verify by going directly to the bank/company's website.\n` +
-    `4. For MEDIUM RISK: flag it with "this one looks a bit off" and suggest they treat it with caution.\n` +
-    `5. After flagging suspicious ones, summarize the legitimate emails normally and warmly.\n` +
-    `6. Keep the tone protective and reassuring — "I've got your back on this one."`;
-
-  return instruction;
+  if (emails.length === 0) return "";
+  return (
+    `\n\nEMAIL HANDLING INSTRUCTIONS:\n` +
+    `Review the emails above and call out any that genuinely need attention — ` +
+    `bills, deadlines, action items, time-sensitive requests, replies that are overdue, or anything the user should act on today. ` +
+    `Mention those naturally in conversation first. ` +
+    `Skip or briefly summarize newsletters, promotions, and routine notifications. ` +
+    `Be warm and practical — like a smart assistant flagging what actually matters.`
+  );
 }
+

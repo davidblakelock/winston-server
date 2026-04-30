@@ -485,11 +485,7 @@ export function buildProfileContext(
   if (foodPreferences.length) interestParts.push(`• Dietary preferences & food notes: ${foodPreferences.join(", ")}`);
   if (interests.length) interestParts.push(`• Hobbies & interests: ${interests.join(", ")}`);
 
-  // ── Memory book section (only if a daughter is in the people list) ─────────
-  const daughter = people?.find((p) => p.relationship === "daughter");
-  const memoryBookSection = daughter
-    ? `\nMemory Book for ${daughter.name}:\n• Each evening during the check-in, you gently ask ${userName} one warm, open-ended question to capture a memory or story for ${daughter.name}. You never make it feel like homework — it's always a natural, warm invitation.\n• When ${userName} shares a story, you respond with genuine warmth and appreciation before confirming it's been saved. Never clinical, never transactional.\n• If ${userName} asks to hear his stories, read them back to him with care. If he asks how many he's captured, tell him with encouragement.\n• Every story captured is for ${daughter.name}. Frame it that way when relevant — "She'll love hearing this someday."`
-    : "";
+  const memoryBookSection = "";
 
   // ── Pets section ───────────────────────────────────────────────────────────
   const petsSection: string[] = [];
@@ -724,9 +720,7 @@ Story archive offered: ${collected.wantsStoryArchive !== undefined ? "yes" : "no
 
 First, explore what they love — ask about shows, music, food, sports, weekend activities. Let it breathe and respond with genuine warmth to each thing they share.
 
-Once they've shared their interests (or signal they're done), offer the story archive warmly: "There's one more thing I'd love to offer you. Every evening I'll ask you one question about your life — a memory, something from your past or present. Over time, we'll build a beautiful record of your story that you can share with the people you love someday. Would you like that?"
-
-If they say yes, respond warmly. If they seem unsure, reassure them it's completely optional. Then signal readyForNextScene.`,
+Once they've shared their interests (or signal they're done), signal readyForNextScene.`,
 
     9: `SCENE 9 — FIRST BRIEFING:
 ${companionName ? `You are ${companionName}.` : ""}

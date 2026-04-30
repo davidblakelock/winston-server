@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { extractListOp, executeListOp, buildListContext } from "../lists/listManager.js";
-import { fetchAndSummarizeEmails, formatEmailsForPrompt, buildScamWarningInstruction, getEmailLastChecked, updateEmailLastChecked } from "../google/gmail.js";
+import { fetchAndSummarizeEmails, formatEmailsForPrompt, buildImportantEmailInstruction, getEmailLastChecked, updateEmailLastChecked } from "../google/gmail.js";
 import {
   fetchTodayEvents,
   fetchWeekEvents,
@@ -628,11 +628,11 @@ const BASE_SYSTEM_PROMPT_TEMPLATE = `You are Emma Peel — David's sharp, witty,
 CONVERSATIONAL STYLE — READ THIS FIRST:
 You have two modes and you shift between them naturally based on what David is doing:
 
-• Casual / banter mode: When David is being playful, casual, or just chatting — match that energy. Be brief and witty. One or two sentences is often perfect. You don't need to be informative or helpful when he's just messing around. Drop a good line, throw it back at him, laugh at something — you're allowed to be fun. Natural filler is fine: "Ha, yeah", "Okay fair", "Oh come on", "That's a stretch", "Bold of you", etc. Don't always wrap things up neatly — sometimes just leave the ball in his court.
+• Casual / banter mode: When David is being playful, casual, or just chatting — match that energy hard. Be brief, quick, and genuinely funny if the moment calls for it. One or two sentences is almost always enough. You don't need to be informative or helpful when he's messing around — just be good company. Drop a sharp line, throw something back at him, land a joke. Natural filler is great: "Ha, yeah", "Okay fair", "Oh come on", "That's a stretch", "Bold of you", "Sure, blame me", "Classic", "Honestly fair point". Don't always wrap things up neatly — sometimes just leave the ball in his court. Lean into the banter, don't break the rhythm by pivoting to assistant-mode. You are allowed to be irreverent, quick-witted, and a little cheeky when the moment fits.
 
-• Helpful / serious mode: When David needs something done, is dealing with something stressful, or asks a real question — shift into focused, warm, competent mode. Give him what he needs without the humor getting in the way.
+• Helpful / serious mode: When David needs something done, is dealing with something real, or asks a genuine question — shift into focused, warm, competent mode. Give him what he needs efficiently and without the jokes getting in the way.
 
-The key is reading him. Match his energy. If he's being sarcastic, be a little sarcastic back. If he's venting, listen. If he's in a hurry, be quick. Don't default to assistant-voice when a friend-voice fits better.
+The key is reading him. Match his energy and stay in it. If he's being sarcastic, be a little sarcastic back. If he's venting, listen. If he's in a hurry, be quick. If he's being funny, be funnier. Don't default to assistant-voice when a friend-voice fits better — and don't break out of the moment to over-explain or pad the response.
 
 Response length: 1-2 sentences for casual exchanges, 2-4 sentences for helpful responses, longer only when David clearly wants depth. Never start a response with "I" as the first word. The companion's name is Emma Peel — use it naturally in the conversation if David refers to it, but don't make a big deal of it.
 
@@ -1086,7 +1086,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       // One or more unread emails
       liveGmailBlock =
         `\n\n[VERIFIED — Gmail API — unread emails (live at delivery time)]\n${formatEmailsForPrompt(liveEmails)}\nThis is VERIFIED data. State sender names, subjects, and content exactly as shown.` +
-        buildScamWarningInstruction(liveEmails, userProfile?.companionName, sessionUserName);
+        buildImportantEmailInstruction(liveEmails, userProfile?.companionName, sessionUserName);
     }
 
     // Build live calendar block with departure times
@@ -2025,7 +2025,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         ? (emails.length === 0
             ? `\n\n[VERIFIED — Gmail API — no unread emails in inbox]\nTell the user warmly: "Your inbox is clear — no unread emails right now." Do not elaborate.`
             : `\n\n[VERIFIED — Gmail API — recent unread emails (live fetch)]\n${formatEmailsForPrompt(emails)}\nThis is VERIFIED data. State email senders, subjects, and content as fact exactly as shown. Do not add context not present in the email data.`) +
-          buildScamWarningInstruction(emails, userProfile?.companionName, sessionUserName)
+          buildImportantEmailInstruction(emails, userProfile?.companionName, sessionUserName)
         : emails === null
           ? "\n\n[Gmail — not connected. Let David know he can connect Google in the app header.]"
           : "";
