@@ -173,6 +173,33 @@ router.get("/lists/restaurants", async (req: Request, res: Response) => {
   }
 });
 
+// POST /api/lists/restaurants
+router.post("/lists/restaurants", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const item = (req.body?.item ?? "").trim();
+  if (!item) return res.status(400).json({ error: "item required" });
+  try {
+    const { rows } = await query<{ id: number; name: string }>(
+      `INSERT INTO profile_items (user_name, category, name, detail)
+       SELECT $1, 'restaurants', $2, NULL
+       WHERE NOT EXISTS (
+         SELECT 1 FROM profile_items
+         WHERE user_name = $1 AND category = 'restaurants' AND lower(name) = lower($2)
+       )
+       RETURNING id, name`,
+      [userName, item]
+    );
+    if (rows.length === 0) {
+      return res.status(409).json({ error: "Restaurant already in list" });
+    }
+    res.json({ id: rows[0].id, item_text: rows[0].name });
+  } catch (err) {
+    req.log.warn({ err }, "Restaurants list POST error");
+    res.status(500).json({ error: "Failed to add restaurant" });
+  }
+});
+
 // DELETE /api/lists/restaurants/:id
 router.delete("/lists/restaurants/:id", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);

@@ -173,7 +173,7 @@ export default function Lists() {
                 {/* Text + optional subtitle */}
                 <div className="flex-1 min-w-0">
                   <p className="text-sm text-foreground/90 truncate">{item.item_text}</p>
-                  {item.detail && (
+                  {item.detail && !/^favorite\s+restaurant/i.test(item.detail) && (
                     <p className="text-xs text-muted-foreground/60 truncate mt-0.5">{item.detail}</p>
                   )}
                 </div>
