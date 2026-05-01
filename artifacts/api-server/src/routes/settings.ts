@@ -12,6 +12,8 @@ import { authenticate, tryAuthenticate, NATIVE_USER } from "../auth/middleware.j
 import { getProfilePlaces, getProfileItems } from "../profile/profileManager.js";
 import { getCuratedContacts } from "../google/contacts.js";
 import { query } from "../db.js";
+import { clearStaticBriefingContext, clearCachedBriefing } from "../morning/briefingCache.js";
+import { preFetchMorningBriefing } from "../morning/briefingPregenerate.js";
 
 const router: IRouter = Router();
 
@@ -494,6 +496,37 @@ router.get("/emergency/info", async (req, res) => {
   } catch (err) {
     logger.error({ msg: "[emergency/info] unhandled error", err: String(err) });
     res.status(500).json({ error: "Failed to load emergency info" });
+  }
+});
+
+// ── POST /api/briefing/refresh ────────────────────────────────────────────────
+// Clears today's cached static context and briefing text, then re-generates
+// fresh (including a new news fetch). Use after prompt changes to test immediately.
+router.post("/briefing/refresh", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  try {
+    // 1. Clear in-memory caches immediately
+    clearStaticBriefingContext(userName);
+    clearCachedBriefing(userName);
+
+    // 2. Clear today's DB record
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+    await query(
+      `DELETE FROM morning_static_context WHERE user_name = $1 AND date_key = $2 RETURNING user_name`,
+      [userName, today]
+    ).catch(() => null);
+
+    // 3. Fire re-generation asynchronously — takes 60–90s, don't block the response
+    req.log.info({ userName }, "[BriefingRefresh] Starting async re-generation");
+    preFetchMorningBriefing(userName)
+      .then(() => req.log.info({ userName }, "[BriefingRefresh] Re-generation complete"))
+      .catch((err: unknown) => req.log.error({ err }, "[BriefingRefresh] Re-generation failed"));
+
+    res.json({ ok: true, message: "Cache cleared — re-generation running in background (60–90s). Check server logs for completion." });
+  } catch (err) {
+    req.log.error({ err }, "[BriefingRefresh] Failed to clear cache");
+    res.status(500).json({ error: "Cache clear failed — check server logs." });
   }
 });
 
