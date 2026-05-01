@@ -125,9 +125,12 @@ async function fetchFromGoogle(city: string, lat: number, lon: number): Promise<
     let dayName = "—";
     let dateStr = "";
     if (d?.year && d?.month && d?.day) {
-      const dateObj = new Date(d.year, d.month - 1, d.day);
-      dayName = dateObj.toLocaleDateString("en-US", { timeZone: "America/Chicago", weekday: "long" });
       dateStr = `${d.year}-${String(d.month).padStart(2, "0")}-${String(d.day).padStart(2, "0")}`;
+      // Parse at noon UTC to avoid midnight-UTC → previous-day-in-CDT off-by-one.
+      // e.g. new Date(2026,4,2) = midnight UTC = 7 PM May 1 CDT → wrong "Friday" label.
+      // new Date("2026-05-02T12:00:00Z") = noon UTC = 7 AM May 2 CDT → correct "Saturday".
+      const dateObj = new Date(`${dateStr}T12:00:00Z`);
+      dayName = dateObj.toLocaleDateString("en-US", { timeZone: "America/Chicago", weekday: "long" });
     }
     return {
       dayName,
