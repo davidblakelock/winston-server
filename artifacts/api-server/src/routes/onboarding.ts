@@ -5,8 +5,6 @@ import {
   getProfile,
   upsertProfile,
   completeOnboarding,
-  isOnboardingComplete,
-  buildOnboardingSystemPrompt,
   VOICE_OPTIONS,
   VOICE_PREVIEW_TEXT,
   type CollectedData,
@@ -15,6 +13,72 @@ import { addProfileItem } from "../profile/profileManager.js";
 import { validateSession } from "../auth/sessionAuth.js";
 import { query } from "../db.js";
 import { fetchFamilySuggestions } from "../google/contacts.js";
+
+// ── Extracted onboarding data shape (from Claude's structured response) ───────
+interface ExtractedOnboardingData {
+  name?: string | null;
+  city?: string | null;
+  companionName?: string | null;
+  people?: Array<{ name: string; relationship: string }> | null;
+  sportsTeams?: string[] | null;
+  shows?: string[] | null;
+  restaurants?: string[] | null;
+  music?: string[] | null;
+  medications?: string[] | null;
+  interests?: string[] | null;
+  pets?: Array<{ name: string; type: string; breed?: string | null }> | null;
+}
+
+// ── Conversational onboarding system prompt ───────────────────────────────────
+const ONBOARDING_SYSTEM_PROMPT = `You are a warm, witty personal AI assistant conducting a friendly onboarding conversation. Your job is to learn about the user naturally — like a clever new friend asking the right questions.
+
+RULES:
+- Ask ONE question at a time. Never ask multiple questions in one message.
+- Be warm and occasionally charming. Sound like a real person, not a chatbot.
+- Keep responses under 3 sentences.
+- If the user says "skip", "next", or "pass" — acknowledge naturally and move on.
+- When you have covered all topics or the user signals they are done — wrap up warmly.
+
+TOPICS TO COVER (in this natural order):
+name → city → companion name (what they want to call you) → family members → close friends → doctors → sports teams → TV shows → favorite restaurants → music → medications → recurring activities → hobbies & interests → pets
+
+COMPANION NAME: When asking what to call their companion, be clear this is the name they give to YOU — their personal AI. E.g. "Do you have a name for me?" or "What would you like to call me?"
+
+CRITICAL — RESPONSE FORMAT:
+You MUST respond ONLY with a valid JSON object. No markdown. No text outside the JSON.
+Always use this exact structure:
+{
+  "message": "Your warm conversational reply here — this will be spoken aloud",
+  "extracted": {
+    "name": null,
+    "city": null,
+    "companionName": null,
+    "people": null,
+    "sportsTeams": null,
+    "shows": null,
+    "restaurants": null,
+    "music": null,
+    "medications": null,
+    "interests": null,
+    "pets": null
+  },
+  "onboardingComplete": false
+}
+
+Rules for "extracted":
+- Only populate fields where the user JUST mentioned something new in their latest message.
+- Set all other fields to null.
+- "people": array of {"name": "string", "relationship": "string"} — covers family, friends, doctors.
+- "pets": array of {"name": "string", "type": "dog/cat/etc", "breed": "string or null"}.
+- All other array fields are arrays of strings.
+- Set "onboardingComplete": true only when all main topics have been covered or the user clearly wants to finish.`;
+
+// ── Shared SQL for list_items seeding ────────────────────────────────────────
+const LIST_UPSERT_SQL = `
+  INSERT INTO list_items (user_name, list_name, item_text)
+  VALUES ($1, $2, $3)
+  ON CONFLICT (user_name, list_name, lower(item_text)) DO NOTHING
+  RETURNING id`;
 
 const router: IRouter = Router();
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -132,8 +196,10 @@ router.post("/onboarding/voice-preview", async (req, res) => {
 });
 
 // ── POST /api/onboarding/chat ─────────────────────────────────────────────────
+// Conversational onboarding: Claude asks one question at a time, extracts data,
+// and saves it immediately. Request: { userMessage, history, voiceId }
+// Response: { message, extracted, onboardingComplete, audioBase64?, mimeType? }
 router.post("/onboarding/chat", async (req, res) => {
-  // Session token is required — reject unauthenticated requests
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith("Bearer ")) {
     res.status(401).json({ error: "authentication_required" });
@@ -147,93 +213,81 @@ router.post("/onboarding/chat", async (req, res) => {
   const userName = session.userName;
 
   const {
-    message = "",
+    userMessage = "",
     history = [],
-    scene = 1,
-    collectedData = {},
+    voiceId,
   } = req.body as {
-    message: string;
-    history: Array<{ role: string; content: string }>;
-    scene: number;
-    collectedData: CollectedData;
+    userMessage?: string;
+    history?: Array<{ role: string; content: string }>;
+    voiceId?: string;
   };
 
   try {
-    const systemPrompt = buildOnboardingSystemPrompt(scene, collectedData);
+    const messages: Anthropic.MessageParam[] = history.map((m) => ({
+      role: m.role as "user" | "assistant",
+      content: m.content,
+    }));
 
-    // Build message array — if first message, companion speaks unprompted
-    const messages: Anthropic.MessageParam[] = [
-      ...history.map((m) => ({
-        role: m.role as "user" | "assistant",
-        content: m.content,
-      })),
-    ];
-
-    if (message) {
-      messages.push({ role: "user", content: message });
-    }
-
-    // If no history and no message, companion speaks first
-    if (messages.length === 0) {
-      const companionLabel = (collectedData as CollectedData).companionName ?? "your companion";
+    if (userMessage.trim()) {
+      messages.push({ role: "user", content: userMessage.trim() });
+    } else if (messages.length === 0) {
+      // No history and no message — companion opens the conversation
       messages.push({
         role: "user",
-        content: `[${companionLabel}: Please deliver your opening welcome message now.]`,
+        content: "[Begin the onboarding conversation. Greet the user warmly and ask for their name.]",
       });
     }
 
-    // ── Companion's conversational response ──
-    const emmaResponse = await anthropic.messages.create({
+    const claudeResp = await anthropic.messages.create({
       model: "claude-sonnet-4-6",
-      max_tokens: 512,
-      system: systemPrompt,
+      max_tokens: 600,
+      system: ONBOARDING_SYSTEM_PROMPT,
       messages,
     });
 
-    const reply =
-      emmaResponse.content[0].type === "text"
-        ? emmaResponse.content[0].text
-        : "";
+    const rawText =
+      claudeResp.content[0].type === "text" ? claudeResp.content[0].text.trim() : "";
 
-    // ── Data extraction from user's message (if there is one) ──
-    let updatedData = { ...collectedData };
-    let suggestNextScene = false;
-
-    if (message.trim()) {
-      try {
-        const extraction = await extractOnboardingData(
-          message,
-          history,
-          scene,
-          collectedData
-        );
-        updatedData = { ...updatedData, ...extraction.data };
-        suggestNextScene = extraction.readyForNextScene;
-
-        // Save to DB incrementally
-        if (Object.keys(extraction.data).length > 0) {
-          await upsertProfile(updatedData, userName).catch(() => {});
-        }
-      } catch (err) {
-        req.log.warn({ err }, "Extraction failed, continuing");
-      }
+    // Parse the structured JSON response from Claude
+    let parsed: {
+      message: string;
+      extracted: ExtractedOnboardingData;
+      onboardingComplete: boolean;
+    };
+    try {
+      const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(jsonMatch ? jsonMatch[0] : rawText) as typeof parsed;
+    } catch {
+      req.log.warn({ rawText }, "Claude returned non-JSON during onboarding — using plaintext fallback");
+      parsed = {
+        message: rawText || "Something went wrong — please try again.",
+        extracted: {},
+        onboardingComplete: false,
+      };
     }
 
-    // ── Determine next scene ──
-    const nextScene = computeNextScene(scene, updatedData, suggestNextScene);
+    const extracted: ExtractedOnboardingData = parsed.extracted ?? {};
 
-    // ── Generate TTS audio ──
+    // Persist extracted data immediately
+    await saveExtractedOnboardingData(extracted, userName, voiceId).catch((err: unknown) => {
+      req.log.warn({ err }, "Failed to save extracted onboarding data");
+    });
+
+    // Mark onboarding complete in DB if the conversation has wrapped up
+    if (parsed.onboardingComplete) {
+      await completeOnboarding(userName).catch(() => {});
+    }
+
+    // ── Generate TTS audio ────────────────────────────────────────────────────
+    const ONBOARDING_DEFAULT_VOICE_ID = "56bWURjYFHyYyVf490Dp"; // Emma — Friendly American Female
+    const ttsVoiceId = voiceId || ONBOARDING_DEFAULT_VOICE_ID;
     let audioBase64: string | undefined;
     let mimeType: string | undefined;
-    // Default to Friendly American Female voice for new users who haven't selected a voice yet.
-    // Never fall back to the env ELEVENLABS_VOICE_ID — that is David's personal voice.
-    const ONBOARDING_DEFAULT_VOICE_ID = "56bWURjYFHyYyVf490Dp"; // Emma — Friendly American Female
-    const voiceId = updatedData.voiceId ?? ONBOARDING_DEFAULT_VOICE_ID;
 
-    if (voiceId && EL_KEY()) {
+    if (ttsVoiceId && EL_KEY()) {
       try {
         const ttsResp = await fetch(
-          `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
+          `https://api.elevenlabs.io/v1/text-to-speech/${ttsVoiceId}`,
           {
             method: "POST",
             headers: {
@@ -242,7 +296,7 @@ router.post("/onboarding/chat", async (req, res) => {
               Accept: "audio/mpeg",
             },
             body: JSON.stringify({
-              text: reply,
+              text: parsed.message,
               model_id: "eleven_turbo_v2_5",
               voice_settings: { stability: 0.5, similarity_boost: 0.8, style: 0.2, use_speaker_boost: true },
             }),
@@ -258,29 +312,12 @@ router.post("/onboarding/chat", async (req, res) => {
       }
     }
 
-    // ── Handle scene 9 completion ──
-    // Complete when companion has delivered the first briefing in scene 9
-    const isComplete = scene === 9 && !!reply;
-
-    if (isComplete) {
-      try {
-        await completeOnboarding(userName);
-        await Promise.all([
-          saveProfileItemsFromOnboarding(updatedData, userName),
-          seedListsFromOnboarding(updatedData, userName),
-        ]);
-      } catch (err) {
-        req.log.error({ err }, "Failed to complete onboarding");
-      }
-    }
-
     res.json({
-      reply,
+      message: parsed.message,
+      extracted,
+      onboardingComplete: parsed.onboardingComplete ?? false,
       audioBase64,
       mimeType,
-      scene: Math.min(nextScene, 9),
-      collectedData: updatedData,
-      isComplete,
     });
   } catch (err) {
     req.log.error({ err }, "Onboarding chat error");
@@ -346,147 +383,80 @@ router.post("/onboarding/complete", async (req, res) => {
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function extractOnboardingData(
-  message: string,
-  history: Array<{ role: string; content: string }>,
-  scene: number,
-  current: CollectedData
-): Promise<{ data: Partial<CollectedData>; readyForNextScene: boolean }> {
-  const recentHistory = history.slice(-4).map((m) => `${m.role}: ${m.content}`).join("\n");
+// ── Save data extracted by the new conversational onboarding endpoint ────────
+async function saveExtractedOnboardingData(
+  extracted: ExtractedOnboardingData,
+  userName: string,
+  voiceId?: string
+): Promise<void> {
+  // Scalar fields → user_profiles
+  const profilePatch: Partial<CollectedData> = {};
+  if (extracted.name) profilePatch.name = extracted.name;
+  if (extracted.city) profilePatch.city = extracted.city;
+  if (extracted.companionName) profilePatch.companionName = extracted.companionName;
+  if (voiceId) profilePatch.voiceId = voiceId;
 
-  const extraction = await anthropic.messages.create({
-    model: "claude-haiku-4-5-20251001",
-    max_tokens: 512,
-    system: `You extract structured profile data from a user message in an onboarding conversation.
-Current scene: ${scene}. Already collected: ${JSON.stringify(current)}.
+  if (Object.keys(profilePatch).length > 0) {
+    await upsertProfile(profilePatch, userName).catch(() => {});
+  }
 
-SCENE STRUCTURE:
-- Scene 1: Welcome only — no data to extract. readyForNextScene=true immediately (welcome is self-contained).
-- Scene 2: User's own name, city, wakeTime. readyForNextScene=true once all three are collected.
-- Scene 3: Companion naming — extract companionName (what the user names their AI). readyForNextScene=true once companionName captured.
-- Scene 4: Voice selection — extract voiceId and voiceName when user picks a voice. readyForNextScene=true once voiceId captured.
-- Scene 5: People in their life. readyForNextScene=true on completion signals.
-- Scene 6: Health notes. readyForNextScene=true on completion signals.
-- Scene 7: Places. readyForNextScene=true on completion signals.
-- Scene 8: Interests + pets. readyForNextScene=true on completion signals.
-- Scene 9: First briefing — final scene.
+  const ops: Array<Promise<unknown>> = [];
 
-Return ONLY valid JSON:
-{
-  "data": {
-    "companionName": string or null (the name the user gives to their AI companion — extract ONLY in scene 3),
-    "name": string or null (the user's own name — extract ONLY in scene 4+),
-    "city": string or null,
-    "wakeTime": "HH:MM" format or null (e.g. "07:00" for 7am, "06:30" for 6:30am),
-    "healthNotes": string or null (brief summary of any health info shared),
-    "people": [{"name": string, "relationship": string, "city": string or null, "birthday": "YYYY-MM-DD" or null}] or null,
-    "places": [{"name": string, "address": string or null}] or null,
-    "shows": [string] or null,
-    "restaurants": [string] or null,
-    "sportsTeams": [string] or null,
-    "music": [string] or null,
-    "interests": [string] or null,
-    "newsTopics": [string] or null,
-    "voiceId": string or null,
-    "voiceName": string or null,
-    "wantsStoryArchive": boolean or null
-  },
-  "readyForNextScene": boolean
-}
-
-Rules:
-- Only include fields that are NEW in this message (don't re-extract already collected data)
-- companionName: extract ONLY in scene 3 when user names their AI (e.g. "Call you James" or "Winston" → companionName). Never confuse with the user's own name.
-- name (user's own name): extract ONLY in scene 2+ when user gives THEIR OWN name in response to "what's your name?". Never extract a companionName as the user's name.
-- Merge arrays: if user says "I also like..." add to existing, don't replace
-- For wakeTime: "I wake up at 6" → "06:00", "around 7:30" → "07:30"
-- For people: "My daughter Olivia lives in Knoxville" → {name:"Olivia",relationship:"daughter",city:"Knoxville"}
-- For people birthdays: "Olivia's birthday is March 3rd" or "born March 3 1995" → include birthday:"YYYY-MM-DD" in the matching person object; if year unknown use current year as placeholder
-- For newsTopics: extract any mentioned news interests, e.g. "tech news", "politics", "business", "sports", "local news"
-- For voiceId: if user says "I'll take option 1" or "Tom" or "number 3" → extract the voiceId AND voiceName (scene 4 only)
-  Voice options: 1=DYkrAHD8iwork3YSUBbs(Tom/British-American Male), 2=56bWURjYFHyYyVf490Dp(Emma/Friendly American Female), 3=hGQkZQUA5RiOXIw7P9iO(Kiora/Warm New Zealand Female), 4=sB7vwSCyX0tQmU24cW2C(Jon/Deep Authoritative American Male), 5=Fahco4VZzobUeiPqni1S(Archer/Charming Young British Male), 6=aj0fZfXTBc7E3By4X8L2(Best Female Friend/Warm Casual American Female), 7=UizRZo250FhTtKlJa6mo(Diana/Elegant American Female), 8=Ky9j3wxFbp3dSAdrkOEv(Bex/Expressive British Female)
-- wantsStoryArchive: true if user says yes to an evening story archive offer, false if they decline
-- readyForNextScene: true if user has finished sharing for this scene topic
-  (e.g. "that's everyone", "that's all", "ok let's move on", natural completion signals)
-  Scene 1: always true (self-contained welcome)
-  Scene 2: true once name + city + wakeTime all collected
-  Scene 3: true once companionName captured
-  Scene 4: true once voiceId captured`,
-    messages: [
-      {
-        role: "user",
-        content: `Recent conversation:\n${recentHistory}\n\nLatest user message: "${message}"`,
-      },
-    ],
-  });
-
-  try {
-    const text =
-      extraction.content[0].type === "text"
-        ? extraction.content[0].text.trim()
-        : "";
-    const match = text.match(/\{[\s\S]*\}/);
-    if (!match) return { data: {}, readyForNextScene: false };
-    const parsed = JSON.parse(match[0]) as {
-      data: Partial<CollectedData>;
-      readyForNextScene: boolean;
-    };
-
-    // Filter out null/empty values and don't overwrite existing arrays unless we have new items
-    const cleaned: Partial<CollectedData> = {};
-    for (const [k, v] of Object.entries(parsed.data ?? {})) {
-      if (v === null || v === undefined) continue;
-      if (Array.isArray(v) && v.length === 0) continue;
-
-      // For arrays, merge with existing
-      const existing = (current as Record<string, unknown>)[k];
-      if (Array.isArray(v) && Array.isArray(existing)) {
-        const merged = [...existing, ...v.filter((item: unknown) => !existing.includes(item))];
-        (cleaned as Record<string, unknown>)[k] = merged;
-      } else {
-        (cleaned as Record<string, unknown>)[k] = v;
-      }
+  for (const person of extracted.people ?? []) {
+    if (person.name?.trim()) {
+      ops.push(addProfileItem("people", person.name.trim(), person.relationship ?? null, userName).catch(() => {}));
     }
-
-    return { data: cleaned, readyForNextScene: parsed.readyForNextScene ?? false };
-  } catch {
-    return { data: {}, readyForNextScene: false };
   }
-}
 
-function computeNextScene(
-  current: number,
-  data: CollectedData,
-  readyForNextScene: boolean
-): number {
-  switch (current) {
-    case 1:
-      // Welcome — always advance immediately (self-contained)
-      return 2;
-
-    case 2:
-      // About You — must have name + city + wakeTime before advancing
-      if (data.name && data.city && data.wakeTime) return 3;
-      return 2;
-
-    case 3:
-      // Companion naming — advance once companion name is captured
-      if (data.companionName || readyForNextScene) return 4;
-      return 3;
-
-    case 4:
-      // Voice selection — advance once voice is selected
-      if (data.voiceId) return 5;
-      return 4;
-
-    case 9:
-      // Scene 9 stays at 9; isComplete logic handles completion
-      return 9;
-
-    default:
-      // Scenes 5-8: advance on explicit readyForNextScene signal
-      return readyForNextScene && current < 9 ? current + 1 : current;
+  for (const show of extracted.shows ?? []) {
+    if (show?.trim()) {
+      ops.push(addProfileItem("shows", show.trim(), null, userName).catch(() => {}));
+      ops.push(query(LIST_UPSERT_SQL, [userName, "tv shows", show.trim()]).catch(() => {}));
+    }
   }
+
+  for (const r of extracted.restaurants ?? []) {
+    if (r?.trim()) {
+      ops.push(addProfileItem("restaurants", r.trim(), null, userName).catch(() => {}));
+      ops.push(query(LIST_UPSERT_SQL, [userName, "favorite restaurants", r.trim()]).catch(() => {}));
+    }
+  }
+
+  for (const team of extracted.sportsTeams ?? []) {
+    if (team?.trim()) {
+      ops.push(addProfileItem("interests", team.trim(), "sports team", userName).catch(() => {}));
+      ops.push(query(LIST_UPSERT_SQL, [userName, "sports teams", team.trim()]).catch(() => {}));
+    }
+  }
+
+  for (const artist of extracted.music ?? []) {
+    if (artist?.trim()) {
+      ops.push(addProfileItem("interests", artist.trim(), "music", userName).catch(() => {}));
+      ops.push(query(LIST_UPSERT_SQL, [userName, "music", artist.trim()]).catch(() => {}));
+    }
+  }
+
+  for (const interest of extracted.interests ?? []) {
+    if (interest?.trim()) {
+      ops.push(addProfileItem("interests", interest.trim(), null, userName).catch(() => {}));
+      ops.push(query(LIST_UPSERT_SQL, [userName, "interests", interest.trim()]).catch(() => {}));
+    }
+  }
+
+  for (const med of extracted.medications ?? []) {
+    if (med?.trim()) {
+      ops.push(addProfileItem("other", med.trim(), "medication", userName).catch(() => {}));
+    }
+  }
+
+  for (const pet of extracted.pets ?? []) {
+    if (pet.name?.trim()) {
+      const detail = [pet.type, pet.breed ?? null].filter(Boolean).join(" — ") || null;
+      ops.push(addProfileItem("pets", pet.name.trim(), detail, userName).catch(() => {}));
+    }
+  }
+
+  await Promise.all(ops);
 }
 
 async function saveProfileItemsFromOnboarding(data: CollectedData, userName = NATIVE_STORED_NAME): Promise<void> {
@@ -542,12 +512,6 @@ async function saveProfileItemsFromOnboarding(data: CollectedData, userName = NA
 // are immediately available as queryable lists (e.g. "what's on my favorite restaurants list?").
 // Uses ON CONFLICT DO NOTHING with the unique functional index on lower(item_text) — race-safe.
 async function seedListsFromOnboarding(data: CollectedData, userName: string): Promise<void> {
-  const UPSERT_SQL = `
-    INSERT INTO list_items (user_name, list_name, item_text)
-    VALUES ($1, $2, $3)
-    ON CONFLICT (user_name, list_name, lower(item_text)) DO NOTHING
-    RETURNING id`;
-
   type ListSeed = { listName: string; items: string[] };
 
   const seeds: ListSeed[] = [
@@ -561,7 +525,7 @@ async function seedListsFromOnboarding(data: CollectedData, userName: string): P
   const ops: Array<Promise<unknown>> = [];
   for (const { listName, items } of seeds) {
     for (const item of items) {
-      ops.push(query(UPSERT_SQL, [userName, listName, item.trim()]).catch(() => {}));
+      ops.push(query(LIST_UPSERT_SQL, [userName, listName, item.trim()]).catch(() => {}));
     }
   }
   await Promise.all(ops);

@@ -5,7 +5,7 @@ import {
   useCallback,
   KeyboardEvent,
 } from "react";
-import { Send, Mic, MicOff, Loader2, Play, Check, X, Pencil, Square } from "lucide-react";
+import { Send, Mic, MicOff, Loader2, Play, Check, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -52,16 +52,6 @@ interface CollectedData {
   interests?: string[];
   newsTopics?: string[];
   pets?: Array<{ name: string; type: string; breed?: string; age?: number }>;
-}
-
-interface SuggestedPerson {
-  name: string;
-  relationship: string;
-  email?: string;
-  phone?: string;
-  resourceName?: string;
-  confidence: "high" | "medium";
-  source: "relation" | "family_group" | "same_name";
 }
 
 // ─── Voice recorder hook ────────────────────────────────────────────────────
@@ -169,12 +159,6 @@ function useVoiceRecorder(onTranscript: (text: string) => void) {
   return { recordingState, startRecording, stopRecording };
 }
 
-// ─── Scene order ─────────────────────────────────────────────────────────────
-// Scene 1: Welcome, Scene 2: About You, Scene 3: Companion Naming,
-// Scene 4: Voice Selection (auto-skipped — voice chosen on first screen),
-// Scene 5: Your People, Scene 6: Wellbeing,
-// Scene 7: Your Places, Scene 8: What You Love, Scene 9: First Briefing
-
 // ─── Main component ──────────────────────────────────────────────────────────
 interface OnboardingProps {
   onComplete: (companionName?: string) => void;
@@ -186,7 +170,6 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
-  const [scene, setScene] = useState(1);
   const [collectedData, setCollectedData] = useState<CollectedData>({});
   const [loading, setLoading] = useState(false);
   const [voices, setVoices] = useState<VoiceOption[]>([]);
@@ -194,13 +177,6 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
   const [selectedVoice, setSelectedVoice] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [voiceAudioRef] = useState<{ current: HTMLAudioElement | null }>({ current: null });
-  // ── Scene 5 people suggestions from Google Contacts ──
-  const [suggestedPeople, setSuggestedPeople] = useState<SuggestedPerson[]>([]);
-  const [dismissedIdxs, setDismissedIdxs] = useState<Set<number>>(new Set());
-  const [confirmedIdxs, setConfirmedIdxs] = useState<Set<number>>(new Set());
-  const [editingIdx, setEditingIdx] = useState<number | null>(null);
-  const [editedRelationships, setEditedRelationships] = useState<Record<number, string>>({});
-  const suggestFetchedRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -219,17 +195,6 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
       .catch(() => {});
   }, []);
 
-  // Scene 5: fetch Google Contacts family suggestions
-  useEffect(() => {
-    if (scene === 5 && !suggestFetchedRef.current) {
-      suggestFetchedRef.current = true;
-      fetch(`${API}/api/onboarding/suggested-people`, { headers: getAuthHeaders() })
-        .then((r) => r.json() as Promise<{ suggestions: SuggestedPerson[] }>)
-        .then((d) => { if (d.suggestions?.length > 0) setSuggestedPeople(d.suggestions); })
-        .catch(() => {});
-    }
-  }, [scene]);
-
   const playAudio = useCallback((base64: string, mimeType = "audio/mpeg") => {
     audioRef.current?.pause();
     const audio = new Audio(`data:${mimeType};base64,${base64}`);
@@ -237,48 +202,70 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
     audio.play().catch(() => {});
   }, []);
 
+  // Merge Claude's per-turn extracted data into the running accumulated collectedData
+  const mergeExtracted = useCallback((extracted: Partial<CollectedData>) => {
+    setCollectedData((prev) => {
+      const next = { ...prev };
+      if (extracted.name) next.name = extracted.name;
+      if (extracted.city) next.city = extracted.city;
+      if (extracted.companionName) next.companionName = extracted.companionName;
+      if (extracted.voiceId) next.voiceId = extracted.voiceId;
+      if (extracted.people?.length) next.people = [...(prev.people ?? []), ...extracted.people];
+      if (extracted.sportsTeams?.length) next.sportsTeams = [...(prev.sportsTeams ?? []), ...extracted.sportsTeams];
+      if (extracted.shows?.length) next.shows = [...(prev.shows ?? []), ...extracted.shows];
+      if (extracted.restaurants?.length) next.restaurants = [...(prev.restaurants ?? []), ...extracted.restaurants];
+      if (extracted.music?.length) next.music = [...(prev.music ?? []), ...extracted.music];
+      if (extracted.interests?.length) next.interests = [...(prev.interests ?? []), ...extracted.interests];
+      if (extracted.pets?.length) next.pets = [...(prev.pets ?? []), ...extracted.pets];
+      return next;
+    });
+  }, []);
+
   const sendMessage = useCallback(
-    async (text: string, currentHistory: Message[], currentScene: number, currentData: CollectedData) => {
+    async (text: string, currentHistory: Message[], voiceId: string | null) => {
       setLoading(true);
       try {
         const resp = await fetch(`${API}/api/onboarding/chat`, {
           method: "POST",
           headers: getAuthHeaders(),
           body: JSON.stringify({
-            message: text,
+            userMessage: text,
             history: currentHistory.map((m) => ({ role: m.role, content: m.content })),
-            scene: currentScene,
-            collectedData: currentData,
+            voiceId: voiceId ?? undefined,
           }),
         });
 
         if (!resp.ok) throw new Error("Chat failed");
 
         const data = await resp.json() as {
-          reply: string;
+          message: string;
           audioBase64?: string;
           mimeType?: string;
-          scene: number;
-          collectedData: CollectedData;
-          isComplete: boolean;
+          extracted: Partial<CollectedData>;
+          onboardingComplete: boolean;
         };
 
-        const emmaMsg: Message = {
-          id: `emma-${Date.now()}`,
+        const companionMsg: Message = {
+          id: `companion-${Date.now()}`,
           role: "assistant",
-          content: data.reply,
+          content: data.message,
         };
 
-        setMessages((prev) => [...prev, emmaMsg]);
-        setScene(data.scene);
-        setCollectedData(data.collectedData);
+        setMessages((prev) => [...prev, companionMsg]);
+
+        if (data.extracted) {
+          mergeExtracted(data.extracted);
+        }
 
         if (data.audioBase64) {
           playAudio(data.audioBase64, data.mimeType);
         }
 
-        if (data.isComplete) {
-          setTimeout(() => onComplete(data.collectedData?.companionName ?? undefined), 3500);
+        if (data.onboardingComplete) {
+          setCollectedData((prev) => {
+            setTimeout(() => onComplete(data.extracted?.companionName ?? prev.companionName ?? undefined), 3500);
+            return prev;
+          });
         }
       } catch (err) {
         console.error("Onboarding chat error:", err);
@@ -286,17 +273,16 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
         setLoading(false);
       }
     },
-    [onComplete, playAudio]
+    [onComplete, playAudio, mergeExtracted]
   );
 
-  // Companion speaks first — but only once we've entered conversation mode.
-  // collectedData already has voiceId set from the voice selection screen,
-  // so the very first message is spoken in the chosen voice.
+  // Companion speaks first — only once conversation mode begins.
+  // selectedVoice is already set from the voice selection screen.
   useEffect(() => {
     if (step !== "conversation") return;
     if (initialized.current) return;
     initialized.current = true;
-    void sendMessage("", [], 1, collectedData);
+    void sendMessage("", [], selectedVoice);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
 
@@ -312,30 +298,28 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
     };
 
     setMessages((prev) => {
-      const newHistory = [...prev, userMsg];
-      void sendMessage(text, prev, scene, collectedData);
-      return newHistory;
+      void sendMessage(text, prev, selectedVoice);
+      return [...prev, userMsg];
     });
-  }, [input, loading, scene, collectedData, sendMessage]);
+  }, [input, loading, selectedVoice, sendMessage]);
 
   const handleTranscript = useCallback(
     (text: string) => {
       setInput(text);
-      setTimeout(async () => {
+      setTimeout(() => {
         const userMsg: Message = {
           id: `user-${Date.now()}`,
           role: "user",
           content: text,
         };
         setMessages((prev) => {
-          const newHistory = [...prev, userMsg];
-          void sendMessage(text, prev, scene, collectedData);
-          return newHistory;
+          void sendMessage(text, prev, selectedVoice);
+          return [...prev, userMsg];
         });
         setInput("");
       }, 100);
     },
-    [scene, collectedData, sendMessage]
+    [selectedVoice, sendMessage]
   );
 
   const { recordingState, startRecording } = useVoiceRecorder(handleTranscript);
@@ -411,57 +395,6 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
     setStep("conversation");
   }, [selectedVoice, voices, voiceAudioRef]);
 
-  // ── Mid-conversation voice selection (scene 4, if reached) ───────────────
-  const selectVoice = useCallback(
-    (voice: VoiceOption) => {
-      setSelectedVoice(voice.id);
-      voiceAudioRef.current?.pause();
-      window.speechSynthesis?.cancel();
-      setPreviewingVoice(null);
-      setPreviewError(null);
-
-      const updatedData = { ...collectedData, voiceId: voice.id, voiceName: voice.name };
-      setCollectedData(updatedData);
-
-      const userMsg: Message = {
-        id: `user-${Date.now()}`,
-        role: "user",
-        content: `I'll go with ${voice.name} — ${voice.description}.`,
-      };
-      setMessages((prev) => {
-        const newHistory = [...prev, userMsg];
-        void sendMessage(userMsg.content, prev, scene, updatedData);
-        return newHistory;
-      });
-    },
-    [collectedData, scene, sendMessage, voiceAudioRef]
-  );
-
-  const handleConfirmSuggestion = useCallback(
-    (idx: number) => {
-      const person = suggestedPeople[idx];
-      if (!person) return;
-      const relationship = editedRelationships[idx] ?? person.relationship;
-      setCollectedData((prev) => ({
-        ...prev,
-        people: [...(prev.people ?? []), { name: person.name, relationship }],
-      }));
-      setConfirmedIdxs((prev) => new Set([...prev, idx]));
-      setEditingIdx(null);
-    },
-    [suggestedPeople, editedRelationships]
-  );
-
-  const handleDismissSuggestion = useCallback((idx: number) => {
-    setDismissedIdxs((prev) => new Set([...prev, idx]));
-    if (editingIdx === idx) setEditingIdx(null);
-  }, [editingIdx]);
-
-  const handleEditSuggestion = useCallback((idx: number, currentRelationship: string) => {
-    setEditingIdx(idx);
-    setEditedRelationships((prev) => ({ ...prev, [idx]: currentRelationship }));
-  }, []);
-
   const handleSkip = useCallback(async () => {
     try {
       await fetch(`${API}/api/onboarding/complete`, {
@@ -477,12 +410,6 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
 
   const isRecording = recordingState === "recording";
   const isTranscribing = recordingState === "transcribing";
-  const showVoiceCards = scene === 4 && voices.length > 0 && !selectedVoice;
-
-  const visibleSuggestions = suggestedPeople
-    .map((p, i) => ({ ...p, idx: i }))
-    .filter((p) => !dismissedIdxs.has(p.idx));
-  const showSuggestionCards = scene === 5 && visibleSuggestions.length > 0;
 
   // ── Voice selection screen ────────────────────────────────────────────────
   if (step === "voiceSelect") {
@@ -658,162 +585,6 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
           )}
         </div>
       </div>
-
-      {/* ── Voice selection cards (Scene 4 fallback, should rarely appear) ── */}
-      {showVoiceCards && (
-        <div className="flex-shrink-0 px-4 pb-2">
-          <div className="max-w-xl mx-auto grid grid-cols-2 gap-2">
-            {voices.map((voice, i) => (
-              <div
-                key={voice.id}
-                className="bg-zinc-800 border border-zinc-700/50 rounded-xl p-3 flex flex-col gap-2"
-              >
-                <div className="flex items-start justify-between">
-                  <div>
-                    <div className="text-sm font-semibold text-zinc-100">
-                      {i + 1}. {voice.name}
-                    </div>
-                    <div className="text-xs text-zinc-400 mt-0.5">{voice.description}</div>
-                  </div>
-                </div>
-                <div className="flex gap-2">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="flex-1 h-7 text-xs text-zinc-300 hover:text-white hover:bg-zinc-700 border border-zinc-600"
-                    onClick={() => void previewVoice(voice.id, voice.name)}
-                    disabled={previewingVoice !== null && previewingVoice !== voice.id}
-                  >
-                    {previewingVoice === voice.id ? (
-                      <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-                    ) : (
-                      <Play className="w-3 h-3 mr-1" />
-                    )}
-                    {previewingVoice === voice.id ? "Playing…" : "Preview"}
-                  </Button>
-                  <Button
-                    size="sm"
-                    className="flex-1 h-7 text-xs bg-indigo-600 hover:bg-indigo-500 text-white"
-                    onClick={() => selectVoice(voice)}
-                  >
-                    <Check className="w-3 h-3 mr-1" />
-                    Choose
-                  </Button>
-                </div>
-              </div>
-            ))}
-          </div>
-          {previewError && (
-            <p className="text-xs text-amber-400/80 text-center mt-1 px-2">{previewError}</p>
-          )}
-        </div>
-      )}
-
-      {/* ── Scene 5: People suggestions from Google Contacts ── */}
-      {showSuggestionCards && (
-        <div className="flex-shrink-0 px-4 pb-2">
-          <div className="max-w-xl mx-auto">
-            <div className="flex items-center justify-between mb-2 px-1">
-              <p className="text-xs text-zinc-500 font-medium">
-                From your Google Contacts
-              </p>
-              <button
-                onClick={() => setDismissedIdxs(new Set(suggestedPeople.map((_, i) => i)))}
-                className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors underline underline-offset-2"
-              >
-                Skip all
-              </button>
-            </div>
-            <div className="space-y-2 max-h-64 overflow-y-auto pr-1" style={{ scrollbarWidth: "thin", scrollbarColor: "#27272a transparent" }}>
-              {visibleSuggestions.map((person) => {
-                const isConfirmed = confirmedIdxs.has(person.idx);
-                const isEditing = editingIdx === person.idx;
-                const displayRelationship = editedRelationships[person.idx] ?? person.relationship;
-                const initial = person.name.trim()[0]?.toUpperCase() ?? "?";
-
-                return (
-                  <div
-                    key={person.idx}
-                    className={`rounded-xl border px-3 py-2.5 transition-all duration-200 ${
-                      isConfirmed
-                        ? "bg-emerald-950/30 border-emerald-800/40"
-                        : "bg-zinc-800/70 border-zinc-700/50"
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className={`h-8 w-8 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-semibold ${
-                        isConfirmed ? "bg-emerald-800/60 text-emerald-200" : "bg-zinc-700 text-zinc-300"
-                      }`}>
-                        {isConfirmed ? <Check className="w-4 h-4" /> : initial}
-                      </div>
-
-                      <div className="flex-1 min-w-0">
-                        <div className={`text-sm font-medium truncate ${isConfirmed ? "text-emerald-300" : "text-zinc-100"}`}>
-                          {person.name}
-                        </div>
-                        {isEditing ? (
-                          <input
-                            className="mt-0.5 text-xs bg-zinc-700 text-zinc-100 rounded px-2 py-0.5 border border-indigo-600 w-full max-w-[160px] focus:outline-none"
-                            value={displayRelationship}
-                            autoFocus
-                            onChange={(e) =>
-                              setEditedRelationships((prev) => ({ ...prev, [person.idx]: e.target.value }))
-                            }
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") handleConfirmSuggestion(person.idx);
-                              if (e.key === "Escape") setEditingIdx(null);
-                            }}
-                            placeholder="e.g. daughter, spouse…"
-                          />
-                        ) : (
-                          <div className="flex items-center gap-1.5 mt-0.5">
-                            <span className={`text-xs px-1.5 py-0.5 rounded-full border ${
-                              isConfirmed
-                                ? "text-emerald-400 bg-emerald-950/50 border-emerald-800/50"
-                                : "text-indigo-300 bg-indigo-950/50 border-indigo-800/50"
-                            }`}>
-                              {displayRelationship}
-                            </span>
-                            {person.source === "same_name" && !isConfirmed && (
-                              <span className="text-[10px] text-zinc-600">same name</span>
-                            )}
-                          </div>
-                        )}
-                      </div>
-
-                      {!isConfirmed && (
-                        <div className="flex items-center gap-1 flex-shrink-0">
-                          <button
-                            onClick={() => handleEditSuggestion(person.idx, displayRelationship)}
-                            title="Edit relationship"
-                            className="h-6 w-6 rounded-lg flex items-center justify-center text-zinc-500 hover:text-zinc-300 hover:bg-zinc-700 transition-colors"
-                          >
-                            <Pencil className="w-3 h-3" />
-                          </button>
-                          <button
-                            onClick={() => handleConfirmSuggestion(person.idx)}
-                            title="Add this person"
-                            className="h-6 w-6 rounded-lg flex items-center justify-center text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/50 transition-colors"
-                          >
-                            <Check className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => handleDismissSuggestion(person.idx)}
-                            title="Remove suggestion"
-                            className="h-6 w-6 rounded-lg flex items-center justify-center text-zinc-600 hover:text-zinc-400 hover:bg-zinc-700 transition-colors"
-                          >
-                            <X className="w-3 h-3" />
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ── Input area ── */}
       <div className="flex-shrink-0 px-4 pb-6 pt-2">
