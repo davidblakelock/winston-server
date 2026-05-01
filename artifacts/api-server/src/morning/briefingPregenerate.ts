@@ -519,7 +519,7 @@ PRE-CLOSE CHECK — MANDATORY BEFORE WRITING THE CLOSING:
 Before writing the closing thought, stop and verify: have I covered at least 2-3 news stories from the [VERIFIED — Web Search News] block? If NO — add them now, before the closing, even if the briefing is already long. The closing cannot be written until news has been covered.
 
 CLOSING — ALWAYS BOTH OF THESE, IN THIS ORDER:
-1. Morning thought: 2–3 sentences. Drawn from philosophy, literature, science, music, history, or anything genuinely insightful. Connected to something real in ${firstName}'s day or life right now — not generic, not greeting card, never "seize the day." Warm and slightly wry. Choose it specifically for THIS person on THIS specific day based on what is actually happening in their life.
+1. Morning thought: 2–3 sentences. Drawn exclusively from philosophy, literature, science, music, or history — timeless wisdom only. Connected to something personal about ${firstName}'s day or life (an activity, a relationship, a value they hold) — not generic, not greeting card, never "seize the day." Warm and slightly wry. STRICT PROHIBITION: Never reference current events, news headlines, politics, world conflicts, protests, legislation, government, or anything anxiety-inducing. The morning thought must always be grounding and timeless, never pulled from today's news cycle.
 2. Final line (on its own): Ask if there is anything from this morning they would like to dig into, and invite them to add something to My Day before they start.
 
 FORBIDDEN — NEVER USE:
@@ -529,6 +529,7 @@ FORBIDDEN — NEVER USE:
 • Briefing announcements: "Here is your morning briefing," "Good morning, here's what you need to know"
 • Weather references outside the weather passage — no weather stats in news, sports, or closing (one exception: if an outdoor activity is on today's calendar and conditions are notably severe or perfect, one brief plain-language phrase is permitted for that event only)
 • Open-ended close without the morning thought and My Day invite — the briefing must always end with both
+• Morning thought that references current events, politics, world conflicts, protests, legislation, government, or any anxiety-inducing news — the morning thought must be purely timeless wisdom
 
   `;
 }

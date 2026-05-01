@@ -508,7 +508,8 @@ async function fetchMotivationFromClaude(userName?: string): Promise<string> {
       `• Weave it in naturally — e.g. "Here's something worth carrying through your ${dayName}:"\n` +
       `• After the quote, add one sentence connecting it to something specific in his life (an activity, a value he holds, a relationship)\n` +
       `• Sound like a trusted friend sharing something interesting, not a motivational poster\n` +
-      `• Keep it to 2-3 sentences total — tight and warm`;
+      `• Keep it to 2-3 sentences total — tight and warm\n` +
+      `• STRICT PROHIBITION: Never reference current events, news, politics, world conflicts, protests, legislation, or government. The thought must be grounding and timeless — never anxiety-inducing.`;
 
     console.log(`[Motivation] ZenQuotes + Claude personalization`);
 
@@ -532,8 +533,10 @@ async function fetchMotivationFromClaude(userName?: string): Promise<string> {
     `Today is ${todayStr}. You are ${companionName}, ${displayName}'s morning companion.\n\n` +
     `${displayName}'s interests: pickleball (indoor YMCA), woodworking, boats, classic rock (Rolling Stones, Jackson Browne, Jimmy Buffett), jazz, cooking. Teams: ${teams.join(", ")}.\n\n` +
     `Write a warm, specific 2-3 sentence motivating thought for ${dayName}. ` +
+    `Draw from philosophy, literature, science, music, or history — timeless wisdom only. ` +
     `Reference something he actually cares about. No generic phrases. No "seize the day." ` +
-    `Sound like a sharp, caring friend.`;
+    `Sound like a sharp, caring friend.\n` +
+    `STRICT PROHIBITION: Never reference current events, news, politics, world conflicts, protests, legislation, government, or anything from today's news cycle. Keep it grounding and timeless.`;
 
   console.log(`[Motivation] Fallback — Claude original thought`);
 
