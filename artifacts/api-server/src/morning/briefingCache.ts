@@ -180,6 +180,14 @@ export async function loadStaticContextFromDb(userName: string): Promise<boolean
     const builtAt = new Date(row.built_at).getTime();
     if (Date.now() - builtAt > STATIC_MAX_AGE_MS) return false;
 
+    // Invalidate cached context that was built before weather was removed from
+    // the briefing. If the suffix still contains a [VERIFIED — Google Weather API]
+    // block, the entry is stale and must be regenerated with the current code.
+    if (row.suffix?.includes("[VERIFIED — Google Weather API")) {
+      console.log(`[BriefingCache] Stale cached context for ${userName} contains weather block — discarding and regenerating`);
+      return false;
+    }
+
     _staticCtxCache.set(userName, {
       preamble: row.preamble,
       suffix: row.suffix,
