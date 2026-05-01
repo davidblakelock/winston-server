@@ -1139,7 +1139,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       // ── Native: collect full briefing text, return as JSON ──
       const nativeBriefing = await anthropic.messages.create({
         model: MODEL_SONNET,
-        max_tokens: 1800,
+        max_tokens: 1500,
         system: buildSystemBlocks(staticCtx.preamble, liveGmailBlock + liveCalendarBlock + staticCtx.suffix),
         messages: [{ role: "user", content: "good morning" }],
       });
@@ -1150,8 +1150,6 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         void logBriefingStories(sessionUserName, staticCtx.candidateStoryKeys);
         req.log.info({ chars: nativeBriefingText.length }, "Morning briefing fetched (native) and cached");
       }
-      // "Anything from this morning you'd like to dig into?" is already delivered by the
-      // briefing instruction after the 10 news stories — do NOT append it again here.
       res.json({ response: nativeBriefingText });
       return;
     }
@@ -1161,7 +1159,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     let fullBriefingText = "";
     const stream = anthropic.messages.stream({
       model: MODEL_SONNET,
-      max_tokens: 1800,
+      max_tokens: 1500,
       system: buildSystemBlocks(staticCtx.preamble, liveGmailBlock + liveCalendarBlock + staticCtx.suffix),
       messages: [{ role: "user", content: "good morning" }],
     });

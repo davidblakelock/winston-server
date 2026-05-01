@@ -1,0 +1,43 @@
+Please completely rewrite the morning briefing system with the following approach:
+Core philosophy:
+Stop assembling separate sections and concatenating them. Instead pass ALL available data to Claude at once and ask for ONE coherent intelligent narrative. The briefing should sound like a brilliant well-informed friend who knows everything about the user's life AND the world — and connects those two things naturally. Not a news anchor. Not a report. A conversation.
+Data to gather and pass to Claude:
+
+Current weather including AQI, pollen, UV index, feels like temperature
+Weather in family members' cities
+Today's full calendar with event locations
+Live traffic data for any calendar events requiring travel
+Overnight emails that need attention or action
+Pre-market stock futures — S&P, Dow, Nasdaq direction and percentage
+Top news stories — global, national, local Dallas — raw headlines and brief context
+User's sports teams scores from last night if they played
+Any major sports storyline worth context
+Local Dallas events happening this weekend
+Dallas restaurant news — new openings, notable closures
+One genuinely surprising or interesting story worth sharing
+Notable entertainment news — significant deaths, major cultural moments
+Garmin or Google Fit health data if available — sleep score, HRV, recovery
+User's full profile — interests, family members and their cities, upcoming plans, recent My Day entries, recent evening check-in themes
+
+The single Claude prompt that synthesizes everything:
+'You are James Bond — warm, witty, direct, occasionally dry. Write a morning briefing for [userName] that sounds like a brilliant well-informed friend who knows everything about his life and the world. You have all of his personal data and today's world events. Your job is to connect the dots between them.
+Rules:
+
+One coherent flowing narrative — no section headers, no bullet points
+Tell him what things MEAN not just what they are
+Connect world events to his personal life where genuinely relevant
+Skip anything with no relevance to his day — be honest when something doesn't affect him
+Add genuine insight and context — not just information
+Be warm, direct, and occasionally witty — never solemn or preachy
+Target 90 seconds spoken at a natural conversational pace
+Cover in natural order: weather if significant, calendar with traffic context, email triage with offer to act, news with context, sports with insight, health data if notable, local events and restaurant news, stock market with personal relevance
+End with a morning thought — something genuinely worth sitting with, chosen specifically for this person on this specific day based on what is happening in their life right now. Draw from philosophy, literature, science, music, or anything genuinely insightful. Connect it to something real in their day or life. Never generic. Never greeting card. Warm and slightly wry. Maximum 3 sentences.
+Final line: Ask if they want to know more about anything and invite them to add something to My Day before starting their day.'
+
+Delivery format:
+Return the briefing as a single block of text for TTS — no markdown, no asterisks, no bullet points, no section headers. Pure conversational prose that sounds natural when spoken aloud.
+Timing:
+Pre-generate the briefing 20 minutes before the user's wake time as currently implemented. Cache it. Serve it instantly when the user says good morning.
+One important change:
+The briefing should feel different every morning. Not just different content — different structure. Some mornings lead with the most important news story. Some mornings lead with a health observation. Some mornings lead with something happening on the calendar. Let Claude decide what's most important that specific morning and lead with that. Don't enforce a rigid order.
+Please deploy when complete and let me know what changed
