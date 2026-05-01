@@ -1,6 +1,4 @@
 import cron from "node-cron";
-import { NATIVE_STORED_NAME } from "../auth/middleware.js";
-import { broadcast } from "../reminders/sseStore.js";
 import { sendPushToAll } from "../push/pushManager.js";
 import {
   getMedications,
@@ -24,14 +22,6 @@ function getCurrentLocalTime(): string {
   });
 }
 
-function buildInitialMessage(medText: string, displayName = NATIVE_STORED_NAME): string {
-  return `Good morning, ${displayName} — don't forget to take ${medText} today. Take them with food if you can.`;
-}
-
-function buildFollowUpMessage(medText: string, displayName = NATIVE_STORED_NAME): string {
-  return `Just a gentle nudge, ${displayName} — have you taken ${medText} yet? Whenever you're ready.`;
-}
-
 export function startMedicationScheduler(): void {
   cron.schedule("* * * * *", async () => {
     try {
@@ -41,8 +31,7 @@ export function startMedicationScheduler(): void {
       if (!users.length) return;
 
       for (const user of users) {
-        const { userName, name: displayName, companionName } = user;
-        const userDisplay = displayName ?? userName;
+        const { userName, companionName } = user;
         const companion = companionName ?? "Winston";
 
         // Check mute preference first — skip everything if reminders are disabled
@@ -67,13 +56,6 @@ export function startMedicationScheduler(): void {
             const taken = await hasTakenMedicationsToday(userName).catch(() => false);
             if (!taken) {
               const medText = buildMedReminderText(meds);
-              broadcast("reminder", {
-                id: `med-init-${userName}-${Date.now()}`,
-                userName,
-                reminderText: `Don't forget to take ${medText} today. Take them with food if you can.`,
-                speakText: buildInitialMessage(medText, userDisplay),
-                isMedication: true,
-              });
               sendPushToAll({
                 title: `💊 Medication Reminder — ${companion}`,
                 body: `Time to take your ${medText}.`,
@@ -106,13 +88,6 @@ export function startMedicationScheduler(): void {
           const taken = await hasTakenMedicationsToday(userName).catch(() => false);
           if (!taken) {
             const medText = buildMedReminderText(meds);
-            broadcast("reminder", {
-              id: `med-followup-${userName}-${Date.now()}`,
-              userName,
-              reminderText: `Gentle nudge — have you taken ${medText} yet?`,
-              speakText: buildFollowUpMessage(medText, userDisplay),
-              isMedication: true,
-            });
             sendPushToAll({
               title: `💊 Medication Reminder — ${companion}`,
               body: `Have you taken your ${medText} yet?`,
