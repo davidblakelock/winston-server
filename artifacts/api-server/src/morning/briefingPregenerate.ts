@@ -450,7 +450,7 @@ function buildPeopleContextBlock(rawData: CollectedData, displayName?: string): 
     `\n\n[Key People — Reference naturally in the briefing]\n` +
     (lines.length > 0 ? lines.join("\n") : "(no people recorded)") + "\n\n" +
     `HOW TO USE THIS:\n` +
-    `• Olivia — always mention her weather in Section 3 if her [VERIFIED weather] block is present. Even just one warm sentence: "Over in Knoxville, Olivia's got a breezy 65 today."\n` +
+    `• Olivia — always mention her weather IN THE SAME PASSAGE as the primary city weather, immediately after or alongside Dallas — not later in the briefing. One warm sentence is enough: "Over in Knoxville, Olivia's got a breezy 65 today." Never separate it from the weather passage.\n` +
     `• Susan (Your Partner) — include a warm, specific one-liner in the Section 15 closing every briefing. Examples: "Hope you and Susan have a great night", "Give Susan my best." Keep it natural — not every closing needs to be about her, but include her often.\n` +
     `• Birthdays — if any birthday is within 7 days, surface it in Section 13 with the date. If it's today, make it feel special.\n` +
     `• Never invent details not listed here. Base any reference on the facts in this block.` +
