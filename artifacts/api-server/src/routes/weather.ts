@@ -166,8 +166,14 @@ router.get("/weather/morning", async (req: Request, res: Response) => {
     }
 
     const rawData = (profile?.rawData ?? {}) as CollectedData;
+    const FAMILY_RELS = /^(spouse|partner|girlfriend|boyfriend|fiancée?|fiancee?|wife|husband|son|daughter|child|parent|mother|father|mom|dad|brother|sister|sibling|grandm|grandp|grandma|grandpa|grandparent|grandchild|stepmom|stepdad|stepson|stepdaughter|stepfather|stepmother|stepparent)/i;
     const people = (rawData.people ?? [])
-      .filter((p) => p.city && p.city.trim().length > 0 && p.city.trim().toLowerCase() !== primaryCity.trim().toLowerCase())
+      .filter((p) => {
+        if (!p.city || p.city.trim().length === 0) return false;
+        if (p.city.trim().toLowerCase() === primaryCity.trim().toLowerCase()) return false;
+        const firstWord = (p.relationship ?? "").trim().split(/\s+/)[0] ?? "";
+        return FAMILY_RELS.test(firstWord);
+      })
       .slice(0, 4);
 
     const geocodedPeople = await Promise.all(
