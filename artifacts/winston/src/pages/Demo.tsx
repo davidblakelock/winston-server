@@ -104,7 +104,7 @@ const STEPS: DemoStep[] = [
   {
     type: "insight",
     insightMain: "Google shows everyone the same sponsored results.",
-    insightDetail: "Emma chose these for Margaret and Claire specifically — knowing Claire is visiting from Chicago, knowing Margaret values a quiet room to talk.",
+    insightDetail: "James Bond chose these for Margaret and Claire specifically — knowing Claire is visiting from Chicago, knowing Margaret values a quiet room to talk.",
   },
 
   // ── Scene 6: Scam Protection ──────────────────────────────────────────────
@@ -118,7 +118,7 @@ const STEPS: DemoStep[] = [
   {
     type: "insight",
     insightMain: "Elder fraud costs Americans over $3 billion every year.",
-    insightDetail: "Emma is always available, always skeptical on your behalf — your first line of defense.",
+    insightDetail: "James Bond is always available, always skeptical on your behalf — your first line of defense.",
   },
 
   // ── Scene 7: Story Capture ────────────────────────────────────────────────
@@ -473,7 +473,7 @@ export default function Demo() {
         <div style={styles.revealWrap}>
           <div style={styles.revealEmmaBadge}>
             <EmmaDot />
-            <span style={styles.revealEmmaName}>Emma Peel</span>
+            <span style={styles.revealEmmaName}>James Bond</span>
           </div>
 
           <p style={styles.revealText}>{revealText || "…"}</p>
@@ -614,7 +614,7 @@ function ChatBubble({ message }: { message: ChatMessage }) {
       {isEmma && (
         <div style={styles.emmaSpeakerLabel}>
           <EmmaDot />
-          <span>Emma Peel</span>
+          <span>James Bond</span>
         </div>
       )}
       {!isEmma && (
