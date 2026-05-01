@@ -362,13 +362,13 @@ Current scene: ${scene}. Already collected: ${JSON.stringify(current)}.
 
 SCENE STRUCTURE:
 - Scene 1: Welcome only — no data to extract. readyForNextScene=true immediately (welcome is self-contained).
-- Scene 2: Voice selection — extract voiceId and voiceName when user picks a voice. readyForNextScene=true once voiceId captured.
+- Scene 2: User's own name, city, wakeTime. readyForNextScene=true once all three are collected.
 - Scene 3: Companion naming — extract companionName (what the user names their AI). readyForNextScene=true once companionName captured.
-- Scene 4: User's own name, city, wakeTime. readyForNextScene=true once all three are collected.
+- Scene 4: Voice selection — extract voiceId and voiceName when user picks a voice. readyForNextScene=true once voiceId captured.
 - Scene 5: People in their life. readyForNextScene=true on completion signals.
 - Scene 6: Health notes. readyForNextScene=true on completion signals.
 - Scene 7: Places. readyForNextScene=true on completion signals.
-- Scene 8: Interests + story archive. readyForNextScene=true on completion signals.
+- Scene 8: Interests + pets. readyForNextScene=true on completion signals.
 - Scene 9: First briefing — final scene.
 
 Return ONLY valid JSON:
@@ -396,21 +396,22 @@ Return ONLY valid JSON:
 
 Rules:
 - Only include fields that are NEW in this message (don't re-extract already collected data)
-- companionName: extract ONLY in scene 3 when user names their AI (e.g. "Call me Emma" or "Winston" → companionName). Never confuse with the user's own name.
-- name (user's own name): extract ONLY in scene 4+ when user gives THEIR OWN name. Never extract a companionName as the user's name.
+- companionName: extract ONLY in scene 3 when user names their AI (e.g. "Call you James" or "Winston" → companionName). Never confuse with the user's own name.
+- name (user's own name): extract ONLY in scene 2+ when user gives THEIR OWN name in response to "what's your name?". Never extract a companionName as the user's name.
 - Merge arrays: if user says "I also like..." add to existing, don't replace
 - For wakeTime: "I wake up at 6" → "06:00", "around 7:30" → "07:30"
 - For people: "My daughter Olivia lives in Knoxville" → {name:"Olivia",relationship:"daughter",city:"Knoxville"}
 - For people birthdays: "Olivia's birthday is March 3rd" or "born March 3 1995" → include birthday:"YYYY-MM-DD" in the matching person object; if year unknown use current year as placeholder
 - For newsTopics: extract any mentioned news interests, e.g. "tech news", "politics", "business", "sports", "local news"
-- For voiceId: if user says "I'll take option 1" or "Tom" or "number 3" → extract the voiceId AND voiceName
+- For voiceId: if user says "I'll take option 1" or "Tom" or "number 3" → extract the voiceId AND voiceName (scene 4 only)
   Voice options: 1=DYkrAHD8iwork3YSUBbs(Tom/British-American Male), 2=56bWURjYFHyYyVf490Dp(Emma/Friendly American Female), 3=hGQkZQUA5RiOXIw7P9iO(Kiora/Warm New Zealand Female), 4=sB7vwSCyX0tQmU24cW2C(Jon/Deep Authoritative American Male), 5=Fahco4VZzobUeiPqni1S(Archer/Charming Young British Male), 6=aj0fZfXTBc7E3By4X8L2(Best Female Friend/Warm Casual American Female), 7=UizRZo250FhTtKlJa6mo(Diana/Elegant American Female), 8=Ky9j3wxFbp3dSAdrkOEv(Bex/Expressive British Female)
-- wantsStoryArchive: true if user says yes to the evening story archive offer in scene 8, false if they decline
+- wantsStoryArchive: true if user says yes to an evening story archive offer, false if they decline
 - readyForNextScene: true if user has finished sharing for this scene topic
   (e.g. "that's everyone", "that's all", "ok let's move on", natural completion signals)
   Scene 1: always true (self-contained welcome)
-  Scene 2: true once voiceId captured
-  Scene 3: true once companionName captured`,
+  Scene 2: true once name + city + wakeTime all collected
+  Scene 3: true once companionName captured
+  Scene 4: true once voiceId captured`,
     messages: [
       {
         role: "user",
@@ -464,8 +465,8 @@ function computeNextScene(
       return 2;
 
     case 2:
-      // Voice selection — advance once voice is selected
-      if (data.voiceId) return 3;
+      // About You — must have name + city + wakeTime before advancing
+      if (data.name && data.city && data.wakeTime) return 3;
       return 2;
 
     case 3:
@@ -474,8 +475,8 @@ function computeNextScene(
       return 3;
 
     case 4:
-      // User info — must have name + city + wakeTime before advancing
-      if (data.name && data.city && data.wakeTime) return 5;
+      // Voice selection — advance once voice is selected
+      if (data.voiceId) return 5;
       return 4;
 
     case 9:

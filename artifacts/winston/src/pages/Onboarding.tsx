@@ -50,6 +50,8 @@ interface CollectedData {
   sportsTeams?: string[];
   music?: string[];
   interests?: string[];
+  newsTopics?: string[];
+  pets?: Array<{ name: string; type: string; breed?: string; age?: number }>;
 }
 
 interface SuggestedPerson {
@@ -167,21 +169,10 @@ function useVoiceRecorder(onTranscript: (text: string) => void) {
   return { recordingState, startRecording, stopRecording };
 }
 
-// ─── Scene labels ────────────────────────────────────────────────────────────
-// Scene 1: Welcome, Scene 2: Voice Selection, Scene 3: Companion Naming,
-// Scene 4: About You, Scene 5: Your People, Scene 6: Wellbeing,
+// ─── Scene order ─────────────────────────────────────────────────────────────
+// Scene 1: Welcome, Scene 2: About You, Scene 3: Companion Naming,
+// Scene 4: Voice Selection, Scene 5: Your People, Scene 6: Wellbeing,
 // Scene 7: Your Places, Scene 8: What You Love, Scene 9: First Briefing
-const SCENE_LABELS = [
-  "Welcome",
-  "Your Voice",
-  "Your Companion",
-  "About You",
-  "Your People",
-  "Wellbeing",
-  "Your Places",
-  "What You Love",
-  "First Briefing",
-];
 
 // ─── Main component ──────────────────────────────────────────────────────────
 interface OnboardingProps {
@@ -457,7 +448,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
 
   const isRecording = recordingState === "recording";
   const isTranscribing = recordingState === "transcribing";
-  const showVoiceCards = scene === 2 && voices.length > 0 && !selectedVoice;
+  const showVoiceCards = scene === 4 && voices.length > 0 && !selectedVoice;
 
   // Scene 5: visible suggestion cards (not dismissed)
   const visibleSuggestions = suggestedPeople
@@ -467,41 +458,17 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
 
   return (
     <div className="flex flex-col h-screen bg-zinc-950 text-zinc-100">
-      {/* ── Scene progress bar ── */}
-      <div className="flex-shrink-0 px-6 pt-5 pb-3">
-        <div className="max-w-xl mx-auto">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-medium text-indigo-400 tracking-wide uppercase">
-              {SCENE_LABELS[scene - 1]}
-            </span>
-            <div className="flex items-center gap-3">
-              {messages.length > 0 && (
-                <button
-                  onClick={() => void handleSkip()}
-                  className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors underline underline-offset-2"
-                >
-                  Skip setup
-                </button>
-              )}
-              <span className="text-xs text-zinc-600">{scene} / 9</span>
-            </div>
-          </div>
-          <div className="flex gap-1">
-            {SCENE_LABELS.map((_, i) => (
-              <div
-                key={i}
-                className={`h-0.5 flex-1 rounded-full transition-all duration-500 ${
-                  i < scene
-                    ? "bg-indigo-500"
-                    : i === scene - 1
-                    ? "bg-indigo-400"
-                    : "bg-zinc-800"
-                }`}
-              />
-            ))}
-          </div>
+      {/* ── Skip setup button ── */}
+      {messages.length > 0 && (
+        <div className="flex-shrink-0 flex justify-end px-6 pt-4">
+          <button
+            onClick={() => void handleSkip()}
+            className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors underline underline-offset-2"
+          >
+            Skip setup
+          </button>
         </div>
-      </div>
+      )}
 
       {/* ── Chat messages ── */}
       <div
