@@ -135,14 +135,18 @@ router.post("/medications/snooze-reminder", express.json({ limit: "1mb" }), asyn
     const medText = meds.length > 0
       ? meds.map((m) => m.name).join(", ")
       : "your medications";
-    const fireAt = new Date(Date.now() + 60 * 60 * 1000);
+    // snoozeMinutes can be passed by the caller; default 30 minutes.
+    const snoozeMinutes = typeof req.body?.snoozeMinutes === "number"
+      ? Math.max(1, Math.min(req.body.snoozeMinutes, 480))
+      : 30;
+    const fireAt = new Date(Date.now() + snoozeMinutes * 60 * 1000);
     const reminder = await createReminder({
       userName,
       reminderText: `Take ${medText}`,
       fireAt,
       timezone: "America/Chicago",
     });
-    req.log.info({ userName, fireAt, reminderId: reminder.id }, "[MEDS] 1-hour snooze reminder created via notification action");
+    req.log.info({ userName, fireAt, snoozeMinutes, reminderId: reminder.id }, "[MEDS] Snooze reminder created via notification action");
     res.json({ ok: true, reminderId: reminder.id });
   } catch (err) {
     req.log.error({ err }, "[MEDS] POST /medications/snooze-reminder error");

@@ -1,13 +1,32 @@
 // Winston Service Worker — handles web push notifications and notification tap routing.
 
 // ── Auth state ────────────────────────────────────────────────────────────────
+// authToken is set by the page via postMessage when the user is logged in.
+// It resets to null when the SW goes idle, so DO NOT rely on it alone for
+// background action API calls. Use the native API key as the primary credential.
 let authToken = null;
 let deviceId = null;
+
+// Native API key — same credential used by the background SDK.
+// Accepted by authenticate() middleware → resolves to "davidblakelock".
+const NATIVE_API_KEY = "winston-native-2026";
 
 self.addEventListener("message", (event) => {
   if (event.data?.type === "SET_TOKEN") authToken = event.data.token;
   if (event.data?.type === "SET_DEVICE_ID") deviceId = event.data.deviceId;
 });
+
+// Build auth headers for background API calls.
+// Prefers Bearer token (set when app is open), falls back to native API key.
+function authHeaders() {
+  const headers = { "Content-Type": "application/json" };
+  if (authToken) {
+    headers["Authorization"] = `Bearer ${authToken}`;
+  } else {
+    headers["x-api-key"] = NATIVE_API_KEY;
+  }
+  return headers;
+}
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 self.addEventListener("install", () => self.skipWaiting());
@@ -95,7 +114,7 @@ self.addEventListener("push", (event) => {
   } else if (payload.categoryId === "medication-action") {
     options.actions = [
       { action: "taken", title: "Taken ✓" },
-      { action: "remind-1h", title: "Remind in 1 hour" },
+      { action: "remind-30m", title: "Remind in 30 min" },
     ];
   } else if (payload.categoryId === "reminder-action") {
     options.actions = [{ action: "done", title: "Done ✓" }];
@@ -121,10 +140,7 @@ self.addEventListener("notificationclick", (event) => {
       if (action === "mark-paid" && data.billId) {
         await fetch(`${base}/api/bills/mark-paid`, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
-          },
+          headers: authHeaders(),
           body: JSON.stringify({ billId: data.billId, billName: data.billName, amount: data.billAmount }),
         }).catch(() => {});
         return;
@@ -133,10 +149,7 @@ self.addEventListener("notificationclick", (event) => {
       if (action === "remind-tomorrow" && data.billId) {
         await fetch(`${base}/api/bills/remind-tomorrow`, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
-          },
+          headers: authHeaders(),
           body: JSON.stringify({ billId: data.billId, billName: data.billName, amount: data.billAmount }),
         }).catch(() => {});
         return;
@@ -145,23 +158,19 @@ self.addEventListener("notificationclick", (event) => {
       if (action === "taken") {
         await fetch(`${base}/api/medications/taken`, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
-          },
+          headers: authHeaders(),
           body: JSON.stringify({}),
         }).catch(() => {});
         return;
       }
 
-      if (action === "remind-1h") {
+      // "remind-30m" is the current action id; "remind-1h" kept for backwards compat
+      // with any cached service workers that still show the old label.
+      if (action === "remind-30m" || action === "remind-1h") {
         await fetch(`${base}/api/medications/snooze-reminder`, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
-          },
-          body: JSON.stringify({}),
+          headers: authHeaders(),
+          body: JSON.stringify({ snoozeMinutes: 30 }),
         }).catch(() => {});
         return;
       }
@@ -169,10 +178,7 @@ self.addEventListener("notificationclick", (event) => {
       if (action === "done" && data.reminderId) {
         await fetch(`${base}/api/reminders/done`, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
-          },
+          headers: authHeaders(),
           body: JSON.stringify({ reminderId: data.reminderId }),
         }).catch(() => {});
         return;

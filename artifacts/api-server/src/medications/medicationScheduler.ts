@@ -55,8 +55,11 @@ export function startMedicationScheduler(): void {
         // Collect unique reminder times
         const reminderTimes = [...new Set(meds.map((m) => m.reminderTime))];
 
+        // Use >= comparison rather than exact match so a missed cron tick doesn't
+        // silently skip the reminder for the whole day. The DB-backed
+        // hasMedicationReminderSentToday guard ensures we fire at most once per day.
         for (const rt of reminderTimes) {
-          if (localTime === rt) {
+          if (localTime >= rt) {
             // DB-backed check — survives server restarts
             const alreadySent = await hasMedicationReminderSentToday(userName, "initial").catch(() => false);
             if (alreadySent) continue;
@@ -76,8 +79,7 @@ export function startMedicationScheduler(): void {
                 body: `Time to take your ${medText}.`,
                 tag: "medication-morning",
                 notificationType: "medication",
-                // "medication-action" category shows "Taken ✓" and "Remind in 1 hour" buttons.
-                // Native app must register this category via Notifications.setNotificationCategoryAsync.
+                // "medication-action" shows "Taken ✓" and "Remind in 30 min" buttons.
                 categoryId: "medication-action",
                 requireInteraction: true,
               }, userName).catch(() => {});
@@ -88,12 +90,15 @@ export function startMedicationScheduler(): void {
           }
         }
 
-        // Follow-up 1 hour after earliest reminder time
+        // Follow-up 30 minutes after the earliest reminder time.
+        // Uses >= so a missed tick doesn't skip the follow-up for the whole day.
         const [h, m] = meds[0].reminderTime.split(":").map(Number);
-        const followUpH = (h + 1) % 24;
-        const followUpTime = `${String(followUpH).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+        const followUpTotalMins = h * 60 + m + 30;
+        const followUpH = Math.floor(followUpTotalMins / 60) % 24;
+        const followUpM = followUpTotalMins % 60;
+        const followUpTime = `${String(followUpH).padStart(2, "0")}:${String(followUpM).padStart(2, "0")}`;
 
-        if (localTime === followUpTime) {
+        if (localTime >= followUpTime) {
           // DB-backed check — survives server restarts
           const alreadySent = await hasMedicationReminderSentToday(userName, "followup").catch(() => false);
           if (alreadySent) continue;
@@ -110,7 +115,7 @@ export function startMedicationScheduler(): void {
             });
             sendPushToAll({
               title: `💊 Medication Reminder — ${companion}`,
-              body: `Time to take your ${medText}.`,
+              body: `Have you taken your ${medText} yet?`,
               tag: "medication-followup",
               notificationType: "medication",
               categoryId: "medication-action",
