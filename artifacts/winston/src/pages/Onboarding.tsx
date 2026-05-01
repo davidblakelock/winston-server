@@ -5,7 +5,7 @@ import {
   useCallback,
   KeyboardEvent,
 } from "react";
-import { Send, Mic, MicOff, Loader2, Play, Check, X, Pencil } from "lucide-react";
+import { Send, Mic, MicOff, Loader2, Play, Check, X, Pencil, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -171,7 +171,8 @@ function useVoiceRecorder(onTranscript: (text: string) => void) {
 
 // ─── Scene order ─────────────────────────────────────────────────────────────
 // Scene 1: Welcome, Scene 2: About You, Scene 3: Companion Naming,
-// Scene 4: Voice Selection, Scene 5: Your People, Scene 6: Wellbeing,
+// Scene 4: Voice Selection (auto-skipped — voice chosen on first screen),
+// Scene 5: Your People, Scene 6: Wellbeing,
 // Scene 7: Your Places, Scene 8: What You Love, Scene 9: First Briefing
 
 // ─── Main component ──────────────────────────────────────────────────────────
@@ -180,6 +181,9 @@ interface OnboardingProps {
 }
 
 export default function Onboarding({ onComplete }: OnboardingProps) {
+  // "voiceSelect" = first screen; "conversation" = chat-based onboarding
+  const [step, setStep] = useState<"voiceSelect" | "conversation">("voiceSelect");
+
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [scene, setScene] = useState(1);
@@ -285,12 +289,16 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
     [onComplete, playAudio]
   );
 
-  // Companion speaks first on mount
+  // Companion speaks first — but only once we've entered conversation mode.
+  // collectedData already has voiceId set from the voice selection screen,
+  // so the very first message is spoken in the chosen voice.
   useEffect(() => {
+    if (step !== "conversation") return;
     if (initialized.current) return;
     initialized.current = true;
-    void sendMessage("", [], 1, {});
-  }, [sendMessage]);
+    void sendMessage("", [], 1, collectedData);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step]);
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
@@ -342,7 +350,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
     [handleSend]
   );
 
-  // Voice preview — tries ElevenLabs first, falls back to browser TTS
+  // ── Voice preview — ElevenLabs first, browser TTS fallback ────────────────
   const previewVoice = useCallback(async (voiceId: string, voiceName?: string) => {
     if (previewingVoice === voiceId) {
       voiceAudioRef.current?.pause();
@@ -350,6 +358,9 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
       setPreviewingVoice(null);
       return;
     }
+    // Stop any current preview
+    voiceAudioRef.current?.pause();
+    window.speechSynthesis?.cancel();
     setPreviewError(null);
     setPreviewingVoice(voiceId);
     const PREVIEW_TEXT = "Hello — I've been looking forward to meeting you.";
@@ -366,7 +377,6 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
       audio.onended = () => setPreviewingVoice(null);
       audio.play().catch(() => setPreviewingVoice(null));
     } catch {
-      // Fall back to browser speech synthesis so the user hears something
       if (typeof window !== "undefined" && window.speechSynthesis) {
         window.speechSynthesis.cancel();
         const utter = new SpeechSynthesisUtterance(PREVIEW_TEXT);
@@ -383,6 +393,25 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
     }
   }, [previewingVoice, voiceAudioRef]);
 
+  // ── Tap a voice card on the selection screen: preview + mark as selected ──
+  const handleVoiceCardTap = useCallback((voice: VoiceOption) => {
+    setSelectedVoice(voice.id);
+    void previewVoice(voice.id, voice.name);
+  }, [previewVoice]);
+
+  // ── Continue from voice selection → start conversation ───────────────────
+  const handleContinueVoiceSelect = useCallback(() => {
+    if (!selectedVoice) return;
+    voiceAudioRef.current?.pause();
+    window.speechSynthesis?.cancel();
+    setPreviewingVoice(null);
+    const voice = voices.find((v) => v.id === selectedVoice);
+    // Pre-populate collectedData with voice so the first message is spoken in it
+    setCollectedData({ voiceId: selectedVoice, voiceName: voice?.name });
+    setStep("conversation");
+  }, [selectedVoice, voices, voiceAudioRef]);
+
+  // ── Mid-conversation voice selection (scene 4, if reached) ───────────────
   const selectVoice = useCallback(
     (voice: VoiceOption) => {
       setSelectedVoice(voice.id);
@@ -450,12 +479,118 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
   const isTranscribing = recordingState === "transcribing";
   const showVoiceCards = scene === 4 && voices.length > 0 && !selectedVoice;
 
-  // Scene 5: visible suggestion cards (not dismissed)
   const visibleSuggestions = suggestedPeople
     .map((p, i) => ({ ...p, idx: i }))
     .filter((p) => !dismissedIdxs.has(p.idx));
   const showSuggestionCards = scene === 5 && visibleSuggestions.length > 0;
 
+  // ── Voice selection screen ────────────────────────────────────────────────
+  if (step === "voiceSelect") {
+    return (
+      <div className="flex flex-col h-screen bg-zinc-950 text-zinc-100">
+        {/* Header */}
+        <div className="flex-shrink-0 pt-12 pb-6 px-6 text-center">
+          <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-indigo-600 mb-4">
+            <span className="text-white font-bold text-xl">W</span>
+          </div>
+          <h1 className="text-2xl font-semibold text-zinc-100 tracking-tight">
+            Choose a voice
+          </h1>
+          <p className="text-sm text-zinc-500 mt-2">
+            Tap any card to hear a preview. Select the one that feels right.
+          </p>
+        </div>
+
+        {/* Voice cards grid */}
+        <div
+          className="flex-1 overflow-y-auto px-4"
+          style={{ scrollbarWidth: "thin", scrollbarColor: "#27272a transparent" }}
+        >
+          <div className="max-w-md mx-auto grid grid-cols-2 gap-3 pb-4">
+            {voices.map((voice) => {
+              const isSelected = selectedVoice === voice.id;
+              const isPreviewing = previewingVoice === voice.id;
+              return (
+                <button
+                  key={voice.id}
+                  onClick={() => handleVoiceCardTap(voice)}
+                  className={`relative text-left rounded-2xl p-4 border transition-all duration-200 focus:outline-none ${
+                    isSelected
+                      ? "bg-indigo-950/60 border-indigo-500 ring-2 ring-indigo-500/40"
+                      : "bg-zinc-900 border-zinc-800 hover:border-zinc-600 hover:bg-zinc-800/60"
+                  }`}
+                >
+                  {/* Selected checkmark */}
+                  {isSelected && (
+                    <div className="absolute top-3 right-3 w-5 h-5 rounded-full bg-indigo-500 flex items-center justify-center">
+                      <Check className="w-3 h-3 text-white" />
+                    </div>
+                  )}
+
+                  {/* Playing pulse */}
+                  {isPreviewing && (
+                    <div className="absolute top-3 right-3 flex items-center gap-0.5">
+                      {[0, 150, 300].map((delay) => (
+                        <div
+                          key={delay}
+                          className="w-0.5 h-3 bg-indigo-400 rounded-full animate-bounce"
+                          style={{ animationDelay: `${delay}ms` }}
+                        />
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="pr-6">
+                    <div className="text-sm font-semibold text-zinc-100 leading-tight">
+                      {voice.name}
+                    </div>
+                    <div className="text-xs text-zinc-500 mt-1 leading-snug">
+                      {voice.description}
+                    </div>
+                  </div>
+
+                  {/* Play/stop indicator at bottom */}
+                  <div className="mt-3 flex items-center gap-1.5">
+                    {isPreviewing ? (
+                      <>
+                        <Square className="w-3 h-3 text-indigo-400 fill-indigo-400" />
+                        <span className="text-xs text-indigo-400">Playing…</span>
+                      </>
+                    ) : (
+                      <>
+                        <Play className="w-3 h-3 text-zinc-600" />
+                        <span className="text-xs text-zinc-600">Preview</span>
+                      </>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Error + Continue */}
+        <div className="flex-shrink-0 px-4 pb-10 pt-4">
+          <div className="max-w-md mx-auto space-y-3">
+            {previewError && (
+              <p className="text-xs text-amber-400/80 text-center">{previewError}</p>
+            )}
+            <Button
+              onClick={handleContinueVoiceSelect}
+              disabled={!selectedVoice}
+              className="w-full h-12 text-base font-semibold bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+            >
+              {selectedVoice
+                ? `Continue with ${voices.find((v) => v.id === selectedVoice)?.name ?? "this voice"}`
+                : "Select a voice to continue"}
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Conversation screen ───────────────────────────────────────────────────
   return (
     <div className="flex flex-col h-screen bg-zinc-950 text-zinc-100">
       {/* ── Skip setup button ── */}
@@ -524,7 +659,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
         </div>
       </div>
 
-      {/* ── Voice selection cards (Scene 7) ── */}
+      {/* ── Voice selection cards (Scene 4 fallback, should rarely appear) ── */}
       {showVoiceCards && (
         <div className="flex-shrink-0 px-4 pb-2">
           <div className="max-w-xl mx-auto grid grid-cols-2 gap-2">
@@ -606,14 +741,12 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
                     }`}
                   >
                     <div className="flex items-center gap-3">
-                      {/* Avatar */}
                       <div className={`h-8 w-8 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-semibold ${
                         isConfirmed ? "bg-emerald-800/60 text-emerald-200" : "bg-zinc-700 text-zinc-300"
                       }`}>
                         {isConfirmed ? <Check className="w-4 h-4" /> : initial}
                       </div>
 
-                      {/* Name + relationship */}
                       <div className="flex-1 min-w-0">
                         <div className={`text-sm font-medium truncate ${isConfirmed ? "text-emerald-300" : "text-zinc-100"}`}>
                           {person.name}
@@ -648,7 +781,6 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
                         )}
                       </div>
 
-                      {/* Action buttons */}
                       {!isConfirmed && (
                         <div className="flex items-center gap-1 flex-shrink-0">
                           <button
