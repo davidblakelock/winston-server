@@ -2273,9 +2273,10 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         todayCalendarBlock =
           `\n\n[Today's Calendar — use in Step 1 to ground the check-in in specifics]\n` +
           lines.join("\n") +
-          `\nIn the check-in, reference a specific event from today by name if relevant — ` +
-          `e.g. "How did that lunch with Mike go?" or "How was the pickleball this morning?" ` +
-          `Make it feel personal, not generic.`;
+          `\nIf a specific calendar event feels naturally relevant (a meeting, lunch, a trip, a workout), ` +
+          `you may reference it in passing — but NEVER ask about it in a scripted way. ` +
+          `Routine recurring activities (pickleball, gym, a standing call) should only come up ` +
+          `if the user raises them first. Make the opener feel warm and human, not like a debrief.`;
       }
     } catch { /* non-fatal */ }
 
@@ -2444,39 +2445,53 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       `Write ONE warm, natural evening check-in message. ` +
       `This is a genuine end-of-day conversation — not a checklist, not a structured report. ` +
       `Think of it as a trusted friend checking in at the end of a long day. ` +
-      `Aim for about 150–180 words. Flowing prose. No headers, no numbers.\n\n` +
+      `Aim for 110–140 words. Flowing prose. No headers, no numbers, no bullets.\n\n` +
 
       `ELEMENT 1 — OPENER:\n` +
       `Warm greeting to ${_windDownDisplayName}. ` +
-      `Reference something real from today — check [Today's Calendar]. ` +
+      `If [Today's Calendar] has a notable event (not a routine recurring activity like a standing workout or regular call), ` +
+      `you may acknowledge it briefly and naturally — never as a scripted question. ` +
       (_familyMentionStr ? `${_familyMentionStr} ` : ``) +
-      `Never invent events not in the calendar.\n\n` +
+      `Never invent events not in the calendar. Never prompt about routine activities like pickleball, gym, or standing calls — ` +
+      `only respond to those if the user raises them.\n\n` +
 
       `ELEMENT 2 — HOW WAS THE DAY:\n` +
-      `Ask warmly and genuinely how the day went. Make it personal — not "how was your day?" ` +
-      `but something specific to what you know about them.\n\n` +
+      `Ask how the day went. Keep it simple, warm, and open — one genuine question. ` +
+      `Avoid scripted phrases like "how was your day?" — find a warmer, more personal phrasing based on what you know.\n\n` +
 
-      `ELEMENT 3 — TOMORROW LOOK-AHEAD:\n` +
-      `Glance at [Tomorrow's Calendar] — briefly mention 1–2 events with times if they exist. ` +
+      `ELEMENT 3 — TOMORROW + LISTS:\n` +
+      `Mention [Tomorrow's Calendar] briefly — the 1–2 most relevant events with times. ` +
       `${weatherNote
-        ? `Include a brief weather note: ${weatherNote} Skip weather for indoor activities.`
+        ? `Add a brief weather note only if tomorrow has outdoor activities: ${weatherNote}`
         : `No weather data — skip weather entirely.`} ` +
       `Then ask: "Anything you want to add to your shopping list, to-do list, or any reminders for tomorrow?"\n\n` +
 
-      `ELEMENT 4 — EVENING THOUGHT:\n` +
-      `One calming, grounding sentence for before sleep. ` +
-      `Not advice. Not a quote. Something a warm friend would say — specific to this evening.\n\n` +
+      `ELEMENT 4 — EVENING REFLECTION (most important — do not rush or skip):\n` +
+      `Close with a calming, specific evening reflection chosen for THIS person and THIS day. ` +
+      `Draw from Stoic philosophy, mindfulness traditions, poetry, or nature and science — whichever fits the mood of the day. ` +
+      `The thought should help the mind release the day and prepare for rest. ` +
+      `Warm, quiet, and unhurried delivery. Maximum 3 sentences. ` +
+      `NEVER generic. NEVER motivational-poster language. NEVER repeat a thought used recently. ` +
+      `Examples of the register (write something original — do NOT copy these):\n` +
+      `• Stoic: "Marcus Aurelius wrote that the impediment to action advances action — what stands in the way becomes the way. Whatever today pushed against you, it was also shaping you."\n` +
+      `• Mindfulness: "The day is complete whether or not it went to plan. You can set it down now — it doesn't need to follow you to sleep."\n` +
+      `• Nature: "The tide goes out fully before it comes back in. There's a kind of wisdom in that rhythm — the retreat is part of the cycle, not a failure of it."\n` +
+      `• Poetry: "Rilke said we must assume our existence as broadly as we in any way can. Tonight, broadly means: rest.\n\n` +
 
-      `ELEMENT 5 — REFLECTIONS INVITE:\n` +
-      `A light, optional close — something like: ` +
-      `"If there's anything on your mind from today you want to capture, just say it." ` +
-      `Keep it brief. This is an open door, not a prompt.\n\n` +
+      `ELEMENT 5 — CLOSE:\n` +
+      `A brief, warm close — one sentence. ` +
+      `Mention ${_windDownDisplayName}${_familyNames.length > 0 ? ` and ${_familyNames.join(", ")}` : ""}. ` +
+      `An open door for anything they want to note — then goodnight.\n\n` +
 
-      `ELEMENT 6 — CLOSING:\n` +
-      `Warm goodnight to ${_windDownDisplayName}. ${_closingFamilyStr} Done.\n\n` +
-
-      `RULES: Flowing prose only — no headers, no bullets, no numbers. ` +
-      `No medication reminders. No music suggestions.\n` +
+      `STRICT RULES:\n` +
+      `• Flowing prose only — no headers, bullets, numbers.\n` +
+      `• No medication reminders. No music suggestions.\n` +
+      `• NEVER repeat topics already covered in the morning briefing: TV episodes, new restaurant openings, ` +
+      `upcoming concerts, news stories, or any specific content that was surfaced this morning. ` +
+      `If TV episode data appears below, only mention it if it is clearly new since this morning AND the user hasn't heard it. ` +
+      `When in doubt — leave it out.\n` +
+      `• Routine activities (pickleball, gym, a standing call) — never prompt for these. Respond only if the user brings them up.\n` +
+      `• The evening reflection in Element 4 is the most important part of this check-in. Give it the space it deserves.\n` +
 
       todayCalendarBlock +
       todayMydayBlock +
