@@ -108,16 +108,17 @@ const TEAM_LOOKUP: Record<string, TeamDef> = {
   "suns":             { fullName: "Phoenix Suns",         abbr: "PHX", id: "21",  sport: "basketball",  league: "nba" },
 
   // ── NHL ───────────────────────────────────────────────────────────────────
-  "stars":            { fullName: "Dallas Stars",         abbr: "DAL", id: "25",  sport: "hockey",      league: "nhl" },
-  "dallas stars":     { fullName: "Dallas Stars",         abbr: "DAL", id: "25",  sport: "hockey",      league: "nhl" },
+  // IDs verified against https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/teams
+  "stars":            { fullName: "Dallas Stars",         abbr: "DAL", id: "9",   sport: "hockey",      league: "nhl" },
+  "dallas stars":     { fullName: "Dallas Stars",         abbr: "DAL", id: "9",   sport: "hockey",      league: "nhl" },
   "blackhawks":       { fullName: "Chicago Blackhawks",   abbr: "CHI", id: "4",   sport: "hockey",      league: "nhl" },
   "bruins":           { fullName: "Boston Bruins",        abbr: "BOS", id: "1",   sport: "hockey",      league: "nhl" },
-  "rangers nhl":      { fullName: "New York Rangers",     abbr: "NYR", id: "19",  sport: "hockey",      league: "nhl" },
-  "ny rangers":       { fullName: "New York Rangers",     abbr: "NYR", id: "19",  sport: "hockey",      league: "nhl" },
-  "penguins":         { fullName: "Pittsburgh Penguins",  abbr: "PIT", id: "23",  sport: "hockey",      league: "nhl" },
-  "maple leafs":      { fullName: "Toronto Maple Leafs",  abbr: "TOR", id: "29",  sport: "hockey",      league: "nhl" },
-  "canadiens":        { fullName: "Montreal Canadiens",   abbr: "MTL", id: "14",  sport: "hockey",      league: "nhl" },
-  "oilers":           { fullName: "Edmonton Oilers",      abbr: "EDM", id: "26",  sport: "hockey",      league: "nhl" },
+  "rangers nhl":      { fullName: "New York Rangers",     abbr: "NYR", id: "13",  sport: "hockey",      league: "nhl" },
+  "ny rangers":       { fullName: "New York Rangers",     abbr: "NYR", id: "13",  sport: "hockey",      league: "nhl" },
+  "penguins":         { fullName: "Pittsburgh Penguins",  abbr: "PIT", id: "16",  sport: "hockey",      league: "nhl" },
+  "maple leafs":      { fullName: "Toronto Maple Leafs",  abbr: "TOR", id: "21",  sport: "hockey",      league: "nhl" },
+  "canadiens":        { fullName: "Montreal Canadiens",   abbr: "MTL", id: "10",  sport: "hockey",      league: "nhl" },
+  "oilers":           { fullName: "Edmonton Oilers",      abbr: "EDM", id: "6",   sport: "hockey",      league: "nhl" },
 };
 
 function lookupTeam(name: string): TeamDef | null {
@@ -142,11 +143,24 @@ async function fetchTeamSchedule(
   league: string,
   teamId: string
 ): Promise<EspnEvent[]> {
-  const url = `https://site.api.espn.com/apis/site/v2/sports/${sport}/${league}/teams/${teamId}/schedule`;
-  const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
+  const base = `https://site.api.espn.com/apis/site/v2/sports/${sport}/${league}/teams/${teamId}/schedule`;
+  const resp = await fetch(base, { signal: AbortSignal.timeout(8000) });
   if (!resp.ok) throw new Error(`ESPN schedule error: ${resp.status}`);
   const data = await resp.json() as EspnScheduleResponse;
-  return data.events || [];
+  const events = data.events || [];
+
+  // If the default (postseason) endpoint returns no events the team was
+  // eliminated before the current playoffs.  Fall back to regular-season
+  // games so we can still report their most recent result.
+  if (events.length === 0) {
+    const fallback = await fetch(`${base}?seasontype=2`, { signal: AbortSignal.timeout(8000) }).catch(() => null);
+    if (fallback?.ok) {
+      const fallbackData = await fallback.json() as EspnScheduleResponse;
+      return fallbackData.events || [];
+    }
+  }
+
+  return events;
 }
 
 async function fetchTodayScoreboard(
