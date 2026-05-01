@@ -3,6 +3,7 @@ import { authenticate } from "../auth/middleware.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
 import type { CollectedData } from "../onboarding/onboardingManager.js";
 import { getCachedWeather } from "../weather/weatherCache.js";
+import { analyzePressureDelta } from "../weather/pressureScheduler.js";
 
 const router = Router();
 
@@ -134,8 +135,6 @@ router.get("/weather/morning", async (req: Request, res: Response) => {
   try {
     const profile = await getProfile(userName).catch(() => null);
 
-    // Allow native app to pass current GPS coordinates (e.g. when opened from a weather-alert notification).
-    // If lat/lon query params are provided they take priority over the saved profile location.
     const qLat = req.query.lat ? parseFloat(req.query.lat as string) : null;
     const qLon = req.query.lon ? parseFloat(req.query.lon as string) : null;
     const qCity = req.query.city ? (req.query.city as string) : null;
@@ -148,7 +147,6 @@ router.get("/weather/morning", async (req: Request, res: Response) => {
     if (usingGPS) {
       primaryLat = qLat!;
       primaryLon = qLon!;
-      // Use provided city name, or reverse-geocode, or fall back to "Current Location"
       primaryCity = qCity ?? await reverseGeocodeCity(primaryLat, primaryLon) ?? "Current Location";
     } else {
       primaryCity = profile?.city ?? "Dallas";
@@ -180,11 +178,25 @@ router.get("/weather/morning", async (req: Request, res: Response) => {
     );
     const validPeople = geocodedPeople.filter(Boolean) as Array<{ name: string; relationship: string; city: string; lat: number; lon: number }>;
 
-    const [primaryWeather, pollenData, ...secondaryWeathers] = await Promise.all([
+    // Fetch weather, pollen, secondary weather, and pressure trend in parallel
+    const [primaryWeather, pollenData, pressureDelta, ...secondaryWeathers] = await Promise.all([
       getCachedWeather(primaryCity, primaryLat, primaryLon).catch(() => null),
       fetchPollen(primaryLat, primaryLon),
+      analyzePressureDelta(6).catch(() => null),
       ...validPeople.map((p) => getCachedWeather(p.city, p.lat, p.lon).catch(() => null)),
     ]);
+
+    // Determine pressure trend from 6-hour delta
+    let pressureTrend: "rising" | "falling" | "steady" = "steady";
+    let pressureInHg: number | null = null;
+    if (pressureDelta) {
+      pressureInHg = parseFloat(pressureDelta.latestReading.pressureInHg.toFixed(2));
+      if (pressureDelta.deltaInHg >= 0.06) pressureTrend = "rising";
+      else if (pressureDelta.deltaInHg <= -0.06) pressureTrend = "falling";
+    } else if (primaryWeather?.pressureHpa) {
+      // Fallback: convert from CachedWeather if no DB reading
+      pressureInHg = parseFloat((primaryWeather.pressureHpa * 0.02953).toFixed(2));
+    }
 
     const secondary = validPeople.map((p, i) => {
       const w = secondaryWeathers[i];
@@ -197,14 +209,21 @@ router.get("/weather/morning", async (req: Request, res: Response) => {
         high: w.high,
         low: w.low,
         temp: w.temp,
+        feelsLike: w.feelsLike,
+        precipChance: w.precipChance,
+        humidity: w.humidity,
       };
     }).filter(Boolean);
 
     res.json({
-      primary: primaryWeather ? { ...primaryWeather, pollen: pollenData } : null,
+      primary: primaryWeather ? {
+        ...primaryWeather,
+        pollen: pollenData,
+        pressureInHg,
+        pressureTrend,
+      } : null,
       secondary,
       fetchedAt: new Date().toISOString(),
-      // Tells the native app whether GPS coordinates were used (vs saved profile location)
       gpsUsed: usingGPS,
       ...(usingGPS ? { resolvedCity: primaryCity } : {}),
     });
