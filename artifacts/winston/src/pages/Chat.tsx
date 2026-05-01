@@ -1087,8 +1087,32 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
     window.history.replaceState({}, "", window.location.pathname);
 
     if (notif.type === "morning") {
-      // Auto-trigger "good morning" silently — briefing streams in without a user bubble
-      setTimeout(() => submitText("good morning", { silent: true }), 600);
+      // Try to fetch the pre-generated briefing text instantly (no streaming delay).
+      // If the server has it cached from the native pre-gen, it displays immediately.
+      // Fall back to the streaming flow only if the cache is cold.
+      (async () => {
+        try {
+          const resp = await fetch("/api/morning-briefing/cached", {
+            headers: { Authorization: `Bearer ${localStorage.getItem("winston_session_token") ?? ""}` },
+          });
+          if (resp.ok) {
+            const data = await resp.json() as { text: string | null };
+            if (data.text) {
+              const msgId = `morning-cached-${Date.now()}`;
+              setMessages((prev) => [
+                ...prev,
+                { id: msgId, role: "assistant" as const, content: data.text!, isMorningBriefing: true },
+              ]);
+              speakReply(msgId, data.text!);
+              return;
+            }
+          }
+        } catch {
+          // Cache endpoint unavailable — fall through to streaming
+        }
+        // Cache miss: stream it the normal way
+        submitText("good morning", { silent: true });
+      })();
     } else if (notif.type === "auto-send" && notif.text) {
       // Generic auto-send (weather alerts, etc.)
       setTimeout(() => submitText(notif.text!), 600);

@@ -4,7 +4,21 @@ function ctDateKey(): string {
   return new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
 }
 
+// ── Startup migrations ─────────────────────────────────────────────────────────
+// Idempotent — safe to run on every server start.
+
+export async function runBriefingCacheMigrations(): Promise<void> {
+  try {
+    await query(`ALTER TABLE morning_static_context ADD COLUMN IF NOT EXISTS push_sent_at timestamptz`);
+    await query(`ALTER TABLE morning_static_context ADD COLUMN IF NOT EXISTS briefing_text text`);
+    console.log("[BriefingCache] Startup migrations complete");
+  } catch (err) {
+    console.warn("[BriefingCache] Startup migration warning:", err);
+  }
+}
+
 // ── Text cache — stores the generated briefing text for follow-up context ─────
+// In-memory for speed; also persisted to DB so it survives server restarts.
 
 interface BriefingEntry {
   text: string;
@@ -24,27 +38,79 @@ export function getCachedBriefing(userName: string): string | null {
 }
 
 export function setCachedBriefing(userName: string, text: string, explicitDateKey?: string): void {
-  _textCache.set(userName, { text, generatedAt: Date.now(), dateKey: explicitDateKey ?? ctDateKey() });
+  const dateKey = explicitDateKey ?? ctDateKey();
+  _textCache.set(userName, { text, generatedAt: Date.now(), dateKey });
+  // Persist so the web "already loaded" endpoint can return it after a restart
+  query(
+    `INSERT INTO morning_static_context (user_name, date_key, briefing_text)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (user_name, date_key) DO UPDATE
+       SET briefing_text = EXCLUDED.briefing_text
+     RETURNING user_name`,
+    [userName, dateKey, text]
+  ).catch((err: unknown) => {
+    console.warn("[BriefingCache] Failed to persist briefing text to DB:", err);
+  });
 }
 
 export function clearCachedBriefing(userName: string): void {
   _textCache.delete(userName);
 }
 
+// ── Push-sent tracking — survives server restarts ──────────────────────────────
+
+const _pushSentDone = new Map<string, string>(); // userName → dateKey
+
+export async function markPushSent(userName: string): Promise<void> {
+  const dateKey = ctDateKey();
+  _pushSentDone.set(userName, dateKey);
+  try {
+    await query(
+      `INSERT INTO morning_static_context (user_name, date_key, push_sent_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (user_name, date_key) DO UPDATE
+         SET push_sent_at = NOW()
+       RETURNING user_name`,
+      [userName, dateKey]
+    );
+  } catch (err) {
+    console.warn("[BriefingCache] Failed to persist push_sent_at:", err);
+  }
+}
+
+export function wasPushSentToday(userName: string): boolean {
+  return _pushSentDone.get(userName) === ctDateKey();
+}
+
+// ── Retrieve persisted briefing text from DB (for "already loaded" endpoint) ──
+
+export async function getPersistedBriefingText(userName: string): Promise<string | null> {
+  // Check in-memory first
+  const mem = getCachedBriefing(userName);
+  if (mem) return mem;
+
+  // Fall back to DB
+  const today = ctDateKey();
+  try {
+    const res = await query<{ briefing_text: string | null; built_at: string }>(
+      `SELECT briefing_text, built_at FROM morning_static_context
+        WHERE user_name = $1 AND date_key = $2
+        LIMIT 1`,
+      [userName, today]
+    );
+    const row = res.rows[0];
+    if (!row?.briefing_text) return null;
+
+    // Restore to in-memory cache
+    const builtAt = new Date(row.built_at).getTime();
+    _textCache.set(userName, { text: row.briefing_text, generatedAt: builtAt, dateKey: today });
+    return row.briefing_text;
+  } catch {
+    return null;
+  }
+}
+
 // ── Static context cache — stores pre-built system prompt halves ──────────────
-//
-// The pre-generation at 5 AM fetches all static data (news, weather, sports,
-// bills, Dallas, etc.) and splits the system prompt into two halves:
-//
-//   preamble — everything before the email + calendar slot
-//   suffix   — everything after the calendar slot, through MASTER_BRIEFING_INSTRUCTION
-//
-// At delivery time the live email block and live calendar block are slotted in
-// between preamble and suffix, and Claude generates the final briefing.
-//
-// Both the in-memory Map and the morning_static_context DB table are used.
-// In-memory is the fast path; DB is the authoritative source that survives
-// server restarts so we never regenerate an already-built briefing.
 
 export interface StaticContextEntry {
   preamble: string;
@@ -67,8 +133,6 @@ export function getStaticBriefingContext(userName: string): StaticContextEntry |
 
 export function setStaticBriefingContext(userName: string, entry: StaticContextEntry): void {
   _staticCtxCache.set(userName, entry);
-  // Persist to DB so restarts don't blow away the cache and trigger a full
-  // re-generation with all its expensive web_search calls.
   query(
     `INSERT INTO morning_static_context
        (user_name, date_key, preamble, suffix, candidate_story_keys, built_at)
@@ -90,9 +154,8 @@ export function clearStaticBriefingContext(userName: string): void {
 }
 
 /**
- * Attempts to load today's static context from the DB into the in-memory cache.
- * Returns true if a valid entry was found and loaded, false otherwise.
- * Call this on startup before deciding whether to trigger pre-generation.
+ * Attempts to load today's static context (and push-sent state) from the DB
+ * into the in-memory caches. Returns true if a valid entry was found.
  */
 export async function loadStaticContextFromDb(userName: string): Promise<boolean> {
   const today = ctDateKey();
@@ -102,8 +165,10 @@ export async function loadStaticContextFromDb(userName: string): Promise<boolean
       suffix: string;
       candidate_story_keys: string[];
       built_at: string;
+      push_sent_at: string | null;
+      briefing_text: string | null;
     }>(
-      `SELECT preamble, suffix, candidate_story_keys, built_at
+      `SELECT preamble, suffix, candidate_story_keys, built_at, push_sent_at, briefing_text
          FROM morning_static_context
         WHERE user_name = $1 AND date_key = $2
         LIMIT 1`,
@@ -122,6 +187,22 @@ export async function loadStaticContextFromDb(userName: string): Promise<boolean
       dateKey: today,
       builtAt,
     });
+
+    // Restore push-sent state so we don't re-send after a restart
+    if (row.push_sent_at) {
+      const sentDate = new Date(row.push_sent_at).toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+      if (sentDate === today) {
+        _pushSentDone.set(userName, today);
+        console.log(`[BriefingCache] Push already sent today for ${userName} — restored from DB`);
+      }
+    }
+
+    // Restore briefing text if present
+    if (row.briefing_text) {
+      _textCache.set(userName, { text: row.briefing_text, generatedAt: builtAt, dateKey: today });
+      console.log(`[BriefingCache] Briefing text restored from DB for ${userName}`);
+    }
+
     console.log(`[BriefingCache] Loaded today's static context from DB for ${userName} — skipping pre-generation`);
     return true;
   } catch (err) {

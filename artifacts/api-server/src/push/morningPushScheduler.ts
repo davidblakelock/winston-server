@@ -5,17 +5,25 @@ import { getWatchedShows } from "../tv/showManager.js";
 import { fetchEpisodesForDate } from "../tv/tvmaze.js";
 import { preFetchMorningNews, preFetchDailyMotivation } from "../news/newsManager.js";
 import { preFetchMorningBriefing } from "../morning/briefingPregenerate.js";
-import { getStaticBriefingContext, loadStaticContextFromDb } from "../morning/briefingCache.js";
+import {
+  getStaticBriefingContext,
+  loadStaticContextFromDb,
+  markPushSent,
+  wasPushSentToday,
+} from "../morning/briefingCache.js";
 import { getActiveUsers, type ActiveUser } from "../onboarding/onboardingManager.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
 const DEFAULT_TZ = "America/Chicago";
 const DEFAULT_WAKE_TIME = "06:00";
+
 // How many minutes before wake time to start pre-fetching.
-// 20 min gives Claude plenty of time to finish before the notification fires,
-// even after a cold server restart.
 const NEWS_LEAD_MINUTES = 25;
 const BRIEFING_LEAD_MINUTES = 20;
+
+// How many minutes after wake time we will still attempt to send the push.
+// 30 minutes gives enough buffer for server restarts near the wake window.
+const WAKE_WINDOW_MINUTES = 30;
 
 // ── Local time helpers ─────────────────────────────────────────────────────────
 
@@ -50,11 +58,11 @@ function minutesSinceWake(localTime: string, wakeTime: string): number {
 }
 
 // ── Per-user state tracking ────────────────────────────────────────────────────
-// Maps userName → last date string for which we fired each action.
+// Note: morningPushDone is now DB-backed via wasPushSentToday() / markPushSent().
+// These maps track the pre-fetch actions (news/briefing) which are fire-and-forget.
 
 const prefetchDone: Map<string, string> = new Map();
 const newsPrefetchDone: Map<string, string> = new Map();
-const morningPushDone: Map<string, string> = new Map();
 
 // ── Push body ──────────────────────────────────────────────────────────────────
 
@@ -73,6 +81,61 @@ async function buildMorningBody(user: ActiveUser): Promise<string> {
     // ignore — use base body
   }
   return base;
+}
+
+// ── Send push for a user ───────────────────────────────────────────────────────
+
+async function sendMorningPush(user: ActiveUser, wakeTime: string, minsSince: number): Promise<void> {
+  const { userName } = user;
+  let staticCtx = getStaticBriefingContext(userName);
+
+  if (!staticCtx && minsSince < WAKE_WINDOW_MINUTES) {
+    // Briefing not ready yet — wait until next minute check
+    logger.info(
+      { userName, minsSince },
+      "[MorningPush] Briefing not ready at wake time — will retry next minute"
+    );
+    return;
+  }
+
+  if (!staticCtx) {
+    // Window almost exhausted but briefing still not cached — generate inline now
+    // so the user never taps the notification and sees a loading state.
+    logger.warn(
+      { userName, minsSince },
+      "[MorningPush] Briefing still not ready — generating inline before push"
+    );
+    try {
+      await preFetchMorningBriefing(userName);
+      await loadStaticContextFromDb(userName).catch(() => false);
+      staticCtx = getStaticBriefingContext(userName);
+      logger.info({ userName, cached: !!staticCtx }, "[MorningPush] Inline pre-gen complete");
+    } catch (genErr) {
+      logger.error({ genErr, userName }, "[MorningPush] Inline pre-gen failed — sending push anyway");
+    }
+  }
+
+  // Mark as sent first (DB-backed) to prevent double-send across restarts
+  await markPushSent(userName);
+
+  try {
+    const body = await buildMorningBody(user);
+    const displayName = user.name ?? userName;
+    await sendPushToAll({
+      title: `Good morning, ${displayName} ☀️`,
+      body,
+      tag: "morning-briefing",
+      notificationType: "morning-briefing",
+      autoSendMessage: "good morning",
+      requireInteraction: true,
+    }, userName);
+    logger.info(
+      { userName, wakeTime, minsSince, briefingReady: !!staticCtx },
+      "[MorningPush] Morning push sent"
+    );
+  } catch (err) {
+    logger.error({ err, userName }, "[MorningPush] Failed to send morning push");
+  }
 }
 
 // ── Per-tick logic ─────────────────────────────────────────────────────────────
@@ -114,62 +177,10 @@ async function runPerUserChecks(): Promise<void> {
       );
     }
 
-    // At or shortly after wake time: send push once the briefing static context is confirmed
-    // ready. Retry every minute for up to 10 minutes in case the server restarted after
-    // pre-generation and the in-memory cache was wiped — avoids delivering a notification
-    // before the briefing is available to stream when the user taps it.
+    // Within the 30-minute wake window: send push if not already sent today
     const minsSince = minutesSinceWake(localTime, wakeTime);
-    if (minsSince >= 0 && minsSince <= 10 && morningPushDone.get(userName) !== today) {
-      let staticCtx = getStaticBriefingContext(userName);
-      if (!staticCtx && minsSince < 10) {
-        // Pre-generation may still be running after a cold restart. Wait until next minute.
-        logger.info(
-          { userName, minsSince },
-          "[MorningPush] Briefing not ready at wake time — will retry next minute"
-        );
-      } else {
-        if (!staticCtx) {
-          // 10-minute window elapsed but briefing still isn't cached — generate it inline
-          // right now so it is guaranteed to be ready before the notification fires.
-          // The user tapping "morning-briefing" should NEVER encounter a loading state.
-          logger.warn(
-            { userName, minsSince },
-            "[MorningPush] Briefing still not ready after 10 min — generating inline before push"
-          );
-          try {
-            await preFetchMorningBriefing(userName);
-            // Attempt to reload from DB into in-memory cache
-            await loadStaticContextFromDb(userName).catch(() => false);
-            staticCtx = getStaticBriefingContext(userName);
-            logger.info({ userName, cached: !!staticCtx }, "[MorningPush] Inline pre-gen complete");
-          } catch (genErr) {
-            logger.error({ genErr, userName }, "[MorningPush] Inline pre-gen failed — sending push anyway");
-          }
-        }
-
-        // Static context is now ready (or inline generation failed — send with what we have).
-        morningPushDone.set(userName, today);
-        try {
-          const body = await buildMorningBody(user);
-          const displayName = user.name ?? userName;
-          await sendPushToAll({
-            title: `Good morning, ${displayName} ☀️`,
-            body,
-            tag: "morning-briefing",
-            notificationType: "morning-briefing",
-            // autoSendMessage: native app sends "good morning" automatically when tapped,
-            // so the briefing starts immediately without the user having to type anything.
-            autoSendMessage: "good morning",
-            requireInteraction: true,
-          }, userName);
-          logger.info(
-            { userName, wakeTime, minsSince, briefingReady: !!staticCtx },
-            "[MorningPush] Morning push sent"
-          );
-        } catch (err) {
-          logger.error({ err, userName }, "[MorningPush] Failed to send morning push");
-        }
-      }
+    if (minsSince >= 0 && minsSince <= WAKE_WINDOW_MINUTES && !wasPushSentToday(userName)) {
+      await sendMorningPush(user, wakeTime, minsSince);
     }
   }
 }
@@ -185,21 +196,41 @@ async function startupPrefetch(): Promise<void> {
     users = [{ userName: NATIVE_STORED_NAME, name: NATIVE_STORED_NAME, city: "Dallas", timezone: DEFAULT_TZ, wakeTime: DEFAULT_WAKE_TIME, companionName: null }];
   }
 
-  const today = new Date().toLocaleDateString("en-CA", { timeZone: DEFAULT_TZ });
-
   for (const user of users) {
     const { userName } = user;
-    // Mark as done so the cron doesn't double-fire on the same calendar day
+    // Mark pre-fetch as done so the cron doesn't double-fire on the same calendar day
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: DEFAULT_TZ });
     prefetchDone.set(userName, today);
     newsPrefetchDone.set(userName, today);
 
     // CRITICAL: Check DB for today's static context before spending tokens on regeneration.
-    // Every server restart used to unconditionally call preFetchMorningBriefing (6+ web_search
-    // Claude calls). If today's content is already in the DB, restore it to the in-memory cache
-    // and skip the expensive re-generation entirely.
+    // loadStaticContextFromDb also restores push_sent_at so we don't re-send.
     const alreadyCached = await loadStaticContextFromDb(userName).catch(() => false);
     if (alreadyCached) {
       logger.info({ userName }, "[MorningPush] Startup — static context restored from DB, skipping pre-generation");
+
+      // If we're inside the wake window AND the push hasn't been sent yet (restart
+      // happened before the push could fire), send it now immediately.
+      const wakeTime = user.wakeTime ?? DEFAULT_WAKE_TIME;
+      const localTime = new Date().toLocaleTimeString("en-US", {
+        timeZone: user.timezone ?? DEFAULT_TZ,
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      });
+      const minsSince = minutesSinceWake(localTime, wakeTime);
+      if (minsSince >= 0 && minsSince <= WAKE_WINDOW_MINUTES && !wasPushSentToday(userName)) {
+        logger.info(
+          { userName, minsSince },
+          "[MorningPush] Startup — within wake window and push not sent — sending now"
+        );
+        // Small delay to let the rest of startup finish first
+        setTimeout(() => {
+          sendMorningPush(user, wakeTime, minsSince).catch((err) =>
+            logger.error({ err, userName }, "[MorningPush] Startup push send failed")
+          );
+        }, 5000);
+      }
       continue;
     }
 
@@ -213,8 +244,6 @@ async function startupPrefetch(): Promise<void> {
 // ── Main export ────────────────────────────────────────────────────────────────
 
 export function startMorningPushScheduler(): void {
-  // Always pre-generate on startup so the briefing is ready within ~2 minutes
-  // after any fresh deployment, regardless of time of day.
   void startupPrefetch();
 
   // Every minute: check each active user's wake_time

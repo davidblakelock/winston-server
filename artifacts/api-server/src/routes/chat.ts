@@ -158,7 +158,7 @@ import {
 import { validateSession } from "../auth/sessionAuth.js";
 import { authenticate, tryAuthenticate } from "../auth/middleware.js";
 import { normalizeTtsText } from "../lib/ttsNormalize.js";
-import { getCachedBriefing, setCachedBriefing, getStaticBriefingContext, loadStaticContextFromDb } from "../morning/briefingCache.js";
+import { getCachedBriefing, setCachedBriefing, getStaticBriefingContext, loadStaticContextFromDb, getPersistedBriefingText } from "../morning/briefingCache.js";
 import { updateSettings as updateWinddownSettings } from "../winddown/winddownManager.js";
 import { analyzePressureDelta, formatPressureContext, formatPressureContextNoChange } from "../weather/pressureScheduler.js";
 import {
@@ -3610,6 +3610,21 @@ router.post("/speak", async (req, res) => {
   const audioBase64 = Buffer.from(audioBuffer).toString("base64");
 
   res.json({ audioBase64, mimeType: "audio/mpeg" });
+});
+
+// ── GET /api/morning-briefing/cached ──────────────────────────────────────────
+// Returns today's pre-generated briefing text if it exists in the cache or DB.
+// The web app uses this immediately on notification tap so the briefing appears
+// instantly instead of having to wait for a full Claude streaming response.
+
+router.get("/morning-briefing/cached", authenticate, async (req: Request, res: Response) => {
+  const userName = (req as any).userName as string;
+  const text = await getPersistedBriefingText(userName).catch(() => null);
+  if (!text) {
+    res.json({ text: null });
+    return;
+  }
+  res.json({ text });
 });
 
 export default router;

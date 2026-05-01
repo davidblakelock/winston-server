@@ -25,6 +25,7 @@ import { initDallasContentTable } from "./morning/dallasContent";
 import { startDallasProactiveScheduler } from "./morning/dallasProactiveScheduler";
 import { initConcertsTable, startVenueMonitorScheduler } from "./morning/venueMonitor";
 import { initBriefingStoriesTable } from "./morning/storyDedup";
+import { runBriefingCacheMigrations } from "./morning/briefingCache";
 import { addProfileItem } from "./profile/profileManager";
 import { ensureContactsTable } from "./google/contacts";
 import { startGarminScheduler } from "./garmin/garminScheduler";
@@ -188,6 +189,12 @@ app.listen(port, async (err) => {
     logger.info("[startup] daily_briefing_stories table ready");
   } catch (e) {
     logger.warn({ e }, "Briefing stories table initialization warning");
+  }
+
+  try {
+    await runBriefingCacheMigrations();
+  } catch (e) {
+    logger.warn({ e }, "Briefing cache migration warning");
   }
 
   try {
