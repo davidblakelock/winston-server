@@ -475,7 +475,7 @@ STRUCTURE — YOU DECIDE EVERY MORNING: Look at ALL the verified data blocks in 
 
 WHAT TO COVER (weave naturally into the narrative — skip what has no relevance today):
 
-• Weather — include current temperature, feels-like, high/low, precip chance. If UV is high or AQI is notable, weave in one sentence. Use ONLY the exact numbers from [VERIFIED — Google Weather API — ${city}]. ALWAYS mention family members' weather if their [VERIFIED — Google Weather API — <city> (for <name>)] blocks are present — one warm sentence per person, every time, no exceptions.
+• Weather — include current temperature, feels-like, high/low, precip chance. If UV is high or AQI is notable, weave in one sentence. Use ONLY the exact numbers from [VERIFIED — Google Weather API — ${city}]. IMMEDIATELY AFTER covering ${city} weather (in the same breath, the very next sentence), mention every family member's weather whose [VERIFIED — Google Weather API — <city> (for <name>)] block is present. This is non-negotiable — it must always appear in the weather passage, never later. One warm sentence per person: "Over in Knoxville, Olivia's sitting at 68 and sunny."
 
 • Calendar — today's events framed in terms of what they mean for the day. Include departure times where calculated. If calendar is NOT CONNECTED, say exactly: "I can't pull your calendar right now — Google may need to be reconnected in the app settings." Do NOT say the day looks clear if the calendar is disconnected.
 
@@ -483,7 +483,7 @@ WHAT TO COVER (weave naturally into the narrative — skip what has no relevance
 
 • Stock market — if [VERIFIED — Financial Markets] is present and markets are open, one sentence on direction and what it signals. Skip entirely if markets are closed, flat, or data is absent.
 
-• News — use ONLY stories from [VERIFIED — Web Search News] blocks. Cover global, national, and local ${city} stories. Tell what they mean, not just what they are. Connect to ${firstName}'s life and interests where genuinely relevant. Honor any ratio preferences (more local, fewer global) from user settings. Never invent headlines.
+• News — MANDATORY: ALWAYS include at least 2–3 national or international news stories from [VERIFIED — Web Search News] blocks, every single briefing, no exceptions. These are not optional filler — they are a core part of every morning briefing. Pick the most significant stories: things people will actually be talking about today. Tell what they mean, not just what they are. After the 2-3 mandatory national/international stories, add 1-2 local ${city} stories if the block has them. Never invent headlines — only use stories from verified blocks. If the [VERIFIED — Web Search News] block has no stories, say exactly one sentence: "I'm not seeing any news this morning — I'll check back in." Do not skip news silently.
 
 • Entertainment and watercooler — from [Entertainment & Pop Culture] and [Watercooler Story] blocks if present. One item each, brief.
 
@@ -899,10 +899,12 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     // All data blocks assembled — build the suffix.
     // The briefing instruction is the final element so Claude's marching orders
     // are the last thing it reads before generating the response.
+    // News appears before Dallas local content and venue concerts so Claude gives it
+    // appropriate prominence — national/international news is mandatory in every briefing.
     const suffix = garminBlock + fitBlock + tvMorningBlock + sportsBlock + billsMorningBlock + datesBlock +
       sundaySummaryBlock + pickleballMorningBlock + recFollowUpBlock + personalFollowUpsBlock +
       mydayBlock + marketsBlock +
-      dallasEventsBlock + dedupedVenueConcertsBlock + dedupedNewsBlock + motivationContextBlock +
+      dedupedNewsBlock + dallasEventsBlock + dedupedVenueConcertsBlock + motivationContextBlock +
       buildNarrativeBriefingInstruction(primaryCity, userProfile?.companionName ?? null, userProfile?.name ?? undefined);
 
     // Log which static sections have data
