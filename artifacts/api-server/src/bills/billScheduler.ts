@@ -106,15 +106,10 @@ async function checkBillReminders(): Promise<void> {
           body: notifBody,
           tag: `bill-${bill.id}`,
           notificationType: "bill-reminder",
-          // "bill-action" category shows "Mark Paid ✓" and "Remind Me Tomorrow" buttons.
-          // Native app must register this category via Notifications.setNotificationCategoryAsync.
-          // Action handlers call:
-          //   POST /api/bills/mark-paid   { billId, billName, amount }
-          //   POST /api/bills/remind-tomorrow  { billId, billName, amount }
-          categoryId: "bill-action",
-          requireInteraction: true,
-          // Pass structured data so native app action handlers have what they need
-          companionMessage: JSON.stringify({ billId: bill.id, billName: bill.name, amount: bill.amount ?? "" }),
+          // "bill-dismiss" shows only a "Done ✓" button and does NOT open the app.
+          // This is a simple reminder — no interaction with the app is required.
+          categoryId: "bill-dismiss",
+          requireInteraction: false,
         }, userName).catch(() => {});
 
         await markReminded(bill.id, today);
@@ -144,9 +139,8 @@ async function checkBillReminders(): Promise<void> {
         body: message,
         tag: `bill-${bill.id}`,
         notificationType: "bill-reminder",
-        categoryId: "bill-action",
-        requireInteraction: true,
-        companionMessage: JSON.stringify({ billId: bill.id, billName: bill.name, amount: bill.amount ?? "" }),
+        categoryId: "bill-dismiss",
+        requireInteraction: false,
       }, userName).catch(() => {});
 
       await markReminded(bill.id, today);
@@ -160,9 +154,25 @@ async function checkBillReminders(): Promise<void> {
 }
 
 export function startBillScheduler(): void {
+  // On startup: if it's already past 9am, run the check immediately so a server
+  // restart mid-morning doesn't silently skip today's bill reminders.
+  const startHour = parseInt(
+    new Date().toLocaleTimeString("en-US", { timeZone: TZ, hour: "2-digit", hour12: false }),
+    10
+  );
+  if (startHour >= 9) {
+    setTimeout(() => checkBillReminders().catch(() => {}), 5000);
+  }
+
   cron.schedule("* * * * *", async () => {
     try {
-      if (getLocalTime() !== "09:00") return;
+      // Run any time from 9:00am onward — the _lastCheckedDate guard inside
+      // checkBillReminders() ensures we only send each user's reminders once per day.
+      // Exact-minute matching ("09:00") is fragile when cron ticks are missed; a
+      // window-based check survives brief event-loop delays and server restarts.
+      const localTime = getLocalTime();
+      const [h] = localTime.split(":").map(Number);
+      if (h < 9) return;
       await checkBillReminders();
     } catch (err) {
       logger.error({ err }, "Bill scheduler error");

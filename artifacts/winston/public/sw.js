@@ -84,7 +84,10 @@ self.addEventListener("push", (event) => {
   }
 
   // Action buttons by category
-  if (payload.categoryId === "bill-action") {
+  if (payload.categoryId === "bill-dismiss") {
+    // Simple reminder — just a dismiss button, no app interaction needed
+    options.actions = [{ action: "bill-done", title: "Done ✓" }];
+  } else if (payload.categoryId === "bill-action") {
     options.actions = [
       { action: "mark-paid", title: "Mark Paid ✓" },
       { action: "remind-tomorrow", title: "Remind Me Tomorrow" },
@@ -111,6 +114,9 @@ self.addEventListener("notificationclick", (event) => {
     (async () => {
       // ── Action button handlers (fire-and-forget API calls) ─────────────────
       const base = self.registration.scope.replace(/\/$/, "");
+
+      // Bill dismiss — just close the notification, no app open, no API call
+      if (action === "bill-done") return;
 
       if (action === "mark-paid" && data.billId) {
         await fetch(`${base}/api/bills/mark-paid`, {
@@ -171,6 +177,9 @@ self.addEventListener("notificationclick", (event) => {
         }).catch(() => {});
         return;
       }
+
+      // ── Bill reminder: body tap also dismisses without opening the app ────
+      if (data.notificationType === "bill-reminder") return;
 
       // ── Main tap (no action button) — open the app ────────────────────────
       // Store payload in IDB so Chat.tsx can consume it on mount.
