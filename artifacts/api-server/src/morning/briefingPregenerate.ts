@@ -450,7 +450,6 @@ function buildPeopleContextBlock(rawData: CollectedData, displayName?: string): 
     `\n\n[Key People — Reference naturally in the briefing]\n` +
     (lines.length > 0 ? lines.join("\n") : "(no people recorded)") + "\n\n" +
     `HOW TO USE THIS:\n` +
-    `• Olivia — always mention her weather IN THE SAME PASSAGE as the primary city weather, immediately after or alongside Dallas — not later in the briefing. One warm sentence is enough: "Over in Knoxville, Olivia's got a breezy 65 today." Never separate it from the weather passage.\n` +
     `• Susan (Your Partner) — include a warm, specific one-liner in the Section 15 closing every briefing. Examples: "Hope you and Susan have a great night", "Give Susan my best." Keep it natural — not every closing needs to be about her, but include her often.\n` +
     `• Birthdays — if any birthday is within 7 days, surface it in Section 13 with the date. If it's today, make it feel special.\n` +
     `• Never invent details not listed here. Base any reference on the facts in this block.` +
@@ -471,13 +470,11 @@ DELIVERY FORMAT: One coherent flowing narrative. No section headers. No bullet p
 
 OPENING: Start with "Good morning, ${firstName}" and then go directly into whatever you have decided leads this morning — no preamble, no "here is your briefing."
 
-STRUCTURE — YOU DECIDE EVERY MORNING: Look at ALL the verified data blocks in this system prompt and determine what matters most to ${firstName} on this specific day. Lead with that. Some mornings a breaking news story demands to go first. Some mornings a health observation sets the whole tone. Some mornings an urgent calendar item or a striking weather pattern leads. Some mornings something surprising from the watercooler story earns the opening. The structure must feel different every morning — never the same opening twice.
+STRUCTURE — YOU DECIDE EVERY MORNING: Look at ALL the verified data blocks in this system prompt and determine what matters most to ${firstName} on this specific day. Lead with that. Some mornings a breaking news story demands to go first. Some mornings a health observation sets the whole tone. Some mornings an urgent calendar item leads. Some mornings something surprising from the watercooler story earns the opening. The structure must feel different every morning — never the same opening twice.
 
 WHAT TO COVER (weave naturally into the narrative — skip what has no relevance today):
 
-• Weather — include current temperature, feels-like, high/low, precip chance. If UV is high or AQI is notable, weave in one sentence. Use ONLY the exact numbers from [VERIFIED — Google Weather API — ${city}]. IMMEDIATELY AFTER covering ${city} weather (in the same breath, the very next sentence), mention every family member's weather whose [VERIFIED — Google Weather API — <city> (for <name>)] block is present. This is non-negotiable — it must always appear in the weather passage, never later. One warm sentence per person: "Over in Knoxville, Olivia's sitting at 68 and sunny."
-
-• News — NON-NEGOTIABLE CORE REQUIREMENT: Every single briefing MUST include at least 2–3 significant national or international news stories from the [VERIFIED — Web Search News] block. This is not optional. This cannot be cut for length. This cannot be skipped because the briefing is already long. News is as required as the weather. Pick the stories people will actually be talking about today — tell what they mean, not just what happened. After the national/international stories, add 1-2 local ${city} stories if the block has them. Never invent headlines — only use what is in the verified block. If the [VERIFIED — Web Search News] block is absent or empty, say exactly: "I'm not seeing any news this morning — I'll check back in." Do not silently omit news.
+• News — NON-NEGOTIABLE CORE REQUIREMENT: Every single briefing MUST include at least 2–3 significant national or international news stories from the [VERIFIED — Web Search News] block. This is not optional. This cannot be cut for length. This cannot be skipped because the briefing is already long. Pick the stories people will actually be talking about today — tell what they mean, not just what happened. After the national/international stories, add 1-2 local ${city} stories if the block has them. Never invent headlines — only use what is in the verified block. If the [VERIFIED — Web Search News] block is absent or empty, say exactly: "I'm not seeing any news this morning — I'll check back in." Do not silently omit news.
 
 • Calendar — today's events framed in terms of what they mean for the day. Include departure times where calculated. If calendar is NOT CONNECTED, say exactly: "I can't pull your calendar right now — Google may need to be reconnected in the app settings." Do NOT say the day looks clear if the calendar is disconnected.
 
@@ -507,7 +504,6 @@ WHAT TO COVER (weave naturally into the narrative — skip what has no relevance
 
 DATA ACCURACY RULES — NO EXCEPTIONS:
 • VERIFIED blocks are ground truth. State their content as fact without softening or hedging.
-• Weather: ONLY the exact numbers in the verified block. If it says 20% precip, say "20%" — never "a chance of rain" or "likely showers." Never add "severe," "dangerous," or "heavy" unless the condition field says so.
 • Calendar: reproduce event titles letter-for-letter exactly as written. NEVER infer who an event is with or enrich it with profile context. If you want to connect profile context, frame it as a question, never a statement.
 • Sports: ONLY from a [VERIFIED — Live Sports] block. If absent, do not guess or reference any score.
 • News: ONLY from verified news blocks. Never invent.
@@ -527,9 +523,9 @@ FORBIDDEN — NEVER USE:
 • Bullet points or numbered lists
 • Transition announcements: "Moving on to," "Now for," "Let's talk about," "Next up," "Speaking of," "In other news," "Turning to"
 • Briefing announcements: "Here is your morning briefing," "Good morning, here's what you need to know"
-• Weather references outside the weather passage — no weather stats in news, sports, or closing (one exception: if an outdoor activity is on today's calendar and conditions are notably severe or perfect, one brief plain-language phrase is permitted for that event only)
 • Open-ended close without the morning thought and My Day invite — the briefing must always end with both
 • Morning thought that references current events, politics, world conflicts, protests, legislation, government, or any anxiety-inducing news — the morning thought must be purely timeless wisdom
+• ANY mention of weather, temperature, feels-like, forecast, rain chance, humidity, UV index, AQI, pollen, wind speed, or family member weather — the app displays a live visual weather card; do NOT speak weather under any circumstances
 
   `;
 }
@@ -629,36 +625,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       dietaryRestrictions: [],  // no field in rawData yet; reserved for future onboarding
     };
 
-    // Geocode secondary cities from profile before the main Promise.all.
-    // IMPORTANT: Only include immediate family/partner — NEVER doctors, coworkers, friends, etc.
-    // This prevents irrelevant cities (e.g. doctor's office suburb) appearing in the briefing.
-    const FAMILY_RELS = /^(daughter|son|wife|husband|girlfriend|boyfriend|partner|fiancée?|fiancee?|mother|father|sister|brother|child|parent|aunt|uncle|cousin|grandm|grandp|grandma|grandpa|grandparent|mom|dad|stepson|stepdaughter|stepfather|stepmother)/i;
-    const rawPeople = ((userProfile?.rawData as CollectedData)?.people ?? [])
-      .filter((p) => {
-        const city = p.city?.trim();
-        const rel = (p.relationship ?? "").trim();
-        const firstWord = rel.split(/\s+/)[0] ?? "";
-        const isFamily = FAMILY_RELS.test(firstWord);
-        return isFamily && city && city.length > 0 && city.toLowerCase() !== primaryCity.toLowerCase();
-      })
-      .slice(0, 4);
-    const geocodedSecondary = await Promise.all(
-      rawPeople.map(async (p) => {
-        const city = p.city!.trim();
-        const name = p.name.trim();
-        const coords = await geocodeCity(city).catch(() => null);
-        return coords ? { name, city, lat: coords.lat, lon: coords.lon } : null;
-      })
-    );
-    const validSecondaryLocs = geocodedSecondary.filter(Boolean) as Array<{ name: string; city: string; lat: number; lon: number }>;
-
-    // Start secondary weather fetches in parallel with the main Promise.all
-    const secondaryWeatherPromise = Promise.all(
-      validSecondaryLocs.map((s) => getCachedWeather(s.city, s.lat, s.lon).catch(() => null))
-    );
-
-    const [dallas, lastNightNotes, newsBlock, yesterdayEps, todayEps, sportsScores, upcomingBills, upcomingDates, sundayData, pendingFollowUps, dallasEvents, pollenData, venueConcertsBlock, dailyMotivation, personalFollowUps] = await Promise.all([
-      getCachedWeather(primaryCity, primaryLat, primaryLon).catch(() => null),
+    const [lastNightNotes, newsBlock, yesterdayEps, todayEps, sportsScores, upcomingBills, upcomingDates, sundayData, pendingFollowUps, dallasEvents, venueConcertsBlock, dailyMotivation, personalFollowUps] = await Promise.all([
       getLastNightNotes().catch(() => []),
       fetchMorningNews(userName).catch(() => ""),
       fetchEpisodesForDate(yesterday, watchedIds).catch(() => []),
@@ -669,7 +636,6 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       isSunday ? collectSundayData(userName).catch(() => null) : Promise.resolve(null),
       getPendingFollowUps(2, 14).catch(() => []),
       fetchDallasContent(localCtx).catch(() => ""),
-      fetchPollenData(primaryLat, primaryLon).catch(() => null),
       runVenueScan().catch(() => ""),
       fetchDailyMotivation(userName).catch(() => ""),
       getPendingPersonalFollowups(userName).catch(() => []),
@@ -682,17 +648,6 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     const fitData = !garminData
       ? await getStoredFitData(userName).catch(() => null)
       : null;
-
-    // Collect secondary weather results (likely already resolved)
-    const secondaryWeatherResults = await secondaryWeatherPromise;
-    const secondaryWeatherEntries: SecondaryWeatherEntry[] = validSecondaryLocs.reduce<SecondaryWeatherEntry[]>(
-      (acc, loc, i) => {
-        const w = secondaryWeatherResults[i];
-        if (w) acc.push({ person: { name: loc.name, city: loc.city }, weather: w });
-        return acc;
-      },
-      []
-    );
 
     // ── Story dedup — filter seen headlines from news, Dallas, venue concerts ──
     // News: strip **bold headline** + sentence pairs that appeared in the last 3 days
@@ -755,49 +710,6 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       ...rawDallasItems.map((i) => i.headline),                        // Dallas local
       ...rawVenueConcerts.map((c) => `${c.artistOrEvent} ${c.venue}`), // venue concerts
     ];
-
-    // Only include AQI/pollen when notable — AQI >100 (Unhealthy for Sensitive Groups) or pollen high/very high (≥30 gr/m³-eq)
-    const POLLEN_HIGH_GRM3 = 30; // threshold for "high" in pollenLevel()
-    const AQI_NOTABLE = 100;
-    const pollenBlock = pollenData
-      ? (() => {
-          const parts: string[] = [];
-          if (pollenData.aqiMax > AQI_NOTABLE) parts.push(`Air Quality (US AQI): ${pollenData.aqiMax} — ${aqiLabel(pollenData.aqiMax)}`);
-          if (pollenData.grassMax >= POLLEN_HIGH_GRM3) parts.push(`Grass pollen: ${pollenLevel(pollenData.grassMax)}`);
-          if (pollenData.ragweedMax >= POLLEN_HIGH_GRM3) parts.push(`Ragweed pollen: ${pollenLevel(pollenData.ragweedMax)}`);
-          if (pollenData.treeMax >= POLLEN_HIGH_GRM3) parts.push(`Tree pollen: ${pollenLevel(pollenData.treeMax)}`);
-          return parts.length > 0 ? `\nAir Quality & Pollen today — ${parts.join(" | ")}` : "";
-        })()
-      : "";
-
-    // Build secondary-only weather block — shown even when primary city weather is unavailable.
-    // This ensures Olivia's Knoxville weather (and any other family member's city) always
-    // appears in the briefing regardless of whether Dallas weather fetched successfully.
-    const secondaryOnlyBlock = secondaryWeatherEntries.length > 0
-      ? secondaryWeatherEntries
-          .map((s) => {
-            const w = s.weather;
-            const days =
-              w.forecastDays.length > 0
-                ? w.forecastDays
-                    .map(
-                      (d) =>
-                        `${d.dayName}: ${d.high}°/${d.low}°${d.precipChance >= 40 ? ` ${d.precipChance}%rain` : ""}`
-                    )
-                    .join(" | ")
-                : "";
-            return (
-              `\n[VERIFIED — Google Weather API — ${s.person.city} (for ${s.person.name})]\n` +
-              `Now: ${w.temp}°F (feels like ${w.feelsLike}°F), ${w.condition} — high ${w.high}°F / low ${w.low}°F | ${w.precipChance}% precip | humidity ${w.humidity}%\n` +
-              (days ? `Forecast: ${days}\n` : "")
-            );
-          })
-          .join("")
-      : "";
-
-    const weatherBlock = dallas
-      ? buildContextualWeatherBlock(dallas, secondaryWeatherEntries, now) + pollenBlock
-      : secondaryOnlyBlock;
 
     // Email and calendar are NOT fetched at pre-generation time.
     // They are fetched live at delivery time (when the user says "good morning")
@@ -876,7 +788,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     // At delivery time, chat.ts inserts live gmailBlock + calendarBlock between them.
     const prefsBlock = buildBriefingPrefsBlock(briefingPrefs, userName);
     const preamble = getCurrentDateTimeBlock() + "\n" + corePrompt + profileContextBlock +
-      memoryBlock + dynamicProfileBlock + prefsBlock + notesBlock + peopleContextBlock + weatherBlock;
+      memoryBlock + dynamicProfileBlock + prefsBlock + notesBlock + peopleContextBlock;
 
     const garminBlock = garminData ? formatGarminForBriefing(garminData) : "";
     const fitBlock = fitData ? formatFitForBriefing(fitData) : "";
@@ -913,9 +825,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
 
     // Log which static sections have data
     const sectionLog: Record<string, boolean | string> = {
-      "weather": !!dallas,
-      "forecast_5day": !!(dallas?.forecastDays && dallas.forecastDays.length > 0),
-      "pollen_aqi": !!pollenData,
+      "weather": "visual-card-only",
       "email": "live-at-delivery",
       "calendar": "live-at-delivery",
       "markets": !!marketsBlock,
