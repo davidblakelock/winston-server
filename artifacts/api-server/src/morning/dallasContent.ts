@@ -133,6 +133,9 @@ function stringsToRx(arr: string[]): RegExp | null {
   return new RegExp(cleaned.map(escRx).join("|"), "i");
 }
 
+/** Detects that a headline/description is about a live music event or concert. */
+const MUSIC_EVENT_SIGNAL = /\b(concert|performing|live\s+show|live\s+music|show\s+at|tour|tickets|gig|festival|at the .{3,30}theater|at the .{3,30}venue)\b/i;
+
 /**
  * Expand a free-text music genre preference into searchable keyword terms.
  * E.g. "classic rock from the 60s and 70s" → ["classic rock","60s","70s","blues rock"]
@@ -206,11 +209,13 @@ function buildPatterns(ctx: UserLocalContext): {
   high: PriorityPattern[];
   medium: PriorityPattern[];
   low: PriorityPattern[];
+  /** When set, any headline that matches MUSIC_EVENT_SIGNAL must also match this
+   *  artist regex — otherwise it is excluded. Enforces strict artist-only concert filtering. */
+  concertArtistRx: RegExp | null;
 } {
   const city = ctx.city;
 
   // ── Signals that detect what a headline is "about" ─────────────────────────
-  const MUSIC_EVENT_SIGNAL = /\b(concert|performing|live|show|tour|tickets|gig|festival|at the .{3,30}theater|at the .{3,30}venue)\b/i;
   const RESTAURANT_OPENING_SIGNAL = /\b(open|opens|opening|grand opening|now open|new restaurant|soft open|debut)\b/i;
   const LOCAL_EVENT_SIGNAL = /\b(event|festival|tournament|league|class|workshop|show|fair|expo|market|tour|race|run|competition)\b/i;
 
@@ -319,7 +324,13 @@ function buildPatterns(ctx: UserLocalContext): {
     { pattern: /neighborhood association|community meeting|city council|zoning/i, label: "community" },
   ];
 
-  return { exclude, high, medium, low };
+  // ── Concert filter ────────────────────────────────────────────────────────
+  // If the user has any saved artists, concerts must match a specific saved artist.
+  // This prevents artists not in the user's profile (e.g. Kid Rock) from surfacing
+  // just because they match a generic genre term or city mention.
+  const concertArtistRx = stringsToRx(ctx.artists ?? []);
+
+  return { exclude, high, medium, low, concertArtistRx };
 }
 
 // ── Lightweight RSS parser (no external packages needed) ──────────────────────
@@ -384,6 +395,16 @@ function scoreItem(
 
   for (const rx of patterns.exclude) {
     if (rx.test(text)) return { priority: null, keywords: [] };
+  }
+
+  // ── Concert/music-event strict filtering ──────────────────────────────────
+  // If the user has saved artists and this looks like a concert/music event,
+  // it MUST match one of their specific saved artists — no exceptions.
+  // Generic concerts (artists not in the user's profile) are excluded entirely.
+  if (patterns.concertArtistRx && MUSIC_EVENT_SIGNAL.test(text)) {
+    if (!patterns.concertArtistRx.test(text)) {
+      return { priority: null, keywords: [] };
+    }
   }
 
   const highKeywords: string[] = [];
@@ -797,7 +818,22 @@ export async function fetchDallasContent(ctx: UserLocalContext = { city: "Dallas
 
   console.log(`[LocalContent] Music web search returned ${musicItems.length} items`);
   console.log(`[LocalContent] Ticketmaster returned ${ticketmasterItems.length} events`);
-  allItems.push(...musicItems, ...ticketmasterItems);
+
+  // ── Ticketmaster strict artist filter ────────────────────────────────────
+  // Only include Ticketmaster events whose headline contains at least one of
+  // the user's saved artists. If the user has no saved artists, include all.
+  const tmArtistRx = stringsToRx(ctx.artists ?? []);
+  const filteredTicketmaster = tmArtistRx
+    ? ticketmasterItems.filter((item) => tmArtistRx.test(item.headline))
+    : ticketmasterItems;
+  if (tmArtistRx) {
+    const dropped = ticketmasterItems.length - filteredTicketmaster.length;
+    if (dropped > 0) {
+      console.log(`[LocalContent] Ticketmaster: dropped ${dropped} events not matching saved artists`);
+    }
+  }
+
+  allItems.push(...musicItems, ...filteredTicketmaster);
 
   let finalItems = deduplicate(allItems);
   console.log(`[LocalContent] After dedup: ${finalItems.length} unique items from ${allItems.length} raw`);
