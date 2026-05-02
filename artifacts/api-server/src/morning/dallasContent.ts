@@ -225,6 +225,12 @@ function buildPatterns(ctx: UserLocalContext): {
     // Sports final-score results are covered by ESPN — don't duplicate here
     /\b(final score|box score|recap|postgame)\b/i,
     /\b(beats|defeats|wins against|loses to)\b.{0,40}\b\d+[-–]\d+\b/i,
+    // Civic/government items not relevant to daily life
+    /\b(DART|transit authority|light rail|bus rapid transit|commuter rail)\b/i,
+    /\b(school bond|bond election|bond measure|school board|bond proposition)\b/i,
+    /\b(property tax|tax rate|city council|zoning variance|zoning hearing|planning commission|city budget|city manager)\b/i,
+    /\b(code enforcement|city ordinance|noise ordinance|permit application|eminent domain)\b/i,
+    /\b(neighborhood association|HOA|homeowners association|civic meeting|town hall meeting)\b/i,
   ];
 
   // ── HIGH priority ──────────────────────────────────────────────────────────
@@ -600,6 +606,67 @@ async function musicWebSearch(ctx: UserLocalContext): Promise<LocalContentItem[]
   return [];
 }
 
+// ── General local events web search ──────────────────────────────────────────
+// Searches for upcoming events this week/weekend — car shows, festivals, fairs,
+// markets, community events — regardless of music or dining preference match.
+
+async function localEventsWebSearch(ctx: UserLocalContext): Promise<LocalContentItem[]> {
+  const city = ctx.city;
+  const today = new Date();
+  const dayName = today.toLocaleDateString("en-US", { timeZone: "America/Chicago", weekday: "long" });
+  const isWeekend = [0, 5, 6].includes(today.getDay()); // Sun, Fri, Sat
+  const focusPhrase = isWeekend
+    ? "this weekend and this week"
+    : "this week and this coming weekend";
+
+  logger.info(`[LocalContent] Running local events web search for ${city} — ${dayName}`);
+  try {
+    const result = await anthropic.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 700,
+      tools: [{ type: "web_search_20250305" as "web_search_20250305", name: "web_search", max_uses: 3 }],
+      system:
+        `You are a local events researcher for ${city}. Search for upcoming local events happening ${focusPhrase} in ${city}. ` +
+        `Look for: car shows, auto shows, classic car events, festivals, fairs, outdoor markets, street fairs, community events, ` +
+        `art festivals, food festivals, charity runs/walks, sports tournaments, free outdoor events, neighborhood events. ` +
+        `EXCLUDE: political events, city council meetings, school board events, transit news, generic news articles. ` +
+        `ONLY include real scheduled events with a specific date or time that a person could actually attend. ` +
+        `Return ONLY a JSON array (no markdown, no explanation) with up to 5 objects, each having: ` +
+        `headline (string — include event name, location, and date/time if known), ` +
+        `summary (1–2 sentence string describing the event), url (string), source (string).`,
+      messages: [{
+        role: "user",
+        content: `Search for: ${city} events this weekend ${focusPhrase} car shows festivals markets fairs community. Also: what's happening in ${city} ${dayName}.`,
+      }],
+    });
+
+    for (const block of result.content) {
+      if (block.type !== "text") continue;
+      const jsonMatch = /\[[\s\S]*\]/.exec(block.text);
+      if (!jsonMatch) continue;
+      const parsed = JSON.parse(jsonMatch[0]) as Array<{
+        headline?: string; summary?: string; url?: string; source?: string;
+      }>;
+      const items = parsed
+        .filter((p) => p.headline)
+        .map((p) => ({
+          source: p.source ?? `${city} Local Events`,
+          headline: p.headline ?? "",
+          summary: p.summary ?? "",
+          url: p.url ?? "",
+          publishedAt: new Date(),
+          priority: "high" as const,
+          keywordsMatched: ["local_events_web_search"],
+        }));
+      logger.info(`[LocalContent] Local events web search returned ${items.length} events for ${city}`);
+      return items;
+    }
+  } catch (err) {
+    logger.warn({ err }, `[LocalContent] Local events web search failed for ${city}`);
+  }
+  return [];
+}
+
 // ── Web search fallback ───────────────────────────────────────────────────────
 
 async function webSearchFallback(ctx: UserLocalContext): Promise<LocalContentItem[]> {
@@ -795,10 +862,11 @@ export async function fetchDallasContent(ctx: UserLocalContext = { city: "Dallas
   const allItems: LocalContentItem[] = [];
   let successCount = 0;
 
-  // Run RSS feeds + music web search + Ticketmaster in parallel
-  const [feedResults, musicItems, ticketmasterItems] = await Promise.all([
+  // Run RSS feeds + music web search + local events search + Ticketmaster in parallel
+  const [feedResults, musicItems, localEventItems, ticketmasterItems] = await Promise.all([
     Promise.allSettled(feeds.map((f) => fetchFeed(f, patterns))),
     musicWebSearch(ctx),
+    localEventsWebSearch(ctx),
     fetchTicketmasterEvents(city),
   ]);
 
@@ -817,6 +885,7 @@ export async function fetchDallasContent(ctx: UserLocalContext = { city: "Dallas
   });
 
   console.log(`[LocalContent] Music web search returned ${musicItems.length} items`);
+  console.log(`[LocalContent] Local events web search returned ${localEventItems.length} items`);
   console.log(`[LocalContent] Ticketmaster returned ${ticketmasterItems.length} events`);
 
   // ── Ticketmaster strict artist filter ────────────────────────────────────
@@ -833,7 +902,7 @@ export async function fetchDallasContent(ctx: UserLocalContext = { city: "Dallas
     }
   }
 
-  allItems.push(...musicItems, ...filteredTicketmaster);
+  allItems.push(...musicItems, ...localEventItems, ...filteredTicketmaster);
 
   let finalItems = deduplicate(allItems);
   console.log(`[LocalContent] After dedup: ${finalItems.length} unique items from ${allItems.length} raw`);

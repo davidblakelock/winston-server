@@ -72,35 +72,9 @@ export function startMedicationScheduler(): void {
           }
         }
 
-        // Follow-up 30 minutes after the earliest reminder time.
-        // Uses >= so a missed tick doesn't skip the follow-up for the whole day.
-        const [h, m] = meds[0].reminderTime.split(":").map(Number);
-        const followUpTotalMins = h * 60 + m + 30;
-        const followUpH = Math.floor(followUpTotalMins / 60) % 24;
-        const followUpM = followUpTotalMins % 60;
-        const followUpTime = `${String(followUpH).padStart(2, "0")}:${String(followUpM).padStart(2, "0")}`;
-
-        if (localTime >= followUpTime) {
-          // DB-backed check — survives server restarts
-          const alreadySent = await hasMedicationReminderSentToday(userName, "followup").catch(() => false);
-          if (alreadySent) continue;
-
-          const taken = await hasTakenMedicationsToday(userName).catch(() => false);
-          if (!taken) {
-            const medText = buildMedReminderText(meds);
-            sendPushToAll({
-              title: `💊 Medication Reminder — ${companion}`,
-              body: `Have you taken your ${medText} yet?`,
-              tag: "medication-followup",
-              notificationType: "medication",
-              categoryId: "medication-action",
-              requireInteraction: false,
-            }, userName).catch(() => {});
-            logger.info({ time: followUpTime, userName }, "Medication follow-up reminder fired");
-          }
-          // Mark follow-up as sent — prevents re-firing if server restarts
-          await logMedicationReminderSent(userName, "followup").catch(() => {});
-        }
+        // No automatic follow-up — the initial reminder shows "Taken ✓" and
+        // "Remind in 1 hour" action buttons. The user triggers any follow-up
+        // themselves by tapping "Remind in 1 hour" on the notification.
       }
     } catch (err) {
       logger.error({ err }, "Medication scheduler error");

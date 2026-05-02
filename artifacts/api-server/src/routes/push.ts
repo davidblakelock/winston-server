@@ -138,6 +138,75 @@ router.delete("/push/expo-token", async (req, res) => {
   }
 });
 
+// GET /api/push/subscriptions — diagnostic: count all registered push subscriptions
+// Helps identify why multiple notifications are received (stale/duplicate subscriptions).
+router.get("/push/subscriptions", async (req, res) => {
+  try {
+    const authedUser = await tryAuthenticate(req);
+    const rawQueryUser = req.query.userName as string | undefined;
+    const userName = authedUser ?? (rawQueryUser ? resolveUserAlias(rawQueryUser) : null) ?? NATIVE_USER;
+
+    const { query: dbQuery } = await import("../db.js");
+    const [webRows, expoTokens] = await Promise.all([
+      dbQuery<{ id: number; device_id: string | null; endpoint: string; updated_at: string }>(
+        `SELECT id, device_id, right(endpoint, 40) AS endpoint, updated_at::text
+           FROM web_push_subscriptions WHERE user_name = $1
+           ORDER BY updated_at DESC`,
+        [userName]
+      ).then((r) => r.rows).catch(() => [] as Array<{ id: number; device_id: string | null; endpoint: string; updated_at: string }>),
+      getExpoTokens(userName),
+    ]);
+
+    res.json({
+      userName,
+      webPushCount: webRows.length,
+      expoTokenCount: expoTokens.length,
+      totalChannels: webRows.length + expoTokens.length,
+      webSubscriptions: webRows.map((r) => ({
+        id: r.id, deviceId: r.device_id, endpointTail: "…" + r.endpoint, updatedAt: r.updated_at,
+      })),
+      expoTokenTails: expoTokens.map((t) => "…" + t.slice(-20)),
+      note: (webRows.length + expoTokens.length) > 2 ? `⚠️ ${webRows.length + expoTokens.length} channels registered — you may receive duplicate notifications. Use POST /api/push/prune to keep only the most recent.` : "OK",
+    });
+  } catch (err) {
+    logger.error({ err }, "[Push] Subscriptions diagnostic error");
+    res.status(500).json({ error: "Diagnostic failed" });
+  }
+});
+
+// POST /api/push/prune — keep only the most recent N web push subscriptions per user.
+// Use this to stop receiving duplicate/triple notifications from stale browser subscriptions.
+router.post("/push/prune", async (req, res) => {
+  const authedUser = await tryAuthenticate(req);
+  const userName = authedUser ?? NATIVE_USER;
+  const keep = Math.max(1, parseInt(String((req.body as Record<string, unknown>).keep ?? "1"), 10));
+
+  try {
+    const { query: dbQuery } = await import("../db.js");
+    const { rows } = await dbQuery<{ id: number; endpoint: string }>(
+      `SELECT id, right(endpoint, 40) AS endpoint
+         FROM web_push_subscriptions WHERE user_name = $1
+         ORDER BY updated_at DESC`,
+      [userName]
+    );
+    const toDelete = rows.slice(keep);
+    if (toDelete.length === 0) {
+      res.json({ pruned: 0, kept: rows.length, message: "Nothing to prune" });
+      return;
+    }
+    const ids = toDelete.map((r) => r.id);
+    await dbQuery(
+      `DELETE FROM web_push_subscriptions WHERE id = ANY($1::int[]) RETURNING id`,
+      [ids]
+    );
+    logger.info({ userName, pruned: ids.length, kept: rows.length - ids.length }, "[WebPush] Pruned old subscriptions");
+    res.json({ pruned: ids.length, kept: rows.length - ids.length, message: `Removed ${ids.length} old subscription(s). You should now receive only ${rows.length - ids.length} notification per push.` });
+  } catch (err) {
+    logger.error({ err }, "[Push] Prune error");
+    res.status(500).json({ error: "Prune failed" });
+  }
+});
+
 // GET /api/push/expo-status — diagnostic: count registered Expo tokens
 router.get("/push/expo-status", async (req, res) => {
   try {
