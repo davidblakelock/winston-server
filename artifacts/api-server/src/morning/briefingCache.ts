@@ -177,6 +177,10 @@ export async function loadStaticContextFromDb(userName: string): Promise<boolean
     const row = res.rows[0];
     if (!row) return false;
 
+    // Preamble/suffix are NULLed by /api/briefing/refresh to force re-generation.
+    // Treat a null preamble as a cache miss so the morning briefing re-generates fresh.
+    if (!row.preamble || !row.suffix) return false;
+
     const builtAt = new Date(row.built_at).getTime();
     if (Date.now() - builtAt > STATIC_MAX_AGE_MS) return false;
 

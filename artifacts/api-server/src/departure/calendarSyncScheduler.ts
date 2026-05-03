@@ -48,15 +48,36 @@ export async function ensureCalendarSyncTable(): Promise<void> {
     ADD COLUMN IF NOT EXISTS event_start_iso TEXT
   `).catch(() => {});
 
+  // Track whether the "time to leave" departure push has been sent for this event
+  await query(`
+    ALTER TABLE calendar_sync_state
+    ADD COLUMN IF NOT EXISTS departure_notified BOOLEAN NOT NULL DEFAULT FALSE
+  `).catch(() => {});
+
+  // Store computed leave time so the departure scheduler can check without re-computing
+  await query(`
+    ALTER TABLE calendar_sync_state
+    ADD COLUMN IF NOT EXISTS leave_time_iso TEXT
+  `).catch(() => {});
+
+  // Store event location so departure scheduler can build a Maps URL without re-fetching
+  await query(`
+    ALTER TABLE calendar_sync_state
+    ADD COLUMN IF NOT EXISTS event_location TEXT
+  `).catch(() => {});
+
   logger.info("calendar_sync_state table ready");
 }
 
 interface KnownEvent {
   startIso: string | null;
+  departureNotified: boolean;
+  leaveTimeIso: string | null;
+  eventLocation: string | null;
 }
 
 /**
- * Returns a map of { event_id → { startIso } } for today's known events.
+ * Returns a map of { event_id → KnownEvent } for today's known events.
  * Returns null on DB error so callers skip the sync cycle rather than
  * treating a query failure as "first sync of the day".
  */
@@ -65,13 +86,24 @@ async function getKnownEvents(
   userName: string
 ): Promise<Map<string, KnownEvent> | null> {
   try {
-    const { rows } = await query<{ event_id: string; event_start_iso: string | null }>(
-      `SELECT event_id, event_start_iso
+    const { rows } = await query<{
+      event_id: string;
+      event_start_iso: string | null;
+      departure_notified: boolean;
+      leave_time_iso: string | null;
+      event_location: string | null;
+    }>(
+      `SELECT event_id, event_start_iso, departure_notified, leave_time_iso, event_location
        FROM calendar_sync_state
        WHERE event_date = $1 AND user_name = $2`,
       [dateStr, userName]
     );
-    return new Map(rows.map((r) => [r.event_id, { startIso: r.event_start_iso ?? null }]));
+    return new Map(rows.map((r) => [r.event_id, {
+      startIso: r.event_start_iso ?? null,
+      departureNotified: r.departure_notified ?? false,
+      leaveTimeIso: r.leave_time_iso ?? null,
+      eventLocation: r.event_location ?? null,
+    }]));
   } catch (err) {
     logger.warn({ err, dateStr, userName }, "Calendar sync: getKnownEvents query failed — skipping sync");
     return null;
@@ -88,22 +120,45 @@ async function markEventKnown(
   summary: string,
   alertSent: boolean,
   userName: string,
-  startIso?: string | null
+  startIso?: string | null,
+  eventLocation?: string | null,
+  leaveTimeIso?: string | null
 ): Promise<void> {
   try {
     await query(
       `INSERT INTO calendar_sync_state
-         (event_date, event_id, event_summary, alert_sent, user_name, event_start_iso)
-       VALUES ($1, $2, $3, $4, $5, $6)
+         (event_date, event_id, event_summary, alert_sent, user_name, event_start_iso, event_location, leave_time_iso)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (event_date, event_id) DO UPDATE
          SET event_summary   = EXCLUDED.event_summary,
              event_start_iso = EXCLUDED.event_start_iso,
+             event_location  = COALESCE(EXCLUDED.event_location, calendar_sync_state.event_location),
+             leave_time_iso  = COALESCE(EXCLUDED.leave_time_iso, calendar_sync_state.leave_time_iso),
              seen_at         = NOW()
        RETURNING event_id`,
-      [dateStr, eventId, summary, alertSent, userName, startIso ?? null]
+      [dateStr, eventId, summary, alertSent, userName,
+       startIso ?? null, eventLocation ?? null, leaveTimeIso ?? null]
     );
   } catch (err) {
     logger.warn({ err, dateStr, eventId, userName }, "Calendar sync: markEventKnown failed");
+  }
+}
+
+async function markDepartureNotified(
+  dateStr: string,
+  eventId: string,
+  userName: string
+): Promise<void> {
+  try {
+    await query(
+      `UPDATE calendar_sync_state
+          SET departure_notified = TRUE
+        WHERE event_date = $1 AND event_id = $2 AND user_name = $3
+        RETURNING event_id`,
+      [dateStr, eventId, userName]
+    );
+  } catch (err) {
+    logger.warn({ err, dateStr, eventId, userName }, "Calendar sync: markDepartureNotified failed");
   }
 }
 
@@ -112,7 +167,7 @@ async function markEventKnown(
 async function getLeaveByTime(
   event: CalendarEvent,
   userName: string
-): Promise<{ leaveTimeStr: string; driveMinutes: number; source: string } | null> {
+): Promise<{ leaveTimeStr: string; leaveAtIso: string; driveMinutes: number; source: string; location: string } | null> {
   if (!event.startIso || event.allDay) return null;
 
   const location = extractEventLocation({
@@ -144,8 +199,10 @@ async function getLeaveByTime(
 
   return {
     leaveTimeStr,
+    leaveAtIso: leaveAt.toISOString(),
     driveMinutes: drive.durationMinutes,
     source: drive.source,
+    location,
   };
 }
 
@@ -173,6 +230,16 @@ async function sendNewEventAlert(event: CalendarEvent, userName: string): Promis
     pushBody = `${eventName} at ${eventTimeStr} added to your calendar.`;
   }
 
+  // Store departure info so the leave-time scheduler can fire a reminder
+  if (event.id) {
+    const today = localDateStr();
+    await markEventKnown(
+      today, event.id, eventName, true, userName, event.startIso,
+      departure?.location ?? null,
+      departure?.leaveAtIso ?? null
+    );
+  }
+
   broadcastToUser(userName, "reminder", {
     id: `new-event-${event.id}-${Date.now()}`,
     userName,
@@ -192,7 +259,7 @@ async function sendNewEventAlert(event: CalendarEvent, userName: string): Promis
   }, userName).catch(() => {});
 
   logger.info(
-    { event: eventName, time: eventTimeStr, hasLocation, userName },
+    { event: eventName, time: eventTimeStr, hasLocation, departure: !!departure, userName },
     "Calendar sync: new event alert sent"
   );
 }
@@ -348,6 +415,7 @@ async function runCalendarSync(): Promise<void> {
 // ── Public function for briefing to pre-populate ───────────────────────────────
 // Called by briefingPregenerate so events in the morning briefing are never
 // treated as "new" by the sync scheduler.
+// Also stores location and leave_time so the departure reminder scheduler can fire.
 
 export async function populateCalendarSyncState(
   events: CalendarEvent[],
@@ -355,16 +423,107 @@ export async function populateCalendarSyncState(
 ): Promise<void> {
   const today = localDateStr();
   for (const event of events) {
-    if (event.id) {
-      await markEventKnown(today, event.id, event.summary, true, userName, event.startIso);
+    if (!event.id) continue;
+
+    const location = event.startIso && !event.allDay
+      ? extractEventLocation({ summary: event.summary, location: event.location, description: event.description })
+      : null;
+
+    let leaveTimeIso: string | null = null;
+    if (location && event.startIso) {
+      const dep = await getLeaveByTime(event, userName).catch(() => null);
+      leaveTimeIso = dep?.leaveAtIso ?? null;
     }
+
+    await markEventKnown(today, event.id, event.summary, true, userName, event.startIso, location, leaveTimeIso);
   }
   logger.info({ count: events.length, userName }, "Calendar sync state: pre-populated from morning briefing");
+}
+
+// ── Departure-time alert (fires when it's time to leave) ──────────────────────
+
+async function runDepartureAlertsForUser(userName: string): Promise<void> {
+  const today = localDateStr();
+  const now = new Date();
+  const nowMs = now.getTime();
+
+  let rows: { event_id: string; event_summary: string; event_location: string; leave_time_iso: string }[];
+  try {
+    const res = await query<{
+      event_id: string;
+      event_summary: string;
+      event_location: string;
+      leave_time_iso: string;
+    }>(
+      `SELECT event_id, event_summary, event_location, leave_time_iso
+         FROM calendar_sync_state
+        WHERE event_date = $1
+          AND user_name = $2
+          AND departure_notified = FALSE
+          AND leave_time_iso IS NOT NULL
+          AND event_location IS NOT NULL`,
+      [today, userName]
+    );
+    rows = res.rows;
+  } catch (err) {
+    logger.warn({ err, userName }, "Departure alert: DB query failed");
+    return;
+  }
+
+  for (const row of rows) {
+    const leaveAtMs = new Date(row.leave_time_iso).getTime();
+    const diffMs = nowMs - leaveAtMs;
+
+    // Fire if we're within a 5-minute window starting at leave time
+    // (negative: not yet time; positive: past leave time)
+    if (diffMs < 0 || diffMs > 5 * 60 * 1000) continue;
+
+    const companionName = await getCompanionName(userName);
+    const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(row.event_location)}`;
+    const leaveTimeStr = new Date(row.leave_time_iso).toLocaleTimeString("en-US", {
+      timeZone: TZ, hour: "numeric", minute: "2-digit", hour12: true,
+    });
+
+    const pushBody = `Time to leave for ${row.event_summary} — ${leaveTimeStr}. Tap to open Maps.`;
+
+    await markDepartureNotified(today, row.event_id, userName);
+
+    await sendPushToAll({
+      title: `🗺️ Time to Leave — ${companionName}`,
+      body: pushBody,
+      tag: `departure-${row.event_id}`,
+      requireInteraction: true,
+      notificationType: "departure",
+      companionMessage: JSON.stringify({ mapsUrl, eventSummary: row.event_summary }),
+    }, userName).catch(() => {});
+
+    broadcastToUser(userName, "reminder", {
+      id: `departure-${row.event_id}-${Date.now()}`,
+      userName,
+      reminderText: pushBody,
+      speakText: pushBody,
+      isCalendarAlert: true,
+      mapsUrl,
+    });
+
+    logger.info({ event: row.event_summary, leaveTime: leaveTimeStr, userName }, "Departure alert: sent");
+  }
+}
+
+async function runDepartureAlerts(): Promise<void> {
+  try {
+    const users = await getActiveUsers();
+    if (users.length === 0) return;
+    await Promise.allSettled(users.map((u) => runDepartureAlertsForUser(u.userName)));
+  } catch (err) {
+    logger.warn({ err }, "Departure alert: failed to load active users");
+  }
 }
 
 // ── Scheduler: every 5 minutes, 7am–10pm CT ───────────────────────────────────
 
 export function startCalendarSyncScheduler(): void {
+  // New-event / moved-event detection — every 5 minutes
   cron.schedule(
     "*/5 7-22 * * *",
     async () => {
@@ -377,5 +536,18 @@ export function startCalendarSyncScheduler(): void {
     { timezone: TZ }
   );
 
-  logger.info("Calendar sync scheduler (every 5 min, 7am–10pm CT) started");
+  // Departure-time alerts — every 2 minutes (finer resolution so we don't miss the window)
+  cron.schedule(
+    "*/2 6-23 * * *",
+    async () => {
+      try {
+        await runDepartureAlerts();
+      } catch (err) {
+        logger.error({ err }, "Departure alert scheduler error");
+      }
+    },
+    { timezone: TZ }
+  );
+
+  logger.info("Calendar sync scheduler (every 5 min, 7am–10pm CT) + departure alert scheduler (every 2 min) started");
 }

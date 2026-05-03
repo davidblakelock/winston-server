@@ -1059,6 +1059,22 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       if (!res.writableEnded) res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
+    // ── Serve cached briefing text if already delivered today ──────────────────
+    // The morning briefing does not change on repeat requests in the same day.
+    // Return the cached text immediately — no new Claude call, no email/calendar re-fetch.
+    const todayCachedBriefing = await getPersistedBriefingText(sessionUserName);
+    if (todayCachedBriefing) {
+      req.log.info({ chars: todayCachedBriefing.length }, "Morning briefing already delivered today — serving cached text (no re-generation)");
+      if (isNativeMorning) {
+        res.json({ response: todayCachedBriefing });
+        return;
+      }
+      sendMorningSSE({ text: todayCachedBriefing });
+      sendMorningSSE({ done: true, isMorningBriefing: true });
+      res.end();
+      return;
+    }
+
     // ── Fetch live email and calendar at delivery time ──
     const deliveryNow = new Date();
     const homeAddress = userProfile?.homeAddress ?? ((userProfile?.rawData as CollectedData)?.homeAddress) ?? "";

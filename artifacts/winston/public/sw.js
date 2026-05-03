@@ -187,6 +187,23 @@ self.addEventListener("notificationclick", (event) => {
       // ── Bill reminder: body tap also dismisses without opening the app ────
       if (data.notificationType === "bill-reminder") return;
 
+      // ── Medication: body tap closes the notification — action buttons handle Taken / Remind ──
+      // Tapping the body of a medication notification does nothing (no app open).
+      // The user must tap "Taken ✓" or "Remind in 30 min" action buttons.
+      if (data.categoryId === "medication-action") return;
+
+      // ── Departure alert: body tap opens Google Maps directly ──────────────
+      if (data.notificationType === "departure") {
+        try {
+          const cm = data.companionMessage ? JSON.parse(data.companionMessage) : null;
+          const mapsUrl = cm?.mapsUrl ?? null;
+          if (mapsUrl) {
+            await self.clients.openWindow(mapsUrl);
+            return;
+          }
+        } catch (_) { /* fall through to default */ }
+      }
+
       // ── Main tap (no action button) — open the app ────────────────────────
       // Store payload in IDB so Chat.tsx can consume it on mount.
       await writeToIDB({
