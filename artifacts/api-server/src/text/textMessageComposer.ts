@@ -286,6 +286,41 @@ export function clearLastSmsPayload(): void {
   _lastSmsPayload = null;
 }
 
+// ── Pending departure text offer ──────────────────────────────────────────────
+// When a departure alert fires and we find a contact with a phone, we store the
+// offer here so that the next chat turn can pick it up if the user says "yes".
+
+export interface PendingDepartureTextOffer {
+  recipientName: string;
+  recipientPhone: string | null;
+  eventSummary: string;
+  userName: string;
+  createdAt: number;
+}
+
+const DEPARTURE_OFFER_TTL_MS = 30 * 60 * 1000; // 30 minutes
+let _pendingDepartureTextOffer: PendingDepartureTextOffer | null = null;
+
+export function getPendingDepartureTextOffer(): PendingDepartureTextOffer | null {
+  if (!_pendingDepartureTextOffer) return null;
+  if (Date.now() - _pendingDepartureTextOffer.createdAt > DEPARTURE_OFFER_TTL_MS) {
+    _pendingDepartureTextOffer = null;
+    return null;
+  }
+  return _pendingDepartureTextOffer;
+}
+
+export function setPendingDepartureTextOffer(offer: PendingDepartureTextOffer | null): void {
+  _pendingDepartureTextOffer = offer;
+  if (offer) {
+    logger.info({ recipient: offer.recipientName, event: offer.eventSummary }, "[TEXT] Departure text offer stored");
+  }
+}
+
+export function clearPendingDepartureTextOffer(): void {
+  _pendingDepartureTextOffer = null;
+}
+
 // ── Confirmation detection ────────────────────────────────────────────────────
 
 const CONFIRM_PATTERN = /^(?:(?:ok|okay|yeah|yep|yup|uh|um|sure|alright|sounds\s+good|looks?\s+good|great|perfect)[,\s]+)*(yes|send\s+it|looks?\s+good|that'?s\s+(?:good|great|perfect|fine)|perfect|go\s+ahead|confirmed?|do\s+it|okay|ok|send\s+that|that\s+works?)\b/i;

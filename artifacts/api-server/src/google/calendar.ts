@@ -19,6 +19,7 @@ export interface CalendarEvent {
   location?: string;
   description?: string;
   allDay: boolean;
+  attendees?: Array<{ name?: string; email?: string }>;
 }
 
 const TZ = "America/Chicago";
@@ -196,6 +197,9 @@ async function fetchEventsFromAllCalendars(
             location: event.location ?? undefined,
             description: event.description ?? undefined,
             allDay: !event.start?.dateTime,
+            attendees: (event.attendees ?? [])
+              .filter((a) => !a.self && a.displayName)
+              .map((a) => ({ name: a.displayName ?? undefined, email: a.email ?? undefined })),
           });
         }
       } catch (err) {

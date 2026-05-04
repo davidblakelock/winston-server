@@ -8,6 +8,8 @@ import { GoogleInvalidGrantError, clearGoogleTokensForUser } from "../google/oau
 import { estimateDriveTime, extractEventLocation, computeLeaveAt } from "./departureManager.js";
 import { query } from "../db.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
+import { searchContacts } from "../google/contacts.js";
+import { setPendingDepartureTextOffer } from "../text/textMessageComposer.js";
 
 // Rate-limit the "Google disconnected" push to once per user per server lifecycle.
 const _invalidGrantNotifiedUsers = new Set<string>();
@@ -51,6 +53,7 @@ export async function ensureCalendarSyncTable(): Promise<void> {
     `ALTER TABLE calendar_sync_state ADD COLUMN IF NOT EXISTS departure_notified BOOLEAN NOT NULL DEFAULT FALSE`,
     `ALTER TABLE calendar_sync_state ADD COLUMN IF NOT EXISTS leave_time_iso TEXT`,
     `ALTER TABLE calendar_sync_state ADD COLUMN IF NOT EXISTS event_location TEXT`,
+    `ALTER TABLE calendar_sync_state ADD COLUMN IF NOT EXISTS event_attendees TEXT`,
   ];
   for (const sql of alters) {
     await query(sql).catch((err: unknown) => {
@@ -114,22 +117,24 @@ async function markEventKnown(
   userName: string,
   startIso?: string | null,
   eventLocation?: string | null,
-  leaveTimeIso?: string | null
+  leaveTimeIso?: string | null,
+  attendeesJson?: string | null
 ): Promise<void> {
   try {
     await query(
       `INSERT INTO calendar_sync_state
-         (event_date, event_id, event_summary, alert_sent, user_name, event_start_iso, event_location, leave_time_iso)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         (event_date, event_id, event_summary, alert_sent, user_name, event_start_iso, event_location, leave_time_iso, event_attendees)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        ON CONFLICT (event_date, event_id) DO UPDATE
          SET event_summary   = EXCLUDED.event_summary,
              event_start_iso = EXCLUDED.event_start_iso,
              event_location  = COALESCE(EXCLUDED.event_location, calendar_sync_state.event_location),
              leave_time_iso  = COALESCE(EXCLUDED.leave_time_iso, calendar_sync_state.leave_time_iso),
+             event_attendees = COALESCE(EXCLUDED.event_attendees, calendar_sync_state.event_attendees),
              seen_at         = NOW()
        RETURNING event_id`,
       [dateStr, eventId, summary, alertSent, userName,
-       startIso ?? null, eventLocation ?? null, leaveTimeIso ?? null]
+       startIso ?? null, eventLocation ?? null, leaveTimeIso ?? null, attendeesJson ?? null]
     );
   } catch (err) {
     logger.warn({ err, dateStr, eventId, userName }, "Calendar sync: markEventKnown failed");
@@ -225,10 +230,14 @@ async function sendNewEventAlert(event: CalendarEvent, userName: string): Promis
   // Store departure info so the leave-time scheduler can fire a reminder
   if (event.id) {
     const today = localDateStr();
+    const attendeesJson = (event.attendees && event.attendees.length > 0)
+      ? JSON.stringify(event.attendees)
+      : null;
     await markEventKnown(
       today, event.id, eventName, true, userName, event.startIso,
       departure?.location ?? null,
-      departure?.leaveAtIso ?? null
+      departure?.leaveAtIso ?? null,
+      attendeesJson
     );
   }
 
@@ -427,7 +436,11 @@ export async function populateCalendarSyncState(
       leaveTimeIso = dep?.leaveAtIso ?? null;
     }
 
-    await markEventKnown(today, event.id, event.summary, true, userName, event.startIso, location, leaveTimeIso);
+    const attendeesJson = (event.attendees && event.attendees.length > 0)
+      ? JSON.stringify(event.attendees)
+      : null;
+
+    await markEventKnown(today, event.id, event.summary, true, userName, event.startIso, location, leaveTimeIso, attendeesJson);
   }
   logger.info({ count: events.length, userName }, "Calendar sync state: pre-populated from morning briefing");
 }
@@ -439,15 +452,16 @@ async function runDepartureAlertsForUser(userName: string): Promise<void> {
   const now = new Date();
   const nowMs = now.getTime();
 
-  let rows: { event_id: string; event_summary: string; event_location: string; leave_time_iso: string }[];
+  let rows: { event_id: string; event_summary: string; event_location: string; leave_time_iso: string; event_attendees: string | null }[];
   try {
     const res = await query<{
       event_id: string;
       event_summary: string;
       event_location: string;
       leave_time_iso: string;
+      event_attendees: string | null;
     }>(
-      `SELECT event_id, event_summary, event_location, leave_time_iso
+      `SELECT event_id, event_summary, event_location, leave_time_iso, event_attendees
          FROM calendar_sync_state
         WHERE event_date = $1
           AND user_name = $2
@@ -467,7 +481,6 @@ async function runDepartureAlertsForUser(userName: string): Promise<void> {
     const diffMs = nowMs - leaveAtMs;
 
     // Fire if we're within a 5-minute window starting at leave time
-    // (negative: not yet time; positive: past leave time)
     if (diffMs < 0 || diffMs > 5 * 60 * 1000) continue;
 
     const companionName = await getCompanionName(userName);
@@ -476,7 +489,46 @@ async function runDepartureAlertsForUser(userName: string): Promise<void> {
       timeZone: TZ, hour: "numeric", minute: "2-digit", hour12: true,
     });
 
-    const pushBody = `Time to leave for ${row.event_summary} — ${leaveTimeStr}. Tap to open Maps.`;
+    // ── Text offer: look up attendees and find one with a phone ───────────────
+    let textOfferRecipient: { name: string; phone: string | null } | null = null;
+    if (row.event_attendees) {
+      try {
+        const attendees = JSON.parse(row.event_attendees) as Array<{ name?: string; email?: string }>;
+        for (const attendee of attendees) {
+          if (!attendee.name) continue;
+          const result = await searchContacts(attendee.name, userName).catch(() => null);
+          const match = result?.contacts.find((c) => c.phone);
+          if (match) {
+            textOfferRecipient = { name: attendee.name, phone: match.phone ?? null };
+            break;
+          }
+        }
+      } catch {
+        // attendees JSON parse failure — skip text offer
+      }
+    }
+
+    // Build messages — with or without text offer
+    const firstName = textOfferRecipient?.name.split(" ")[0] ?? null;
+    const offerSuffix = firstName
+      ? ` Want me to text ${firstName} you're on your way?`
+      : "";
+
+    const speakText = `Time to leave for ${row.event_summary} — leave by ${leaveTimeStr}.${offerSuffix}`;
+    const pushBody = textOfferRecipient
+      ? `Time to leave — ${leaveTimeStr}. Open Winston to text ${firstName} you're on your way.`
+      : `Time to leave for ${row.event_summary} — ${leaveTimeStr}. Tap to open Maps.`;
+
+    // Store offer state so the next chat message can pick it up
+    if (textOfferRecipient) {
+      setPendingDepartureTextOffer({
+        recipientName: textOfferRecipient.name,
+        recipientPhone: textOfferRecipient.phone,
+        eventSummary: row.event_summary,
+        userName,
+        createdAt: Date.now(),
+      });
+    }
 
     await markDepartureNotified(today, row.event_id, userName);
 
@@ -492,13 +544,21 @@ async function runDepartureAlertsForUser(userName: string): Promise<void> {
     broadcastToUser(userName, "reminder", {
       id: `departure-${row.event_id}-${Date.now()}`,
       userName,
-      reminderText: pushBody,
-      speakText: pushBody,
+      reminderText: speakText,
+      speakText,
       isCalendarAlert: true,
       mapsUrl,
+      ...(textOfferRecipient ? {
+        offerText: true,
+        textRecipientName: textOfferRecipient.name,
+        textRecipientPhone: textOfferRecipient.phone,
+      } : {}),
     });
 
-    logger.info({ event: row.event_summary, leaveTime: leaveTimeStr, userName }, "Departure alert: sent");
+    logger.info(
+      { event: row.event_summary, leaveTime: leaveTimeStr, textOffer: !!textOfferRecipient, userName },
+      "Departure alert: sent"
+    );
   }
 }
 

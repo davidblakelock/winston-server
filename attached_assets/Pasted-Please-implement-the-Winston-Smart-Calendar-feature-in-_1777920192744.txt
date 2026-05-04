@@ -1,0 +1,23 @@
+Please implement the Winston Smart Calendar feature in priority order. Here is the full spec:
+Feature 1 — Departure Alert + Text Offer (build first, mostly done):
+When a departure alert fires, include an offer to text the person the user is meeting. Example notification: 'You have lunch with Susan downtown at noon. Leave by 11:40 — accident on I-75. Want me to text her you're on your way?' The notification tap should open Winston and James Bond should offer to compose and send the text. Use the existing departure alert infrastructure plus contacts lookup plus text composition.
+Feature 2 — Email to Calendar Detection:
+During morning email processing, scan for meeting requests embedded in emails. When detected, surface conversationally in the morning briefing: 'You have an email from John asking to meet Thursday at 2pm. You're free then but you have a 3pm appointment — want me to suggest 10am instead?' User confirms by voice → Winston drafts the reply for approval → sends via Gmail API. Use existing Gmail API plus Claude natural language parsing plus Google Calendar availability check.
+Feature 3 — Proactive Meeting Suggestions:
+When someone emails requesting a meeting without proposing a specific time, detect the intent, check calendar for available slots, surface 2-3 options conversationally. Draft reply for user approval.
+Trust-based automation progression:
+
+Beta: always require user approval before sending any email or calendar reply
+Post-beta: opt-in semi-automatic with notification after sending
+Power user: full auto-send with these permanent guardrails that can never be disabled:
+
+Never auto-accept meetings conflicting with existing calendar events
+Never auto-send to unknown contacts
+Always notify after sending
+60-second undo window
+
+
+
+Feature 4 — Group Coordination via Winston Connect:
+When user says 'Hey Winston, find a time for dinner with Susan and Mike next week' — if they are Winston users query availability across all calendars via Supabase and propose mutually available time. If not Winston users, draft coordinating texts asking for availability.
+Please implement in order — Feature 1 first since it's mostly built, then Feature 2, then 3 and 4. Deploy after each feature is complete and confirm what was built

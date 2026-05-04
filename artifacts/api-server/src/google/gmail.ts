@@ -9,6 +9,8 @@ export interface EmailSummary {
   subject: string;
   snippet: string;
   date: string;
+  gmailId: string;
+  gmailThreadId: string;
 }
 
 function decodeHeader(encoded: string): string {
@@ -317,7 +319,7 @@ export async function fetchAndSummarizeEmails(maxResults = 15, since?: Date, use
     const snippet = detail.data.snippet ?? "";
     const date = get("Date");
 
-    emails.push({ from, fromEmail, subject, snippet, date });
+    emails.push({ from, fromEmail, subject, snippet, date, gmailId: msg.id ?? "", gmailThreadId: detail.data.threadId ?? "" });
   }
 
   const fetchDurationMs = Date.now() - fetchStart.getTime();
@@ -396,7 +398,7 @@ export async function fetchRecentEmails(maxResults = 10): Promise<EmailSummary[]
     const snippet = detail.data.snippet ?? "";
     const date = get("Date");
 
-    emails.push({ from, fromEmail, subject, snippet, date });
+    emails.push({ from, fromEmail, subject, snippet, date, gmailId: msg.id ?? "", gmailThreadId: detail.data.threadId ?? "" });
   }
 
   // ── Diagnostic: log fetch summary ─────────────────────────────────────────

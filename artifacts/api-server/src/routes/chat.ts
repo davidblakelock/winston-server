@@ -158,6 +158,18 @@ import {
 import { validateSession } from "../auth/sessionAuth.js";
 import { authenticate, tryAuthenticate } from "../auth/middleware.js";
 import { normalizeTtsText } from "../lib/ttsNormalize.js";
+import {
+  detectMeetingRequests,
+  buildMeetingRequestsBlock,
+  composeEmailReply,
+  getPendingMeetingRequests,
+  setPendingMeetingRequests,
+  clearPendingMeetingRequests,
+  getPendingEmailReply,
+  setPendingEmailReply,
+  clearPendingEmailReply,
+  type EmailInput,
+} from "../email/emailMeetingManager.js";
 import { getCachedBriefing, setCachedBriefing, getStaticBriefingContext, loadStaticContextFromDb, getPersistedBriefingText } from "../morning/briefingCache.js";
 import { updateSettings as updateWinddownSettings } from "../winddown/winddownManager.js";
 import { analyzePressureDelta, formatPressureContext, formatPressureContextNoChange } from "../weather/pressureScheduler.js";
@@ -174,6 +186,8 @@ import {
   isSendCancellation,
   setLastSmsPayload,
   getLastSmsPayload,
+  getPendingDepartureTextOffer,
+  clearPendingDepartureTextOffer,
   type MessageTone,
 } from "../text/textMessageComposer.js";
 import {
@@ -956,6 +970,22 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const pendingText = getPendingText();
   const isTextMessageRequest = !isMorningGreeting && TEXT_MESSAGE_PATTERN.test(message);
   const isTextFlowActive = !isMorningGreeting && pendingText !== null;
+
+  // E007: Email meeting reply flow
+  const pendingEmailReply = getPendingEmailReply();
+  const pendingMeetingRequests = getPendingMeetingRequests();
+  const EMAIL_REPLY_ACCEPT = /^(?:(?:ok|okay|yeah|yep|yup|sure|alright)[,\s]+)*(yes|draft\s+(?:it|a\s+reply|the\s+reply)|yes\s+draft|do\s+it|sounds?\s+good|let.?s\s+do\s+it|go\s+ahead)(?:[,\s!.]|$)/i;
+  const isEmailReplyAccepted =
+    !isMorningGreeting && !isTextFlowActive && !isTextMessageRequest &&
+    pendingEmailReply === null && pendingMeetingRequests.length > 0 &&
+    EMAIL_REPLY_ACCEPT.test(message.trim());
+  const isEmailReplyFlowActive = pendingEmailReply !== null;
+
+  // T006-DEP: Departure text offer — user said yes after a departure alert offered to text someone
+  const pendingDepartureOffer = getPendingDepartureTextOffer();
+  const DEPARTURE_TEXT_ACCEPT = /^(?:yes|yeah|yep|yup|sure|go\s+ahead|do\s+it|ok(?:ay)?|send\s+it|text\s+(her|him|them)|that\s+works?|sounds?\s+good)(?:[,\s!.]|$)/i;
+  const isDepartureTextAccepted = !isMorningGreeting && !isTextFlowActive && !isTextMessageRequest
+    && pendingDepartureOffer !== null && DEPARTURE_TEXT_ACCEPT.test(message.trim());
   // Retry: user says something like "it didn't open" / "try again" within 30 min of last SMS dispatch
   const SMS_RETRY_PATTERN = /\b(it\s+didn.?t\s+(open|work)|try\s+again|open\s+(messages|messaging|it)\s+again|send\s+it\s+again|retry|re-?send|messages\s+(didn.?t|didn.t)\s+open)\b/i;
   const lastSmsPayload = getLastSmsPayload();
@@ -1149,8 +1179,31 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       updateEmailLastChecked().catch(() => {});
     }
 
+    // ── E007: Detect meeting requests in morning emails ───────────────────────
+    let meetingRequestsBlock = "";
+    if (liveEmails && liveEmails.length > 0) {
+      try {
+        const emailsForDetection: EmailInput[] = liveEmails.map((e) => ({
+          gmailId: e.gmailId,
+          gmailThreadId: e.gmailThreadId,
+          from: e.from,
+          fromEmail: e.fromEmail,
+          subject: e.subject,
+          snippet: e.snippet,
+        }));
+        const detected = await detectMeetingRequests(emailsForDetection, liveEvents ?? []);
+        if (detected.length > 0) {
+          setPendingMeetingRequests(detected);
+          meetingRequestsBlock = buildMeetingRequestsBlock(detected);
+          req.log.info({ count: detected.length }, "[E007] Meeting requests detected in morning emails");
+        }
+      } catch (err) {
+        req.log.warn({ err }, "[E007] Meeting detection failed — skipping");
+      }
+    }
+
     // Assemble full system prompt: pre-built static preamble + live blocks + static suffix
-    const fullSystemPrompt = staticCtx.preamble + liveGmailBlock + liveCalendarBlock + staticCtx.suffix;
+    const fullSystemPrompt = staticCtx.preamble + liveGmailBlock + meetingRequestsBlock + liveCalendarBlock + staticCtx.suffix;
 
     req.log.info(
       { promptChars: fullSystemPrompt.length, hasEmail: !!liveGmailBlock, hasCalendar: !!liveCalendarBlock },
@@ -1162,7 +1215,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       const nativeBriefing = await anthropic.messages.create({
         model: MODEL_SONNET,
         max_tokens: 1500,
-        system: buildSystemBlocks(staticCtx.preamble, liveGmailBlock + liveCalendarBlock + staticCtx.suffix),
+        system: buildSystemBlocks(staticCtx.preamble, liveGmailBlock + meetingRequestsBlock + liveCalendarBlock + staticCtx.suffix),
         messages: [{ role: "user", content: "good morning" }],
       });
       const nativeBriefingText =
@@ -1182,7 +1235,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     const stream = anthropic.messages.stream({
       model: MODEL_SONNET,
       max_tokens: 1500,
-      system: buildSystemBlocks(staticCtx.preamble, liveGmailBlock + liveCalendarBlock + staticCtx.suffix),
+      system: buildSystemBlocks(staticCtx.preamble, liveGmailBlock + meetingRequestsBlock + liveCalendarBlock + staticCtx.suffix),
       messages: [{ role: "user", content: "good morning" }],
     });
 
@@ -1683,6 +1736,139 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       }
     } catch (err) {
       req.log.warn({ err }, "[T005] Pressure analysis failed");
+    }
+  }
+
+  // ── T006-DEP: Departure text offer accepted ────────────────────────────────
+  // User said "yes" / "sure" after a departure alert offered to text the attendee.
+  // Immediately compose an "I'm on my way" message and jump to awaiting_confirmation.
+  if (isDepartureTextAccepted && pendingDepartureOffer) {
+    const displayName = userProfile?.name ?? sessionUserName;
+    const intent = `I'm on my way to ${pendingDepartureOffer.eventSummary}`;
+    clearPendingDepartureTextOffer();
+    try {
+      const composed = await composeTextMessage({
+        recipientName: pendingDepartureOffer.recipientName,
+        tone: "casual",
+        userIntent: intent,
+        senderName: displayName,
+      });
+      setPendingText({
+        phase: "awaiting_confirmation",
+        recipientName: pendingDepartureOffer.recipientName,
+        recipientPhone: pendingDepartureOffer.recipientPhone,
+        tone: "casual",
+        composedBody: composed.body,
+      });
+      systemPrompt +=
+        `\n\n[Departure Text Composed for ${pendingDepartureOffer.recipientName}]\n` +
+        `Message body:\n"${composed.body}"\n\n` +
+        `Read this message back to ${displayName} word for word, then ask if it looks good. ` +
+        `Example: "Here's what I've got: [read message verbatim]. Want me to hand that off to your Messages app?" ` +
+        `CRITICAL HONESTY RULES: ` +
+        `(1) You are composing — you are NOT sending it and you CANNOT send it. ` +
+        `(2) Messages only opens AFTER they say yes. Do NOT say it is opening now. ` +
+        `(3) Never say "sending now", "opening Messages", or imply immediate action.`;
+      req.log.info({ recipient: pendingDepartureOffer.recipientName }, "[T006-DEP] Departure text composed — awaiting confirmation");
+    } catch (err) {
+      req.log.warn({ err }, "[T006-DEP] Departure text composition failed");
+      systemPrompt +=
+        `\n\n[Departure Text — Error]\nTell ${displayName} you had trouble composing the text and ask them to try again.`;
+    }
+  }
+
+  // ── E007-CONF: Email reply confirmed — package for email app ──────────────
+  if (isEmailReplyFlowActive && pendingEmailReply) {
+    const displayName = userProfile?.name ?? sessionUserName;
+    if (isSendConfirmation(message)) {
+      const mailtoUri =
+        `mailto:${encodeURIComponent(pendingEmailReply.to)}` +
+        `?subject=${encodeURIComponent(pendingEmailReply.subject)}` +
+        `&body=${encodeURIComponent(pendingEmailReply.draftBody)}`;
+      const emailPayload = {
+        to: pendingEmailReply.to,
+        recipientName: pendingEmailReply.recipientName,
+        subject: pendingEmailReply.subject,
+        body: pendingEmailReply.draftBody,
+        mailtoUri,
+      };
+      clearPendingEmailReply();
+      clearPendingMeetingRequests();
+      (req as any)._emailPayload = emailPayload;
+      broadcastToUser(sessionUserName, "email-compose", { type: "email_compose", ...emailPayload });
+      const confirmText = `The reply is ready. Your email app should open with it pre-filled for ${pendingEmailReply.recipientName} — hit send when you're ready. I can't send it directly; that part's yours.`;
+      (req as any)._hardcodedResponse = confirmText;
+      req.log.info({ to: pendingEmailReply.to }, "[E007-CONF] Email packaged — hardcoded response");
+    } else if (isSendCancellation(message)) {
+      clearPendingEmailReply();
+      systemPrompt += `\n\n[Email Reply Cancelled]\nUser cancelled. Acknowledge: "No problem, I've dropped it."`;
+    } else {
+      // User wants to revise the draft
+      try {
+        const revised = await composeEmailReply(
+          {
+            from: pendingEmailReply.recipientName,
+            fromEmail: pendingEmailReply.to,
+            subject: pendingEmailReply.subject,
+            proposedDateTimeStr: null,
+            isOpenEnded: true,
+          },
+          `Previous draft: "${pendingEmailReply.draftBody}". User's feedback: "${message}"`,
+          displayName,
+        );
+        setPendingEmailReply({ ...pendingEmailReply, draftBody: revised });
+        systemPrompt +=
+          `\n\n[Email Reply Revised]\nDraft:\n"${revised}"\n\n` +
+          `Read the revised reply word for word, then ask: ` +
+          `"Does that work? Say yes and I'll hand it off to your email app." ` +
+          `CRITICAL: You cannot send it — the email app opens only AFTER they confirm.`;
+      } catch (err) {
+        req.log.warn({ err }, "[E007-CONF] Revision failed");
+      }
+    }
+  }
+
+  // ── E007-MEET: Email meeting request — user accepted, compose draft ────────
+  if (isEmailReplyAccepted && pendingMeetingRequests.length > 0) {
+    const displayName = userProfile?.name ?? sessionUserName;
+    const request = pendingMeetingRequests[0];
+    // Extract any time preference hinted in the user's message
+    const timeHintMatch = /suggest\s+(.+)|prefer\s+(.+)|how\s+about\s+(.+)|what\s+about\s+(.+)/i.exec(message);
+    const timeHint = timeHintMatch?.[1] ?? timeHintMatch?.[2] ?? timeHintMatch?.[3] ?? timeHintMatch?.[4] ?? null;
+    const intent =
+      request.isOpenEnded
+        ? `Reply positively and suggest a time to meet${timeHint ? `: ${timeHint}` : " — pick something that sounds reasonable from the calendar context"}`
+        : request.calendarStatus === "conflict" && request.suggestedAlternative
+          ? `Apologize that ${request.proposedDateTimeStr} doesn't work, suggest ${timeHint ?? request.suggestedAlternative} instead`
+          : `Confirm that ${timeHint ?? request.proposedDateTimeStr} works great`;
+    try {
+      const draftBody = await composeEmailReply(request, intent, displayName);
+      const replySubject = request.subject.startsWith("Re:") ? request.subject : `Re: ${request.subject}`;
+      setPendingEmailReply({
+        gmailId: request.gmailId,
+        gmailThreadId: request.gmailThreadId,
+        to: request.fromEmail,
+        recipientName: request.from,
+        subject: replySubject,
+        draftBody,
+        userName: sessionUserName,
+        createdAt: Date.now(),
+      });
+      systemPrompt +=
+        `\n\n[Email Reply Drafted for ${request.from}]\n` +
+        `Reply to: ${request.fromEmail}\n` +
+        `Subject: ${replySubject}\n` +
+        `Draft:\n"${draftBody}"\n\n` +
+        `Read this reply to ${displayName} word for word, then ask: ` +
+        `"Want me to hand that off to your email app?" ` +
+        `CRITICAL HONESTY RULES: ` +
+        `(1) You are composing only — you CANNOT send it directly. ` +
+        `(2) The email app opens AFTER they say yes. Do NOT say it is opening now. ` +
+        `(3) Never say "sending now", "opening your email", or imply immediate action.`;
+      req.log.info({ to: request.fromEmail }, "[E007-MEET] Reply drafted — awaiting confirmation");
+    } catch (err) {
+      req.log.warn({ err }, "[E007-MEET] Reply composition failed");
+      systemPrompt += `\n\n[Email Reply — Error]\nTell ${displayName} you had trouble drafting the reply and ask them to try again.`;
     }
   }
 
@@ -3484,8 +3670,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   if ((req as any)._hardcodedResponse) {
     const hardcoded = (req as any)._hardcodedResponse as string;
     const smsPayload = (req as any)._smsPayload;
+    const emailPayload = (req as any)._emailPayload;
     sendSSE({ text: hardcoded });
-    sendSSE({ done: true, messageId, ...(smsPayload ? { smsPayload } : {}) });
+    sendSSE({ done: true, messageId, ...(smsPayload ? { smsPayload } : {}), ...(emailPayload ? { emailPayload } : {}) });
     // Broadcast to other devices and let the standard post-SSE sync pick it up
     broadcastToUser(sessionUserName, "chat_sync", {
       role: "assistant",

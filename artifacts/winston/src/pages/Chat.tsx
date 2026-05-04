@@ -597,6 +597,14 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
                 prev.map((m) => m.id === targetMsgId ? { ...m, isMorningBriefing: true } : m)
               );
             }
+            if (data.smsPayload) {
+              const sms = data.smsPayload as { smsUri: string };
+              if (sms.smsUri) setTimeout(() => { window.location.href = sms.smsUri; }, 1200);
+            }
+            if (data.emailPayload) {
+              const em = data.emailPayload as { mailtoUri: string };
+              if (em.mailtoUri) setTimeout(() => { window.open(em.mailtoUri, "_blank"); }, 1200);
+            }
           }
           if (data.error) {
             const errReply = (data.reply as string) || "Something went wrong. Please try again.";
@@ -1753,6 +1761,20 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         } catch (err) {
           console.error("[PROACTIVE] Error handling proactive event:", err);
         }
+      });
+
+      source.addEventListener("sms-compose", (e) => {
+        try {
+          const data = JSON.parse(e.data) as { smsUri: string };
+          if (data.smsUri) window.location.href = data.smsUri;
+        } catch {}
+      });
+
+      source.addEventListener("email-compose", (e) => {
+        try {
+          const data = JSON.parse(e.data) as { mailtoUri: string };
+          if (data.mailtoUri) window.open(data.mailtoUri, "_blank");
+        } catch {}
       });
 
       source.onopen = () => {
