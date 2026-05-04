@@ -17,19 +17,21 @@ type Tab = "shopping" | "to do" | "tv-shows" | "restaurants";
 const TAB_CONFIG: { key: Tab; label: string; readOnly: boolean; emptyText: string }[] = [
   { key: "shopping",    label: "Shopping",    readOnly: false, emptyText: "Shopping list is empty." },
   { key: "to do",      label: "To Do",       readOnly: false, emptyText: "No to-dos yet." },
-  { key: "tv-shows",   label: "TV Shows",    readOnly: true,  emptyText: "No shows on your watch list." },
+  { key: "tv-shows",   label: "TV Shows",    readOnly: false, emptyText: "No shows on your watch list." },
   { key: "restaurants",label: "Restaurants", readOnly: false, emptyText: "No restaurants saved yet." },
 ];
 
 function apiPath(tab: Tab): string {
   if (tab === "tv-shows") return `${API}/api/lists/tv-shows`;
   if (tab === "restaurants") return `${API}/api/lists/restaurants`;
+  if (tab === "to do") return `${API}/api/lists/todo`;
   return `${API}/api/lists/${encodeURIComponent(tab)}`;
 }
 
 function deletePath(tab: Tab, id: number): string {
   if (tab === "tv-shows") return `${API}/api/lists/tv-shows/${id}`;
   if (tab === "restaurants") return `${API}/api/lists/restaurants/${id}`;
+  if (tab === "to do") return `${API}/api/lists/todo/${id}`;
   return `${API}/api/lists/${encodeURIComponent(tab)}/${id}`;
 }
 

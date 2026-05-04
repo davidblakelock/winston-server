@@ -129,6 +129,32 @@ router.get("/lists/tv-shows", async (req: Request, res: Response) => {
   }
 });
 
+// POST /api/lists/tv-shows — add a show directly from the UI
+router.post("/lists/tv-shows", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const item = ((req.body?.item ?? "") as string).trim();
+  if (!item) { res.status(400).json({ error: "item required" }); return; }
+  try {
+    const { rows } = await query<{ id: number; show_name: string }>(
+      `INSERT INTO watched_shows (user_name, show_name)
+       VALUES ($1, $2)
+       ON CONFLICT (user_name, lower(show_name)) DO NOTHING
+       RETURNING id, show_name`,
+      [userName, item]
+    );
+    if (rows.length === 0) {
+      res.status(409).json({ error: "Show already in list" });
+      return;
+    }
+    req.log.info({ userName, show: item }, "[TV Shows] Added via UI");
+    res.json({ item: { id: rows[0].id, item_text: rows[0].show_name, created_at: new Date().toISOString() } });
+  } catch (err) {
+    req.log.warn({ err }, "TV Shows list POST error");
+    res.status(500).json({ error: "Failed to add show" });
+  }
+});
+
 // DELETE /api/lists/tv-shows/:id
 router.delete("/lists/tv-shows/:id", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
@@ -214,6 +240,65 @@ router.delete("/lists/restaurants/:id", async (req: Request, res: Response) => {
   } catch (err) {
     req.log.warn({ err }, "Restaurants list DELETE error");
     res.status(500).json({ error: "Failed to remove restaurant" });
+  }
+});
+
+// ── To Do — dedicated slug so the URL never needs %20 encoding ───────────────
+// Maps the clean /todo path to list_name = 'to do' in the DB.
+// MUST appear before the /lists/:listName wildcard.
+router.get("/lists/todo", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  pullTasksFromGoogle(userName).catch(() => {});
+  try {
+    const { rows } = await query<{ id: number; item_text: string; created_at: string }>(
+      `SELECT id, item_text, created_at FROM list_items
+       WHERE user_name = $1 AND list_name = 'to do'
+       ORDER BY created_at ASC`,
+      [userName]
+    );
+    res.json({ items: rows });
+  } catch (err) {
+    req.log.warn({ err }, "To Do GET error");
+    res.status(500).json({ error: "Failed to fetch to do list" });
+  }
+});
+
+router.post("/lists/todo", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const { item } = req.body as { item?: string };
+  if (!item?.trim()) { res.status(400).json({ error: "item is required" }); return; }
+  try {
+    const { rows } = await query<{ id: number; item_text: string; created_at: string }>(
+      `INSERT INTO list_items (user_name, list_name, item_text)
+       VALUES ($1, 'to do', $2)
+       ON CONFLICT (user_name, list_name, lower(item_text))
+       DO UPDATE SET item_text = EXCLUDED.item_text
+       RETURNING id, item_text, created_at`,
+      [userName, item.trim()]
+    );
+    pushItemsToGoogleTasks(userName, [item.trim()]).catch(() => {});
+    res.json({ item: rows[0] });
+  } catch (err) {
+    req.log.warn({ err }, "To Do POST error");
+    res.status(500).json({ error: "Failed to add item" });
+  }
+});
+
+router.delete("/lists/todo/:id", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const { id } = req.params;
+  try {
+    await query(
+      `DELETE FROM list_items WHERE id = $1 AND user_name = $2 AND list_name = 'to do' RETURNING id`,
+      [id, userName]
+    );
+    res.json({ deleted: true });
+  } catch (err) {
+    req.log.warn({ err }, "To Do DELETE error");
+    res.status(500).json({ error: "Failed to delete item" });
   }
 });
 
