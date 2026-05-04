@@ -318,6 +318,9 @@ const MORNING_PATTERN = /^(good\s+morning|mornin[g']?|morning\s+(briefing|summar
 // Fired when user wants details on a specific Top 10 news story from the morning briefing.
 const NEWS_DIG_PATTERN = /\b(?:(?:tell\s+me\s+more|more\s+(?:about|on|details?)|dig\s+(?:into|deeper)|details?\s+on|expand\s+on|what\s+happened\s+with)\s+(?:(?:story|number|#|item)\s*)?(\d+)|(?:story|number|item|#)\s*(\d+)(?:\s+please)?$)/i;
 const EVENING_PATTERN = /\b(good\s+evening|evening\s+check[\s-]?in|check[\s-]?in\s+for\s+the\s+evening|start\s+(my\s+)?evening\s+check[\s-]?in|winding\s+down|wind\s+down|heading\s+to\s+bed|going\s+to\s+bed|getting\s+ready\s+for\s+bed|calling\s+it\s+a\s+night|turning\s+in|good\s+night|goodnite|end\s+of\s+the\s+day|wrapping\s+up|relaxing\s+(tonight|this\s+evening)|settling\s+in)\b/i;
+// Catches direct weather queries at any time of day (not just during wind-down).
+// Matches: "what's the weather", "weather on Friday", "forecast", "will it rain", "how hot", etc.
+const WEATHER_PATTERN = /\b(weather|forecast|temperature|how\s+(hot|cold|warm)|will\s+it\s+(rain|snow|be\s+(hot|cold|warm|sunny|cloudy|rainy|windy))|chance\s+of\s+rain|what('?s|\s+is)\s+(it\s+like\s+)?(outside|today|tomorrow|this\s+week|this\s+weekend|on\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday))|is\s+it\s+(going\s+to|supposed\s+to)\s+(rain|snow|be\s+(hot|cold|warm|sunny|nice))|outdoor\s+(conditions?|weather)|rain\s+(today|tomorrow|this\s+week|this\s+weekend)|degrees?\s+outside|feels?\s+like\s+outside)\b/i;
 // LIST_REMINDERS_PATTERN must come before REMINDER_PATTERN in evaluation order so
 // "what are my reminders?" is never mistakenly routed to the reminder-creation path.
 const LIST_REMINDERS_PATTERN = /\b(what\s+(are\s+)?(my\s+)?(active\s+|pending\s+|upcoming\s+|current\s+)?reminders?|show\s+(me\s+)?(my\s+)?(active\s+|pending\s+|upcoming\s+|current\s+)?reminders?|list\s+(my\s+)?(active\s+|pending\s+|upcoming\s+|current\s+)?reminders?|do\s+i\s+have\s+(any\s+)?(active\s+|pending\s+|upcoming\s+)?reminders?|any\s+(active\s+|pending\s+|upcoming\s+)?reminders?|reminders?\s+do\s+i\s+have)\b/i;
@@ -915,6 +918,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
   const isSportsRequest = !isMorningGreeting && SPORTS_PATTERN.test(message);
   const isMarketsRequest = !isMorningGreeting && MARKETS_PATTERN.test(message);
+  const isWeatherRequest = !isMorningGreeting && WEATHER_PATTERN.test(message);
   const isBriefingPrefRequest = !isMorningGreeting && BRIEFING_PREF_PATTERN.test(message);
   const isLocalEventsRequest = !isMorningGreeting && !isCalendarRequest && LOCAL_EVENTS_PATTERN.test(message);
   const isRestaurantReco = !isMorningGreeting && !isLocalEventsRequest && RESTAURANT_RECO_PATTERN.test(message);
@@ -1277,6 +1281,35 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     } catch (err) {
       req.log.warn({ err }, "On-demand markets fetch failed");
       systemPrompt += `\n\n[Markets — Unavailable]\nLet the user know you weren't able to pull market data right now and suggest they check back in a moment.`;
+    }
+  }
+
+  // ── Weather (on-demand) ───────────────────────────────────────────────────
+  // Fires any time the user asks about weather outside of the wind-down session.
+  // The wind-down flow already injects weather separately (lines further below).
+  if (isWeatherRequest) {
+    const _wxCity = userProfile?.city ?? "Dallas";
+    const _wxLat = userProfile?.latitude ?? 32.7767;
+    const _wxLon = userProfile?.longitude ?? -96.7970;
+    try {
+      const wx = await getCachedWeather(_wxCity, _wxLat, _wxLon);
+      const forecastLines = wx.forecastDays.map((d) =>
+        `${d.dayName}${d.date ? ` (${d.date})` : ""}: high ${d.high}°F / low ${d.low}°F, ${d.condition}` +
+        (d.precipChance > 20 ? `, ${d.precipChance}% chance of rain` : "")
+      ).join("\n");
+      req.log.info({ city: _wxCity }, "[Weather] On-demand fetch for chat query");
+      systemPrompt +=
+        `\n\n[Weather — ${_wxCity} — Live Data]\n` +
+        `Right now: ${wx.temp}°F (feels like ${wx.feelsLike}°F), ${wx.condition}\n` +
+        `Today: high ${wx.high}°F / low ${wx.low}°F` +
+        (wx.precipChance > 20 ? `, ${wx.precipChance}% chance of rain` : "") + `\n` +
+        (forecastLines ? `\nUpcoming forecast:\n${forecastLines}\n` : "") +
+        `\nAnswer the user's weather question directly using this data. ` +
+        `If they asked about a specific day, look it up in the forecast above and answer precisely. ` +
+        `Be conversational — don't just read the numbers back.`;
+    } catch (err) {
+      req.log.warn({ err, city: _wxCity }, "[Weather] On-demand fetch failed");
+      systemPrompt += `\n\n[Weather — Unavailable]\nThe weather API returned an error right now. Let the user know you're having trouble pulling the forecast and suggest they check a weather app for now. Do NOT say you don't have access to weather data — you do, it's just temporarily unavailable.`;
     }
   }
 
