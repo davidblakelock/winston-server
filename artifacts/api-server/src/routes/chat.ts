@@ -432,7 +432,7 @@ const RESTAURANT_RECO_PATTERN =
 
 // R001: Restaurant intelligence — reservation booking, directions, or info for a named restaurant
 const RESTAURANT_INTEL_PATTERN =
-  /\b(make\s+a?\s*reservation|book\s+(?:a\s+)?(?:table|reservation)|reserve\s+(?:a\s+)?(?:table|spot)|get\s+(?:us\s+)?(?:a\s+)?(?:table|reservation)\s+(?:at|for)|can\s+(?:i|we)\s+get\s+(?:in|a\s+(?:table|reservation))\s+(?:at|for)|check\s+(?:opentable|resy|availability)\s+(?:at|for)|what.?s\s+the\s+(?:number|phone)\s+for|call\s+the\s+restaurant|get\s+directions?\s+to\s+(?:my\s+favorite\s+)?(?:restaurant)?)\b/i;
+  /\b(make\s+(?:a\s+)?reservations?|book\s+(?:a\s+)?(?:table|reservation|spot|us\s+a\s+table)|reserve\s+(?:a\s+)?(?:table|spot|reservation)|get\s+(?:us\s+)?(?:a\s+)?(?:table|reservation)\s+(?:at|for)|can\s+(?:i|we)\s+get\s+(?:in|a\s+(?:table|reservation))\s+(?:at|for)|check\s+(?:opentable|resy|availability)\s+(?:at|for)|what.?s\s+the\s+(?:number|phone)\s+for|call\s+the\s+restaurant|get\s+directions?\s+to|directions?\s+to)\b/i;
 
 // Nearby essential places — pharmacy, urgent care, hospital, grocery, gas, bank
 const NEARBY_PLACES_PATTERN =
