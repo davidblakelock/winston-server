@@ -193,7 +193,7 @@ router.post("/lists/restaurants", async (req: Request, res: Response) => {
     if (rows.length === 0) {
       return res.status(409).json({ error: "Restaurant already in list" });
     }
-    res.json({ id: rows[0].id, item_text: rows[0].name });
+    res.json({ item: { id: rows[0].id, item_text: rows[0].name, created_at: new Date().toISOString() } });
   } catch (err) {
     req.log.warn({ err }, "Restaurants list POST error");
     res.status(500).json({ error: "Failed to add restaurant" });
@@ -255,7 +255,7 @@ router.post("/lists/:listName", async (req: Request, res: Response) => {
     const { rows } = await query<{ id: number; item_text: string; created_at: string }>(
       `INSERT INTO list_items (user_name, list_name, item_text)
        VALUES ($1, $2, $3)
-       ON CONFLICT ON CONSTRAINT list_items_uq
+       ON CONFLICT (user_name, list_name, lower(item_text))
        DO UPDATE SET item_text = EXCLUDED.item_text
        RETURNING id, item_text, created_at`,
       [userName, listName, item.trim()]
