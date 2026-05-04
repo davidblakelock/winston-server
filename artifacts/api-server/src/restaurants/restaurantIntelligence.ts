@@ -232,7 +232,7 @@ export async function lookupRestaurantDetails(
       },
       body: JSON.stringify({
         textQuery,
-        maxResultCount: 1,
+        pageSize: 1,
         languageCode: "en",
       }),
       signal: AbortSignal.timeout(8000),

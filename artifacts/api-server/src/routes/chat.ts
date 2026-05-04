@@ -1996,13 +1996,17 @@ const chatHandlerCore = async (req: Request, res: Response) => {
             (req as any)._hardcodedResponse = phase1Text;
             req.log.info({ restaurantName: details.name, platform: details.platform, conflict: !!conflict }, "[R001] Pending reservation set");
           } else {
-            // No Places result
-            const conflictNote = conflict ? ` Note: there's a possible calendar conflict — ${conflict}.` : "";
-            systemPrompt +=
-              `\n\n[R001 — Restaurant Reservation Request: ${intent.restaurantName}]\n` +
-              `No Google Places result found for this restaurant. Help as best you can.${conflictNote}\n` +
-              `User wants a reservation${intent.dateLabel ? ` on ${intent.dateLabel}` : ""}${intent.timeLabel ? ` at ${intent.timeLabel}` : ""}${intent.partySize ? ` for ${intent.partySize}` : ""}. ` +
-              `Suggest checking OpenTable or Resy directly, or calling the restaurant.`;
+            // No Places result — hardcoded response, never let Claude handle it
+            const dateTimeStr = [
+              intent.dateLabel,
+              intent.timeLabel ? `at ${intent.timeLabel}` : null,
+              intent.partySize ? `for ${intent.partySize}` : null,
+            ].filter(Boolean).join(" ");
+            const conflictNote = conflict ? ` Heads up — you have a possible conflict: ${conflict}.` : "";
+            (req as any)._hardcodedResponse =
+              `I couldn't find ${intent.restaurantName} in my directory right now.${conflictNote} ` +
+              `Want me to open Google Maps to find their number${dateTimeStr ? ` so you can book ${dateTimeStr}` : ""}?`;
+            req.log.info({ restaurantName: intent.restaurantName }, "[R001] No Places result — hardcoded fallback");
           }
         }
       }
