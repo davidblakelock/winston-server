@@ -1902,7 +1902,10 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
   // ── R001: Restaurant intelligence — reservation, directions, info ───────────
   // Phase 1: New request — parse intent, look up Places, check calendar
-  if (isRestaurantIntelRequest && !isReservationFlowActive) {
+  if (isRestaurantIntelRequest) {
+    // A new restaurant request always resets any stale pending state so Phase 1
+    // fires correctly even if the user never confirmed/cancelled the last offer.
+    if (pendingReservation) clearPendingReservation();
     const displayName = userProfile?.name ?? sessionUserName;
     const city = userProfile?.city ?? "Dallas";
     const todayISO = chicagoDateStr();
@@ -1977,23 +1980,20 @@ const chatHandlerCore = async (req: Request, res: Response) => {
               intent.partySize ? `for ${intent.partySize}` : null,
             ].filter(Boolean).join(" ");
 
-            let block = `\n\n[R001 — Restaurant Intelligence: ${details.name}]\n`;
-            block += `Address: ${details.formattedAddress ?? "not found"}\n`;
-            block += `Phone: ${details.phone ?? "not found"}\n`;
-            block += `Reservation Platform: ${details.platform}${platformLabel ? ` (${platformLabel})` : ""}\n`;
-            if (reservationUrl) block += `Pre-filled booking URL: ready\n`;
-            if (conflict) block += `\n⚠ CALENDAR CONFLICT at requested time: ${conflict}\n`;
-            block += `\nUser intent: make a reservation${dateTimeStr ? ` — ${dateTimeStr}` : ""}\n\n`;
-
+            // Build a hardcoded Phase 1 offer — bypasses Claude entirely so it
+            // can't fall back on trained "I can't make reservations" language.
+            let phase1Text: string;
             if (conflict) {
-              block += `Mention the calendar conflict first — say something like "Heads up, you've got ${conflict} around that time." Then still offer to proceed — ask if they'd like to ${platformLabel ? `open ${platformLabel}` : "call them"} anyway.`;
+              const via = platformLabel ? `open ${platformLabel}` : "open the dialer";
+              phase1Text = `Heads up — you've got ${conflict} around that time. Still want me to ${via}${dateTimeStr ? ` for ${dateTimeStr}` : ""} at ${details.name}?`;
             } else if (platformLabel) {
-              block += `Tell ${displayName} that ${details.name} takes reservations through ${platformLabel}. Say you have${dateTimeStr ? ` ${dateTimeStr}` : " the details"} ready to go — ask: "Want me to open ${platformLabel}?" Be brief and natural.`;
+              phase1Text = `${details.name} uses ${platformLabel}${dateTimeStr ? ` — I've got ${dateTimeStr} ready to go` : ""}. Want me to open ${platformLabel}?`;
             } else {
-              block += `Tell ${displayName} that ${details.name} doesn't appear to use OpenTable or Resy — reservations are by phone. ${details.phone ? `Their number is ${details.phone} — offer to open the dialer.` : "No phone number was found — suggest they call directly or check their website."} Ask if they'd like to call.`;
+              const phoneStr = details.phone ? ` at ${details.phone}` : "";
+              phase1Text = `${details.name} takes reservations by phone${phoneStr}. Want me to open the dialer${dateTimeStr ? ` for ${dateTimeStr}` : ""}?`;
             }
 
-            systemPrompt += block;
+            (req as any)._hardcodedResponse = phase1Text;
             req.log.info({ restaurantName: details.name, platform: details.platform, conflict: !!conflict }, "[R001] Pending reservation set");
           } else {
             // No Places result
