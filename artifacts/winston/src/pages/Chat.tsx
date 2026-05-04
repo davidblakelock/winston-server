@@ -459,7 +459,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
   const [messages, setMessages] = useState<Message[]>([]);
   const [messagesLoaded, setMessagesLoaded] = useState(false);
   const [pendingNotification, setPendingNotification] = useState<{
-    type: "morning" | "reminder" | "concert-alert" | "auto-send" | "medication-reminder" | "winddown";
+    type: "morning" | "reminder" | "concert-alert" | "auto-send" | "medication-reminder" | "winddown" | "connect-reminder" | "connect-message";
     text?: string;
     id?: number;
     companionMessage?: string;
@@ -1140,6 +1140,22 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         // Fallback: let the model generate a winddown message naturally
         submitText("Evening Check-In", { silent: true });
       })();
+    } else if (notif.type === "connect-reminder" && notif.companionMessage) {
+      // Winston Connect: a linked user sent a reminder — display and speak it
+      const msgId = `connect-reminder-${Date.now()}`;
+      setMessages((prev) => [
+        ...prev,
+        { id: msgId, role: "assistant" as const, content: notif.companionMessage! },
+      ]);
+      speakReply(msgId, notif.companionMessage!);
+    } else if (notif.type === "connect-message" && notif.companionMessage) {
+      // Winston Connect: a linked user sent a voice message — display and speak it
+      const msgId = `connect-message-${Date.now()}`;
+      setMessages((prev) => [
+        ...prev,
+        { id: msgId, role: "assistant" as const, content: notif.companionMessage! },
+      ]);
+      speakReply(msgId, notif.companionMessage!);
     } else if (notif.type === "auto-send" && notif.text) {
       // Generic auto-send (weather alerts, etc.)
       setTimeout(() => submitText(notif.text!), 600);
@@ -1224,6 +1240,20 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
             const notifType = pending.notificationType;
             const compMsg = pending.companionMessage;
 
+            // Winston Connect: reminder from a linked user
+            if (notifType === "connect-reminder" && compMsg) {
+              console.log("[CHAT] NOTIFICATION_TAP: connect-reminder from IDB");
+              setPendingNotification((prev) => prev ?? { type: "connect-reminder", companionMessage: compMsg });
+              return;
+            }
+
+            // Winston Connect: voice message from a linked user
+            if (notifType === "connect-message" && compMsg) {
+              console.log("[CHAT] NOTIFICATION_TAP: connect-message from IDB");
+              setPendingNotification((prev) => prev ?? { type: "connect-message", companionMessage: compMsg });
+              return;
+            }
+
             // Concert alert: display companion's crafted message
             if (notifType === "concert-alert" && compMsg) {
               console.log("[CHAT] NOTIFICATION_TAP: concert-alert from IDB");
@@ -1297,6 +1327,16 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
           if (!pending) return;
           store.delete("reminder"); // consume immediately so it never fires twice
 
+          // Winston Connect: reminder from a linked user
+          if (pending.notificationType === "connect-reminder" && pending.companionMessage) {
+            setPendingNotification((prev) => prev ?? { type: "connect-reminder", companionMessage: pending.companionMessage });
+            return;
+          }
+          // Winston Connect: voice message from a linked user
+          if (pending.notificationType === "connect-message" && pending.companionMessage) {
+            setPendingNotification((prev) => prev ?? { type: "connect-message", companionMessage: pending.companionMessage });
+            return;
+          }
           // Concert alert stored from a previous notification tap
           if (pending.notificationType === "concert-alert" && pending.companionMessage) {
             setPendingNotification((prev) => prev ?? { type: "concert-alert", companionMessage: pending.companionMessage });

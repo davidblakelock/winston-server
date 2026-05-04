@@ -24,6 +24,7 @@ import journalRouter from "./journal";
 import memoriesRouter from "./memories";
 import conversationRouter from "./conversation";
 import mydayRouter from "./myday";
+import connectRouter from "./connect";
 
 const router: IRouter = Router();
 
@@ -52,5 +53,6 @@ router.use(journalRouter);
 router.use(memoriesRouter);
 router.use(conversationRouter);
 router.use(mydayRouter);
+router.use(connectRouter);
 
 export default router;

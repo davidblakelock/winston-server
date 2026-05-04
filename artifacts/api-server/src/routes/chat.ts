@@ -195,6 +195,8 @@ import { createReminder } from "../reminders/reminderManager.js";
 import { nextOccurrenceForPattern, humanReadableRecurring } from "../reminders/recurringUtils.js";
 import { broadcastToUser } from "../reminders/sseStore.js";
 import { saveMoodCheckin } from "../mood/moodManager.js";
+import { findConnectionByLabel, saveConnectMessage, markMessageDelivered } from "../connect/connectManager.js";
+import { sendPushToAll } from "../push/pushManager.js";
 import { extractAndSaveFollowups } from "../followups/followupManager.js";
 import {
   saveMydayEntry,
@@ -2651,13 +2653,47 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         req.log.info({ extracted, resolvedTime, fireAt, noTimeGiven, recurringLabel }, "Reminder saved");
 
         if (extracted.forContact) {
+          // Try to deliver via Winston Connect if the contact is a linked user
+          let connectDelivered = false;
+          try {
+            const match = await findConnectionByLabel(sessionUserName, extracted.forContact);
+            if (match) {
+              const msgId = await saveConnectMessage(
+                sessionUserName,
+                match.recipientUserName,
+                "reminder",
+                extracted.reminderText
+              );
+              const displayName = match.senderLabel;
+              const companionMsg = `Reminder from ${displayName}: ${extracted.reminderText}`;
+              const pushResult = await sendPushToAll({
+                title: `Reminder from ${displayName}`,
+                body: extracted.reminderText,
+                tag: `connect-reminder-${msgId}`,
+                notificationType: "connect-reminder",
+                companionMessage: companionMsg,
+                requireInteraction: true,
+              }, match.recipientUserName);
+              if (pushResult.sent > 0) {
+                await markMessageDelivered(msgId);
+              }
+              connectDelivered = true;
+              req.log.info({ msgId, recipient: match.recipientUserName, sent: pushResult.sent }, "[Connect] Reminder delivered via Winston Connect");
+            }
+          } catch (connectErr) {
+            req.log.warn({ connectErr }, "[Connect] Winston Connect delivery attempt failed — local reminder still saved");
+          }
+
           reminderConfirmation =
             `\n\n[Reminder saved for contact]\n` +
             `Contact: "${extracted.forContact}"\n` +
             `Text: "${extracted.reminderText}"\n` +
             `Time: ${timeLabel}${noTimeGiven ? " (defaulted — no time specified)" : ""}\n` +
-            `If ${extracted.forContact} has Winston installed and is linked, they will receive a push notification at ${timeLabel}. ` +
-            `Reply with ONLY the confirmation. One line: "Done — I'll send ${extracted.forContact} a reminder to ${extracted.reminderText} at ${timeLabel}."`;
+            (connectDelivered
+              ? `Winston Connect push notification sent to ${extracted.forContact}'s companion. ` +
+                `Reply with ONLY the confirmation. One line: "Done — I've sent ${extracted.forContact} a reminder to ${extracted.reminderText}."`
+              : `${extracted.forContact} is not currently linked via Winston Connect, so no push was sent. ` +
+                `Reply with ONLY the confirmation. One line: "Done — I'll remind ${extracted.forContact} to ${extracted.reminderText} at ${timeLabel}. Note: they'll need Winston Connect to receive it as a push notification."`);
         } else {
           const recurringPhrase = recurringLabel ? ` ${recurringLabel}` : "";
           reminderConfirmation =
