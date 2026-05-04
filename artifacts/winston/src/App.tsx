@@ -8,6 +8,7 @@ import Chat from "@/pages/Chat";
 import Onboarding from "@/pages/Onboarding";
 import OliviaArchive from "@/pages/OliviaArchive";
 import Lists from "@/pages/Lists";
+import Orders from "@/pages/Orders";
 import SignIn from "@/pages/SignIn";
 import Demo from "@/pages/Demo";
 import { useAuth } from "@/hooks/useAuth";
@@ -229,6 +230,7 @@ function AppShell({ onSignOut, userPicture, userName, userFullName }: AppShellPr
   return (
     <Switch>
       <Route path="/lists">{() => <Lists />}</Route>
+      <Route path="/orders">{() => <Orders />}</Route>
       <Route path="/">{() => <Chat onSignOut={onSignOut} companionName={profile?.companionName ?? null} voiceId={profile?.voiceId ?? null} photoUrl={profile?.photoUrl ?? null} avatarBase64={profile?.avatarBase64 ?? null} userPicture={userPicture} userName={userName} userFullName={userFullName} />}</Route>
       <Route component={NotFound} />
     </Switch>

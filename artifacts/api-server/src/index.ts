@@ -39,6 +39,7 @@ import { ensureMemoryArchiveTable } from "./memory/memoryArchiveManager";
 import { ensureJournalSourceColumn } from "./routes/journal";
 import { ensureConnectTables } from "./connect/connectManager";
 import { ensureRestaurantCacheTable } from "./restaurants/restaurantIntelligence";
+import { ensureOrdersTable } from "./orders/ordersManager";
 
 const rawPort = process.env["PORT"];
 
@@ -236,6 +237,12 @@ app.listen(port, async (err) => {
     logger.info("[startup] restaurant_places_cache table ready");
   } catch (e) {
     logger.warn({ e }, "Restaurant places cache table initialization warning");
+  }
+
+  try {
+    await ensureOrdersTable();
+  } catch (e) {
+    logger.warn({ e }, "Orders table initialization warning");
   }
 
   try {

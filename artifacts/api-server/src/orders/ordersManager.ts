@@ -1,0 +1,235 @@
+import { query } from "../db.js";
+import { NATIVE_USER } from "../auth/middleware.js";
+import { logger } from "../lib/logger.js";
+
+export type OrderStatus =
+  | "ordered"
+  | "shipped"
+  | "in_transit"
+  | "out_for_delivery"
+  | "delivered"
+  | "exception";
+
+export interface TrackingEvent {
+  timestamp: string;
+  message: string;
+  location?: string | null;
+  status?: string | null;
+}
+
+export interface Order {
+  id: number;
+  user_name: string;
+  retailer: string;
+  item_name: string;
+  order_number: string | null;
+  tracking_number: string | null;
+  carrier: string | null;
+  aftership_slug: string | null;
+  status: OrderStatus;
+  expected_date: string | null;
+  order_total: string | null;
+  email_id: string | null;
+  order_url: string | null;
+  tracking_events: TrackingEvent[];
+  last_tracked_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NewOrder {
+  retailer: string;
+  item_name: string;
+  order_number?: string | null;
+  tracking_number?: string | null;
+  carrier?: string | null;
+  status?: OrderStatus;
+  expected_date?: string | null;
+  order_total?: string | null;
+  email_id?: string | null;
+  order_url?: string | null;
+}
+
+// ── Startup migration ──────────────────────────────────────────────────────────
+export async function ensureOrdersTable(): Promise<void> {
+  try {
+    await query(`
+      CREATE TABLE IF NOT EXISTS orders (
+        id serial PRIMARY KEY,
+        user_name text NOT NULL DEFAULT '${NATIVE_USER}',
+        retailer text NOT NULL,
+        item_name text NOT NULL,
+        order_number text,
+        tracking_number text,
+        carrier text,
+        aftership_slug text,
+        status text NOT NULL DEFAULT 'ordered',
+        expected_date date,
+        order_total text,
+        email_id text,
+        order_url text,
+        tracking_events jsonb NOT NULL DEFAULT '[]',
+        last_tracked_at timestamptz,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    await query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS orders_email_id_idx
+      ON orders (user_name, email_id) WHERE email_id IS NOT NULL
+    `).catch(() => {});
+    await query(`
+      CREATE TABLE IF NOT EXISTS order_sync_state (
+        user_name text PRIMARY KEY,
+        last_scan_at timestamptz
+      )
+    `);
+    logger.info("[Orders] Table and sync state ready");
+  } catch (err) {
+    logger.warn({ err }, "[Orders] Startup migration warning");
+  }
+}
+
+// ── Query helpers ──────────────────────────────────────────────────────────────
+
+export async function getOrders(userName = NATIVE_USER): Promise<Order[]> {
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const { rows } = await query<Order>(
+    `SELECT * FROM orders
+     WHERE user_name = $1
+       AND (
+         status != 'delivered'
+         OR (status = 'delivered' AND updated_at > $2)
+       )
+     ORDER BY
+       CASE WHEN status = 'out_for_delivery' THEN 0
+            WHEN status = 'in_transit'        THEN 1
+            WHEN status = 'shipped'           THEN 2
+            WHEN status = 'ordered'           THEN 3
+            WHEN status = 'delivered'         THEN 4
+            ELSE 5 END,
+       expected_date ASC NULLS LAST,
+       created_at DESC`,
+    [userName, sevenDaysAgo]
+  );
+  return rows.map((r) => ({
+    ...r,
+    tracking_events: (r.tracking_events as unknown as TrackingEvent[]) ?? [],
+  }));
+}
+
+export async function getOrdersForBriefing(userName = NATIVE_USER): Promise<Order[]> {
+  const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+  const { rows } = await query<Order>(
+    `SELECT * FROM orders
+     WHERE user_name = $1
+       AND status = 'out_for_delivery'
+       AND (expected_date = $2 OR expected_date IS NULL)`,
+    [userName, todayStr]
+  );
+  return rows;
+}
+
+export async function upsertOrder(
+  userName: string,
+  order: NewOrder
+): Promise<Order | null> {
+  try {
+    const { rows } = await query<Order>(
+      `INSERT INTO orders
+         (user_name, retailer, item_name, order_number, tracking_number, carrier, status, expected_date, order_total, email_id, order_url)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       ON CONFLICT (user_name, email_id)
+       WHERE email_id IS NOT NULL
+       DO UPDATE SET
+         retailer = EXCLUDED.retailer,
+         item_name = EXCLUDED.item_name,
+         order_number = COALESCE(EXCLUDED.order_number, orders.order_number),
+         tracking_number = COALESCE(EXCLUDED.tracking_number, orders.tracking_number),
+         carrier = COALESCE(EXCLUDED.carrier, orders.carrier),
+         order_total = COALESCE(EXCLUDED.order_total, orders.order_total),
+         order_url = COALESCE(EXCLUDED.order_url, orders.order_url),
+         updated_at = now()
+       RETURNING *`,
+      [
+        userName,
+        order.retailer,
+        order.item_name,
+        order.order_number ?? null,
+        order.tracking_number ?? null,
+        order.carrier ?? null,
+        order.status ?? "ordered",
+        order.expected_date ?? null,
+        order.order_total ?? null,
+        order.email_id ?? null,
+        order.order_url ?? null,
+      ]
+    );
+    return rows[0] ?? null;
+  } catch (err) {
+    logger.warn({ err, order }, "[Orders] upsertOrder failed");
+    return null;
+  }
+}
+
+export async function updateOrderTracking(
+  id: number,
+  update: {
+    status?: OrderStatus;
+    expected_date?: string | null;
+    tracking_events?: TrackingEvent[];
+    aftership_slug?: string | null;
+    carrier?: string | null;
+  }
+): Promise<void> {
+  await query(
+    `UPDATE orders SET
+       status = COALESCE($2, status),
+       expected_date = CASE WHEN $3::text IS NOT NULL THEN $3::date ELSE expected_date END,
+       tracking_events = COALESCE($4::jsonb, tracking_events),
+       aftership_slug = COALESCE($5, aftership_slug),
+       carrier = COALESCE($6, carrier),
+       last_tracked_at = now(),
+       updated_at = now()
+     WHERE id = $1
+     RETURNING id`,
+    [
+      id,
+      update.status ?? null,
+      update.expected_date ?? null,
+      update.tracking_events ? JSON.stringify(update.tracking_events) : null,
+      update.aftership_slug ?? null,
+      update.carrier ?? null,
+    ]
+  );
+}
+
+export async function deleteOrder(id: number, userName: string): Promise<boolean> {
+  const { rows } = await query<{ id: number }>(
+    `DELETE FROM orders WHERE id = $1 AND user_name = $2 RETURNING id`,
+    [id, userName]
+  );
+  return rows.length > 0;
+}
+
+// ── Sync state ─────────────────────────────────────────────────────────────────
+
+export async function getLastOrderScanAt(userName = NATIVE_USER): Promise<Date | null> {
+  const { rows } = await query<{ last_scan_at: string | null }>(
+    `SELECT last_scan_at FROM order_sync_state WHERE user_name = $1`,
+    [userName]
+  );
+  const val = rows[0]?.last_scan_at;
+  return val ? new Date(val) : null;
+}
+
+export async function updateLastOrderScanAt(userName = NATIVE_USER): Promise<void> {
+  await query(
+    `INSERT INTO order_sync_state (user_name, last_scan_at)
+     VALUES ($1, now())
+     ON CONFLICT (user_name)
+     DO UPDATE SET last_scan_at = now()
+     RETURNING user_name`,
+    [userName]
+  );
+}

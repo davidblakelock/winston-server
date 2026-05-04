@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, KeyboardEvent, ChangeEvent } from "react";
-import { Send, Play, Loader2, Disc3, Mic, MicOff, MapPin, Mail, LogOut, Settings, X, Moon, Bell, BellOff, Clock, ChevronDown, ChevronUp, HelpCircle, Check, List } from "lucide-react";
+import { Send, Play, Loader2, Disc3, Mic, MicOff, MapPin, Mail, LogOut, Settings, X, Moon, Bell, BellOff, Clock, ChevronDown, ChevronUp, HelpCircle, Check, List, Package } from "lucide-react";
 import { useLocation } from "wouter";
 import { useTextToSpeech } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
@@ -2291,6 +2291,15 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
           title="Lists"
         >
           <List className="h-4 w-4" />
+        </button>
+
+        {/* Orders */}
+        <button
+          onClick={() => setLocation("/orders")}
+          className="text-muted-foreground hover:text-foreground transition-colors p-1.5 rounded-full hover:bg-white/10 border border-white/10 hover:border-white/20"
+          title="Orders"
+        >
+          <Package className="h-4 w-4" />
         </button>
 
         {/* Help button */}
