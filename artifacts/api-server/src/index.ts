@@ -38,6 +38,7 @@ import { ensureFollowupsTable } from "./followups/followupManager";
 import { ensureMemoryArchiveTable } from "./memory/memoryArchiveManager";
 import { ensureJournalSourceColumn } from "./routes/journal";
 import { ensureConnectTables } from "./connect/connectManager";
+import { ensureRestaurantCacheTable } from "./restaurants/restaurantIntelligence";
 
 const rawPort = process.env["PORT"];
 
@@ -228,6 +229,13 @@ app.listen(port, async (err) => {
     await ensureConnectTables();
   } catch (e) {
     logger.warn({ e }, "Winston Connect table initialization warning");
+  }
+
+  try {
+    await ensureRestaurantCacheTable();
+    logger.info("[startup] restaurant_places_cache table ready");
+  } catch (e) {
+    logger.warn({ e }, "Restaurant places cache table initialization warning");
   }
 
   // Initialize medication reminder log table (DB-backed dedup so reminders don't

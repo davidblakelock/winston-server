@@ -273,6 +273,37 @@ export async function fetchTomorrowEvents(userName?: string): Promise<CalendarEv
   // Note: do NOT filter with isEventInPast — all tomorrow events are future events
 }
 
+/**
+ * Fetch events for a specific calendar date (YYYY-MM-DD in CT).
+ * Used by restaurant intelligence to check for scheduling conflicts.
+ */
+export async function fetchEventsForDate(
+  dateISO: string,
+  userName?: string
+): Promise<CalendarEvent[] | null> {
+  const auth = await resolveAuthClient(userName);
+  if (!auth) return null;
+
+  const calendar = google.calendar({ version: "v3", auth });
+
+  // Build a Date that falls within the target CT day (noon avoids DST edge cases)
+  const [y, mo, d] = dateISO.split("-").map(Number);
+  const targetDate = new Date(Date.UTC(y, mo - 1, d, 18, 0, 0)); // ~noon CT
+
+  const todayStr = chicagoDateStr();
+  const tomorrowStr = getLocalYMD(new Date(targetDate.getTime() + 86400000));
+
+  const midnight = ctMidnightOf(targetDate);
+  const timeMin = midnight.toISOString();
+  const timeMax = new Date(midnight.getTime() + 86399999).toISOString();
+
+  try {
+    return await fetchEventsFromAllCalendars(calendar, timeMin, timeMax, todayStr, tomorrowStr, 20);
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchWeekEvents(filterPast = true, userName?: string): Promise<CalendarEvent[] | null> {
   const auth = await resolveAuthClient(userName);
   if (!auth) return null;

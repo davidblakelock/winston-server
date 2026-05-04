@@ -605,6 +605,18 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
               const em = data.emailPayload as { mailtoUri: string };
               if (em.mailtoUri) setTimeout(() => { window.open(em.mailtoUri, "_blank"); }, 1200);
             }
+            if (data.reservationPayload) {
+              const rp = data.reservationPayload as { url: string; type: string };
+              if (rp.url) {
+                setTimeout(() => {
+                  if (rp.type === "phone") {
+                    window.location.href = rp.url;
+                  } else {
+                    window.open(rp.url, "_blank", "noopener,noreferrer");
+                  }
+                }, 1200);
+              }
+            }
           }
           if (data.error) {
             const errReply = (data.reply as string) || "Something went wrong. Please try again.";
@@ -1774,6 +1786,19 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         try {
           const data = JSON.parse(e.data) as { mailtoUri: string };
           if (data.mailtoUri) window.open(data.mailtoUri, "_blank");
+        } catch {}
+      });
+
+      source.addEventListener("reservation-link", (e) => {
+        try {
+          const data = JSON.parse(e.data) as { url: string; type: string };
+          if (data.url) {
+            if (data.type === "phone") {
+              window.location.href = data.url;
+            } else {
+              window.open(data.url, "_blank", "noopener,noreferrer");
+            }
+          }
         } catch {}
       });
 

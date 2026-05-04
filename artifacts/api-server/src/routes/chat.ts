@@ -159,6 +159,20 @@ import { validateSession } from "../auth/sessionAuth.js";
 import { authenticate, tryAuthenticate } from "../auth/middleware.js";
 import { normalizeTtsText } from "../lib/ttsNormalize.js";
 import {
+  parseReservationIntent,
+  lookupRestaurantDetails,
+  getCachedRestaurantDetails,
+  cacheRestaurantDetails,
+  updateProfileItemWithAddress,
+  buildReservationUrl,
+  checkCalendarConflict,
+  getPendingReservation,
+  setPendingReservation,
+  clearPendingReservation,
+  chicagoDateStr,
+  type PendingReservation,
+} from "../restaurants/restaurantIntelligence.js";
+import {
   detectMeetingRequests,
   buildMeetingRequestsBlock,
   composeEmailReply,
@@ -415,6 +429,10 @@ const LOCAL_EVENTS_PATTERN = /\b(what'?s\s+happening|what'?s\s+going\s+on|things
 // Restaurant recommendations — "recommend a restaurant", "where should I eat", etc.
 const RESTAURANT_RECO_PATTERN =
   /\b(recommend\s+(?:a|some|any|me\s+a)\s+(?:restaurant|place\s+to\s+eat|spot|place\s+for\s+(?:dinner|lunch|breakfast))|suggest\s+(?:a|some)\s+(?:restaurant|place|spot)|where\s+should\s+(?:i|we)\s+(?:eat|go\s+(?:for\s+)?(?:dinner|lunch|breakfast))|good\s+(?:place|restaurant|spot)\s+(?:for\s+(?:dinner|lunch)|to\s+eat)|best\s+(?:restaurant|place|spot)\s+(?:in|near|around|for)|where\s+(?:can|to)\s+(?:i|we)\s+(?:eat|grab\s+(?:dinner|lunch|breakfast|food|a\s+bite))|(?:dinner|lunch|breakfast)\s+(?:recommendation|suggestion)|find\s+(?:me\s+)?(?:a|some)\s+(?:restaurant|place\s+to\s+eat)|what.?s\s+(?:a\s+)?good\s+(?:restaurant|place)\s+(?:in|near|around|for)|take\s+(?:me|us)\s+(?:somewhere|out)\s+(?:for|to)\s+(?:eat|dinner|lunch)|(?:restaurant|dining)\s+(?:recommendation|suggestion)|good\s+(?:italian|mexican|japanese|sushi|thai|indian|chinese|french|korean|vietnamese|mediterranean|bbq|steakhouse|seafood|pizza|burger|tex-mex|ramen)\s+(?:restaurant|place|spot|food))\b/i;
+
+// R001: Restaurant intelligence — reservation booking, directions, or info for a named restaurant
+const RESTAURANT_INTEL_PATTERN =
+  /\b(make\s+a?\s*reservation|book\s+(?:a\s+)?(?:table|reservation)|reserve\s+(?:a\s+)?(?:table|spot)|get\s+(?:us\s+)?(?:a\s+)?(?:table|reservation)\s+(?:at|for)|can\s+(?:i|we)\s+get\s+(?:in|a\s+(?:table|reservation))\s+(?:at|for)|check\s+(?:opentable|resy|availability)\s+(?:at|for)|what.?s\s+the\s+(?:number|phone)\s+for|call\s+the\s+restaurant|get\s+directions?\s+to\s+(?:my\s+favorite\s+)?(?:restaurant)?)\b/i;
 
 // Nearby essential places — pharmacy, urgent care, hospital, grocery, gas, bank
 const NEARBY_PLACES_PATTERN =
@@ -937,6 +955,16 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isLocalEventsRequest = !isMorningGreeting && !isCalendarRequest && LOCAL_EVENTS_PATTERN.test(message);
   const isRestaurantReco = !isMorningGreeting && !isLocalEventsRequest && RESTAURANT_RECO_PATTERN.test(message);
   const isNearbyPlaces = !isMorningGreeting && !isRestaurantReco && NEARBY_PLACES_PATTERN.test(message);
+
+  // R001: Restaurant intelligence (reservation, directions, info for a named restaurant)
+  const pendingReservation = getPendingReservation();
+  const isRestaurantIntelRequest = !isMorningGreeting && !isRestaurantReco && RESTAURANT_INTEL_PATTERN.test(message);
+  const isReservationFlowActive = !isMorningGreeting && pendingReservation !== null;
+  const RESERVATION_CONFIRM = /^(?:(?:ok|okay|yeah|yep|yup|sure|alright)[,\s]+)*(yes|open\s+it|do\s+it|go\s+ahead|sounds?\s+good|let.?s\s+(?:do\s+it|book)|book\s+it|call\s+them|open\s+(?:the\s+)?(?:opentable|resy|maps?|dialer)|get\s+directions?|dial\s+(?:them|it))(?:[,\s!.]|$)/i;
+  const RESERVATION_CANCEL = /^(?:no\s+thanks?|never\s+mind|cancel|skip\s+it|not\s+now|forget\s+it)(?:[,\s!.]|$)/i;
+  const isReservationConfirm = isReservationFlowActive && RESERVATION_CONFIRM.test(message.trim());
+  const isReservationCancel = isReservationFlowActive && RESERVATION_CANCEL.test(message.trim());
+
   const isBillAdd = !isMorningGreeting && BILL_ADD_PATTERN.test(message);
   const isBillList = !isMorningGreeting && BILL_LIST_PATTERN.test(message);
   const isBillRemove = !isMorningGreeting && BILL_REMOVE_PATTERN.test(message);
@@ -1870,6 +1898,160 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       req.log.warn({ err }, "[E007-MEET] Reply composition failed");
       systemPrompt += `\n\n[Email Reply — Error]\nTell ${displayName} you had trouble drafting the reply and ask them to try again.`;
     }
+  }
+
+  // ── R001: Restaurant intelligence — reservation, directions, info ───────────
+  // Phase 1: New request — parse intent, look up Places, check calendar
+  if (isRestaurantIntelRequest && !isReservationFlowActive) {
+    const displayName = userProfile?.name ?? sessionUserName;
+    const city = userProfile?.city ?? "Dallas";
+    const todayISO = chicagoDateStr();
+
+    try {
+      const intent = await parseReservationIntent(message, todayISO);
+      if (intent) {
+        req.log.info({ restaurantName: intent.restaurantName, action: intent.action }, "[R001] Intent parsed");
+
+        // Cache-first Places lookup
+        let details = await getCachedRestaurantDetails(sessionUserName, intent.restaurantName);
+        const fromCache = !!details;
+        if (!details) {
+          details = await lookupRestaurantDetails(intent.restaurantName, city);
+          if (details) {
+            cacheRestaurantDetails(sessionUserName, intent.restaurantName, details).catch(() => {});
+            if (details.formattedAddress) {
+              updateProfileItemWithAddress(sessionUserName, intent.restaurantName, details.formattedAddress).catch(() => {});
+            }
+          }
+        }
+        req.log.info({ fromCache, found: !!details, platform: details?.platform }, "[R001] Places lookup complete");
+
+        if (intent.action === "directions") {
+          // Directions — immediate, no confirmation needed
+          const url = details?.mapsUrl ?? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(intent.restaurantName + " " + city)}`;
+          const shortAddr = details?.formattedAddress?.split(",")[0] ?? intent.restaurantName;
+          (req as any)._reservationPayload = { url, type: "maps", restaurantName: intent.restaurantName };
+          (req as any)._hardcodedResponse = `Opening Google Maps with directions to ${intent.restaurantName}${shortAddr && shortAddr !== intent.restaurantName ? ` — ${shortAddr}` : ""}.`;
+          broadcastToUser(sessionUserName, "reservation-link", { url, type: "maps", restaurantName: intent.restaurantName });
+          req.log.info({ restaurantName: intent.restaurantName, url }, "[R001] Directions dispatched");
+
+        } else if (intent.action === "info") {
+          // Info — return what we found, let Claude narrate
+          if (details) {
+            systemPrompt +=
+              `\n\n[Restaurant Info — ${details.name}]\n` +
+              `Phone: ${details.phone ?? "not found"}\n` +
+              `Address: ${details.formattedAddress ?? "not found"}\n` +
+              `Website: ${details.website ?? "not found"}\n` +
+              `Reservation Platform: ${details.platform}\n\n` +
+              `Share this info naturally. If a phone number is available and the user seems to want to call, offer to open the dialer.`;
+          } else {
+            systemPrompt += `\n\n[Restaurant Lookup — ${intent.restaurantName}]\nNo Google Places result found. Answer as best you can from training knowledge.`;
+          }
+
+        } else {
+          // Reservation — check calendar conflict, set pending state
+          const conflict = (intent.dateISO && intent.timeISO)
+            ? await checkCalendarConflict(sessionUserName, intent.dateISO, intent.timeISO).catch(() => null)
+            : null;
+
+          if (details) {
+            const reservationUrl = buildReservationUrl(details, intent.dateISO, intent.timeISO, intent.partySize);
+            setPendingReservation({
+              restaurantName: intent.restaurantName,
+              details,
+              action: "reservation",
+              dateISO: intent.dateISO,
+              dateLabel: intent.dateLabel,
+              timeISO: intent.timeISO,
+              timeLabel: intent.timeLabel,
+              partySize: intent.partySize,
+              calendarConflict: conflict,
+              reservationUrl,
+            });
+
+            const platformLabel = details.platform === "opentable" ? "OpenTable" : details.platform === "resy" ? "Resy" : null;
+            const dateTimeStr = [
+              intent.dateLabel,
+              intent.timeLabel ? `at ${intent.timeLabel}` : null,
+              intent.partySize ? `for ${intent.partySize}` : null,
+            ].filter(Boolean).join(" ");
+
+            let block = `\n\n[R001 — Restaurant Intelligence: ${details.name}]\n`;
+            block += `Address: ${details.formattedAddress ?? "not found"}\n`;
+            block += `Phone: ${details.phone ?? "not found"}\n`;
+            block += `Reservation Platform: ${details.platform}${platformLabel ? ` (${platformLabel})` : ""}\n`;
+            if (reservationUrl) block += `Pre-filled booking URL: ready\n`;
+            if (conflict) block += `\n⚠ CALENDAR CONFLICT at requested time: ${conflict}\n`;
+            block += `\nUser intent: make a reservation${dateTimeStr ? ` — ${dateTimeStr}` : ""}\n\n`;
+
+            if (conflict) {
+              block += `Mention the calendar conflict first — say something like "Heads up, you've got ${conflict} around that time." Then still offer to proceed — ask if they'd like to ${platformLabel ? `open ${platformLabel}` : "call them"} anyway.`;
+            } else if (platformLabel) {
+              block += `Tell ${displayName} that ${details.name} takes reservations through ${platformLabel}. Say you have${dateTimeStr ? ` ${dateTimeStr}` : " the details"} ready to go — ask: "Want me to open ${platformLabel}?" Be brief and natural.`;
+            } else {
+              block += `Tell ${displayName} that ${details.name} doesn't appear to use OpenTable or Resy — reservations are by phone. ${details.phone ? `Their number is ${details.phone} — offer to open the dialer.` : "No phone number was found — suggest they call directly or check their website."} Ask if they'd like to call.`;
+            }
+
+            systemPrompt += block;
+            req.log.info({ restaurantName: details.name, platform: details.platform, conflict: !!conflict }, "[R001] Pending reservation set");
+          } else {
+            // No Places result
+            const conflictNote = conflict ? ` Note: there's a possible calendar conflict — ${conflict}.` : "";
+            systemPrompt +=
+              `\n\n[R001 — Restaurant Reservation Request: ${intent.restaurantName}]\n` +
+              `No Google Places result found for this restaurant. Help as best you can.${conflictNote}\n` +
+              `User wants a reservation${intent.dateLabel ? ` on ${intent.dateLabel}` : ""}${intent.timeLabel ? ` at ${intent.timeLabel}` : ""}${intent.partySize ? ` for ${intent.partySize}` : ""}. ` +
+              `Suggest checking OpenTable or Resy directly, or calling the restaurant.`;
+          }
+        }
+      }
+    } catch (err) {
+      req.log.warn({ err }, "[R001] Restaurant intelligence failed — falling through to Claude");
+    }
+  }
+
+  // Phase 2: Reservation flow — user responded to our offer
+  if (isReservationFlowActive && pendingReservation) {
+    if (isReservationCancel) {
+      clearPendingReservation();
+      systemPrompt += `\n\n[Reservation Cancelled]\nAcknowledge briefly and warmly — "No problem, I've dropped it."`;
+
+    } else if (isReservationConfirm) {
+      const res = pendingReservation;
+      clearPendingReservation();
+
+      if (res.details.platform === "phone" && res.details.phone) {
+        const telUri = `tel:${res.details.phone.replace(/[^\d+]/g, "")}`;
+        (req as any)._reservationPayload = { url: telUri, type: "phone", restaurantName: res.restaurantName };
+        (req as any)._hardcodedResponse = `Opening the dialer with ${res.restaurantName}'s number — ${res.details.phone}. Give them a call and let me know if you get a table.`;
+        broadcastToUser(sessionUserName, "reservation-link", { url: telUri, type: "phone", restaurantName: res.restaurantName });
+        req.log.info({ restaurantName: res.restaurantName }, "[R001] Phone dialer dispatched");
+
+      } else if (res.reservationUrl) {
+        const platformLabel = res.details.platform === "opentable" ? "OpenTable" : "Resy";
+        const dateStr = [
+          res.dateLabel,
+          res.timeLabel ? `at ${res.timeLabel}` : null,
+          res.partySize ? `for ${res.partySize}` : null,
+        ].filter(Boolean).join(" ");
+        (req as any)._reservationPayload = { url: res.reservationUrl, type: res.details.platform, restaurantName: res.restaurantName };
+        (req as any)._hardcodedResponse = `Opening ${platformLabel}${dateStr ? ` with ${dateStr} pre-filled` : ""} — finish the booking on their site. I can't complete it on your behalf.`;
+        broadcastToUser(sessionUserName, "reservation-link", { url: res.reservationUrl, type: res.details.platform, restaurantName: res.restaurantName });
+        req.log.info({ restaurantName: res.restaurantName, platform: res.details.platform, url: res.reservationUrl }, "[R001] Reservation link dispatched");
+
+      } else if (res.details.phone) {
+        // Platform detected but no slug extracted — fall back to dialer
+        const telUri = `tel:${res.details.phone.replace(/[^\d+]/g, "")}`;
+        (req as any)._reservationPayload = { url: telUri, type: "phone", restaurantName: res.restaurantName };
+        (req as any)._hardcodedResponse = `I couldn't build a direct booking link, but opening the dialer with ${res.restaurantName}'s number — ${res.details.phone}. Give them a call to book.`;
+        broadcastToUser(sessionUserName, "reservation-link", { url: telUri, type: "phone", restaurantName: res.restaurantName });
+      } else {
+        // No URL, no phone — tell Claude to explain
+        systemPrompt += `\n\n[Reservation — No Link Available]\nYou can't open a booking link or dialer for ${res.restaurantName} because no phone number or reservation platform was found. Tell the user honestly and suggest they search manually on OpenTable or Resy.`;
+      }
+    }
+    // If neither confirm nor cancel, let Claude handle it naturally (user may be asking a follow-up)
   }
 
   // ── T006: Text message composition flow ────────────────────────────────────
@@ -3620,6 +3802,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       req.log.info({ responsePreview: hardcoded }, "[DIAG:4] Native response sent (hardcoded)");
       const hardcodedBody: Record<string, unknown> = { response: hardcoded };
       if ((req as any)._smsPayload) hardcodedBody.smsPayload = (req as any)._smsPayload;
+      if ((req as any)._reservationPayload) hardcodedBody.reservationPayload = (req as any)._reservationPayload;
       res.json(hardcodedBody);
       return;
     }
@@ -3671,8 +3854,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     const hardcoded = (req as any)._hardcodedResponse as string;
     const smsPayload = (req as any)._smsPayload;
     const emailPayload = (req as any)._emailPayload;
+    const reservationPayload = (req as any)._reservationPayload;
     sendSSE({ text: hardcoded });
-    sendSSE({ done: true, messageId, ...(smsPayload ? { smsPayload } : {}), ...(emailPayload ? { emailPayload } : {}) });
+    sendSSE({ done: true, messageId, ...(smsPayload ? { smsPayload } : {}), ...(emailPayload ? { emailPayload } : {}), ...(reservationPayload ? { reservationPayload } : {}) });
     // Broadcast to other devices and let the standard post-SSE sync pick it up
     broadcastToUser(sessionUserName, "chat_sync", {
       role: "assistant",
