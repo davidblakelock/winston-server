@@ -138,8 +138,10 @@ router.post("/lists/tv-shows", async (req: Request, res: Response) => {
   try {
     const { rows } = await query<{ id: number; show_name: string }>(
       `INSERT INTO watched_shows (user_name, show_name)
-       VALUES ($1, $2)
-       ON CONFLICT (user_name, lower(show_name)) DO NOTHING
+       SELECT $1, $2
+       WHERE NOT EXISTS (
+         SELECT 1 FROM watched_shows WHERE user_name = $1 AND lower(show_name) = lower($2)
+       )
        RETURNING id, show_name`,
       [userName, item]
     );

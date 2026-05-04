@@ -238,6 +238,16 @@ app.listen(port, async (err) => {
     logger.warn({ e }, "Restaurant places cache table initialization warning");
   }
 
+  try {
+    await query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS watched_shows_user_name_lower_idx
+       ON watched_shows (user_name, lower(show_name))`
+    );
+    logger.info("[startup] watched_shows unique index ready");
+  } catch (e) {
+    logger.warn({ e }, "watched_shows unique index warning (non-fatal)");
+  }
+
   // Initialize medication reminder log table (DB-backed dedup so reminders don't
   // re-fire when the server restarts mid-morning)
   try {
