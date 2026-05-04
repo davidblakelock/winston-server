@@ -459,7 +459,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
   const [messages, setMessages] = useState<Message[]>([]);
   const [messagesLoaded, setMessagesLoaded] = useState(false);
   const [pendingNotification, setPendingNotification] = useState<{
-    type: "morning" | "reminder" | "concert-alert" | "auto-send" | "medication-reminder";
+    type: "morning" | "reminder" | "concert-alert" | "auto-send" | "medication-reminder" | "winddown";
     text?: string;
     id?: number;
     companionMessage?: string;
@@ -1113,6 +1113,33 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         // Cache miss: stream it the normal way
         submitText("good morning", { silent: true });
       })();
+    } else if (notif.type === "winddown") {
+      // Winddown tap: fetch tonight's pre-generated message and display it directly.
+      // This avoids the "Evening Check-In" user-text path which produced a generic reply.
+      (async () => {
+        try {
+          const resp = await fetch("/api/winddown/tonight-message", {
+            headers: { Authorization: `Bearer ${localStorage.getItem("winston_session_token") ?? ""}` },
+          });
+          if (resp.ok) {
+            const data = await resp.json() as { message: string | null; firedTonight: boolean };
+            const msg = data.message;
+            if (msg) {
+              const msgId = `winddown-${Date.now()}`;
+              setMessages((prev) => [
+                ...prev,
+                { id: msgId, role: "assistant" as const, content: msg },
+              ]);
+              speakReply(msgId, msg);
+              return;
+            }
+          }
+        } catch {
+          // Fall through to generic submit
+        }
+        // Fallback: let the model generate a winddown message naturally
+        submitText("Evening Check-In", { silent: true });
+      })();
     } else if (notif.type === "auto-send" && notif.text) {
       // Generic auto-send (weather alerts, etc.)
       setTimeout(() => submitText(notif.text!), 600);
@@ -1218,6 +1245,13 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
               return;
             }
 
+            // Winddown: fetch tonight's pre-generated message and display it
+            if (notifType === "winddown") {
+              console.log("[CHAT] NOTIFICATION_TAP: winddown — fetching tonight message");
+              setPendingNotification((prev) => prev ?? { type: "winddown" });
+              return;
+            }
+
             // Auto-send: any notification with an autoSendMessage (weather alerts, etc.)
             if (pending.autoSendMessage) {
               console.log("[CHAT] NOTIFICATION_TAP: autoSendMessage —", pending.autoSendMessage);
@@ -1276,6 +1310,11 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
           // Medication reminder: show action card with Taken/Remind buttons immediately
           if (pending.notificationType === "medication") {
             setPendingNotification((prev) => prev ?? { type: "medication-reminder" });
+            return;
+          }
+          // Winddown: fetch tonight's pre-generated message and display it
+          if (pending.notificationType === "winddown") {
+            setPendingNotification((prev) => prev ?? { type: "winddown" });
             return;
           }
           // Auto-send: any notification with an autoSendMessage

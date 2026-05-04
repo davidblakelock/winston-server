@@ -50,10 +50,25 @@ export function startMedicationScheduler(): void {
         for (const rt of reminderTimes) {
           if (localTime >= rt) {
             // DB-backed check — survives server restarts
-            const alreadySent = await hasMedicationReminderSentToday(userName, "initial").catch(() => false);
-            if (alreadySent) continue;
+            let alreadySent = false;
+            try {
+              alreadySent = await hasMedicationReminderSentToday(userName, "initial");
+            } catch (err) {
+              logger.warn({ err, userName, rt }, "[MED] hasMedicationReminderSentToday threw — treating as not sent");
+            }
+            if (alreadySent) {
+              logger.info({ userName, rt, localTime }, "[MED] Reminder already sent today — skipping");
+              continue;
+            }
 
-            const taken = await hasTakenMedicationsToday(userName).catch(() => false);
+            let taken = false;
+            try {
+              taken = await hasTakenMedicationsToday(userName);
+            } catch (err) {
+              logger.warn({ err, userName }, "[MED] hasTakenMedicationsToday threw — treating as not taken");
+            }
+            logger.info({ userName, rt, localTime, taken }, "[MED] Reminder check — about to fire or skip");
+
             if (!taken) {
               const medText = buildMedReminderText(meds);
               sendPushToAll({
@@ -64,11 +79,17 @@ export function startMedicationScheduler(): void {
                 // "medication-action" shows "Taken ✓" and "Remind in 30 min" buttons.
                 categoryId: "medication-action",
                 requireInteraction: true,
-              }, userName).catch(() => {});
-              logger.info({ time: rt, userName }, "Medication initial reminder fired");
+              }, userName).catch((err: unknown) => {
+                logger.error({ err, userName }, "[MED] Push delivery failed");
+              });
+              logger.info({ time: rt, userName, medText }, "Medication initial reminder fired");
+            } else {
+              logger.info({ userName, rt }, "[MED] Skipping push — medications already taken today");
             }
             // Mark as sent regardless of taken status — prevents re-firing if server restarts
-            await logMedicationReminderSent(userName, "initial").catch(() => {});
+            await logMedicationReminderSent(userName, "initial").catch((err: unknown) => {
+              logger.warn({ err, userName }, "[MED] logMedicationReminderSent failed");
+            });
           }
         }
 

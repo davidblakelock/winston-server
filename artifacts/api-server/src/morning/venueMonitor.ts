@@ -319,8 +319,8 @@ async function sendConcertAlertsForUser(userName: string, companionName: string)
     const result = await query<{ id: number; venue: string; artist_or_event: string; event_date_text: string }>(
       `SELECT id, venue, artist_or_event, event_date_text
        FROM concerts_of_interest
-       WHERE notified = FALSE AND score >= 5
-         AND (event_date BETWEEN $1 AND $2 OR event_date IS NULL)
+       WHERE notified = FALSE AND score >= 8
+         AND event_date BETWEEN $1 AND $2
        ORDER BY score DESC LIMIT 12`,
       [today, limit7]
     );

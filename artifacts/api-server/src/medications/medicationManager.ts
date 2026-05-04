@@ -103,13 +103,14 @@ export async function logMedicationsTaken(meds: Medication[], userName = NATIVE_
 // This replaces in-memory Maps which reset on every server restart.
 
 export async function initMedicationReminderLogTable(): Promise<void> {
+  // medication_reminder_log — tracks when the daily reminder was sent (survives restarts)
   await query(`
     CREATE TABLE IF NOT EXISTS medication_reminder_log (
-      id          serial PRIMARY KEY,
-      user_name   text NOT NULL,
+      id            serial PRIMARY KEY,
+      user_name     text NOT NULL,
       reminder_date date NOT NULL DEFAULT CURRENT_DATE,
       reminder_type text NOT NULL,
-      sent_at     timestamptz NOT NULL DEFAULT NOW(),
+      sent_at       timestamptz NOT NULL DEFAULT NOW(),
       UNIQUE (user_name, reminder_date, reminder_type)
     )
   `);
@@ -117,6 +118,18 @@ export async function initMedicationReminderLogTable(): Promise<void> {
     `CREATE INDEX IF NOT EXISTS idx_med_reminder_log_lookup
      ON medication_reminder_log (user_name, reminder_date)`
   );
+
+  // medication_logs — tracks when the user confirmed they took their meds
+  await query(`
+    CREATE TABLE IF NOT EXISTS medication_logs (
+      id                serial PRIMARY KEY,
+      user_name         text NOT NULL,
+      log_date          date NOT NULL DEFAULT CURRENT_DATE,
+      medication_names  text,
+      confirmed_at      timestamptz NOT NULL DEFAULT NOW(),
+      UNIQUE (user_name, log_date)
+    )
+  `);
 }
 
 export async function hasMedicationReminderSentToday(

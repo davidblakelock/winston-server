@@ -134,9 +134,15 @@ app.listen(port, async (err) => {
     await ensureOnboardingTable();
     await ensureRelationshipTable();
     await ensureContactMentionsTable();
-    await ensureCalendarSyncTable();
   } catch (e) {
     logger.warn({ e }, "Table initialization warning");
+  }
+
+  // Isolated so a failure in the block above never skips the calendar migration
+  try {
+    await ensureCalendarSyncTable();
+  } catch (e) {
+    logger.warn({ e }, "calendar_sync_state table initialization warning");
   }
 
   try {

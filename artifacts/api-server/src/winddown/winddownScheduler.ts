@@ -224,13 +224,14 @@ export function startWinddownScheduler(): void {
 
       broadcastToUser(primaryUser, "winddown-start", { message });
 
+      // Do NOT include autoSendMessage — the web app fetches /api/winddown/tonight-message
+      // when the notification is tapped, so the pre-generated message is displayed directly.
       sendPushToAll({
         title: `🌙 Evening Check-In — ${companionName}`,
         body: `Time for your Evening Check-In — how did your day go?`,
         tag: "winddown",
         notificationType: "winddown",
         requireInteraction: true,
-        autoSendMessage: "Evening Check-In",
       }, primaryUser).catch(() => {});
     } catch (err) {
       logger.error({ err }, "Evening check-in scheduler error");

@@ -26,45 +26,37 @@ function localDateStr(): string {
 // ── DB helpers ─────────────────────────────────────────────────────────────────
 
 export async function ensureCalendarSyncTable(): Promise<void> {
+  // Include all known columns so new installations start fully-migrated.
   await query(`
     CREATE TABLE IF NOT EXISTS calendar_sync_state (
-      event_date    DATE    NOT NULL,
-      event_id      TEXT    NOT NULL,
-      event_summary TEXT,
-      alert_sent    BOOLEAN NOT NULL DEFAULT FALSE,
-      seen_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      event_date         DATE        NOT NULL,
+      event_id           TEXT        NOT NULL,
+      event_summary      TEXT,
+      alert_sent         BOOLEAN     NOT NULL DEFAULT FALSE,
+      seen_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      user_name          TEXT        NOT NULL DEFAULT '${NATIVE_STORED_NAME}',
+      event_start_iso    TEXT,
+      departure_notified BOOLEAN     NOT NULL DEFAULT FALSE,
+      leave_time_iso     TEXT,
+      event_location     TEXT,
       PRIMARY KEY (event_date, event_id)
     )
   `);
 
-  await query(`
-    ALTER TABLE calendar_sync_state
-    ADD COLUMN IF NOT EXISTS user_name TEXT NOT NULL DEFAULT '${NATIVE_STORED_NAME}'
-  `).catch(() => {});
-
-  // Track the stored start time so we can detect when an event is moved
-  await query(`
-    ALTER TABLE calendar_sync_state
-    ADD COLUMN IF NOT EXISTS event_start_iso TEXT
-  `).catch(() => {});
-
-  // Track whether the "time to leave" departure push has been sent for this event
-  await query(`
-    ALTER TABLE calendar_sync_state
-    ADD COLUMN IF NOT EXISTS departure_notified BOOLEAN NOT NULL DEFAULT FALSE
-  `).catch(() => {});
-
-  // Store computed leave time so the departure scheduler can check without re-computing
-  await query(`
-    ALTER TABLE calendar_sync_state
-    ADD COLUMN IF NOT EXISTS leave_time_iso TEXT
-  `).catch(() => {});
-
-  // Store event location so departure scheduler can build a Maps URL without re-fetching
-  await query(`
-    ALTER TABLE calendar_sync_state
-    ADD COLUMN IF NOT EXISTS event_location TEXT
-  `).catch(() => {});
+  // Backwards-compat ALTER TABLEs for existing installations — each is idempotent.
+  // Errors are logged (not swallowed) so migration failures surface in the logs.
+  const alters = [
+    `ALTER TABLE calendar_sync_state ADD COLUMN IF NOT EXISTS user_name TEXT NOT NULL DEFAULT '${NATIVE_STORED_NAME}'`,
+    `ALTER TABLE calendar_sync_state ADD COLUMN IF NOT EXISTS event_start_iso TEXT`,
+    `ALTER TABLE calendar_sync_state ADD COLUMN IF NOT EXISTS departure_notified BOOLEAN NOT NULL DEFAULT FALSE`,
+    `ALTER TABLE calendar_sync_state ADD COLUMN IF NOT EXISTS leave_time_iso TEXT`,
+    `ALTER TABLE calendar_sync_state ADD COLUMN IF NOT EXISTS event_location TEXT`,
+  ];
+  for (const sql of alters) {
+    await query(sql).catch((err: unknown) => {
+      logger.warn({ err }, `[CalendarSync] Migration ALTER TABLE failed: ${sql.slice(0, 80)}`);
+    });
+  }
 
   logger.info("calendar_sync_state table ready");
 }
