@@ -54,7 +54,11 @@ export function startMedicationScheduler(): void {
             try {
               alreadySent = await hasMedicationReminderSentToday(userName, "initial");
             } catch (err) {
-              logger.warn({ err, userName, rt }, "[MED] hasMedicationReminderSentToday threw — treating as not sent");
+              // Table missing or query failed — SKIP this tick rather than firing.
+              // Continuous firing (the old "treat as not sent" behavior) is far worse
+              // than missing one tick. The table will be created on startup.
+              logger.warn({ err, userName, rt }, "[MED] hasMedicationReminderSentToday threw — skipping tick (safe default)");
+              continue;
             }
             if (alreadySent) {
               logger.info({ userName, rt, localTime }, "[MED] Reminder already sent today — skipping");
@@ -76,8 +80,11 @@ export function startMedicationScheduler(): void {
                 body: `Time to take your ${medText}.`,
                 tag: "medication-morning",
                 notificationType: "medication",
-                // "medication-action" shows "Taken ✓" and "Remind in 30 min" buttons.
-                categoryId: "medication-action",
+                // categoryId "medication-reminder" — native app must register this category
+                // with two action buttons:
+                //   { identifier: "MEDICATION_DONE",      title: "Done ✓",                   destructive: false }
+                //   { identifier: "MEDICATION_SNOOZE_30", title: "Remind me in 30 minutes",  destructive: false }
+                categoryId: "medication-reminder",
                 requireInteraction: true,
               }, userName).catch((err: unknown) => {
                 logger.error({ err, userName }, "[MED] Push delivery failed");

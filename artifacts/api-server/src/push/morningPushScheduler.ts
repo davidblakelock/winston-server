@@ -8,7 +8,7 @@ import { preFetchMorningBriefing } from "../morning/briefingPregenerate.js";
 import {
   getStaticBriefingContext,
   loadStaticContextFromDb,
-  markPushSent,
+  claimMorningPushSlot,
   wasPushSentToday,
 } from "../morning/briefingCache.js";
 import { getActiveUsers, type ActiveUser } from "../onboarding/onboardingManager.js";
@@ -87,10 +87,12 @@ async function buildMorningBody(user: ActiveUser): Promise<string> {
 
 async function sendMorningPush(user: ActiveUser, wakeTime: string, minsSince: number): Promise<void> {
   const { userName } = user;
+
   let staticCtx = getStaticBriefingContext(userName);
 
   if (!staticCtx && minsSince < WAKE_WINDOW_MINUTES) {
-    // Briefing not ready yet — wait until next minute check
+    // Briefing not ready yet — wait until next minute check before claiming the slot.
+    // Important: do NOT claim here, so the next tick can still try.
     logger.info(
       { userName, minsSince },
       "[MorningPush] Briefing not ready at wake time — will retry next minute"
@@ -115,8 +117,14 @@ async function sendMorningPush(user: ActiveUser, wakeTime: string, minsSince: nu
     }
   }
 
-  // Mark as sent first (DB-backed) to prevent double-send across restarts
-  await markPushSent(userName);
+  // Briefing is ready (or we've given up waiting). Atomically claim the send slot now.
+  // claimMorningPushSlot uses INSERT ... ON CONFLICT DO UPDATE WHERE push_sent_at IS NULL
+  // so exactly one autoscale process wins across the cluster per day.
+  const claimed = await claimMorningPushSlot(userName);
+  if (!claimed) {
+    logger.info({ userName }, "[MorningPush] Push slot already claimed — skipping (prevents double-send)");
+    return;
+  }
 
   try {
     const body = await buildMorningBody(user);

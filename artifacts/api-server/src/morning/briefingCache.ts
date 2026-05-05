@@ -8,6 +8,31 @@ function ctDateKey(): string {
 // Idempotent — safe to run on every server start.
 
 export async function runBriefingCacheMigrations(): Promise<void> {
+  // Create the table if it doesn't exist (idempotent).
+  // UNIQUE constraint is a separate index to avoid exec_sql parse issues on Supabase.
+  try {
+    await query(`
+      CREATE TABLE IF NOT EXISTS morning_static_context (
+        user_name             text NOT NULL,
+        date_key              text NOT NULL,
+        preamble              text,
+        suffix                text,
+        candidate_story_keys  jsonb,
+        built_at              timestamptz NOT NULL DEFAULT NOW(),
+        push_sent_at          timestamptz,
+        briefing_text         text
+      )
+    `);
+    await query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS morning_static_context_pk
+       ON morning_static_context (user_name, date_key)`
+    );
+    console.log("[BriefingCache] morning_static_context table ready");
+  } catch (err) {
+    console.warn("[BriefingCache] morning_static_context table creation warning:", err);
+  }
+
+  // Add columns that may be missing on older deployments (idempotent).
   try {
     await query(`ALTER TABLE morning_static_context ADD COLUMN IF NOT EXISTS push_sent_at timestamptz`);
     await query(`ALTER TABLE morning_static_context ADD COLUMN IF NOT EXISTS briefing_text text`);
@@ -80,6 +105,52 @@ export async function markPushSent(userName: string): Promise<void> {
 
 export function wasPushSentToday(userName: string): boolean {
   return _pushSentDone.get(userName) === ctDateKey();
+}
+
+/**
+ * Atomically claim the morning push send slot for this user+day.
+ * Returns true if THIS process should send the push, false if another process
+ * (or a previous restart) already sent it.
+ *
+ * Uses INSERT ... ON CONFLICT DO UPDATE WHERE push_sent_at IS NULL — only one
+ * process across an autoscale cluster can win the RETURNING row.
+ */
+export async function claimMorningPushSlot(userName: string): Promise<boolean> {
+  const dateKey = ctDateKey();
+
+  // Fast path: in-memory already set (single-process restarts won't re-send)
+  if (wasPushSentToday(userName)) return false;
+
+  try {
+    // Atomic claim: the UPDATE only fires when push_sent_at is still NULL.
+    // RETURNING returns a row only if we actually inserted or updated —
+    // so exactly one process wins across the autoscale cluster.
+    const { rows } = await query<{ user_name: string }>(
+      `INSERT INTO morning_static_context (user_name, date_key, push_sent_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (user_name, date_key) DO UPDATE
+         SET push_sent_at = NOW()
+       WHERE morning_static_context.push_sent_at IS NULL
+       RETURNING user_name`,
+      [userName, dateKey]
+    );
+    if (rows.length > 0) {
+      _pushSentDone.set(userName, dateKey);
+      return true; // We won the claim
+    }
+    // Another process already claimed it
+    _pushSentDone.set(userName, dateKey);
+    return false;
+  } catch {
+    // Table not yet created — fall back to non-atomic in-memory only.
+    // Will be correct for single-process deployments; multi-process may double-send
+    // until the table is created on next restart.
+    if (!wasPushSentToday(userName)) {
+      _pushSentDone.set(userName, dateKey);
+      return true;
+    }
+    return false;
+  }
 }
 
 // ── Retrieve persisted briefing text from DB (for "already loaded" endpoint) ──

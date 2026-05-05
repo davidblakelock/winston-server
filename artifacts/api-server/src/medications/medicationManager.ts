@@ -103,17 +103,22 @@ export async function logMedicationsTaken(meds: Medication[], userName = NATIVE_
 // This replaces in-memory Maps which reset on every server restart.
 
 export async function initMedicationReminderLogTable(): Promise<void> {
-  // medication_reminder_log — tracks when the daily reminder was sent (survives restarts)
+  // medication_reminder_log — tracks when the daily reminder was sent (survives restarts).
+  // UNIQUE constraint is added as a separate index to avoid inline-constraint parse issues
+  // with Supabase's exec_sql RPC.
   await query(`
     CREATE TABLE IF NOT EXISTS medication_reminder_log (
       id            serial PRIMARY KEY,
       user_name     text NOT NULL,
       reminder_date date NOT NULL DEFAULT CURRENT_DATE,
       reminder_type text NOT NULL,
-      sent_at       timestamptz NOT NULL DEFAULT NOW(),
-      UNIQUE (user_name, reminder_date, reminder_type)
+      sent_at       timestamptz NOT NULL DEFAULT NOW()
     )
   `);
+  await query(
+    `CREATE UNIQUE INDEX IF NOT EXISTS medication_reminder_log_uniq
+     ON medication_reminder_log (user_name, reminder_date, reminder_type)`
+  );
   await query(
     `CREATE INDEX IF NOT EXISTS idx_med_reminder_log_lookup
      ON medication_reminder_log (user_name, reminder_date)`
