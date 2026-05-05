@@ -197,19 +197,19 @@ async function scrapeBookingLink(websiteUrl: string): Promise<{
 }> {
   try {
     const res = await fetch(websiteUrl, {
-      signal: AbortSignal.timeout(6000),
+      signal: AbortSignal.timeout(3000),
       headers: {
         "User-Agent": "Mozilla/5.0 (compatible; RestaurantReservationBot/1.0)",
         Accept: "text/html",
       },
     });
     if (!res.ok) return { platform: "phone", slug: null, city: null };
-    // Only read first 80 KB — booking links are almost always in the head or hero section.
+    // Only read first 30 KB — booking links are in the <head> or top of <body>.
     const reader = res.body?.getReader();
     if (!reader) return { platform: "phone", slug: null, city: null };
     const chunks: Uint8Array[] = [];
     let total = 0;
-    while (total < 80_000) {
+    while (total < 30_000) {
       const { done, value } = await reader.read();
       if (done || !value) break;
       chunks.push(value);
