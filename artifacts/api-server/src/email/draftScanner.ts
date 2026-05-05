@@ -53,15 +53,63 @@ const SKIP_FROM_PATTERNS = [
   /newsletter/i, /notifications?@/i, /alerts?@/i, /updates?@/i,
   /support@/i, /help@/i, /info@/i, /hello@/i, /marketing@/i,
   /unsubscribe/i, /mailchimp/i, /sendgrid/i, /constantcontact/i,
+  /mailer-daemon/i, /postmaster/i, /bounce/i, /automailer/i,
+  /reply@/i, /auto@/i, /robot@/i, /system@/i,
 ];
 
 const SKIP_SUBJECT_PATTERNS = [
   /\b(unsubscribe|newsletter|weekly digest|daily digest|your receipt|order confirmation|shipping|delivery|invoice #|statement|automated|do not reply)\b/i,
+  /^(auto(matic)?\s*reply|automatic response|out of office|away from the office|on vacation|vacation notice|on leave|ooo\b)/i,
+  /^re:\s*(auto(matic)?\s*reply|automatic response|out of office)/i,
+  /\b(acknowledgement|acknowledgment|we received your|we have received your|thank you for (?:contacting|reaching out|getting in touch|your (?:email|message|inquiry|enquiry)))\b/i,
+  /\b(delivery (?:status|failure|notification)|mail delivery|undelivered mail)\b/i,
 ];
+
+// Body phrases that definitively indicate an automated or non-human email
+const SKIP_BODY_PHRASES = [
+  /this (is an? )?auto(matic(ally generated)?)?[- ]?reply/i,
+  /this (inbox|email address) is (not )?monitored/i,
+  /please do not (reply to|respond to) this (email|message)/i,
+  /do not reply (to |directly to )?this (email|message|address)/i,
+  /this message was sent (automatically|by an automated system)/i,
+  /you are receiving this (email|message|notification) because/i,
+  /out of (the )?office/i,
+  /i('m| am) (currently |on )?(out of( the)? office|away|on vacation|on leave|traveling)/i,
+  /thank you for (getting in touch|reaching out|contacting us|your (email|message|inquiry|enquiry))/i,
+  /our team will (be in touch|get back to you|respond|contact you)/i,
+  /we('ll| will) (get back|respond|be in touch)/i,
+  /someone (will|from our team) (be in touch|get back to you|respond|contact you)/i,
+  /expected (reply|response) time/i,
+  /if you need (immediate|urgent) (assistance|help|support)/i,
+  /this is a (no-reply|noreply|automated) (address|email|mailbox)/i,
+  /replies to this (email|message|address) are not (monitored|read)/i,
+  /for (immediate|urgent) (assistance|help|support), (please |)(?:call|contact|visit)/i,
+];
+
+// Standard RFC headers that indicate automated mail
+const AUTO_SUBMITTED_VALUES = ["auto-replied", "auto-generated", "auto-notified"];
+
+function isAutoReplyHeader(headers: Array<{ name?: string | null; value?: string | null }>): boolean {
+  for (const h of headers) {
+    const name = (h.name ?? "").toLowerCase();
+    const value = (h.value ?? "").toLowerCase();
+    if (name === "auto-submitted" && AUTO_SUBMITTED_VALUES.some((v) => value.includes(v))) return true;
+    if (name === "x-autoreply" && value === "yes") return true;
+    if (name === "x-auto-response-suppress") return true;
+    if (name === "precedence" && (value === "bulk" || value === "junk" || value === "list")) return true;
+    if (name === "x-mailer" && /mailchimp|sendgrid|marketo|hubspot|salesforce|eloqua|pardot/i.test(value)) return true;
+  }
+  return false;
+}
 
 function isSkippable(fromEmail: string, subject: string): boolean {
   return SKIP_FROM_PATTERNS.some((p) => p.test(fromEmail)) ||
     SKIP_SUBJECT_PATTERNS.some((p) => p.test(subject));
+}
+
+function isSkippableBody(body: string): boolean {
+  const sample = body.slice(0, 2000).toLowerCase();
+  return SKIP_BODY_PHRASES.some((p) => p.test(sample));
 }
 
 // ── Claude Haiku: needs-reply + draft ─────────────────────────────────────────
@@ -114,19 +162,24 @@ Return JSON:
   "suggestedReply": "a warm, brief, professional reply draft from David's perspective — or null if needsReply is false"
 }
 
-Emails that need a reply:
-- Direct questions addressed to David
-- Meeting/call requests
-- Follow-ups awaiting David's response
-- Action items requested from David
-- Personal emails from real people (not services)
+An email NEEDS a reply only if ALL of these are true:
+- It is from a real, identifiable human (not a service, system, or mailing list)
+- It contains a direct question, request, or action item addressed personally to David
+- A human is clearly waiting for David's specific response
 
-Emails that do NOT need a reply:
-- Marketing emails, newsletters, promotions
-- Automated notifications, receipts, shipping updates
-- CC'd emails where David is not the primary recipient
-- Emails that are clearly FYI only
-- Anything from a no-reply address`;
+An email does NOT need a reply if ANY of these apply:
+- Auto-reply, out-of-office, or vacation response
+- Generic acknowledgment ("thank you for reaching out", "we received your message", "our team will be in touch", "we'll get back to you")
+- This inbox is monitored / unmonitored notice
+- Automated notification, receipt, shipping update, invoice, or statement
+- Marketing email, newsletter, or promotion
+- The sender says replies are not monitored or asks David not to reply
+- CC or BCC only — David is not the primary recipient
+- FYI-only with no action requested
+- A no-reply or automated address sent it
+- The body reads like a form letter or template response
+
+If there is ANY doubt, return needsReply: false. Only flag emails where it would be genuinely rude or harmful NOT to reply.`;
 
   try {
     const resp = await anthropic.messages.create({
@@ -195,10 +248,12 @@ export async function scanEmailsForDrafts(
       const fromEmail = extractEmailAddress(from);
 
       if (isSkippable(fromEmail, subject)) continue;
+      if (isAutoReplyHeader(headers)) continue;
 
       let body = extractBodyFromPayload((detail.data.payload ?? {}) as GmailPart);
       if (body.includes("<")) body = stripHtml(body);
       if (body.length < 30) continue;
+      if (isSkippableBody(body)) continue;
 
       const result = await analyzeAndDraft(from, subject, body, date);
       if (!result || !result.needsReply || !result.suggestedReply) continue;
