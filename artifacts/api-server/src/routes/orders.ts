@@ -4,15 +4,13 @@ import { authenticate } from "../auth/middleware.js";
 import {
   getOrders,
   upsertOrder,
-  updateOrderTracking,
   deleteOrder,
   getLastOrderScanAt,
   updateLastOrderScanAt,
 } from "../orders/ordersManager.js";
 import { scanOrderEmails } from "../orders/gmailOrderScanner.js";
-import { trackOrder } from "../orders/aftershipTracker.js";
+import { pollActiveOrderTracking } from "../orders/orderTrackingScheduler.js";
 import { logger } from "../lib/logger.js";
-import { sendPushToAll } from "../push/pushManager.js";
 
 const router: IRouter = Router();
 
@@ -58,54 +56,8 @@ router.post("/orders/sync", express.json({ limit: "1mb" }), async (req, res) => 
     await updateLastOrderScanAt(userName);
     req.log.info({ userName, scanned: scanned.length, newOrUpdated: newCount }, "[Orders] Gmail scan complete");
 
-    // ── Step 2: Update tracking for orders with tracking numbers ────────────
-    const allOrders = await getOrders(userName);
-    const trackableOrders = allOrders.filter(
-      (o) =>
-        o.tracking_number &&
-        o.status !== "delivered" &&
-        o.status !== "exception"
-    );
-
-    let trackingUpdated = 0;
-    for (const order of trackableOrders) {
-      try {
-        const result = await trackOrder(
-          order.tracking_number!,
-          order.aftership_slug,
-          order.carrier
-        );
-        if (result) {
-          const prevStatus = order.status;
-          await updateOrderTracking(order.id, {
-            status: result.status,
-            expected_date: result.expected_date ?? undefined,
-            tracking_events: result.events,
-            aftership_slug: result.aftership_slug,
-            carrier: result.carrier ?? undefined,
-          });
-          trackingUpdated++;
-
-          // Push notification when status transitions to a notable state
-          if (prevStatus !== result.status) {
-            if (result.status === "out_for_delivery") {
-              sendPushToAll(userName, {
-                title: "Package Out for Delivery",
-                body: `Your ${order.item_name} from ${order.retailer} is out for delivery today.`,
-              }).catch((e: unknown) => logger.warn({ e }, "[Orders] Push send failed"));
-            } else if (result.status === "delivered") {
-              sendPushToAll(userName, {
-                title: "Package Delivered",
-                body: `Your ${order.item_name} from ${order.retailer} has been delivered.`,
-              }).catch((e: unknown) => logger.warn({ e }, "[Orders] Push send failed"));
-            }
-          }
-        }
-      } catch (err) {
-        req.log.warn({ err, orderId: order.id }, "[Orders] Tracking update failed for order");
-      }
-    }
-
+    // ── Step 2: Update live tracking via AfterShip (throttled — 30 min cooldown per order)
+    const { updated: trackingUpdated } = await pollActiveOrderTracking(userName);
     req.log.info({ userName, trackingUpdated }, "[Orders] Tracking updates complete");
 
     const updatedOrders = await getOrders(userName);

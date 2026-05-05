@@ -40,6 +40,7 @@ import { ensureJournalSourceColumn } from "./routes/journal";
 import { ensureConnectTables } from "./connect/connectManager";
 import { ensureRestaurantCacheTable } from "./restaurants/restaurantIntelligence";
 import { ensureOrdersTable } from "./orders/ordersManager";
+import { startOrderTrackingScheduler } from "./orders/orderTrackingScheduler";
 
 const rawPort = process.env["PORT"];
 
@@ -281,6 +282,7 @@ app.listen(port, async (err) => {
   startGarminScheduler();
   startJournalPatternScheduler();
   startPressureScheduler();
+  startOrderTrackingScheduler();
 
   // Seed David's music preferences into profile_items so they persist and
   // can be referenced in any conversation naturally.
