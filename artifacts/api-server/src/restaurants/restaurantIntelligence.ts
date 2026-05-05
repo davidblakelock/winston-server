@@ -264,6 +264,50 @@ function detectPlatform(text: string | null | undefined): {
   return { platform: "phone", slug: null, city: null };
 }
 
+// Search OpenTable directly by name and return the first matching slug.
+// Used as a second fallback when the restaurant's own website has no booking link.
+async function searchOpenTableByName(
+  restaurantName: string,
+  metroId: number | null
+): Promise<{ slug: string } | null> {
+  try {
+    const term = encodeURIComponent(restaurantName);
+    const url = metroId
+      ? `https://www.opentable.com/s/?term=${term}&metroId=${metroId}`
+      : `https://www.opentable.com/s/?term=${term}`;
+
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(4000),
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; RestaurantReservationBot/1.0)",
+        Accept: "text/html",
+      },
+    });
+    if (!res.ok) return null;
+
+    // Read first 60 KB — restaurant cards are near the top of the page
+    const reader = res.body?.getReader();
+    if (!reader) return null;
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    while (total < 60_000) {
+      const { done, value } = await reader.read();
+      if (done || !value) break;
+      chunks.push(value);
+      total += value.byteLength;
+    }
+    reader.cancel().catch(() => {});
+    const html = Buffer.concat(chunks).toString("utf-8");
+
+    // OpenTable search results contain href="/r/<slug>" in each restaurant card
+    const match = html.match(/href="\/r\/([\w-]+)"/);
+    if (match) return { slug: match[1] };
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 // Fetch the restaurant's own website and scan the HTML for booking links.
 // Many restaurants embed an OpenTable/Resy widget or link on their homepage
 // even when their Google Places "website" URL is their own domain.
@@ -384,8 +428,7 @@ export async function lookupRestaurantDetails(
     const website = place.websiteUri ?? null;
     let { platform, slug, city: platformCity } = detectPlatform(website);
 
-    // If Places' website URL is the restaurant's own domain (not OpenTable/Resy),
-    // scrape the homepage HTML to look for embedded booking links.
+    // Fallback 1: scrape the restaurant's own homepage for embedded booking links.
     if (platform === "phone" && website) {
       console.log(`[RestaurantIntel] Scraping ${website} for booking links…`);
       const scraped = await scrapeBookingLink(website);
@@ -394,6 +437,23 @@ export async function lookupRestaurantDetails(
         platform = scraped.platform;
         slug = scraped.slug;
         platformCity = scraped.city;
+      }
+    }
+
+    // Fallback 2: search OpenTable directly by restaurant name.
+    // Covers restaurants whose own websites don't link to OpenTable (e.g. Nick & Sam's).
+    if (platform === "phone") {
+      const restaurantCity = place.formattedAddress
+        ? (place.formattedAddress.split(",")[1]?.trim() ?? city)
+        : city;
+      const metroId = getOpenTableMetroId(restaurantCity);
+      console.log(`[RestaurantIntel] Searching OpenTable for "${restaurantName}" (metroId=${metroId})…`);
+      const otResult = await searchOpenTableByName(restaurantName, metroId);
+      if (otResult) {
+        console.log(`[RestaurantIntel] Found OpenTable slug via search: ${otResult.slug}`);
+        platform = "opentable";
+        slug = otResult.slug;
+        platformCity = null;
       }
     }
 
