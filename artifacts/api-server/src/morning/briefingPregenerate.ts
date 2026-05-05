@@ -30,6 +30,7 @@ import { getStoredFitData, formatFitForBriefing } from "../google/fit.js";
 import { fetchMarkets, buildMarketsBlock } from "../markets/marketsManager.js";
 import { getMydayEntries, type MydayEntry } from "../myday/mydayManager.js";
 import { getOrdersForBriefing } from "../orders/ordersManager.js";
+import { getTodayTravelSegments, formatTravelForBriefing } from "../travel/travelManager.js";
 
 // ── Departure times for calendar events ───────────────────────────────────────
 // Calculates leave-by time for each event that has a location.
@@ -418,7 +419,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       dietaryRestrictions: [],  // no field in rawData yet; reserved for future onboarding
     };
 
-    const [lastNightNotes, newsBlock, yesterdayEps, todayEps, sportsScores, upcomingBills, upcomingDates, sundayData, pendingFollowUps, dallasEvents, venueConcertsBlock, dailyMotivation, personalFollowUps, outForDeliveryOrders] = await Promise.all([
+    const [lastNightNotes, newsBlock, yesterdayEps, todayEps, sportsScores, upcomingBills, upcomingDates, sundayData, pendingFollowUps, dallasEvents, venueConcertsBlock, dailyMotivation, personalFollowUps, outForDeliveryOrders, todayTravelSegments] = await Promise.all([
       getLastNightNotes().catch(() => []),
       fetchMorningNews(userName).catch(() => ""),
       fetchEpisodesForDate(yesterday, watchedIds).catch(() => []),
@@ -433,6 +434,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       fetchDailyMotivation(userName).catch(() => ""),
       getPendingPersonalFollowups(userName).catch(() => []),
       getOrdersForBriefing(userName).catch(() => []),
+      getTodayTravelSegments(userName).catch(() => []),
     ]);
 
     // Fetch Garmin health data (yesterday's stored data — no live API call needed)
@@ -522,6 +524,8 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
 
 
     const sportsBlock = sportsScores ? formatSportsForPrompt(sportsScores) : "";
+
+    const travelBlock = formatTravelForBriefing(todayTravelSegments);
 
     const ordersBlock = (() => {
       if (!outForDeliveryOrders || outForDeliveryOrders.length === 0) return "";
@@ -618,7 +622,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     // are the last thing it reads before generating the response.
     // News appears before Dallas local content and venue concerts so Claude gives it
     // appropriate prominence — national/international news is mandatory in every briefing.
-    const suffix = garminBlock + fitBlock + ordersBlock + tvMorningBlock + sportsBlock + billsMorningBlock + datesBlock +
+    const suffix = garminBlock + fitBlock + travelBlock + ordersBlock + tvMorningBlock + sportsBlock + billsMorningBlock + datesBlock +
       sundaySummaryBlock + pickleballMorningBlock + recFollowUpBlock + personalFollowUpsBlock +
       mydayBlock + marketsBlock +
       dedupedNewsBlock + dallasEventsBlock + dedupedVenueConcertsBlock + motivationContextBlock +

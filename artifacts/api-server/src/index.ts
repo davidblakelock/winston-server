@@ -41,6 +41,7 @@ import { ensureConnectTables } from "./connect/connectManager";
 import { ensureRestaurantCacheTable } from "./restaurants/restaurantIntelligence";
 import { ensureOrdersTable } from "./orders/ordersManager";
 import { startOrderTrackingScheduler } from "./orders/orderTrackingScheduler";
+import { ensureTravelTable } from "./travel/travelManager";
 
 const rawPort = process.env["PORT"];
 
@@ -244,6 +245,12 @@ app.listen(port, async (err) => {
     await ensureOrdersTable();
   } catch (e) {
     logger.warn({ e }, "Orders table initialization warning");
+  }
+
+  try {
+    await ensureTravelTable();
+  } catch (e) {
+    logger.warn({ e }, "Travel table initialization warning");
   }
 
   try {

@@ -26,6 +26,9 @@ import conversationRouter from "./conversation";
 import mydayRouter from "./myday";
 import connectRouter from "./connect";
 import ordersRouter from "./orders";
+import emailRouter from "./email";
+import calendarSmartRouter from "./calendarSmart";
+import travelRouter from "./travel";
 
 const router: IRouter = Router();
 
@@ -56,5 +59,8 @@ router.use(conversationRouter);
 router.use(mydayRouter);
 router.use(connectRouter);
 router.use(ordersRouter);
+router.use(emailRouter);
+router.use(calendarSmartRouter);
+router.use(travelRouter);
 
 export default router;
