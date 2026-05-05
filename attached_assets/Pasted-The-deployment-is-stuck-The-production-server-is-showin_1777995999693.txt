@@ -1,0 +1,54 @@
+The deployment is stuck. The production server is showing constant NODE-CRON missed execution warnings indicating high CPU load. Please check what is causing the CPU spike and fix it, then redeploy.
+
+13 minutes ago
+
+7 actions
+Let me get more recent logs and look at the scraper code at the same time to find the root cause:
+
+
+2 actions
+Multiple missed executions firing per second — that's event loop blocking, not just high load. Let me look at the scraper and the new OpenTable search function simultaneously:
+
+
+3 actions
+Let me look at what's running at the 1-minute mark, and check all scheduler files for anything that could block:
+
+
+3 actions
+The pattern is clear — missed executions fire at :34, :35, :36, :37 every single minute. Let me read the minute-scheduler files and the briefing pregenerate to find what's blocking the event loop:
+
+
+4 actions
+Now let me look at briefingCache.ts and check if chat.ts calls anything that triggers venue scanning:
+
+
+3 actions
+Found it. chat.ts line 1091 calls preFetchMorningBriefing from a chat request — the Nick & Sam's request triggered it. That in turn calls runVenueScan, which runs fetchVenueWebsite for 3 venues (Kessler, Granada, Dallas Arboretum). Each does await res.text() — the entire HTML with no size limit — and then runs 4 chained synchronous regexes on that full content. For large event pages (1–5MB), those synchronous regex operations block the Node.js event loop for seconds. Three venues running in parallel makes it worse. Let me see the exact chat.ts trigger and fix the root cause:
+
+
+2 actions
+Confirmed. The Nick & Sam's request triggered preFetchMorningBriefing because it was a fresh deployment with no cached static context. That called runVenueScan, which ran fetchVenueWebsite for 3 venues simultaneously — each reads the ENTIRE page HTML with res.text() and runs 4 synchronous chained regex operations on it. For large event pages this blocks the event loop for seconds per venue, three at a time. The fix is identical to what we already use in scrapeBookingLink: chunked reading with a hard byte cap:
+
+
+2 actions
+Now restart and deploy:
+
+
+4 actions
+Server is up clean with no missed execution warnings. Let me deploy:
+
+
+Diagnosing root cause
+Root cause identified and fixed. Here's exactly what was happening:
+
+The chain of events:
+
+You asked for a Nick & Sam's reservation — the server had just restarted fresh with no cached morning briefing context
+The chat handler detected the missing cache and triggered a full morning briefing pre-generation inline
+That called the venue scanner, which fetched the event pages for Kessler Theater, Granada Theater, and Dallas Arboretum — all three simultaneously
+Each one used res.text() which downloads the entire HTML page (venue event pages are 1–5 MB each)
+Then ran 4 chained synchronous regex operations on that full content to strip tags
+Synchronous operations on multi-megabyte strings block Node.js completely — cron jobs then couldn't fire on time, generating the missed execution cascade every minute
+The fix: fetchVenueWebsite now uses the same chunked-reading pattern as the restaurant scraper — reads only the first 50 KB of each venue page, then cancels the connection. The regex operations stay synchronous but are now safe because they're running on 50 KB instead of 5 MB. This prevents any event loop blocking.
+
+The server restart logs show zero missed execution warnings. Click Publish to ship it.
