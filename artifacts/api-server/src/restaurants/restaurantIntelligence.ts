@@ -257,6 +257,12 @@ function detectPlatform(text: string | null | undefined): {
   const otProfileMatch = text.match(/opentable\.com\/restaurant\/profile\/([\w-]+)/i);
   if (otProfileMatch) return { platform: "opentable", slug: `restaurant/profile/${otProfileMatch[1]}`, city: null };
 
+  // OpenTable direct slug: opentable.com/<restaurant-slug> (no /r/ prefix)
+  // e.g. opentable.com/nick-and-sams-steakhouse
+  // Exclude known non-restaurant paths: s (search), about, home, login, widget, etc.
+  const otDirectMatch = text.match(/opentable\.com\/(?!r\/|restaurant|s[/?]|about|home|login|widget|privacy|terms|help)([\w-]{4,})/i);
+  if (otDirectMatch) return { platform: "opentable", slug: `direct:${otDirectMatch[1]}`, city: null };
+
   // Resy: /cities/<city>/venues/<slug>  OR  /cities/<city>/<slug>
   const resyMatch = text.match(/resy\.com\/cities\/([\w-]+)\/(?:venues\/)?([\w-]+)/i);
   if (resyMatch) return { platform: "resy", slug: resyMatch[2], city: resyMatch[1] };
@@ -353,11 +359,17 @@ export function buildReservationUrl(
   const n = partySize ?? 2;
 
   if (details.platform === "opentable" && details.platformSlug) {
-    // Profile-based slug (e.g. "restaurant/profile/12345") uses a different URL path than canonical /r/<slug>
-    const isProfile = details.platformSlug.startsWith("restaurant/profile/");
-    const base = isProfile
-      ? `https://www.opentable.com/${details.platformSlug}?covers=${n}`
-      : `https://www.opentable.com/r/${details.platformSlug}?covers=${n}`;
+    let base: string;
+    if (details.platformSlug.startsWith("restaurant/profile/")) {
+      // /restaurant/profile/<id> format
+      base = `https://www.opentable.com/${details.platformSlug}?covers=${n}`;
+    } else if (details.platformSlug.startsWith("direct:")) {
+      // Direct slug format: opentable.com/<slug> (no /r/ prefix)
+      base = `https://www.opentable.com/${details.platformSlug.slice(7)}?covers=${n}`;
+    } else {
+      // Standard /r/<slug> format
+      base = `https://www.opentable.com/r/${details.platformSlug}?covers=${n}`;
+    }
     if (dateISO && timeISO) return `${base}&dateTime=${dateISO}T${timeISO}:00`;
     return base;
   }
