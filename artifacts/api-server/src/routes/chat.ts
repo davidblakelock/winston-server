@@ -170,6 +170,9 @@ import {
   setPendingReservation,
   clearPendingReservation,
   chicagoDateStr,
+  extractCityFromAddress,
+  getOpenTableMetroId,
+  getResyCitySlug,
   type PendingReservation,
 } from "../restaurants/restaurantIntelligence.js";
 import {
@@ -1954,13 +1957,25 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
         } else {
           // Reservation — immediate dispatch, no confirmation step needed.
-          // Build search fallback URLs (OpenTable Dallas metro=15, Resy Dallas city=dal)
           const partySize = intent.partySize ?? 2;
           const searchName = encodeURIComponent(intent.restaurantName);
-          const openTableSearchUrl = intent.dateISO && intent.timeISO
-            ? `https://www.opentable.com/s/?covers=${partySize}&dateTime=${intent.dateISO}T${intent.timeISO}:00&term=${searchName}&metroId=15`
-            : `https://www.opentable.com/s/?term=${searchName}&metroId=15`;
-          const resySearchUrl = `https://resy.com/cities/dal?query=${searchName}`;
+
+          // Use the restaurant's actual city (from its Places address) when available,
+          // otherwise fall back to the user's home city from their profile.
+          const restaurantCity = details?.formattedAddress
+            ? (extractCityFromAddress(details.formattedAddress) ?? city)
+            : city;
+          const otMetroId  = getOpenTableMetroId(restaurantCity);
+          const resyCitySlug = getResyCitySlug(restaurantCity);
+
+          // Build search fallback URLs with the correct metro/city for this restaurant.
+          const otBase = intent.dateISO && intent.timeISO
+            ? `https://www.opentable.com/s/?covers=${partySize}&dateTime=${intent.dateISO}T${intent.timeISO}:00&term=${searchName}`
+            : `https://www.opentable.com/s/?term=${searchName}`;
+          const openTableSearchUrl = otMetroId ? `${otBase}&metroId=${otMetroId}` : otBase;
+          const resySearchUrl = resyCitySlug
+            ? `https://resy.com/cities/${resyCitySlug}?query=${searchName}`
+            : `https://resy.com/?query=${searchName}`;
 
           const conflict = (intent.dateISO && intent.timeISO)
             ? await checkCalendarConflict(sessionUserName, intent.dateISO, intent.timeISO).catch(() => null)

@@ -8,6 +8,83 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 export type ReservationPlatform = "opentable" | "resy" | "phone";
 export type ReservationAction = "reservation" | "directions" | "info";
 
+// ── Booking platform metro/city lookup ───────────────────────────────────────
+
+/** OpenTable metro IDs keyed by normalised city name. */
+const OPENTABLE_METRO: Record<string, number> = {
+  "new york":        1,
+  "los angeles":     2,
+  "chicago":         3,
+  "san francisco":   4,
+  "washington":      5,
+  "washington dc":   5,
+  "boston":          6,
+  "philadelphia":    7,
+  "denver":          8,
+  "phoenix":         9,
+  "san diego":      10,
+  "miami":          12,
+  "seattle":        13,
+  "las vegas":      14,
+  "dallas":         15,
+  "fort worth":     15,
+  "houston":        16,
+  "portland":       18,
+  "minneapolis":    19,
+  "atlanta":        22,
+  "austin":         24,
+  "nashville":      55,
+  "new orleans":    56,
+};
+
+/** Resy city slugs keyed by normalised city name. */
+const RESY_CITY: Record<string, string> = {
+  "new york":       "nyc",
+  "los angeles":    "la",
+  "chicago":        "chi",
+  "san francisco":  "sf",
+  "washington":     "dc",
+  "washington dc":  "dc",
+  "boston":         "bos",
+  "miami":          "mia",
+  "las vegas":      "lv",
+  "seattle":        "sea",
+  "houston":        "hou",
+  "philadelphia":   "phl",
+  "denver":         "den",
+  "austin":         "atx",
+  "nashville":      "nash",
+  "atlanta":        "atl",
+  "dallas":         "dal",
+  "fort worth":     "dal",
+  "portland":       "por",
+  "minneapolis":    "min",
+  "new orleans":    "nola",
+  "san diego":      "sd",
+  "phoenix":        "phx",
+  "charlotte":      "char",
+  "richmond":       "rva",
+};
+
+/**
+ * Extract the city name from a Google Places formatted address.
+ * e.g. "4217 Oak Lawn Ave, Dallas, TX 75219, USA" → "Dallas"
+ */
+export function extractCityFromAddress(formattedAddress: string): string | null {
+  const parts = formattedAddress.split(",");
+  return parts.length >= 2 ? parts[1].trim() : null;
+}
+
+/** Returns the OpenTable metroId for a given city name, or null if unknown. */
+export function getOpenTableMetroId(city: string): number | null {
+  return OPENTABLE_METRO[city.toLowerCase()] ?? null;
+}
+
+/** Returns the Resy city slug for a given city name, or null if unknown. */
+export function getResyCitySlug(city: string): string | null {
+  return RESY_CITY[city.toLowerCase()] ?? null;
+}
+
 export interface RestaurantIntent {
   restaurantName: string;
   action: ReservationAction;
