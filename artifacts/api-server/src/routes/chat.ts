@@ -3823,6 +3823,12 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       const hardcodedBody: Record<string, unknown> = { response: hardcoded };
       if ((req as any)._smsPayload) hardcodedBody.smsPayload = (req as any)._smsPayload;
       if ((req as any)._reservationPayload) hardcodedBody.reservationPayload = (req as any)._reservationPayload;
+      // Expose the booking URL as navigationUrl so the Android app opens it
+      // using the same mechanism it uses for Google Maps (directions).
+      const rp = (req as any)._reservationPayload as { type?: string; url?: string } | undefined;
+      if (rp?.url && (rp.type === "opentable" || rp.type === "resy")) {
+        hardcodedBody.navigationUrl = rp.url;
+      }
       res.json(hardcodedBody);
       return;
     }
@@ -3841,6 +3847,12 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       if (navigationUrl) nativeResponseBody.navigationUrl = navigationUrl;
       if ((req as any)._smsPayload) nativeResponseBody.smsPayload = (req as any)._smsPayload;
       if ((req as any)._reservationPayload) nativeResponseBody.reservationPayload = (req as any)._reservationPayload;
+      // Expose the booking URL as navigationUrl so the Android app opens it
+      // using the same mechanism it uses for Google Maps (directions).
+      const rp2 = (req as any)._reservationPayload as { type?: string; url?: string } | undefined;
+      if (rp2?.url && (rp2.type === "opentable" || rp2.type === "resy") && !navigationUrl) {
+        nativeResponseBody.navigationUrl = rp2.url;
+      }
       res.json(nativeResponseBody);
     } catch (err: unknown) {
       const errStatus = (err as Record<string, unknown>)?.status as number | undefined;
