@@ -18,6 +18,7 @@ Winston is a personal AI companion app with a dark-themed chat interface that pr
 - `OLIVIA_PASSWORD` (default: `ForOlivia`)
 - `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET` (if Microsoft auth enabled)
 - `APPLE_CLIENT_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY` (if Apple auth enabled)
+- `SMTP_HOST`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`, `SMTP_PORT` (optional, for medication email export)
 
 ## Stack
 
@@ -55,7 +56,8 @@ Winston is a personal AI companion app with a dark-themed chat interface that pr
 - Chat with a personalized Claude AI companion.
 - Text-to-speech via ElevenLabs (with browser TTS fallback) and voice input via ElevenLabs Scribe.
 - Personalized morning briefings (weather, Gmail, Calendar, News).
-- Medication, Financial Obligation, and Important Date (birthdays/anniversaries) reminders with conversational management and SSE/push notifications.
+- Medication management: full CRUD (GET/POST/PUT/DELETE), drug interaction checking via RxNorm (free, no key), and email export via SMTP. Schema includes dose, frequency, time_of_day, prescribing_doctor, notes, active.
+- Financial Obligation, and Important Date (birthdays/anniversaries) reminders with conversational management and SSE/push notifications.
 - List management (shopping, to-do) and navigation to saved locations.
 - Google OAuth integration for Gmail and Calendar.
 - Multi-provider authentication (Google, Microsoft, Apple, Email+Password).

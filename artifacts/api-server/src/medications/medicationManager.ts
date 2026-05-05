@@ -1,5 +1,6 @@
 import { query } from "../db.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
+import nodemailer from "nodemailer";
 
 export interface Medication {
   id: number;
@@ -7,19 +8,41 @@ export interface Medication {
   dosage: string | null;
   reminderTime: string;
   active: boolean;
+  frequency: string | null;
+  timeOfDay: string | null;
+  prescribingDoctor: string | null;
+  notes: string | null;
 }
 
-export async function getMedications(userName = NATIVE_STORED_NAME): Promise<Medication[]> {
+// ── Schema migrations ─────────────────────────────────────────────────────────
+
+export async function runMedicationSchemaMigrations(): Promise<void> {
+  await query(`ALTER TABLE medications ADD COLUMN IF NOT EXISTS frequency TEXT`);
+  await query(`ALTER TABLE medications ADD COLUMN IF NOT EXISTS time_of_day TEXT`);
+  await query(`ALTER TABLE medications ADD COLUMN IF NOT EXISTS prescribing_doctor TEXT`);
+  await query(`ALTER TABLE medications ADD COLUMN IF NOT EXISTS notes TEXT`);
+}
+
+// ── Core CRUD ─────────────────────────────────────────────────────────────────
+
+export async function getMedications(
+  userName = NATIVE_STORED_NAME,
+  includeInactive = false
+): Promise<Medication[]> {
   const { rows } = await query<{
     id: number;
     name: string;
     dosage: string | null;
     reminder_time: string;
     active: boolean;
+    frequency: string | null;
+    time_of_day: string | null;
+    prescribing_doctor: string | null;
+    notes: string | null;
   }>(
-    `SELECT id, name, dosage, reminder_time, active
+    `SELECT id, name, dosage, reminder_time, active, frequency, time_of_day, prescribing_doctor, notes
      FROM medications
-     WHERE user_name = $1 AND active = true
+     WHERE user_name = $1 ${includeInactive ? "" : "AND active = true"}
      ORDER BY reminder_time ASC, name ASC`,
     [userName]
   );
@@ -29,6 +52,10 @@ export async function getMedications(userName = NATIVE_STORED_NAME): Promise<Med
     dosage: r.dosage,
     reminderTime: r.reminder_time,
     active: r.active,
+    frequency: r.frequency,
+    timeOfDay: r.time_of_day,
+    prescribingDoctor: r.prescribing_doctor,
+    notes: r.notes,
   }));
 }
 
@@ -38,19 +65,55 @@ export async function addMedication(
   reminderTime = "08:00",
   userName = NATIVE_STORED_NAME
 ): Promise<{ success: boolean; alreadyExists: boolean; medication?: Medication }> {
+  return addMedicationFull({ name, dosage, reminderTime }, userName);
+}
+
+export async function addMedicationFull(
+  fields: {
+    name: string;
+    dosage?: string;
+    reminderTime?: string;
+    frequency?: string;
+    timeOfDay?: string;
+    prescribingDoctor?: string;
+    notes?: string;
+  },
+  userName = NATIVE_STORED_NAME
+): Promise<{ success: boolean; alreadyExists: boolean; medication?: Medication }> {
   const existing = await query(
     `SELECT id FROM medications WHERE user_name = $1 AND lower(name) = lower($2) AND active = true`,
-    [userName, name]
+    [userName, fields.name]
   );
   if (existing.rows.length > 0) {
     return { success: false, alreadyExists: true };
   }
 
-  const { rows } = await query<{ id: number; name: string; dosage: string | null; reminder_time: string; active: boolean }>(
-    `INSERT INTO medications (user_name, name, dosage, reminder_time)
-     VALUES ($1, $2, $3, $4)
-     RETURNING id, name, dosage, reminder_time, active`,
-    [userName, name, dosage ?? null, reminderTime]
+  const reminderTime = fields.reminderTime ?? "08:00";
+  const { rows } = await query<{
+    id: number;
+    name: string;
+    dosage: string | null;
+    reminder_time: string;
+    active: boolean;
+    frequency: string | null;
+    time_of_day: string | null;
+    prescribing_doctor: string | null;
+    notes: string | null;
+  }>(
+    `INSERT INTO medications
+       (user_name, name, dosage, reminder_time, frequency, time_of_day, prescribing_doctor, notes)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING id, name, dosage, reminder_time, active, frequency, time_of_day, prescribing_doctor, notes`,
+    [
+      userName,
+      fields.name,
+      fields.dosage ?? null,
+      reminderTime,
+      fields.frequency ?? null,
+      fields.timeOfDay ?? null,
+      fields.prescribingDoctor ?? null,
+      fields.notes ?? null,
+    ]
   );
 
   return {
@@ -62,7 +125,59 @@ export async function addMedication(
       dosage: rows[0].dosage,
       reminderTime: rows[0].reminder_time,
       active: rows[0].active,
+      frequency: rows[0].frequency,
+      timeOfDay: rows[0].time_of_day,
+      prescribingDoctor: rows[0].prescribing_doctor,
+      notes: rows[0].notes,
     },
+  };
+}
+
+export async function updateMedication(
+  id: number,
+  fields: {
+    name?: string;
+    dosage?: string | null;
+    reminderTime?: string;
+    frequency?: string | null;
+    timeOfDay?: string | null;
+    prescribingDoctor?: string | null;
+    notes?: string | null;
+    active?: boolean;
+  },
+  userName = NATIVE_STORED_NAME
+): Promise<Medication | null> {
+  const setClauses: string[] = [];
+  const values: unknown[] = [];
+  let idx = 1;
+
+  if (fields.name !== undefined) { setClauses.push(`name = $${idx++}`); values.push(fields.name); }
+  if (fields.dosage !== undefined) { setClauses.push(`dosage = $${idx++}`); values.push(fields.dosage); }
+  if (fields.reminderTime !== undefined) { setClauses.push(`reminder_time = $${idx++}`); values.push(fields.reminderTime); }
+  if (fields.frequency !== undefined) { setClauses.push(`frequency = $${idx++}`); values.push(fields.frequency); }
+  if (fields.timeOfDay !== undefined) { setClauses.push(`time_of_day = $${idx++}`); values.push(fields.timeOfDay); }
+  if (fields.prescribingDoctor !== undefined) { setClauses.push(`prescribing_doctor = $${idx++}`); values.push(fields.prescribingDoctor); }
+  if (fields.notes !== undefined) { setClauses.push(`notes = $${idx++}`); values.push(fields.notes); }
+  if (fields.active !== undefined) { setClauses.push(`active = $${idx++}`); values.push(fields.active); }
+
+  if (setClauses.length === 0) return null;
+
+  values.push(id, userName);
+  const { rows } = await query<{
+    id: number; name: string; dosage: string | null; reminder_time: string; active: boolean;
+    frequency: string | null; time_of_day: string | null; prescribing_doctor: string | null; notes: string | null;
+  }>(
+    `UPDATE medications SET ${setClauses.join(", ")}
+     WHERE id = $${idx} AND user_name = $${idx + 1}
+     RETURNING id, name, dosage, reminder_time, active, frequency, time_of_day, prescribing_doctor, notes`,
+    values
+  );
+  if (rows.length === 0) return null;
+  return {
+    id: rows[0].id, name: rows[0].name, dosage: rows[0].dosage,
+    reminderTime: rows[0].reminder_time, active: rows[0].active,
+    frequency: rows[0].frequency, timeOfDay: rows[0].time_of_day,
+    prescribingDoctor: rows[0].prescribing_doctor, notes: rows[0].notes,
   };
 }
 
@@ -76,36 +191,194 @@ export async function removeMedication(name: string, userName = NATIVE_STORED_NA
   return rows.length > 0;
 }
 
-export async function hasTakenMedicationsToday(userName = NATIVE_STORED_NAME): Promise<boolean> {
+export async function removeMedicationById(id: number, userName = NATIVE_STORED_NAME): Promise<boolean> {
   const { rows } = await query(
-    `SELECT 1 FROM medication_logs
-     WHERE user_name = $1 AND log_date = CURRENT_DATE`,
-    [userName]
+    `UPDATE medications SET active = false
+     WHERE id = $1 AND user_name = $2 AND active = true
+     RETURNING id`,
+    [id, userName]
   );
   return rows.length > 0;
 }
 
-export async function logMedicationsTaken(meds: Medication[], userName = NATIVE_STORED_NAME): Promise<void> {
-  const names = meds.map((m) => m.name).join(", ");
-  // RETURNING id is required so exec_dml_ret (not exec_sql) handles this on Supabase.
-  await query(
-    `INSERT INTO medication_logs (user_name, log_date, medication_names)
-     VALUES ($1, CURRENT_DATE, $2)
-     ON CONFLICT (user_name, log_date) DO UPDATE SET
-       confirmed_at = NOW(),
-       medication_names = EXCLUDED.medication_names
-     RETURNING id`,
-    [userName, names]
-  );
+// ── Drug interaction lookup via RxNorm (no API key required) ──────────────────
+
+export interface DrugInteraction {
+  severity: string;
+  description: string;
+  drugs: string[];
 }
 
-// ── medication_reminder_log — DB-backed tracking of when reminders were sent ──
-// This replaces in-memory Maps which reset on every server restart.
+async function getRxCui(drugName: string): Promise<string | null> {
+  try {
+    const url = `https://rxnav.nlm.nih.gov/REST/rxcui.json?name=${encodeURIComponent(drugName)}&search=1`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return null;
+    const data = await res.json() as { idGroup?: { rxnormId?: string[] } };
+    return data.idGroup?.rxnormId?.[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function getMedicationInteractions(
+  userName = NATIVE_STORED_NAME
+): Promise<{ interactions: DrugInteraction[]; checkedDrugs: string[]; failedLookups: string[] }> {
+  const meds = await getMedications(userName);
+  if (meds.length < 2) {
+    return { interactions: [], checkedDrugs: meds.map((m) => m.name), failedLookups: [] };
+  }
+
+  const rxcuiResults = await Promise.all(
+    meds.map(async (m) => ({ name: m.name, rxcui: await getRxCui(m.name) }))
+  );
+
+  const found = rxcuiResults.filter((r) => r.rxcui !== null);
+  const failedLookups = rxcuiResults.filter((r) => r.rxcui === null).map((r) => r.name);
+
+  if (found.length < 2) {
+    return { interactions: [], checkedDrugs: found.map((r) => r.name), failedLookups };
+  }
+
+  const rxcuiList = found.map((r) => r.rxcui!).join("+");
+  const interactionUrl = `https://rxnav.nlm.nih.gov/REST/interaction/list.json?rxcuis=${rxcuiList}`;
+
+  let interactions: DrugInteraction[] = [];
+  try {
+    const res = await fetch(interactionUrl, { signal: AbortSignal.timeout(12000) });
+    if (res.ok) {
+      const data = await res.json() as {
+        fullInteractionTypeGroup?: Array<{
+          fullInteractionType?: Array<{
+            interactionPair?: Array<{
+              severity?: string;
+              description?: string;
+              interactionConcept?: Array<{ minConceptItem?: { name?: string } }>;
+            }>;
+          }>;
+        }>;
+      };
+      for (const group of data.fullInteractionTypeGroup ?? []) {
+        for (const type of group.fullInteractionType ?? []) {
+          for (const pair of type.interactionPair ?? []) {
+            const drugs = (pair.interactionConcept ?? [])
+              .map((c) => c.minConceptItem?.name ?? "Unknown")
+              .filter(Boolean);
+            interactions.push({
+              severity: pair.severity ?? "unknown",
+              description: pair.description ?? "",
+              drugs,
+            });
+          }
+        }
+      }
+    }
+  } catch {
+    // RxNorm timeout — return what we have
+  }
+
+  return {
+    interactions,
+    checkedDrugs: found.map((r) => r.name),
+    failedLookups,
+  };
+}
+
+// ── Medication export via email ───────────────────────────────────────────────
+
+function buildMedEmailHtml(meds: Medication[], exportDate: string): string {
+  const rows = meds.map((m) => `
+    <tr style="border-bottom:1px solid #e5e7eb;">
+      <td style="padding:10px 12px;font-weight:600;">${m.name}</td>
+      <td style="padding:10px 12px;">${m.dosage ?? "—"}</td>
+      <td style="padding:10px 12px;">${m.frequency ?? "—"}</td>
+      <td style="padding:10px 12px;">${m.timeOfDay ?? m.reminderTime}</td>
+      <td style="padding:10px 12px;">${m.prescribingDoctor ?? "—"}</td>
+      <td style="padding:10px 12px;">${m.notes ?? "—"}</td>
+    </tr>`).join("");
+
+  return `<!DOCTYPE html>
+<html>
+<body style="font-family:system-ui,sans-serif;color:#111;max-width:800px;margin:0 auto;padding:24px;">
+  <h2 style="margin-bottom:4px;">Medication List</h2>
+  <p style="color:#6b7280;margin-top:0;">Exported ${exportDate} — David Blake Lock</p>
+  <table style="width:100%;border-collapse:collapse;font-size:14px;margin-top:16px;">
+    <thead>
+      <tr style="background:#f3f4f6;text-align:left;">
+        <th style="padding:10px 12px;">Medication</th>
+        <th style="padding:10px 12px;">Dose</th>
+        <th style="padding:10px 12px;">Frequency</th>
+        <th style="padding:10px 12px;">Time</th>
+        <th style="padding:10px 12px;">Prescribing Doctor</th>
+        <th style="padding:10px 12px;">Notes</th>
+      </tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  </table>
+  <p style="color:#9ca3af;font-size:12px;margin-top:24px;">Sent by Winston AI Companion</p>
+</body>
+</html>`;
+}
+
+function buildMedEmailText(meds: Medication[], exportDate: string): string {
+  const lines = meds.map((m) => [
+    `Medication:  ${m.name}`,
+    `Dose:        ${m.dosage ?? "—"}`,
+    `Frequency:   ${m.frequency ?? "—"}`,
+    `Time:        ${m.timeOfDay ?? m.reminderTime}`,
+    `Doctor:      ${m.prescribingDoctor ?? "—"}`,
+    `Notes:       ${m.notes ?? "—"}`,
+  ].join("\n")).join("\n\n---\n\n");
+
+  return `MEDICATION LIST — David Blake Lock\nExported: ${exportDate}\n\n${"=".repeat(40)}\n\n${lines}`;
+}
+
+export async function exportMedicationsEmail(
+  toEmail: string,
+  userName = NATIVE_STORED_NAME
+): Promise<{ sent: boolean; error?: string }> {
+  const smtpHost = process.env.SMTP_HOST;
+  const smtpUser = process.env.SMTP_USER;
+  const smtpPass = process.env.SMTP_PASS;
+  const smtpFrom = process.env.SMTP_FROM ?? smtpUser;
+  const smtpPort = parseInt(process.env.SMTP_PORT ?? "587", 10);
+
+  if (!smtpHost || !smtpUser || !smtpPass) {
+    return { sent: false, error: "SMTP not configured. Set SMTP_HOST, SMTP_USER, and SMTP_PASS." };
+  }
+
+  const meds = await getMedications(userName, true);
+  const active = meds.filter((m) => m.active);
+  const exportDate = new Date().toLocaleDateString("en-US", {
+    year: "numeric", month: "long", day: "numeric",
+  });
+
+  const transport = nodemailer.createTransport({
+    host: smtpHost,
+    port: smtpPort,
+    secure: smtpPort === 465,
+    auth: { user: smtpUser, pass: smtpPass },
+  });
+
+  try {
+    await transport.sendMail({
+      from: `"Winston" <${smtpFrom}>`,
+      to: toEmail,
+      subject: `Medication List — ${exportDate}`,
+      text: buildMedEmailText(active, exportDate),
+      html: buildMedEmailHtml(active, exportDate),
+    });
+    return { sent: true };
+  } catch (err) {
+    return { sent: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+// ── Medication reminder log / scheduling helpers ──────────────────────────────
 
 export async function initMedicationReminderLogTable(): Promise<void> {
-  // medication_reminder_log — tracks when the daily reminder was sent (survives restarts).
-  // UNIQUE constraint is added as a separate index to avoid inline-constraint parse issues
-  // with Supabase's exec_sql RPC.
+  await runMedicationSchemaMigrations();
+
   await query(`
     CREATE TABLE IF NOT EXISTS medication_reminder_log (
       id            serial PRIMARY KEY,
@@ -124,7 +397,6 @@ export async function initMedicationReminderLogTable(): Promise<void> {
      ON medication_reminder_log (user_name, reminder_date)`
   );
 
-  // medication_logs — tracks when the user confirmed they took their meds
   await query(`
     CREATE TABLE IF NOT EXISTS medication_logs (
       id                serial PRIMARY KEY,
@@ -136,7 +408,6 @@ export async function initMedicationReminderLogTable(): Promise<void> {
     )
   `);
 
-  // medication_dose_logs — per-medication per-dose acknowledgment tracking
   await query(`
     CREATE TABLE IF NOT EXISTS medication_dose_logs (
       id               serial PRIMARY KEY,
@@ -153,8 +424,6 @@ export async function initMedicationReminderLogTable(): Promise<void> {
     `CREATE INDEX IF NOT EXISTS idx_medication_dose_logs_user_date
      ON medication_dose_logs (user_name, log_date)`
   );
-  // Unique constraint so seedTodayDoseLog's ON CONFLICT DO NOTHING actually works —
-  // without this, every server restart inserts duplicate rows.
   await query(
     `CREATE UNIQUE INDEX IF NOT EXISTS medication_dose_logs_uniq
      ON medication_dose_logs (user_name, medication_name, log_date)`
@@ -174,10 +443,7 @@ export interface DoseLogRow {
   created_at: string;
 }
 
-/** Seed today's dose log rows if they don't exist yet (one row per active med). */
-export async function seedTodayDoseLog(
-  userName = NATIVE_STORED_NAME,
-): Promise<void> {
+export async function seedTodayDoseLog(userName = NATIVE_STORED_NAME): Promise<void> {
   const meds = await getMedications(userName);
   for (const med of meds) {
     await query(
@@ -190,21 +456,17 @@ export async function seedTodayDoseLog(
   }
 }
 
-/** Acknowledge a specific medication dose (or all if no name given). */
 export async function acknowledgeMedicationDose(
   userName = NATIVE_STORED_NAME,
-  medicationName?: string,
+  medicationName?: string
 ): Promise<{ acknowledged: string[] }> {
   const meds = await getMedications(userName);
   const targets = medicationName
     ? meds.filter((m) => m.name.toLowerCase().includes(medicationName.toLowerCase()))
     : meds;
 
-  if (targets.length === 0) {
-    return { acknowledged: [] };
-  }
+  if (targets.length === 0) return { acknowledged: [] };
 
-  // Ensure today's rows exist
   await seedTodayDoseLog(userName);
 
   const acknowledged: string[] = [];
@@ -219,16 +481,11 @@ export async function acknowledgeMedicationDose(
     acknowledged.push(med.name);
   }
 
-  // Also update the daily aggregate log for backward compatibility
   await logMedicationsTaken(targets, userName);
-
   return { acknowledged };
 }
 
-/** Get today's dose log. */
-export async function getTodayDoseLog(
-  userName = NATIVE_STORED_NAME,
-): Promise<DoseLogRow[]> {
+export async function getTodayDoseLog(userName = NATIVE_STORED_NAME): Promise<DoseLogRow[]> {
   await seedTodayDoseLog(userName);
   const { rows } = await query<DoseLogRow>(
     `SELECT * FROM medication_dose_logs
@@ -239,13 +496,31 @@ export async function getTodayDoseLog(
   return rows;
 }
 
-/** Check if all doses acknowledged today. */
-export async function allDosesAcknowledgedToday(
-  userName = NATIVE_STORED_NAME,
-): Promise<boolean> {
+export async function allDosesAcknowledgedToday(userName = NATIVE_STORED_NAME): Promise<boolean> {
   const rows = await getTodayDoseLog(userName);
   if (rows.length === 0) return false;
   return rows.every((r) => r.acknowledged);
+}
+
+export async function hasTakenMedicationsToday(userName = NATIVE_STORED_NAME): Promise<boolean> {
+  const { rows } = await query(
+    `SELECT 1 FROM medication_logs WHERE user_name = $1 AND log_date = CURRENT_DATE`,
+    [userName]
+  );
+  return rows.length > 0;
+}
+
+export async function logMedicationsTaken(meds: Medication[], userName = NATIVE_STORED_NAME): Promise<void> {
+  const names = meds.map((m) => m.name).join(", ");
+  await query(
+    `INSERT INTO medication_logs (user_name, log_date, medication_names)
+     VALUES ($1, CURRENT_DATE, $2)
+     ON CONFLICT (user_name, log_date) DO UPDATE SET
+       confirmed_at = NOW(),
+       medication_names = EXCLUDED.medication_names
+     RETURNING id`,
+    [userName, names]
+  );
 }
 
 export async function hasMedicationReminderSentToday(
@@ -254,9 +529,7 @@ export async function hasMedicationReminderSentToday(
 ): Promise<boolean> {
   const { rows } = await query(
     `SELECT 1 FROM medication_reminder_log
-     WHERE user_name = $1
-       AND reminder_date = CURRENT_DATE
-       AND reminder_type = $2`,
+     WHERE user_name = $1 AND reminder_date = CURRENT_DATE AND reminder_type = $2`,
     [userName, type]
   );
   return rows.length > 0;
@@ -266,7 +539,6 @@ export async function logMedicationReminderSent(
   userName: string,
   type: "initial" | "followup"
 ): Promise<void> {
-  // RETURNING id routes through exec_dml_ret on Supabase (required for DML).
   await query(
     `INSERT INTO medication_reminder_log (user_name, reminder_date, reminder_type)
      VALUES ($1, CURRENT_DATE, $2)
@@ -276,25 +548,15 @@ export async function logMedicationReminderSent(
   );
 }
 
-// ── Medication reminder mute preference ──────────────────────────────────────
-// Stored in profile_items as category='preferences', name='medication_reminders_enabled'.
-// When detail = 'false', all medication push notifications are silenced.
+// ── Reminder mute preference ──────────────────────────────────────────────────
 
-// Medication reminders are ENABLED by default.
-// When the user mutes them, we insert a row with detail='muted'.
-// To re-enable, we delete that row.
-// This avoids needing a unique constraint on profile_items.
-
-export async function getMedicationRemindersEnabled(
-  userName = NATIVE_STORED_NAME
-): Promise<boolean> {
+export async function getMedicationRemindersEnabled(userName = NATIVE_STORED_NAME): Promise<boolean> {
   const { rows } = await query<{ detail: string | null }>(
     `SELECT detail FROM profile_items
      WHERE user_name = $1 AND category = 'preferences' AND name = 'medication_reminders_muted'
      LIMIT 1`,
     [userName]
   );
-  // If a 'muted' row exists → reminders are disabled
   return rows.length === 0;
 }
 
@@ -303,7 +565,6 @@ export async function setMedicationRemindersEnabled(
   userName = NATIVE_STORED_NAME
 ): Promise<void> {
   if (enabled) {
-    // Re-enabling: remove the muted row. RETURNING id routes through exec_dml_ret on Supabase.
     await query(
       `DELETE FROM profile_items
        WHERE user_name = $1 AND category = 'preferences' AND name = 'medication_reminders_muted'
@@ -311,8 +572,6 @@ export async function setMedicationRemindersEnabled(
       [userName]
     );
   } else {
-    // Muting: first remove any existing muted row, then insert fresh.
-    // Two-step to avoid needing a unique constraint on profile_items.
     await query(
       `DELETE FROM profile_items
        WHERE user_name = $1 AND category = 'preferences' AND name = 'medication_reminders_muted'
@@ -328,6 +587,7 @@ export async function setMedicationRemindersEnabled(
   }
 }
 
+// ── Utility helpers ───────────────────────────────────────────────────────────
 
 export function buildMedReminderText(meds: Medication[]): string {
   if (!meds.length) return "";
@@ -345,9 +605,6 @@ export function extractMedicationFromMessage(message: string): {
   dosage?: string;
   reminderTime?: string;
 } | null {
-  // "add a new medication called Metformin 500mg at 9am"
-  // "add medication Lisinopril taken at 8pm"
-  // "start taking Vitamin D"
   const nameMatch =
     message.match(/(?:add\s+(?:a\s+)?(?:new\s+)?medication\s+(?:called\s+)?|new\s+medication\s+(?:called\s+)?|start\s+taking\s+(?:a\s+)?(?:new\s+)?medication\s+called\s+|start\s+taking\s+)([\w\s\-]+?)(?:\s+(\d+\s*(?:mg|mcg|g|ml|iu)))?(?:\s+(?:taken\s+)?at\s+(\d{1,2}(?::\d{2})?\s*[ap]m|\d{1,2}:\d{2}))?(?:[.,!]|$)/i);
 
@@ -358,11 +615,7 @@ export function extractMedicationFromMessage(message: string): {
 
   const dosage = nameMatch[2]?.trim();
   const rawTime = nameMatch[3]?.trim();
-
-  let reminderTime: string | undefined;
-  if (rawTime) {
-    reminderTime = parseTimeToHHMM(rawTime);
-  }
+  const reminderTime = rawTime ? parseTimeToHHMM(rawTime) : undefined;
 
   return { name, dosage, reminderTime };
 }
