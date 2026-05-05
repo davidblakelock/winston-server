@@ -533,3 +533,168 @@ export function formatContactsForPrompt(result: ContactSearchResult, searchName:
     `Once they confirm, ask if they want to save them to their Winston contacts.`
   );
 }
+
+// ── Google Contacts write access ──────────────────────────────────────────────
+// Requires the contacts (write) scope: https://www.googleapis.com/auth/contacts
+// Users who authenticated before this scope was added will need to reconnect Google.
+
+export interface NewContact {
+  name: string;
+  phone?: string;
+  email?: string;
+  address?: string;
+  notes?: string;
+}
+
+export interface ContactWriteResult {
+  ok: boolean;
+  resourceName?: string;
+  error?: string;
+  needsReauth?: boolean;
+}
+
+/** Create a new contact in the user's Google Contacts. */
+export async function createGoogleContact(
+  contact: NewContact,
+  userName: string,
+): Promise<ContactWriteResult> {
+  const tokenInfo = await getAccessTokenForUser(userName);
+  if (!tokenInfo) return { ok: false, error: "Google not connected" };
+
+  const scope = tokenInfo as unknown as { token: string; hasContactsScope: boolean; userName: string };
+  const { rows: authRows } = await query<{ scope: string | null }>(
+    `SELECT scope FROM google_auth WHERE user_name = $1 LIMIT 1`,
+    [userName]
+  );
+  const hasWriteScope = authRows[0]?.scope
+    ?.split(" ")
+    .some((s) => s === "https://www.googleapis.com/auth/contacts") ?? false;
+
+  if (!hasWriteScope) {
+    return { ok: false, needsReauth: true, error: "contacts write scope required — please reconnect Google" };
+  }
+
+  const body: Record<string, unknown> = {
+    names: [{ givenName: contact.name.split(" ")[0], familyName: contact.name.split(" ").slice(1).join(" ") }],
+  };
+  if (contact.phone) body.phoneNumbers = [{ value: contact.phone }];
+  if (contact.email) body.emailAddresses = [{ value: contact.email }];
+  if (contact.address) body.addresses = [{ formattedValue: contact.address }];
+  if (contact.notes) body.biographies = [{ value: contact.notes, contentType: "TEXT_PLAIN" }];
+
+  try {
+    const resp = await fetch("https://people.googleapis.com/v1/people:createContact", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenInfo.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({})) as { error?: { message?: string } };
+      const msg = err.error?.message ?? resp.statusText;
+      logger.warn({ userName, status: resp.status, msg }, "[CONTACTS] createGoogleContact failed");
+      if (resp.status === 403) return { ok: false, needsReauth: true, error: msg };
+      return { ok: false, error: msg };
+    }
+
+    const data = await resp.json() as { resourceName?: string };
+    logger.info({ userName, resourceName: data.resourceName }, "[CONTACTS] Google contact created");
+
+    // Also save to local curated contacts
+    await saveCuratedContact({ name: contact.name, phone: contact.phone, email: contact.email, address: contact.address, resourceName: data.resourceName }, userName).catch(() => {});
+
+    return { ok: true, resourceName: data.resourceName };
+  } catch (err) {
+    logger.error({ err, userName }, "[CONTACTS] createGoogleContact exception");
+    return { ok: false, error: String(err) };
+  }
+}
+
+/** Update a single field on an existing Google contact by resourceName or display name. */
+export async function updateGoogleContact(
+  userName: string,
+  resourceName: string,
+  updates: { phone?: string; email?: string; address?: string; notes?: string },
+): Promise<ContactWriteResult> {
+  const tokenInfo = await getAccessTokenForUser(userName);
+  if (!tokenInfo) return { ok: false, error: "Google not connected" };
+
+  const { rows: authRows } = await query<{ scope: string | null }>(
+    `SELECT scope FROM google_auth WHERE user_name = $1 LIMIT 1`,
+    [userName]
+  );
+  const hasWriteScope = authRows[0]?.scope
+    ?.split(" ")
+    .some((s) => s === "https://www.googleapis.com/auth/contacts") ?? false;
+
+  if (!hasWriteScope) {
+    return { ok: false, needsReauth: true, error: "contacts write scope required — please reconnect Google" };
+  }
+
+  // Build update mask and body
+  const updatePersonFields: string[] = [];
+  const body: Record<string, unknown> = { etag: "*" };
+
+  if (updates.phone !== undefined) {
+    updatePersonFields.push("phoneNumbers");
+    body.phoneNumbers = updates.phone ? [{ value: updates.phone }] : [];
+  }
+  if (updates.email !== undefined) {
+    updatePersonFields.push("emailAddresses");
+    body.emailAddresses = updates.email ? [{ value: updates.email }] : [];
+  }
+  if (updates.address !== undefined) {
+    updatePersonFields.push("addresses");
+    body.addresses = updates.address ? [{ formattedValue: updates.address }] : [];
+  }
+  if (updates.notes !== undefined) {
+    updatePersonFields.push("biographies");
+    body.biographies = updates.notes ? [{ value: updates.notes, contentType: "TEXT_PLAIN" }] : [];
+  }
+
+  if (updatePersonFields.length === 0) return { ok: false, error: "no fields to update" };
+
+  const url = `https://people.googleapis.com/v1/${resourceName}:updateContact?updatePersonFields=${updatePersonFields.join(",")}`;
+
+  try {
+    const resp = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${tokenInfo.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({})) as { error?: { message?: string } };
+      const msg = err.error?.message ?? resp.statusText;
+      logger.warn({ userName, resourceName, status: resp.status, msg }, "[CONTACTS] updateGoogleContact failed");
+      if (resp.status === 403) return { ok: false, needsReauth: true, error: msg };
+      return { ok: false, error: msg };
+    }
+
+    logger.info({ userName, resourceName, fields: updatePersonFields }, "[CONTACTS] Google contact updated");
+
+    // Update local curated contacts table too
+    const updateFields: string[] = [];
+    const updateVals: unknown[] = [userName, resourceName];
+    if (updates.phone !== undefined) { updateFields.push(`phone = $${updateVals.length + 1}`); updateVals.push(updates.phone || null); }
+    if (updates.email !== undefined) { updateFields.push(`email = $${updateVals.length + 1}`); updateVals.push(updates.email || null); }
+    if (updates.address !== undefined) { updateFields.push(`address = $${updateVals.length + 1}`); updateVals.push(updates.address || null); }
+    if (updateFields.length > 0) {
+      await query(
+        `UPDATE google_contacts SET ${updateFields.join(", ")} WHERE user_name = $1 AND resource_name = $2 RETURNING id`,
+        updateVals
+      ).catch(() => {});
+    }
+
+    return { ok: true, resourceName };
+  } catch (err) {
+    logger.error({ err, userName }, "[CONTACTS] updateGoogleContact exception");
+    return { ok: false, error: String(err) };
+  }
+}

@@ -41,6 +41,7 @@ export const IDENTITY_SCOPES = [
 
 // ── Full integration scopes (used for "Connect Google" in settings) ───────────
 // NOTE: fitness.activity.read was removed — Google Fit API was deprecated May 2024.
+// contacts scope (write) is included so new/updated contact writes work without re-auth.
 export const SCOPES = [
   "openid",
   "https://www.googleapis.com/auth/userinfo.email",
@@ -49,6 +50,7 @@ export const SCOPES = [
   "https://www.googleapis.com/auth/gmail.send",
   "https://www.googleapis.com/auth/calendar",
   "https://www.googleapis.com/auth/contacts.readonly",
+  "https://www.googleapis.com/auth/contacts",
   "https://www.googleapis.com/auth/tasks",
 ];
 
@@ -91,6 +93,21 @@ export async function hasContactsScope(userName?: string): Promise<boolean> {
   return rows[0].scope
     .split(" ")
     .some((s) => s === "https://www.googleapis.com/auth/contacts.readonly");
+}
+
+export async function hasContactsWriteScope(userName?: string): Promise<boolean> {
+  const { rows } = userName
+    ? await query<{ scope: string | null }>(
+        `SELECT scope FROM google_auth WHERE user_name = $1 LIMIT 1`,
+        [userName]
+      )
+    : await query<{ scope: string | null }>(
+        `SELECT scope FROM google_auth ${PREFERRED_ACCOUNT_ORDER} LIMIT 1`
+      );
+  if (!rows.length || !rows[0].scope) return false;
+  return rows[0].scope
+    .split(" ")
+    .some((s) => s === "https://www.googleapis.com/auth/contacts");
 }
 
 export function getRedirectUri(): string {

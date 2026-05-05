@@ -135,6 +135,111 @@ export async function initMedicationReminderLogTable(): Promise<void> {
       UNIQUE (user_name, log_date)
     )
   `);
+
+  // medication_dose_logs — per-medication per-dose acknowledgment tracking
+  await query(`
+    CREATE TABLE IF NOT EXISTS medication_dose_logs (
+      id               serial PRIMARY KEY,
+      user_name        text NOT NULL,
+      medication_name  text NOT NULL,
+      scheduled_time   text NOT NULL,
+      acknowledged     boolean NOT NULL DEFAULT FALSE,
+      acknowledged_at  timestamptz,
+      log_date         date NOT NULL DEFAULT CURRENT_DATE,
+      created_at       timestamptz NOT NULL DEFAULT NOW()
+    )
+  `);
+  await query(
+    `CREATE INDEX IF NOT EXISTS idx_medication_dose_logs_user_date
+     ON medication_dose_logs (user_name, log_date)`
+  );
+}
+
+// ── Per-dose acknowledgment ───────────────────────────────────────────────────
+
+export interface DoseLogRow {
+  id: number;
+  user_name: string;
+  medication_name: string;
+  scheduled_time: string;
+  acknowledged: boolean;
+  acknowledged_at: string | null;
+  log_date: string;
+  created_at: string;
+}
+
+/** Seed today's dose log rows if they don't exist yet (one row per active med). */
+export async function seedTodayDoseLog(
+  userName = NATIVE_STORED_NAME,
+): Promise<void> {
+  const meds = await getMedications(userName);
+  for (const med of meds) {
+    await query(
+      `INSERT INTO medication_dose_logs (user_name, medication_name, scheduled_time, log_date)
+       VALUES ($1, $2, $3, CURRENT_DATE)
+       ON CONFLICT DO NOTHING
+       RETURNING id`,
+      [userName, med.name, med.reminderTime]
+    ).catch(() => {});
+  }
+}
+
+/** Acknowledge a specific medication dose (or all if no name given). */
+export async function acknowledgeMedicationDose(
+  userName = NATIVE_STORED_NAME,
+  medicationName?: string,
+): Promise<{ acknowledged: string[] }> {
+  const meds = await getMedications(userName);
+  const targets = medicationName
+    ? meds.filter((m) => m.name.toLowerCase().includes(medicationName.toLowerCase()))
+    : meds;
+
+  if (targets.length === 0) {
+    return { acknowledged: [] };
+  }
+
+  // Ensure today's rows exist
+  await seedTodayDoseLog(userName);
+
+  const acknowledged: string[] = [];
+  for (const med of targets) {
+    await query(
+      `UPDATE medication_dose_logs
+       SET acknowledged = TRUE, acknowledged_at = NOW()
+       WHERE user_name = $1 AND medication_name = $2 AND log_date = CURRENT_DATE
+       RETURNING id`,
+      [userName, med.name]
+    );
+    acknowledged.push(med.name);
+  }
+
+  // Also update the daily aggregate log for backward compatibility
+  await logMedicationsTaken(targets, userName);
+
+  return { acknowledged };
+}
+
+/** Get today's dose log. */
+export async function getTodayDoseLog(
+  userName = NATIVE_STORED_NAME,
+): Promise<DoseLogRow[]> {
+  await seedTodayDoseLog(userName);
+  const { rows } = await query<DoseLogRow>(
+    `SELECT * FROM medication_dose_logs
+     WHERE user_name = $1 AND log_date = CURRENT_DATE
+     ORDER BY scheduled_time ASC, medication_name ASC`,
+    [userName]
+  );
+  return rows;
+}
+
+/** Check if all doses acknowledged today. */
+export async function allDosesAcknowledgedToday(
+  userName = NATIVE_STORED_NAME,
+): Promise<boolean> {
+  const rows = await getTodayDoseLog(userName);
+  if (rows.length === 0) return false;
+  return rows.every((r) => r.acknowledged);
 }
 
 export async function hasMedicationReminderSentToday(

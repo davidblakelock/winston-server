@@ -27,7 +27,7 @@ import {
   type ParsedDeleteEvent,
 } from "../google/calendarWriter.js";
 import { hasCalendarWriteScope } from "../google/oauth.js";
-import { searchContacts, formatContactsForPrompt, saveCuratedContact, getCuratedContacts, type Contact as GoogleContact } from "../google/contacts.js";
+import { searchContacts, formatContactsForPrompt, saveCuratedContact, getCuratedContacts, createGoogleContact, updateGoogleContact, type Contact as GoogleContact } from "../google/contacts.js";
 import {
   getMedications,
   hasTakenMedicationsToday,
@@ -188,6 +188,7 @@ import {
   type EmailInput,
 } from "../email/emailMeetingManager.js";
 import { getCachedBriefing, setCachedBriefing, getStaticBriefingContext, loadStaticContextFromDb, getPersistedBriefingText } from "../morning/briefingCache.js";
+import { assembleMorningActions, type MorningAction } from "../morning/morningActions.js";
 import { updateSettings as updateWinddownSettings } from "../winddown/winddownManager.js";
 import { analyzePressureDelta, formatPressureContext, formatPressureContextNoChange } from "../weather/pressureScheduler.js";
 import {
@@ -407,6 +408,11 @@ const COMPOUND_CONTACT_SAVE_PATTERN = new RegExp(
 );
 // Detects when David explicitly wants to save a contact to his curated Winston list
 const SAVE_CONTACT_PATTERN = /\b(yes,?\s+)?(save|remember|add|keep)\s+(her|him|them|this\s+(contact|person))(\s+to\s+(my\s+)?(winston\s+)?(contacts?|list))?\b|\b(save|add)\s+((?:\w+\s+){1,3}\w+)\s+to\s+my\s+(winston\s+)?(contacts?|list)\b|\b(remember|save)\s+((?:\w+\s+){1,3}\w+)\s+in\s+my\s+(winston\s+)?(contacts?|list)\b/i;
+// Detects intent to create or update a contact in Google Contacts (not just Winston/curated list)
+// e.g. "Add John Smith to my Google Contacts with number 214-555-1234"
+//      "Update Sarah's phone number in Google Contacts to 972-555-5678"
+//      "Create a Google contact for Mike Jones, email mike@jones.com"
+const GOOGLE_CONTACT_WRITE_PATTERN = /\b(add|create|save|update|change|edit)\s+.{1,60}\s+(to\s+(my\s+)?google\s+contacts?|in\s+(my\s+)?google\s+contacts?|as\s+a\s+google\s+contact?|google\s+contact\s+for)|\b(update|change|edit)\s+.{1,60}(phone|email|number|address)\s+.{0,30}(in\s+(my\s+)?google\s+contacts?|to\s+.{1,30}in\s+google)|\bcreate\s+a\s+(new\s+)?contact\s+for\b|\badd\s+.{1,40}\s+to\s+(my\s+)?contacts?\s+with\s+(number|phone|email)/i;
 // Detects "call [name]", "phone [name]", "dial [name]", "ring [name]", "give [name] a call/ring"
 // Excludes "call 911", "call me", "call you", reminder phrases, and bare "call" with no name.
 const CALL_PATTERN = /\b(call|phone|dial|ring)\s+(?!me\b|you\b|us\b|911\b|them\b|him\b|her\b|it\b|back\b|now\b|later\b)([A-Za-z][A-Za-z'.]*(?:\s+[A-Za-z][A-Za-z'.]*)?)(?:\s|$)|give\s+([A-Za-z][A-Za-z'.]*(?:\s+[A-Za-z][A-Za-z'.]*)?)\s+a\s+(call|ring)\b/i;
@@ -915,6 +921,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isCompoundContactAndSave = COMPOUND_CONTACT_SAVE_PATTERN.test(message);
   const isContactRequest = isCompoundContactAndSave || CONTACT_PATTERN.test(message);
   const isSaveContactRequest = !isContactRequest && SAVE_CONTACT_PATTERN.test(message);
+  const isGoogleContactWrite = !isMorningGreeting && GOOGLE_CONTACT_WRITE_PATTERN.test(message);
   const isCallRequest = !isReminderRequest && CALL_PATTERN.test(message);
   const isStoryRead = STORY_READ_PATTERN.test(message);
   const isStoryCount = STORY_COUNT_PATTERN.test(message);
@@ -1212,6 +1219,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
     // ── E007: Detect meeting requests in morning emails ───────────────────────
     let meetingRequestsBlock = "";
+    let detectedMeetings: Awaited<ReturnType<typeof detectMeetingRequests>> = [];
     if (liveEmails && liveEmails.length > 0) {
       try {
         const emailsForDetection: EmailInput[] = liveEmails.map((e) => ({
@@ -1222,16 +1230,34 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           subject: e.subject,
           snippet: e.snippet,
         }));
-        const detected = await detectMeetingRequests(emailsForDetection, liveEvents ?? []);
-        if (detected.length > 0) {
-          setPendingMeetingRequests(detected);
-          meetingRequestsBlock = buildMeetingRequestsBlock(detected);
-          req.log.info({ count: detected.length }, "[E007] Meeting requests detected in morning emails");
+        detectedMeetings = await detectMeetingRequests(emailsForDetection, liveEvents ?? []);
+        if (detectedMeetings.length > 0) {
+          setPendingMeetingRequests(detectedMeetings);
+          meetingRequestsBlock = buildMeetingRequestsBlock(detectedMeetings);
+          req.log.info({ count: detectedMeetings.length }, "[E007] Meeting requests detected in morning emails");
         }
       } catch (err) {
         req.log.warn({ err }, "[E007] Meeting detection failed — skipping");
       }
     }
+
+    // ── Morning Actions — assemble action cards in parallel with prompt build ──
+    const primaryCity = (userProfile?.rawData as CollectedData | undefined)?.city ?? userProfile?.city ?? "";
+    const [morningActions] = await Promise.allSettled([
+      assembleMorningActions({
+        userName: sessionUserName,
+        detectedMeetings,
+        calendarEvents: liveEvents ?? [],
+        userCity: primaryCity || undefined,
+        userLat: primaryLat,
+        userLon: primaryLon,
+      }).catch((err: unknown) => {
+        req.log.warn({ err }, "[MorningActions] Assembly failed — returning empty");
+        return [] as MorningAction[];
+      }),
+    ]);
+    const morningActionsResult =
+      morningActions.status === "fulfilled" ? morningActions.value : ([] as MorningAction[]);
 
     // Assemble full system prompt: pre-built static preamble + live blocks + static suffix
     const fullSystemPrompt = staticCtx.preamble + liveGmailBlock + meetingRequestsBlock + liveCalendarBlock + staticCtx.suffix;
@@ -1256,7 +1282,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         void logBriefingStories(sessionUserName, staticCtx.candidateStoryKeys);
         req.log.info({ chars: nativeBriefingText.length }, "Morning briefing fetched (native) and cached");
       }
-      res.json({ response: nativeBriefingText });
+      res.json({ response: nativeBriefingText, morningActions: morningActionsResult });
       return;
     }
 
@@ -1279,7 +1305,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
     // "Anything from this morning you'd like to dig into?" is delivered by the
     // briefing instruction itself after the 10 news stories — do NOT append here.
-    sendMorningSSE({ done: true, isMorningBriefing: true });
+    sendMorningSSE({ done: true, isMorningBriefing: true, morningActions: morningActionsResult });
     res.end();
 
     // Cache the generated text for follow-up context and log story keys for dedup
@@ -3632,6 +3658,75 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       }
     } catch (err) {
       req.log.warn({ err }, "[CONTACTS] Save contact failed");
+    }
+  }
+
+  // ── Google Contact write — create or update a contact ────────────────────────
+  // Detects "Add [name] to my Google Contacts with number [phone]",
+  // "Update [name]'s email in Google Contacts to [email]", etc.
+  // Uses Claude Haiku to extract structured contact info, then calls the Google API.
+  if (isGoogleContactWrite) {
+    try {
+      const extractionResp = await anthropic.messages.create({
+        model: MODEL_HAIKU,
+        max_tokens: 300,
+        messages: [{
+          role: "user",
+          content:
+            `Extract contact write intent from this message. Return ONLY valid JSON, no other text.\n\n` +
+            `Message: "${message}"\n\n` +
+            `Return JSON in this exact format:\n` +
+            `{ "action": "create" | "update", "name": "<full name>", "phone": "<phone or null>", "email": "<email or null>", "address": "<address or null>" }\n\n` +
+            `If action is "update", also return "resourceName": null (caller will look it up by name).`,
+        }],
+      });
+
+      const raw = extractionResp.content[0]?.type === "text" ? extractionResp.content[0].text.trim() : "";
+      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+      const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) as { action?: string; name?: string; phone?: string | null; email?: string | null; address?: string | null } : null;
+
+      if (parsed?.name) {
+        const contactName = parsed.name.trim();
+        if (parsed.action === "update") {
+          const searchResult = await searchContacts(contactName, sessionUserName).catch(() => ({ contacts: [], needsReauth: false, source: "none" as const }));
+          const found = searchResult.contacts[0];
+          if (found?.resourceName) {
+            const updates: { phone?: string; email?: string; address?: string } = {};
+            if (parsed.phone) updates.phone = parsed.phone;
+            if (parsed.email) updates.email = parsed.email;
+            if (parsed.address) updates.address = parsed.address;
+            const result = await updateGoogleContact(sessionUserName, found.resourceName, updates);
+            if (result.ok) {
+              systemPrompt += `\n\n[Google Contact Updated]\nSuccessfully updated ${contactName}'s contact in Google Contacts.${parsed.phone ? ` Phone: ${parsed.phone}.` : ""}${parsed.email ? ` Email: ${parsed.email}.` : ""}\nConfirm naturally: "Done — I've updated ${contactName}'s info in your Google Contacts."`;
+            } else if (result.needsReauth) {
+              systemPrompt += `\n\n[Google Contact Update — Reconnect Required]\nGoogle Contacts write access needs a fresh authorization. Tell the user: "To write to your Google Contacts, you'll need to reconnect Google in the app settings — the scope for editing contacts was recently added."`;
+            } else {
+              systemPrompt += `\n\n[Google Contact Update — Failed]\nError: ${result.error ?? "Unknown error"}. Let the user know: "I wasn't able to update ${contactName}'s contact — ${result.error ?? "something went wrong"}."`;
+            }
+          } else {
+            systemPrompt += `\n\n[Google Contact Update — Not Found]\nCould not find "${contactName}" in Google Contacts. Tell the user: "I couldn't find ${contactName} in your Google Contacts — make sure the name matches exactly."`;
+          }
+        } else {
+          // Create
+          const result = await createGoogleContact({
+            name: contactName,
+            phone: parsed.phone ?? undefined,
+            email: parsed.email ?? undefined,
+            address: parsed.address ?? undefined,
+          }, sessionUserName);
+          if (result.ok) {
+            systemPrompt += `\n\n[Google Contact Created]\nSuccessfully created a new Google Contact for ${contactName}.${parsed.phone ? ` Phone: ${parsed.phone}.` : ""}${parsed.email ? ` Email: ${parsed.email}.` : ""}\nConfirm naturally: "Done — I've added ${contactName} to your Google Contacts."`;
+          } else if (result.needsReauth) {
+            systemPrompt += `\n\n[Google Contact Create — Reconnect Required]\nGoogle Contacts write access needs a fresh authorization. Tell the user: "To add contacts to Google, you'll need to reconnect Google in the app settings — the contacts write scope was recently added."`;
+          } else {
+            systemPrompt += `\n\n[Google Contact Create — Failed]\nError: ${result.error ?? "Unknown error"}. Let the user know: "I wasn't able to add ${contactName} to your Google Contacts — ${result.error ?? "something went wrong"}."`;
+          }
+        }
+      } else {
+        systemPrompt += `\n\n[Google Contact Write — Parse Failed]\nCould not extract contact info from the message. Ask the user: "Could you give me the full name and details you'd like to save?"`;
+      }
+    } catch (err) {
+      req.log.warn({ err }, "[CONTACTS] Google contact write failed");
     }
   }
 

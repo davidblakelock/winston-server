@@ -8,8 +8,19 @@ import {
   hasMedicationReminderSentToday,
   logMedicationReminderSent,
 } from "./medicationManager.js";
+import { query } from "../db.js";
 import { getActiveUsers } from "../onboarding/onboardingManager.js";
 import { logger } from "../lib/logger.js";
+
+async function getInitialReminderSentAt(userName: string): Promise<Date | null> {
+  const { rows } = await query<{ sent_at: string }>(
+    `SELECT sent_at FROM medication_reminder_log
+     WHERE user_name = $1 AND reminder_date = CURRENT_DATE AND reminder_type = 'initial'
+     LIMIT 1`,
+    [userName]
+  );
+  return rows.length > 0 ? new Date(rows[0].sent_at) : null;
+}
 
 const TZ = "America/Chicago";
 
@@ -100,9 +111,34 @@ export function startMedicationScheduler(): void {
           }
         }
 
-        // No automatic follow-up — the initial reminder shows "Taken ✓" and
-        // "Remind in 1 hour" action buttons. The user triggers any follow-up
-        // themselves by tapping "Remind in 1 hour" on the notification.
+        // ── 10-minute follow-up check ────────────────────────────────────────
+        // If initial reminder was sent 10+ min ago and meds still not taken,
+        // fire a gentle follow-up push once per day.
+        const initialSentAt = await getInitialReminderSentAt(userName).catch(() => null);
+        if (initialSentAt) {
+          const minutesSinceSent = (Date.now() - initialSentAt.getTime()) / 60000;
+          if (minutesSinceSent >= 10) {
+            const followupAlreadySent = await hasMedicationReminderSentToday(userName, "followup").catch(() => true);
+            if (!followupAlreadySent) {
+              const stillNotTaken = !(await hasTakenMedicationsToday(userName).catch(() => true));
+              if (stillNotTaken) {
+                const medText = buildMedReminderText(meds);
+                sendPushToAll({
+                  title: `💊 Gentle Reminder — ${companion}`,
+                  body: `Just checking — have you taken your ${medText}?`,
+                  tag: "medication-followup",
+                  notificationType: "medication",
+                  categoryId: "medication-reminder",
+                  requireInteraction: false,
+                }, userName).catch((err: unknown) => {
+                  logger.warn({ err, userName }, "[MED] Follow-up push delivery failed");
+                });
+                logger.info({ userName }, "[MED] 10-min follow-up fired");
+              }
+              await logMedicationReminderSent(userName, "followup").catch(() => {});
+            }
+          }
+        }
       }
     } catch (err) {
       logger.error({ err }, "Medication scheduler error");

@@ -42,6 +42,8 @@ import { ensureRestaurantCacheTable } from "./restaurants/restaurantIntelligence
 import { ensureOrdersTable } from "./orders/ordersManager";
 import { startOrderTrackingScheduler } from "./orders/orderTrackingScheduler";
 import { ensureTravelTable } from "./travel/travelManager";
+import { ensureBillHistoryTable } from "./bills/billAnomalyScanner";
+import { ensureContextReminderColumns } from "./reminders/contextReminderManager";
 
 const rawPort = process.env["PORT"];
 
@@ -251,6 +253,20 @@ app.listen(port, async (err) => {
     await ensureTravelTable();
   } catch (e) {
     logger.warn({ e }, "Travel table initialization warning");
+  }
+
+  try {
+    await ensureBillHistoryTable();
+    logger.info("[startup] bill_history table ready");
+  } catch (e) {
+    logger.warn({ e }, "Bill history table initialization warning");
+  }
+
+  try {
+    await ensureContextReminderColumns();
+    logger.info("[startup] context reminder columns ready");
+  } catch (e) {
+    logger.warn({ e }, "Context reminder columns initialization warning");
   }
 
   try {

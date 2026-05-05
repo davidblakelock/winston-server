@@ -6,6 +6,8 @@ import {
   addMedication,
   removeMedication,
   logMedicationsTaken,
+  acknowledgeMedicationDose,
+  getTodayDoseLog,
 } from "../medications/medicationManager.js";
 import { createReminder } from "../reminders/reminderManager.js";
 
@@ -171,6 +173,40 @@ router.post("/medications/taken", express.json({ limit: "1mb" }), async (req, re
   } catch (err) {
     req.log.error({ err }, "[MEDS] POST /medications/taken error");
     res.status(500).json({ error: "Failed to log medications as taken" });
+  }
+});
+
+// ── POST /api/medications/acknowledge ────────────────────────────────────────
+// Log acknowledgment of a specific medication dose (or all active meds).
+// Body: { medicationName?: string }  — omit to acknowledge all.
+// Response: { ok: true, acknowledged: string[] }
+router.post("/medications/acknowledge", express.json({ limit: "1mb" }), async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  try {
+    const { medicationName } = req.body as { medicationName?: string };
+    const result = await acknowledgeMedicationDose(userName, medicationName?.trim());
+    req.log.info({ userName, acknowledged: result.acknowledged }, "[MEDS] Dose acknowledged");
+    res.json({ ok: true, acknowledged: result.acknowledged });
+  } catch (err) {
+    req.log.error({ err }, "[MEDS] POST /medications/acknowledge error");
+    res.status(500).json({ error: "Failed to acknowledge medication dose" });
+  }
+});
+
+// ── GET /api/medications/log ──────────────────────────────────────────────────
+// Returns today's per-dose acknowledgment log.
+// Response: { log: DoseLogRow[], allAcknowledged: boolean }
+router.get("/medications/log", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  try {
+    const log = await getTodayDoseLog(userName);
+    const allAcknowledged = log.length > 0 && log.every((r) => r.acknowledged);
+    res.json({ log, allAcknowledged, date: new Date().toISOString().split("T")[0] });
+  } catch (err) {
+    req.log.error({ err }, "[MEDS] GET /medications/log error");
+    res.status(500).json({ error: "Failed to fetch medication log" });
   }
 });
 

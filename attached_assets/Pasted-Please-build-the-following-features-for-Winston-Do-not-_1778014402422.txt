@@ -1,0 +1,74 @@
+Please build the following features for Winston. Do not break any existing functionality. Deploy when complete.
+1. Morning Briefing Action Payloads
+When the morning briefing response contains any of the following, include a structured morningActions array in the API response alongside the text:
+
+Pending email drafts needing reply — include: emailId, sender, subject, suggestedReply
+Meeting requests detected — include: emailId, organizer, eventTitle, proposedDate, proposedStartTime, hasConflict
+Bill anomalies detected — include: retailer, amount, previousAmount, percentChange
+Orders out for delivery today — include: retailer, itemName, carrier
+Travel departing today — include: airline, flightNumber, departureAirport, arrivalAirport, departureTime
+
+Format: morningActions: [{ type: 'email_draft' | 'meeting_request' | 'bill_anomaly' | 'order_delivery' | 'travel_today', payload: {} }]
+2. Intelligent Context-Aware Reminders
+Extend the existing reminder system so reminders can be triggered by context, not just time:
+
+Calendar-based trigger — 'Remind me to ask my doctor about my knee' fires when a doctor appointment is detected on the calendar
+Location-based trigger — 'Remind me to grab dry cleaning' fires when user is near the dry cleaner (use stored address from reminder text, geocode it)
+Person-based trigger — 'Remind me to mention the budget to Sarah' fires before a calendar meeting that includes Sarah
+Claude should detect the trigger type from natural language automatically — user never specifies
+Store trigger type and trigger data in the existing reminders table with new columns: trigger_type, trigger_data
+New endpoint: POST /api/reminders/context — creates a context-aware reminder
+Check calendar-based and person-based triggers on every calendar sync
+Location-based triggers checked when /api/location/update is called with current coordinates
+
+3. Medication Acknowledgment with Voice Logging
+
+New Supabase table: medication_logs with columns: id, user_name, medication_name, scheduled_time, acknowledged_at, acknowledged, created_at
+When medication reminder fires, log it as unacknowledged
+New endpoint: POST /api/medications/acknowledge — logs acknowledgment with timestamp
+If no acknowledgment within 10 minutes, send a follow-up push notification
+GET /api/medications/log — returns today's medication log
+Winston Connect: if a family member is connected and has opted in, send them a quiet daily push notification confirming medications were acknowledged. Only notify if something was missed.
+
+4. Bill and Subscription Anomaly Detection
+
+Scan Gmail for billing and subscription emails — amounts, retailers, billing dates
+Compare against previous amounts stored in Supabase
+New table: bill_history with columns: id, user_name, retailer, amount, billing_date, email_id, created_at
+Flag anomalies where amount is more than 10% higher than previous bill from same retailer
+New endpoint: GET /api/bills/anomalies — returns flagged anomalies
+Surface anomalies in morning briefing morningActions payload with type: 'bill_anomaly'
+Exclude: one-time purchases, order confirmations, shipping notifications — only recurring billing emails
+
+5. Proactive Weather-Driven Suggestions
+
+After fetching morning weather, check if user has any calendar events or reminders that could be affected by weather
+If rain is forecast and user has an outdoor activity on calendar — surface suggestion in morning briefing
+If temperature exceeds 90 degrees and user has outdoor activity — suggest earlier time
+If severe weather alert — proactively notify regardless of time of day
+Add weather suggestion to morningActions payload with type: 'weather_suggestion', include: condition, affectedEvent, suggestion
+
+6. Voice-Driven Contact Write Access
+
+Extend existing Google Contacts integration to include write access
+New endpoint: POST /api/contacts/update — updates an existing contact field (name, phone, email, address)
+New endpoint: POST /api/contacts/create — creates a new contact
+Claude should detect contact update intent in chat — 'Update John's number to 214-555-1234' or 'Add Karen Smith, she's my dentist, 972-555-4567'
+Confirm back to user by voice before writing: 'I'll update John Smith's mobile to 214-555-1234 — shall I save that?'
+Require user confirmation before any write operation
+
+7. Smart Calendar Morning Briefing Integration
+
+GET /api/calendar/smart already exists and returns detected meeting requests
+Wire it into the morning briefing so detected meeting requests appear in morningActions
+POST /api/calendar/smart/accept and POST /api/calendar/smart/decline already exist
+Make sure the morning briefing calls /api/calendar/smart and includes results in morningActions
+
+8. Fix Email Scanner — Exclude Auto-Replies
+
+The email drafting scanner is flagging auto-replies and generic acknowledgment emails as needing a response
+Exclude: auto-replies, out-of-office messages, generic acknowledgment emails, no-reply addresses
+Exclude emails containing phrases: 'this inbox is monitored', 'auto-reply', 'thank you for getting in touch', 'our team will be in touch', 'this is an automated', 'do not reply to this email'
+Only surface emails that genuinely need a human response
+
+Deploy when complete and confirm each endpoint is live.

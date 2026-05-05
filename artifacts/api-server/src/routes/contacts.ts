@@ -1,7 +1,9 @@
 import { Router, type Request, type Response } from "express";
+import express from "express";
 import { validateSession } from "../auth/sessionAuth.js";
 import { query } from "../db.js";
 import { authenticate, NATIVE_STORED_NAME, NATIVE_API_KEY } from "../auth/middleware.js";
+import { createGoogleContact, updateGoogleContact, searchContacts } from "../google/contacts.js";
 
 const router = Router();
 
@@ -339,6 +341,111 @@ router.get("/contacts/test", async (req: Request, res: Response) => {
     });
   } catch (e: unknown) {
     return res.json({ error: (e as Error).message });
+  }
+});
+
+// ── POST /api/contacts/create ─────────────────────────────────────────────────
+// Create a new contact in the user's Google Contacts (requires contacts write scope).
+// Body: { name: string, phone?: string, email?: string, address?: string, notes?: string }
+// Response: { ok: true, resourceName?, needsReauth? }
+router.post("/contacts/create", express.json({ limit: "1mb" }), async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const { name, phone, email, address, notes } = req.body as {
+    name?: string;
+    phone?: string;
+    email?: string;
+    address?: string;
+    notes?: string;
+  };
+
+  if (!name?.trim()) {
+    res.status(400).json({ error: "name is required" });
+    return;
+  }
+
+  try {
+    const result = await createGoogleContact(
+      { name: name.trim(), phone: phone?.trim(), email: email?.trim(), address: address?.trim(), notes: notes?.trim() },
+      userName,
+    );
+    if (!result.ok) {
+      if (result.needsReauth) {
+        res.status(403).json({ error: result.error, needsReauth: true });
+        return;
+      }
+      res.status(500).json({ error: result.error ?? "Failed to create contact" });
+      return;
+    }
+    req.log.info({ userName, name, resourceName: result.resourceName }, "[CONTACTS] Contact created");
+    res.json({ ok: true, resourceName: result.resourceName });
+  } catch (err) {
+    req.log.error({ err }, "[CONTACTS] POST /contacts/create error");
+    res.status(500).json({ error: "Failed to create contact" });
+  }
+});
+
+// ── POST /api/contacts/update ─────────────────────────────────────────────────
+// Update fields on an existing Google contact.
+// Looks up by resourceName (preferred) or searches by name to find resourceName.
+// Body: { resourceName?: string, name?: string, phone?: string, email?: string, address?: string, notes?: string }
+// Response: { ok: true, resourceName }
+router.post("/contacts/update", express.json({ limit: "1mb" }), async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const { resourceName, name, phone, email, address, notes } = req.body as {
+    resourceName?: string;
+    name?: string;
+    phone?: string;
+    email?: string;
+    address?: string;
+    notes?: string;
+  };
+
+  const updates = { phone, email, address, notes };
+  const hasUpdates = Object.values(updates).some((v) => v !== undefined);
+
+  if (!hasUpdates) {
+    res.status(400).json({ error: "At least one field to update (phone, email, address, notes) is required" });
+    return;
+  }
+
+  try {
+    let resolvedResourceName = resourceName;
+
+    // If no resourceName, look it up by name via Google search
+    if (!resolvedResourceName && name) {
+      const searchResult = await searchContacts(name.trim(), userName);
+      const contact = searchResult.contacts[0];
+      if (!contact?.resourceName) {
+        res.status(404).json({ error: `Contact "${name}" not found` });
+        return;
+      }
+      resolvedResourceName = contact.resourceName;
+    }
+
+    if (!resolvedResourceName) {
+      res.status(400).json({ error: "Either resourceName or name is required to identify the contact" });
+      return;
+    }
+
+    const result = await updateGoogleContact(userName, resolvedResourceName, updates);
+    if (!result.ok) {
+      if (result.needsReauth) {
+        res.status(403).json({ error: result.error, needsReauth: true });
+        return;
+      }
+      res.status(500).json({ error: result.error ?? "Failed to update contact" });
+      return;
+    }
+
+    req.log.info({ userName, resourceName: resolvedResourceName }, "[CONTACTS] Contact updated");
+    res.json({ ok: true, resourceName: resolvedResourceName });
+  } catch (err) {
+    req.log.error({ err }, "[CONTACTS] POST /contacts/update error");
+    res.status(500).json({ error: "Failed to update contact" });
   }
 });
 

@@ -3,6 +3,7 @@ import express from "express";
 import { authenticate } from "../auth/middleware.js";
 import { markBillPaid, getBills, addBill, type Category, type Frequency } from "../bills/billManager.js";
 import { createReminder } from "../reminders/reminderManager.js";
+import { scanForBillAnomalies } from "../bills/billAnomalyScanner.js";
 
 const router: IRouter = Router();
 
@@ -153,6 +154,23 @@ router.post("/bills", express.json({ limit: "1mb" }), async (req, res) => {
     }
   } catch (err) {
     res.status(500).json({ error: String(err) });
+  }
+});
+
+// ── GET /api/bills/anomalies ──────────────────────────────────────────────────
+// Scans Gmail for billing emails in the last 30 days, compares against stored
+// history, and returns any charges that are >10% higher than the usual amount.
+// Response: { anomalies: BillAnomaly[], count: number }
+router.get("/bills/anomalies", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  try {
+    const anomalies = await scanForBillAnomalies(userName);
+    req.log.info({ userName, count: anomalies.length }, "[BILLS] Anomaly scan complete");
+    res.json({ anomalies, count: anomalies.length });
+  } catch (err) {
+    req.log.error({ err }, "[BILLS] GET /bills/anomalies error");
+    res.status(500).json({ error: "Failed to scan for bill anomalies" });
   }
 });
 
