@@ -91,11 +91,11 @@ export function startMedicationScheduler(): void {
                 body: `Time to take your ${medText}.`,
                 tag: "medication-morning",
                 notificationType: "medication",
-                // categoryId "medication-reminder" — native app must register this category
-                // with two action buttons:
-                //   { identifier: "MEDICATION_DONE",      title: "Done ✓",                   destructive: false }
-                //   { identifier: "MEDICATION_SNOOZE_30", title: "Remind me in 30 minutes",  destructive: false }
-                categoryId: "medication-reminder",
+                // "medication-action" is the category registered in sw.js that shows:
+                //   "Taken ✓" (calls /api/medications/taken, no app open)
+                //   "Remind in 30 min" (calls /api/medications/snooze-reminder, no app open)
+                // Body tap also does nothing (no app open) when categoryId = "medication-action".
+                categoryId: "medication-action",
                 requireInteraction: true,
               }, userName).catch((err: unknown) => {
                 logger.error({ err, userName }, "[MED] Push delivery failed");
@@ -111,13 +111,15 @@ export function startMedicationScheduler(): void {
           }
         }
 
-        // ── 10-minute follow-up check ────────────────────────────────────────
-        // If initial reminder was sent 10+ min ago and meds still not taken,
-        // fire a gentle follow-up push once per day.
+        // ── 10-minute follow-up check ─────────────────────────────────────────
+        // Fire once if:
+        //   • initial was sent 10–60 min ago (avoids firing hours later)
+        //   • meds still not taken
+        //   • follow-up not already logged today
         const initialSentAt = await getInitialReminderSentAt(userName).catch(() => null);
         if (initialSentAt) {
           const minutesSinceSent = (Date.now() - initialSentAt.getTime()) / 60000;
-          if (minutesSinceSent >= 10) {
+          if (minutesSinceSent >= 10 && minutesSinceSent <= 60) {
             const followupAlreadySent = await hasMedicationReminderSentToday(userName, "followup").catch(() => true);
             if (!followupAlreadySent) {
               const stillNotTaken = !(await hasTakenMedicationsToday(userName).catch(() => true));
@@ -128,12 +130,12 @@ export function startMedicationScheduler(): void {
                   body: `Just checking — have you taken your ${medText}?`,
                   tag: "medication-followup",
                   notificationType: "medication",
-                  categoryId: "medication-reminder",
+                  categoryId: "medication-action",
                   requireInteraction: false,
                 }, userName).catch((err: unknown) => {
                   logger.warn({ err, userName }, "[MED] Follow-up push delivery failed");
                 });
-                logger.info({ userName }, "[MED] 10-min follow-up fired");
+                logger.info({ userName, minutesSinceSent: Math.round(minutesSinceSent) }, "[MED] 10-min follow-up fired");
               }
               await logMedicationReminderSent(userName, "followup").catch(() => {});
             }
