@@ -270,47 +270,44 @@ function detectPlatform(text: string | null | undefined): {
   return { platform: "phone", slug: null, city: null };
 }
 
-// Search OpenTable directly by name and return the first matching slug.
-// Used as a second fallback when the restaurant's own website has no booking link.
-async function searchOpenTableByName(
+// Use Anthropic web search to find the restaurant's OpenTable or Resy listing.
+// OpenTable and Resy both block server-side HTTP fetches (return 000/Forbidden),
+// so direct scraping of their search pages is impossible. Anthropic's web_search
+// tool uses real indexed results and reliably returns the restaurant's listing URL.
+// Results are cached in the DB for 30 days so this only fires once per restaurant.
+async function findBookingPlatformByWebSearch(
   restaurantName: string,
-  metroId: number | null
-): Promise<{ slug: string } | null> {
+  city: string
+): Promise<{ platform: ReservationPlatform; slug: string | null; city: string | null }> {
+  const none = { platform: "phone" as ReservationPlatform, slug: null, city: null };
   try {
-    const term = encodeURIComponent(restaurantName);
-    const url = metroId
-      ? `https://www.opentable.com/s/?term=${term}&metroId=${metroId}`
-      : `https://www.opentable.com/s/?term=${term}`;
-
-    const res = await fetch(url, {
-      signal: AbortSignal.timeout(4000),
-      headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; RestaurantReservationBot/1.0)",
-        Accept: "text/html",
-      },
+    const result = await anthropic.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 300,
+      tools: [{ type: "web_search_20250305" as "web_search_20250305", name: "web_search", max_uses: 2 }],
+      system:
+        "Search for the restaurant's OpenTable or Resy reservation page. " +
+        "Return ONLY the direct OpenTable or Resy URL for this specific restaurant, nothing else. " +
+        "Example outputs: https://www.opentable.com/r/al-biernats-dallas  or  " +
+        "https://resy.com/cities/dal/venues/al-biernats  or  " +
+        "https://www.opentable.com/nick-and-sams-steakhouse  " +
+        "If the restaurant is genuinely not on OpenTable or Resy, return exactly: NOT_FOUND",
+      messages: [{
+        role: "user",
+        content: `Find the OpenTable or Resy reservation page for "${restaurantName}" in ${city}.`,
+      }],
     });
-    if (!res.ok) return null;
 
-    // Read first 60 KB — restaurant cards are near the top of the page
-    const reader = res.body?.getReader();
-    if (!reader) return null;
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-    while (total < 60_000) {
-      const { done, value } = await reader.read();
-      if (done || !value) break;
-      chunks.push(value);
-      total += value.byteLength;
+    for (const block of result.content) {
+      if (block.type !== "text") continue;
+      const text = block.text.trim();
+      if (!text || text === "NOT_FOUND") continue;
+      const detected = detectPlatform(text);
+      if (detected.platform !== "phone") return detected;
     }
-    reader.cancel().catch(() => {});
-    const html = Buffer.concat(chunks).toString("utf-8");
-
-    // OpenTable search results contain href="/r/<slug>" in each restaurant card
-    const match = html.match(/href="\/r\/([\w-]+)"/);
-    if (match) return { slug: match[1] };
-    return null;
+    return none;
   } catch {
-    return null;
+    return none;
   }
 }
 
@@ -331,12 +328,14 @@ async function scrapeBookingLink(websiteUrl: string): Promise<{
       },
     });
     if (!res.ok) return { platform: "phone", slug: null, city: null };
-    // Only read first 30 KB — booking links are in the <head> or top of <body>.
+    // Read first 50 KB — catches booking links in <head> and early <body> for most sites.
+    // Do not go higher: Wix/Squarespace sites load content lazily at 300KB+, and the
+    // web search fallback handles those cases far more reliably.
     const reader = res.body?.getReader();
     if (!reader) return { platform: "phone", slug: null, city: null };
     const chunks: Uint8Array[] = [];
     let total = 0;
-    while (total < 30_000) {
+    while (total < 50_000) {
       const { done, value } = await reader.read();
       if (done || !value) break;
       chunks.push(value);
@@ -452,20 +451,23 @@ export async function lookupRestaurantDetails(
       }
     }
 
-    // Fallback 2: search OpenTable directly by restaurant name.
-    // Covers restaurants whose own websites don't link to OpenTable (e.g. Nick & Sam's).
+    // Fallback 2: AI web search for OpenTable or Resy listing.
+    // OpenTable blocks all server-side HTTP requests (returns 000/Forbidden).
+    // Resy and many restaurant sites use client-side rendering — their booking
+    // links appear hundreds of KB into the page, well beyond any safe read limit.
+    // Anthropic's web_search tool uses real indexed results and reliably finds
+    // the restaurant's OT or Resy listing URL for any restaurant in the US.
     if (platform === "phone") {
       const restaurantCity = place.formattedAddress
-        ? (place.formattedAddress.split(",")[1]?.trim() ?? city)
+        ? (extractCityFromAddress(place.formattedAddress) ?? city)
         : city;
-      const metroId = getOpenTableMetroId(restaurantCity);
-      console.log(`[RestaurantIntel] Searching OpenTable for "${restaurantName}" (metroId=${metroId})…`);
-      const otResult = await searchOpenTableByName(restaurantName, metroId);
-      if (otResult) {
-        console.log(`[RestaurantIntel] Found OpenTable slug via search: ${otResult.slug}`);
-        platform = "opentable";
-        slug = otResult.slug;
-        platformCity = null;
+      console.log(`[RestaurantIntel] Web searching for "${restaurantName}" booking page in ${restaurantCity}…`);
+      const webResult = await findBookingPlatformByWebSearch(restaurantName, restaurantCity);
+      if (webResult.platform !== "phone") {
+        console.log(`[RestaurantIntel] Found ${webResult.platform} via web search: ${webResult.slug}`);
+        platform = webResult.platform;
+        slug = webResult.slug;
+        platformCity = webResult.city;
       }
     }
 
