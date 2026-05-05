@@ -199,7 +199,24 @@ async function fetchVenueWebsite(venue: VenueConfig): Promise<string> {
       signal: AbortSignal.timeout(8_000),
     });
     if (!res.ok) return "";
-    const html = await res.text();
+
+    // Read only the first 50 KB — event listings appear near the top of the page.
+    // IMPORTANT: Never use res.text() here — venue event pages can be 1–5 MB and the
+    // subsequent synchronous regex strip blocks the Node.js event loop for seconds.
+    const reader = res.body?.getReader();
+    if (!reader) return "";
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    while (total < 50_000) {
+      const { done, value } = await reader.read();
+      if (done || !value) break;
+      chunks.push(value);
+      total += value.byteLength;
+    }
+    reader.cancel().catch(() => {});
+    const html = Buffer.concat(chunks).toString("utf-8");
+
+    // Strip tags synchronously — safe now because input is capped at 50 KB.
     return html
       .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, " ")
       .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, " ")
