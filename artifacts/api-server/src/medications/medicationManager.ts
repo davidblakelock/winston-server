@@ -153,6 +153,12 @@ export async function initMedicationReminderLogTable(): Promise<void> {
     `CREATE INDEX IF NOT EXISTS idx_medication_dose_logs_user_date
      ON medication_dose_logs (user_name, log_date)`
   );
+  // Unique constraint so seedTodayDoseLog's ON CONFLICT DO NOTHING actually works —
+  // without this, every server restart inserts duplicate rows.
+  await query(
+    `CREATE UNIQUE INDEX IF NOT EXISTS medication_dose_logs_uniq
+     ON medication_dose_logs (user_name, medication_name, log_date)`
+  );
 }
 
 // ── Per-dose acknowledgment ───────────────────────────────────────────────────
