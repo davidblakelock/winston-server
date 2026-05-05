@@ -164,20 +164,63 @@ export async function updateProfileItemWithAddress(
 }
 
 // ── Platform detection ────────────────────────────────────────────────────────
-function detectPlatform(website: string | null | undefined): {
+// Works on both a single URL string and raw HTML (scans for the first match).
+function detectPlatform(text: string | null | undefined): {
   platform: ReservationPlatform;
   slug: string | null;
   city: string | null;
 } {
-  if (!website) return { platform: "phone", slug: null, city: null };
+  if (!text) return { platform: "phone", slug: null, city: null };
 
-  const otMatch = website.match(/opentable\.com\/r\/([\w-]+)/);
+  // OpenTable canonical: /r/<slug>
+  const otMatch = text.match(/opentable\.com\/r\/([\w-]+)/);
   if (otMatch) return { platform: "opentable", slug: otMatch[1], city: null };
 
-  const resyMatch = website.match(/resy\.com\/cities\/([\w-]+)\/(?:venues\/)?([\w-]+)/i);
+  // OpenTable restaurant profile: /restaurant/profile/<id>
+  const otProfileMatch = text.match(/opentable\.com\/restaurant\/profile\/([\w-]+)/i);
+  if (otProfileMatch) return { platform: "opentable", slug: `restaurant/profile/${otProfileMatch[1]}`, city: null };
+
+  // Resy: /cities/<city>/venues/<slug>  OR  /cities/<city>/<slug>
+  const resyMatch = text.match(/resy\.com\/cities\/([\w-]+)\/(?:venues\/)?([\w-]+)/i);
   if (resyMatch) return { platform: "resy", slug: resyMatch[2], city: resyMatch[1] };
 
   return { platform: "phone", slug: null, city: null };
+}
+
+// Fetch the restaurant's own website and scan the HTML for booking links.
+// Many restaurants embed an OpenTable/Resy widget or link on their homepage
+// even when their Google Places "website" URL is their own domain.
+async function scrapeBookingLink(websiteUrl: string): Promise<{
+  platform: ReservationPlatform;
+  slug: string | null;
+  city: string | null;
+}> {
+  try {
+    const res = await fetch(websiteUrl, {
+      signal: AbortSignal.timeout(6000),
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; RestaurantReservationBot/1.0)",
+        Accept: "text/html",
+      },
+    });
+    if (!res.ok) return { platform: "phone", slug: null, city: null };
+    // Only read first 80 KB — booking links are almost always in the head or hero section.
+    const reader = res.body?.getReader();
+    if (!reader) return { platform: "phone", slug: null, city: null };
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    while (total < 80_000) {
+      const { done, value } = await reader.read();
+      if (done || !value) break;
+      chunks.push(value);
+      total += value.byteLength;
+    }
+    reader.cancel().catch(() => {});
+    const html = Buffer.concat(chunks).toString("utf-8");
+    return detectPlatform(html);
+  } catch {
+    return { platform: "phone", slug: null, city: null };
+  }
 }
 
 export function buildReservationUrl(
@@ -189,7 +232,11 @@ export function buildReservationUrl(
   const n = partySize ?? 2;
 
   if (details.platform === "opentable" && details.platformSlug) {
-    const base = `https://www.opentable.com/r/${details.platformSlug}?covers=${n}`;
+    // Profile-based slug (e.g. "restaurant/profile/12345") uses a different URL path than canonical /r/<slug>
+    const isProfile = details.platformSlug.startsWith("restaurant/profile/");
+    const base = isProfile
+      ? `https://www.opentable.com/${details.platformSlug}?covers=${n}`
+      : `https://www.opentable.com/r/${details.platformSlug}?covers=${n}`;
     if (dateISO && timeISO) return `${base}&dateTime=${dateISO}T${timeISO}:00`;
     return base;
   }
@@ -258,7 +305,21 @@ export async function lookupRestaurantDetails(
     if (!place) return null;
 
     const website = place.websiteUri ?? null;
-    const { platform, slug, city: platformCity } = detectPlatform(website);
+    let { platform, slug, city: platformCity } = detectPlatform(website);
+
+    // If Places' website URL is the restaurant's own domain (not OpenTable/Resy),
+    // scrape the homepage HTML to look for embedded booking links.
+    if (platform === "phone" && website) {
+      console.log(`[RestaurantIntel] Scraping ${website} for booking links…`);
+      const scraped = await scrapeBookingLink(website);
+      if (scraped.platform !== "phone") {
+        console.log(`[RestaurantIntel] Found ${scraped.platform} link via website scrape`);
+        platform = scraped.platform;
+        slug = scraped.slug;
+        platformCity = scraped.city;
+      }
+    }
+
     const address = place.formattedAddress ?? null;
 
     return {

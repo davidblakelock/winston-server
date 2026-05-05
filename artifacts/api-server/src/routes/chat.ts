@@ -2008,7 +2008,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
                 resyUrl: resySearchUrl,
               };
               (req as any)._hardcodedResponse =
-                `${details.name} takes reservations by phone at ${details.phone}. Opening the dialer now.${conflictNote}`;
+                `${details.name} takes reservations by phone. Opening the dialer for ${details.phone}.${conflictNote}`;
 
             } else {
               // Found in Places but no phone and no booking platform
