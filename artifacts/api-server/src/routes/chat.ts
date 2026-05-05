@@ -2037,8 +2037,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
                 restaurantName: details.name,
                 phone: details.phone ?? null,
               };
-              (req as any)._hardcodedResponse =
-                `Opening OpenTable for ${details.name}${dateTimeStr ? ` — ${dateTimeStr} pre-filled` : ""}.${conflictNote}`;
+              (req as any)._hardcodedResponse = "";
 
             } else if (details.platform === "resy" && reservationUrl) {
               (req as any)._reservationPayload = {
@@ -2047,11 +2046,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
                 restaurantName: details.name,
                 phone: details.phone ?? null,
               };
-              (req as any)._hardcodedResponse =
-                `Opening Resy for ${details.name}${dateTimeStr ? ` — ${dateTimeStr} pre-filled` : ""}.${conflictNote}`;
+              (req as any)._hardcodedResponse = "";
 
             } else if (details.platform === "yelp" && reservationUrl) {
-              const yelpLabel = details.platformCity === "waitlist" ? "Yelp Waitlist" : "Yelp Reservations";
               (req as any)._reservationPayload = {
                 type: "yelp",
                 url: reservationUrl,
@@ -2059,8 +2056,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
                 restaurantName: details.name,
                 phone: details.phone ?? null,
               };
-              (req as any)._hardcodedResponse =
-                `Opening ${yelpLabel} for ${details.name}${dateTimeStr ? ` — ${dateTimeStr} pre-filled` : ""}.${conflictNote}`;
+              (req as any)._hardcodedResponse = "";
 
             } else if (details.phone) {
               // Phone-only — open dialer immediately, also provide search links
@@ -3940,7 +3936,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   if ((req as any)._nativeMode === true) {
     // Short-circuit: if a hardcoded response is set (e.g. SMS confirmation),
     // skip Claude entirely — Claude cannot reliably avoid lying about sending texts.
-    if ((req as any)._hardcodedResponse) {
+    if ((req as any)._hardcodedResponse !== undefined) {
       const hardcoded = (req as any)._hardcodedResponse as string;
       req.log.info({ responsePreview: hardcoded }, "[DIAG:4] Native response sent (hardcoded)");
       const hardcodedBody: Record<string, unknown> = { response: hardcoded };
