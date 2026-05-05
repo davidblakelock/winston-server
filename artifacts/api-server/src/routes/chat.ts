@@ -1241,23 +1241,20 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       }
     }
 
-    // ── Morning Actions — assemble action cards in parallel with prompt build ──
+    // ── Morning Actions — fire in background NOW, runs parallel with Claude ──
+    // Do NOT await here. The promise resolves while Claude generates the briefing.
     const primaryCity = (userProfile?.rawData as CollectedData | undefined)?.city ?? userProfile?.city ?? "";
-    const [morningActions] = await Promise.allSettled([
-      assembleMorningActions({
-        userName: sessionUserName,
-        detectedMeetings,
-        calendarEvents: liveEvents ?? [],
-        userCity: primaryCity || undefined,
-        userLat: primaryLat,
-        userLon: primaryLon,
-      }).catch((err: unknown) => {
-        req.log.warn({ err }, "[MorningActions] Assembly failed — returning empty");
-        return [] as MorningAction[];
-      }),
-    ]);
-    const morningActionsResult =
-      morningActions.status === "fulfilled" ? morningActions.value : ([] as MorningAction[]);
+    const morningActionsPromise: Promise<MorningAction[]> = assembleMorningActions({
+      userName: sessionUserName,
+      detectedMeetings,
+      calendarEvents: liveEvents ?? [],
+      userCity: primaryCity || undefined,
+      userLat: primaryLat,
+      userLon: primaryLon,
+    }).catch((err: unknown) => {
+      req.log.warn({ err }, "[MorningActions] Assembly failed — returning empty");
+      return [] as MorningAction[];
+    });
 
     // Assemble full system prompt: pre-built static preamble + live blocks + static suffix
     const fullSystemPrompt = staticCtx.preamble + liveGmailBlock + meetingRequestsBlock + liveCalendarBlock + staticCtx.suffix;
@@ -1268,26 +1265,34 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     );
 
     if (isNativeMorning) {
-      // ── Native: collect full briefing text, return as JSON ──
-      const nativeBriefing = await anthropic.messages.create({
-        model: MODEL_SONNET,
-        max_tokens: 1500,
-        system: buildSystemBlocks(staticCtx.preamble, liveGmailBlock + meetingRequestsBlock + liveCalendarBlock + staticCtx.suffix),
-        messages: [{ role: "user", content: "good morning" }],
-      });
+      // ── Native: run Claude + morningActions in parallel, return both in one JSON ──
+      const [nativeBriefing, morningActionsResult] = await Promise.all([
+        anthropic.messages.create({
+          model: MODEL_SONNET,
+          max_tokens: 1500,
+          system: buildSystemBlocks(staticCtx.preamble, liveGmailBlock + meetingRequestsBlock + liveCalendarBlock + staticCtx.suffix),
+          messages: [{ role: "user", content: "good morning" }],
+        }),
+        morningActionsPromise,
+      ]);
       const nativeBriefingText =
         nativeBriefing.content[0]?.type === "text" ? nativeBriefing.content[0].text : "";
       if (nativeBriefingText) {
         setCachedBriefing(sessionUserName, nativeBriefingText, staticCtx.dateKey);
         void logBriefingStories(sessionUserName, staticCtx.candidateStoryKeys);
-        req.log.info({ chars: nativeBriefingText.length }, "Morning briefing fetched (native) and cached");
+        req.log.info(
+          { chars: nativeBriefingText.length, actionCount: morningActionsResult.length },
+          "Morning briefing fetched (native) and cached"
+        );
       }
       res.json({ response: nativeBriefingText, morningActions: morningActionsResult });
       return;
     }
 
-    // Stream Claude's response — each chunk is sent as a separate SSE text event.
-    // The frontend accumulates via: fullText += data.text (already handles this).
+    // ── SSE streaming path ────────────────────────────────────────────────────
+    // morningActionsPromise is already running in background.
+    // Stream Claude while actions assemble — they should be ready by the time
+    // streaming finishes, so the `done` event incurs zero extra wait.
     let fullBriefingText = "";
     const stream = anthropic.messages.stream({
       model: MODEL_SONNET,
@@ -1302,6 +1307,13 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         fullBriefingText += event.delta.text;
       }
     }
+
+    // Collect actions — streaming took several seconds so they should already be resolved.
+    // Fall back to [] after 5 s if something is still pending.
+    const morningActionsResult = await Promise.race([
+      morningActionsPromise,
+      new Promise<MorningAction[]>((resolve) => setTimeout(() => resolve([]), 5000)),
+    ]);
 
     // "Anything from this morning you'd like to dig into?" is delivered by the
     // briefing instruction itself after the 10 news stories — do NOT append here.
