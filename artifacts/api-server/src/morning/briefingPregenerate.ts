@@ -279,7 +279,11 @@ WHAT TO COVER (weave naturally into the narrative — skip what has no relevance
 
 • Sports — from [VERIFIED — Live Sports] block only. Results from the last 24 hours for followed teams. If no games were played, skip entirely and do not say so. NEVER mention FIFA, soccer, World Cup, or teams not in the user's profile.
 
-• Health — if Garmin or Fit data is present and noteworthy (great sleep, poor recovery, significant workout), mention it naturally. Skip if unremarkable.
+• Health — Garmin/Fit data is YESTERDAY's data (the block is labeled "Yesterday's Health Data"). STRICT RULES — NO EXCEPTIONS:
+  - ALWAYS say "yesterday" when referencing any Garmin activity or workout. NEVER say "this morning," "today," or "earlier" for Garmin data.
+  - If yesterday was a pickleball day (Mon/Wed/Fri at Semones YMCA; Sat at Moody's YMCA) and Garmin shows a pickleball workout, say "you had pickleball yesterday" — not "this morning."
+  - If today is Tuesday/Thursday/Sunday, yesterday was NOT a pickleball day — never imply pickleball happened recently unless the Garmin data explicitly shows it from a valid pickleball day.
+  - Skip health entirely if data is unremarkable (nothing unusual about sleep, HR, or activity).
 
 • Local ${city} — from [What's Happening in ${city}] block only. If the block has real items, deliver them. If it says no items found, say exactly one sentence: "Nothing new on the ${city} front this morning." Never supplement from training data.
 

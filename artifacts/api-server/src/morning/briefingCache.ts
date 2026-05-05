@@ -40,6 +40,17 @@ export async function runBriefingCacheMigrations(): Promise<void> {
   } catch (err) {
     console.warn("[BriefingCache] Startup migration warning:", err);
   }
+
+  // Drop NOT NULL constraints on preamble/suffix — older deployments created the table
+  // with NOT NULL which causes the briefing_text-only INSERT in setCachedBriefing to fail,
+  // breaking the "briefing doesn't change during the day" guarantee after server restarts.
+  try {
+    await query(`ALTER TABLE morning_static_context ALTER COLUMN preamble DROP NOT NULL`);
+    await query(`ALTER TABLE morning_static_context ALTER COLUMN suffix DROP NOT NULL`);
+    console.log("[BriefingCache] preamble/suffix NOT NULL constraints dropped (idempotent)");
+  } catch (err) {
+    console.warn("[BriefingCache] Could not drop NOT NULL constraints (may already be nullable):", err);
+  }
 }
 
 // ── Text cache — stores the generated briefing text for follow-up context ─────
@@ -52,7 +63,10 @@ interface BriefingEntry {
 }
 
 const _textCache = new Map<string, BriefingEntry>();
-const TEXT_MAX_AGE_MS = 8 * 60 * 60 * 1000;
+// 20-hour window covers any realistic usage pattern in a day.
+// The dateKey check is the primary guard — this is a belt-and-suspenders
+// backstop so a briefing never survives into the next morning.
+const TEXT_MAX_AGE_MS = 20 * 60 * 60 * 1000;
 
 export function getCachedBriefing(userName: string): string | null {
   const entry = _textCache.get(userName);
