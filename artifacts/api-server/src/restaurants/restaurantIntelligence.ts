@@ -5,7 +5,7 @@ import { toChicagoTime, fetchEventsForDate, chicagoDateStr } from "../google/cal
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-export type ReservationPlatform = "opentable" | "resy" | "phone";
+export type ReservationPlatform = "opentable" | "resy" | "yelp" | "phone";
 export type ReservationAction = "reservation" | "directions" | "info";
 
 // ── Booking platform metro/city lookup ───────────────────────────────────────
@@ -267,14 +267,23 @@ function detectPlatform(text: string | null | undefined): {
   const resyMatch = text.match(/resy\.com\/cities\/([\w-]+)\/(?:venues\/)?([\w-]+)/i);
   if (resyMatch) return { platform: "resy", slug: resyMatch[2], city: resyMatch[1] };
 
+  // Yelp Reservations: yelp.com/reservations/<slug>
+  const yelpResMatch = text.match(/yelp\.com\/reservations\/([\w-]+)/i);
+  if (yelpResMatch) return { platform: "yelp", slug: yelpResMatch[1], city: "reservation" };
+
+  // Yelp Waitlist: yelp.com/waitlist/<slug>
+  const yelpWaitMatch = text.match(/yelp\.com\/waitlist\/([\w-]+)/i);
+  if (yelpWaitMatch) return { platform: "yelp", slug: yelpWaitMatch[1], city: "waitlist" };
+
   return { platform: "phone", slug: null, city: null };
 }
 
-// Use Anthropic web search to find the restaurant's OpenTable or Resy listing.
+// Use Anthropic web search to find the restaurant's OpenTable, Resy, or Yelp listing.
 // OpenTable and Resy both block server-side HTTP fetches (return 000/Forbidden),
 // so direct scraping of their search pages is impossible. Anthropic's web_search
 // tool uses real indexed results and reliably returns the restaurant's listing URL.
 // Results are cached in the DB for 30 days so this only fires once per restaurant.
+// Priority order: OpenTable > Resy > Yelp Reservations/Waitlist > phone.
 async function findBookingPlatformByWebSearch(
   restaurantName: string,
   city: string
@@ -283,18 +292,21 @@ async function findBookingPlatformByWebSearch(
   try {
     const result = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 300,
-      tools: [{ type: "web_search_20250305" as "web_search_20250305", name: "web_search", max_uses: 2 }],
+      max_tokens: 400,
+      tools: [{ type: "web_search_20250305" as "web_search_20250305", name: "web_search", max_uses: 3 }],
       system:
-        "Search for the restaurant's OpenTable or Resy reservation page. " +
-        "Return ONLY the direct OpenTable or Resy URL for this specific restaurant, nothing else. " +
-        "Example outputs: https://www.opentable.com/r/al-biernats-dallas  or  " +
-        "https://resy.com/cities/dal/venues/al-biernats  or  " +
-        "https://www.opentable.com/nick-and-sams-steakhouse  " +
-        "If the restaurant is genuinely not on OpenTable or Resy, return exactly: NOT_FOUND",
+        "Search for the restaurant's online reservation or waitlist page. " +
+        "Check OpenTable first, then Resy, then Yelp Reservations or Yelp Waitlist. " +
+        "Return ONLY the single best direct URL for this specific restaurant in priority order: " +
+        "1) OpenTable direct link (e.g. https://www.opentable.com/r/al-biernats-dallas), " +
+        "2) Resy direct link (e.g. https://resy.com/cities/dal/venues/al-biernats), " +
+        "3) Yelp Reservations link (e.g. https://www.yelp.com/reservations/al-biernats-dallas), " +
+        "4) Yelp Waitlist link (e.g. https://www.yelp.com/waitlist/al-biernats-dallas). " +
+        "Return nothing else — just the URL. " +
+        "If the restaurant is genuinely not on any of these platforms, return exactly: NOT_FOUND",
       messages: [{
         role: "user",
-        content: `Find the OpenTable or Resy reservation page for "${restaurantName}" in ${city}.`,
+        content: `Find the reservation or waitlist page for "${restaurantName}" in ${city}. Check OpenTable, Resy, and Yelp.`,
       }],
     });
 
@@ -377,6 +389,17 @@ export function buildReservationUrl(
     const base = `https://resy.com/cities/${details.platformCity}/venues/${details.platformSlug}?seats=${n}`;
     if (dateISO) return `${base}&date=${dateISO}`;
     return base;
+  }
+
+  if (details.platform === "yelp" && details.platformSlug) {
+    const yelpType = details.platformCity; // "reservation" or "waitlist"
+    const path = yelpType === "waitlist" ? "waitlist" : "reservations";
+    const params = new URLSearchParams({ covers: String(n) });
+    if (yelpType !== "waitlist") {
+      if (dateISO) params.set("date", dateISO);
+      if (timeISO) params.set("time", timeISO);
+    }
+    return `https://www.yelp.com/${path}/${details.platformSlug}?${params.toString()}`;
   }
 
   return null;

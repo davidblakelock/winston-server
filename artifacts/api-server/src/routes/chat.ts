@@ -1976,6 +1976,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           const resySearchUrl = resyCitySlug
             ? `https://resy.com/cities/${resyCitySlug}?query=${searchName}`
             : `https://resy.com/?query=${searchName}`;
+          const yelpSearchUrl = `https://www.yelp.com/search?find_desc=${searchName}&find_loc=${encodeURIComponent(restaurantCity)}`;
 
           const conflict = (intent.dateISO && intent.timeISO)
             ? await checkCalendarConflict(sessionUserName, intent.dateISO, intent.timeISO).catch(() => null)
@@ -2011,6 +2012,18 @@ const chatHandlerCore = async (req: Request, res: Response) => {
               (req as any)._hardcodedResponse =
                 `Opening Resy for ${details.name}${dateTimeStr ? ` — ${dateTimeStr} pre-filled` : ""}.${conflictNote}`;
 
+            } else if (details.platform === "yelp" && reservationUrl) {
+              const yelpLabel = details.platformCity === "waitlist" ? "Yelp Waitlist" : "Yelp Reservations";
+              (req as any)._reservationPayload = {
+                type: "yelp",
+                url: reservationUrl,
+                yelpUrl: reservationUrl,
+                restaurantName: details.name,
+                phone: details.phone ?? null,
+              };
+              (req as any)._hardcodedResponse =
+                `Opening ${yelpLabel} for ${details.name}${dateTimeStr ? ` — ${dateTimeStr} pre-filled` : ""}.${conflictNote}`;
+
             } else if (details.phone) {
               // Phone-only — open dialer immediately, also provide search links
               const telUri = `tel:${details.phone.replace(/[^\d+]/g, "")}`;
@@ -2021,6 +2034,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
                 phone: details.phone,
                 openTableUrl: openTableSearchUrl,
                 resyUrl: resySearchUrl,
+                yelpUrl: yelpSearchUrl,
               };
               (req as any)._hardcodedResponse =
                 `${details.name} takes reservations by phone. Opening the dialer for ${details.phone}.${conflictNote}`;
@@ -2032,9 +2046,10 @@ const chatHandlerCore = async (req: Request, res: Response) => {
                 restaurantName: details.name,
                 openTableUrl: openTableSearchUrl,
                 resyUrl: resySearchUrl,
+                yelpUrl: yelpSearchUrl,
               };
               (req as any)._hardcodedResponse =
-                `I don't have a direct booking link or phone number for ${details.name} right now.${conflictNote} I've pulled up OpenTable and Resy search results for you.`;
+                `I don't have a direct booking link or phone number for ${details.name} right now.${conflictNote} I've pulled up OpenTable, Resy, and Yelp search results for you.`;
             }
 
             req.log.info(
@@ -2049,9 +2064,10 @@ const chatHandlerCore = async (req: Request, res: Response) => {
               restaurantName: intent.restaurantName,
               openTableUrl: openTableSearchUrl,
               resyUrl: resySearchUrl,
+              yelpUrl: yelpSearchUrl,
             };
             (req as any)._hardcodedResponse =
-              `I couldn't find ${intent.restaurantName} in my directory right now.${conflictNote} I've pulled up OpenTable and Resy search results for you.`;
+              `I couldn't find ${intent.restaurantName} in my directory right now.${conflictNote} I've pulled up OpenTable, Resy, and Yelp search results for you.`;
             req.log.info({ restaurantName: intent.restaurantName }, "[R001] No Places result — search fallback");
           }
         }
@@ -3826,7 +3842,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       // Expose the booking URL as navigationUrl so the Android app opens it
       // using the same mechanism it uses for Google Maps (directions).
       const rp = (req as any)._reservationPayload as { type?: string; url?: string } | undefined;
-      if (rp?.url && (rp.type === "opentable" || rp.type === "resy")) {
+      if (rp?.url && (rp.type === "opentable" || rp.type === "resy" || rp.type === "yelp")) {
         hardcodedBody.navigationUrl = rp.url;
       }
       res.json(hardcodedBody);
@@ -3850,7 +3866,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       // Expose the booking URL as navigationUrl so the Android app opens it
       // using the same mechanism it uses for Google Maps (directions).
       const rp2 = (req as any)._reservationPayload as { type?: string; url?: string } | undefined;
-      if (rp2?.url && (rp2.type === "opentable" || rp2.type === "resy") && !navigationUrl) {
+      if (rp2?.url && (rp2.type === "opentable" || rp2.type === "resy" || rp2.type === "yelp") && !navigationUrl) {
         nativeResponseBody.navigationUrl = rp2.url;
       }
       res.json(nativeResponseBody);
