@@ -233,6 +233,18 @@ export async function assembleMorningActions(
       (severityOrder[b.severity ?? "undefined"] ?? 3)
   );
 
+  // Fallback test action: if nothing real surfaced, inject one weather_suggestion
+  // so the native app can confirm action card rendering. Remove once confirmed working.
+  if (allActions.length === 0) {
+    allActions.push({
+      type: "weather_suggestion",
+      title: "Good Morning",
+      detail: "All clear — no alerts or reminders this morning. Tap to start your day.",
+      severity: "info",
+      data: { suggestionType: "good_morning_fallback", test: true },
+    });
+  }
+
   logger.info(
     { userName, count: allActions.length },
     "[MorningActions] Actions assembled"

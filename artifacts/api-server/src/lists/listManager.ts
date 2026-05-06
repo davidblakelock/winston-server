@@ -1,5 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
+import { logger } from "../lib/logger.js";
+import { getConnections } from "../connect/connectManager.js";
+import { sendPushToAll } from "../push/pushManager.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -19,6 +22,24 @@ export interface ListResult {
   currentItems: string[];
 }
 
+export const SHOPPING_CATEGORIES = [
+  "Produce", "Dairy", "Meat", "Bakery", "Frozen",
+  "Beverages", "Cleaning", "Personal Care", "Pharmacy",
+  "Snacks", "Canned Goods", "Other",
+] as const;
+
+const CATEGORY_ORDER: Record<string, number> = Object.fromEntries(
+  SHOPPING_CATEGORIES.map((c, i) => [c, i])
+);
+
+// ── DB migrations (idempotent) ────────────────────────────────────────────────
+
+export async function ensureListItemColumns(): Promise<void> {
+  await query(`ALTER TABLE list_items ADD COLUMN IF NOT EXISTS added_by text`).catch(() => {});
+  await query(`ALTER TABLE list_items ADD COLUMN IF NOT EXISTS category text`).catch(() => {});
+  logger.info("[Lists] list_items columns ensured (added_by, category)");
+}
+
 // ── Normalise list name for storage ──────────────────────────────────────────
 
 function normaliseListName(raw: string): string {
@@ -28,6 +49,125 @@ function normaliseListName(raw: string): string {
     .replace(/\bshopping\b/, "shopping")
     .replace(/\s+list\s*$/, "")
     .trim();
+}
+
+// ── Claude: categorize a single shopping item ─────────────────────────────────
+
+export async function categorizeSingleItem(itemText: string): Promise<string> {
+  try {
+    const resp = await anthropic.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 20,
+      system: `Classify the grocery/shopping item into exactly one of these categories:
+Produce, Dairy, Meat, Bakery, Frozen, Beverages, Cleaning, Personal Care, Pharmacy, Snacks, Canned Goods, Other
+Reply with ONLY the category name, nothing else.`,
+      messages: [{ role: "user", content: itemText }],
+    });
+    const raw = resp.content[0].type === "text" ? resp.content[0].text.trim() : "";
+    const match = SHOPPING_CATEGORIES.find((c) => c.toLowerCase() === raw.toLowerCase());
+    return match ?? "Other";
+  } catch {
+    return "Other";
+  }
+}
+
+/** Batch-categorize multiple items in one Claude call. Returns { itemText → category }. */
+export async function batchCategorizeItems(items: string[]): Promise<Record<string, string>> {
+  if (!items.length) return {};
+  try {
+    const resp = await anthropic.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 512,
+      system: `Classify each shopping item into one of these categories:
+Produce, Dairy, Meat, Bakery, Frozen, Beverages, Cleaning, Personal Care, Pharmacy, Snacks, Canned Goods, Other
+Return ONLY a JSON array: [{"item":"...","category":"..."}]`,
+      messages: [{ role: "user", content: items.join("\n") }],
+    });
+    const raw = resp.content[0].type === "text" ? resp.content[0].text.trim() : "";
+    const m = raw.match(/\[[\s\S]*\]/);
+    if (!m) return {};
+    const parsed = JSON.parse(m[0]) as Array<{ item: string; category: string }>;
+    const result: Record<string, string> = {};
+    for (const entry of parsed) {
+      if (!entry.item) continue;
+      const match = SHOPPING_CATEGORIES.find((c) => c.toLowerCase() === (entry.category ?? "").toLowerCase());
+      result[entry.item.toLowerCase()] = match ?? "Other";
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+/** Sort items by category order (Produce first, Other last). */
+export function sortByCategory<T extends { category?: string | null }>(items: T[]): T[] {
+  return [...items].sort((a, b) => {
+    const aOrder = CATEGORY_ORDER[a.category ?? "Other"] ?? 99;
+    const bOrder = CATEGORY_ORDER[b.category ?? "Other"] ?? 99;
+    return aOrder - bOrder;
+  });
+}
+
+// ── Async: categorize an item in the background after insert ─────────────────
+
+export async function categorizeAndUpdateItem(id: number, itemText: string): Promise<void> {
+  const category = await categorizeSingleItem(itemText);
+  await query(
+    `UPDATE list_items SET category = $1 WHERE id = $2`,
+    [category, id]
+  ).catch((err) => logger.warn({ err, id }, "[Lists] Category update failed"));
+}
+
+// ── Sync new items to all connected users ─────────────────────────────────────
+
+export async function syncListItemToConnections(
+  listName: string,
+  items: string[],
+  senderUserName: string
+): Promise<void> {
+  if (!items.length) return;
+
+  const connections = await getConnections(senderUserName).catch(() => []);
+  if (!connections.length) return;
+
+  await Promise.all(connections.map(async (conn) => {
+    const connectedUserName =
+      conn.requester_user_name === senderUserName
+        ? conn.recipient_user_name
+        : conn.requester_user_name;
+    if (!connectedUserName) return;
+
+    const senderLabel =
+      conn.requester_user_name === senderUserName
+        ? (conn.requester_label ?? senderUserName)
+        : (conn.recipient_label ?? senderUserName);
+
+    for (const item of items) {
+      await query(
+        `INSERT INTO list_items (user_name, list_name, item_text, added_by)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (user_name, list_name, lower(item_text)) DO NOTHING`,
+        [connectedUserName, listName, item, senderLabel]
+      ).catch(() => {});
+    }
+
+    const listDisplayName = listName === "shopping" ? "shopping" : "to-do";
+    const deepLink = listName === "shopping" ? "winston://lists?tab=shopping" : "winston://lists?tab=todo";
+
+    await sendPushToAll(
+      {
+        title: `${senderLabel} added to your ${listDisplayName} list`,
+        body: items.length === 1 ? items[0] : `${items[0]} + ${items.length - 1} more`,
+        tag: `list-sync-${listName}`,
+        notificationType: "list-sync",
+        url: deepLink,
+        companionMessage: `${senderLabel} just added ${items.length === 1 ? `"${items[0]}"` : `${items.length} items`} to your ${listDisplayName} list.`,
+      },
+      connectedUserName
+    ).catch((err) => logger.warn({ err, connectedUserName }, "[Lists] Sync push failed"));
+
+    logger.info({ senderUserName, connectedUserName, listName, count: items.length }, "[Lists] Synced to connection");
+  }));
 }
 
 // ── Extract list operation with Claude ───────────────────────────────────────
@@ -77,16 +217,24 @@ Return raw JSON only — no markdown fences.`,
 
 // ── DB operations ─────────────────────────────────────────────────────────────
 
-export async function addItems(listName: string, items: string[], userName: string): Promise<void> {
+export async function addItems(
+  listName: string,
+  items: string[],
+  userName: string,
+  addedBy?: string
+): Promise<Array<{ id: number; item_text: string }>> {
+  const inserted: Array<{ id: number; item_text: string }> = [];
   for (const item of items) {
-    await query(
-      `INSERT INTO list_items (user_name, list_name, item_text)
-       VALUES ($1, $2, $3)
+    const { rows } = await query<{ id: number; item_text: string }>(
+      `INSERT INTO list_items (user_name, list_name, item_text, added_by)
+       VALUES ($1, $2, $3, $4)
        ON CONFLICT (user_name, list_name, lower(item_text)) DO NOTHING
-       RETURNING id`,
-      [userName, listName, item.trim()]
+       RETURNING id, item_text`,
+      [userName, listName, item.trim(), addedBy ?? null]
     );
+    if (rows[0]) inserted.push(rows[0]);
   }
+  return inserted;
 }
 
 export async function removeItems(listName: string, items: string[], userName: string): Promise<void> {
@@ -141,7 +289,6 @@ export async function executeListOp(op: ListOp, userName: string): Promise<ListR
 
   switch (op.action) {
     case "add": {
-      // Always read current state from Supabase first — never trust local state or cache
       const existing = await getItems(op.listName, userName);
       const existingLower = new Set(existing.map((i) => i.trim().toLowerCase()));
 
@@ -149,9 +296,20 @@ export async function executeListOp(op: ListOp, userName: string): Promise<ListR
       alreadyExisted = op.items.filter((i) => existingLower.has(i.trim().toLowerCase()));
 
       if (newItems.length > 0) {
-        await addItems(op.listName, newItems, userName);
+        const inserted = await addItems(op.listName, newItems, userName);
+
+        // Auto-categorize shopping items in the background
+        if (op.listName === "shopping") {
+          for (const row of inserted) {
+            categorizeAndUpdateItem(row.id, row.item_text).catch(() => {});
+          }
+        }
+
+        // Sync to connected users in the background
+        if (op.listName === "shopping" || op.listName === "to do") {
+          syncListItemToConnections(op.listName, newItems, userName).catch(() => {});
+        }
       }
-      // Replace op.items with only what was actually inserted
       op = { ...op, items: newItems };
       break;
     }
@@ -182,7 +340,6 @@ export function buildListContext(result: ListResult): string {
           : "(empty)";
 
       if (result.items.length === 0 && result.alreadyExisted.length > 0) {
-        // Nothing new was added — every item was already in Supabase
         const dupes = result.alreadyExisted.join(", ");
         return (
           `\n\n[List — No Change — ${displayName} — AUTHORITATIVE CURRENT STATE FROM SUPABASE]\n` +

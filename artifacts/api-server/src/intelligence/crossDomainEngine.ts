@@ -295,7 +295,7 @@ async function checkUpcomingDates(userName: string): Promise<MorningAction[]> {
       day: number;
     }>(
       `SELECT id, person_name, event_type, month, day
-       FROM dates_tracker WHERE user_name = $1`,
+       FROM important_dates WHERE user_name = $1 AND active = true`,
       [userName]
     );
 

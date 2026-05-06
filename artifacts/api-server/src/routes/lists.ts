@@ -6,6 +6,12 @@ import {
   pullTasksFromGoogle,
   pushItemsToGoogleTasks,
 } from "../google/tasks.js";
+import {
+  batchCategorizeItems,
+  categorizeAndUpdateItem,
+  syncListItemToConnections,
+  sortByCategory,
+} from "../lists/listManager.js";
 
 const router: IRouter = Router();
 
@@ -26,8 +32,6 @@ router.get("/lists", async (req: Request, res: Response) => {
     for (const r of listRows) listCounts[r.list_name] = parseInt(r.item_count, 10);
 
     // TV Shows — watched_shows is the single source of truth.
-    // Use DISTINCT ON lower(show_name) so duplicate rows in watched_shows don't inflate the count.
-    // Fall back to profile_items shows only if watched_shows is completely empty.
     const { rows: wsCountRows } = await query<{ cnt: string }>(
       `SELECT COUNT(*) AS cnt FROM (
          SELECT DISTINCT ON (lower(show_name)) id
@@ -88,13 +92,8 @@ router.get("/tasks/sync", async (req: Request, res: Response) => {
 router.get("/lists/tv-shows", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
-  // Disable client-side caching so stale empty responses don't mask fresh data
   res.setHeader("Cache-Control", "no-store");
   try {
-    // watched_shows is the single source of truth.
-    // DISTINCT ON lower(show_name) deduplicates rows where the same show was inserted
-    // multiple times (e.g. mentioned in chat more than once). The lowest id wins.
-    // Fall back to profile_items only if watched_shows has zero distinct rows.
     const { rows: wsRows } = await query<{ id: number; show_name: string; network: string | null; status: string | null }>(
       `SELECT DISTINCT ON (lower(show_name)) id, show_name, network, status
        FROM watched_shows
@@ -245,6 +244,134 @@ router.delete("/lists/restaurants/:id", async (req: Request, res: Response) => {
   }
 });
 
+// ── Shopping — dedicated routes (Feature 2: auto-categorize + Feature 1: sync)
+// MUST be before the /lists/:listName wildcard.
+
+interface ShoppingItem {
+  id: number;
+  item_text: string;
+  category: string | null;
+  added_by: string | null;
+  created_at: string;
+}
+
+// GET /api/lists/shopping — returns items sorted by category, with category + added_by fields
+router.get("/lists/shopping", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  try {
+    const { rows } = await query<ShoppingItem>(
+      `SELECT id, item_text, category, added_by, created_at
+       FROM list_items
+       WHERE user_name = $1 AND list_name = 'shopping'
+       ORDER BY created_at ASC`,
+      [userName]
+    );
+
+    const sorted = sortByCategory(rows);
+
+    // Build byCategory map
+    const byCategory: Record<string, ShoppingItem[]> = {};
+    for (const item of sorted) {
+      const cat = item.category ?? "Other";
+      if (!byCategory[cat]) byCategory[cat] = [];
+      byCategory[cat].push(item);
+    }
+
+    res.json({ items: sorted, byCategory });
+  } catch (err) {
+    req.log.warn({ err }, "Shopping list GET error");
+    res.status(500).json({ error: "Failed to fetch shopping list" });
+  }
+});
+
+// POST /api/lists/shopping — add item, auto-categorize (async), sync to connections (async)
+router.post("/lists/shopping", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const { item } = req.body as { item?: string };
+  if (!item?.trim()) { res.status(400).json({ error: "item is required" }); return; }
+  try {
+    const { rows } = await query<ShoppingItem>(
+      `INSERT INTO list_items (user_name, list_name, item_text)
+       VALUES ($1, 'shopping', $2)
+       ON CONFLICT (user_name, list_name, lower(item_text))
+       DO UPDATE SET item_text = EXCLUDED.item_text
+       RETURNING id, item_text, category, added_by, created_at`,
+      [userName, item.trim()]
+    );
+    const newItem = rows[0];
+
+    // Fire-and-forget: categorize + sync
+    if (newItem) {
+      categorizeAndUpdateItem(newItem.id, newItem.item_text).catch(() => {});
+      syncListItemToConnections("shopping", [newItem.item_text], userName).catch(() => {});
+    }
+
+    res.json({ item: newItem });
+  } catch (err) {
+    req.log.warn({ err }, "Shopping list POST error");
+    res.status(500).json({ error: "Failed to add item" });
+  }
+});
+
+// DELETE /api/lists/shopping/:id
+router.delete("/lists/shopping/:id", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const { id } = req.params;
+  try {
+    await query(
+      `DELETE FROM list_items WHERE id = $1 AND user_name = $2 AND list_name = 'shopping' RETURNING id`,
+      [id, userName]
+    );
+    res.json({ deleted: true });
+  } catch (err) {
+    req.log.warn({ err }, "Shopping list DELETE error");
+    res.status(500).json({ error: "Failed to delete item" });
+  }
+});
+
+// POST /api/lists/shopping/categorize — batch-categorize all uncategorized items
+router.post("/lists/shopping/categorize", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  try {
+    const force = (req.query["force"] ?? req.body?.force) === "true" || req.body?.force === true;
+
+    const { rows } = await query<{ id: number; item_text: string }>(
+      force
+        ? `SELECT id, item_text FROM list_items WHERE user_name = $1 AND list_name = 'shopping'`
+        : `SELECT id, item_text FROM list_items WHERE user_name = $1 AND list_name = 'shopping' AND category IS NULL`,
+      [userName]
+    );
+
+    if (!rows.length) {
+      res.json({ categorized: 0, message: "All items already have categories" });
+      return;
+    }
+
+    const itemTexts = rows.map((r) => r.item_text);
+    const categoryMap = await batchCategorizeItems(itemTexts);
+
+    let updated = 0;
+    for (const row of rows) {
+      const cat = categoryMap[row.item_text.toLowerCase()] ?? "Other";
+      await query(
+        `UPDATE list_items SET category = $1 WHERE id = $2`,
+        [cat, row.id]
+      ).catch(() => {});
+      updated++;
+    }
+
+    req.log.info({ userName, updated }, "[Shopping] Bulk categorize complete");
+    res.json({ categorized: updated });
+  } catch (err) {
+    req.log.warn({ err }, "Shopping categorize error");
+    res.status(500).json({ error: "Failed to categorize items" });
+  }
+});
+
 // ── To Do — dedicated slug so the URL never needs %20 encoding ───────────────
 // Maps the clean /todo path to list_name = 'to do' in the DB.
 // MUST appear before the /lists/:listName wildcard.
@@ -253,8 +380,8 @@ router.get("/lists/todo", async (req: Request, res: Response) => {
   if (!userName) return;
   pullTasksFromGoogle(userName).catch(() => {});
   try {
-    const { rows } = await query<{ id: number; item_text: string; created_at: string }>(
-      `SELECT id, item_text, created_at FROM list_items
+    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; created_at: string }>(
+      `SELECT id, item_text, added_by, created_at FROM list_items
        WHERE user_name = $1 AND list_name = 'to do'
        ORDER BY created_at ASC`,
       [userName]
@@ -272,15 +399,16 @@ router.post("/lists/todo", async (req: Request, res: Response) => {
   const { item } = req.body as { item?: string };
   if (!item?.trim()) { res.status(400).json({ error: "item is required" }); return; }
   try {
-    const { rows } = await query<{ id: number; item_text: string; created_at: string }>(
+    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; created_at: string }>(
       `INSERT INTO list_items (user_name, list_name, item_text)
        VALUES ($1, 'to do', $2)
        ON CONFLICT (user_name, list_name, lower(item_text))
        DO UPDATE SET item_text = EXCLUDED.item_text
-       RETURNING id, item_text, created_at`,
+       RETURNING id, item_text, added_by, created_at`,
       [userName, item.trim()]
     );
     pushItemsToGoogleTasks(userName, [item.trim()]).catch(() => {});
+    syncListItemToConnections("to do", [item.trim()], userName).catch(() => {});
     res.json({ item: rows[0] });
   } catch (err) {
     req.log.warn({ err }, "To Do POST error");
@@ -314,8 +442,8 @@ router.get("/lists/:listName", async (req: Request, res: Response) => {
     if (listName === "to do" || listName === "to%20do") {
       pullTasksFromGoogle(userName).catch(() => {});
     }
-    const { rows } = await query<{ id: number; item_text: string; created_at: string }>(
-      `SELECT id, item_text, created_at
+    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; created_at: string }>(
+      `SELECT id, item_text, added_by, created_at
        FROM list_items
        WHERE user_name = $1 AND list_name = $2
        ORDER BY created_at ASC`,
@@ -339,12 +467,12 @@ router.post("/lists/:listName", async (req: Request, res: Response) => {
     return;
   }
   try {
-    const { rows } = await query<{ id: number; item_text: string; created_at: string }>(
+    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; created_at: string }>(
       `INSERT INTO list_items (user_name, list_name, item_text)
        VALUES ($1, $2, $3)
        ON CONFLICT (user_name, list_name, lower(item_text))
        DO UPDATE SET item_text = EXCLUDED.item_text
-       RETURNING id, item_text, created_at`,
+       RETURNING id, item_text, added_by, created_at`,
       [userName, listName, item.trim()]
     );
     if (listName === "to do" && rows[0]) {

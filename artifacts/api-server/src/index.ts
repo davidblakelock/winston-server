@@ -52,6 +52,7 @@ import { ensureNotificationVipsTable } from "./push/notificationVips";
 import { ensureFocusModeTable } from "./push/focusMode";
 import { ensureDigestLogTable, startDigestScheduler } from "./push/digestScheduler";
 import { ensureSavedPlacesTable } from "./location/geofenceManager";
+import { ensureListItemColumns } from "./lists/listManager";
 
 const rawPort = process.env["PORT"];
 
@@ -318,6 +319,13 @@ app.listen(port, async (err) => {
     logger.info("[startup] saved_places table ready");
   } catch (e) {
     logger.warn({ e }, "Saved places table initialization warning");
+  }
+
+  try {
+    await ensureListItemColumns();
+    logger.info("[startup] list_items columns ready (added_by, category)");
+  } catch (e) {
+    logger.warn({ e }, "List items column initialization warning");
   }
 
   try {

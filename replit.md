@@ -58,7 +58,10 @@ Winston is a personal AI companion app with a dark-themed chat interface that pr
 - Personalized morning briefings (weather, Gmail, Calendar, News).
 - Medication management: full CRUD (GET/POST/PUT/DELETE), drug interaction checking via RxNorm (free, no key), and email export via SMTP. Schema includes dose, frequency, time_of_day, prescribing_doctor, notes, active.
 - Financial Obligation, and Important Date (birthdays/anniversaries) reminders with conversational management and SSE/push notifications.
-- List management (shopping, to-do) and navigation to saved locations.
+- List management (shopping, to-do) and navigation to saved locations. Shopping items auto-categorize via Claude Haiku (Produce/Dairy/Meat/Bakery/Frozen/Beverages/Cleaning/Personal Care/Pharmacy/Snacks/Canned Goods/Other); GET returns items sorted by category with `byCategory` map.
+- Shared lists via Winston Connect: items added to shopping/to-do sync automatically to all accepted connections with `added_by` label + push notification.
+- Geofencing: checks user GPS against saved places + Google Places API; sends push with relevant shopping items on enter (2-hour cooldown per location); items sorted by category. Fix: `getRelevantShoppingItems` now uses correct `list_items` schema.
+- Morning action cards: `morningActions` now falls back to a "Good Morning / All clear" card if no real alerts exist (so native app can confirm rendering). Fix: `crossDomainEngine.checkUpcomingDates` now queries `important_dates` (not missing `dates_tracker` table).
 - Google OAuth integration for Gmail and Calendar.
 - Multi-provider authentication (Google, Microsoft, Apple, Email+Password).
 - Scam/phishing detection for emails with proactive warnings.

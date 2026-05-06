@@ -1,0 +1,40 @@
+Please build the following features for Winston. Do not break any existing functionality. Deploy when complete.
+1. Shared Shopping and To-Do Lists via Winston Connect
+
+When two users are connected on Winston Connect, their shopping lists and to-do lists sync automatically between both users
+Any item added by either user appears on both users' lists immediately
+Any item checked off or deleted by either user is reflected on both users' lists
+Send a push notification to the connected user when an item is added: 'David added milk to the shopping list'
+Store who added each item — add an added_by column to the list items table so the native app can show 'Added by Susan'
+Chat detection: 'Add milk to Susan's list' or 'Add milk to the shopping list' → adds to the shared list and notifies Susan
+If a user has multiple Winston Connect connections, the shared list syncs with all accepted connections
+GET /api/lists/shopping and GET /api/lists/todo — update to include added_by field on each item
+POST /api/lists/shopping and POST /api/lists/todo — update to sync item to all connected users and send push notifications
+
+2. Smart Shopping List — Auto-Categorization
+
+When a new item is added to the shopping list, use Claude Haiku to automatically assign a category: Produce, Dairy, Meat, Bakery, Frozen, Beverages, Cleaning, Personal Care, Pharmacy, Snacks, Canned Goods, Other
+Add category column to shopping list items table
+GET /api/lists/shopping — update to return items sorted by category with category label on each item
+POST /api/lists/shopping/categorize — re-categorizes all existing items that have no category assigned
+Category assignment must happen automatically on every new item add — no user action required
+
+3. Geofencing — Full Backend Support
+
+When user enters a geofence near a grocery store: send push notification that deep links to the shopping list screen, items pre-sorted by category
+When user enters a geofence near a pharmacy: send push notification showing only Pharmacy and Personal Care items from their shopping list
+When user enters a geofence near a hardware store: show hardware-related items
+Store type detection using Google Places API — already available in the codebase
+Proximity threshold: 500 meters
+POST /api/location/geofence-check — already built, update it to return category-sorted shopping list items relevant to the detected store type, and trigger a push notification with a deep link to winston://lists?tab=shopping
+Do not trigger more than once per store visit — add a cooldown of 2 hours per location per user in Supabase
+Push notification body should be specific: 'You are near Tom Thumb — you have 4 items on your list'
+
+4. Morning Briefing — Fix morningActions Not Populating
+
+The morningActions array is returning empty [] in every morning briefing response despite the assembleMorningActions() function being wired
+Please audit assembleMorningActions() and confirm it is actually checking for: pending email drafts needing reply, detected meeting requests, bill anomalies, orders out for delivery today, travel departing today, weather suggestions, relationship nudges, important dates within 10 days
+Fix any issues found and confirm morningActions is populated with real data when conditions are met
+Add a fallback test: if no real actions exist, include a single test action of type 'weather_suggestion' with a sample payload so we can confirm the native app renders action buttons correctly — remove this test fallback once confirmed working
+
+Deploy when complete and confirm each endpoint is live with test results.
