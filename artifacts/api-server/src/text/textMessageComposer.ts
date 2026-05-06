@@ -324,12 +324,30 @@ export function clearPendingDepartureTextOffer(): void {
 // ── Confirmation detection ────────────────────────────────────────────────────
 
 const CONFIRM_PATTERN = /^(?:(?:ok|okay|yeah|yep|yup|uh|um|sure|alright|sounds\s+good|looks?\s+good|great|perfect)[,\s]+)*(yes|send\s+it|looks?\s+good|that'?s\s+(?:good|great|perfect|fine)|perfect|go\s+ahead|confirmed?|do\s+it|okay|ok|send\s+that|that\s+works?)\b/i;
-const CANCEL_PATTERN = /^(?:(?:actually|um|uh|wait|hold\s+on)[,\s]+)*(no|nope|nah|don'?t\s+send|cancel|forget\s+it|never\s+mind|discard|scratch\s+that)\b/i;
+
+// Explicit cancellation phrases that are always a cancel regardless of context.
+const CANCEL_EXPLICIT = /^(?:(?:actually|um|uh|wait|hold\s+on)[,\s]+)*(nope|nah|don'?t\s+send(?:\s+that)?|cancel(?:\s+that)?|forget\s+it|never\s+mind|discard|scratch\s+that|abort)\b/i;
+
+// Words that follow "no" and confirm it's truly a cancellation (not an edit).
+const CANCEL_NO_FOLLOWUP = /^(?:(?:actually|um|uh|wait|hold\s+on)[,\s]+)*no[,.\s]+(?:don'?t|cancel|stop|abort|forget|never|discard|scratch)\b/i;
 
 export function isSendConfirmation(message: string): boolean {
   return CONFIRM_PATTERN.test(message.trim());
 }
 
 export function isSendCancellation(message: string): boolean {
-  return CANCEL_PATTERN.test(message.trim());
+  const trimmed = message.trim();
+
+  // Always cancel: "nope", "cancel", "forget it", "never mind", etc.
+  if (CANCEL_EXPLICIT.test(trimmed)) return true;
+
+  // Standalone "no" (optionally with punctuation only) → cancel
+  if (/^(?:(?:actually|um|uh|wait|hold\s+on)[,\s]+)*no[.!?]?\s*$/i.test(trimmed)) return true;
+
+  // "no, don't send" / "no, cancel" / "no, stop" → cancel
+  if (CANCEL_NO_FOLLOWUP.test(trimmed)) return true;
+
+  // Everything else starting with "no" (e.g. "no, the text is from me",
+  // "no, make it warmer", "no wait, change the wording") is an EDIT, not a cancel.
+  return false;
 }
