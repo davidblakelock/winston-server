@@ -1108,7 +1108,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       // Generation failed entirely — very unusual. Give a short honest message.
       const notReadyText = `I ran into an issue pulling your briefing together — please try again in a moment.`;
       if (isNativeMorning) {
-        res.json({ response: notReadyText });
+        res.json({ response: notReadyText, morningActions: [] });
         return;
       }
       // SSE path
@@ -1140,7 +1140,24 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     if (todayCachedBriefing) {
       req.log.info({ chars: todayCachedBriefing.length }, "Morning briefing already delivered today — serving cached text (no re-generation)");
       if (isNativeMorning) {
-        res.json({ response: todayCachedBriefing });
+        // Assemble morning actions even on the cached path — client always needs them.
+        // Calendar events aren't yet fetched here; pass [] so non-calendar checks still run.
+        const cachedLat = userProfile?.latitude ?? 32.7767;
+        const cachedLon = userProfile?.longitude ?? -96.7970;
+        const cachedCity = (userProfile?.rawData as CollectedData | undefined)?.city ?? userProfile?.city ?? "";
+        const cachedMorningActions = await assembleMorningActions({
+          userName: sessionUserName,
+          detectedMeetings: [],
+          calendarEvents: [],
+          userCity: cachedCity || undefined,
+          userLat: cachedLat,
+          userLon: cachedLon,
+        }).catch((err: unknown) => {
+          req.log.warn({ err }, "[MorningActions] Cached path assembly failed — returning empty");
+          return [] as MorningAction[];
+        });
+        req.log.info({ actionCount: cachedMorningActions.length }, "Morning briefing cached — morningActions assembled");
+        res.json({ response: todayCachedBriefing, morningActions: cachedMorningActions });
         return;
       }
       sendMorningSSE({ text: todayCachedBriefing });
