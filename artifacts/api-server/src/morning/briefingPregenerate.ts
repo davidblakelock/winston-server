@@ -25,6 +25,8 @@ import {
 } from "./storyDedup.js";
 import { logger } from "../lib/logger.js";
 import { getBriefingPreferences, buildBriefingPrefsBlock } from "../briefingPreferences/briefingPreferencesManager.js";
+import { getProactiveMode, buildModeInstruction } from "../proactiveMode/proactiveModeManager.js";
+import { runCrossDomainEngine, buildCrossDomainBlock } from "../intelligence/crossDomainEngine.js";
 import { getStoredGarminData, formatGarminForBriefing } from "../garmin/garminService.js";
 import { getStoredFitData, formatFitForBriefing } from "../google/fit.js";
 import { fetchMarkets, buildMarketsBlock } from "../markets/marketsManager.js";
@@ -342,13 +344,14 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     const isSunday = now.toLocaleDateString("en-US", { timeZone: "America/Chicago", weekday: "long" }) === "Sunday";
     const isPickleballMorning = isTodayPickleballDay();
 
-    const [recentMemories, allProfileItems, userProfile, seenHeadlines, seenVenueHeadlines, briefingPrefs] = await Promise.all([
+    const [recentMemories, allProfileItems, userProfile, seenHeadlines, seenVenueHeadlines, briefingPrefs, proactiveMode] = await Promise.all([
       getRecentMemories(7).catch(() => []),
       getProfileItems(undefined, userName).catch(() => []),
       getProfile(userName).catch(() => null),
       getSeenHeadlines(userName, 7).catch(() => new Set<string>()),    // news/Dallas: 7-day window (no story repeats within a week)
       getSeenHeadlines(userName, 14).catch(() => new Set<string>()),  // venue concerts: 14-day window (events repeat until show date)
       getBriefingPreferences(userName).catch(() => []),
+      getProactiveMode(userName).catch(() => "balanced" as const),
     ]);
     const memoryBlock = formatMemoriesForContext(recentMemories);
     const dynamicProfileBlock = formatProfileForContext(allProfileItems);
@@ -626,11 +629,28 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     // are the last thing it reads before generating the response.
     // News appears before Dallas local content and venue concerts so Claude gives it
     // appropriate prominence — national/international news is mandatory in every briefing.
+    // ── Cross-domain intelligence (non-calendar checks — calendar runs live at delivery) ─
+    const crossDomainActions = proactiveMode !== "whisper"
+      ? await runCrossDomainEngine({
+          userName,
+          calendarEvents: [],
+          mode: proactiveMode,
+          userCity: primaryCity,
+          userLat: primaryLat,
+          userLon: primaryLon,
+        }).catch(() => [])
+      : [];
+    const crossDomainBlock = buildCrossDomainBlock(crossDomainActions);
+
+    const firstName = userProfile?.name?.split(" ")[0] ?? "there";
+    const modeInstruction = buildModeInstruction(proactiveMode, firstName);
+
     const suffix = garminBlock + fitBlock + travelBlock + ordersBlock + tvMorningBlock + sportsBlock + billsMorningBlock + datesBlock +
       sundaySummaryBlock + pickleballMorningBlock + recFollowUpBlock + personalFollowUpsBlock +
-      mydayBlock + marketsBlock +
+      mydayBlock + marketsBlock + crossDomainBlock +
       dedupedNewsBlock + dallasEventsBlock + dedupedVenueConcertsBlock + motivationContextBlock +
-      buildNarrativeBriefingInstruction(primaryCity, userProfile?.companionName ?? null, userProfile?.name ?? undefined);
+      buildNarrativeBriefingInstruction(primaryCity, userProfile?.companionName ?? null, userProfile?.name ?? undefined) +
+      modeInstruction;
 
     // Log which static sections have data
     const sectionLog: Record<string, boolean | string> = {

@@ -1,0 +1,93 @@
+Please build the following features for Winston. Do not break any existing functionality. Deploy when complete.
+1. Proactive Mode System
+Create a proactive intelligence mode that controls how active Winston is throughout the day. Four modes:
+
+Whisper — minimal, only speaks when spoken to, VIPs only, bare minimum morning briefing
+Balanced — default, full morning briefing, time-sensitive proactive alerts only
+Full Partner — maximum engagement, cross-domain connections, relationship nudges, health pattern observations, schedule risk warnings
+Vacation — handles everything, monitors all domains, surfaces anything interesting, suggests automatic responses
+
+New Supabase table: user_proactive_settings with columns: user_name, mode (whisper/balanced/full/vacation), updated_at
+GET /api/settings/proactive-mode — returns current mode
+POST /api/settings/proactive-mode — updates mode
+Morning briefing must respect the mode:
+
+Whisper: 3-4 sentences, calendar and weather only
+Balanced: current full briefing
+Full Partner: full briefing plus cross-domain connections, relationship nudges, schedule risk
+Vacation: everything, maximum proactive intelligence, suggest automatic handling of routine items
+
+2. Proactive Intelligence Engine
+Build a cross-domain intelligence layer that connects data Winston already has and surfaces insights proactively. Run this during morning briefing assembly and include results in morningActions.
+Cross-domain connections to make:
+
+Calendar + Weather + Health: if recovery score is low AND temperature exceeds 90 AND outdoor activity on calendar — surface warning and suggest alternative
+Calendar + Travel: if travel segment departs same day as calendar events — surface conflict
+Calendar + Contacts: if meeting with someone who emailed recently — surface email context
+Email + Calendar: if email contains meeting request and calendar has availability — surface suggested time
+Departure risk: if back-to-back meetings leave less than 30 minutes before next commitment — flag it
+
+Relationship nudges (Full Partner and Vacation modes only):
+
+Track last communication date per contact in a new table: contact_communication_log (user_name, contact_name, contact_email, last_contact_date, channel)
+If no communication with a frequent contact in 14+ days — surface nudge in morning briefing
+Frequent contact defined as: communicated 3+ times in the last 30 days before the gap
+
+Important date awareness:
+
+Scan Google Contacts for birthdays
+Scan calendar for anniversaries and recurring personal events
+Surface 10 days in advance in morning briefing with a specific suggestion: 'Susan's birthday is in 10 days — want me to add a reminder to make a reservation?'
+
+Anomaly detection extensions:
+
+Health pattern: if step count drops more than 50% from 7-day average for 3+ days — surface observation
+Communication pattern: if user hasn't initiated any outbound communication in 3+ days — surface gentle nudge
+Schedule stress: if calendar shows 5+ meetings in a single day — proactively suggest which ones could be moved or shortened
+
+3. Notification Intelligence
+Build a notification triage system:
+VIP system:
+
+New table: notification_vips (user_name, contact_name, contact_phone, contact_email, created_at)
+GET /api/settings/vip-contacts — returns VIP list
+POST /api/settings/vip-contacts — adds a VIP contact
+DELETE /api/settings/vip-contacts/:id — removes a VIP contact
+VIP contacts always trigger immediate push notification regardless of mode
+
+Hourly digest:
+
+POST /api/notifications/digest — assembles and sends a smart digest push notification summarizing what came in since last digest
+Digest respects proactive mode: Whisper sends digest every 4 hours, Balanced every 2 hours, Full Partner every hour, Vacation every 30 minutes
+Digest notification is conversational not a list: 'Two things worth knowing: Susan texted asking what time you'll be home. Your Nordstrom order ships today.'
+Schedule the digest using existing node-cron infrastructure
+
+Focus mode:
+
+POST /api/settings/focus-mode — enables focus mode with optional duration in minutes
+During focus mode: only VIPs get through, everything else held for end-of-focus digest
+When focus mode ends: send digest of everything that came in during focus period
+GET /api/settings/focus-mode — returns current focus mode status
+
+SMS triage (if Android SMS read access is available via API):
+
+Read incoming SMS
+Match sender against contacts and VIP list
+VIP SMS triggers immediate push notification
+Non-VIP SMS held for hourly digest
+POST /api/sms/digest — returns SMS summary for digest
+
+4. Keyboard Fix for EAS Build
+The Android keyboard is pushing the chat input up incorrectly or covering it. Please audit the KeyboardAvoidingView implementation in the native app API and ensure the keyboard behavior is correct for Android. The fix should use: behavior='height' on Android, keyboardVerticalOffset adjusted for Android status bar. Confirm the fix is compatible with EAS build.
+5. Geofencing Backend
+The native app already has expo-location in app.json and geofencing code ready. Build the backend support:
+
+POST /api/location/geofence-check — accepts current lat/lng, checks against user's saved locations (home, work, saved places from profile), returns any relevant list items or reminders triggered by proximity
+Proximity threshold: 500 meters
+Check shopping list for items relevant to nearby store type — pharmacy items near pharmacies, grocery items near grocery stores, hardware items near hardware stores
+Store type detection: use Google Places API to identify what type of store is nearby
+Return triggered items in format: { triggered: true, storeName, storeType, relevantItems: [] }
+POST /api/location/save-place — saves a named place with lat/lng for geofencing
+GET /api/location/saved-places — returns all saved places
+
+Deploy when complete and confirm each endpoint is live with test results

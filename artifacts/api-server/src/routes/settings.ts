@@ -14,6 +14,10 @@ import { getCuratedContacts } from "../google/contacts.js";
 import { query } from "../db.js";
 import { clearStaticBriefingContext, clearCachedBriefing } from "../morning/briefingCache.js";
 import { preFetchMorningBriefing } from "../morning/briefingPregenerate.js";
+import { getProactiveMode, setProactiveMode, isValidMode } from "../proactiveMode/proactiveModeManager.js";
+import { getVipContacts, addVipContact, removeVipContact, isVipSender } from "../push/notificationVips.js";
+import { getFocusMode, enableFocusMode, disableFocusMode } from "../push/focusMode.js";
+import { assembleAndSendDigest } from "../push/digestScheduler.js";
 
 const router: IRouter = Router();
 
@@ -532,6 +536,169 @@ router.post("/briefing/refresh", async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "[BriefingRefresh] Failed to clear cache");
     res.status(500).json({ error: "Cache clear failed — check server logs." });
+  }
+});
+
+// ── GET /api/settings/proactive-mode ─────────────────────────────────────────
+router.get("/settings/proactive-mode", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const mode = await getProactiveMode(userName);
+  res.json({ mode });
+});
+
+// ── POST /api/settings/proactive-mode ────────────────────────────────────────
+router.post("/settings/proactive-mode", express.json(), async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const { mode } = req.body as { mode?: unknown };
+  if (!isValidMode(mode)) {
+    res.status(400).json({ error: "mode must be one of: whisper, balanced, full, vacation" });
+    return;
+  }
+  await setProactiveMode(userName, mode);
+  res.json({ ok: true, mode });
+});
+
+// ── GET /api/settings/vip-contacts ───────────────────────────────────────────
+router.get("/settings/vip-contacts", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  try {
+    const vips = await getVipContacts(userName);
+    res.json({ vips });
+  } catch (err) {
+    req.log.error({ err }, "[VIPs] Failed to get VIP contacts");
+    res.status(500).json({ error: "Failed to get VIP contacts" });
+  }
+});
+
+// ── POST /api/settings/vip-contacts ──────────────────────────────────────────
+router.post("/settings/vip-contacts", express.json(), async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const { contactName, contactPhone, contactEmail } = req.body as {
+    contactName?: unknown; contactPhone?: unknown; contactEmail?: unknown;
+  };
+  if (typeof contactName !== "string" || !contactName.trim()) {
+    res.status(400).json({ error: "contactName is required" });
+    return;
+  }
+  try {
+    const vip = await addVipContact(
+      userName,
+      contactName.trim(),
+      typeof contactPhone === "string" ? contactPhone : undefined,
+      typeof contactEmail === "string" ? contactEmail : undefined
+    );
+    res.status(201).json({ vip });
+  } catch (err) {
+    req.log.error({ err }, "[VIPs] Failed to add VIP contact");
+    res.status(500).json({ error: "Failed to add VIP contact" });
+  }
+});
+
+// ── DELETE /api/settings/vip-contacts/:id ────────────────────────────────────
+router.delete("/settings/vip-contacts/:id", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const id = parseInt(req.params["id"] ?? "", 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+  try {
+    const removed = await removeVipContact(userName, id);
+    if (!removed) { res.status(404).json({ error: "VIP contact not found" }); return; }
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error({ err }, "[VIPs] Failed to remove VIP contact");
+    res.status(500).json({ error: "Failed to remove VIP contact" });
+  }
+});
+
+// ── GET /api/settings/focus-mode ─────────────────────────────────────────────
+router.get("/settings/focus-mode", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const state = await getFocusMode(userName);
+  res.json(state);
+});
+
+// ── POST /api/settings/focus-mode ────────────────────────────────────────────
+router.post("/settings/focus-mode", express.json(), async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const { enabled, durationMinutes } = req.body as { enabled?: unknown; durationMinutes?: unknown };
+  try {
+    if (enabled === false) {
+      await disableFocusMode(userName);
+      res.json({ ok: true, enabled: false });
+    } else {
+      const dur = typeof durationMinutes === "number" ? durationMinutes : undefined;
+      const state = await enableFocusMode(userName, dur);
+      res.json({ ok: true, ...state });
+    }
+  } catch (err) {
+    req.log.error({ err }, "[FocusMode] Failed to update focus mode");
+    res.status(500).json({ error: "Failed to update focus mode" });
+  }
+});
+
+// ── POST /api/notifications/digest ───────────────────────────────────────────
+router.post("/notifications/digest", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  try {
+    const result = await assembleAndSendDigest(userName);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    req.log.error({ err }, "[Digest] Manual digest trigger failed");
+    res.status(500).json({ error: "Failed to assemble digest" });
+  }
+});
+
+// ── POST /api/sms/digest ──────────────────────────────────────────────────────
+// Accepts incoming SMS messages, matches against VIP list, returns triage result.
+router.post("/sms/digest", express.json(), async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const { messages } = req.body as {
+    messages?: Array<{ from?: string; phone?: string; email?: string; body?: string; timestamp?: string }>;
+  };
+
+  if (!Array.isArray(messages)) {
+    res.status(400).json({ error: "messages array required" });
+    return;
+  }
+
+  try {
+    const vips = await getVipContacts(userName);
+    const triaged = messages.map((m) => {
+      const vip = isVipSender(vips, m.from, m.phone, m.email);
+      return {
+        from: m.from ?? "Unknown",
+        body: m.body ?? "",
+        timestamp: m.timestamp ?? new Date().toISOString(),
+        isVip: vip,
+        action: vip ? "immediate_push" : "hold_for_digest",
+      };
+    });
+
+    const vipMessages = triaged.filter((t) => t.isVip);
+    const heldMessages = triaged.filter((t) => !t.isVip);
+
+    res.json({
+      triaged,
+      summary: {
+        total: messages.length,
+        vipCount: vipMessages.length,
+        heldCount: heldMessages.length,
+        vipMessages: vipMessages.map((m) => ({ from: m.from, body: m.body })),
+        heldForDigest: heldMessages.map((m) => ({ from: m.from, body: m.body })),
+      },
+    });
+  } catch (err) {
+    req.log.error({ err }, "[SMS] Digest triage failed");
+    res.status(500).json({ error: "SMS triage failed" });
   }
 });
 

@@ -46,6 +46,12 @@ import { startOrderTrackingScheduler } from "./orders/orderTrackingScheduler";
 import { ensureTravelTable } from "./travel/travelManager";
 import { ensureBillHistoryTable } from "./bills/billAnomalyScanner";
 import { ensureContextReminderColumns } from "./reminders/contextReminderManager";
+import { ensureProactiveModeTable } from "./proactiveMode/proactiveModeManager";
+import { ensureContactCommunicationLogTable } from "./intelligence/crossDomainEngine";
+import { ensureNotificationVipsTable } from "./push/notificationVips";
+import { ensureFocusModeTable } from "./push/focusMode";
+import { ensureDigestLogTable, startDigestScheduler } from "./push/digestScheduler";
+import { ensureSavedPlacesTable } from "./location/geofenceManager";
 
 const rawPort = process.env["PORT"];
 
@@ -285,6 +291,36 @@ app.listen(port, async (err) => {
   }
 
   try {
+    await ensureProactiveModeTable();
+    logger.info("[startup] user_proactive_settings table ready");
+  } catch (e) {
+    logger.warn({ e }, "Proactive mode table initialization warning");
+  }
+
+  try {
+    await ensureContactCommunicationLogTable();
+    logger.info("[startup] contact_communication_log table ready");
+  } catch (e) {
+    logger.warn({ e }, "Contact communication log table initialization warning");
+  }
+
+  try {
+    await ensureNotificationVipsTable();
+    await ensureFocusModeTable();
+    await ensureDigestLogTable();
+    logger.info("[startup] notification VIPs, focus mode, digest log tables ready");
+  } catch (e) {
+    logger.warn({ e }, "Notification intelligence tables initialization warning");
+  }
+
+  try {
+    await ensureSavedPlacesTable();
+    logger.info("[startup] saved_places table ready");
+  } catch (e) {
+    logger.warn({ e }, "Saved places table initialization warning");
+  }
+
+  try {
     await query(
       `CREATE UNIQUE INDEX IF NOT EXISTS watched_shows_user_name_lower_idx
        ON watched_shows (user_name, lower(show_name))`
@@ -321,6 +357,7 @@ app.listen(port, async (err) => {
   startJournalPatternScheduler();
   startPressureScheduler();
   startOrderTrackingScheduler();
+  startDigestScheduler();
 
   // Seed David's music preferences into profile_items so they persist and
   // can be referenced in any conversation naturally.

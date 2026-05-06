@@ -6,6 +6,8 @@ import { getWeatherSuggestions, type WeatherSuggestion } from "../weather/weathe
 import { getCachedWeather } from "../weather/weatherCache.js";
 import type { CalendarEvent } from "../google/calendar.js";
 import type { DetectedMeetingRequest } from "../email/emailMeetingManager.js";
+import { runCrossDomainEngine } from "../intelligence/crossDomainEngine.js";
+import { getProactiveMode } from "../proactiveMode/proactiveModeManager.js";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -14,7 +16,8 @@ export type MorningActionType =
   | "order_delivery"
   | "travel_today"
   | "weather_suggestion"
-  | "bill_anomaly";
+  | "bill_anomaly"
+  | "cross_domain_insight";
 
 export interface MorningAction {
   type: MorningActionType;
@@ -141,6 +144,7 @@ export interface AssembleMorningActionsInput {
   userCity?: string;
   userLat?: number;
   userLon?: number;
+  proactiveMode?: string;
 }
 
 /**
@@ -153,14 +157,27 @@ export async function assembleMorningActions(
 ): Promise<MorningAction[]> {
   const { userName, detectedMeetings, calendarEvents, userCity, userLat, userLon } = input;
 
+  // Fetch proactive mode (needed for cross-domain engine)
+  const mode = await getProactiveMode(userName).catch(() => "balanced" as const);
+
   // Run all data fetches in parallel — failures are non-fatal
-  const [orders, travelSegments, billAnomalies, weatherData] = await Promise.allSettled([
+  const [orders, travelSegments, billAnomalies, weatherData, crossDomainActions] = await Promise.allSettled([
     getOrdersForBriefing(userName),
     getTodayTravelSegments(userName),
     getBillAnomalies(userName),
     userLat && userLon && userCity
       ? getCachedWeather(userCity, userLat, userLon)
       : Promise.resolve(null),
+    mode !== "whisper"
+      ? runCrossDomainEngine({
+          userName,
+          calendarEvents,
+          mode,
+          userCity,
+          userLat,
+          userLon,
+        })
+      : Promise.resolve([]),
   ]);
 
   const allActions: MorningAction[] = [];
@@ -199,6 +216,13 @@ export async function assembleMorningActions(
     }
   } else if (weatherData.status === "rejected") {
     logger.warn({ err: weatherData.reason, userName }, "[MorningActions] Weather fetch failed");
+  }
+
+  // Cross-domain intelligence (calendar-dependent checks run here with live events)
+  if (crossDomainActions.status === "fulfilled" && crossDomainActions.value.length > 0) {
+    allActions.push(...crossDomainActions.value);
+  } else if (crossDomainActions.status === "rejected") {
+    logger.warn({ err: crossDomainActions.reason, userName }, "[MorningActions] Cross-domain engine failed");
   }
 
   // Sort: alert > warning > info
