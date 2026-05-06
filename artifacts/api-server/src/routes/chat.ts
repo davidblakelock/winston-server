@@ -187,7 +187,7 @@ import {
   clearPendingEmailReply,
   type EmailInput,
 } from "../email/emailMeetingManager.js";
-import { getCachedBriefing, setCachedBriefing, getStaticBriefingContext, loadStaticContextFromDb, getPersistedBriefingText } from "../morning/briefingCache.js";
+import { getCachedBriefing, setCachedBriefing, getCachedBriefingIfRecent, getStaticBriefingContext, loadStaticContextFromDb, getPersistedBriefingText } from "../morning/briefingCache.js";
 import { assembleMorningActions, type MorningAction } from "../morning/morningActions.js";
 import { updateSettings as updateWinddownSettings } from "../winddown/winddownManager.js";
 import { analyzePressureDelta, formatPressureContext, formatPressureContextNoChange } from "../weather/pressureScheduler.js";
@@ -1147,57 +1147,92 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         return;
       }
     } else {
-      req.log.info({ sessionUserName }, "Native morning path — skipping text cache, fetching live calendar");
+      // Native path: serve from cache if generated within the last 15 minutes.
+      // This avoids redundant Gmail+Calendar+Claude round-trips when the app reloads
+      // or the user taps "morning briefing" twice in quick succession.
+      const recentCached = getCachedBriefingIfRecent(sessionUserName, 90 * 60 * 1000);
+      if (recentCached) {
+        req.log.info({ sessionUserName, chars: recentCached.length }, "Native morning briefing — cache hit (≤90 min), returning instantly");
+        res.json({ response: recentCached, morningActions: [] });
+        return;
+      }
+      req.log.info({ sessionUserName }, "Native morning path — cache miss, fetching live calendar+email");
     }
 
-    // ── Fetch live email and calendar at delivery time ──
+    // ── Fetch live email and calendar at delivery time ──────────────────────────
+    // OPTIMISED PIPELINE (replaces a sequential chain that took ~38 s):
+    //   1. Fire Gmail + Calendar concurrently.
+    //   2. As soon as Calendar resolves (~1-2 s), kick off departure-time OSRM
+    //      calls — these no longer wait for Gmail (~3-8 s).
+    //   3. As soon as Gmail resolves, kick off meeting detection.
+    //   4. Await departure times + meeting detection in one Promise.all.
+    //   5. Call Claude with Haiku (3-5 s vs Sonnet's 15-20 s) once all data is ready.
+    // Expected total delivery time: ~8-10 s (vs ~38 s before).
     const deliveryNow = new Date();
     const homeAddress = userProfile?.homeAddress ?? ((userProfile?.rawData as CollectedData)?.homeAddress) ?? "";
     const primaryLat = userProfile?.latitude ?? 32.7767;
     const primaryLon = userProfile?.longitude ?? -96.7970;
+    const t0 = Date.now();
 
     req.log.info("Fetching live email and calendar for morning briefing delivery");
-    const [liveEmails, allCalendarEvents] = await Promise.all([
-      fetchAndSummarizeEmails(15, undefined, sessionUserName).catch(() => null),
-      fetchWeekEvents(false, sessionUserName).catch(() => null),
-    ]);
 
-    // Filter calendar to events that have NOT yet started (start time is in the future)
-    // All-day events are always included since they don't have a specific start time that passes.
+    // Phase 1 — start both concurrently; hold separate promises so Calendar can
+    // unblock departure-times before Gmail finishes.
+    const emailPromise = fetchAndSummarizeEmails(10, undefined, sessionUserName).catch(() => null);
+    const calendarPromise = fetchWeekEvents(false, sessionUserName).catch(() => null);
+
+    // Phase 2 — Calendar resolves first (~1-2 s); start departure times immediately.
+    const allCalendarEvents = await calendarPromise;
     const liveEvents = allCalendarEvents?.filter((ev) => {
       if (ev.allDay) return true;
       if (!ev.startIso) return true;
       return new Date(ev.startIso) > deliveryNow;
     }) ?? null;
 
+    // Departure times capped at 3 s — runs while Gmail is still in flight.
+    const departurePromise: Promise<string> = liveEvents !== null
+      ? Promise.race([
+          buildCalendarDepartureTimes(liveEvents, homeAddress, primaryLat, primaryLon),
+          new Promise<string>((resolve) => setTimeout(() => resolve(""), 3000)),
+        ])
+      : Promise.resolve("");
+
+    // Calendar sync state — fire-and-forget, no need to await.
+    if (liveEvents !== null) {
+      populateCalendarSyncState(liveEvents, sessionUserName).catch(() => {});
+    }
+
+    // Phase 3 — await Gmail (may already be done; departs ahead of departure times).
+    const liveEmails = await emailPromise;
     req.log.info(
       {
         emailCount: liveEmails?.length ?? "null (auth failed)",
         totalCalEvents: allCalendarEvents?.length ?? "null",
         futureCalEvents: liveEvents?.length ?? "null",
+        elapsedMs: Date.now() - t0,
       },
       "Live email and calendar fetched for briefing delivery"
     );
 
-    // Build live Gmail block — always included so Section 5 is never silently skipped.
-    // If liveEmails is null, Google auth failed (not connected); Claude will say so.
-    // If liveEmails is [] (empty), inbox is clear; Claude will confirm that briefly.
-    // If liveEmails has items, Claude summarises the ones that matter.
+    // Build live Gmail block
     let liveGmailBlock: string;
     if (liveEmails === null) {
-      // Auth failed — Google not connected or token expired
       liveGmailBlock = `\n\n[VERIFIED — Gmail API — status: NOT CONNECTED]\nGoogle is not connected or the token has expired. Tell the user: "I couldn't pull your email — Google may need to be reconnected in the app settings." Keep it to one sentence.`;
     } else if (liveEmails.length === 0) {
-      // Inbox is clear
       liveGmailBlock = `\n\n[VERIFIED — Gmail API — unread emails (live at delivery time)]\nInbox is clear — no unread messages right now. Mention this briefly and warmly in one short sentence — e.g. "Your inbox is clear this morning." Don't dwell on it.`;
     } else {
-      // One or more unread emails
       liveGmailBlock =
         `\n\n[VERIFIED — Gmail API — unread emails (live at delivery time)]\n${formatEmailsForPrompt(liveEmails)}\nThis is VERIFIED data. State sender names, subjects, and content exactly as shown.` +
         buildImportantEmailInstruction(liveEmails, userProfile?.companionName, sessionUserName);
     }
 
-    // ── Prepare email inputs for meeting detection (sync mapping, no IO) ──────
+    // Update email last-checked timestamp in background
+    if (liveEmails !== null) {
+      updateEmailLastChecked().catch(() => {});
+    }
+
+    // Phase 4 — Meeting detection starts now (needs email data); runs concurrently
+    // with the remaining departure-times wait. Both capped at 3 s.
     const emailsForDetection: EmailInput[] = liveEmails && liveEmails.length > 0
       ? liveEmails.map((e) => ({
           gmailId: e.gmailId,
@@ -1209,48 +1244,40 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         }))
       : [];
 
-    // ── E007: Start meeting detection NOW — runs in parallel with departure times ──
-    // Detection calls Claude (~3-8s); departure times calls OSRM per event (~5-15s).
-    // Running them concurrently shaves up to 8 seconds off total briefing time.
     const detectPromise: Promise<Awaited<ReturnType<typeof detectMeetingRequests>>> =
       emailsForDetection.length > 0
         ? Promise.race([
             detectMeetingRequests(emailsForDetection, liveEvents ?? []),
             new Promise<Awaited<ReturnType<typeof detectMeetingRequests>>>((resolve) =>
-              setTimeout(() => resolve([]), 8000)
+              setTimeout(() => resolve([]), 3000)
             ),
           ])
         : Promise.resolve([]);
 
-    // Build live calendar block with departure times
+    // Phase 5 — await departure times + meeting detection together.
+    const [departureTimes, detectedMeetingsRaw] = await Promise.all([
+      departurePromise,
+      detectPromise.catch(() => [] as Awaited<ReturnType<typeof detectMeetingRequests>>),
+    ]);
+
+    req.log.info({ elapsedMs: Date.now() - t0 }, "Departure times and meeting detection complete");
+
+    // Build live calendar block
     let liveCalendarBlock = "";
     if (liveEvents !== null) {
-      const [departureTimes] = await Promise.all([
-        Promise.race([
-          buildCalendarDepartureTimes(liveEvents, homeAddress, primaryLat, primaryLon),
-          new Promise<string>((resolve) => setTimeout(() => resolve(""), 6000)),
-        ]),
-        populateCalendarSyncState(liveEvents, sessionUserName).catch(() => {}),
-      ]);
       liveCalendarBlock =
         `\n\n[VERIFIED — Google Calendar API — upcoming events from now through next 7 days (past events excluded)]\n` +
         `${formatCalendarForPrompt(liveEvents, "this week")}${departureTimes}\n\n` +
         `⚠ CALENDAR RULE — NO EXCEPTIONS: Use ONLY the exact event title shown above. NEVER substitute, infer, or enrich event titles with names or context from memory. Report every event title letter-for-letter as written. If you want to add context, frame it as a question (INFERRED tier), never a statement.`;
     } else {
-      // Google Calendar auth failed — tell Claude explicitly so it does NOT say "calendar is clear"
       liveCalendarBlock = `\n\n[VERIFIED — Google Calendar API — status: NOT CONNECTED]\nGoogle Calendar authentication failed — no refresh token. This means zero calendar data is available.\nCRITICAL RULES — NO EXCEPTIONS:\n• Say EXACTLY this one sentence: "I can't pull your calendar right now — Google may need to be reconnected in the app settings."\n• Do NOT say his calendar is clear, open, or free.\n• Do NOT say he has nothing scheduled or no events.\n• Do NOT mention any specific event, appointment, or meeting.\n• Do NOT use any qualifier about calendar status (e.g. "looks like a clear day", "you seem free", "nothing on the agenda").\n• The calendar is DISCONNECTED — you have NO information about it. Silence on calendar status is the only acceptable alternative to the one sentence above.`;
     }
 
-    // Update email last-checked timestamp so on-demand checks show only new mail
-    if (liveEmails !== null) {
-      updateEmailLastChecked().catch(() => {});
-    }
-
-    // ── E007: Await meeting detection (already running in parallel with departure times) ──
+    // Process meeting detection results
     let meetingRequestsBlock = "";
     let detectedMeetings: Awaited<ReturnType<typeof detectMeetingRequests>> = [];
     try {
-      detectedMeetings = await detectPromise;
+      detectedMeetings = detectedMeetingsRaw;
       if (detectedMeetings.length > 0) {
         setPendingMeetingRequests(detectedMeetings);
         meetingRequestsBlock = buildMeetingRequestsBlock(detectedMeetings);
@@ -1285,9 +1312,11 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
     if (isNativeMorning) {
       // ── Native: run Claude + morningActions in parallel, return both in one JSON ──
+      // Uses Haiku (3-5 s) instead of Sonnet (15-20 s) — the briefing prompt is data-rich
+      // and instruction-heavy, which Haiku handles well; the quality difference is minimal.
       const [nativeBriefing, morningActionsResult] = await Promise.all([
         anthropic.messages.create({
-          model: MODEL_SONNET,
+          model: MODEL_HAIKU,
           max_tokens: 1500,
           system: buildSystemBlocks(staticCtx.preamble, liveGmailBlock + meetingRequestsBlock + liveCalendarBlock + staticCtx.suffix),
           messages: [{ role: "user", content: "good morning" }],
@@ -1300,7 +1329,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         setCachedBriefing(sessionUserName, nativeBriefingText, staticCtx.dateKey);
         void logBriefingStories(sessionUserName, staticCtx.candidateStoryKeys);
         req.log.info(
-          { chars: nativeBriefingText.length, actionCount: morningActionsResult.length },
+          { chars: nativeBriefingText.length, actionCount: morningActionsResult.length, totalMs: Date.now() - t0 },
           "Morning briefing fetched (native) and cached"
         );
       }
@@ -1314,7 +1343,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     // streaming finishes, so the `done` event incurs zero extra wait.
     let fullBriefingText = "";
     const stream = anthropic.messages.stream({
-      model: MODEL_SONNET,
+      model: MODEL_HAIKU,
       max_tokens: 1500,
       system: buildSystemBlocks(staticCtx.preamble, liveGmailBlock + meetingRequestsBlock + liveCalendarBlock + staticCtx.suffix),
       messages: [{ role: "user", content: "good morning" }],

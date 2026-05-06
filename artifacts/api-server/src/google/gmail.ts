@@ -296,17 +296,21 @@ export async function fetchAndSummarizeEmails(maxResults = 15, since?: Date, use
   console.log(`[Gmail] fetchAndSummarizeEmails: messages.list returned ${messages.length} messages`);
   if (messages.length === 0) return [];
 
-  const emails: EmailSummary[] = [];
+  // Fetch all message details in parallel — previously sequential (one await per message)
+  // which added ~300-500ms per email. Parallel cuts this to a single network round-trip.
+  const msgList = messages.slice(0, maxResults).filter((msg) => !!msg.id);
+  const details = await Promise.all(
+    msgList.map((msg) =>
+      gmail.users.messages.get({
+        userId: "me",
+        id: msg.id!,
+        format: "metadata",
+        metadataHeaders: ["From", "Subject", "Date"],
+      })
+    )
+  );
 
-  for (const msg of messages.slice(0, maxResults)) {
-    if (!msg.id) continue;
-    const detail = await gmail.users.messages.get({
-      userId: "me",
-      id: msg.id,
-      format: "metadata",
-      metadataHeaders: ["From", "Subject", "Date"],
-    });
-
+  const emails: EmailSummary[] = details.map((detail) => {
     const headers = detail.data.payload?.headers ?? [];
     const get = (name: string) =>
       decodeHeader(headers.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value ?? "");
@@ -315,12 +319,17 @@ export async function fetchAndSummarizeEmails(maxResults = 15, since?: Date, use
     const fromEmail = extractEmailAddress(rawFrom);
     const fromMatch = rawFrom.match(/^(.*?)\s*<[^>]+>/) ?? null;
     const from = fromMatch ? fromMatch[1].trim().replace(/^"(.*)"$/, "$1") : rawFrom;
-    const subject = get("Subject") || "(no subject)";
-    const snippet = detail.data.snippet ?? "";
-    const date = get("Date");
 
-    emails.push({ from, fromEmail, subject, snippet, date, gmailId: msg.id ?? "", gmailThreadId: detail.data.threadId ?? "" });
-  }
+    return {
+      from,
+      fromEmail,
+      subject: get("Subject") || "(no subject)",
+      snippet: detail.data.snippet ?? "",
+      date: get("Date"),
+      gmailId: detail.data.id ?? "",
+      gmailThreadId: detail.data.threadId ?? "",
+    };
+  });
 
   const fetchDurationMs = Date.now() - fetchStart.getTime();
   const mostRecentDate = emails.length > 0 ? emails[0].date : "(none in last 7d)";

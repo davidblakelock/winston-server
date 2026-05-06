@@ -1,4 +1,6 @@
-import { toChicagoTime, type CalendarEvent } from "../google/calendar.js";
+import Anthropic from "@anthropic-ai/sdk";
+import { toChicagoTime, type CalendarEvent, fetchWeekEvents, formatCalendarForPrompt } from "../google/calendar.js";
+import { fetchAndSummarizeEmails, formatEmailsForPrompt, buildImportantEmailInstruction } from "../google/gmail.js";
 import { estimateDriveTime, extractEventLocation } from "../departure/departureManager.js";
 import { getLastNightNotes, formatNotesForMorningBriefing } from "../winddown/winddownManager.js";
 import { getRecentMemories, formatMemoriesForContext } from "../memory/memoryManager.js";
@@ -14,7 +16,7 @@ import { isTodayPickleballDay } from "../pickleball/pickleballManager.js";
 import { getPendingFollowUps, buildRecommendationFollowUpBlock } from "../recommendations/recommendationsManager.js";
 import { collectSundayData, buildSundaySummaryBlock } from "../sundaySummary/sundaySummaryManager.js";
 import { getPendingPersonalFollowups, buildPersonalFollowupsBlock } from "../followups/followupManager.js";
-import { setStaticBriefingContext } from "./briefingCache.js";
+import { setStaticBriefingContext, setCachedBriefing } from "./briefingCache.js";
 import { fetchDallasContent, getDallasItems, buildDallasBlock } from "./dallasContent.js";
 import { runVenueScan, getVenueConcerts, buildVenueConcertsBlock, getFavoriteVenueNames } from "./venueMonitor.js";
 import {
@@ -681,8 +683,94 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
 
     logger.info(
       { userName, preambleChars: preamble.length, suffixChars: suffix.length, dateKey: generationDateKey },
-      "Static briefing context cached — email and calendar will be fetched live at delivery"
+      "Static briefing context cached — pre-generating full briefing with live email+calendar"
     );
+
+    // ── Full briefing pre-generation ───────────────────────────────────────────
+    // Fetch email + calendar NOW so that when the user opens the app and says
+    // "good morning", the response is instant (served from 90-minute TTL cache).
+    // This runs entirely in the background — errors are caught and logged.
+    try {
+      const preNow = new Date();
+      const t0pregen = Date.now();
+
+      const emailPrePromise = fetchAndSummarizeEmails(10, undefined, userName).catch(() => null);
+      const calendarPrePromise = fetchWeekEvents(false, userName).catch(() => null);
+
+      // Calendar first — unblocks departure-time calculations immediately
+      const preCalEvents = await calendarPrePromise;
+      const preLiveEvents = preCalEvents?.filter((ev) => {
+        if (ev.allDay) return true;
+        if (!ev.startIso) return true;
+        return new Date(ev.startIso) > preNow;
+      }) ?? null;
+
+      // Departure times — capped at 6 s, runs while Gmail is still in-flight
+      const preDeparturePromise: Promise<string> = preLiveEvents !== null
+        ? Promise.race([
+            buildCalendarDepartureTimes(preLiveEvents, homeAddress, primaryLat, primaryLon),
+            new Promise<string>((resolve) => setTimeout(() => resolve(""), 6000)),
+          ])
+        : Promise.resolve("");
+
+      const preEmails = await emailPrePromise;
+
+      const [preDepartureTimes] = await Promise.all([preDeparturePromise]);
+
+      logger.info(
+        { userName, emailCount: preEmails?.length ?? "null", calCount: preLiveEvents?.length ?? "null", elapsedMs: Date.now() - t0pregen },
+        "[MorningPush] Pre-gen: email+calendar+departure fetched"
+      );
+
+      // Build Gmail block
+      let preEmailBlock: string;
+      if (preEmails === null) {
+        preEmailBlock = `\n\n[VERIFIED — Gmail API — status: NOT CONNECTED]\nGoogle is not connected or the token has expired. Tell the user: "I couldn't pull your email — Google may need to be reconnected in the app settings." Keep it to one sentence.`;
+      } else if (preEmails.length === 0) {
+        preEmailBlock = `\n\n[VERIFIED — Gmail API — unread emails (live at delivery time)]\nInbox is clear — no unread messages right now. Mention this briefly and warmly in one short sentence — e.g. "Your inbox is clear this morning." Don't dwell on it.`;
+      } else {
+        preEmailBlock =
+          `\n\n[VERIFIED — Gmail API — unread emails (live at delivery time)]\n${formatEmailsForPrompt(preEmails)}\nThis is VERIFIED data. State sender names, subjects, and content exactly as shown.` +
+          buildImportantEmailInstruction(preEmails, userProfile?.companionName, userName);
+      }
+
+      // Build calendar block
+      let preCalendarBlock: string;
+      if (preLiveEvents !== null) {
+        preCalendarBlock =
+          `\n\n[VERIFIED — Google Calendar API — upcoming events from now through next 7 days (past events excluded)]\n` +
+          `${formatCalendarForPrompt(preLiveEvents, "this week")}${preDepartureTimes}\n\n` +
+          `⚠ CALENDAR RULE — NO EXCEPTIONS: Use ONLY the exact event title shown above. NEVER substitute, infer, or enrich event titles with names or context from memory. Report every event title letter-for-letter as written. If you want to add context, frame it as a question (INFERRED tier), never a statement.`;
+      } else {
+        preCalendarBlock = `\n\n[VERIFIED — Google Calendar API — status: NOT CONNECTED]\nGoogle Calendar authentication failed — no refresh token. This means zero calendar data is available.\nCRITICAL RULES — NO EXCEPTIONS:\n• Say EXACTLY this one sentence: "I can't pull your calendar right now — Google may need to be reconnected in the app settings."\n• Do NOT say his calendar is clear, open, or free.\n• Do NOT say he has nothing scheduled or no events.\n• Do NOT mention any specific event, appointment, or meeting.\n• Do NOT use any qualifier about calendar status (e.g. "looks like a clear day", "you seem free", "nothing on the agenda").\n• The calendar is DISCONNECTED — you have NO information about it. Silence on calendar status is the only acceptable alternative to the one sentence above.`;
+      }
+
+      // Run Claude Haiku with the full prompt — capped at 45 s
+      const fullPreSystem = preamble + preEmailBlock + preCalendarBlock + suffix;
+      const anthropic = new Anthropic();
+      const pregenResult = await Promise.race([
+        anthropic.messages.create({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 1500,
+          system: fullPreSystem,
+          messages: [{ role: "user", content: "good morning" }],
+        }),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 45000)),
+      ]);
+
+      if (pregenResult && pregenResult.content[0]?.type === "text") {
+        const briefingText = pregenResult.content[0].text;
+        setCachedBriefing(userName, briefingText, generationDateKey);
+        logger.info(
+          { userName, chars: briefingText.length, totalMs: Date.now() - t0pregen },
+          "[MorningPush] Full briefing pre-generated and cached — native delivery will be instant"
+        );
+      } else {
+        logger.warn({ userName }, "[MorningPush] Pre-gen Claude call timed out or returned empty — native path will regenerate on first call");
+      }
+    } catch (pregenErr) {
+      logger.warn({ pregenErr, userName }, "[MorningPush] Full briefing pre-generation failed — native path will regenerate on first call");
+    }
   } catch (err) {
     logger.error({ err }, "Failed to pre-generate morning briefing static context");
   }

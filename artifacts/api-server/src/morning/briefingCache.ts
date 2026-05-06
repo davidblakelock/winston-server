@@ -76,6 +76,19 @@ export function getCachedBriefing(userName: string): string | null {
   return entry.text;
 }
 
+/**
+ * Returns the cached briefing only if it was generated within maxAgeMs milliseconds.
+ * Used by the native path to skip regeneration on rapid successive calls (e.g. app restart,
+ * background refresh). Default: 15 minutes.
+ */
+export function getCachedBriefingIfRecent(userName: string, maxAgeMs = 15 * 60 * 1000): string | null {
+  const entry = _textCache.get(userName);
+  if (!entry) return null;
+  if (entry.dateKey !== ctDateKey()) { _textCache.delete(userName); return null; }
+  if (Date.now() - entry.generatedAt > maxAgeMs) return null;
+  return entry.text;
+}
+
 export function setCachedBriefing(userName: string, text: string, explicitDateKey?: string): void {
   const dateKey = explicitDateKey ?? ctDateKey();
   _textCache.set(userName, { text, generatedAt: Date.now(), dateKey });
