@@ -1,14 +1,9 @@
 import cron from "node-cron";
-import { broadcast } from "../reminders/sseStore.js";
-import { sendPushToAll } from "../push/pushManager.js";
 import { logger } from "../lib/logger.js";
 import { getActiveUsers } from "../onboarding/onboardingManager.js";
 import {
   getBills,
   computeNextDueDate,
-  buildBillReminderMessage,
-  markReminded,
-  type UpcomingBill,
 } from "./billManager.js";
 
 const TZ = "America/Chicago";
@@ -27,28 +22,19 @@ function getLocalTime(): string {
 }
 
 function daysBetween(a: Date, b: Date): number {
-  const msPerDay = 86400000;
-  const aDay = new Date(a.getFullYear(), a.getMonth(), a.getDate());
-  const bDay = new Date(b.getFullYear(), b.getMonth(), b.getDate());
-  return Math.round((bDay.getTime() - aDay.getTime()) / msPerDay);
-}
-
-// ── Urgent notification body (within 2 days) ──────────────────────────────────
-// Formats a short, action-button-friendly message. The companion name is used
-// in the push title rather than in the body for brevity.
-function buildUrgentNotificationBody(bill: UpcomingBill): string {
-  const amtPart = bill.amount ? ` of ${bill.amount}` : "";
-  if (bill.daysUntilDue === 0) {
-    return `Your ${bill.name}${amtPart} is due today. Paid?`;
-  }
-  if (bill.daysUntilDue === 1) {
-    return `Your ${bill.name}${amtPart} is due tomorrow. Paid?`;
-  }
-  return `Your ${bill.name}${amtPart} is due in ${bill.daysUntilDue} days. Paid?`;
+  const tz = "America/Chicago";
+  const aStr = a.toLocaleDateString("en-CA", { timeZone: tz });
+  const bStr = b.toLocaleDateString("en-CA", { timeZone: tz });
+  const [aY, aM, aD] = aStr.split("-").map(Number);
+  const [bY, bM, bD] = bStr.split("-").map(Number);
+  return Math.round((Date.UTC(bY, bM - 1, bD) - Date.UTC(aY, aM - 1, aD)) / 86400000);
 }
 
 let _lastCheckedDate: string | null = null;
 
+// Bill push notifications are disabled — bill reminders are handled exclusively
+// by the morning briefing. This scheduler runs to log upcoming bills for
+// observability only; no push or SSE is sent from here.
 async function checkBillReminders(): Promise<void> {
   const today = getLocalDateString();
   if (_lastCheckedDate === today) return;
@@ -60,10 +46,7 @@ async function checkBillReminders(): Promise<void> {
   const now = new Date();
 
   for (const user of users) {
-    const { userName, name: displayName, companionName } = user;
-    const userDisplay = displayName ?? userName;
-    const companion = companionName ?? "Winston";
-
+    const { userName } = user;
     const bills = await getBills(userName).catch(() => []);
     if (!bills.length) continue;
 
@@ -71,91 +54,17 @@ async function checkBillReminders(): Promise<void> {
       const nextDue = computeNextDueDate(bill, now);
       const daysUntil = daysBetween(now, nextDue);
 
-      // Guard: skip bills already reminded within the last 7 days
-      if (bill.lastRemindedDate) {
-        const daysSinceLast = daysBetween(new Date(bill.lastRemindedDate + "T12:00:00"), now);
-        if (daysSinceLast < 7) continue;
-      }
-
-      const upcoming: UpcomingBill = {
-        ...bill,
-        nextDueDate: nextDue,
-        daysUntilDue: daysUntil,
-        dueDateLabel: nextDue.toLocaleDateString("en-US", {
-          timeZone: TZ,
-          month: "long",
-          day: "numeric",
-        }),
-      };
-
-      // ── Within 2 days: urgent "Paid?" notification with action buttons ────────
-      // Takes priority over the lead-days reminder if the due date is imminent.
-      if (daysUntil >= 0 && daysUntil <= 2) {
-        const notifBody = buildUrgentNotificationBody(upcoming);
-
-        broadcast("reminder", {
-          id: `bill-urgent-${bill.id}-${Date.now()}`,
-          userName,
-          reminderText: notifBody,
-          speakText: buildBillReminderMessage(upcoming, userDisplay),
-          isBill: true,
-        });
-
-        await sendPushToAll({
-          title: `💳 Bill Due Soon — ${companion}`,
-          body: notifBody,
-          tag: `bill-${bill.id}`,
-          notificationType: "bill-reminder",
-          // "bill-dismiss" shows only a "Done ✓" button and does NOT open the app.
-          // This is a simple reminder — no interaction with the app is required.
-          categoryId: "bill-dismiss",
-          requireInteraction: false,
-        }, userName).catch(() => {});
-
-        await markReminded(bill.id, today);
-
+      if (daysUntil >= 0 && daysUntil <= bill.reminderLeadDays) {
         logger.info(
           { billId: bill.id, name: bill.name, daysUntil, userName },
-          "Urgent bill reminder fired (within 2 days)"
+          "[BILLS] Bill upcoming — morning briefing will handle notification"
         );
-        continue; // Don't also fire the lead-days reminder
       }
-
-      // ── Lead-days reminder: early warning at reminderLeadDays out ─────────────
-      if (daysUntil !== bill.reminderLeadDays) continue;
-
-      const message = buildBillReminderMessage(upcoming, userDisplay);
-
-      broadcast("reminder", {
-        id: `bill-${bill.id}-${Date.now()}`,
-        userName,
-        reminderText: message,
-        speakText: message,
-        isBill: true,
-      });
-
-      await sendPushToAll({
-        title: `💳 Bill Reminder — ${companion}`,
-        body: message,
-        tag: `bill-${bill.id}`,
-        notificationType: "bill-reminder",
-        categoryId: "bill-dismiss",
-        requireInteraction: false,
-      }, userName).catch(() => {});
-
-      await markReminded(bill.id, today);
-
-      logger.info(
-        { billId: bill.id, name: bill.name, daysUntil, userName },
-        "Bill reminder fired"
-      );
     }
   }
 }
 
 export function startBillScheduler(): void {
-  // On startup: if it's already past 9am, run the check immediately so a server
-  // restart mid-morning doesn't silently skip today's bill reminders.
   const startHour = parseInt(
     new Date().toLocaleTimeString("en-US", { timeZone: TZ, hour: "2-digit", hour12: false }),
     10
@@ -166,10 +75,6 @@ export function startBillScheduler(): void {
 
   cron.schedule("* * * * *", async () => {
     try {
-      // Run any time from 9:00am onward — the _lastCheckedDate guard inside
-      // checkBillReminders() ensures we only send each user's reminders once per day.
-      // Exact-minute matching ("09:00") is fragile when cron ticks are missed; a
-      // window-based check survives brief event-loop delays and server restarts.
       const localTime = getLocalTime();
       const [h] = localTime.split(":").map(Number);
       if (h < 9) return;
