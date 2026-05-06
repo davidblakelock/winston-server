@@ -16,6 +16,7 @@ import express from "express";
 import { authenticate } from "../auth/middleware.js";
 import { normalizeTtsText } from "../lib/ttsNormalize.js";
 import { logger } from "../lib/logger.js";
+import { getProfile } from "../onboarding/onboardingManager.js";
 
 const router: IRouter = Router();
 
@@ -73,7 +74,15 @@ router.post(
       ""
     ).trim();
 
-    const voiceId = (bodyVoiceId ?? process.env.ELEVENLABS_VOICE_ID ?? "").trim();
+    // Resolve voice: body override → user profile → env default (same as /api/speak)
+    const envVoiceId = (process.env.EL_VOICE_ID?.trim() || process.env.ELEVENLABS_VOICE_ID?.trim() || "");
+    let voiceId = (bodyVoiceId ?? "").trim() || envVoiceId;
+    try {
+      const profile = await getProfile(userName);
+      if (profile?.voiceId) voiceId = profile.voiceId;
+    } catch {
+      // Non-fatal — continue with body/env voice
+    }
 
     if (!EL_API_KEY || !voiceId) {
       res.status(503).json({ error: "TTS not configured — missing API key or voice ID" });
