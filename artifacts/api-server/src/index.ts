@@ -38,6 +38,8 @@ import { ensureFollowupsTable } from "./followups/followupManager";
 import { ensureMemoryArchiveTable } from "./memory/memoryArchiveManager";
 import { ensureJournalSourceColumn } from "./routes/journal";
 import { ensureConnectTables } from "./connect/connectManager";
+import { ensureGroupTables } from "./connect/groupManager";
+import { ensureCalendarSmartTables } from "./routes/calendarSmart";
 import { ensureRestaurantCacheTable } from "./restaurants/restaurantIntelligence";
 import { ensureOrdersTable } from "./orders/ordersManager";
 import { startOrderTrackingScheduler } from "./orders/orderTrackingScheduler";
@@ -234,6 +236,19 @@ app.listen(port, async (err) => {
     await ensureConnectTables();
   } catch (e) {
     logger.warn({ e }, "Winston Connect table initialization warning");
+  }
+
+  try {
+    await ensureGroupTables();
+    logger.info("[startup] Connect group tables ready");
+  } catch (e) {
+    logger.warn({ e }, "Connect group table initialization warning");
+  }
+
+  try {
+    await ensureCalendarSmartTables();
+  } catch (e) {
+    logger.warn({ e }, "Calendar smart settings table initialization warning");
   }
 
   try {

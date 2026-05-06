@@ -29,6 +29,7 @@ import ordersRouter from "./orders";
 import emailRouter from "./email";
 import calendarSmartRouter from "./calendarSmart";
 import travelRouter from "./travel";
+import ttsRouter from "./tts";
 
 const router: IRouter = Router();
 
@@ -62,5 +63,6 @@ router.use(ordersRouter);
 router.use(emailRouter);
 router.use(calendarSmartRouter);
 router.use(travelRouter);
+router.use(ttsRouter);
 
 export default router;

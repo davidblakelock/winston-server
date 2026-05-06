@@ -1196,11 +1196,39 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         buildImportantEmailInstruction(liveEmails, userProfile?.companionName, sessionUserName);
     }
 
+    // ── Prepare email inputs for meeting detection (sync mapping, no IO) ──────
+    const emailsForDetection: EmailInput[] = liveEmails && liveEmails.length > 0
+      ? liveEmails.map((e) => ({
+          gmailId: e.gmailId,
+          gmailThreadId: e.gmailThreadId,
+          from: e.from,
+          fromEmail: e.fromEmail,
+          subject: e.subject,
+          snippet: e.snippet,
+        }))
+      : [];
+
+    // ── E007: Start meeting detection NOW — runs in parallel with departure times ──
+    // Detection calls Claude (~3-8s); departure times calls OSRM per event (~5-15s).
+    // Running them concurrently shaves up to 8 seconds off total briefing time.
+    const detectPromise: Promise<Awaited<ReturnType<typeof detectMeetingRequests>>> =
+      emailsForDetection.length > 0
+        ? Promise.race([
+            detectMeetingRequests(emailsForDetection, liveEvents ?? []),
+            new Promise<Awaited<ReturnType<typeof detectMeetingRequests>>>((resolve) =>
+              setTimeout(() => resolve([]), 8000)
+            ),
+          ])
+        : Promise.resolve([]);
+
     // Build live calendar block with departure times
     let liveCalendarBlock = "";
     if (liveEvents !== null) {
       const [departureTimes] = await Promise.all([
-        buildCalendarDepartureTimes(liveEvents, homeAddress, primaryLat, primaryLon),
+        Promise.race([
+          buildCalendarDepartureTimes(liveEvents, homeAddress, primaryLat, primaryLon),
+          new Promise<string>((resolve) => setTimeout(() => resolve(""), 6000)),
+        ]),
         populateCalendarSyncState(liveEvents, sessionUserName).catch(() => {}),
       ]);
       liveCalendarBlock =
@@ -1217,28 +1245,18 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       updateEmailLastChecked().catch(() => {});
     }
 
-    // ── E007: Detect meeting requests in morning emails ───────────────────────
+    // ── E007: Await meeting detection (already running in parallel with departure times) ──
     let meetingRequestsBlock = "";
     let detectedMeetings: Awaited<ReturnType<typeof detectMeetingRequests>> = [];
-    if (liveEmails && liveEmails.length > 0) {
-      try {
-        const emailsForDetection: EmailInput[] = liveEmails.map((e) => ({
-          gmailId: e.gmailId,
-          gmailThreadId: e.gmailThreadId,
-          from: e.from,
-          fromEmail: e.fromEmail,
-          subject: e.subject,
-          snippet: e.snippet,
-        }));
-        detectedMeetings = await detectMeetingRequests(emailsForDetection, liveEvents ?? []);
-        if (detectedMeetings.length > 0) {
-          setPendingMeetingRequests(detectedMeetings);
-          meetingRequestsBlock = buildMeetingRequestsBlock(detectedMeetings);
-          req.log.info({ count: detectedMeetings.length }, "[E007] Meeting requests detected in morning emails");
-        }
-      } catch (err) {
-        req.log.warn({ err }, "[E007] Meeting detection failed — skipping");
+    try {
+      detectedMeetings = await detectPromise;
+      if (detectedMeetings.length > 0) {
+        setPendingMeetingRequests(detectedMeetings);
+        meetingRequestsBlock = buildMeetingRequestsBlock(detectedMeetings);
+        req.log.info({ count: detectedMeetings.length }, "[E007] Meeting requests detected in morning emails");
       }
+    } catch (err) {
+      req.log.warn({ err }, "[E007] Meeting detection failed — skipping");
     }
 
     // ── Morning Actions — fire in background NOW, runs parallel with Claude ──
