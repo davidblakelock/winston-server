@@ -6,7 +6,6 @@ import {
   updateOrderTracking,
 } from "./ordersManager.js";
 import { trackOrder, isAfterShipEnabled } from "./aftershipTracker.js";
-import { sendPushToAll } from "../push/pushManager.js";
 
 const TZ = "America/Chicago";
 
@@ -85,19 +84,12 @@ export async function pollActiveOrderTracking(userName = NATIVE_USER): Promise<{
         "[OrderTracker] Tracking updated"
       );
 
-      // Push notifications on meaningful status transitions
+      // Push notifications suppressed — order status surfaces in morning briefing only
       if (prevStatus !== result.status) {
-        if (result.status === "out_for_delivery") {
-          sendPushToAll(userName, {
-            title: "Package Out for Delivery",
-            body: `Your ${order.item_name} from ${order.retailer} is out for delivery today.`,
-          }).catch((e: unknown) => logger.warn({ e }, "[OrderTracker] Push send failed"));
-        } else if (result.status === "delivered") {
-          sendPushToAll(userName, {
-            title: "Package Delivered",
-            body: `Your ${order.item_name} from ${order.retailer} has been delivered.`,
-          }).catch((e: unknown) => logger.warn({ e }, "[OrderTracker] Push send failed"));
-        }
+        logger.info(
+          { orderId: order.id, prevStatus, newStatus: result.status },
+          "[OrderTracker] Status changed (push suppressed — appears in morning briefing)"
+        );
       }
     } catch (err) {
       logger.warn({ err, orderId: order.id }, "[OrderTracker] Failed to track order");

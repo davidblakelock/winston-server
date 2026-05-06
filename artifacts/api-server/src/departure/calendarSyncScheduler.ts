@@ -252,16 +252,10 @@ async function sendNewEventAlert(event: CalendarEvent, userName: string): Promis
     eventSummary: eventName,
   });
 
-  await sendPushToAll({
-    title: `📅 New Event — ${companionName}`,
-    body: pushBody,
-    tag: `new-event-${event.id}`,
-    requireInteraction: false,
-  }, userName).catch(() => {});
-
+  // Push suppressed — new-event alerts surface in morning briefing only; SSE above is sufficient
   logger.info(
     { event: eventName, time: eventTimeStr, hasLocation, departure: !!departure, userName },
-    "Calendar sync: new event alert sent"
+    "Calendar sync: new event SSE sent (push suppressed)"
   );
 }
 
@@ -305,16 +299,10 @@ async function sendMovedEventAlert(
     eventSummary: eventName,
   });
 
-  await sendPushToAll({
-    title: `📅 Event Moved — ${companionName}`,
-    body: pushBody,
-    tag: `moved-event-${event.id}`,
-    requireInteraction: false,
-  }, userName).catch(() => {});
-
+  // Push suppressed — moved-event alerts surface in morning briefing only; SSE above is sufficient
   logger.info(
     { event: eventName, oldTime: oldTimeStr, newTime: newTimeStr, userName },
-    "Calendar sync: moved event alert sent"
+    "Calendar sync: moved event SSE sent (push suppressed)"
   );
 }
 

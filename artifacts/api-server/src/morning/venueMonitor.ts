@@ -13,7 +13,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import cron from "node-cron";
 import { broadcastToUser } from "../reminders/sseStore.js";
-import { sendPushToAll } from "../push/pushManager.js";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { getActiveUsers, getProfile, type CollectedData } from "../onboarding/onboardingManager.js";
@@ -382,24 +381,7 @@ async function sendConcertAlertsForUser(userName: string, companionName: string)
       logger.warn({ err }, "[VenueMonitor] SSE broadcast failed");
     }
 
-    try {
-      await sendPushToAll({
-        title: `🎵 ${companionName} — Concert Alert`,
-        body: bodyText,
-        tag: `concert-alert-${venueSlug}`,
-        notificationType: "concert-alert",
-        companionMessage,
-        eventDetails: concerts.map((c) => ({
-          id: c.id,
-          venue: c.venue,
-          artistOrEvent: c.artist_or_event,
-          eventDateText: c.event_date_text,
-        })),
-        requireInteraction: false,
-      }, userName);
-    } catch {
-      // non-fatal
-    }
+    // Push notifications suppressed — concert alerts surface in morning briefing only
 
     for (const c of concerts) {
       await markNotified(c.id);

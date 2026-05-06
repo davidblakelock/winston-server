@@ -9,7 +9,6 @@
 
 import cron from "node-cron";
 import { broadcastToUser } from "../reminders/sseStore.js";
-import { sendPushToAll } from "../push/pushManager.js";
 import { logger } from "../lib/logger.js";
 import { getTodayHighPriorityItems, getLocalContentCity } from "./dallasContent.js";
 import { query } from "../db.js";
@@ -122,17 +121,7 @@ async function runDallasProactiveCheck(): Promise<void> {
       logger.warn({ err, userName }, "[Dallas Proactive] SSE broadcast failed");
     }
 
-    try {
-      await sendPushToAll({
-        title: `Winston — What's Happening in ${contentCity}`,
-        body: text,
-        tag: "dallas-proactive",
-      }, userName);
-      logger.info({ userName }, "[Dallas Proactive] Push sent");
-    } catch (err) {
-      logger.warn({ err, userName }, "[Dallas Proactive] Push failed (non-fatal)");
-    }
-
+    // Push notifications suppressed — Dallas content surfaces in morning briefing only
     await markSent(userName, dedupKey);
   }
 }

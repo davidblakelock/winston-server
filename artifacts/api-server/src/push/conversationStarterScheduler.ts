@@ -1,7 +1,6 @@
 import cron from "node-cron";
 import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
-import { sendPushToAll } from "./pushManager.js";
 import { getActiveUsers, type ActiveUser } from "../onboarding/onboardingManager.js";
 import { logger } from "../lib/logger.js";
 
@@ -77,15 +76,9 @@ async function maybeFireStarterForUser(user: ActiveUser): Promise<void> {
   const starter = await generateStarter(user);
   if (!starter) return;
 
-  const companionName = user.companionName ?? "Winston";
-  await sendPushToAll({
-    title: companionName,
-    body: starter,
-    tag: "conversation-starter",
-  }, userName);
-
+  // Push notifications suppressed for conversation starters — user prefers morning briefing only
   await incrementStarterCount(userName);
-  logger.info({ userName, starter: starter.substring(0, 80) }, "Conversation starter sent");
+  logger.info({ userName, starter: starter.substring(0, 80) }, "Conversation starter generated (push suppressed)");
 }
 
 async function maybeFireStarters(): Promise<void> {
