@@ -1,0 +1,67 @@
+Please build the following features for Winston. Do not break any existing functionality. Deploy when complete.
+1. Streaming TTS
+Replace the current ElevenLabs TTS implementation with sentence-level streaming. Instead of waiting for the full response to be converted to audio before playing, split the response into sentences, convert and stream each sentence as it becomes available, and begin playback immediately on the first sentence. The user should hear Winston start speaking within 500ms of the response arriving. Use ElevenLabs streaming API if available, otherwise implement sentence chunking on our side. This applies to both the native app audio response.
+2. Smart Calendar Full Auto-Send
+Extend the existing smart calendar feature to support automatic acceptance of meeting requests based on user-defined rules:
+
+User can set trusted senders — meeting requests from these people auto-accept without asking
+User can set blocked times — never auto-accept during these windows
+User can set a default response style — always ask, auto-accept if no conflict, or fully automatic
+All auto-sends must be logged in Supabase with: emailId, action taken, timestamp, event added
+New endpoint: GET /api/calendar/smart/settings — returns current auto-send settings
+New endpoint: POST /api/calendar/smart/settings — updates auto-send settings
+Surface auto-accepted meetings in morning briefing: 'I accepted a meeting request from John for Tuesday at 2pm on your behalf'
+
+3. Winston Connect — Full Group Feature
+Build a complete group coordination system on top of the existing Winston Connect infrastructure:
+Groups:
+
+New Supabase tables: connect_groups (id, name, created_by, created_at) and connect_group_members (id, group_id, user_name, added_at)
+POST /api/connect/groups/create — creates a named group with initial members
+GET /api/connect/groups — returns all groups the user belongs to with member list
+POST /api/connect/groups/:id/add-member — adds a Winston Connect user to a group
+DELETE /api/connect/groups/:id/remove-member — removes a member from a group
+DELETE /api/connect/groups/:id — deletes a group (creator only)
+PUT /api/connect/groups/:id/rename — renames a group
+
+Group Messaging:
+
+POST /api/connect/groups/:id/message — sends a message to all group members via Winston Connect
+POST /api/connect/groups/:id/reminder — sends a reminder to all group members
+
+Group Scheduling:
+
+POST /api/connect/groups/:id/find-time — queries Google Calendar availability for all group members who are Winston users, returns mutually available time slots in a specified date range
+POST /api/connect/groups/:id/propose-time — sends a time proposal to all group members
+POST /api/connect/groups/:id/confirm-time — confirms a proposed time and adds to all participants' calendars who are Winston users, sends text to non-Winston members
+
+Chat Integration:
+
+Detect group coordination intent in chat — 'Find a time for pickleball with the crew next week' should trigger group scheduling for the relevant group
+'Remind the pickleball group about tomorrow's game' should send a group reminder
+'Message the book club that Thursday is canceled' should send a group message
+
+4. Fix Morning Briefing Response Time
+The morning briefing is taking 38 seconds to respond. This is unacceptable. Fix it so:
+
+The text response returns in under 10 seconds
+morningActions assembly runs in parallel and non-blocking
+morningActions are returned in the same JSON response but assembled concurrently
+If morningActions takes longer than 8 seconds, return what is ready and skip the rest
+Add timeout protection to every external API call in the morningActions assembly
+
+5. Fix morningActions Not Appearing in Response
+The morningActions array is not appearing in the chat-native JSON response. Please confirm it is correctly attached to the response payload and verify with a test call.
+6. Medication Management Backend
+Expand the medication system beyond the basic acknowledgment logging already built:
+
+Expand medications table to include: medication_name, dose, frequency, time_of_day, prescribing_doctor, notes, active
+GET /api/medications — returns full medication list for the user
+POST /api/medications/add — adds a medication with full details
+PUT /api/medications/:id — updates a medication
+DELETE /api/medications/:id — removes a medication (soft delete, set active: false)
+GET /api/medications/interactions — checks all current active medications for known interactions using OpenFDA or RxNorm API
+POST /api/medications/export — emails the full medication list to a specified email address
+Clean up all test/duplicate entries in medication_logs table from development testing
+
+Deploy when complete and confirm each feature is live with test results
