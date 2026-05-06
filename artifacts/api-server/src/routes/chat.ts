@@ -194,6 +194,7 @@ import { analyzePressureDelta, formatPressureContext, formatPressureContextNoCha
 import {
   extractTextTargetName,
   composeTextMessage,
+  sanitizeSmsBody,
   detectToneFromRelationship,
   detectToneOverride,
   detectInlineTone,
@@ -2253,7 +2254,11 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         // Claude cannot reliably be instructed not to claim it sent the message,
         // so we hardcode the confirmation response server-side.
         const phone = pendingText.recipientPhone ?? "";
-        const body = pendingText.composedBody ?? "";
+        // sanitizeSmsBody ensures the body that lands in the Messages app is
+        // identical to what was read back — no markdown asterisks, no Unicode
+        // punctuation (em-dash, ellipsis, curly quotes) that Android SMS apps
+        // may silently drop or mangle.
+        const body = sanitizeSmsBody(pendingText.composedBody ?? "");
         const recipientName = pendingText.recipientName;
         setPendingText(null);
 

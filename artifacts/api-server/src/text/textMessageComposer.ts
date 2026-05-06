@@ -128,6 +128,45 @@ export function toneLabel(tone: MessageTone): string {
   }
 }
 
+// ── SMS body sanitizer ────────────────────────────────────────────────────────
+// Normalises the raw Claude output to clean plain text before it goes into
+// the SMS payload.  The SMS composer is NOT a markdown renderer — asterisks,
+// curly quotes, em-dashes, and multi-byte Unicode punctuation all appear
+// literally (or get silently dropped by some Android SMS apps), so we replace
+// them with safe ASCII equivalents here as a defence-in-depth measure on top
+// of the prompt instructions.
+
+export function sanitizeSmsBody(text: string): string {
+  let s = text;
+
+  // ── Strip markdown bold/italic wrappers ────────────────────────────────────
+  // **word** → word,  *word* → word,  __word__ → word,  _word_ → word
+  s = s.replace(/\*\*(.+?)\*\*/g, "$1");
+  s = s.replace(/\*(.+?)\*/g, "$1");
+  s = s.replace(/__(.+?)__/g, "$1");
+  s = s.replace(/_(.+?)_/g, "$1");
+  // Inline code `word` → word
+  s = s.replace(/`(.+?)`/g, "$1");
+
+  // ── Normalise Unicode punctuation → ASCII equivalents ──────────────────────
+  // Curly/smart double quotes → straight double quote
+  s = s.replace(/[\u201C\u201D\u201E\u201F\u2033\u2036]/g, '"');
+  // Curly/smart single quotes and apostrophes → straight apostrophe
+  s = s.replace(/[\u2018\u2019\u201A\u201B\u2032\u2035]/g, "'");
+  // Em dash (—) and en dash (–) → hyphen with spaces
+  s = s.replace(/\u2014/g, " - ");
+  s = s.replace(/\u2013/g, " - ");
+  // Horizontal ellipsis (…) → three dots
+  s = s.replace(/\u2026/g, "...");
+  // Non-breaking space → regular space
+  s = s.replace(/\u00A0/g, " ");
+
+  // ── Collapse multiple spaces / trim ────────────────────────────────────────
+  s = s.replace(/ {2,}/g, " ").trim();
+
+  return s;
+}
+
 // ── Message composition ────────────────────────────────────────────────────────
 
 export interface ComposeTextOptions {
@@ -211,7 +250,14 @@ export async function composeTextMessage(opts: ComposeTextOptions): Promise<Comp
     `TONE: ${toneInstruction}\n\n` +
     `WHAT ${senderName.toUpperCase()} WANTS TO SAY:\n${userIntent}\n\n` +
     `Write ONLY the message body. No preamble. No explanation. No quotes around it. ` +
-    `Keep it concise (1-4 sentences). No signature.`;
+    `Keep it concise (1-4 sentences). No signature.\n\n` +
+    `FORMATTING RULES (the output goes directly into an SMS — it must be clean plain text):\n` +
+    `- NO markdown: no asterisks (*), underscores (_), backticks, pound signs, or any other markup.\n` +
+    `- NO curly/smart quotes. Use straight apostrophes (') and straight double quotes (") only.\n` +
+    `- NO em dash (—) or en dash (–). Use a regular hyphen (-) or reword the sentence.\n` +
+    `- NO ellipsis character (…). Use three regular dots (...) if you need a pause.\n` +
+    `- Emojis are fine and encouraged where appropriate.\n` +
+    `- Plain sentences. No bullet points, no line breaks between sentences.`;
 
   const response = await anthropic.messages.create({
     model: "claude-sonnet-4-6",
@@ -222,7 +268,7 @@ export async function composeTextMessage(opts: ComposeTextOptions): Promise<Comp
   const block = response.content[0];
   if (block.type !== "text") throw new Error("Unexpected response type from Claude");
 
-  return { body: block.text.trim(), tone };
+  return { body: sanitizeSmsBody(block.text.trim()), tone };
 }
 
 // ── In-memory pending text state ─────────────────────────────────────────────
