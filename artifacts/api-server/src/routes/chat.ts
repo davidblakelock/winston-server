@@ -1133,37 +1133,21 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       if (!res.writableEnded) res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
-    // ── Serve cached briefing text if already delivered today ──────────────────
-    // The morning briefing does not change on repeat requests in the same day.
-    // Return the cached text immediately — no new Claude call, no email/calendar re-fetch.
-    const todayCachedBriefing = await getPersistedBriefingText(sessionUserName);
-    if (todayCachedBriefing) {
-      req.log.info({ chars: todayCachedBriefing.length }, "Morning briefing already delivered today — serving cached text (no re-generation)");
-      if (isNativeMorning) {
-        // Assemble morning actions even on the cached path — client always needs them.
-        // Calendar events aren't yet fetched here; pass [] so non-calendar checks still run.
-        const cachedLat = userProfile?.latitude ?? 32.7767;
-        const cachedLon = userProfile?.longitude ?? -96.7970;
-        const cachedCity = (userProfile?.rawData as CollectedData | undefined)?.city ?? userProfile?.city ?? "";
-        const cachedMorningActions = await assembleMorningActions({
-          userName: sessionUserName,
-          detectedMeetings: [],
-          calendarEvents: [],
-          userCity: cachedCity || undefined,
-          userLat: cachedLat,
-          userLon: cachedLon,
-        }).catch((err: unknown) => {
-          req.log.warn({ err }, "[MorningActions] Cached path assembly failed — returning empty");
-          return [] as MorningAction[];
-        });
-        req.log.info({ actionCount: cachedMorningActions.length }, "Morning briefing cached — morningActions assembled");
-        res.json({ response: todayCachedBriefing, morningActions: cachedMorningActions });
+    // ── Cached briefing text (SSE/web path only) ──────────────────────────────
+    // Native always fetches live calendar and regenerates so calendar changes
+    // made after the first delivery are immediately reflected. SSE uses the cache
+    // to avoid repeat Claude calls on the web client.
+    if (!isNativeMorning) {
+      const todayCachedBriefing = await getPersistedBriefingText(sessionUserName);
+      if (todayCachedBriefing) {
+        req.log.info({ chars: todayCachedBriefing.length }, "Morning briefing cached (SSE) — serving without re-generation");
+        sendMorningSSE({ text: todayCachedBriefing });
+        sendMorningSSE({ done: true, isMorningBriefing: true });
+        res.end();
         return;
       }
-      sendMorningSSE({ text: todayCachedBriefing });
-      sendMorningSSE({ done: true, isMorningBriefing: true });
-      res.end();
-      return;
+    } else {
+      req.log.info({ sessionUserName }, "Native morning path — skipping text cache, fetching live calendar");
     }
 
     // ── Fetch live email and calendar at delivery time ──
