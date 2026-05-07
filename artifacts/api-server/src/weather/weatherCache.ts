@@ -10,6 +10,8 @@ export interface ForecastDay {
   low: number;
   precipChance: number;
   condition: string;
+  /** True for the entry representing today in the user's local timezone (America/Chicago) */
+  isToday?: boolean;
 }
 
 export interface CachedWeather {
