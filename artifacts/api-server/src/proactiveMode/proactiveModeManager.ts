@@ -17,7 +17,39 @@ export async function ensureProactiveModeTable(): Promise<void> {
       updated_at timestamptz NOT NULL DEFAULT now()
     )
   `);
+  await query(`
+    ALTER TABLE user_proactive_settings
+    ADD COLUMN IF NOT EXISTS digest_interval_minutes integer NOT NULL DEFAULT 120
+  `);
   logger.info("[ProactiveMode] Table ready");
+}
+
+const DEFAULT_DIGEST_INTERVAL = 120;
+const MIN_DIGEST_INTERVAL = 15;
+const MAX_DIGEST_INTERVAL = 1440;
+
+export async function getDigestInterval(userName: string): Promise<number> {
+  try {
+    const { rows } = await query<{ digest_interval_minutes: number }>(
+      `SELECT digest_interval_minutes FROM user_proactive_settings WHERE user_name = $1`,
+      [userName]
+    );
+    const val = rows[0]?.digest_interval_minutes;
+    if (typeof val === "number" && val >= MIN_DIGEST_INTERVAL) return val;
+    return DEFAULT_DIGEST_INTERVAL;
+  } catch {
+    return DEFAULT_DIGEST_INTERVAL;
+  }
+}
+
+export async function setDigestInterval(userName: string, minutes: number): Promise<void> {
+  await query(
+    `INSERT INTO user_proactive_settings (user_name, digest_interval_minutes, updated_at)
+     VALUES ($1, $2, now())
+     ON CONFLICT (user_name) DO UPDATE SET digest_interval_minutes = $2, updated_at = now()`,
+    [userName, minutes]
+  );
+  logger.info({ userName, minutes }, "[DigestInterval] Interval updated");
 }
 
 export async function getProactiveMode(userName: string): Promise<ProactiveMode> {

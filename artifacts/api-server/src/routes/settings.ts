@@ -14,7 +14,7 @@ import { getCuratedContacts } from "../google/contacts.js";
 import { query } from "../db.js";
 import { clearStaticBriefingContext, clearCachedBriefing } from "../morning/briefingCache.js";
 import { preFetchMorningBriefing } from "../morning/briefingPregenerate.js";
-import { getProactiveMode, setProactiveMode, isValidMode } from "../proactiveMode/proactiveModeManager.js";
+import { getProactiveMode, setProactiveMode, isValidMode, getDigestInterval, setDigestInterval } from "../proactiveMode/proactiveModeManager.js";
 import { getVipContacts, addVipContact, removeVipContact, isVipSender } from "../push/notificationVips.js";
 import { getFocusMode, enableFocusMode, disableFocusMode } from "../push/focusMode.js";
 import { assembleAndSendDigest } from "../push/digestScheduler.js";
@@ -558,6 +558,27 @@ router.post("/settings/proactive-mode", express.json(), async (req, res) => {
   }
   await setProactiveMode(userName, mode);
   res.json({ ok: true, mode });
+});
+
+// ── GET /api/settings/digest-interval ────────────────────────────────────────
+router.get("/settings/digest-interval", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const intervalMinutes = await getDigestInterval(userName);
+  res.json({ intervalMinutes });
+});
+
+// ── POST /api/settings/digest-interval ───────────────────────────────────────
+router.post("/settings/digest-interval", express.json(), async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const { intervalMinutes } = req.body as { intervalMinutes?: unknown };
+  if (typeof intervalMinutes !== "number" || !Number.isInteger(intervalMinutes) || intervalMinutes < 15 || intervalMinutes > 1440) {
+    res.status(400).json({ error: "intervalMinutes must be an integer between 15 and 1440" });
+    return;
+  }
+  await setDigestInterval(userName, intervalMinutes);
+  res.json({ ok: true, intervalMinutes });
 });
 
 // ── GET /api/settings/vip-contacts ───────────────────────────────────────────
