@@ -1,12 +1,8 @@
 /**
  * Notification Digest Scheduler
  *
- * Sends a conversational digest push notification at intervals determined by
- * the user's proactive mode:
- *   whisper   — every 4 hours
- *   balanced  — every 2 hours
- *   full      — every 1 hour
- *   vacation  — every 30 minutes
+ * Sends a conversational digest push notification at each user's configured
+ * digest_interval_minutes (default 120, min 15, max 1440).
  *
  * Digest content: upcoming reminders, recent calendar changes, order updates.
  * Uses Claude to generate a conversational summary (not a list).
@@ -18,7 +14,7 @@ import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { sendPushToAll } from "./pushManager.js";
 import { getActiveUsers } from "../onboarding/onboardingManager.js";
-import { getProactiveMode } from "../proactiveMode/proactiveModeManager.js";
+import { getDigestInterval } from "../proactiveMode/proactiveModeManager.js";
 import { getFocusMode } from "./focusMode.js";
 import { NATIVE_USER } from "../auth/middleware.js";
 
@@ -128,8 +124,8 @@ async function generateDigestText(
 // ── Main digest function ──────────────────────────────────────────────────────
 
 export async function assembleAndSendDigest(userName = NATIVE_USER): Promise<{ sent: boolean; itemCount: number }> {
-  const [mode, focusState, profile] = await Promise.all([
-    getProactiveMode(userName),
+  const [intervalMinutes, focusState, profile] = await Promise.all([
+    getDigestInterval(userName),
     getFocusMode(userName),
     query<{ companion_name: string | null; name: string | null }>(
       `SELECT companion_name, name FROM user_profiles WHERE user_name = $1`,
@@ -139,20 +135,14 @@ export async function assembleAndSendDigest(userName = NATIVE_USER): Promise<{ s
 
   const companionName = profile?.companion_name ?? "James Bond";
   const displayName = profile?.name ?? "there";
-
-  const intervalMs = {
-    whisper: 4 * 60 * 60 * 1000,
-    balanced: 2 * 60 * 60 * 1000,
-    full: 1 * 60 * 60 * 1000,
-    vacation: 30 * 60 * 1000,
-  }[mode];
+  const intervalMs = intervalMinutes * 60 * 1000;
 
   const lastDigest = await getLastDigestAt(userName);
   const sinceDate = lastDigest ?? new Date(Date.now() - intervalMs);
   const timeSinceLast = Date.now() - (lastDigest?.getTime() ?? 0);
 
   if (lastDigest && timeSinceLast < intervalMs * 0.9) {
-    logger.info({ userName, mode, timeSinceLast }, "[Digest] Too soon since last digest — skipping");
+    logger.info({ userName, intervalMinutes, timeSinceLast }, "[Digest] Too soon since last digest — skipping");
     return { sent: false, itemCount: 0 };
   }
 
@@ -175,14 +165,14 @@ export async function assembleAndSendDigest(userName = NATIVE_USER): Promise<{ s
   }
 
   await markDigestSent(userName, items.length, digestText);
-  logger.info({ userName, itemCount: items.length, mode }, "[Digest] Digest sent");
+  logger.info({ userName, itemCount: items.length, intervalMinutes }, "[Digest] Digest sent");
   return { sent: !focusState.enabled, itemCount: items.length };
 }
 
 // ── Scheduler ─────────────────────────────────────────────────────────────────
 
 export function startDigestScheduler(): void {
-  cron.schedule("*/30 * * * *", async () => {
+  cron.schedule("*/15 * * * *", async () => {
     const hour = parseInt(new Date().toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", hour12: false }), 10);
     if (hour < 8 || hour >= 22) return;
 
@@ -198,5 +188,5 @@ export function startDigestScheduler(): void {
     }
   }, { timezone: TZ });
 
-  logger.info("[Digest] Digest scheduler started (runs every 30 min, 8 AM–10 PM CT)");
+  logger.info("[Digest] Digest scheduler started (runs every 15 min, 8 AM–10 PM CT)");
 }
