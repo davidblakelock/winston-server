@@ -347,6 +347,26 @@ app.listen(port, async (err) => {
     logger.warn({ e }, "medication_reminder_log table init warning");
   }
 
+  // Repair: ensure the native user's profile is always marked onboarding_completed.
+  // If this flag is false, getActiveUsers() returns empty and ALL schedulers silently
+  // skip — no medication, bill, date, departure, or digest notifications fire.
+  try {
+    const repairResult = await query(
+      `UPDATE user_profiles
+          SET onboarding_completed = true
+        WHERE user_name = $1 AND onboarding_completed = false
+        RETURNING user_name`,
+      [NATIVE_STORED_NAME]
+    );
+    if (repairResult.rows.length > 0) {
+      logger.info({ userName: NATIVE_STORED_NAME }, "[startup] ✅ Repaired onboarding_completed flag — schedulers will now fire");
+    } else {
+      logger.info({ userName: NATIVE_STORED_NAME }, "[startup] onboarding_completed check OK — flag already true");
+    }
+  } catch (e) {
+    logger.warn({ e }, "[startup] onboarding_completed repair failed — notifications may not fire");
+  }
+
   startScheduler();
   startWinddownScheduler();
   startMedicationScheduler();

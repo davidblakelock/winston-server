@@ -283,27 +283,47 @@ export interface ActiveUser {
 }
 
 export async function getActiveUsers(): Promise<ActiveUser[]> {
-  const { rows } = await query<{
+  type ProfileRow = {
     user_name: string;
     name: string | null;
     city: string | null;
     timezone: string | null;
     wake_time: string | null;
     companion_name: string | null;
-  }>(
+  };
+
+  const { rows } = await query<ProfileRow>(
     `SELECT user_name, name, city, timezone, wake_time, companion_name
      FROM user_profiles
      WHERE onboarding_completed = true
      ORDER BY user_name`
   );
-  return rows.map((r) => ({
+
+  const toActiveUser = (r: ProfileRow): ActiveUser => ({
     userName: r.user_name,
     name: r.name,
     city: r.city,
     timezone: r.timezone,
     wakeTime: r.wake_time,
     companionName: r.companion_name,
-  }));
+  });
+
+  if (rows.length > 0) return rows.map(toActiveUser);
+
+  // Fallback: if no users have onboarding_completed=true (e.g. flag was accidentally
+  // reset), include the native user anyway so schedulers never silently go dark.
+  const { rows: fallback } = await query<ProfileRow>(
+    `SELECT user_name, name, city, timezone, wake_time, companion_name
+     FROM user_profiles
+     WHERE user_name = $1
+     LIMIT 1`,
+    [NATIVE_STORED_NAME]
+  );
+
+  if (fallback.length > 0) return fallback.map(toActiveUser);
+
+  // Last resort — return a minimal stub so schedulers can still look up per-user data.
+  return [{ userName: NATIVE_STORED_NAME, name: null, city: null, timezone: null, wakeTime: null, companionName: null }];
 }
 
 // Build the persona/behavioral portion of the system prompt from a dynamic user profile.
