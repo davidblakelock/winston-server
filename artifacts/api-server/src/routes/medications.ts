@@ -223,7 +223,8 @@ router.post("/medications/confirm-taken", express.json({ limit: "1mb" }), async 
     const meds = await getMedications(userName);
     if (meds.length > 0) await logMedicationsTaken(meds, userName);
     req.log.info({ userName, medCount: meds.length }, "[MEDS] Confirmed taken via notification action");
-    res.json({ ok: true });
+    // dismissTag tells the native app which notification tag to dismiss after confirming.
+    res.json({ ok: true, dismissTag: "medication-morning" });
   } catch (err) {
     req.log.error({ err }, "[MEDS] POST /medications/confirm-taken error");
     res.status(500).json({ error: "Failed to log medications as taken" });
@@ -241,9 +242,19 @@ router.post("/medications/snooze-reminder", express.json({ limit: "1mb" }), asyn
       ? Math.max(1, Math.min(req.body.snoozeMinutes, 480))
       : 30;
     const fireAt = new Date(Date.now() + snoozeMinutes * 60 * 1000);
-    const reminder = await createReminder({ userName, reminderText: `Take ${medText}`, fireAt, timezone: "America/Chicago" });
+    // Pass pushCategoryId so the re-fired reminder retains the medication action buttons
+    // ("Taken ✓" and "Remind in 30 min") instead of firing as a generic reminder-action.
+    const reminder = await createReminder({
+      userName,
+      reminderText: `Take ${medText}`,
+      fireAt,
+      timezone: "America/Chicago",
+      pushCategoryId: "medication-action",
+      pushData: { notificationType: "medication", tag: "medication-morning" },
+    });
     req.log.info({ userName, fireAt, snoozeMinutes, reminderId: reminder.id }, "[MEDS] Snooze reminder created");
-    res.json({ ok: true, reminderId: reminder.id });
+    // Return dismissTag so the native app can clear the original notification after snoozing.
+    res.json({ ok: true, reminderId: reminder.id, dismissTag: "medication-morning" });
   } catch (err) {
     req.log.error({ err }, "[MEDS] POST /medications/snooze-reminder error");
     res.status(500).json({ error: "Failed to create snooze reminder" });
@@ -258,7 +269,7 @@ router.post("/medications/taken", express.json({ limit: "1mb" }), async (req, re
     const meds = await getMedications(userName);
     if (meds.length > 0) await logMedicationsTaken(meds, userName);
     req.log.info({ userName, medCount: meds.length }, "[MEDS] Taken confirmed via /medications/taken");
-    res.json({ ok: true });
+    res.json({ ok: true, dismissTag: "medication-morning" });
   } catch (err) {
     req.log.error({ err }, "[MEDS] POST /medications/taken error");
     res.status(500).json({ error: "Failed to log medications as taken" });
