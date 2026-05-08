@@ -254,9 +254,28 @@ function buildPeopleContextBlock(rawData: CollectedData, displayName?: string): 
   );
 }
 
-function buildNarrativeBriefingInstruction(city: string, companionName: string | null, displayName?: string): string {
+function buildNarrativeBriefingInstruction(city: string, companionName: string | null, displayName?: string, mode: import("../proactiveMode/proactiveModeManager.js").ProactiveMode = "balanced"): string {
   const companion = companionName ?? "your companion";
   const firstName = displayName?.split(" ")[0] ?? "there";
+
+  if (mode === "whisper") {
+    return `
+
+[MORNING BRIEFING — WHISPER MODE]
+
+You are ${companion}. Deliver an ultra-brief morning briefing for ${firstName}.
+
+ABSOLUTE RULES — NO EXCEPTIONS:
+• Total length: 3–4 sentences maximum. This overrides every other instruction.
+• Start with "Good morning, ${firstName}" and immediately give the single most important item for today.
+• Include ONLY: today's calendar events (if any) and/or one genuinely critical alert (urgent bill, medication, urgent reminder).
+• Skip ALL of the following completely: news, sports, weather, entertainment, markets, health, TV shows, local content, venue concerts, bills (unless due today), relationship nudges, closing thought, My Day invite.
+• No bullet points. No markdown. Pure conversational prose for TTS.
+• If nothing critical exists: "Good morning, ${firstName}. Your day looks clear — nothing critical this morning. Let me know if you'd like more detail."
+
+`;
+  }
+
   return `
 
 [MORNING BRIEFING — DELIVERY INSTRUCTION]
@@ -651,7 +670,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       sundaySummaryBlock + pickleballMorningBlock + recFollowUpBlock + personalFollowUpsBlock +
       mydayBlock + marketsBlock + crossDomainBlock +
       dedupedNewsBlock + dallasEventsBlock + dedupedVenueConcertsBlock + motivationContextBlock +
-      buildNarrativeBriefingInstruction(primaryCity, userProfile?.companionName ?? null, userProfile?.name ?? undefined) +
+      buildNarrativeBriefingInstruction(primaryCity, userProfile?.companionName ?? null, userProfile?.name ?? undefined, proactiveMode) +
       modeInstruction;
 
     // Log which static sections have data

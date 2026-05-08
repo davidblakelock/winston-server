@@ -2,6 +2,7 @@ import webpush from "web-push";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { NATIVE_USER } from "../auth/middleware.js";
+import { getProactiveMode, shouldSendPushForMode } from "../proactiveMode/proactiveModeManager.js";
 
 // ── VAPID configuration ───────────────────────────────────────────────────────
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY ?? "";
@@ -74,6 +75,8 @@ export interface PushPayload {
   title: string;
   body: string;
   tag?: string;
+  /** Set true when the notification is about/from a VIP contact — bypasses mode-based suppression. */
+  vipOverride?: boolean;
   icon?: string;
   badge?: string;
   url?: string;
@@ -202,11 +205,30 @@ async function sendWebPushNotifications(
  * Send a push notification through all registered channels for the given user:
  * - Expo push (native Android app)
  * - Web push / VAPID (browser PWA — enables service worker action buttons)
+ *
+ * Respects the user's proactive mode — notifications may be suppressed based on
+ * their category (always / time-sensitive / proactive). Set payload.vipOverride=true
+ * to bypass mode suppression for VIP-contact notifications.
  */
 export async function sendPushToAll(
   payload: PushPayload,
   userName = NATIVE_USER
 ): Promise<{ sent: number; failed: number }> {
+  // Mode gate — check before any network calls
+  try {
+    const mode = await getProactiveMode(userName);
+    const allowed = shouldSendPushForMode(mode, payload.notificationType, payload.vipOverride);
+    if (!allowed) {
+      logger.info(
+        { userName, mode, notificationType: payload.notificationType, tag: payload.tag },
+        "[Push] Suppressed by proactive mode"
+      );
+      return { sent: 0, failed: 0 };
+    }
+  } catch {
+    // If mode lookup fails, proceed with send (fail open for safety)
+  }
+
   const [expoResult, webResult] = await Promise.all([
     sendExpoNotifications(payload, userName).catch((err) => {
       logger.warn({ err }, "[Push] Expo notification send failed");

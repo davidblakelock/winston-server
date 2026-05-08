@@ -52,6 +52,65 @@ export async function setDigestInterval(userName: string, minutes: number): Prom
   logger.info({ userName, minutes }, "[DigestInterval] Interval updated");
 }
 
+// ── Digest interval derived from mode ─────────────────────────────────────────
+
+export function getIntervalForMode(mode: ProactiveMode): number {
+  switch (mode) {
+    case "whisper":  return 240; // 4 hours
+    case "balanced": return 120; // 2 hours
+    case "full":     return 60;  // 1 hour
+    case "vacation": return 30;  // 30 minutes
+  }
+}
+
+// ── Push notification categories ───────────────────────────────────────────────
+//   "always"         — sent in ALL modes (safety-critical, morning briefing)
+//   "time-sensitive" — suppressed in whisper; sent in balanced, full, vacation
+//   "proactive"      — sent only in full and vacation
+
+const NOTIFICATION_CATEGORY_MAP: Record<string, "always" | "time-sensitive" | "proactive"> = {
+  "morning-briefing": "always",
+  "medication":       "always",
+  "weather-alert":    "always",
+  "digest":           "always",        // interval itself is mode-controlled
+  "departure":        "time-sensitive",
+  "reminder":         "time-sensitive",
+  "bill-reminder":    "time-sensitive",
+  "date-reminder":    "time-sensitive",
+  "winddown":         "time-sensitive",
+  "contact-reminder": "time-sensitive",
+  "connect-accepted": "time-sensitive",
+  "connect-message":  "time-sensitive",
+  "connect-reminder": "time-sensitive",
+  "calendar-update":  "time-sensitive",
+  "geofence-shopping":"proactive",
+  "list-sync":        "proactive",
+  "pickleball":       "proactive",
+};
+
+/**
+ * Returns true if a push notification should be sent given the user's proactive
+ * mode, the notification type, and whether the notification is for/from a VIP.
+ *
+ * Mode matrix:
+ *   whisper  — always only (medication, weather-alert, morning-briefing)
+ *   balanced — always + time-sensitive
+ *   full     — always + time-sensitive + proactive
+ *   vacation — always + time-sensitive + proactive
+ */
+export function shouldSendPushForMode(
+  mode: ProactiveMode,
+  notificationType: string | undefined,
+  isVip = false
+): boolean {
+  if (isVip) return true; // VIP contacts always bypass the mode gate
+  const category = NOTIFICATION_CATEGORY_MAP[notificationType ?? ""] ?? "time-sensitive";
+  if (category === "always") return true;
+  if (mode === "whisper") return false;         // whisper: only "always" passes
+  if (category === "time-sensitive") return true; // balanced/full/vacation: time-sensitive passes
+  return mode === "full" || mode === "vacation";  // proactive: full/vacation only
+}
+
 export async function getProactiveMode(userName: string): Promise<ProactiveMode> {
   try {
     const { rows } = await query<{ mode: string }>(

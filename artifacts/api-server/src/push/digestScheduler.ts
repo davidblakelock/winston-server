@@ -14,7 +14,7 @@ import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { sendPushToAll } from "./pushManager.js";
 import { getActiveUsers } from "../onboarding/onboardingManager.js";
-import { getDigestInterval } from "../proactiveMode/proactiveModeManager.js";
+import { getProactiveMode, getIntervalForMode } from "../proactiveMode/proactiveModeManager.js";
 import { getFocusMode } from "./focusMode.js";
 import { NATIVE_USER } from "../auth/middleware.js";
 
@@ -124,8 +124,8 @@ async function generateDigestText(
 // ── Main digest function ──────────────────────────────────────────────────────
 
 export async function assembleAndSendDigest(userName = NATIVE_USER): Promise<{ sent: boolean; itemCount: number }> {
-  const [intervalMinutes, focusState, profile] = await Promise.all([
-    getDigestInterval(userName),
+  const [mode, focusState, profile] = await Promise.all([
+    getProactiveMode(userName),
     getFocusMode(userName),
     query<{ companion_name: string | null; name: string | null }>(
       `SELECT companion_name, name FROM user_profiles WHERE user_name = $1`,
@@ -133,6 +133,7 @@ export async function assembleAndSendDigest(userName = NATIVE_USER): Promise<{ s
     ).then((r) => r.rows[0] ?? null).catch(() => null),
   ]);
 
+  const intervalMinutes = getIntervalForMode(mode);
   const companionName = profile?.companion_name ?? "James Bond";
   const displayName = profile?.name ?? "there";
   const intervalMs = intervalMinutes * 60 * 1000;
