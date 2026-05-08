@@ -122,6 +122,10 @@ async function fetchFromGoogle(city: string, lat: number, lon: number): Promise<
     0
   );
 
+  // Compute today's date in CT once — lets each forecast day self-identify
+  // so the native app doesn't have to guess via date comparison.
+  const todayCT = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(new Date());
+
   const mappedForecastDays: ForecastDay[] = upcoming.map((day) => {
     const d = day.displayDate;
     let dayName = "—";
@@ -141,6 +145,7 @@ async function fetchFromGoogle(city: string, lat: number, lon: number): Promise<
       low: Math.round(day.minTemperature?.degrees ?? 0),
       precipChance: Math.round(day.daytimeForecast?.precipitation?.probability?.percent ?? 0),
       condition: day.daytimeForecast?.weatherCondition?.description?.text?.toLowerCase() ?? "",
+      isToday: dateStr === todayCT,
     };
   });
 
