@@ -56,10 +56,10 @@ export async function setDigestInterval(userName: string, minutes: number): Prom
 
 export function getIntervalForMode(mode: ProactiveMode): number {
   switch (mode) {
-    case "whisper":  return 240; // 4 hours
-    case "balanced": return 120; // 2 hours
-    case "full":     return 60;  // 1 hour
-    case "vacation": return 30;  // 30 minutes
+    case "whisper":  return 240;  // 4 hours
+    case "balanced": return 120;  // 2 hours
+    case "full":     return 60;   // 1 hour
+    case "vacation": return 1440; // once daily (on-demand via chat)
   }
 }
 
@@ -93,22 +93,22 @@ const NOTIFICATION_CATEGORY_MAP: Record<string, "always" | "time-sensitive" | "p
  * mode, the notification type, and whether the notification is for/from a VIP.
  *
  * Mode matrix:
- *   whisper  — always only (medication, weather-alert, morning-briefing)
- *   balanced — always + time-sensitive
- *   full     — always + time-sensitive + proactive
- *   vacation — always + time-sensitive + proactive
+ *   whisper  — always only + VIP override
+ *   balanced — always + time-sensitive + VIP override
+ *   full     — always + time-sensitive + proactive + VIP override
+ *   vacation — always + VIP override only (no proactive interruptions; silent mode)
  */
 export function shouldSendPushForMode(
   mode: ProactiveMode,
   notificationType: string | undefined,
   isVip = false
 ): boolean {
-  if (isVip) return true; // VIP contacts always bypass the mode gate
+  if (isVip) return true; // VIP contacts always bypass the mode gate in every mode
   const category = NOTIFICATION_CATEGORY_MAP[notificationType ?? ""] ?? "time-sensitive";
   if (category === "always") return true;
-  if (mode === "whisper") return false;         // whisper: only "always" passes
-  if (category === "time-sensitive") return true; // balanced/full/vacation: time-sensitive passes
-  return mode === "full" || mode === "vacation";  // proactive: full/vacation only
+  if (mode === "whisper" || mode === "vacation") return false; // silent except "always" + VIPs
+  if (category === "time-sensitive") return true;              // balanced + full
+  return mode === "full";                                      // proactive: full only
 }
 
 export async function getProactiveMode(userName: string): Promise<ProactiveMode> {
@@ -147,6 +147,6 @@ export function buildModeInstruction(mode: ProactiveMode, firstName: string): st
       return `\n\n[PROACTIVE MODE: FULL PARTNER]\nDeliver the full briefing as normal, and additionally weave in any [Cross-Domain Intelligence] insights naturally into the narrative — these are connections James Bond has noticed between ${firstName}'s calendar, health, relationships, and tasks. Surface relationship nudges warmly and specifically. Flag any schedule risks plainly. The briefing should feel like a highly-informed advisor who sees across all domains of ${firstName}'s life.`;
 
     case "vacation":
-      return `\n\n[PROACTIVE MODE: VACATION]\nDeliver the full briefing with maximum intelligence. Include all [Cross-Domain Intelligence] insights. Proactively suggest handling routine items — for example: "I can draft a reply to that meeting request," "Want me to add that flight to your calendar," "I can send Susan a reminder about Saturday." Be maximally helpful and anticipate ${firstName}'s needs across every domain. Suggest automatic responses where appropriate.`;
+      return `\n\n[PROACTIVE MODE: VACATION]\n${firstName} is on vacation and wants minimal interruptions. Keep this briefing extremely brief — 2–3 sentences maximum. Mention only what is genuinely critical (a VIP contact reaching out, a safety alert, something that truly cannot wait). Skip news, sports, calendar details, bills, health data, entertainment, and all proactive suggestions. No closing thought. No My Day invite. If nothing critical exists, say exactly: "All clear — enjoy your vacation." Then stop.`;
   }
 }

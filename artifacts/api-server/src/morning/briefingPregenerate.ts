@@ -276,6 +276,23 @@ ABSOLUTE RULES — NO EXCEPTIONS:
 `;
   }
 
+  if (mode === "vacation") {
+    return `
+
+[MORNING BRIEFING — VACATION MODE]
+
+You are ${companion}. ${firstName} is on vacation and wants to be left alone unless something truly matters.
+
+ABSOLUTE RULES — NO EXCEPTIONS:
+• Total length: 2–3 sentences maximum. This overrides every other instruction.
+• Start with "Good morning, ${firstName}" and mention only what is genuinely critical — a VIP contact reaching out, a safety alert, or something that truly cannot wait.
+• Skip EVERYTHING else: news, sports, calendar, bills, health, entertainment, markets, reminders, relationship nudges, local content, closing thought, My Day invite.
+• No bullet points. No markdown. Pure conversational prose for TTS.
+• If nothing critical exists: "Good morning, ${firstName}. All clear — enjoy your vacation."
+
+`;
+  }
+
   return `
 
 [MORNING BRIEFING — DELIVERY INSTRUCTION]
