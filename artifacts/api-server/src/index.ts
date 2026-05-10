@@ -469,10 +469,18 @@ app.listen(port, async (err) => {
     logger.warn({ e }, "Startup migration warning: push_subscriptions unique index");
   }
 
-  // companion_name migration removed — it used UPDATE...FROM (cross-table join) which
-  // the Supabase exec_sql client silently ignores, stripping the WHERE guard and
-  // unconditionally overwriting user-chosen companion names with 'Emma Peel' on every restart.
-  logger.info("Startup migration: companion_name check complete (migration removed)");
+  // Fix companion_name if it is still set to the old default 'Emma Peel'.
+  // Runs once per restart; idempotent — only updates rows that still carry the
+  // legacy value so user-chosen names (other than 'Emma Peel') are never touched.
+  try {
+    await query(
+      `UPDATE user_profiles SET companion_name = 'James Bond'
+       WHERE companion_name = 'Emma Peel' OR companion_name IS NULL`
+    );
+    logger.info("Startup migration: companion_name 'Emma Peel' → 'James Bond' (idempotent)");
+  } catch (e) {
+    logger.warn({ e }, "Startup migration warning: companion_name fix");
+  }
 
   // Migrate watched_shows rows stored under old user_name 'David' → 'davidblakelock'.
   // This happened when the system used a short display name instead of the login ID.

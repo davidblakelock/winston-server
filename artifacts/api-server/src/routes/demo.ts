@@ -4,7 +4,7 @@ import { logger } from "../lib/logger.js";
 
 const router: IRouter = Router();
 
-const EMMA_VOICE_ID = "56bWURjYFHyYyVf490Dp";
+const DEMO_VOICE_ID = "56bWURjYFHyYyVf490Dp";
 
 // ── POST /api/demo/speak — public, no auth, uses demo voice ──────────────────
 
@@ -25,7 +25,7 @@ router.post("/demo/speak", async (req: Request, res: Response) => {
 
   try {
     const upstream = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${EMMA_VOICE_ID}`,
+      `https://api.elevenlabs.io/v1/text-to-speech/${DEMO_VOICE_ID}`,
       {
         method: "POST",
         headers: {

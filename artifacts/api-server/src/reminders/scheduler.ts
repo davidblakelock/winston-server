@@ -65,7 +65,7 @@ export function startScheduler(): void {
 
         // ── 3. Look up companion name (used in both paths below) ──────────
         const profile = await getProfile(reminder.user_name).catch(() => null);
-        const companionName = profile?.companionName ?? "Your Companion";
+        const companionName = profile?.companionName ?? "James Bond";
 
         // ── 4a. Contact push — if this reminder is FOR a contact with Winston ──
         // Look up contact_push_links: finds the linked Winston user for the named contact.
