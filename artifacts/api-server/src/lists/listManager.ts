@@ -35,9 +35,20 @@ const CATEGORY_ORDER: Record<string, number> = Object.fromEntries(
 // ── DB migrations (idempotent) ────────────────────────────────────────────────
 
 export async function ensureListItemColumns(): Promise<void> {
-  await query(`ALTER TABLE list_items ADD COLUMN IF NOT EXISTS added_by text`).catch(() => {});
-  await query(`ALTER TABLE list_items ADD COLUMN IF NOT EXISTS category text`).catch(() => {});
-  logger.info("[Lists] list_items columns ensured (added_by, category)");
+  // These ALTERs are idempotent (IF NOT EXISTS). They may fail silently when
+  // Supabase REST is unavailable — that's acceptable because the columns are
+  // seeded in the base schema. If they do fail, we log a warning so it's visible.
+  const r1 = await query(`ALTER TABLE list_items ADD COLUMN IF NOT EXISTS added_by text`).catch((err) => {
+    logger.warn({ err }, "[Lists] Could not add added_by column — may already exist or DDL not supported");
+    return null;
+  });
+  const r2 = await query(`ALTER TABLE list_items ADD COLUMN IF NOT EXISTS category text`).catch((err) => {
+    logger.warn({ err }, "[Lists] Could not add category column — may already exist or DDL not supported");
+    return null;
+  });
+  if (r1 !== null && r2 !== null) {
+    logger.info("[Lists] list_items columns ensured (added_by, category)");
+  }
 }
 
 // ── Normalise list name for storage ──────────────────────────────────────────
@@ -205,8 +216,14 @@ Return raw JSON only — no markdown fences.`,
 
   if (!raw || raw === "null") return null;
 
+  // Strip markdown code fences that Haiku sometimes wraps around JSON
+  const cleaned = raw
+    .replace(/^```(?:json)?\s*\n?/i, "")
+    .replace(/\n?```\s*$/i, "")
+    .trim();
+
   try {
-    const parsed = JSON.parse(raw) as ListOp;
+    const parsed = JSON.parse(cleaned) as ListOp;
     if (!parsed.action || !parsed.listName) return null;
     parsed.listName = normaliseListName(parsed.listName);
     return parsed;

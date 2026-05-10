@@ -7,12 +7,42 @@ import {
   hasFiredToday,
   markFiredToday,
   saveTonightMessage,
+  type WinddownSettings,
 } from "./winddownManager.js";
+
 import { getProfile, getActiveUsers, type CollectedData } from "../onboarding/onboardingManager.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 import { fetchTodayEvents, fetchTomorrowEvents } from "../google/calendar.js";
 import { getMoodForToday } from "../mood/moodManager.js";
 import { logger } from "../lib/logger.js";
+
+// ── Settings cache ────────────────────────────────────────────────────────────
+// getSettings() calls Supabase REST. A transient "other side closed" network
+// drop used to crash the entire scheduler tick before it could fire the
+// evening check-in. Cache the last-known-good value so a blip in the Supabase
+// connection never prevents the 9 PM notification from going out.
+let _cachedSettings: WinddownSettings | null = null;
+let _settingsCacheTime = 0;
+const SETTINGS_CACHE_MS = 10 * 60 * 1000; // re-fetch at most every 10 min
+
+async function getSettingsCached(): Promise<WinddownSettings> {
+  const now = Date.now();
+  if (_cachedSettings && now - _settingsCacheTime < SETTINGS_CACHE_MS) {
+    return _cachedSettings;
+  }
+  try {
+    const fresh = await getSettings();
+    _cachedSettings = fresh;
+    _settingsCacheTime = now;
+    return fresh;
+  } catch (err) {
+    if (_cachedSettings) {
+      logger.warn({ err }, "Evening check-in: getSettings failed — using cached settings");
+      return _cachedSettings;
+    }
+    throw err; // no cached value yet — propagate so the outer catch logs it
+  }
+}
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -174,7 +204,7 @@ export async function generateOpeningMessage(
 export function startWinddownScheduler(): void {
   cron.schedule("* * * * *", async () => {
     try {
-      const settings = await getSettings();
+      const settings = await getSettingsCached();
 
       const tz = "America/Chicago";
       const now = new Date();

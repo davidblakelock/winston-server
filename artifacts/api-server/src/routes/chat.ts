@@ -3301,17 +3301,18 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         const result = await executeListOp(op, sessionUserName);
         const listContext = buildListContext(result);
         systemPrompt = systemPrompt + listContext;
-        req.log.info({ op, itemCount: result.currentItems.length }, "List operation executed");
+        req.log.info({ op, itemCount: result.currentItems.length, insertedCount: result.items.length }, "List operation executed");
         // Sync newly added "to do" items to Google Tasks (fire-and-forget)
         if (op.action === "add" && op.listName === "to do" && result.items.length > 0) {
           pushItemsToGoogleTasks(sessionUserName, result.items).catch(() => {});
         }
       } else {
+        req.log.warn({ message }, "List op — extractListOp returned null (could not parse)");
         systemPrompt = systemPrompt +
           `\n\n[List Request — Could Not Parse]\nCould not determine which list or operation was requested. Ask the user to clarify (e.g., "Which list — shopping or to do?"). Do NOT guess or invent any list items.`;
       }
     } catch (err) {
-      req.log.warn({ err }, "List operation failed");
+      req.log.warn({ err: err instanceof Error ? { message: (err as Error).message, stack: (err as Error).stack } : String(err) }, "List operation failed");
       systemPrompt = systemPrompt +
         `\n\n[List Request — Failed]\nThe list retrieval failed due to a system error. Tell the user: "I couldn't retrieve your list right now — please try again in a moment." Do NOT invent or guess any list items.`;
     }
