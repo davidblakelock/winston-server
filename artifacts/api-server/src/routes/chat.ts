@@ -220,7 +220,6 @@ import {
   type BriefingPreference,
 } from "../briefingPreferences/briefingPreferencesManager.js";
 import { preFetchMorningBriefing, buildCalendarDepartureTimes } from "../morning/briefingPregenerate.js";
-import { pushItemsToGoogleTasks } from "../google/tasks.js";
 import { populateCalendarSyncState } from "../departure/calendarSyncScheduler.js";
 import { logBriefingStories } from "../morning/storyDedup.js";
 import { getDallasItems, getLocalContentCity, type LocalContentItem } from "../morning/dallasContent.js";
@@ -3311,10 +3310,6 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         const listContext = buildListContext(result);
         systemPrompt = systemPrompt + listContext;
         req.log.info({ op, itemCount: result.currentItems.length, insertedCount: result.items.length }, "List operation executed");
-        // Sync newly added "to do" items to Google Tasks (fire-and-forget)
-        if (op.action === "add" && op.listName === "to do" && result.items.length > 0) {
-          pushItemsToGoogleTasks(sessionUserName, result.items).catch(() => {});
-        }
       } else {
         req.log.warn({ message }, "List op — extractListOp returned null (could not parse)");
         systemPrompt = systemPrompt +

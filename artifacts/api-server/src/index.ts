@@ -31,7 +31,6 @@ import { ensureContactsTable } from "./google/contacts";
 import { startGarminScheduler } from "./garmin/garminScheduler";
 import { ensureJournalInsightsTable, startJournalPatternScheduler } from "./journal/journalPatternAnalyzer";
 import { ensurePressureTable, startPressureScheduler } from "./weather/pressureScheduler";
-import { ensureTasksSyncTable } from "./google/tasks";
 import { ensureFitTable } from "./google/fit";
 import { ensureMoodTable } from "./mood/moodManager";
 import { ensureFollowupsTable } from "./followups/followupManager";
@@ -162,11 +161,10 @@ app.listen(port, async (err) => {
   }
 
   try {
-    await ensureTasksSyncTable();
     await ensureFitTable();
-    logger.info("[startup] google_tasks_sync and google_fit_data tables ready");
+    logger.info("[startup] google_fit_data table ready");
   } catch (e) {
-    logger.warn({ e }, "Google Tasks/Fit table initialization warning");
+    logger.warn({ e }, "Google Fit table initialization warning");
   }
 
   try {

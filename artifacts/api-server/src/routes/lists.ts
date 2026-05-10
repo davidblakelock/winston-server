@@ -2,11 +2,6 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import { query } from "../db.js";
 import { authenticate } from "../auth/middleware.js";
 import {
-  fullTasksSync,
-  pullTasksFromGoogle,
-  pushItemsToGoogleTasks,
-} from "../google/tasks.js";
-import {
   batchCategorizeItems,
   categorizeAndUpdateItem,
   syncListItemToConnections,
@@ -71,19 +66,6 @@ router.get("/lists", async (req: Request, res: Response) => {
   } catch (err) {
     req.log.warn({ err }, "Lists index GET error");
     res.status(500).json({ error: "Failed to fetch lists" });
-  }
-});
-
-// GET /api/tasks/sync — manual bidirectional sync with Google Tasks
-router.get("/tasks/sync", async (req: Request, res: Response) => {
-  const userName = await authenticate(req, res);
-  if (!userName) return;
-  try {
-    const result = await fullTasksSync(userName);
-    res.json({ ok: true, fromGoogle: result.fromGoogle, toGoogle: result.toGoogle });
-  } catch (err) {
-    req.log.warn({ err }, "Tasks sync error");
-    res.status(500).json({ error: "Failed to sync Google Tasks" });
   }
 });
 
@@ -378,7 +360,6 @@ router.post("/lists/shopping/categorize", async (req: Request, res: Response) =>
 router.get("/lists/todo", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
-  pullTasksFromGoogle(userName).catch(() => {});
   try {
     const { rows } = await query<{ id: number; item_text: string; added_by: string | null; created_at: string }>(
       `SELECT id, item_text, added_by, created_at FROM list_items
@@ -407,7 +388,6 @@ router.post("/lists/todo", async (req: Request, res: Response) => {
        RETURNING id, item_text, added_by, created_at`,
       [userName, item.trim()]
     );
-    pushItemsToGoogleTasks(userName, [item.trim()]).catch(() => {});
     syncListItemToConnections("to do", [item.trim()], userName).catch(() => {});
     res.json({ item: rows[0] });
   } catch (err) {
@@ -439,9 +419,6 @@ router.get("/lists/:listName", async (req: Request, res: Response) => {
   if (!userName) return;
   const { listName } = req.params;
   try {
-    if (listName === "to do" || listName === "to%20do") {
-      pullTasksFromGoogle(userName).catch(() => {});
-    }
     const { rows } = await query<{ id: number; item_text: string; added_by: string | null; created_at: string }>(
       `SELECT id, item_text, added_by, created_at
        FROM list_items
@@ -475,9 +452,6 @@ router.post("/lists/:listName", async (req: Request, res: Response) => {
        RETURNING id, item_text, added_by, created_at`,
       [userName, listName, item.trim()]
     );
-    if (listName === "to do" && rows[0]) {
-      pushItemsToGoogleTasks(userName, [item.trim()]).catch(() => {});
-    }
     res.json({ item: rows[0] });
   } catch (err) {
     req.log.warn({ err }, "Lists POST error");
