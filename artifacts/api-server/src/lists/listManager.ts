@@ -374,9 +374,11 @@ export function buildListContext(result: ListResult): string {
       return (
         `\n\n[List updated — ${displayName} — AUTHORITATIVE CURRENT STATE FROM SUPABASE]\n` +
         `Added: ${added}${dupeNote}\n` +
-        `Current list (these are the ONLY items that exist — disregard anything mentioned earlier in this conversation):\n${remaining}\n` +
-        `Confirm warmly what was added. If you read back the list, read ONLY the items above. ` +
-        `Do NOT suggest additional items. Do NOT invent context, recipes, or dinner plans.`
+        `Current list (for reference only — do NOT read this back unprompted):\n${remaining}\n` +
+        `RESPONSE RULES: Confirm what was just added in one brief, warm sentence (e.g. "Done — eggs are on your list."). ` +
+        `Do NOT read back the full list. Do NOT mention other items already on the list. ` +
+        `Do NOT suggest additional items. Do NOT invent context, recipes, or dinner plans. ` +
+        `If the user explicitly asks what's on the list, then you may read the current list above.`
       );
     }
     case "remove": {

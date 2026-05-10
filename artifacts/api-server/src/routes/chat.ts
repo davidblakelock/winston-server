@@ -2966,10 +2966,19 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       ? `Mention ${_familyNames.join(", ")} by name.`
       : "";
 
+    // Utility-only requests (list adds/reads, medication, reminders) should
+    // never trigger the full evening check-in script — the user just wants
+    // the task done. isEveningGreeting still allows the check-in to start.
+    const isUtilityOnlyRequest =
+      (isListRequest && !isEveningGreeting) ||
+      isMedRequest ||
+      (isReminderRequest && !isEveningGreeting) ||
+      isReminderListRequest;
+
     // Skip the evening check-in system prompt when a text message flow is
     // active — T006 context already in systemPrompt takes priority.
     // Also handle the auto-listen no-response case with a brief witty skip line.
-    if (!isTextFlowActive && isCheckinNoResponse) {
+    if (!isUtilityOnlyRequest && !isTextFlowActive && isCheckinNoResponse) {
       systemPrompt +=
         `\n\n[Evening Check-In — Auto-Listen: No Response]\n` +
         `${userProfile?.name ?? "The user"}'s device was listening for 6 seconds and picked up nothing — they may be distracted, ` +
@@ -2982,7 +2991,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         `• "Moving on, then. The evening won't wait forever."\n` +
         `Match the tone, find a fresh line.\n` +
         todayCalendarBlock + tomorrowCalendarBlock;
-    } else if (!isTextFlowActive) systemPrompt +=
+    } else if (!isUtilityOnlyRequest && !isTextFlowActive) systemPrompt +=
       `\n\n[Evening Check-In — ACTIVE]\n` +
       `Write ONE warm, natural evening check-in message. ` +
       `This is a genuine end-of-day conversation — not a checklist, not a structured report. ` +
