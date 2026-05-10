@@ -4211,6 +4211,10 @@ router.post("/chat", chatHandlerCore);
 // ── /api/chat-native ─────────────────────────────────────────────────────────
 // Identical to /chat but returns a single JSON object {"response":"<full text>"}
 // instead of streaming SSE events. For use by native mobile clients.
+// GET — connectivity/health check used by the native app before sending a POST.
+router.get("/chat-native", (_req: Request, res: Response) => {
+  res.json({ ok: true, status: "ready" });
+});
 router.post("/chat-native", (req: Request, res: Response) => {
   (req as any)._nativeMode = true;
   return chatHandlerCore(req, res);

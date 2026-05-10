@@ -467,17 +467,23 @@ app.listen(port, async (err) => {
     logger.warn({ e }, "Startup migration warning: push_subscriptions unique index");
   }
 
-  // Fix companion_name if it is still set to the old default 'Emma Peel'.
-  // Runs once per restart; idempotent — only updates rows that still carry the
-  // legacy value so user-chosen names (other than 'Emma Peel') are never touched.
+  // Restore companion_name and voice_id for davidblakelock if they've been wiped.
+  // Idempotent — companion_name only touched when it's still the old default or NULL;
+  // voice_id only touched when NULL so a user-chosen voice is never overwritten.
   try {
     await query(
       `UPDATE user_profiles SET companion_name = 'James Bond'
-       WHERE companion_name = 'Emma Peel' OR companion_name IS NULL`
+       WHERE user_name = 'davidblakelock'
+         AND (companion_name = 'Emma Peel' OR companion_name IS NULL)`
     );
-    logger.info("Startup migration: companion_name 'Emma Peel' → 'James Bond' (idempotent)");
+    await query(
+      `UPDATE user_profiles SET voice_id = 'Fahco4VZzobUeiPqni1S'
+       WHERE user_name = 'davidblakelock'
+         AND voice_id IS NULL`
+    );
+    logger.info("Startup migration: davidblakelock profile defaults ensured (companion_name + voice_id)");
   } catch (e) {
-    logger.warn({ e }, "Startup migration warning: companion_name fix");
+    logger.warn({ e }, "Startup migration warning: profile defaults fix");
   }
 
   // Migrate watched_shows rows stored under old user_name 'David' → 'davidblakelock'.
