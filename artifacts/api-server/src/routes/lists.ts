@@ -265,6 +265,36 @@ router.delete("/lists/restaurants/:id", async (req: Request, res: Response) => {
   }
 });
 
+// PUT /api/lists/restaurants/:id — update a restaurant name and/or url
+router.put("/lists/restaurants/:id", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const { id } = req.params;
+  const { item, url: rawUrl } = req.body as { item?: string; url?: string };
+  if (!item?.trim()) {
+    res.status(400).json({ error: "item is required" });
+    return;
+  }
+  const manualUrl = rawUrl?.trim() || null;
+  try {
+    const { rows } = await query<{ id: number; name: string; url: string | null }>(
+      `UPDATE profile_items
+       SET name = $1, url = COALESCE($2, url)
+       WHERE id = $3 AND user_name = $4 AND category = 'restaurants'
+       RETURNING id, name, url`,
+      [item.trim(), manualUrl, id, userName]
+    );
+    if (rows.length === 0) {
+      res.status(404).json({ error: "Restaurant not found" });
+      return;
+    }
+    res.json({ item: { id: rows[0].id, item_text: rows[0].name, url: rows[0].url } });
+  } catch (err) {
+    req.log.warn({ err }, "Restaurants list PUT error");
+    res.status(500).json({ error: "Failed to update restaurant" });
+  }
+});
+
 // ── Shopping — dedicated routes (Feature 2: auto-categorize + Feature 1: sync)
 // MUST be before the /lists/:listName wildcard.
 
@@ -777,6 +807,36 @@ router.post("/lists/:listName", async (req: Request, res: Response) => {
   } catch (err) {
     req.log.warn({ err }, "Lists POST error");
     res.status(500).json({ error: "Failed to add item" });
+  }
+});
+
+// PUT /api/lists/:listName/:id — update an existing item's text and/or url
+router.put("/lists/:listName/:id", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const { listName, id } = req.params;
+  const { item, url: rawUrl } = req.body as { item?: string; url?: string };
+  if (!item?.trim()) {
+    res.status(400).json({ error: "item is required" });
+    return;
+  }
+  const manualUrl = rawUrl?.trim() || null;
+  try {
+    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string }>(
+      `UPDATE list_items
+       SET item_text = $1, url = COALESCE($2, url)
+       WHERE id = $3 AND user_name = $4 AND list_name = $5
+       RETURNING id, item_text, added_by, url, created_at`,
+      [item.trim(), manualUrl, id, userName, listName]
+    );
+    if (rows.length === 0) {
+      res.status(404).json({ error: "Item not found" });
+      return;
+    }
+    res.json({ item: rows[0] });
+  } catch (err) {
+    req.log.warn({ err }, "Lists PUT error");
+    res.status(500).json({ error: "Failed to update item" });
   }
 });
 
