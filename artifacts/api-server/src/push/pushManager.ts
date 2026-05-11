@@ -332,6 +332,10 @@ async function sendExpoNotifications(
       ...(payload.alertExpires ? { alertExpires: payload.alertExpires } : {}),
       // autoSendMessage: native app sends this text automatically when tapped (no user typing).
       ...(payload.autoSendMessage ? { autoSendMessage: payload.autoSendMessage } : {}),
+      // Mirror categoryId in data so the native app can read it from either location.
+      // Some Expo versions surface notification.request.content.categoryIdentifier unreliably;
+      // data.categoryId is always accessible in the response handler.
+      ...(payload.categoryId ? { categoryId: payload.categoryId } : {}),
     },
   }));
 
