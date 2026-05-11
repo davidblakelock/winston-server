@@ -14,6 +14,7 @@ const router: IRouter = Router();
 router.get("/lists", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
+  res.setHeader("Cache-Control", "no-store");
   try {
     // Shopping and To Do — from list_items
     const { rows: listRows } = await query<{ list_name: string; item_count: string }>(
@@ -160,6 +161,7 @@ router.delete("/lists/tv-shows/:id", async (req: Request, res: Response) => {
 router.get("/lists/restaurants", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
+  res.setHeader("Cache-Control", "no-store");
   try {
     const { rows } = await query<{ id: number; name: string; detail: string | null; created_at: string }>(
       `SELECT id, name, detail, created_at
@@ -241,6 +243,7 @@ interface ShoppingItem {
 router.get("/lists/shopping", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
+  res.setHeader("Cache-Control", "no-store");
   try {
     const { rows } = await query<ShoppingItem>(
       `SELECT id, item_text, category, added_by, created_at
@@ -360,6 +363,7 @@ router.post("/lists/shopping/categorize", async (req: Request, res: Response) =>
 router.get("/lists/todo", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
+  res.setHeader("Cache-Control", "no-store");
   try {
     const { rows } = await query<{ id: number; item_text: string; added_by: string | null; created_at: string }>(
       `SELECT id, item_text, added_by, created_at FROM list_items
@@ -417,6 +421,7 @@ router.delete("/lists/todo/:id", async (req: Request, res: Response) => {
 router.get("/lists/:listName", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
+  res.setHeader("Cache-Control", "no-store");
   const { listName } = req.params;
   try {
     const { rows } = await query<{ id: number; item_text: string; added_by: string | null; created_at: string }>(
