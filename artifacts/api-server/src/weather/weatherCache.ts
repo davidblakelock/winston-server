@@ -128,7 +128,7 @@ async function fetchFromGoogle(city: string, lat: number, lon: number): Promise<
   // shifts days, but the first entry will always be tomorrow (day 1).
   const todayCT = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(new Date());
 
-  const mappedForecastDays: ForecastDay[] = upcoming.map((day) => {
+  const mappedForecastDays: ForecastDay[] = upcoming.map((day, index) => {
     const d = day.displayDate;
     let dayName = "—";
     let dateStr = "";
@@ -138,7 +138,11 @@ async function fetchFromGoogle(city: string, lat: number, lon: number): Promise<
       // e.g. new Date(2026,4,2) = midnight UTC = 7 PM May 1 CDT → wrong "Friday" label.
       // new Date("2026-05-02T12:00:00Z") = noon UTC = 7 AM May 2 CDT → correct "Saturday".
       const dateObj = new Date(`${dateStr}T12:00:00Z`);
-      dayName = dateObj.toLocaleDateString("en-US", { timeZone: "America/Chicago", weekday: "long" });
+      // First entry is always the next calendar day — label it "Tomorrow" so the
+      // native app doesn't have to translate the weekday name itself.
+      dayName = index === 0
+        ? "Tomorrow"
+        : dateObj.toLocaleDateString("en-US", { timeZone: "America/Chicago", weekday: "long" });
     }
     return {
       dayName,
