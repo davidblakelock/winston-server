@@ -17,6 +17,7 @@ import {
   getSharedWithUser,
   getRequesterLabel,
 } from "../lists/listShareManager.js";
+import { autoUpdateItemUrl, autoUpdateRestaurantUrl, detectAutoLookupType } from "../lists/autoUrlLookup.js";
 import { sendPushToAll } from "../push/pushManager.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -189,8 +190,8 @@ router.get("/lists/restaurants", async (req: Request, res: Response) => {
   if (!userName) return;
   res.setHeader("Cache-Control", "no-store");
   try {
-    const { rows } = await query<{ id: number; name: string; detail: string | null; created_at: string }>(
-      `SELECT id, name, detail, created_at
+    const { rows } = await query<{ id: number; name: string; detail: string | null; url: string | null; created_at: string }>(
+      `SELECT id, name, detail, url, created_at
        FROM profile_items
        WHERE user_name = $1 AND category = 'restaurants'
        ORDER BY created_at DESC`,
@@ -201,6 +202,7 @@ router.get("/lists/restaurants", async (req: Request, res: Response) => {
         id: r.id,
         item_text: r.name,
         detail: r.detail ?? null,
+        url: r.url ?? null,
         created_at: r.created_at,
       })),
     });
@@ -211,26 +213,35 @@ router.get("/lists/restaurants", async (req: Request, res: Response) => {
 });
 
 // POST /api/lists/restaurants
+// Accepts optional manual url; if none provided, auto-looks up via Google Places API.
 router.post("/lists/restaurants", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
-  const item = (req.body?.item ?? "").trim();
+  const { item: rawItem, url: rawUrl } = req.body as { item?: string; url?: string };
+  const item = (rawItem ?? "").trim();
   if (!item) return res.status(400).json({ error: "item required" });
+  const manualUrl = rawUrl?.trim() || null;
   try {
     const { rows } = await query<{ id: number; name: string }>(
-      `INSERT INTO profile_items (user_name, category, name, detail)
-       SELECT $1, 'restaurants', $2, NULL
+      `INSERT INTO profile_items (user_name, category, name, detail, url)
+       SELECT $1, 'restaurants', $2, NULL, $3
        WHERE NOT EXISTS (
          SELECT 1 FROM profile_items
          WHERE user_name = $1 AND category = 'restaurants' AND lower(name) = lower($2)
        )
        RETURNING id, name`,
-      [userName, item]
+      [userName, item, manualUrl]
     );
     if (rows.length === 0) {
       return res.status(409).json({ error: "Restaurant already in list" });
     }
-    res.json({ item: { id: rows[0].id, item_text: rows[0].name, created_at: new Date().toISOString() } });
+    const newItem = rows[0];
+
+    if (!manualUrl) {
+      autoUpdateRestaurantUrl(newItem.id, newItem.name).catch(() => {});
+    }
+
+    res.json({ item: { id: newItem.id, item_text: newItem.name, url: manualUrl, created_at: new Date().toISOString() } });
   } catch (err) {
     req.log.warn({ err }, "Restaurants list POST error");
     res.status(500).json({ error: "Failed to add restaurant" });
@@ -301,7 +312,8 @@ router.get("/lists/shopping", async (req: Request, res: Response) => {
 router.post("/lists/shopping", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
-  const { item, url, ownerUserName } = req.body as { item?: string; url?: string; ownerUserName?: string };
+  const { item, url: rawUrl, ownerUserName } = req.body as { item?: string; url?: string; ownerUserName?: string };
+  const manualUrl = rawUrl?.trim() || null;
   if (!item?.trim()) { res.status(400).json({ error: "item is required" }); return; }
 
   const targetUser = ownerUserName?.trim() ?? userName;
@@ -336,7 +348,7 @@ router.post("/lists/shopping", async (req: Request, res: Response) => {
        VALUES ($1, 'shopping', $2, $3, $4)
        ON CONFLICT (user_name, list_name, lower(item_text)) DO NOTHING
        RETURNING id, item_text, category, added_by, url, created_at`,
-      [targetUser, item.trim(), addedByLabel, url?.trim() ?? null]
+      [targetUser, item.trim(), addedByLabel, manualUrl]
     );
     const newItem = rows[0];
     if (newItem) {
@@ -362,9 +374,10 @@ router.post("/lists/shopping", async (req: Request, res: Response) => {
       `INSERT INTO list_items (user_name, list_name, item_text, url)
        VALUES ($1, 'shopping', $2, $3)
        ON CONFLICT (user_name, list_name, lower(item_text))
-       DO UPDATE SET item_text = EXCLUDED.item_text, url = COALESCE(EXCLUDED.url, list_items.url)
+       DO UPDATE SET item_text = EXCLUDED.item_text,
+                     url = CASE WHEN EXCLUDED.url IS NOT NULL THEN EXCLUDED.url ELSE list_items.url END
        RETURNING id, item_text, category, added_by, url, created_at`,
-      [userName, item.trim(), url?.trim() ?? null]
+      [userName, item.trim(), manualUrl]
     );
     const newItem = rows[0];
 
@@ -461,7 +474,8 @@ router.get("/lists/todo", async (req: Request, res: Response) => {
 router.post("/lists/todo", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
-  const { item, url, ownerUserName } = req.body as { item?: string; url?: string; ownerUserName?: string };
+  const { item, url: rawTodoUrl, ownerUserName } = req.body as { item?: string; url?: string; ownerUserName?: string };
+  const manualUrl = rawTodoUrl?.trim() || null;
   if (!item?.trim()) { res.status(400).json({ error: "item is required" }); return; }
 
   const targetUser = ownerUserName?.trim() ?? userName;
@@ -496,7 +510,7 @@ router.post("/lists/todo", async (req: Request, res: Response) => {
        VALUES ($1, 'to do', $2, $3, $4)
        ON CONFLICT (user_name, list_name, lower(item_text)) DO NOTHING
        RETURNING id, item_text, added_by, url, created_at`,
-      [targetUser, item.trim(), addedByLabel, url?.trim() ?? null]
+      [targetUser, item.trim(), addedByLabel, manualUrl]
     );
     const newItem = rows[0];
     if (newItem) {
@@ -521,9 +535,10 @@ router.post("/lists/todo", async (req: Request, res: Response) => {
       `INSERT INTO list_items (user_name, list_name, item_text, url)
        VALUES ($1, 'to do', $2, $3)
        ON CONFLICT (user_name, list_name, lower(item_text))
-       DO UPDATE SET item_text = EXCLUDED.item_text, url = COALESCE(EXCLUDED.url, list_items.url)
+       DO UPDATE SET item_text = EXCLUDED.item_text,
+                     url = CASE WHEN EXCLUDED.url IS NOT NULL THEN EXCLUDED.url ELSE list_items.url END
        RETURNING id, item_text, added_by, url, created_at`,
-      [userName, item.trim(), url?.trim() ?? null]
+      [userName, item.trim(), manualUrl]
     );
     syncListItemToConnections("to do", [item.trim()], userName).catch(() => {});
     res.json({ item: rows[0] });
@@ -722,6 +737,9 @@ Return JSON array only:`;
 });
 
 // POST /api/lists/:listName — add an item
+// - Manual url field is saved as-is when provided.
+// - For auto-lookup list types (movies, books, restaurants, recipes, tv shows),
+//   if no url is supplied, a URL is looked up in the background after insert.
 router.post("/lists/:listName", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
@@ -731,16 +749,31 @@ router.post("/lists/:listName", async (req: Request, res: Response) => {
     res.status(400).json({ error: "item is required" });
     return;
   }
+
+  const manualUrl = url?.trim() || null;
+  const isAutoLookupList = !manualUrl && !!detectAutoLookupType(listName);
+
   try {
     const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string }>(
       `INSERT INTO list_items (user_name, list_name, item_text, url)
        VALUES ($1, $2, $3, $4)
        ON CONFLICT (user_name, list_name, lower(item_text))
-       DO UPDATE SET item_text = EXCLUDED.item_text, url = COALESCE(EXCLUDED.url, list_items.url)
+       DO UPDATE SET item_text = EXCLUDED.item_text,
+                     url = CASE
+                             WHEN EXCLUDED.url IS NOT NULL THEN EXCLUDED.url
+                             ELSE list_items.url
+                           END
        RETURNING id, item_text, added_by, url, created_at`,
-      [userName, listName, item.trim(), url?.trim() ?? null]
+      [userName, listName, item.trim(), manualUrl]
     );
-    res.json({ item: rows[0] });
+    const newItem = rows[0];
+
+    if (newItem && isAutoLookupList) {
+      autoUpdateItemUrl(newItem.id, newItem.item_text, listName).catch(() => {});
+    }
+
+    req.log.info({ userName, listName, item: item.trim(), manualUrl, isAutoLookupList }, "[Lists] Item added");
+    res.json({ item: newItem });
   } catch (err) {
     req.log.warn({ err }, "Lists POST error");
     res.status(500).json({ error: "Failed to add item" });

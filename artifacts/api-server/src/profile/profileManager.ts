@@ -60,6 +60,9 @@ export async function ensureProfileTable(): Promise<void> {
     CREATE INDEX IF NOT EXISTS profile_items_user_idx
     ON profile_items (user_name, category)
   `).catch(() => {});
+  await query(`
+    ALTER TABLE profile_items ADD COLUMN IF NOT EXISTS url text
+  `).catch(() => {});
 }
 
 // Use Claude to extract structured profile operation from natural language
