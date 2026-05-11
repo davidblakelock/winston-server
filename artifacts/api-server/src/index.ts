@@ -49,7 +49,7 @@ import { ensureProactiveModeTable } from "./proactiveMode/proactiveModeManager";
 import { ensureContactCommunicationLogTable } from "./intelligence/crossDomainEngine";
 import { ensureNotificationVipsTable } from "./push/notificationVips";
 import { ensureFocusModeTable } from "./push/focusMode";
-import { ensureDigestLogTable, startDigestScheduler } from "./push/digestScheduler";
+import { startBackgroundEmailScanner } from "./email/backgroundEmailScanner";
 import { ensureSavedPlacesTable } from "./location/geofenceManager";
 import { ensureListItemColumns } from "./lists/listManager";
 
@@ -306,8 +306,7 @@ app.listen(port, async (err) => {
   try {
     await ensureNotificationVipsTable();
     await ensureFocusModeTable();
-    await ensureDigestLogTable();
-    logger.info("[startup] notification VIPs, focus mode, digest log tables ready");
+    logger.info("[startup] notification VIPs and focus mode tables ready");
   } catch (e) {
     logger.warn({ e }, "Notification intelligence tables initialization warning");
   }
@@ -383,7 +382,7 @@ app.listen(port, async (err) => {
   startJournalPatternScheduler();
   startPressureScheduler();
   startOrderTrackingScheduler();
-  startDigestScheduler();
+  startBackgroundEmailScanner();
 
   // Seed David's music preferences into profile_items so they persist and
   // can be referenced in any conversation naturally.

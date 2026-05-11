@@ -14,10 +14,9 @@ import { getCuratedContacts } from "../google/contacts.js";
 import { query } from "../db.js";
 import { clearStaticBriefingContext, clearCachedBriefing } from "../morning/briefingCache.js";
 import { preFetchMorningBriefing } from "../morning/briefingPregenerate.js";
-import { getProactiveMode, setProactiveMode, isValidMode, getDigestInterval, setDigestInterval } from "../proactiveMode/proactiveModeManager.js";
+import { getProactiveMode, setProactiveMode, isValidMode } from "../proactiveMode/proactiveModeManager.js";
 import { getVipContacts, addVipContact, removeVipContact, isVipSender } from "../push/notificationVips.js";
 import { getFocusMode, enableFocusMode, disableFocusMode } from "../push/focusMode.js";
-import { assembleAndSendDigest } from "../push/digestScheduler.js";
 
 const router: IRouter = Router();
 
@@ -560,27 +559,6 @@ router.post("/settings/proactive-mode", express.json(), async (req, res) => {
   res.json({ ok: true, mode });
 });
 
-// ── GET /api/settings/digest-interval ────────────────────────────────────────
-router.get("/settings/digest-interval", async (req, res) => {
-  const userName = await authenticate(req, res);
-  if (!userName) return;
-  const intervalMinutes = await getDigestInterval(userName);
-  res.json({ intervalMinutes });
-});
-
-// ── POST /api/settings/digest-interval ───────────────────────────────────────
-router.post("/settings/digest-interval", express.json(), async (req, res) => {
-  const userName = await authenticate(req, res);
-  if (!userName) return;
-  const { intervalMinutes } = req.body as { intervalMinutes?: unknown };
-  if (typeof intervalMinutes !== "number" || !Number.isInteger(intervalMinutes) || intervalMinutes < 15 || intervalMinutes > 1440) {
-    res.status(400).json({ error: "intervalMinutes must be an integer between 15 and 1440" });
-    return;
-  }
-  await setDigestInterval(userName, intervalMinutes);
-  res.json({ ok: true, intervalMinutes });
-});
-
 // ── GET /api/settings/vip-contacts ───────────────────────────────────────────
 router.get("/settings/vip-contacts", async (req, res) => {
   const userName = await authenticate(req, res);
@@ -660,66 +638,6 @@ router.post("/settings/focus-mode", express.json(), async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "[FocusMode] Failed to update focus mode");
     res.status(500).json({ error: "Failed to update focus mode" });
-  }
-});
-
-// ── POST /api/notifications/digest ───────────────────────────────────────────
-router.post("/notifications/digest", async (req, res) => {
-  const userName = await authenticate(req, res);
-  if (!userName) return;
-  try {
-    const result = await assembleAndSendDigest(userName);
-    res.json({ ok: true, ...result });
-  } catch (err) {
-    req.log.error({ err }, "[Digest] Manual digest trigger failed");
-    res.status(500).json({ error: "Failed to assemble digest" });
-  }
-});
-
-// ── POST /api/sms/digest ──────────────────────────────────────────────────────
-// Accepts incoming SMS messages, matches against VIP list, returns triage result.
-router.post("/sms/digest", express.json(), async (req, res) => {
-  const userName = await authenticate(req, res);
-  if (!userName) return;
-
-  const { messages } = req.body as {
-    messages?: Array<{ from?: string; phone?: string; email?: string; body?: string; timestamp?: string }>;
-  };
-
-  if (!Array.isArray(messages)) {
-    res.status(400).json({ error: "messages array required" });
-    return;
-  }
-
-  try {
-    const vips = await getVipContacts(userName);
-    const triaged = messages.map((m) => {
-      const vip = isVipSender(vips, m.from, m.phone, m.email);
-      return {
-        from: m.from ?? "Unknown",
-        body: m.body ?? "",
-        timestamp: m.timestamp ?? new Date().toISOString(),
-        isVip: vip,
-        action: vip ? "immediate_push" : "hold_for_digest",
-      };
-    });
-
-    const vipMessages = triaged.filter((t) => t.isVip);
-    const heldMessages = triaged.filter((t) => !t.isVip);
-
-    res.json({
-      triaged,
-      summary: {
-        total: messages.length,
-        vipCount: vipMessages.length,
-        heldCount: heldMessages.length,
-        vipMessages: vipMessages.map((m) => ({ from: m.from, body: m.body })),
-        heldForDigest: heldMessages.map((m) => ({ from: m.from, body: m.body })),
-      },
-    });
-  } catch (err) {
-    req.log.error({ err }, "[SMS] Digest triage failed");
-    res.status(500).json({ error: "SMS triage failed" });
   }
 });
 

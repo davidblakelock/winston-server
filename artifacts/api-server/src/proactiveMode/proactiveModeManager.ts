@@ -24,45 +24,6 @@ export async function ensureProactiveModeTable(): Promise<void> {
   logger.info("[ProactiveMode] Table ready");
 }
 
-const DEFAULT_DIGEST_INTERVAL = 120;
-const MIN_DIGEST_INTERVAL = 15;
-const MAX_DIGEST_INTERVAL = 1440;
-
-export async function getDigestInterval(userName: string): Promise<number> {
-  try {
-    const { rows } = await query<{ digest_interval_minutes: number }>(
-      `SELECT digest_interval_minutes FROM user_proactive_settings WHERE user_name = $1`,
-      [userName]
-    );
-    const val = rows[0]?.digest_interval_minutes;
-    if (typeof val === "number" && val >= MIN_DIGEST_INTERVAL) return val;
-    return DEFAULT_DIGEST_INTERVAL;
-  } catch {
-    return DEFAULT_DIGEST_INTERVAL;
-  }
-}
-
-export async function setDigestInterval(userName: string, minutes: number): Promise<void> {
-  await query(
-    `INSERT INTO user_proactive_settings (user_name, digest_interval_minutes, updated_at)
-     VALUES ($1, $2, now())
-     ON CONFLICT (user_name) DO UPDATE SET digest_interval_minutes = $2, updated_at = now()`,
-    [userName, minutes]
-  );
-  logger.info({ userName, minutes }, "[DigestInterval] Interval updated");
-}
-
-// ── Digest interval derived from mode ─────────────────────────────────────────
-
-export function getIntervalForMode(mode: ProactiveMode): number {
-  switch (mode) {
-    case "whisper":  return 240;  // 4 hours
-    case "balanced": return 120;  // 2 hours
-    case "full":     return 60;   // 1 hour
-    case "vacation": return 1440; // once daily (on-demand via chat)
-  }
-}
-
 // ── Push notification categories ───────────────────────────────────────────────
 //   "always"         — sent in ALL modes (safety-critical, morning briefing)
 //   "time-sensitive" — suppressed in whisper; sent in balanced, full, vacation
@@ -72,7 +33,6 @@ const NOTIFICATION_CATEGORY_MAP: Record<string, "always" | "time-sensitive" | "p
   "morning-briefing": "always",
   "medication":       "always",
   "weather-alert":    "always",
-  "digest":           "always",        // interval itself is mode-controlled
   "departure":        "time-sensitive",
   "reminder":         "time-sensitive",
   "bill-reminder":    "time-sensitive",
