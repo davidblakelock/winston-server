@@ -220,6 +220,7 @@ import {
   type BriefingPreference,
 } from "../briefingPreferences/briefingPreferencesManager.js";
 import { preFetchMorningBriefing, buildCalendarDepartureTimes } from "../morning/briefingPregenerate.js";
+import { getProactiveMode, buildModeInstruction } from "../proactiveMode/proactiveModeManager.js";
 import { populateCalendarSyncState } from "../departure/calendarSyncScheduler.js";
 import { logBriefingStories } from "../morning/storyDedup.js";
 import { getDallasItems, getLocalContentCity, type LocalContentItem } from "../morning/dallasContent.js";
@@ -1122,6 +1123,27 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       return;
     }
 
+    // ── Delivery-time proactive mode ────────────────────────────────────────────
+    // Re-read the current mode every delivery so changes made after pre-generation
+    // (e.g. user switched from balanced → whisper during the day) take effect
+    // immediately without waiting for tomorrow's pre-gen cycle.
+    //
+    // max_tokens per mode:
+    //   whisper      — 450  (~3-4 sentences)
+    //   balanced     — 1500 (current full briefing)
+    //   full_partner — 2000 (full + cross-domain insights)
+    //   vacation     — 200  (~1-2 sentences)
+    const deliveryProactiveMode = await getProactiveMode(sessionUserName).catch(() => "balanced" as const);
+    const deliveryFirstName = userProfile?.name?.split(" ")[0] ?? "there";
+    const deliveryMaxTokens =
+      deliveryProactiveMode === "whisper"      ? 450  :
+      deliveryProactiveMode === "vacation"     ? 200  :
+      deliveryProactiveMode === "full_partner" ? 2000 :
+      1500;
+    // Appending the mode instruction at delivery time overrides whatever mode was
+    // baked into the static preamble at pre-gen time. This handles mode changes mid-day.
+    const deliveryModeInstruction = buildModeInstruction(deliveryProactiveMode, deliveryFirstName);
+
     if (!isNativeMorning) {
       // ── SSE headers sent IMMEDIATELY — prevents proxy first-byte timeout ──
       res.setHeader("Content-Type", "text/event-stream");
@@ -1319,8 +1341,10 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     const livePreamble = getCurrentDateTimeBlock() + "\n" +
       staticCtx.preamble.replace(/^\[Current date and time[^\[]+/, "");
 
-    // Assemble full system prompt: pre-built static preamble + live blocks + static suffix
-    const fullSystemPrompt = livePreamble + liveGmailBlock + meetingRequestsBlock + liveCalendarBlock + staticCtx.suffix;
+    // Assemble full system prompt: pre-built static preamble + live blocks + static suffix +
+    // delivery-time mode instruction (overrides any mode instruction baked into the suffix).
+    const deliverySuffix = staticCtx.suffix + deliveryModeInstruction;
+    const fullSystemPrompt = livePreamble + liveGmailBlock + meetingRequestsBlock + liveCalendarBlock + deliverySuffix;
 
     req.log.info(
       { promptChars: fullSystemPrompt.length, hasEmail: !!liveGmailBlock, hasCalendar: !!liveCalendarBlock },
@@ -1334,8 +1358,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       const [nativeBriefing, morningActionsResult] = await Promise.all([
         anthropic.messages.create({
           model: MODEL_HAIKU,
-          max_tokens: 1500,
-          system: buildSystemBlocks(livePreamble, liveGmailBlock + meetingRequestsBlock + liveCalendarBlock + staticCtx.suffix),
+          max_tokens: deliveryMaxTokens,
+          system: buildSystemBlocks(livePreamble, liveGmailBlock + meetingRequestsBlock + liveCalendarBlock + deliverySuffix),
           messages: [{ role: "user", content: "good morning" }],
         }),
         morningActionsPromise,
@@ -1361,8 +1385,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     let fullBriefingText = "";
     const stream = anthropic.messages.stream({
       model: MODEL_HAIKU,
-      max_tokens: 1500,
-      system: buildSystemBlocks(livePreamble, liveGmailBlock + meetingRequestsBlock + liveCalendarBlock + staticCtx.suffix),
+      max_tokens: deliveryMaxTokens,
+      system: buildSystemBlocks(livePreamble, liveGmailBlock + meetingRequestsBlock + liveCalendarBlock + deliverySuffix),
       messages: [{ role: "user", content: "good morning" }],
     });
 

@@ -1,9 +1,9 @@
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 
-export type ProactiveMode = "whisper" | "balanced" | "full" | "vacation";
+export type ProactiveMode = "whisper" | "balanced" | "full_partner" | "vacation";
 
-const VALID_MODES: readonly ProactiveMode[] = ["whisper", "balanced", "full", "vacation"];
+const VALID_MODES: readonly ProactiveMode[] = ["whisper", "balanced", "full_partner", "vacation"];
 
 export function isValidMode(m: unknown): m is ProactiveMode {
   return typeof m === "string" && (VALID_MODES as readonly string[]).includes(m);
@@ -25,14 +25,17 @@ export async function ensureProactiveModeTable(): Promise<void> {
 }
 
 // ── Push notification categories ───────────────────────────────────────────────
-//   "always"         — sent in ALL modes (safety-critical, morning briefing)
-//   "time-sensitive" — suppressed in whisper; sent in balanced, full, vacation
-//   "proactive"      — sent only in full and vacation
+//   "always"         — sent in ALL modes (safety-critical, morning briefing, urgent)
+//   "time-sensitive" — suppressed in whisper/vacation; sent in balanced, full_partner
+//   "proactive"      — sent only in full_partner
 
 const NOTIFICATION_CATEGORY_MAP: Record<string, "always" | "time-sensitive" | "proactive"> = {
   "morning-briefing": "always",
   "medication":       "always",
   "weather-alert":    "always",
+  "order-update":     "always",   // package delivered / out-for-delivery
+  "bill-anomaly":     "always",   // unusual charge detected
+  "flight-cancel":    "always",   // flight cancelled
   "departure":        "time-sensitive",
   "reminder":         "time-sensitive",
   "bill-reminder":    "time-sensitive",
@@ -53,22 +56,22 @@ const NOTIFICATION_CATEGORY_MAP: Record<string, "always" | "time-sensitive" | "p
  * mode, the notification type, and whether the notification is for/from a VIP.
  *
  * Mode matrix:
- *   whisper  — always only + VIP override
- *   balanced — always + time-sensitive + VIP override
- *   full     — always + time-sensitive + proactive + VIP override
- *   vacation — always + VIP override only (no proactive interruptions; silent mode)
+ *   whisper      — always only + VIP override
+ *   balanced     — always + time-sensitive + VIP override
+ *   full_partner — always + time-sensitive + proactive + VIP override
+ *   vacation     — always + VIP override only (no proactive interruptions; silent mode)
  */
 export function shouldSendPushForMode(
   mode: ProactiveMode,
   notificationType: string | undefined,
   isVip = false
 ): boolean {
-  if (isVip) return true; // VIP contacts always bypass the mode gate in every mode
+  if (isVip) return true;
   const category = NOTIFICATION_CATEGORY_MAP[notificationType ?? ""] ?? "time-sensitive";
   if (category === "always") return true;
-  if (mode === "whisper" || mode === "vacation") return false; // silent except "always" + VIPs
-  if (category === "time-sensitive") return true;              // balanced + full
-  return mode === "full";                                      // proactive: full only
+  if (mode === "whisper" || mode === "vacation") return false;
+  if (category === "time-sensitive") return true;
+  return mode === "full_partner";
 }
 
 export async function getProactiveMode(userName: string): Promise<ProactiveMode> {
@@ -77,7 +80,11 @@ export async function getProactiveMode(userName: string): Promise<ProactiveMode>
       `SELECT mode FROM user_proactive_settings WHERE user_name = $1`,
       [userName]
     );
-    if (rows[0] && isValidMode(rows[0].mode)) return rows[0].mode;
+    const raw = rows[0]?.mode;
+    if (!raw) return "balanced";
+    // Migrate legacy "full" value written before the rename
+    if (raw === "full") return "full_partner";
+    if (isValidMode(raw)) return raw;
     return "balanced";
   } catch {
     return "balanced";
@@ -95,6 +102,23 @@ export async function setProactiveMode(userName: string, mode: ProactiveMode): P
   logger.info({ userName, mode }, "[ProactiveMode] Mode updated");
 }
 
+/**
+ * Returns the background email scan interval in milliseconds for a given mode.
+ *
+ *   whisper      — every 2 hours  (120 min)
+ *   balanced     — every 1 hour   ( 60 min)
+ *   full_partner — every 30 min   ( 30 min)
+ *   vacation     — every 4 hours  (240 min)
+ */
+export function getModeEmailIntervalMs(mode: ProactiveMode): number {
+  switch (mode) {
+    case "whisper":      return 120 * 60 * 1000;
+    case "balanced":     return  60 * 60 * 1000;
+    case "full_partner": return  30 * 60 * 1000;
+    case "vacation":     return 240 * 60 * 1000;
+  }
+}
+
 export function buildModeInstruction(mode: ProactiveMode, firstName: string): string {
   switch (mode) {
     case "whisper":
@@ -103,7 +127,7 @@ export function buildModeInstruction(mode: ProactiveMode, firstName: string): st
     case "balanced":
       return "";
 
-    case "full":
+    case "full_partner":
       return `\n\n[PROACTIVE MODE: FULL PARTNER]\nDeliver the full briefing as normal, and additionally weave in any [Cross-Domain Intelligence] insights naturally into the narrative — these are connections James Bond has noticed between ${firstName}'s calendar, health, relationships, and tasks. Surface relationship nudges warmly and specifically. Flag any schedule risks plainly. The briefing should feel like a highly-informed advisor who sees across all domains of ${firstName}'s life.`;
 
     case "vacation":

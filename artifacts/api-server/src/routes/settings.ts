@@ -552,7 +552,7 @@ router.post("/settings/proactive-mode", express.json(), async (req, res) => {
   if (!userName) return;
   const { mode } = req.body as { mode?: unknown };
   if (!isValidMode(mode)) {
-    res.status(400).json({ error: "mode must be one of: whisper, balanced, full, vacation" });
+    res.status(400).json({ error: "mode must be one of: whisper, balanced, full_partner, vacation" });
     return;
   }
   await setProactiveMode(userName, mode);

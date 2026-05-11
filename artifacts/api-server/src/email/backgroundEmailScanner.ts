@@ -1,10 +1,16 @@
 /**
  * Background Email Scanner
  *
- * Runs every 30 minutes. Silently scans Gmail for:
- *   1. Order confirmations / shipping updates → upsert into orders table
- *   2. Billing emails → detect anomalies (>10% spike) → push alert
- *   3. Meeting requests → store as pending → push if response needed before tomorrow
+ * Runs a heartbeat every 30 minutes. The actual scan interval is dynamically
+ * determined by the user's proactive mode:
+ *
+ *   whisper      — every 2 hours  (120 min)
+ *   balanced     — every 1 hour   ( 60 min)
+ *   full_partner — every 30 min   ( 30 min)  ← minimum / heartbeat interval
+ *   vacation     — every 4 hours  (240 min)
+ *
+ * Each tick reads the current mode from the DB and skips if not enough time
+ * has elapsed since the last completed scan.
  *
  * Push notifications are sent ONLY for:
  *   - Package status change to out_for_delivery or delivered
@@ -21,13 +27,14 @@ import { scanForBillAnomalies } from "../bills/billAnomalyScanner.js";
 import { scanEmailsForMeetings } from "../email/meetingScanner.js";
 import { setPendingMeetingRequests, getPendingMeetingRequests } from "../email/emailMeetingManager.js";
 import { sendPushToAll } from "../push/pushManager.js";
+import { getProactiveMode, getModeEmailIntervalMs } from "../proactiveMode/proactiveModeManager.js";
 import type { MeetingRequest } from "../email/meetingScanner.js";
 
 const TZ = "America/Chicago";
 
-// ── Last-scan timestamp (in-memory; resets on restart) ────────────────────────
+// ── Per-user last-scan timestamp (in-memory; resets on restart) ───────────────
 
-let _lastScanAt: Date | null = null;
+const _lastScanAt = new Map<string, Date>();
 
 // ── Order status push logic ───────────────────────────────────────────────────
 
@@ -158,10 +165,25 @@ async function processMeetingEmails(userName: string, since: Date): Promise<void
 // ── Main scan tick ────────────────────────────────────────────────────────────
 
 async function runScan(userName: string): Promise<void> {
-  const since = _lastScanAt ?? new Date(Date.now() - 31 * 60 * 1000);
+  // Read current mode and decide whether enough time has elapsed for a scan.
+  const mode = await getProactiveMode(userName).catch(() => "balanced" as const);
+  const intervalMs = getModeEmailIntervalMs(mode);
+  const lastScan = _lastScanAt.get(userName);
+  const elapsedMs = lastScan ? Date.now() - lastScan.getTime() : Infinity;
+
+  if (elapsedMs < intervalMs) {
+    const nextInMin = Math.ceil((intervalMs - elapsedMs) / 60_000);
+    logger.info(
+      { userName, mode, intervalMin: intervalMs / 60_000, nextInMin },
+      "[BgEmailScanner] Skipping tick — not yet time for this mode"
+    );
+    return;
+  }
+
+  const since = lastScan ?? new Date(Date.now() - intervalMs);
   const scanStart = new Date();
 
-  logger.info({ userName, since: since.toISOString() }, "[BgEmailScanner] Starting scan");
+  logger.info({ userName, mode, intervalMin: intervalMs / 60_000, since: since.toISOString() }, "[BgEmailScanner] Starting scan");
 
   await Promise.allSettled([
     processOrderEmails(userName, since),
@@ -169,11 +191,13 @@ async function runScan(userName: string): Promise<void> {
     processMeetingEmails(userName, since),
   ]);
 
-  _lastScanAt = scanStart;
-  logger.info({ userName }, "[BgEmailScanner] Scan complete");
+  _lastScanAt.set(userName, scanStart);
+  logger.info({ userName, mode }, "[BgEmailScanner] Scan complete");
 }
 
 // ── Scheduler ─────────────────────────────────────────────────────────────────
+// Heartbeat fires every 30 min (the minimum interval, used by full_partner mode).
+// Actual scan frequency is gated by the user's proactive mode inside runScan().
 
 export function startBackgroundEmailScanner(userName = NATIVE_USER): void {
   cron.schedule("*/30 * * * *", async () => {

@@ -379,7 +379,7 @@ export async function runCrossDomainEngine(input: CrossDomainInput): Promise<Mor
     checkStepAnomaly(userName),
   ];
 
-  if (mode === "full" || mode === "vacation") {
+  if (mode === "full_partner" || mode === "vacation") {
     checks.push(
       checkHealthCalendarRisk(userName, calendarEvents, userCity, userLat, userLon),
       checkRelationshipNudges(userName)
