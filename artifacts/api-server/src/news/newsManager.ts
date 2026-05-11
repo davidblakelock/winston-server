@@ -75,9 +75,10 @@ async function fetchWatercoolerStories(): Promise<string> {
     timeZone: "America/Chicago", month: "long", day: "numeric",
   });
 
+  const currentYear = now.getFullYear();
   const prompt =
-    `Today is ${todayStr}. Use web search to find ONE genuinely fascinating, unexpected, or conversation-worthy story ` +
-    `published after ${cutoffStr} — within the last 24 hours ONLY. ` +
+    `Today is ${todayStr}. The current year is ${currentYear}. Use web search to find ONE genuinely fascinating, unexpected, or conversation-worthy story ` +
+    `published after ${cutoffStr} — within the last 24 hours ONLY. The story must be from ${currentYear} — REJECT any story from ${currentYear - 1} or earlier. ` +
     `\n\nFocus on variety — pick from any of these categories: record-breaking achievements, ` +
     `surprising historical or archaeological discoveries, unusual animal behavior, unexpected tech or science firsts, ` +
     `remarkable human interest stories, viral real-world moments, quirky cultural events, ` +
@@ -135,14 +136,15 @@ async function fetchEntertainmentNews(userMusicGenres?: string[], userInterests?
     `Only include a death if it would genuinely resonate with someone who likes ${likedGenres} ` +
     `or if it is truly historic (e.g. major film star, household name).`;
 
+  const currentYear = now.getFullYear();
   const prompt =
-    `Today is ${todayStr}. Use web search to find 2 notable entertainment or pop culture items. ` +
+    `Today is ${todayStr}. The current year is ${currentYear}. Use web search to find 2 notable entertainment or pop culture items. ` +
     `Focus exclusively on: (1) major celebrity or public figure deaths in the past 48 hours, ` +
     `(2) highly anticipated movie or TV releases opening before ${futureStr}, ` +
     `(3) major awards shows or significant cultural moments from the past 48 hours. ` +
     `\n\nEach item: ONE sentence only. Specific names, dates, and facts. ` +
-    `Search terms: "celebrity death today", "movie opening this month", "awards news today", "entertainment news ${todayStr}". ` +
-    `Only use stories from ${cutoffStr} or later for deaths/awards; upcoming releases can be within 30 days. ` +
+    `Search terms: "celebrity death today ${currentYear}", "movie opening this month ${currentYear}", "awards news today", "entertainment news ${todayStr}". ` +
+    `Only use stories from ${cutoffStr} or later for deaths/awards — must be from ${currentYear}, REJECT any story from ${currentYear - 1} or earlier. Upcoming releases can be within 30 days. ` +
     `If only 1 qualifying story exists, return only 1. If none qualify, return "NONE". ` +
     `\n\nReturn as bullet points: • [one sentence]. No headers, no tier labels.` +
     avoidNote;
@@ -198,9 +200,18 @@ async function fetchNewsFromClaude(userName?: string): Promise<string> {
     .slice(0, 6);
   const wildcardInterests = [...cleanInterests, ...musicGenres].slice(0, 8);
 
-  const mainPrompt = `Today is ${todayStr}. Yesterday was ${yesterdayStr}.
+  const currentYear = now.getFullYear();
+
+  const mainPrompt = `Today is ${todayStr}. Yesterday was ${yesterdayStr}. The current year is ${currentYear}.
 
 You are curating a morning news briefing for a listener in ${city}, ${state}. Use web search to find real, current news. RECENCY IS CRITICAL — every story must be from ${todayStr} or ${yesterdayStr} only.
+
+MANDATORY DATE VALIDATION — before including ANY story you MUST verify its publication date via web search:
+• REJECT any story published before ${yesterdayStr} — no exceptions
+• REJECT any story from ${currentYear - 1} or earlier — these are old news, not current
+• REJECT any story about a past administration, expired policy, or concluded event
+• If you cannot confirm a publication date of ${todayStr} or ${yesterdayStr}, skip the story and find a different one
+• Search queries must include "${currentYear}" or "today" or "this week" to bias toward recent results
 
 LISTENER PROFILE:
 - Sports teams followed: ${sportsTeams.length > 0 ? sportsTeams.join(", ") : "none specified"}
@@ -248,7 +259,8 @@ OUTPUT FORMAT (follow exactly):
 ... (continue through 10)
 
 GLOBAL RULES:
-• All stories from ${todayStr} or ${yesterdayStr} only — max 48 hours old
+• All stories from ${todayStr} or ${yesterdayStr} only — max 48 hours old — publication year must be ${currentYear}
+• REJECT any article from ${currentYear - 1} or earlier regardless of how recent the search result appears
 • No two stories about the same person, company, or topic
 • NEVER include any sports stories in Stories 1–10 — sports is covered in a dedicated section
 • NEVER include FIFA, World Cup, soccer trophies, or international soccer in any section
