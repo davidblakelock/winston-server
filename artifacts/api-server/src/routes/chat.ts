@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
-import { extractListOp, executeListOp, buildListContext } from "../lists/listManager.js";
+import { extractListOp, executeListOp, buildListContext, getItems } from "../lists/listManager.js";
 import { fetchAndSummarizeEmails, formatEmailsForPrompt, buildImportantEmailInstruction, getEmailLastChecked, updateEmailLastChecked } from "../google/gmail.js";
 import {
   fetchTodayEvents,
@@ -371,6 +371,8 @@ const CALENDAR_CONFIRM_PATTERN = /^(yes|yeah|yep|yup|sure|go\s+ahead|please\s+do
 const CALENDAR_CANCEL_PATTERN = /^(no|nope|nah|never\s+mind|don'?t|keep\s+it|actually\s+no|cancel\s+that|forget\s+it|hold\s+on|wait)[\s.!]*$/i;
 const LIST_PATTERN = /\b(add\s+.+\s+to\s+(my\s+)?\w.+list|remove\s+.+\s+from\s+(my\s+)?\w.+list|clear\s+(my\s+)?\w.+list|what('?s|\s+is)\s+(on\s+)?(my\s+)?\w.+list|show\s+(me\s+)?(my\s+)?\w.+list|read\s+(me\s+)?(my\s+)?\w.+list|(shopping|to\s*-?\s*do|grocery|errand|task)\s+list)\b/i;
 const CASUAL_LIST_ADD_PATTERN = /\bas\s+well\b|\bthrow\s+in\b|\balso\s+(?:add|get|grab|pick\s+up)\b|\band\s+also\b|(?:\balso|\btoo)\s*$|^(?:grab|pick\s+up)\s/i;
+// Matches "send Susan my shopping list", "share my grocery list with Mike", "forward my to-do list to dad"
+const SEND_LIST_CONNECT_PATTERN = /\b(send|share|forward|text)\b.{1,60}\b(shopping|grocery|groceries|to[\s\-]?do|todo|tasks?)\b.{0,20}\blist\b/i;
 
 function detectActiveListFromHistory(history: Array<{ role: string; content: string }>): string | null {
   const recent = [...history].slice(-8).reverse();
@@ -917,6 +919,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const activeListFromHistory = !isListRequest ? detectActiveListFromHistory(history) : null;
   const isCasualListAdd = !isListRequest && CASUAL_LIST_ADD_PATTERN.test(message) && activeListFromHistory !== null;
   if (isCasualListAdd) isListRequest = true;
+  const isSendListViaConnect = !isMorningGreeting && SEND_LIST_CONNECT_PATTERN.test(message);
+  if (isSendListViaConnect) isListRequest = false;
   const isEmailRequest = !isMorningGreeting && EMAIL_PATTERN.test(message);
   const isCalendarRequest = !isMorningGreeting && CALENDAR_PATTERN.test(message);
   const isCompoundContactAndSave = COMPOUND_CONTACT_SAVE_PATTERN.test(message);
@@ -3350,6 +3354,65 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       req.log.info({ count: pending.length }, "Reminder list injected into prompt");
     } catch (err) {
       req.log.warn({ err }, "Reminder list fetch failed, continuing normally");
+    }
+  }
+
+  if (isSendListViaConnect) {
+    try {
+      const extraction = await anthropic.messages.create({
+        model: MODEL_HAIKU,
+        max_tokens: 80,
+        system: `Extract the contact name and list name from this message.
+Return ONLY valid JSON: {"contact":"<name>","listName":"shopping"|"to do"}
+listName must be exactly "shopping" or "to do" (grocery/groceries → shopping, todo/tasks → to do).
+If you cannot extract both, return null.`,
+        messages: [{ role: "user", content: message }],
+      });
+      const raw = extraction.content[0]?.type === "text" ? extraction.content[0].text.trim() : "";
+      let parsed: { contact: string; listName: string } | null = null;
+      try { parsed = raw && raw !== "null" ? JSON.parse(raw) : null; } catch { parsed = null; }
+
+      if (parsed?.contact && parsed?.listName) {
+        const match = await findConnectionByLabel(sessionUserName, parsed.contact);
+        if (match) {
+          const items = await getItems(parsed.listName, sessionUserName).catch(() => [] as string[]);
+          if (items.length === 0) {
+            systemPrompt +=
+              `\n\n[Send List via Connect — Empty List]\n` +
+              `Your ${parsed.listName} list is empty, so nothing was sent to ${parsed.contact}.\n` +
+              `Reply with ONLY one line: "Your ${parsed.listName} list is empty — nothing to send."`;
+          } else {
+            const listText = items.map((item, i) => `${i + 1}. ${item}`).join("\n");
+            const msgText = `Here's my ${parsed.listName} list:\n${listText}`;
+            const msgId = await saveConnectMessage(sessionUserName, match.recipientUserName, "list", msgText);
+            const pushResult = await sendPushToAll(
+              {
+                title: `List from ${match.senderLabel}`,
+                body: `${parsed.listName} list — ${items.length} item${items.length !== 1 ? "s" : ""}`,
+                tag: `connect-list-${msgId}`,
+                notificationType: "connect-message",
+                companionMessage: msgText,
+              },
+              match.recipientUserName
+            ).catch(() => ({ sent: 0 }));
+            if (pushResult.sent > 0) await markMessageDelivered(msgId);
+            req.log.info({ msgId, recipient: match.recipientUserName, itemCount: items.length, listName: parsed.listName }, "[Connect] List sent via Winston Connect");
+            systemPrompt +=
+              `\n\n[List sent via Winston Connect]\n` +
+              `Contact: "${parsed.contact}"\n` +
+              `List: ${parsed.listName} (${items.length} item${items.length !== 1 ? "s" : ""})\n` +
+              `Message sent to ${parsed.contact}'s companion.\n` +
+              `Reply with ONLY one line: "Done — I've sent your ${parsed.listName} list to ${parsed.contact}."`;
+          }
+        } else {
+          systemPrompt +=
+            `\n\n[Send List via Connect — Contact Not Linked]\n` +
+            `"${parsed.contact}" is not connected via Winston Connect.\n` +
+            `Reply with ONLY one line: "I don't have ${parsed.contact} connected via Winston Connect, so I couldn't send the list. Ask them to link up first."`;
+        }
+      }
+    } catch (connectErr) {
+      req.log.warn({ connectErr }, "[Connect] Send list via Connect failed");
     }
   }
 

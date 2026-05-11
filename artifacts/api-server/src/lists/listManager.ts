@@ -46,8 +46,12 @@ export async function ensureListItemColumns(): Promise<void> {
     logger.warn({ err }, "[Lists] Could not add category column — may already exist or DDL not supported");
     return null;
   });
-  if (r1 !== null && r2 !== null) {
-    logger.info("[Lists] list_items columns ensured (added_by, category)");
+  const r3 = await query(`ALTER TABLE list_items ADD COLUMN IF NOT EXISTS url text`).catch((err) => {
+    logger.warn({ err }, "[Lists] Could not add url column — may already exist or DDL not supported");
+    return null;
+  });
+  if (r1 !== null && r2 !== null && r3 !== null) {
+    logger.info("[Lists] list_items columns ensured (added_by, category, url)");
   }
 }
 

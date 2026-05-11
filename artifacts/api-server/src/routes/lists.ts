@@ -10,6 +10,14 @@ import {
   syncListItemToConnections,
   sortByCategory,
 } from "../lists/listManager.js";
+import {
+  hasListSharePermission,
+  grantListShare,
+  revokeListShare,
+  getSharedWithUser,
+  getRequesterLabel,
+} from "../lists/listShareManager.js";
+import { sendPushToAll } from "../push/pushManager.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -254,17 +262,18 @@ interface ShoppingItem {
   item_text: string;
   category: string | null;
   added_by: string | null;
+  url: string | null;
   created_at: string;
 }
 
-// GET /api/lists/shopping — returns items sorted by category, with category + added_by fields
+// GET /api/lists/shopping — returns items sorted by category, with category + added_by + url fields
 router.get("/lists/shopping", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
   res.setHeader("Cache-Control", "no-store");
   try {
     const { rows } = await query<ShoppingItem>(
-      `SELECT id, item_text, category, added_by, created_at
+      `SELECT id, item_text, category, added_by, url, created_at
        FROM list_items
        WHERE user_name = $1 AND list_name = 'shopping'
        ORDER BY created_at ASC`,
@@ -292,20 +301,73 @@ router.get("/lists/shopping", async (req: Request, res: Response) => {
 router.post("/lists/shopping", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
-  const { item } = req.body as { item?: string };
+  const { item, url, ownerUserName } = req.body as { item?: string; url?: string; ownerUserName?: string };
   if (!item?.trim()) { res.status(400).json({ error: "item is required" }); return; }
+
+  const targetUser = ownerUserName?.trim() ?? userName;
+
+  if (targetUser !== userName) {
+    const allowed = await hasListSharePermission(targetUser, userName, "shopping").catch(() => false);
+    if (!allowed) {
+      res.status(403).json({ error: "You do not have permission to add to this list" });
+      return;
+    }
+    const { rows: existing } = await query<{ id: number }>(
+      `SELECT id FROM list_items
+       WHERE user_name = $1 AND list_name = 'shopping' AND lower(item_text) = lower($2)`,
+      [targetUser, item.trim()]
+    );
+    if (existing.length > 0) {
+      await sendPushToAll(
+        {
+          title: "Already on the list",
+          body: `"${item.trim()}" is already on ${targetUser}'s shopping list`,
+          tag: `list-dup-${userName}`,
+          notificationType: "list-sync",
+        },
+        userName
+      ).catch(() => {});
+      res.json({ item: null, duplicate: true, message: `"${item.trim()}" is already on that list` });
+      return;
+    }
+    const addedByLabel = await getRequesterLabel(targetUser, userName).catch(() => userName);
+    const { rows } = await query<ShoppingItem>(
+      `INSERT INTO list_items (user_name, list_name, item_text, added_by, url)
+       VALUES ($1, 'shopping', $2, $3, $4)
+       ON CONFLICT (user_name, list_name, lower(item_text)) DO NOTHING
+       RETURNING id, item_text, category, added_by, url, created_at`,
+      [targetUser, item.trim(), addedByLabel, url?.trim() ?? null]
+    );
+    const newItem = rows[0];
+    if (newItem) {
+      categorizeAndUpdateItem(newItem.id, newItem.item_text).catch(() => {});
+      await sendPushToAll(
+        {
+          title: `${addedByLabel} added to your shopping list`,
+          body: item.trim(),
+          tag: `list-shared-add-${newItem.id}`,
+          notificationType: "list-sync",
+          url: "winston://lists?tab=shopping",
+          companionMessage: `${addedByLabel} added "${item.trim()}" to your shopping list.`,
+        },
+        targetUser
+      ).catch(() => {});
+    }
+    res.json({ item: newItem ?? null });
+    return;
+  }
+
   try {
     const { rows } = await query<ShoppingItem>(
-      `INSERT INTO list_items (user_name, list_name, item_text)
-       VALUES ($1, 'shopping', $2)
+      `INSERT INTO list_items (user_name, list_name, item_text, url)
+       VALUES ($1, 'shopping', $2, $3)
        ON CONFLICT (user_name, list_name, lower(item_text))
-       DO UPDATE SET item_text = EXCLUDED.item_text
-       RETURNING id, item_text, category, added_by, created_at`,
-      [userName, item.trim()]
+       DO UPDATE SET item_text = EXCLUDED.item_text, url = COALESCE(EXCLUDED.url, list_items.url)
+       RETURNING id, item_text, category, added_by, url, created_at`,
+      [userName, item.trim(), url?.trim() ?? null]
     );
     const newItem = rows[0];
 
-    // Fire-and-forget: categorize + sync
     if (newItem) {
       categorizeAndUpdateItem(newItem.id, newItem.item_text).catch(() => {});
       syncListItemToConnections("shopping", [newItem.item_text], userName).catch(() => {});
@@ -383,8 +445,8 @@ router.get("/lists/todo", async (req: Request, res: Response) => {
   if (!userName) return;
   res.setHeader("Cache-Control", "no-store");
   try {
-    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; created_at: string }>(
-      `SELECT id, item_text, added_by, created_at FROM list_items
+    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string }>(
+      `SELECT id, item_text, added_by, url, created_at FROM list_items
        WHERE user_name = $1 AND list_name = 'to do'
        ORDER BY created_at ASC`,
       [userName]
@@ -399,16 +461,69 @@ router.get("/lists/todo", async (req: Request, res: Response) => {
 router.post("/lists/todo", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
-  const { item } = req.body as { item?: string };
+  const { item, url, ownerUserName } = req.body as { item?: string; url?: string; ownerUserName?: string };
   if (!item?.trim()) { res.status(400).json({ error: "item is required" }); return; }
+
+  const targetUser = ownerUserName?.trim() ?? userName;
+
+  if (targetUser !== userName) {
+    const allowed = await hasListSharePermission(targetUser, userName, "to do").catch(() => false);
+    if (!allowed) {
+      res.status(403).json({ error: "You do not have permission to add to this list" });
+      return;
+    }
+    const { rows: existing } = await query<{ id: number }>(
+      `SELECT id FROM list_items
+       WHERE user_name = $1 AND list_name = 'to do' AND lower(item_text) = lower($2)`,
+      [targetUser, item.trim()]
+    );
+    if (existing.length > 0) {
+      await sendPushToAll(
+        {
+          title: "Already on the list",
+          body: `"${item.trim()}" is already on ${targetUser}'s to-do list`,
+          tag: `list-dup-${userName}`,
+          notificationType: "list-sync",
+        },
+        userName
+      ).catch(() => {});
+      res.json({ item: null, duplicate: true, message: `"${item.trim()}" is already on that list` });
+      return;
+    }
+    const addedByLabel = await getRequesterLabel(targetUser, userName).catch(() => userName);
+    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string }>(
+      `INSERT INTO list_items (user_name, list_name, item_text, added_by, url)
+       VALUES ($1, 'to do', $2, $3, $4)
+       ON CONFLICT (user_name, list_name, lower(item_text)) DO NOTHING
+       RETURNING id, item_text, added_by, url, created_at`,
+      [targetUser, item.trim(), addedByLabel, url?.trim() ?? null]
+    );
+    const newItem = rows[0];
+    if (newItem) {
+      await sendPushToAll(
+        {
+          title: `${addedByLabel} added to your to-do list`,
+          body: item.trim(),
+          tag: `list-shared-add-${newItem.id}`,
+          notificationType: "list-sync",
+          url: "winston://lists?tab=todo",
+          companionMessage: `${addedByLabel} added "${item.trim()}" to your to-do list.`,
+        },
+        targetUser
+      ).catch(() => {});
+    }
+    res.json({ item: newItem ?? null });
+    return;
+  }
+
   try {
-    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; created_at: string }>(
-      `INSERT INTO list_items (user_name, list_name, item_text)
-       VALUES ($1, 'to do', $2)
+    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string }>(
+      `INSERT INTO list_items (user_name, list_name, item_text, url)
+       VALUES ($1, 'to do', $2, $3)
        ON CONFLICT (user_name, list_name, lower(item_text))
-       DO UPDATE SET item_text = EXCLUDED.item_text
-       RETURNING id, item_text, added_by, created_at`,
-      [userName, item.trim()]
+       DO UPDATE SET item_text = EXCLUDED.item_text, url = COALESCE(EXCLUDED.url, list_items.url)
+       RETURNING id, item_text, added_by, url, created_at`,
+      [userName, item.trim(), url?.trim() ?? null]
     );
     syncListItemToConnections("to do", [item.trim()], userName).catch(() => {});
     res.json({ item: rows[0] });
@@ -434,6 +549,83 @@ router.delete("/lists/todo/:id", async (req: Request, res: Response) => {
   }
 });
 
+// ── List sharing management ───────────────────────────────────────────────────
+// MUST be before the /lists/:listName wildcard.
+
+// GET /api/lists/shared-with-me — lists shared with the authenticated user
+router.get("/lists/shared-with-me", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  try {
+    const entries = await getSharedWithUser(userName);
+    const grouped: Record<string, Array<{ listName: string; grantedAt: string }>> = {};
+    for (const e of entries) {
+      if (!grouped[e.ownerUserName]) grouped[e.ownerUserName] = [];
+      grouped[e.ownerUserName].push({ listName: e.listName, grantedAt: e.createdAt });
+    }
+    const sharedLists = Object.entries(grouped).map(([ownerUserName, lists]) => ({
+      ownerUserName,
+      lists,
+    }));
+    res.json({ sharedLists });
+  } catch (err) {
+    req.log.warn({ err }, "Shared-with-me GET error");
+    res.status(500).json({ error: "Failed to fetch shared lists" });
+  }
+});
+
+// POST /api/lists/share — grant permission for a connected user to add to one of the owner's lists
+// Body: { sharedWithUserName: string, listName: string }
+router.post("/lists/share", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const { sharedWithUserName, listName } = req.body as { sharedWithUserName?: string; listName?: string };
+  if (!sharedWithUserName?.trim() || !listName?.trim()) {
+    res.status(400).json({ error: "sharedWithUserName and listName are required" });
+    return;
+  }
+  const { rows: connRows } = await query<{ id: number }>(
+    `SELECT id FROM winston_connections
+     WHERE ((requester_user_name = $1 AND recipient_user_name = $2)
+        OR  (requester_user_name = $2 AND recipient_user_name = $1))
+       AND status = 'accepted'
+     LIMIT 1`,
+    [userName, sharedWithUserName.trim()]
+  );
+  if (!connRows.length) {
+    res.status(403).json({ error: "No accepted connection with that user" });
+    return;
+  }
+  try {
+    await grantListShare(userName, sharedWithUserName.trim(), listName.trim());
+    req.log.info({ userName, sharedWithUserName, listName }, "[ListShare] Permission granted");
+    res.json({ granted: true });
+  } catch (err) {
+    req.log.warn({ err }, "List share grant error");
+    res.status(500).json({ error: "Failed to grant list share" });
+  }
+});
+
+// DELETE /api/lists/share — revoke list share permission
+// Body: { sharedWithUserName: string, listName: string }
+router.delete("/lists/share", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const { sharedWithUserName, listName } = req.body as { sharedWithUserName?: string; listName?: string };
+  if (!sharedWithUserName?.trim() || !listName?.trim()) {
+    res.status(400).json({ error: "sharedWithUserName and listName are required" });
+    return;
+  }
+  try {
+    await revokeListShare(userName, sharedWithUserName.trim(), listName.trim());
+    req.log.info({ userName, sharedWithUserName, listName }, "[ListShare] Permission revoked");
+    res.json({ revoked: true });
+  } catch (err) {
+    req.log.warn({ err }, "List share revoke error");
+    res.status(500).json({ error: "Failed to revoke list share" });
+  }
+});
+
 // ── Generic list_items — wildcard routes AFTER specific routes ────────────────
 // GET /api/lists/:listName — fetch all items for a list
 router.get("/lists/:listName", async (req: Request, res: Response) => {
@@ -442,8 +634,8 @@ router.get("/lists/:listName", async (req: Request, res: Response) => {
   res.setHeader("Cache-Control", "no-store");
   const { listName } = req.params;
   try {
-    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; created_at: string }>(
-      `SELECT id, item_text, added_by, created_at
+    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string }>(
+      `SELECT id, item_text, added_by, url, created_at
        FROM list_items
        WHERE user_name = $1 AND list_name = $2
        ORDER BY created_at ASC`,
@@ -505,7 +697,7 @@ Return JSON array only:`;
     const text = resp.content[0]?.type === "text" ? resp.content[0].text.trim() : "[]";
     const match = text.match(/\[[\s\S]*\]/);
     if (!match) {
-      res.json({ items: [] });
+      res.json({ items: [], urlMap: {} });
       return;
     }
 
@@ -514,8 +706,15 @@ Return JSON array only:`;
       ? parsed.filter((x): x is string => typeof x === "string" && x.trim().length > 0).map((x) => x.trim())
       : [];
 
-    req.log.info({ userName, listName, transcript: transcript.trim(), itemCount: items.length }, "[ParseVoice] Extracted items");
-    res.json({ items });
+    // Extract any URLs from the transcript and map them to the nearest item
+    const urlMap: Record<string, string> = {};
+    const urlMatches = transcript.match(/https?:\/\/[^\s]+/g);
+    if (urlMatches && urlMatches.length > 0 && items.length > 0) {
+      urlMap[items[items.length - 1]] = urlMatches[0];
+    }
+
+    req.log.info({ userName, listName, transcript: transcript.trim(), itemCount: items.length, urlCount: Object.keys(urlMap).length }, "[ParseVoice] Extracted items");
+    res.json({ items, urlMap });
   } catch (err) {
     req.log.error({ err }, "[ParseVoice] Claude extraction failed");
     res.status(500).json({ error: "Failed to parse transcript" });
@@ -527,19 +726,19 @@ router.post("/lists/:listName", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
   const { listName } = req.params;
-  const { item } = req.body as { item?: string };
+  const { item, url } = req.body as { item?: string; url?: string };
   if (!item || !item.trim()) {
     res.status(400).json({ error: "item is required" });
     return;
   }
   try {
-    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; created_at: string }>(
-      `INSERT INTO list_items (user_name, list_name, item_text)
-       VALUES ($1, $2, $3)
+    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string }>(
+      `INSERT INTO list_items (user_name, list_name, item_text, url)
+       VALUES ($1, $2, $3, $4)
        ON CONFLICT (user_name, list_name, lower(item_text))
-       DO UPDATE SET item_text = EXCLUDED.item_text
-       RETURNING id, item_text, added_by, created_at`,
-      [userName, listName, item.trim()]
+       DO UPDATE SET item_text = EXCLUDED.item_text, url = COALESCE(EXCLUDED.url, list_items.url)
+       RETURNING id, item_text, added_by, url, created_at`,
+      [userName, listName, item.trim(), url?.trim() ?? null]
     );
     res.json({ item: rows[0] });
   } catch (err) {

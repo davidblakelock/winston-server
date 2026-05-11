@@ -52,6 +52,7 @@ import { ensureFocusModeTable } from "./push/focusMode";
 import { startBackgroundEmailScanner } from "./email/backgroundEmailScanner";
 import { ensureSavedPlacesTable } from "./location/geofenceManager";
 import { ensureListItemColumns } from "./lists/listManager";
+import { ensureListShareTable } from "./lists/listShareManager";
 
 const rawPort = process.env["PORT"];
 
@@ -320,9 +321,15 @@ app.listen(port, async (err) => {
 
   try {
     await ensureListItemColumns();
-    logger.info("[startup] list_items columns ready (added_by, category)");
+    logger.info("[startup] list_items columns ready (added_by, category, url)");
   } catch (e) {
     logger.warn({ e }, "List items column initialization warning");
+  }
+
+  try {
+    await ensureListShareTable();
+  } catch (e) {
+    logger.warn({ e }, "List share permissions table initialization warning");
   }
 
   try {
