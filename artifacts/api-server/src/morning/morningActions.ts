@@ -197,8 +197,12 @@ export async function assembleMorningActions(
           userLon,
         })
       : Promise.resolve([]),
-    // Scan for emails needing a reply (capped at 5 to keep assembly fast)
-    scanEmailsForDrafts(userName, 5),
+    // Scan for emails needing a reply — capped at 5 emails, 8-second hard timeout
+    // to prevent sequential Claude calls from blocking the morning response.
+    Promise.race([
+      scanEmailsForDrafts(userName, 5),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("email draft scan timeout")), 8000)),
+    ]),
   ]);
 
   const allActions: MorningAction[] = [];
@@ -260,18 +264,6 @@ export async function assembleMorningActions(
       (severityOrder[a.severity ?? "undefined"] ?? 3) -
       (severityOrder[b.severity ?? "undefined"] ?? 3)
   );
-
-  // Fallback test action: if nothing real surfaced, inject one weather_suggestion
-  // so the native app can confirm action card rendering. Remove once confirmed working.
-  if (allActions.length === 0) {
-    allActions.push({
-      type: "weather_suggestion",
-      title: "Good Morning",
-      detail: "All clear — no alerts or reminders this morning. Tap to start your day.",
-      severity: "info",
-      data: { suggestionType: "good_morning_fallback", test: true },
-    });
-  }
 
   logger.info(
     { userName, count: allActions.length },
