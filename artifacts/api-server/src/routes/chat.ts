@@ -1302,8 +1302,15 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       return [] as MorningAction[];
     });
 
+    // Refresh the datetime block in the pre-generated preamble.
+    // The preamble was built at ~5 AM; the stale time block is stripped and replaced
+    // with the current time so Claude reports the correct time when the user opens
+    // the briefing at 7 AM (or any other hour).
+    const livePreamble = getCurrentDateTimeBlock() + "\n" +
+      staticCtx.preamble.replace(/^\[Current date and time[^\[]+/, "");
+
     // Assemble full system prompt: pre-built static preamble + live blocks + static suffix
-    const fullSystemPrompt = staticCtx.preamble + liveGmailBlock + meetingRequestsBlock + liveCalendarBlock + staticCtx.suffix;
+    const fullSystemPrompt = livePreamble + liveGmailBlock + meetingRequestsBlock + liveCalendarBlock + staticCtx.suffix;
 
     req.log.info(
       { promptChars: fullSystemPrompt.length, hasEmail: !!liveGmailBlock, hasCalendar: !!liveCalendarBlock },
@@ -1318,7 +1325,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         anthropic.messages.create({
           model: MODEL_HAIKU,
           max_tokens: 1500,
-          system: buildSystemBlocks(staticCtx.preamble, liveGmailBlock + meetingRequestsBlock + liveCalendarBlock + staticCtx.suffix),
+          system: buildSystemBlocks(livePreamble, liveGmailBlock + meetingRequestsBlock + liveCalendarBlock + staticCtx.suffix),
           messages: [{ role: "user", content: "good morning" }],
         }),
         morningActionsPromise,
@@ -1345,7 +1352,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     const stream = anthropic.messages.stream({
       model: MODEL_HAIKU,
       max_tokens: 1500,
-      system: buildSystemBlocks(staticCtx.preamble, liveGmailBlock + meetingRequestsBlock + liveCalendarBlock + staticCtx.suffix),
+      system: buildSystemBlocks(livePreamble, liveGmailBlock + meetingRequestsBlock + liveCalendarBlock + staticCtx.suffix),
       messages: [{ role: "user", content: "good morning" }],
     });
 

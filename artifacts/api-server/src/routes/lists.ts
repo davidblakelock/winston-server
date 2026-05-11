@@ -1,4 +1,4 @@
-import { Router, type IRouter, type Request, type Response } from "express";
+import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { query } from "../db.js";
 import { authenticate } from "../auth/middleware.js";
 import {
@@ -9,6 +9,19 @@ import {
 } from "../lists/listManager.js";
 
 const router: IRouter = Router();
+
+// ── Disable 304 caching for all list routes ────────────────────────────────
+// Express generates a stable ETag from the response body and returns 304 when
+// the client's If-None-Match matches — even when Cache-Control: no-store is set.
+// Setting a time-based ETag before Express can generate its own prevents the
+// match (Express skips generation if ETag is already present), guaranteeing
+// every list request returns a fresh 200 with live DB data.
+router.use((_req: Request, res: Response, next: NextFunction) => {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("ETag", `"ts-${Date.now()}"`);
+  next();
+});
 
 // GET /api/lists — always returns all 4 lists with real counts from their respective tables
 router.get("/lists", async (req: Request, res: Response) => {

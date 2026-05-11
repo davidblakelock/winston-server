@@ -317,9 +317,9 @@ export async function fetchMorningNews(userName?: string): Promise<string> {
     return _cache.content;
   }
 
-  const TIMEOUT_MS = 90_000;
+  const TIMEOUT_MS = 120_000;
   const timeout = new Promise<string>((_, reject) =>
-    setTimeout(() => reject(new Error("News fetch timed out after 90s")), TIMEOUT_MS)
+    setTimeout(() => reject(new Error("News fetch timed out after 120s")), TIMEOUT_MS)
   );
 
   try {
