@@ -1,0 +1,23 @@
+Please restructure both the morning briefing and evening check-in. These are the most important changes we have made to Winston. Deploy when complete.
+Morning Briefing — complete restructure:
+The morning briefing should take no more than 90 seconds to listen to. Here is the exact structure in order:
+
+Weather — one sentence only if there is something actionable or notable. Examples: 'It is going to hit 95 today — stay hydrated.' or 'Rain moving in around 2pm — grab an umbrella.' If conditions are unremarkable, say nothing about weather at all. The weather card displays full detail so there is no need to repeat it.
+Calendar — concise summary of today and tomorrow only. Departure times for any appointments. No more than 2-3 sentences.
+News — exactly 2-3 national or global stories that matter today. For each story: one sentence on what happened, one sentence on why it matters or how it affects the listener. No local news. No sports scores. No more than 10 stories ever again — 2-3 max.
+Proactive alert — only include if something real and relevant: a package arriving today, a flight departing today, a bill due soon, a notable upcoming event the user would enjoy. If nothing relevant, skip this entirely. Do not manufacture alerts.
+Feel-good or bizarre story — find one story from Reuters Oddly Enough or AP Oddities that is either genuinely heartwarming or genuinely strange — the kind of story someone would repeat at dinner. One sentence on what happened, one sentence on why it's worth knowing. This should always be included.
+Thought of the day — a meaningful quote or observation. Always included. After delivering it, Winston naturally says something like: 'Something worth sitting with today. If it resonates, you might want to add something to your day.' This opens the conversation for the user to add to My Day.
+
+The total briefing should feel like 60-90 seconds of listening, not 5 minutes. Claude should be instructed to be concise and conversational — not comprehensive. Update the morning briefing system prompt and max_tokens accordingly. Remove the instruction to cover 10 stories entirely.
+Evening Check-In — complete restructure:
+The evening check-in is the opposite of the morning briefing. The morning is Winston talking. The evening is Winston listening. It should feel like a brief conversation with a thoughtful assistant at the end of the day, not another briefing.
+Structure:
+
+Opening question — Winston asks one simple open question: 'How did the day go?' or 'How was your day?' Then Winston listens and responds naturally to whatever the user shares. Winston should be warm and genuinely curious, not clinical.
+Tomorrow preview — after the conversation, Winston briefly previews tomorrow. Two or three things maximum. Departure times if relevant. Concise.
+Capture — Winston asks: 'Anything you want to add to your lists or reminders before tomorrow?' The user can add items to My Day, shopping list, to-do list, or set reminders. Winston handles it conversationally.
+Wind-down thought — a brief reflective observation or question to close the evening. Not motivational or energetic — calm and thoughtful. Something that invites reflection rather than action.
+
+The evening check-in should feel like 2-3 minutes of natural back-and-forth conversation. Winston asks, the user responds, Winston captures and organizes. Winston should never deliver a long monologue in the evening check-in.
+Deploy when complete and confirm both briefings are updated

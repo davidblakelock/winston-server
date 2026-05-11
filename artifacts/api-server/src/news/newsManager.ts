@@ -77,20 +77,20 @@ async function fetchWatercoolerStories(): Promise<string> {
 
   const currentYear = now.getFullYear();
   const prompt =
-    `Today is ${todayStr}. The current year is ${currentYear}. Use web search to find ONE genuinely fascinating, unexpected, or conversation-worthy story ` +
-    `published after ${cutoffStr} — within the last 24 hours ONLY. The story must be from ${currentYear} — REJECT any story from ${currentYear - 1} or earlier. ` +
-    `\n\nFocus on variety — pick from any of these categories: record-breaking achievements, ` +
-    `surprising historical or archaeological discoveries, unusual animal behavior, unexpected tech or science firsts, ` +
-    `remarkable human interest stories, viral real-world moments, quirky cultural events, ` +
-    `sports records or upsets, music or entertainment surprises (no deaths). ` +
-    `Rotate across categories — do NOT default to science every time. ` +
-    `\n\nSTRICTLY AVOID: politics, crime, violence, tragedy, death, accidents, disasters, controversy. ` +
-    `\n\nReturn EXACTLY ONE story in TWO sentences maximum. ` +
-    `Sentence 1: What happened (specific, vivid, surprising). ` +
-    `Sentence 2: Why it's fascinating or what makes it remarkable. ` +
-    `No headers, no bullet points, no commentary — just the two sentences. ` +
-    `If you cannot find a qualifying story from the last 24 hours, search for "amazing story today", ` +
-    `"record broken today", "incredible achievement today". Do not use a story older than 24 hours.`;
+    `Today is ${todayStr}. The current year is ${currentYear}. ` +
+    `Use web search to find ONE feel-good, bizarre, or delightfully unexpected story from the last 24 hours. ` +
+    `Search these sources first: Reuters "Oddly Enough" section (reuters.com/oddly-enough), AP Oddities, and similar quirky wire feeds. ` +
+    `If those are thin, broaden to any story published after ${cutoffStr} that qualifies. ` +
+    `The story must be from ${currentYear} — REJECT any story from ${currentYear - 1} or earlier.\n\n` +
+    `Focus on: record-breaking feats, bizarre but charming events, unusual animal behavior, ` +
+    `unexpected human-interest moments, quirky cultural happenings, heartwarming community stories, ` +
+    `or genuinely surprising scientific discoveries. Rotate across categories — do NOT default to science every time.\n\n` +
+    `STRICTLY AVOID: politics, crime, violence, tragedy, death, accidents, disasters, controversy.\n\n` +
+    `Return EXACTLY ONE story in TWO sentences:\n` +
+    `Sentence 1: What happened — specific, vivid, surprising.\n` +
+    `Sentence 2: Why it's remarkable or what makes it delightful.\n` +
+    `No headers, no bullet points, no commentary — just the two sentences.\n` +
+    `If you cannot find a qualifying story, search: "oddly enough today", "weird news today ${currentYear}", "feel good story today". Do not use a story older than 24 hours.`;
 
   console.log(`[API] Claude web_search (watercooler) — starting at ${new Date().toISOString()}`);
 

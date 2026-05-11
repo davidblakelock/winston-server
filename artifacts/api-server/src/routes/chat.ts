@@ -1134,16 +1134,16 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     //
     // max_tokens per mode:
     //   whisper      — 450  (~3-4 sentences)
-    //   balanced     — 1500 (current full briefing)
-    //   full_partner — 2000 (full + cross-domain insights)
+    //   balanced     — 600  (60-90 seconds)
+    //   full_partner — 900  (slightly richer)
     //   vacation     — 200  (~1-2 sentences)
     const deliveryProactiveMode = await getProactiveMode(sessionUserName).catch(() => "balanced" as const);
     const deliveryFirstName = userProfile?.name?.split(" ")[0] ?? "there";
     const deliveryMaxTokens =
       deliveryProactiveMode === "whisper"      ? 450  :
       deliveryProactiveMode === "vacation"     ? 200  :
-      deliveryProactiveMode === "full_partner" ? 2000 :
-      1500;
+      deliveryProactiveMode === "full_partner" ? 900  :
+      600;
     // Appending the mode instruction at delivery time overrides whatever mode was
     // baked into the static preamble at pre-gen time. This handles mode changes mid-day.
     const deliveryModeInstruction = buildModeInstruction(deliveryProactiveMode, deliveryFirstName);
@@ -3045,64 +3045,45 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         `• "Moving on, then. The evening won't wait forever."\n` +
         `Match the tone, find a fresh line.\n` +
         todayCalendarBlock + tomorrowCalendarBlock;
-    } else if (!isUtilityOnlyRequest && !isTextFlowActive) systemPrompt +=
-      `\n\n[Evening Check-In — ACTIVE]\n` +
-      `Write ONE warm, natural evening check-in message. ` +
-      `This is a genuine end-of-day conversation — not a checklist, not a structured report. ` +
-      `Think of it as a trusted friend checking in at the end of a long day. ` +
-      `Aim for 110–140 words. Flowing prose. No headers, no numbers, no bullets.\n\n` +
-
-      `ELEMENT 1 — OPENER:\n` +
-      `Warm greeting to ${_windDownDisplayName}. ` +
-      `If [Today's Calendar] has a notable event (not a routine recurring activity like a standing workout or regular call), ` +
-      `you may acknowledge it briefly and naturally — never as a scripted question. ` +
-      (_familyMentionStr ? `${_familyMentionStr} ` : ``) +
-      `Never invent events not in the calendar. Never prompt about routine activities like pickleball, gym, or standing calls — ` +
-      `only respond to those if the user raises them.\n\n` +
-
-      `ELEMENT 2 — HOW WAS THE DAY:\n` +
-      `Ask how the day went. Keep it simple, warm, and open — one genuine question. ` +
-      `Avoid scripted phrases like "how was your day?" — find a warmer, more personal phrasing based on what you know.\n\n` +
-
-      `ELEMENT 3 — TOMORROW + LISTS:\n` +
-      `Mention [Tomorrow's Calendar] briefly — the 1–2 most relevant events with times. ` +
-      `${weatherNote
-        ? `Add a brief weather note only if tomorrow has outdoor activities: ${weatherNote}`
-        : `No weather data — skip weather entirely.`} ` +
-      `Then ask: "Anything you want to add to your shopping list, to-do list, or any reminders for tomorrow?"\n\n` +
-
-      `ELEMENT 4 — EVENING REFLECTION (most important — do not rush or skip):\n` +
-      `Close with a calming, specific evening reflection chosen for THIS person and THIS day. ` +
-      `Draw from Stoic philosophy, mindfulness traditions, poetry, or nature and science — whichever fits the mood of the day. ` +
-      `The thought should help the mind release the day and prepare for rest. ` +
-      `Warm, quiet, and unhurried delivery. Maximum 3 sentences. ` +
-      `NEVER generic. NEVER motivational-poster language. NEVER repeat a thought used recently. ` +
-      `Examples of the register (write something original — do NOT copy these):\n` +
-      `• Stoic: "Marcus Aurelius wrote that the impediment to action advances action — what stands in the way becomes the way. Whatever today pushed against you, it was also shaping you."\n` +
-      `• Mindfulness: "The day is complete whether or not it went to plan. You can set it down now — it doesn't need to follow you to sleep."\n` +
-      `• Nature: "The tide goes out fully before it comes back in. There's a kind of wisdom in that rhythm — the retreat is part of the cycle, not a failure of it."\n` +
-      `• Poetry: "Rilke said we must assume our existence as broadly as we in any way can. Tonight, broadly means: rest.\n\n` +
-
-      `ELEMENT 5 — CLOSE:\n` +
-      `A brief, warm close — one sentence. ` +
-      `Mention ${_windDownDisplayName}${_familyNames.length > 0 ? ` and ${_familyNames.join(", ")}` : ""}. ` +
-      `An open door for anything they want to note — then goodnight.\n\n` +
-
-      `STRICT RULES:\n` +
-      `• Flowing prose only — no headers, bullets, numbers.\n` +
-      `• No medication reminders. No music suggestions.\n` +
-      `• NEVER repeat topics already covered in the morning briefing: TV episodes, new restaurant openings, ` +
-      `upcoming concerts, news stories, or any specific content that was surfaced this morning. ` +
-      `If TV episode data appears below, only mention it if it is clearly new since this morning AND the user hasn't heard it. ` +
-      `When in doubt — leave it out.\n` +
-      `• Routine activities (pickleball, gym, a standing call) — never prompt for these. Respond only if the user brings them up.\n` +
-      `• The evening reflection in Element 4 is the most important part of this check-in. Give it the space it deserves.\n` +
-
-      todayCalendarBlock +
-      todayMydayBlock +
-      tomorrowWeatherBlock +
-      tomorrowCalendarBlock +
-      tvEveningNote;
+    } else if (!isUtilityOnlyRequest && !isTextFlowActive) {
+      if (isEveningGreeting) {
+        // ── Opening message — just one warm question ─────────────────────────
+        systemPrompt +=
+          `\n\n[Evening Check-In — OPENING]\n` +
+          `Ask ${_windDownDisplayName} ONE warm, short question about how the day went. ` +
+          `1–2 sentences maximum. No agenda. No preview of tomorrow. No lists. No reflection. ` +
+          `Just a genuine, personal opening — a trusted friend checking in. ` +
+          `Vary the phrasing each time — never say "how was your day?" verbatim. ` +
+          `If [Today's Calendar] has a notable non-routine event, you may weave it in naturally as the hook. ` +
+          (_familyMentionStr ? `${_familyMentionStr} ` : ``) +
+          `Never prompt about routine activities (pickleball, gym, standing calls) — only acknowledge those if the user raises them.\n` +
+          `STRICT: No headers. No bullets. 1–2 sentences only.\n` +
+          todayCalendarBlock +
+          todayMydayBlock;
+      } else {
+        // ── Continuation — listen and flow naturally ──────────────────────────
+        systemPrompt +=
+          `\n\n[Evening Check-In — CONVERSATION IN PROGRESS]\n` +
+          `You are mid-conversation in the evening check-in. Listen to what ${_windDownDisplayName} just said and respond naturally. ` +
+          `No headers, no bullets, no numbered steps — flowing conversational prose only.\n\n` +
+          `NATURAL FLOW — work through these when the moment is right, not all at once:\n` +
+          `• Respond warmly and specifically to what they shared about their day.\n` +
+          `• When it feels natural, briefly preview tomorrow — 2–3 items max with times. ` +
+          `${weatherNote ? `Weather note if tomorrow has outdoor activities: ${weatherNote}` : `Skip weather if no outdoor activities.`}\n` +
+          `• At a natural pause, ask: "Anything you want to add to your shopping list, to-do list, or any reminders for tomorrow?"\n` +
+          `• Close with a wind-down thought — drawn from Stoic philosophy, mindfulness, poetry, or nature. ` +
+          `Warm, quiet, unhurried. 2–3 sentences. Never generic. Never motivational-poster language.\n\n` +
+          `STRICT RULES:\n` +
+          `• Never prompt about routine activities (pickleball, gym, standing calls) — respond only if the user brings them up.\n` +
+          `• No medication reminders. No music suggestions.\n` +
+          `• If TV episode data appears below, mention it only if clearly new and the user hasn't heard it. When in doubt — leave it out.\n` +
+          todayCalendarBlock +
+          todayMydayBlock +
+          tomorrowWeatherBlock +
+          tomorrowCalendarBlock +
+          tvEveningNote;
+      }
+    }
 
     // [DIAG] Log the winddown context blocks that were injected
     req.log.info({

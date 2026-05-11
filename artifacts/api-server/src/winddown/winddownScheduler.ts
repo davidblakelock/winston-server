@@ -163,25 +163,20 @@ export async function generateOpeningMessage(
   const prompt =
     `You are ${companionName}, ${displayName}'s warm personal AI companion. It's ${dayName} evening in ${city}.\n\n` +
     familyLine +
-    (todayContext ? `${todayContext}\n` : "") +
-    (tomorrowContext ? `Tomorrow's calendar: ${tomorrowContext}\n` : "") +
-    (morningMood ? `This morning ${displayName} mentioned feeling: "${morningMood.substring(0, 120)}". Acknowledge the day relative to that feeling in your opener.\n` : "") +
-    `\nWrite ONE warm, natural evening check-in message — about 150–180 words. ` +
-    `Flowing prose. No headers. No numbers. One connected message.\n\n` +
-    `Cover these naturally, woven together:\n\n` +
-    `1. OPENER: Warm greeting to ${displayName}. Reference something from today${todayContext ? " (use the calendar events)" : " — ask warmly how things went"}. ` +
-    (familyContext ? `Weave in ${familyContext} where it feels natural.\n\n` : "\n\n") +
-    `2. HOW WAS THE DAY: Ask genuinely how the day went — make it personal, not generic.\n\n` +
-    `3. TOMORROW LOOK-AHEAD: ${tomorrowContext ? `Briefly mention what's coming up tomorrow (${tomorrowContext}). ` : "Note the calendar looks clear tomorrow. "}Then ask: "Is there anything you want to add to your shopping list, to-do list, or any reminders for tomorrow?"\n\n` +
-    `4. EVENING THOUGHT: One calming sentence — something grounding and warm for before sleep. Not advice. Not a quote. Something a trusted friend would say. Specific to this ${dayName}.\n\n` +
-    `5. REFLECTIONS: A light invite — something like: "Anything on your mind you want to talk through before you wind down?" Keep it brief and optional.\n\n` +
-    `6. CLOSING: Warm goodnight to ${displayName}.${familyNames ? ` Mention ${familyNames}.` : ""}\n\n` +
-    `Write as one flowing message — no bullet points, no headers, no numbers.`;
+    (todayContext ? `Today's calendar events: ${todayContext}\n` : "") +
+    (morningMood ? `This morning ${displayName} mentioned feeling: "${morningMood.substring(0, 120)}".\n` : "") +
+    `\nWrite ONE warm opening question to start the evening check-in. ` +
+    `1–2 sentences maximum. Just a genuine, personal "how did the day go?" — ` +
+    `no agenda, no preview of tomorrow, no lists, no reflection yet. ` +
+    `Vary the phrasing — never say "how was your day?" verbatim. ` +
+    (todayContext ? `You may weave in a non-routine calendar event as a natural hook. ` : "") +
+    (familyContext ? `${familyContext} — weave them in naturally if it feels right. ` : "") +
+    `No headers, no bullets. 1–2 sentences only.`;
 
   try {
     const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 500,
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 150,
       messages: [{ role: "user", content: prompt }],
     });
     const block = response.content[0];
@@ -192,13 +187,7 @@ export async function generateOpeningMessage(
 
   // Fallback
   const familyNote = familyNames ? ` Hope ${familyNames} had a good one too.` : "";
-  return (
-    `Good evening, ${displayName}. How did your ${dayName} go?${familyNote}\n\n` +
-    (tomorrowContext ? `Coming up tomorrow: ${tomorrowContext}. ` : "") +
-    `Is there anything you want to add to your shopping list, to-do list, or any reminders for tomorrow?\n\n` +
-    `Anything on your mind tonight? I'm here.\n\n` +
-    `Goodnight${familyNames ? ` — take care of ${familyNames}` : ""}. Rest well.`
-  );
+  return `Good evening, ${displayName}. How did your ${dayName} go?${familyNote}`;
 }
 
 export function startWinddownScheduler(): void {
