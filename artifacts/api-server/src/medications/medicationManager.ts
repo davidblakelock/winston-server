@@ -80,11 +80,47 @@ export async function addMedicationFull(
   },
   userName = NATIVE_STORED_NAME
 ): Promise<{ success: boolean; alreadyExists: boolean; medication?: Medication }> {
-  const existing = await query(
-    `SELECT id FROM medications WHERE user_name = $1 AND lower(name) = lower($2) AND active = true`,
+  // Check for any existing record (active OR inactive) — the unique constraint
+  // is on (user_name, name) regardless of active status, so we must check both.
+  const existing = await query<{ id: number; active: boolean }>(
+    `SELECT id, active FROM medications WHERE user_name = $1 AND lower(name) = lower($2)`,
     [userName, fields.name]
   );
   if (existing.rows.length > 0) {
+    const rec = existing.rows[0];
+    // If the record is inactive, reactivate it and update all provided fields.
+    if (!rec.active) {
+      const reminderTime = fields.reminderTime ?? "08:00";
+      const { rows: updated } = await query<{
+        id: number; name: string; dosage: string | null; reminder_time: string;
+        active: boolean; frequency: string | null; time_of_day: string | null;
+        prescribing_doctor: string | null; notes: string | null;
+      }>(
+        `UPDATE medications
+         SET active = true,
+             dosage = COALESCE($3, dosage),
+             reminder_time = $4,
+             frequency = COALESCE($5, frequency),
+             time_of_day = COALESCE($6, time_of_day),
+             prescribing_doctor = COALESCE($7, prescribing_doctor),
+             notes = COALESCE($8, notes)
+         WHERE id = $1 AND user_name = $2
+         RETURNING id, name, dosage, reminder_time, active, frequency, time_of_day, prescribing_doctor, notes`,
+        [rec.id, userName, fields.dosage ?? null, reminderTime,
+         fields.frequency ?? null, fields.timeOfDay ?? null,
+         fields.prescribingDoctor ?? null, fields.notes ?? null]
+      );
+      const r = updated[0];
+      return {
+        success: true,
+        alreadyExists: false,
+        medication: r ? {
+          id: r.id, name: r.name, dosage: r.dosage, reminderTime: r.reminder_time,
+          active: r.active, frequency: r.frequency, timeOfDay: r.time_of_day,
+          prescribingDoctor: r.prescribing_doctor, notes: r.notes,
+        } : undefined,
+      };
+    }
     return { success: false, alreadyExists: true };
   }
 

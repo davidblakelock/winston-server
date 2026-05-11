@@ -114,6 +114,13 @@ router.post("/medications/add", express.json({ limit: "1mb" }), async (req, res)
     req.log.info({ name: name.trim(), alreadyExists: result.alreadyExists }, "[MEDS] POST /medications/add");
     res.json({ ok: true, alreadyExists: result.alreadyExists, medication: result.medication ?? null });
   } catch (err) {
+    // Unique constraint violation — medication already exists (e.g. inactive record
+    // not caught by the pre-check due to a race condition). Treat as alreadyExists.
+    if (typeof err === "object" && err !== null && (err as { code?: string }).code === "23505") {
+      req.log.warn({ name: name?.trim() }, "[MEDS] POST /medications/add — duplicate constraint, returning alreadyExists");
+      res.json({ ok: true, alreadyExists: true, medication: null });
+      return;
+    }
     req.log.error({ err }, "[MEDS] POST /medications/add error");
     res.status(500).json({ error: "Failed to add medication" });
   }
