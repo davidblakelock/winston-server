@@ -108,10 +108,11 @@ async function fetchFromGoogle(city: string, lat: number, lon: number): Promise<
 
   const forecastDays = forecastData.forecastDays ?? [];
 
-  // Day 0 = today; Days 1–9 = upcoming 9-day forecast.
-  // We include day 0 in mappedForecastDays so the native app can identify it
-  // with isToday: true and label it "Today" rather than "Tomorrow".
+  // Day 0 = today (used for high/low only); Days 1–9 = the 9-day forecast shown to the user.
+  // The native app labels the first entry "Tomorrow" and subsequent entries by weekday name,
+  // so day 0 must stay excluded from mappedForecastDays.
   const today = forecastDays[0];
+  const upcoming = forecastDays.slice(1);
 
   const high = Math.round(today?.maxTemperature?.degrees ?? current.currentConditionsHistory?.maxTemperature?.degrees ?? current.temperature?.degrees ?? 0);
   const low = Math.round(today?.minTemperature?.degrees ?? current.currentConditionsHistory?.minTemperature?.degrees ?? current.temperature?.degrees ?? 0);
@@ -123,13 +124,11 @@ async function fetchFromGoogle(city: string, lat: number, lon: number): Promise<
     0
   );
 
-  // Compute today's date in CT once — lets each forecast day self-identify
-  // so the native app doesn't have to guess via date comparison.
+  // Compute today's date in CT — used to set isToday on the rare case the API
+  // shifts days, but the first entry will always be tomorrow (day 1).
   const todayCT = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(new Date());
 
-  // Map ALL forecast days (0 = today through 9). isToday is set by date comparison
-  // so the native app reliably knows which entry to label "Today".
-  const mappedForecastDays: ForecastDay[] = forecastDays.map((day) => {
+  const mappedForecastDays: ForecastDay[] = upcoming.map((day) => {
     const d = day.displayDate;
     let dayName = "—";
     let dateStr = "";
