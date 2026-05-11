@@ -1,12 +1,17 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
+import express from "express";
+import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { authenticate } from "../auth/middleware.js";
+import { MODEL_HAIKU } from "../lib/models.js";
 import {
   batchCategorizeItems,
   categorizeAndUpdateItem,
   syncListItemToConnections,
   sortByCategory,
 } from "../lists/listManager.js";
+
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const router: IRouter = Router();
 
@@ -448,6 +453,72 @@ router.get("/lists/:listName", async (req: Request, res: Response) => {
   } catch (err) {
     req.log.warn({ err }, "Lists GET error");
     res.status(500).json({ error: "Failed to fetch list" });
+  }
+});
+
+// ── POST /api/lists/parse-voice ───────────────────────────────────────────────
+// Parses a natural language transcript into individual list items using Haiku.
+// Body: { transcript: string, listName: string }
+// Returns: { items: string[] }
+router.post("/lists/parse-voice", express.json(), async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const { transcript, listName } = req.body as { transcript?: unknown; listName?: unknown };
+
+  if (typeof transcript !== "string" || !transcript.trim()) {
+    res.status(400).json({ error: "transcript is required" });
+    return;
+  }
+  if (typeof listName !== "string" || !listName.trim()) {
+    res.status(400).json({ error: "listName is required" });
+    return;
+  }
+
+  const isTodo = listName.toLowerCase().includes("to") || listName.toLowerCase().includes("todo") || listName.toLowerCase().includes("task");
+  const listContext = isTodo
+    ? "to-do / task list (items are actions like 'call the dentist', 'pick up dry cleaning')"
+    : "shopping list (items are things to buy like 'milk', 'bread', 'olive oil')";
+
+  const prompt = `Extract individual ${listContext} items from this voice transcript. Return ONLY a JSON array of strings — no explanation, no markdown.
+
+Rules:
+- Split on conjunctions (and, also, plus) and commas
+- Preserve natural phrasing for to-do tasks (e.g. "call the dentist", not just "dentist")
+- For shopping items, use simple noun phrases (e.g. "almond milk", not "get some almond milk")
+- Strip filler words: "add", "put", "I need", "we need", "get me", "grab", "pick up", "can you add", "please add"
+- Preserve quantity/brand qualifiers (e.g. "2% milk", "a dozen eggs", "Tide pods")
+- Do not include empty strings
+- Return [] if no valid items can be extracted
+
+Transcript: "${transcript.trim()}"
+
+Return JSON array only:`;
+
+  try {
+    const resp = await anthropic.messages.create({
+      model: MODEL_HAIKU,
+      max_tokens: 300,
+      messages: [{ role: "user", content: prompt }],
+    });
+
+    const text = resp.content[0]?.type === "text" ? resp.content[0].text.trim() : "[]";
+    const match = text.match(/\[[\s\S]*\]/);
+    if (!match) {
+      res.json({ items: [] });
+      return;
+    }
+
+    const parsed = JSON.parse(match[0]);
+    const items: string[] = Array.isArray(parsed)
+      ? parsed.filter((x): x is string => typeof x === "string" && x.trim().length > 0).map((x) => x.trim())
+      : [];
+
+    req.log.info({ userName, listName, transcript: transcript.trim(), itemCount: items.length }, "[ParseVoice] Extracted items");
+    res.json({ items });
+  } catch (err) {
+    req.log.error({ err }, "[ParseVoice] Claude extraction failed");
+    res.status(500).json({ error: "Failed to parse transcript" });
   }
 });
 
