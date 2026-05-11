@@ -1,19 +1,31 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import multer from "multer";
 import { logger } from "../lib/logger.js";
+import { authenticate } from "../auth/middleware.js";
 
 const router: IRouter = Router();
 
+// Accept either "audio" or "file" field names — Android clients vary
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024 },
-});
+}).fields([
+  { name: "audio", maxCount: 1 },
+  { name: "file", maxCount: 1 },
+]);
 
 router.post(
   "/transcribe",
-  upload.single("audio"),
+  upload,
   async (req: Request, res: Response) => {
-    if (!req.file) {
+    const userName = await authenticate(req, res);
+    if (!userName) return;
+
+    // Support both "audio" and "file" field names
+    const fieldMap = (req as Request & { files?: Record<string, Express.Multer.File[]> }).files;
+    const file = (fieldMap?.["audio"]?.[0]) ?? (fieldMap?.["file"]?.[0]);
+
+    if (!file) {
       res.status(400).json({ error: "No audio file provided" });
       return;
     }
@@ -31,18 +43,18 @@ router.post(
     }
 
     try {
-      const mime = (req.file.mimetype || "audio/m4a").toLowerCase();
+      const mime = (file.mimetype || "audio/m4a").toLowerCase();
 
       logger.info(
-        { mime, bytes: req.file.size },
-        "STT request (ElevenLabs)"
+        { mime, bytes: file.size, userName, fieldName: file.fieldname },
+        "[Transcribe] STT request (ElevenLabs Scribe)"
       );
 
       const formData = new FormData();
       formData.append(
         "file",
-        new Blob([req.file.buffer], { type: mime }),
-        req.file.originalname || "audio.m4a"
+        new Blob([new Uint8Array(file.buffer)], { type: mime }),
+        file.originalname || "audio.m4a"
       );
       formData.append("model_id", "scribe_v1");
 
@@ -57,18 +69,32 @@ router.post(
 
       if (!response.ok) {
         const errorText = await response.text();
-        logger.error("ElevenLabs STT error", { status: response.status, mime, body: errorText });
-        throw new Error(`ElevenLabs STT error ${response.status}: ${errorText}`);
+        logger.error(
+          { status: response.status, mime, bytes: file.size, body: errorText, userName },
+          "[Transcribe] ElevenLabs STT error"
+        );
+        // Pass through the actual ElevenLabs status code so the client can distinguish
+        // auth/quota failures (403) from bad audio (400) from server errors (5xx)
+        const clientStatus = response.status >= 400 && response.status < 600
+          ? response.status
+          : 502;
+        res.status(clientStatus).json({
+          error: "Speech recognition failed",
+          detail: errorText,
+          upstreamStatus: response.status,
+        });
+        return;
       }
 
       const data = (await response.json()) as { text?: string };
       const text = (data.text ?? "").trim();
 
-      logger.info({ mime, textLength: text.length }, "STT result (ElevenLabs)");
+      logger.info({ mime, bytes: file.size, textLength: text.length, userName }, "[Transcribe] STT result");
 
       res.json({ text });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Transcription failed";
+      logger.error({ err, userName }, "[Transcribe] Unexpected error");
       res.status(500).json({ error: message });
     }
   }
