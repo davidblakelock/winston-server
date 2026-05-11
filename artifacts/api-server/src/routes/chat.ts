@@ -1342,8 +1342,18 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       staticCtx.preamble.replace(/^\[Current date and time[^\[]+/, "");
 
     // Assemble full system prompt: pre-built static preamble + live blocks + static suffix +
-    // delivery-time mode instruction (overrides any mode instruction baked into the suffix).
-    const deliverySuffix = staticCtx.suffix + deliveryModeInstruction;
+    // delivery-time mode instruction.
+    //
+    // For whisper and vacation modes the static suffix is intentionally SKIPPED.
+    // The suffix contains thousands of tokens of news blocks, sports scores, and a
+    // "cover 10 stories" briefing instruction — Claude will follow that agenda even
+    // if the whisper instruction says "be brief". Dropping the suffix means Claude
+    // only sees the persona preamble + live email/calendar + the mode instruction,
+    // which produces the correct 3-4 sentence (whisper) or 1-2 sentence (vacation)
+    // output without being cut off mid-sentence by the token cap.
+    const deliverySuffix = (deliveryProactiveMode === "whisper" || deliveryProactiveMode === "vacation")
+      ? deliveryModeInstruction
+      : staticCtx.suffix + deliveryModeInstruction;
     const fullSystemPrompt = livePreamble + liveGmailBlock + meetingRequestsBlock + liveCalendarBlock + deliverySuffix;
 
     req.log.info(
