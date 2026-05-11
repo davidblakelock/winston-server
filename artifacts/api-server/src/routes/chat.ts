@@ -1152,8 +1152,18 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       // or the user taps "morning briefing" twice in quick succession.
       const recentCached = getCachedBriefingIfRecent(sessionUserName, 90 * 60 * 1000);
       if (recentCached) {
-        req.log.info({ sessionUserName, chars: recentCached.length }, "Native morning briefing — cache hit (≤90 min), returning instantly");
-        res.json({ response: recentCached, morningActions: [] });
+        req.log.info({ sessionUserName, chars: recentCached.length }, "Native morning briefing — cache hit (≤90 min), assembling actions and returning");
+        // Briefing text served from cache but actions are always freshly assembled
+        // so delivery/bill/draft cards reflect the current state.
+        const cachedActionsResult = await assembleMorningActions({
+          userName: sessionUserName,
+          detectedMeetings: [],
+          calendarEvents: [],
+          userCity: (userProfile?.rawData as CollectedData | undefined)?.city ?? (userProfile as Record<string, unknown> & { city?: string } | null)?.city ?? undefined,
+          userLat: userProfile?.latitude ?? 32.7767,
+          userLon: userProfile?.longitude ?? -96.7970,
+        }).catch(() => [] as MorningAction[]);
+        res.json({ response: recentCached, morningActions: cachedActionsResult });
         return;
       }
       req.log.info({ sessionUserName }, "Native morning path — cache miss, fetching live calendar+email");
@@ -4027,7 +4037,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         nativeResp.content[0]?.type === "text" ? nativeResp.content[0].text : "";
       // [DIAG] Log the actual response text sent back to native app
       req.log.info({ responsePreview: nativeReply.slice(0, 300) }, "[DIAG:4] Native response sent");
-      const nativeResponseBody: Record<string, unknown> = { response: nativeReply };
+      const nativeResponseBody: Record<string, unknown> = { response: nativeReply, morningActions: [] };
       if (navigationUrl) nativeResponseBody.navigationUrl = navigationUrl;
       if ((req as any)._smsPayload) nativeResponseBody.smsPayload = (req as any)._smsPayload;
       if ((req as any)._reservationPayload) nativeResponseBody.reservationPayload = (req as any)._reservationPayload;

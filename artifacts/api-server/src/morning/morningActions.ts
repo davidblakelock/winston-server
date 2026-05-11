@@ -6,6 +6,7 @@ import { getWeatherSuggestions, type WeatherSuggestion } from "../weather/weathe
 import { getCachedWeather } from "../weather/weatherCache.js";
 import type { CalendarEvent } from "../google/calendar.js";
 import type { DetectedMeetingRequest } from "../email/emailMeetingManager.js";
+import { scanEmailsForDrafts, type EmailDraft } from "../email/draftScanner.js";
 import { runCrossDomainEngine } from "../intelligence/crossDomainEngine.js";
 import { getProactiveMode } from "../proactiveMode/proactiveModeManager.js";
 
@@ -17,6 +18,7 @@ export type MorningActionType =
   | "travel_today"
   | "weather_suggestion"
   | "bill_anomaly"
+  | "email_draft"
   | "cross_domain_insight";
 
 export interface MorningAction {
@@ -135,6 +137,23 @@ function billAnomaliesToActions(anomalies: BillAnomaly[]): MorningAction[] {
   }));
 }
 
+function emailDraftsToActions(drafts: EmailDraft[]): MorningAction[] {
+  return drafts.map((d) => ({
+    type: "email_draft" as MorningActionType,
+    title: `Reply Needed: ${d.sender}`,
+    detail: d.originalSummary,
+    severity: "info" as const,
+    data: {
+      emailId: d.emailId,
+      sender: d.sender,
+      senderEmail: d.senderEmail,
+      subject: d.subject,
+      emailDate: d.emailDate,
+      suggestedReply: d.suggestedReply,
+    },
+  }));
+}
+
 // ── Main assembler ────────────────────────────────────────────────────────────
 
 export interface AssembleMorningActionsInput {
@@ -161,7 +180,7 @@ export async function assembleMorningActions(
   const mode = await getProactiveMode(userName).catch(() => "balanced" as const);
 
   // Run all data fetches in parallel — failures are non-fatal
-  const [orders, travelSegments, billAnomalies, weatherData, crossDomainActions] = await Promise.allSettled([
+  const [orders, travelSegments, billAnomalies, weatherData, crossDomainActions, emailDrafts] = await Promise.allSettled([
     getOrdersForBriefing(userName),
     getTodayTravelSegments(userName),
     getBillAnomalies(userName),
@@ -178,6 +197,8 @@ export async function assembleMorningActions(
           userLon,
         })
       : Promise.resolve([]),
+    // Scan for emails needing a reply (capped at 5 to keep assembly fast)
+    scanEmailsForDrafts(userName, 5),
   ]);
 
   const allActions: MorningAction[] = [];
@@ -223,6 +244,13 @@ export async function assembleMorningActions(
     allActions.push(...crossDomainActions.value);
   } else if (crossDomainActions.status === "rejected") {
     logger.warn({ err: crossDomainActions.reason, userName }, "[MorningActions] Cross-domain engine failed");
+  }
+
+  // Pending email drafts (emails that need a reply)
+  if (emailDrafts.status === "fulfilled" && emailDrafts.value.length > 0) {
+    allActions.push(...emailDraftsToActions(emailDrafts.value));
+  } else if (emailDrafts.status === "rejected") {
+    logger.warn({ err: emailDrafts.reason, userName }, "[MorningActions] Email drafts fetch failed");
   }
 
   // Sort: alert > warning > info
