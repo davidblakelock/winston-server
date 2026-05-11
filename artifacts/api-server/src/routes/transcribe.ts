@@ -1,32 +1,73 @@
-import { Router, type IRouter, type Request, type Response } from "express";
+import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
+import express from "express";
 import multer from "multer";
 import { logger } from "../lib/logger.js";
 import { authenticate } from "../auth/middleware.js";
 
 const router: IRouter = Router();
 
-// Accept either "audio" or "file" field names — Android clients vary
+// ── Body parsing ───────────────────────────────────────────────────────────────
+// Replit's autoscale proxy blocks multipart/form-data uploads at the CDN layer.
+// The primary path is therefore JSON with a base64-encoded audio payload.
+// Multer is kept as a fallback for local dev / direct curl testing.
+//
+// Client sends ONE of:
+//   a) JSON body: { audioBase64: "<base64>", mimeType: "audio/m4a" }
+//   b) Multipart: field name "audio" or "file"  (dev / curl only)
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024 },
 }).fields([
   { name: "audio", maxCount: 1 },
-  { name: "file", maxCount: 1 },
+  { name: "file",  maxCount: 1 },
 ]);
+
+const jsonParser = express.json({ limit: "35mb" }); // room for base64 overhead
+
+function flexibleParser(req: Request, res: Response, next: NextFunction): void {
+  const ct = (req.headers["content-type"] ?? "").toLowerCase();
+  if (ct.startsWith("multipart/")) {
+    upload(req, res, next);
+  } else {
+    jsonParser(req, res, next);
+  }
+}
+
+// ── Route ──────────────────────────────────────────────────────────────────────
 
 router.post(
   "/transcribe",
-  upload,
+  flexibleParser,
   async (req: Request, res: Response) => {
     const userName = await authenticate(req, res);
     if (!userName) return;
 
-    // Support both "audio" and "file" field names
+    // Resolve audio source — multer file OR base64 JSON body
     const fieldMap = (req as Request & { files?: Record<string, Express.Multer.File[]> }).files;
-    const file = (fieldMap?.["audio"]?.[0]) ?? (fieldMap?.["file"]?.[0]);
+    const multerFile = fieldMap?.["audio"]?.[0] ?? fieldMap?.["file"]?.[0];
 
-    if (!file) {
-      res.status(400).json({ error: "No audio file provided" });
+    const jsonBody = (req.body ?? {}) as { audioBase64?: unknown; mimeType?: unknown };
+
+    let fileBuffer: Buffer;
+    let mime: string;
+    let fileName: string;
+
+    if (multerFile) {
+      fileBuffer = multerFile.buffer;
+      mime       = (multerFile.mimetype || "audio/m4a").toLowerCase();
+      fileName   = multerFile.originalname || "audio.m4a";
+    } else if (typeof jsonBody.audioBase64 === "string" && jsonBody.audioBase64.length > 0) {
+      try {
+        fileBuffer = Buffer.from(jsonBody.audioBase64, "base64");
+      } catch {
+        res.status(400).json({ error: "Invalid base64 audio data" });
+        return;
+      }
+      mime     = typeof jsonBody.mimeType === "string" ? jsonBody.mimeType.toLowerCase() : "audio/m4a";
+      fileName = "audio.m4a";
+    } else {
+      res.status(400).json({ error: "No audio file provided. Send { audioBase64, mimeType } JSON or multipart form-data." });
       return;
     }
 
@@ -43,18 +84,16 @@ router.post(
     }
 
     try {
-      const mime = (file.mimetype || "audio/m4a").toLowerCase();
-
       logger.info(
-        { mime, bytes: file.size, userName, fieldName: file.fieldname },
+        { mime, bytes: fileBuffer.length, userName, source: multerFile ? "multipart" : "base64-json" },
         "[Transcribe] STT request (ElevenLabs Scribe)"
       );
 
       const formData = new FormData();
       formData.append(
         "file",
-        new Blob([new Uint8Array(file.buffer)], { type: mime }),
-        file.originalname || "audio.m4a"
+        new Blob([new Uint8Array(fileBuffer)], { type: mime }),
+        fileName,
       );
       formData.append("model_id", "scribe_v1");
 
@@ -70,14 +109,11 @@ router.post(
       if (!response.ok) {
         const errorText = await response.text();
         logger.error(
-          { status: response.status, mime, bytes: file.size, body: errorText, userName },
+          { status: response.status, mime, bytes: fileBuffer.length, body: errorText, userName },
           "[Transcribe] ElevenLabs STT error"
         );
-        // Pass through the actual ElevenLabs status code so the client can distinguish
-        // auth/quota failures (403) from bad audio (400) from server errors (5xx)
-        const clientStatus = response.status >= 400 && response.status < 600
-          ? response.status
-          : 502;
+        const clientStatus =
+          response.status >= 400 && response.status < 600 ? response.status : 502;
         res.status(clientStatus).json({
           error: "Speech recognition failed",
           detail: errorText,
@@ -89,7 +125,7 @@ router.post(
       const data = (await response.json()) as { text?: string };
       const text = (data.text ?? "").trim();
 
-      logger.info({ mime, bytes: file.size, textLength: text.length, userName }, "[Transcribe] STT result");
+      logger.info({ mime, bytes: fileBuffer.length, textLength: text.length, userName }, "[Transcribe] STT result");
 
       res.json({ text });
     } catch (err: unknown) {
