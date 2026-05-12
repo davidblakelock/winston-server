@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { authenticate } from "../auth/middleware.js";
 import { query } from "../db.js";
+import { lookupRestaurantUrl } from "../lists/autoUrlLookup.js";
 
 const router = Router();
 
@@ -67,6 +68,62 @@ router.post("/admin/reset-profile", async (req: Request, res: Response) => {
     }
   } catch (err) {
     req.log.error({ err }, "[ADMIN] reset-profile — error");
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
+/**
+ * POST /api/admin/backfill-restaurant-urls
+ *
+ * Scans all restaurants in profile_items and populates missing URLs.
+ * Also upgrades any plain website URLs to OpenTable/Resy booking links where available.
+ * Runs sequentially (not in parallel) to avoid hammering the APIs.
+ */
+router.post("/admin/backfill-restaurant-urls", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  try {
+    const { rows } = await query<{ id: number; name: string; url: string | null; detail: string | null }>(
+      `SELECT id, name, url, detail FROM profile_items
+       WHERE user_name = $1 AND category = 'restaurants'
+       ORDER BY id`,
+      [userName]
+    );
+
+    const city = (req.body as { city?: string }).city ?? "Dallas";
+    const results: Array<{ id: number; name: string; before: string | null; after: string | null; status: string }> = [];
+
+    for (const row of rows) {
+      // Skip rows that already have a booking platform URL
+      const alreadyBooked = row.url && /opentable\.com|resy\.com/i.test(row.url);
+      if (alreadyBooked) {
+        results.push({ id: row.id, name: row.name, before: row.url, after: row.url, status: "skipped_already_booked" });
+        continue;
+      }
+
+      req.log.info({ id: row.id, name: row.name, city }, "[ADMIN] backfill-restaurant-urls — looking up");
+      const url = await lookupRestaurantUrl(row.name, city);
+
+      if (url) {
+        await query(
+          `UPDATE profile_items SET url = $1 WHERE id = $2`,
+          [url, row.id]
+        );
+        results.push({ id: row.id, name: row.name, before: row.url, after: url, status: "updated" });
+      } else {
+        results.push({ id: row.id, name: row.name, before: row.url, after: null, status: "not_found" });
+      }
+    }
+
+    const updated = results.filter((r) => r.status === "updated").length;
+    const notFound = results.filter((r) => r.status === "not_found").length;
+    const skipped = results.filter((r) => r.status === "skipped_already_booked").length;
+
+    req.log.info({ updated, notFound, skipped }, "[ADMIN] backfill-restaurant-urls — complete");
+    res.json({ ok: true, updated, notFound, skipped, results });
+  } catch (err) {
+    req.log.error({ err }, "[ADMIN] backfill-restaurant-urls — error");
     res.status(500).json({ error: "internal_error" });
   }
 });

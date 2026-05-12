@@ -1,3 +1,4 @@
+import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 
@@ -17,12 +18,62 @@ export function detectAutoLookupType(listName: string): AutoLookupType | null {
 
 // ── Per-type URL builders ─────────────────────────────────────────────────────
 
-async function lookupRestaurantUrl(name: string): Promise<string | null> {
-  const apiKey = process.env.GOOGLE_PLACES_API_KEY;
-  if (!apiKey) {
-    logger.warn("[AutoURL] GOOGLE_PLACES_API_KEY not set — skipping restaurant lookup");
+// Step 1: Use Claude web_search to find a direct OpenTable or Resy booking page.
+// Returns the booking URL if found, or null if neither platform has a listing.
+async function lookupRestaurantBookingUrl(name: string, city = "Dallas"): Promise<string | null> {
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  if (!anthropicKey) return null;
+
+  const anthropic = new Anthropic({ apiKey: anthropicKey });
+  const prompt =
+    `Find the direct booking page URL for the restaurant "${name}"${city ? ` in ${city}` : ""}.\n\n` +
+    `Search for:\n` +
+    `  1. "${name} opentable" — look for a URL matching opentable.com/r/... or opentable.com/restaurant/...\n` +
+    `  2. "${name} resy" — look for a URL matching resy.com/cities/.../venues/...\n\n` +
+    `Rules:\n` +
+    `• Return ONLY the single direct booking page URL (not a search results page).\n` +
+    `• Prefer OpenTable over Resy if both exist.\n` +
+    `• The URL must contain "opentable.com" or "resy.com" — reject anything else.\n` +
+    `• If no direct booking page is found on either platform, return exactly: NONE\n` +
+    `• No explanation, no extra text — just the URL or NONE.`;
+
+  try {
+    const response = await anthropic.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 200,
+      tools: [{ type: "web_search_20250305" as const, name: "web_search" }],
+      messages: [{ role: "user", content: prompt }],
+    });
+
+    const text = response.content
+      .filter((b) => b.type === "text")
+      .map((b) => (b as { type: "text"; text: string }).text)
+      .join("").trim();
+
+    if (!text || /^none$/i.test(text.trim())) return null;
+
+    // Validate it's actually a booking platform URL
+    const url = text.trim().split(/\s/)[0]; // take first word in case Claude adds commentary
+    if (/opentable\.com|resy\.com/i.test(url)) {
+      logger.info({ name, url }, "[AutoURL] Booking URL found via web search");
+      return url;
+    }
+    return null;
+  } catch (err) {
+    logger.warn({ err, name }, "[AutoURL] Booking URL web search failed");
     return null;
   }
+}
+
+// Step 2 fallback: Google Places API websiteUri (the restaurant's own website).
+async function lookupRestaurantWebsite(name: string, city = "Dallas"): Promise<string | null> {
+  const apiKey = process.env.GOOGLE_PLACES_API_KEY;
+  if (!apiKey) return null;
+
+  // Skip city suffix for restaurants that are clearly in specific non-default locations
+  // (e.g. "Nobu Malibu" already encodes the city, "Eleven Madison Park" is NYC)
+  const nameEncodeCity = / (malibu|manhattan|nyc|new york|miami|chicago|la |los angeles|san francisco|austin|houston|nashville|vegas)/i.test(name);
+  const query_text = nameEncodeCity ? `${name} restaurant` : `${name} restaurant ${city}`;
 
   try {
     const searchResp = await fetch("https://places.googleapis.com/v1/places:searchText", {
@@ -33,10 +84,11 @@ async function lookupRestaurantUrl(name: string): Promise<string | null> {
         "X-Goog-FieldMask": "places.websiteUri,places.displayName",
       },
       body: JSON.stringify({
-        textQuery: `${name} restaurant`,
+        textQuery: query_text,
         maxResultCount: 1,
         languageCode: "en",
       }),
+      signal: AbortSignal.timeout(10000),
     });
 
     if (!searchResp.ok) {
@@ -49,13 +101,22 @@ async function lookupRestaurantUrl(name: string): Promise<string | null> {
     };
 
     const websiteUri = data.places?.[0]?.websiteUri ?? null;
-    logger.info({ name, websiteUri }, "[AutoURL] Restaurant URL found");
+    logger.info({ name, websiteUri }, "[AutoURL] Restaurant website found via Places API");
     return websiteUri;
   } catch (err) {
-    logger.warn({ err }, "[AutoURL] Restaurant lookup failed");
+    logger.warn({ err }, "[AutoURL] Restaurant Places lookup failed");
     return null;
   }
 }
+
+// Orchestrator: booking URL first, then restaurant website fallback.
+async function lookupRestaurantUrl(name: string, city = "Dallas"): Promise<string | null> {
+  const bookingUrl = await lookupRestaurantBookingUrl(name, city);
+  if (bookingUrl) return bookingUrl;
+  return lookupRestaurantWebsite(name, city);
+}
+
+export { lookupRestaurantUrl };
 
 export async function lookupItemUrl(itemText: string, type: AutoLookupType): Promise<string | null> {
   const encoded = encodeURIComponent(itemText);
