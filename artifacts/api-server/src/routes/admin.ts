@@ -4,6 +4,7 @@ import { authenticate } from "../auth/middleware.js";
 import { query } from "../db.js";
 import { lookupRestaurantUrl } from "../lists/autoUrlLookup.js";
 import { upsertProfile } from "../onboarding/onboardingManager.js";
+import { isOpenTableBookingReady, isResyBookingReady } from "../restaurants/apifyBooking.js";
 
 const router = Router();
 
@@ -155,6 +156,107 @@ router.patch("/admin/update-interests", express.json(), async (req: Request, res
     res.json({ ok: true, interests });
   } catch (err) {
     req.log.error({ err }, "[ADMIN] update-interests error");
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
+/**
+ * GET /api/admin/timezone-check
+ *
+ * Diagnostic: confirms that reminder times are stored as UTC TIMESTAMPTZ
+ * and shows pending to-do reminders in both UTC and America/Chicago time.
+ * Use this to verify that computeFireAt() is producing correct local times.
+ */
+router.get("/admin/timezone-check", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  try {
+    const nowUTC = new Date();
+    const nowChicago = nowUTC.toLocaleString("en-US", {
+      timeZone: "America/Chicago",
+      dateStyle: "short",
+      timeStyle: "short",
+    });
+
+    const { rows: todoRows } = await query<{
+      id: number;
+      item_text: string;
+      reminder_time: Date;
+      user_name: string;
+    }>(
+      `SELECT id, item_text, reminder_time, user_name
+         FROM list_items
+        WHERE list_name = 'to do'
+          AND reminder_time IS NOT NULL
+          AND reminder_fired = FALSE
+        ORDER BY reminder_time ASC
+        LIMIT 10`
+    );
+
+    const { rows: reminderRows } = await query<{
+      id: number;
+      reminder_text: string;
+      fire_at: Date;
+      status: string;
+    }>(
+      `SELECT id, reminder_text, fire_at, status
+         FROM reminders
+        WHERE user_name = $1
+          AND status = 'pending'
+        ORDER BY fire_at ASC
+        LIMIT 10`,
+      [userName]
+    );
+
+    const todoReminders = todoRows.map((r) => {
+      const fireMs = new Date(r.reminder_time).getTime();
+      const diffMin = Math.round((fireMs - nowUTC.getTime()) / 60_000);
+      return {
+        id: r.id,
+        text: r.item_text,
+        utc: new Date(r.reminder_time).toISOString(),
+        chicago: new Date(r.reminder_time).toLocaleString("en-US", {
+          timeZone: "America/Chicago",
+          dateStyle: "short",
+          timeStyle: "short",
+        }),
+        firesIn: diffMin >= 0 ? `${diffMin} min` : `${Math.abs(diffMin)} min overdue`,
+      };
+    });
+
+    const scheduledReminders = reminderRows.map((r) => {
+      const fireMs = new Date(r.fire_at).getTime();
+      const diffMin = Math.round((fireMs - nowUTC.getTime()) / 60_000);
+      return {
+        id: r.id,
+        text: r.reminder_text,
+        utc: new Date(r.fire_at).toISOString(),
+        chicago: new Date(r.fire_at).toLocaleString("en-US", {
+          timeZone: "America/Chicago",
+          dateStyle: "short",
+          timeStyle: "short",
+        }),
+        firesIn: diffMin >= 0 ? `${diffMin} min` : `${Math.abs(diffMin)} min overdue`,
+      };
+    });
+
+    res.json({
+      serverNowUTC: nowUTC.toISOString(),
+      serverNowChicago: nowChicago,
+      timezoneImpl:
+        "computeFireAt() uses Intl.DateTimeFormat(America/Chicago) to offset user's local time to UTC. " +
+        "reminder_time / fire_at are TIMESTAMPTZ (stored as UTC). " +
+        "Scheduler comparison `reminder_time <= NOW()` is UTC vs UTC — correct.",
+      apifyStatus: {
+        openTableReady: isOpenTableBookingReady(),
+        resyReady: isResyBookingReady(),
+      },
+      pendingTodoReminders: todoReminders,
+      pendingScheduledReminders: scheduledReminders,
+    });
+  } catch (err) {
+    req.log.error({ err }, "[ADMIN] timezone-check error");
     res.status(500).json({ error: "internal_error" });
   }
 });

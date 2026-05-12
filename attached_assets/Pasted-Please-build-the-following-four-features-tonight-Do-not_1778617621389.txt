@@ -1,0 +1,43 @@
+Please build the following four features tonight. Do not break any existing functionality. Deploy when complete.
+1. Reservation Booking via Apify MCP
+Integrate the Apify OpenTable and Resy MCP servers to enable real zero-touch restaurant booking:
+
+OpenTable MCP: https://apify.com/canadesk/opentable/api
+Resy MCP: https://apify.com/clearpath/resy-booker
+
+When a user says something like 'Book Nobu for 2 this Saturday at 7' or 'Make a reservation at Nick and Sam's for 4 people Friday at 8':
+
+Search OpenTable first for the restaurant and requested time
+If available, book it directly and confirm
+If not available, present 2-3 alternative times and ask which the user prefers
+Once booked, add the reservation to the user's Google Calendar automatically
+Send a push notification confirming the booking: 'Reservation confirmed at Nobu Dallas — Saturday at 7:00 PM, party of 2'
+If the restaurant is not on OpenTable, try Resy
+If neither has it, fall back to the existing behavior of opening the booking page pre-filled
+
+2. Cross-User Reminders via Winston Connect
+When a user says something like 'Remind Alex at noon to pick up the dry cleaning' or 'Tell Sarah at 3pm that the meeting moved to Thursday':
+
+Look up the named person in the user's Winston Connect connections
+Schedule a push notification to that connection's Winston at the specified time
+The push notification body should be conversational and from the sender: 'A message from David: pick up the dry cleaning'
+Also add the reminder to the recipient's to-do list with the reminder_time set
+If the named person is not a Winston Connect connection, tell the user and suggest adding them
+
+3. Shopping List Category Grouping
+The list_items table already has a category column populated by Claude Haiku when items are added. Update GET /api/lists/shopping to:
+
+Return items sorted by category in this order: Produce, Dairy, Meat, Bakery, Frozen, Beverages, Snacks, Canned Goods, Cleaning, Personal Care, Pharmacy, Other
+Include the category field on each item in the response
+Items with no category should appear at the end under 'Other'
+Run the categorization on any existing shopping list items that have no category assigned
+
+4. To-Do Reminder Timezone Fix
+The to-do reminder scheduler sends push notifications based on reminder_time stored in the database. Verify that:
+
+When a user sets a reminder via chat ('Remind me at 3pm to call the dentist'), the time is interpreted in the user's local timezone (America/Chicago for davidblakelock) not UTC
+The push notification fires at the correct local time
+If the reminder_time is being stored in UTC, ensure the scheduler correctly converts to the user's timezone before sending
+Test by setting a reminder for a specific time and confirming the notification fires at that local time
+
+Deploy all four when complete and confirm each with a test result.

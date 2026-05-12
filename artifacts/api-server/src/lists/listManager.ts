@@ -24,8 +24,8 @@ export interface ListResult {
 
 export const SHOPPING_CATEGORIES = [
   "Produce", "Dairy", "Meat", "Bakery", "Frozen",
-  "Beverages", "Cleaning", "Personal Care", "Pharmacy",
-  "Snacks", "Canned Goods", "Other",
+  "Beverages", "Snacks", "Canned Goods", "Cleaning",
+  "Personal Care", "Pharmacy", "Other",
 ] as const;
 
 const CATEGORY_ORDER: Record<string, number> = Object.fromEntries(

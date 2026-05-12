@@ -176,6 +176,12 @@ import {
   type PendingReservation,
 } from "../restaurants/restaurantIntelligence.js";
 import {
+  bookViaOpenTable,
+  bookViaResy,
+  isOpenTableBookingReady,
+  isResyBookingReady,
+} from "../restaurants/apifyBooking.js";
+import {
   detectMeetingRequests,
   buildMeetingRequestsBlock,
   composeEmailReply,
@@ -2161,22 +2167,158 @@ const chatHandlerCore = async (req: Request, res: Response) => {
             const reservationUrl = buildReservationUrl(details, intent.dateISO, intent.timeISO, intent.partySize);
 
             if (details.platform === "opentable" && reservationUrl) {
-              (req as any)._reservationPayload = {
-                type: "opentable",
-                url: reservationUrl,
-                restaurantName: details.name,
-                phone: details.phone ?? null,
-              };
-              (req as any)._hardcodedResponse = "";
+              if (isOpenTableBookingReady() && intent.dateISO && intent.timeISO && details.platformSlug) {
+                // Apify zero-touch booking — respond immediately, book in background
+                const bookingDateLabel = intent.dateLabel ?? intent.dateISO;
+                const bookingTimeLabel = intent.timeLabel ?? intent.timeISO;
+                (req as any)._hardcodedResponse =
+                  `Booking ${details.name} for ${partySize} on ${bookingDateLabel} at ${bookingTimeLabel} — I'll push you a confirmation once it's locked in.${conflictNote}`;
+                const _snap = {
+                  slug: details.platformSlug!,
+                  name: details.name,
+                  addr: details.formattedAddress ?? details.name,
+                  date: intent.dateISO!,
+                  time: intent.timeISO!,
+                  timeLabel: bookingTimeLabel,
+                  dateLabel: bookingDateLabel,
+                  fallbackUrl: reservationUrl,
+                };
+                const _user = sessionUserName;
+                Promise.resolve().then(async () => {
+                  try {
+                    const result = await bookViaOpenTable(
+                      _snap.slug, _snap.name, _snap.date, _snap.time, partySize
+                    );
+                    if (result.success) {
+                      await createCalendarEvent({
+                        title: `Reservation at ${_snap.name}`,
+                        date: _snap.date,
+                        startTime: _snap.timeLabel,
+                        endTime: null,
+                        location: _snap.addr,
+                        description: `Party of ${partySize}${result.confirmationNumber ? `. Confirmation #${result.confirmationNumber}` : ""}`,
+                        allDay: false,
+                      }, _user).catch(() => {});
+                      await sendPushToAll({
+                        title: "Reservation Confirmed ✓",
+                        body: `${_snap.name} — ${_snap.dateLabel} at ${_snap.timeLabel}, party of ${partySize}${result.confirmationNumber ? `. Conf #${result.confirmationNumber}` : ""}`,
+                        tag: `reservation-confirmed-${Date.now()}`,
+                        notificationType: "reservation-confirmed",
+                        requireInteraction: true,
+                      }, _user);
+                    } else if (result.alternatives?.length) {
+                      const alts = result.alternatives.map((a) => a.time).join(", ");
+                      await sendPushToAll({
+                        title: `${_snap.name} — Check Alternatives`,
+                        body: `${_snap.timeLabel} is taken. Available: ${alts}. Reply to James Bond to book one.`,
+                        tag: `reservation-alt-${Date.now()}`,
+                        notificationType: "reservation-alternatives",
+                        requireInteraction: true,
+                      }, _user);
+                    } else {
+                      broadcastToUser(_user, "reservation-link", {
+                        type: "opentable", url: _snap.fallbackUrl, restaurantName: _snap.name,
+                      });
+                      await sendPushToAll({
+                        title: `${_snap.name} — Manual Booking Needed`,
+                        body: `Couldn't auto-book — opening OpenTable for you.`,
+                        tag: `reservation-fallback-${Date.now()}`,
+                        notificationType: "reservation-fallback",
+                      }, _user);
+                    }
+                  } catch (apifyErr) {
+                    req.log.warn({ apifyErr }, "[Apify] Async OpenTable booking error — sending fallback URL");
+                    broadcastToUser(_user, "reservation-link", {
+                      type: "opentable", url: _snap.fallbackUrl, restaurantName: _snap.name,
+                    });
+                  }
+                }).catch(() => {});
+              } else {
+                (req as any)._reservationPayload = {
+                  type: "opentable",
+                  url: reservationUrl,
+                  restaurantName: details.name,
+                  phone: details.phone ?? null,
+                };
+                (req as any)._hardcodedResponse = "";
+              }
 
             } else if (details.platform === "resy" && reservationUrl) {
-              (req as any)._reservationPayload = {
-                type: "resy",
-                url: reservationUrl,
-                restaurantName: details.name,
-                phone: details.phone ?? null,
-              };
-              (req as any)._hardcodedResponse = "";
+              if (isResyBookingReady() && intent.dateISO && intent.timeISO && details.platformSlug) {
+                const bookingDateLabel = intent.dateLabel ?? intent.dateISO;
+                const bookingTimeLabel = intent.timeLabel ?? intent.timeISO;
+                (req as any)._hardcodedResponse =
+                  `Booking ${details.name} for ${partySize} on ${bookingDateLabel} at ${bookingTimeLabel} — I'll push you a confirmation once it's locked in.${conflictNote}`;
+                const _snap = {
+                  slug: details.platformSlug!,
+                  city: resyCitySlug ?? "us",
+                  name: details.name,
+                  addr: details.formattedAddress ?? details.name,
+                  date: intent.dateISO!,
+                  time: intent.timeISO!,
+                  timeLabel: bookingTimeLabel,
+                  dateLabel: bookingDateLabel,
+                  fallbackUrl: reservationUrl,
+                };
+                const _user = sessionUserName;
+                Promise.resolve().then(async () => {
+                  try {
+                    const result = await bookViaResy(
+                      _snap.slug, _snap.city, _snap.name, _snap.date, _snap.time, partySize
+                    );
+                    if (result.success) {
+                      await createCalendarEvent({
+                        title: `Reservation at ${_snap.name}`,
+                        date: _snap.date,
+                        startTime: _snap.timeLabel,
+                        endTime: null,
+                        location: _snap.addr,
+                        description: `Party of ${partySize}${result.confirmationNumber ? `. Confirmation #${result.confirmationNumber}` : ""}`,
+                        allDay: false,
+                      }, _user).catch(() => {});
+                      await sendPushToAll({
+                        title: "Reservation Confirmed ✓",
+                        body: `${_snap.name} — ${_snap.dateLabel} at ${_snap.timeLabel}, party of ${partySize}${result.confirmationNumber ? `. Conf #${result.confirmationNumber}` : ""}`,
+                        tag: `reservation-confirmed-${Date.now()}`,
+                        notificationType: "reservation-confirmed",
+                        requireInteraction: true,
+                      }, _user);
+                    } else if (result.alternatives?.length) {
+                      const alts = result.alternatives.map((a) => a.time).join(", ");
+                      await sendPushToAll({
+                        title: `${_snap.name} — Check Alternatives`,
+                        body: `${_snap.timeLabel} is taken. Available: ${alts}. Reply to James Bond to book one.`,
+                        tag: `reservation-alt-${Date.now()}`,
+                        notificationType: "reservation-alternatives",
+                        requireInteraction: true,
+                      }, _user);
+                    } else {
+                      broadcastToUser(_user, "reservation-link", {
+                        type: "resy", url: _snap.fallbackUrl, restaurantName: _snap.name,
+                      });
+                      await sendPushToAll({
+                        title: `${_snap.name} — Manual Booking Needed`,
+                        body: `Couldn't auto-book — opening Resy for you.`,
+                        tag: `reservation-fallback-${Date.now()}`,
+                        notificationType: "reservation-fallback",
+                      }, _user);
+                    }
+                  } catch (apifyErr) {
+                    req.log.warn({ apifyErr }, "[Apify] Async Resy booking error — sending fallback URL");
+                    broadcastToUser(_user, "reservation-link", {
+                      type: "resy", url: _snap.fallbackUrl, restaurantName: _snap.name,
+                    });
+                  }
+                }).catch(() => {});
+              } else {
+                (req as any)._reservationPayload = {
+                  type: "resy",
+                  url: reservationUrl,
+                  restaurantName: details.name,
+                  phone: details.phone ?? null,
+                };
+                (req as any)._hardcodedResponse = "";
+              }
 
             } else if (details.platform === "yelp" && reservationUrl) {
               (req as any)._reservationPayload = {
@@ -3269,35 +3411,43 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         req.log.info({ extracted, resolvedTime, fireAt, noTimeGiven, recurringLabel }, "Reminder saved");
 
         if (extracted.forContact) {
-          // Try to deliver via Winston Connect if the contact is a linked user
-          let connectDelivered = false;
+          // Schedule the reminder for the recipient via Winston Connect.
+          // Creates a row in the RECIPIENT's reminders table so the scheduler
+          // fires the push at the correct local time — not immediately.
+          let connectScheduled = false;
+          let connectSenderLabel = sessionUserName;
           try {
             const match = await findConnectionByLabel(sessionUserName, extracted.forContact);
             if (match) {
-              const msgId = await saveConnectMessage(
-                sessionUserName,
-                match.recipientUserName,
-                "reminder",
-                extracted.reminderText
+              connectSenderLabel = match.senderLabel;
+              const recipientReminderText = `A message from ${match.senderLabel}: ${extracted.reminderText}`;
+
+              // Schedule in recipient's reminders table — scheduler fires push at fireAt
+              await createReminder({
+                userName: match.recipientUserName,
+                reminderText: recipientReminderText,
+                fireAt,
+                timezone: "America/Chicago",
+              });
+
+              // Mirror to recipient's to-do list so they see it there too
+              await query(
+                `INSERT INTO list_items (user_name, list_name, item_text, reminder_time, added_by)
+                 VALUES ($1, 'to do', $2, $3, $4)
+                 ON CONFLICT (user_name, list_name, lower(item_text))
+                 DO UPDATE SET reminder_time  = EXCLUDED.reminder_time,
+                               reminder_fired = FALSE`,
+                [match.recipientUserName, extracted.reminderText, fireAt, match.senderLabel]
+              ).catch(() => {});
+
+              connectScheduled = true;
+              req.log.info(
+                { recipient: match.recipientUserName, fireAt: fireAt.toISOString(), text: extracted.reminderText },
+                "[Connect] Cross-user reminder scheduled"
               );
-              const displayName = match.senderLabel;
-              const companionMsg = `Reminder from ${displayName}: ${extracted.reminderText}`;
-              const pushResult = await sendPushToAll({
-                title: `Reminder from ${displayName}`,
-                body: extracted.reminderText,
-                tag: `connect-reminder-${msgId}`,
-                notificationType: "connect-reminder",
-                companionMessage: companionMsg,
-                requireInteraction: true,
-              }, match.recipientUserName);
-              if (pushResult.sent > 0) {
-                await markMessageDelivered(msgId);
-              }
-              connectDelivered = true;
-              req.log.info({ msgId, recipient: match.recipientUserName, sent: pushResult.sent }, "[Connect] Reminder delivered via Winston Connect");
             }
           } catch (connectErr) {
-            req.log.warn({ connectErr }, "[Connect] Winston Connect delivery attempt failed — local reminder still saved");
+            req.log.warn({ connectErr }, "[Connect] Winston Connect scheduling failed — local reminder still saved");
           }
 
           reminderConfirmation =
@@ -3305,11 +3455,13 @@ const chatHandlerCore = async (req: Request, res: Response) => {
             `Contact: "${extracted.forContact}"\n` +
             `Text: "${extracted.reminderText}"\n` +
             `Time: ${timeLabel}${noTimeGiven ? " (defaulted — no time specified)" : ""}\n` +
-            (connectDelivered
-              ? `Winston Connect push notification sent to ${extracted.forContact}'s companion. ` +
-                `Reply with ONLY the confirmation. One line: "Done — I've sent ${extracted.forContact} a reminder to ${extracted.reminderText}."`
-              : `${extracted.forContact} is not currently linked via Winston Connect, so no push was sent. ` +
-                `Reply with ONLY the confirmation. One line: "Done — I'll remind ${extracted.forContact} to ${extracted.reminderText} at ${timeLabel}. Note: they'll need Winston Connect to receive it as a push notification."`);
+            (connectScheduled
+              ? `Scheduled push on ${extracted.forContact}'s companion at ${timeLabel}. ` +
+                `Message will read: "A message from ${connectSenderLabel}: ${extracted.reminderText}". ` +
+                `Also added "${extracted.reminderText}" to ${extracted.forContact}'s to-do list with a ${timeLabel} reminder. ` +
+                `Reply with ONLY: "Done — I'll remind ${extracted.forContact} to ${extracted.reminderText} at ${timeLabel}."`
+              : `${extracted.forContact} is not currently linked via Winston Connect, so no push was scheduled. ` +
+                `Reply with ONLY: "Done — I'll remind you to follow up with ${extracted.forContact} about ${extracted.reminderText} at ${timeLabel}. They'll need Winston Connect to receive it directly."`);
         } else {
           const recurringPhrase = recurringLabel ? ` ${recurringLabel}` : "";
           reminderConfirmation =
