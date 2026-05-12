@@ -487,7 +487,7 @@ router.post("/lists/shopping/categorize", async (req: Request, res: Response) =>
 // ── To Do — dedicated slug so the URL never needs %20 encoding ───────────────
 // Maps the clean /todo path to list_name = 'to do' in the DB.
 // MUST appear before the /lists/:listName wildcard.
-router.get("/lists/todo", async (req: Request, res: Response) => {
+router.get(["/lists/todo", "/lists/to do"], async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
   res.setHeader("Cache-Control", "no-store");
@@ -505,7 +505,7 @@ router.get("/lists/todo", async (req: Request, res: Response) => {
   }
 });
 
-router.post("/lists/todo", async (req: Request, res: Response) => {
+router.post(["/lists/todo", "/lists/to do"], async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
   const { item, url: rawTodoUrl, ownerUserName, reminder_time: rawReminderTime } = req.body as { item?: string; url?: string; ownerUserName?: string; reminder_time?: string };
@@ -585,7 +585,7 @@ router.post("/lists/todo", async (req: Request, res: Response) => {
   }
 });
 
-router.delete("/lists/todo/:id", async (req: Request, res: Response) => {
+router.delete(["/lists/todo/:id", "/lists/to do/:id"], async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
   const { id } = req.params;
