@@ -156,7 +156,7 @@ function rowToProfile(r: ProfileRow): UserProfile {
 
 export async function getProfile(userName = NATIVE_STORED_NAME): Promise<UserProfile | null> {
   const { rows } = await query<ProfileRow>(
-    `SELECT * FROM user_profiles WHERE user_name = $1 LIMIT 1`,
+    `SELECT * FROM user_profiles WHERE user_name = $1 ORDER BY id DESC LIMIT 1`,
     [userName]
   );
   if (rows.length === 0) return null;
@@ -303,10 +303,10 @@ export async function getActiveUsers(): Promise<ActiveUser[]> {
   };
 
   const { rows } = await query<ProfileRow>(
-    `SELECT user_name, name, city, timezone, wake_time, companion_name
+    `SELECT DISTINCT ON (user_name) user_name, name, city, timezone, wake_time, companion_name
      FROM user_profiles
      WHERE onboarding_completed = true
-     ORDER BY user_name`
+     ORDER BY user_name, id DESC`
   );
 
   const toActiveUser = (r: ProfileRow): ActiveUser => ({
