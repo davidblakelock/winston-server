@@ -79,6 +79,39 @@ export interface DuplicateGroup {
   };
 }
 
+// ── GET /api/contacts/search?q={query} ───────────────────────────────────────
+// Live search of the user's Google Contacts via the People API.
+// Returns matching contacts with name, email, and phone fields.
+// Response: { contacts: [{ name, email?, phone? }] }
+// If the Google account isn't connected or lacks contacts scope, returns
+// { contacts: [], needsReauth: true }.
+router.get("/contacts/search", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const q = (req.query["q"] as string | undefined)?.trim();
+  if (!q) {
+    res.status(400).json({ error: "q query parameter is required" });
+    return;
+  }
+
+  try {
+    const result = await searchContacts(q, userName);
+
+    const contacts = result.contacts.map((c) => ({
+      name: c.name,
+      ...(c.email ? { email: c.email } : {}),
+      ...(c.phone ? { phone: c.phone } : {}),
+    }));
+
+    req.log.info({ userName, q, count: contacts.length }, "[CONTACTS] GET /contacts/search");
+    res.json({ contacts, needsReauth: result.needsReauth ?? false });
+  } catch (err) {
+    req.log.error({ err }, "[CONTACTS] GET /contacts/search error");
+    res.status(500).json({ error: "Failed to search contacts" });
+  }
+});
+
 // ── GET /api/contacts/duplicates ──────────────────────────────────────────────
 router.get("/contacts/duplicates", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
