@@ -1,7 +1,9 @@
 import { Router, type Request, type Response } from "express";
+import express from "express";
 import { authenticate } from "../auth/middleware.js";
 import { query } from "../db.js";
 import { lookupRestaurantUrl } from "../lists/autoUrlLookup.js";
+import { upsertProfile } from "../onboarding/onboardingManager.js";
 
 const router = Router();
 
@@ -124,6 +126,35 @@ router.post("/admin/backfill-restaurant-urls", async (req: Request, res: Respons
     res.json({ ok: true, updated, notFound, skipped, results });
   } catch (err) {
     req.log.error({ err }, "[ADMIN] backfill-restaurant-urls — error");
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
+/**
+ * PATCH /api/admin/update-interests
+ *
+ * Replaces the authenticated user's interests array in raw_data.
+ * Also removes any matching profile_items entries for the removed interests.
+ * Use this to clean up stale interests (e.g. woodworking) from production.
+ *
+ * Body: { "interests": ["pickleball", "running", ...] }
+ */
+router.patch("/admin/update-interests", express.json(), async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const { interests } = req.body as { interests?: string[] };
+  if (!Array.isArray(interests)) {
+    res.status(400).json({ error: "interests array required" });
+    return;
+  }
+
+  try {
+    await upsertProfile({ interests }, userName);
+    req.log.info({ userName, interests }, "[ADMIN] update-interests — profile rawData.interests updated");
+    res.json({ ok: true, interests });
+  } catch (err) {
+    req.log.error({ err }, "[ADMIN] update-interests error");
     res.status(500).json({ error: "internal_error" });
   }
 });
