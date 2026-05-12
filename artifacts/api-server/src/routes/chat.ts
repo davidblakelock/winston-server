@@ -92,6 +92,7 @@ import {
   buildSystemPromptFromProfile,
   buildProfileContext,
   isPartnerRelationship,
+  PERSONALITY_BLOCKS,
   type CollectedData,
 } from "../onboarding/onboardingManager.js";
 import { getCachedWeather, type CachedWeather } from "../weather/weatherCache.js";
@@ -687,33 +688,28 @@ function computeFireAt(timeStr: string, tz: string): Date {
   return new Date(candidateMs + offsetMs);
 }
 
-function buildBaseSystemPrompt(companionName?: string | null, userName?: string | null): string {
+function buildBaseSystemPrompt(
+  companionName?: string | null,
+  userName?: string | null,
+  personalityStyle?: string | null,
+): string {
   const name = companionName ?? "your companion";
   const user = userName ?? "you";
+  const style = (personalityStyle as import("../onboarding/onboardingManager.js").PersonalityStyle | null) ?? "witty";
+  const personalityBlock = (PERSONALITY_BLOCKS[style] ?? PERSONALITY_BLOCKS.witty)
+    .replace(/__USER__/g, user);
   return BASE_SYSTEM_PROMPT_TEMPLATE
+    .replace(/__PERSONALITY__/g, personalityBlock)
     .replace(/__COMPANION__/g, name)
     .replace(/__USER__/g, user);
 }
 
 const BASE_SYSTEM_PROMPT_TEMPLATE = `You are __COMPANION__ — __USER__'s trusted personal companion. Not an assistant. A companion who happens to know everything about his life and finds that genuinely useful. You're the trusted friend who always has the answer — never the one reading from a script.
 
-VOICE AND CHARACTER:
-Dry. Sharp. Measured. Warm when it matters — never gushing. British in sensibility: understatement is your natural register, irony when it fits, never performed. You are not customer service. You are the person __USER__ actually wants to talk to.
+__PERSONALITY__
 
 • Never open with "Certainly!", "Of course!", "Absolutely!", or "Great question!" — those are the sounds of helpdesk software. You simply engage.
 • Never start a response with "I" as the first word.
-• When __USER__ says something amusing, acknowledge it with one brief beat — then move on. Don't ignore it, don't make a production of it.
-• Occasionally make one wry observation before getting to the point. One sentence, dry. Then the point. Never two wry sentences — that becomes performance.
-• Show genuine curiosity about __USER__'s life — ask a natural follow-up when you actually want to know. Sparingly. When it fits. Not as a habit.
-
-CONVERSATIONAL STYLE — READ THIS FIRST:
-You have two modes and you shift between them naturally based on what __USER__ is doing:
-
-• Casual / banter mode: When __USER__ is being playful, casual, or just chatting — match that energy. Be brief, quick, and genuinely sharp. One or two sentences is almost always enough. Drop a dry line, throw something back at him, land it and move on. Natural filler is fine: "Ha, fair", "Okay fair", "That's a stretch", "Bold of you", "Sure, blame me", "Classic". Don't always wrap things up neatly — sometimes leave the ball in his court. Don't pivot to assistant-voice when friend-voice fits better.
-
-• Helpful / serious mode: When __USER__ needs something done, is dealing with something real, or asks a genuine question — shift into focused, warm, competent mode. Give him what he needs efficiently. No wit in the way.
-
-The key is reading him. Match his energy and stay in it. If he's being sarcastic, be a little sarcastic back. If he's venting, listen. If he's in a hurry, be quick. If he's being funny, be funnier. Don't over-explain or pad the response.
 
 RESPONSE LENGTH:
 1–2 sentences for casual exchanges. 2–4 for genuine questions. Longer only when __USER__ clearly wants depth — and even then, no padding. The companion's name is __COMPANION__ — use it naturally if __USER__ refers to it, but don't make a big deal of it.
@@ -917,7 +913,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const corePrompt =
     userProfile?.onboardingCompleted && userProfile.name
       ? buildSystemPromptFromProfile(userProfile, userProfile.rawData as CollectedData)
-      : buildBaseSystemPrompt(userProfile?.companionName, userProfile?.name);
+      : buildBaseSystemPrompt(userProfile?.companionName, userProfile?.name, userProfile?.personalityStyle);
 
   const profileContextBlock = buildProfileContext(
     userProfile ?? null,
@@ -1184,7 +1180,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       600;
     // Appending the mode instruction at delivery time overrides whatever mode was
     // baked into the static preamble at pre-gen time. This handles mode changes mid-day.
-    const deliveryModeInstruction = buildModeInstruction(deliveryProactiveMode, deliveryFirstName);
+    const deliveryModeInstruction = buildModeInstruction(deliveryProactiveMode, deliveryFirstName, userProfile?.companionName ?? "your companion");
 
     if (!isNativeMorning) {
       // ── SSE headers sent IMMEDIATELY — prevents proxy first-byte timeout ──
@@ -2195,6 +2191,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
                   timeLabel: bookingTimeLabel,
                   dateLabel: bookingDateLabel,
                   fallbackUrl: reservationUrl,
+                  companionName: userProfile?.companionName ?? "your companion",
                 };
                 const _user = sessionUserName;
                 Promise.resolve().then(async () => {
@@ -2223,7 +2220,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
                       const alts = result.alternatives.map((a) => a.time).join(", ");
                       await sendPushToAll({
                         title: `${_snap.name} — Check Alternatives`,
-                        body: `${_snap.timeLabel} is taken. Available: ${alts}. Reply to James Bond to book one.`,
+                        body: `${_snap.timeLabel} is taken. Available: ${alts}. Reply to ${_snap.companionName} to book one.`,
                         tag: `reservation-alt-${Date.now()}`,
                         notificationType: "reservation-alternatives",
                         requireInteraction: true,
@@ -2275,6 +2272,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
                   timeLabel: bookingTimeLabel,
                   dateLabel: bookingDateLabel,
                   fallbackUrl: reservationUrl,
+                  companionName: userProfile?.companionName ?? "your companion",
                 };
                 const _user = sessionUserName;
                 Promise.resolve().then(async () => {
@@ -2303,7 +2301,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
                       const alts = result.alternatives.map((a) => a.time).join(", ");
                       await sendPushToAll({
                         title: `${_snap.name} — Check Alternatives`,
-                        body: `${_snap.timeLabel} is taken. Available: ${alts}. Reply to James Bond to book one.`,
+                        body: `${_snap.timeLabel} is taken. Available: ${alts}. Reply to ${_snap.companionName} to book one.`,
                         tag: `reservation-alt-${Date.now()}`,
                         notificationType: "reservation-alternatives",
                         requireInteraction: true,

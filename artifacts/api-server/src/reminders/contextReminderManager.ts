@@ -152,7 +152,7 @@ async function getPendingContextReminders(
 async function fireTrigger(
   reminder: ContextReminderRow,
   userName: string,
-  companionName = "James Bond",
+  companionName = "your companion",
 ): Promise<void> {
   // Mark triggered
   await query(
@@ -186,7 +186,7 @@ async function fireTrigger(
 export async function checkCalendarTriggers(
   userName: string,
   eventSummary: string,
-  companionName = "James Bond",
+  companionName = "your companion",
 ): Promise<void> {
   try {
     const reminders = await getPendingContextReminders(userName, "calendar");
@@ -217,7 +217,7 @@ export async function checkCalendarTriggers(
 export async function checkPersonTriggers(
   userName: string,
   personName: string,
-  companionName = "James Bond",
+  companionName = "your companion",
 ): Promise<void> {
   try {
     const reminders = await getPendingContextReminders(userName, "person");
@@ -258,7 +258,7 @@ export async function checkLocationTriggers(
   userName: string,
   userLat: number,
   userLon: number,
-  companionName = "James Bond",
+  companionName = "your companion",
 ): Promise<void> {
   try {
     const reminders = await getPendingContextReminders(userName, "location");

@@ -235,7 +235,7 @@ export function getModeEmailIntervalMs(mode: WinstonMode): number {
 
 // ── Briefing mode instructions ────────────────────────────────────────────────
 
-export function buildModeInstruction(mode: WinstonMode, firstName: string): string {
+export function buildModeInstruction(mode: WinstonMode, firstName: string, companionName = "your companion"): string {
   switch (mode) {
     case "briefing_only":
       return `\n\n[WINSTON MODE: BRIEFING ONLY]\nKeep this briefing minimal. 3–4 sentences total — calendar and critical alerts only. Skip news, sports, entertainment, local content, health, and anything non-essential. Lead with the single most important thing for ${firstName}'s day. No closing thought. No My Day invite. Just the essentials.`;
@@ -244,6 +244,6 @@ export function buildModeInstruction(mode: WinstonMode, firstName: string): stri
       return "";
 
     case "autopilot":
-      return `\n\n[WINSTON MODE: AUTOPILOT]\nDeliver the full briefing as normal, and additionally weave in any [Cross-Domain Intelligence] insights naturally into the narrative — these are connections James Bond has noticed between ${firstName}'s calendar, health, relationships, and tasks. Surface relationship nudges warmly and specifically. Flag any schedule risks plainly. The briefing should feel like a highly-informed advisor who sees across all domains of ${firstName}'s life.`;
+      return `\n\n[WINSTON MODE: AUTOPILOT]\nDeliver the full briefing as normal, and additionally weave in any [Cross-Domain Intelligence] insights naturally into the narrative — these are connections ${companionName} has noticed between ${firstName}'s calendar, health, relationships, and tasks. Surface relationship nudges warmly and specifically. Flag any schedule risks plainly. The briefing should feel like a highly-informed advisor who sees across all domains of ${firstName}'s life.`;
   }
 }

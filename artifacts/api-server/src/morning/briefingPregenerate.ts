@@ -663,10 +663,10 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
           userLon: primaryLon,
         }).catch(() => [])
       : [];
-    const crossDomainBlock = buildCrossDomainBlock(crossDomainActions);
+    const crossDomainBlock = buildCrossDomainBlock(crossDomainActions, userProfile?.companionName ?? "your companion");
 
     const firstName = userProfile?.name?.split(" ")[0] ?? "there";
-    const modeInstruction = buildModeInstruction(proactiveMode, firstName);
+    const modeInstruction = buildModeInstruction(proactiveMode, firstName, userProfile?.companionName ?? "your companion");
 
     const suffix = garminBlock + fitBlock + travelBlock + ordersBlock + tvMorningBlock + sportsBlock + billsMorningBlock + datesBlock +
       sundaySummaryBlock + pickleballMorningBlock + recFollowUpBlock + personalFollowUpsBlock +

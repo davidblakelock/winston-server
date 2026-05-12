@@ -408,7 +408,7 @@ router.post("/location/update", express.json({ limit: "1mb" }), async (req: Requ
 
   try {
     const profile = await getProfile(userName).catch(() => null);
-    const companionName = profile?.companionName ?? "James Bond";
+    const companionName = profile?.companionName ?? "your companion";
     await checkLocationTriggers(userName, lat, lon, companionName);
     req.log.info({ userName, lat, lon }, "[LOCATION] Location update processed");
     res.json({ ok: true });

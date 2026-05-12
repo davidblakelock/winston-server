@@ -49,7 +49,7 @@ router.post("/winddown/activate", async (req: Request, res: Response) => {
     // Always generate fresh — the opening message includes tonight's story question,
     // calendar events, and all 6 check-in elements. Caching would serve stale content.
     const profile = await getProfile(sessionUserName).catch(() => null);
-    const companionName = profile?.companionName ?? "James Bond";
+    const companionName = profile?.companionName ?? "your companion";
     const message = await generateOpeningMessage(companionName);
     await saveTonightMessage(message).catch(() => {});
 

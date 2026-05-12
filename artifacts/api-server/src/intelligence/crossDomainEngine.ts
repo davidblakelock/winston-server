@@ -398,9 +398,9 @@ export async function runCrossDomainEngine(input: CrossDomainInput): Promise<Mor
   return allActions;
 }
 
-export function buildCrossDomainBlock(actions: MorningAction[]): string {
+export function buildCrossDomainBlock(actions: MorningAction[], companionName = "your companion"): string {
   if (actions.length === 0) return "";
   const lines = actions.map((a) => `• ${a.title}: ${a.detail}`);
-  return `\n\n[Cross-Domain Intelligence — James Bond noticed these connections]\n` + lines.join("\n") +
-    `\nSurface these naturally in the briefing where they connect to what ${"`"}he${"`"}'s already covering — not as a separate section.`;
+  return `\n\n[Cross-Domain Intelligence — ${companionName} noticed these connections]\n` + lines.join("\n") +
+    `\nSurface these naturally in the briefing where they connect to what he's already covering — not as a separate section.`;
 }

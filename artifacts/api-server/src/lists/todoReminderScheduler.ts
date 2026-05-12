@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { query } from "../db.js";
 import { sendPushToAll } from "../push/pushManager.js";
 import { logger } from "../lib/logger.js";
+import { getProfile } from "../onboarding/onboardingManager.js";
 
 interface TodoReminderRow {
   id: number;
@@ -22,6 +23,14 @@ export function startTodoReminderScheduler(): void {
             AND reminder_fired = FALSE`
       );
 
+      // Build a companion name cache for all users in this batch
+      const uniqueUsers = [...new Set(rows.map((r) => r.user_name))];
+      const companionNames = new Map<string, string>();
+      for (const un of uniqueUsers) {
+        const profile = await getProfile(un).catch(() => null);
+        companionNames.set(un, profile?.companionName ?? "your companion");
+      }
+
       for (const item of rows) {
         // Atomically mark fired — prevents double-fire if scheduler overlaps
         const locked = await query(
@@ -34,9 +43,11 @@ export function startTodoReminderScheduler(): void {
         );
         if (!locked.rows.length) continue;
 
+        const companionName = companionNames.get(item.user_name) ?? "your companion";
+
         await sendPushToAll(
           {
-            title: "James Bond",
+            title: companionName,
             body: `Just a reminder — ${item.item_text}`,
             tag: `todo-reminder-${item.id}`,
             notificationType: "reminder",

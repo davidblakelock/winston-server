@@ -795,4 +795,60 @@ router.delete("/settings/resy-credentials", async (req, res) => {
   }
 });
 
+// ── GET /api/settings/companion ──────────────────────────────────────────────
+router.get("/settings/companion", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const profile = await getProfile(userName);
+  res.json({
+    companionName: profile?.companionName ?? null,
+    personalityStyle: profile?.personalityStyle ?? "witty",
+    voiceId: profile?.voiceId ?? null,
+    voices: VOICE_OPTIONS,
+  });
+});
+
+// ── POST /api/settings/companion ─────────────────────────────────────────────
+router.post("/settings/companion", express.json({ limit: "1mb" }), async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const { companionName, personalityStyle, voiceId } = req.body as {
+    companionName?: string;
+    personalityStyle?: string;
+    voiceId?: string;
+  };
+
+  const VALID_STYLES = ["professional", "warm", "witty", "direct"] as const;
+  if (personalityStyle && !(VALID_STYLES as readonly string[]).includes(personalityStyle)) {
+    res.status(400).json({ error: `personalityStyle must be one of: ${VALID_STYLES.join(", ")}` });
+    return;
+  }
+
+  if (voiceId) {
+    const voice = VOICE_OPTIONS.find((v) => v.id === voiceId);
+    if (!voice) { res.status(400).json({ error: "Invalid voiceId" }); return; }
+  }
+
+  const updates: Parameters<typeof updateProfileField>[1] = {};
+  if (companionName?.trim()) updates.companionName = companionName.trim();
+  if (personalityStyle) updates.personalityStyle = personalityStyle;
+  if (voiceId) updates.voiceId = voiceId;
+
+  if (Object.keys(updates).length === 0) {
+    res.status(400).json({ error: "No valid fields provided" });
+    return;
+  }
+
+  await updateProfileField(userName, updates);
+  const profile = await getProfile(userName);
+
+  res.json({
+    ok: true,
+    companionName: profile?.companionName ?? null,
+    personalityStyle: profile?.personalityStyle ?? "witty",
+    voiceId: profile?.voiceId ?? null,
+  });
+});
+
 export default router;
