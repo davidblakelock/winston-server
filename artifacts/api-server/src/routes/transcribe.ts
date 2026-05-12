@@ -6,6 +6,16 @@ import { authenticate } from "../auth/middleware.js";
 
 const router: IRouter = Router();
 
+// ── Limits ─────────────────────────────────────────────────────────────────────
+// ElevenLabs Scribe sync endpoint handles files up to ~1 GB but long audio
+// clips take proportionally longer to transcribe and will exceed Replit's proxy
+// idle timeout (~30 s) for anything over ~2–3 minutes.
+// We enforce a decoded-audio cap and a generous fetch timeout so the caller
+// always receives a clear error instead of a silently truncated transcript.
+
+const MAX_AUDIO_BYTES = 20 * 1024 * 1024; // 20 MB decoded ≈ ~8 min of m4a @ 320 kbps
+const SCRIBE_TIMEOUT_MS = 55_000;          // 55 s — safely under Replit proxy limit
+
 // ── Body parsing ───────────────────────────────────────────────────────────────
 // Replit's autoscale proxy blocks multipart/form-data uploads at the CDN layer.
 // The primary path is therefore JSON with a base64-encoded audio payload.
@@ -17,18 +27,28 @@ const router: IRouter = Router();
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024 },
+  limits: { fileSize: MAX_AUDIO_BYTES },
 }).fields([
   { name: "audio", maxCount: 1 },
   { name: "file",  maxCount: 1 },
 ]);
 
-const jsonParser = express.json({ limit: "35mb" }); // room for base64 overhead
+const jsonParser = express.json({ limit: "35mb" }); // base64 adds ~33 % overhead over MAX_AUDIO_BYTES
 
 function flexibleParser(req: Request, res: Response, next: NextFunction): void {
   const ct = (req.headers["content-type"] ?? "").toLowerCase();
   if (ct.startsWith("multipart/")) {
-    upload(req, res, next);
+    upload(req, res, (err) => {
+      if (err) {
+        // Multer LIMIT_FILE_SIZE fires here
+        res.status(413).json({
+          error: "Audio file too large",
+          detail: `Maximum audio size is ${MAX_AUDIO_BYTES / (1024 * 1024)} MB. Please record a shorter clip.`,
+        });
+        return;
+      }
+      next();
+    });
   } else {
     jsonParser(req, res, next);
   }
@@ -58,16 +78,52 @@ router.post(
       mime       = (multerFile.mimetype || "audio/m4a").toLowerCase();
       fileName   = multerFile.originalname || "audio.m4a";
     } else if (typeof jsonBody.audioBase64 === "string" && jsonBody.audioBase64.length > 0) {
+      const b64 = jsonBody.audioBase64;
+
+      // Detect proxy truncation: valid base64 length is always a multiple of 4
+      // (after stripping padding). A non-multiple strongly indicates the payload
+      // was cut off before reaching the server.
+      const stripped = b64.replace(/=+$/, "");
+      if (stripped.length % 4 !== 0) {
+        logger.warn(
+          { b64Length: b64.length, userName },
+          "[Transcribe] base64 payload length not a multiple of 4 — likely truncated by proxy"
+        );
+        res.status(400).json({
+          error: "Audio payload was truncated in transit",
+          detail: "The recording did not arrive intact. This usually means the file was too large for the network proxy. Please try a shorter recording.",
+        });
+        return;
+      }
+
       try {
-        fileBuffer = Buffer.from(jsonBody.audioBase64, "base64");
+        fileBuffer = Buffer.from(b64, "base64");
       } catch {
         res.status(400).json({ error: "Invalid base64 audio data" });
         return;
       }
+
       mime     = typeof jsonBody.mimeType === "string" ? jsonBody.mimeType.toLowerCase() : "audio/m4a";
       fileName = "audio.m4a";
     } else {
-      res.status(400).json({ error: "No audio file provided. Send { audioBase64, mimeType } JSON or multipart form-data." });
+      res.status(400).json({
+        error: "No audio file provided. Send { audioBase64, mimeType } JSON or multipart form-data.",
+      });
+      return;
+    }
+
+    // ── Pre-flight size check ──────────────────────────────────────────────────
+    // Reject before hitting ElevenLabs so the error is immediate and clear.
+    if (fileBuffer.length > MAX_AUDIO_BYTES) {
+      const mb = (fileBuffer.length / (1024 * 1024)).toFixed(1);
+      const maxMb = (MAX_AUDIO_BYTES / (1024 * 1024)).toFixed(0);
+      logger.warn({ bytes: fileBuffer.length, mb, userName }, "[Transcribe] Rejected — audio too large");
+      res.status(413).json({
+        error: "Recording too long",
+        detail: `Audio is ${mb} MB (limit: ${maxMb} MB). Please keep voice messages under ~8 minutes.`,
+        bytes: fileBuffer.length,
+        limitBytes: MAX_AUDIO_BYTES,
+      });
       return;
     }
 
@@ -83,9 +139,19 @@ router.post(
       return;
     }
 
+    // Rough duration estimate: m4a at ~128 kbps ≈ 1 MB/min
+    const estimatedMinutes = (fileBuffer.length / (1024 * 1024)).toFixed(1);
+
     try {
       logger.info(
-        { mime, bytes: fileBuffer.length, userName, source: multerFile ? "multipart" : "base64-json" },
+        {
+          mime,
+          bytes: fileBuffer.length,
+          estimatedMinutes,
+          userName,
+          source: multerFile ? "multipart" : "base64-json",
+          contentLength: req.headers["content-length"] ?? "not-sent",
+        },
         "[Transcribe] STT request (ElevenLabs Scribe)"
       );
 
@@ -103,6 +169,7 @@ router.post(
           method: "POST",
           headers: { "xi-api-key": apiKey },
           body: formData,
+          signal: AbortSignal.timeout(SCRIBE_TIMEOUT_MS),
         }
       );
 
@@ -125,10 +192,31 @@ router.post(
       const data = (await response.json()) as { text?: string };
       const text = (data.text ?? "").trim();
 
-      logger.info({ mime, bytes: fileBuffer.length, textLength: text.length, userName }, "[Transcribe] STT result");
+      logger.info(
+        { mime, bytes: fileBuffer.length, estimatedMinutes, textLength: text.length, userName },
+        "[Transcribe] STT result"
+      );
 
       res.json({ text });
     } catch (err: unknown) {
+      // Distinguish timeout from other errors so the client can show a helpful message
+      const isTimeout =
+        err instanceof Error &&
+        (err.name === "TimeoutError" || err.name === "AbortError");
+
+      if (isTimeout) {
+        logger.warn(
+          { bytes: fileBuffer.length, estimatedMinutes, userName, timeoutMs: SCRIBE_TIMEOUT_MS },
+          "[Transcribe] ElevenLabs Scribe timed out"
+        );
+        res.status(504).json({
+          error: "Transcription timed out",
+          detail: `The recording took too long to process. Please try a shorter clip (under ~2 minutes).`,
+          bytes: fileBuffer.length,
+        });
+        return;
+      }
+
       const message = err instanceof Error ? err.message : "Transcription failed";
       logger.error({ err, userName }, "[Transcribe] Unexpected error");
       res.status(500).json({ error: message });
