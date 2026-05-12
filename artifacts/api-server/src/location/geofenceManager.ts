@@ -283,7 +283,7 @@ export async function geofenceCheck(
         body: `You have shopping items: ${itemNames}${moreCount}`,
         tag: `geofence-${locationKey}`,
         notificationType: "geofence-shopping",
-        url: "winston://lists?tab=shopping",
+        deepLink: "winston://lists?tab=shopping",
         companionMessage: `You're near ${storeName ?? "a store"}! You have ${relevantItems.length} shopping item${relevantItems.length === 1 ? "" : "s"} that might be relevant: ${itemNames}${moreCount}.`,
       },
       userName

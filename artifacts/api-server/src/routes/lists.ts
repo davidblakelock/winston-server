@@ -408,7 +408,7 @@ router.post("/lists/shopping", async (req: Request, res: Response) => {
           body: item.trim(),
           tag: `list-shared-add-${newItem.id}`,
           notificationType: "list-sync",
-          url: "winston://lists?tab=shopping",
+          deepLink: "winston://lists?tab=shopping",
           companionMessage: `${addedByLabel} added "${item.trim()}" to your shopping list.`,
         },
         targetUser
@@ -570,7 +570,7 @@ router.post(["/lists/todo", "/lists/to do"], async (req: Request, res: Response)
           body: item.trim(),
           tag: `list-shared-add-${newItem.id}`,
           notificationType: "list-sync",
-          url: "winston://lists?tab=todo",
+          deepLink: "winston://lists?tab=todo",
           companionMessage: `${addedByLabel} added "${item.trim()}" to your to-do list.`,
         },
         targetUser

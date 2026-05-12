@@ -40,7 +40,7 @@ export function startTodoReminderScheduler(): void {
             body: `Just a reminder — ${item.item_text}`,
             tag: `todo-reminder-${item.id}`,
             notificationType: "reminder",
-            url: "winston://lists?tab=todo",
+            deepLink: "winston://lists?tab=todo",
             requireInteraction: true,
           },
           item.user_name

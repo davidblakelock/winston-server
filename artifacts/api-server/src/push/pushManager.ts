@@ -80,6 +80,14 @@ export interface PushPayload {
   icon?: string;
   badge?: string;
   url?: string;
+  /**
+   * Native-app deep link (custom scheme, e.g. "winston://lists?tab=todo").
+   * Passed through to the Expo data payload so the native app can call
+   * Linking.openURL(data.deepLink) on tap.  Unlike `url` (which is for web push
+   * only and is deliberately excluded from Expo data to avoid opening the browser),
+   * `deepLink` is always forwarded to the native app.
+   */
+  deepLink?: string;
   mapsUrl?: string;                // For departure alerts — full directions URL (origin → destination)
   mapsDeepLink?: string;           // Compact Maps deep-link, preferred on mobile: maps.google.com/?daddr=...
   destination?: string;            // Raw destination address so native app can build its own Maps URL
@@ -336,6 +344,10 @@ async function sendExpoNotifications(
       // Some Expo versions surface notification.request.content.categoryIdentifier unreliably;
       // data.categoryId is always accessible in the response handler.
       ...(payload.categoryId ? { categoryId: payload.categoryId } : {}),
+      // deepLink: native-app custom scheme URL (e.g. "winston://lists?tab=todo").
+      // On tap, the native app calls Linking.openURL(data.deepLink) to navigate directly
+      // to the relevant screen.  This is distinct from `payload.url` (web push only).
+      ...(payload.deepLink ? { deepLink: payload.deepLink } : {}),
     },
   }));
 
