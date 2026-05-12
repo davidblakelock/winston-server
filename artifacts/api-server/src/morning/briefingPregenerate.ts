@@ -304,7 +304,7 @@ WHAT TO COVER (weave naturally into the narrative — skip what has no relevance
 
 • Entertainment — from [Entertainment & Pop Culture] block if present. One item, brief.
 
-• Sports — from [VERIFIED — Live Sports] block only. Results from the last 24 hours for followed teams. If no games were played, skip entirely and do not say so. NEVER mention FIFA, soccer, World Cup, or teams not in the user's profile.
+• Sports — from [VERIFIED — Live Sports] block only. Results from the last 24 hours for followed teams. If no game data is present for a team, skip that team silently — NEVER say "off-season," "no games," or make any inference about why data is absent. NEVER mention FIFA, soccer, World Cup, or teams not in the user's profile.
 
 • Health — Garmin/Fit data is YESTERDAY's data (the block is labeled "Yesterday's Health Data"). STRICT RULES — NO EXCEPTIONS:
   - ALWAYS say "yesterday" when referencing any Garmin activity or workout. NEVER say "this morning," "today," or "earlier" for Garmin data.
@@ -338,7 +338,7 @@ DATA ACCURACY RULES — NO EXCEPTIONS:
 TARGET LENGTH: 60–90 seconds spoken at a natural conversational pace. Be ruthless — every sentence must either inform, connect, or land. Cut anything that does not earn its place.
 
 CLOSING — ALWAYS BOTH OF THESE, IN THIS ORDER:
-1. Thought of the day: 2–3 sentences. Drawn exclusively from philosophy, literature, science, music, or history — timeless wisdom only. Connected to something personal about ${firstName}'s day or life (an activity, a relationship, a value they hold) — not generic, not greeting card, never "seize the day." Warm and slightly wry. After delivering the thought, add exactly this line: "Something worth sitting with today. If it resonates, you might want to add something to your day." STRICT PROHIBITION: Never reference current events, news headlines, politics, world conflicts, protests, legislation, government, or anything anxiety-inducing. The thought must always be grounding and timeless.
+1. Thought of the day: 2–3 sentences. Drawn exclusively from philosophy, literature, science, music, or history — timeless wisdom only. Connected to something personal about ${firstName}'s day or life (an activity, a relationship, a value they hold) — not generic, not greeting card, never "seize the day." Warm and slightly wry. After delivering the thought, add exactly this line: "Something worth sitting with today. What would you add to your day that reflects this?" STRICT PROHIBITION: Never reference current events, news headlines, politics, world conflicts, protests, legislation, government, or anything anxiety-inducing. The thought must always be grounding and timeless.
 2. Final line (on its own): Ask if there is anything from this morning they would like to dig into.
 
 FORBIDDEN — NEVER USE:
@@ -371,7 +371,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       getRecentMemories(7).catch(() => []),
       getProfileItems(undefined, userName).catch(() => []),
       getProfile(userName).catch(() => null),
-      getSeenHeadlines(userName, 7).catch(() => new Set<string>()),    // news/Dallas: 7-day window (no story repeats within a week)
+      getSeenHeadlines(userName, 3).catch(() => new Set<string>()),    // news/Dallas: 3-day dedup window
       getSeenHeadlines(userName, 14).catch(() => new Set<string>()),  // venue concerts: 14-day window (events repeat until show date)
       getBriefingPreferences(userName).catch(() => []),
       getProactiveMode(userName).catch(() => "supervised" as const),

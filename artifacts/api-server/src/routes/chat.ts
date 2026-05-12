@@ -985,7 +985,25 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isBillRemove = !isMorningGreeting && BILL_REMOVE_PATTERN.test(message);
   // My Day — GET must be checked before ADD (prevents "what did I add today" routing to write path)
   const isMydayGet = !isMorningGreeting && MYDAY_GET_PATTERN.test(message);
-  const isMydayAdd = !isMorningGreeting && !isMydayGet && MYDAY_ADD_PATTERN.test(message);
+  let isMydayAdd = !isMorningGreeting && !isMydayGet && MYDAY_ADD_PATTERN.test(message);
+
+  // Auto-capture: if the last assistant message posed the thought-of-day "What would you add"
+  // question or the evening wind-down My Day prompt, save the user's substantive response
+  // directly to My Day without requiring explicit phrasing.
+  if (!isMydayAdd && !isMydayGet) {
+    const _lastAssistant = [...history].reverse().find((m) => m.role === "assistant");
+    const _lastContent = _lastAssistant?.content ?? "";
+    const _isContextualMyDayPrompt =
+      _lastContent.includes("What would you add to your day that reflects this?") ||
+      _lastContent.includes("Is there anything from today worth capturing in My Day before you rest?");
+    const _isSubstantive =
+      message.trim().split(/\s+/).length >= 3 &&
+      !/^(no|nope|nothing|nah|not really|i don'?t|skip|pass|never mind|nevermind|not tonight|maybe later|not now)$/i.test(message.trim());
+    if (_isContextualMyDayPrompt && _isSubstantive) {
+      isMydayAdd = true;
+      req.log.info({ trigger: _lastContent.slice(0, 60) }, "[MyDay] Auto-capture from contextual prompt");
+    }
+  }
   const isDateAdd = !isMorningGreeting && DATE_ADD_PATTERN.test(message);
   const isDateList = !isMorningGreeting && DATE_LIST_PATTERN.test(message);
   const isDateRemove = !isMorningGreeting && DATE_REMOVE_PATTERN.test(message);
@@ -3070,7 +3088,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           `${weatherNote ? `Weather note if tomorrow has outdoor activities: ${weatherNote}` : `Skip weather if no outdoor activities.`}\n` +
           `• At a natural pause, ask: "Anything you want to add to your shopping list, to-do list, or any reminders for tomorrow?"\n` +
           `• Close with a wind-down thought — drawn from Stoic philosophy, mindfulness, poetry, or nature. ` +
-          `Warm, quiet, unhurried. 2–3 sentences. Never generic. Never motivational-poster language.\n\n` +
+          `Warm, quiet, unhurried. 2–3 sentences. Never generic. Never motivational-poster language. ` +
+          `After the closing thought, end with exactly this: "Is there anything from today worth capturing in My Day before you rest?"\n\n` +
           `STRICT RULES:\n` +
           `• Never prompt about routine activities (pickleball, gym, standing calls) — respond only if the user brings them up.\n` +
           `• No medication reminders. No music suggestions.\n` +
