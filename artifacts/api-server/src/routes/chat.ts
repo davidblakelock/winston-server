@@ -4358,7 +4358,16 @@ router.post("/chat", chatHandlerCore);
 router.get("/chat-native", (_req: Request, res: Response) => {
   res.json({ ok: true, status: "ready" });
 });
-router.post("/chat-native", (req: Request, res: Response) => {
+router.post("/chat-native", async (req: Request, res: Response) => {
+  // Fast path: voice activation trigger — skip the full pipeline, return a brief Bond-style prompt
+  if ((req.body as { message?: string })?.message === "voice_trigger") {
+    const userName = await authenticate(req, res);
+    if (!userName) return;
+    const greetings = ["Yes?", "Go ahead.", "At your service.", "What do you need?", "Listening."];
+    const reply = greetings[Math.floor(Math.random() * greetings.length)];
+    res.json({ response: reply });
+    return;
+  }
   (req as any)._nativeMode = true;
   return chatHandlerCore(req, res);
 });
