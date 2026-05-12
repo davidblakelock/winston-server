@@ -17,7 +17,7 @@ import {
   getSharedWithUser,
   getRequesterLabel,
 } from "../lists/listShareManager.js";
-import { autoUpdateItemUrl, autoUpdateRestaurantUrl, detectAutoLookupType } from "../lists/autoUrlLookup.js";
+import { autoUpdateItemUrl, autoUpdateRestaurantUrl, detectAutoLookupType, lookupRestaurantUrl } from "../lists/autoUrlLookup.js";
 import { sendPushToAll } from "../push/pushManager.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -217,7 +217,8 @@ router.get("/lists/restaurants", async (req: Request, res: Response) => {
 });
 
 // POST /api/lists/restaurants
-// Accepts optional manual url; if none provided, auto-looks up via Google Places API.
+// Accepts optional manual url; if none provided, auto-looks up booking/website URL.
+// Awaits the lookup so the response always includes the resolved URL.
 router.post("/lists/restaurants", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
@@ -241,11 +242,25 @@ router.post("/lists/restaurants", async (req: Request, res: Response) => {
     }
     const newItem = rows[0];
 
-    if (!manualUrl) {
-      autoUpdateRestaurantUrl(newItem.id, newItem.name).catch(() => {});
+    // Await the URL lookup so the response includes the resolved URL immediately.
+    // manualUrl takes priority; otherwise auto-lookup (booking platform → website).
+    let resolvedUrl = manualUrl;
+    if (!resolvedUrl) {
+      try {
+        resolvedUrl = await lookupRestaurantUrl(newItem.name);
+        if (resolvedUrl) {
+          await query(
+            `UPDATE profile_items SET url = $1 WHERE id = $2`,
+            [resolvedUrl, newItem.id]
+          );
+          req.log.info({ id: newItem.id, name: newItem.name, url: resolvedUrl }, "[Restaurants] URL auto-resolved");
+        }
+      } catch (lookupErr) {
+        req.log.warn({ lookupErr, name: newItem.name }, "[Restaurants] URL lookup failed — restaurant saved without URL");
+      }
     }
 
-    res.json({ item: { id: newItem.id, item_text: newItem.name, url: manualUrl, created_at: new Date().toISOString() } });
+    res.json({ item: { id: newItem.id, item_text: newItem.name, url: resolvedUrl ?? null, created_at: new Date().toISOString() } });
   } catch (err) {
     req.log.warn({ err }, "Restaurants list POST error");
     res.status(500).json({ error: "Failed to add restaurant" });
