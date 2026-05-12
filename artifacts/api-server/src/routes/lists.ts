@@ -701,8 +701,8 @@ router.get("/lists/:listName", async (req: Request, res: Response) => {
   res.setHeader("Cache-Control", "no-store");
   const { listName } = req.params;
   try {
-    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string }>(
-      `SELECT id, item_text, added_by, url, created_at
+    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string; reminder_time: string | null }>(
+      `SELECT id, item_text, added_by, url, created_at, reminder_time
        FROM list_items
        WHERE user_name = $1 AND list_name = $2
        ORDER BY created_at ASC`,
