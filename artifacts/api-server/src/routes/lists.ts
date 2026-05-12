@@ -24,6 +24,10 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const router: IRouter = Router();
 
+// ── Idempotent column migrations for list_items ────────────────────────────
+query(`ALTER TABLE list_items ADD COLUMN IF NOT EXISTS reminder_time TIMESTAMPTZ`).catch(() => {});
+query(`ALTER TABLE list_items ADD COLUMN IF NOT EXISTS reminder_fired BOOLEAN NOT NULL DEFAULT FALSE`).catch(() => {});
+
 // ── Disable 304 caching for all list routes ────────────────────────────────
 // Express generates a stable ETag from the response body and returns 304 when
 // the client's If-None-Match matches — even when Cache-Control: no-store is set.
@@ -488,8 +492,8 @@ router.get("/lists/todo", async (req: Request, res: Response) => {
   if (!userName) return;
   res.setHeader("Cache-Control", "no-store");
   try {
-    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string }>(
-      `SELECT id, item_text, added_by, url, created_at FROM list_items
+    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string; reminder_time: string | null }>(
+      `SELECT id, item_text, added_by, url, created_at, reminder_time FROM list_items
        WHERE user_name = $1 AND list_name = 'to do'
        ORDER BY created_at ASC`,
       [userName]
@@ -504,8 +508,9 @@ router.get("/lists/todo", async (req: Request, res: Response) => {
 router.post("/lists/todo", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
-  const { item, url: rawTodoUrl, ownerUserName } = req.body as { item?: string; url?: string; ownerUserName?: string };
+  const { item, url: rawTodoUrl, ownerUserName, reminder_time: rawReminderTime } = req.body as { item?: string; url?: string; ownerUserName?: string; reminder_time?: string };
   const manualUrl = rawTodoUrl?.trim() || null;
+  const reminderTime = rawReminderTime?.trim() || null;
   if (!item?.trim()) { res.status(400).json({ error: "item is required" }); return; }
 
   const targetUser = ownerUserName?.trim() ?? userName;
@@ -535,12 +540,12 @@ router.post("/lists/todo", async (req: Request, res: Response) => {
       return;
     }
     const addedByLabel = await getRequesterLabel(targetUser, userName).catch(() => userName);
-    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string }>(
-      `INSERT INTO list_items (user_name, list_name, item_text, added_by, url)
-       VALUES ($1, 'to do', $2, $3, $4)
+    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string; reminder_time: string | null }>(
+      `INSERT INTO list_items (user_name, list_name, item_text, added_by, url, reminder_time)
+       VALUES ($1, 'to do', $2, $3, $4, $5)
        ON CONFLICT (user_name, list_name, lower(item_text)) DO NOTHING
-       RETURNING id, item_text, added_by, url, created_at`,
-      [targetUser, item.trim(), addedByLabel, manualUrl]
+       RETURNING id, item_text, added_by, url, created_at, reminder_time`,
+      [targetUser, item.trim(), addedByLabel, manualUrl, reminderTime]
     );
     const newItem = rows[0];
     if (newItem) {
@@ -561,14 +566,16 @@ router.post("/lists/todo", async (req: Request, res: Response) => {
   }
 
   try {
-    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string }>(
-      `INSERT INTO list_items (user_name, list_name, item_text, url)
-       VALUES ($1, 'to do', $2, $3)
+    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string; reminder_time: string | null }>(
+      `INSERT INTO list_items (user_name, list_name, item_text, url, reminder_time)
+       VALUES ($1, 'to do', $2, $3, $4)
        ON CONFLICT (user_name, list_name, lower(item_text))
-       DO UPDATE SET item_text = EXCLUDED.item_text,
-                     url = CASE WHEN EXCLUDED.url IS NOT NULL THEN EXCLUDED.url ELSE list_items.url END
-       RETURNING id, item_text, added_by, url, created_at`,
-      [userName, item.trim(), manualUrl]
+       DO UPDATE SET item_text     = EXCLUDED.item_text,
+                     url           = CASE WHEN EXCLUDED.url IS NOT NULL THEN EXCLUDED.url ELSE list_items.url END,
+                     reminder_time = CASE WHEN EXCLUDED.reminder_time IS NOT NULL THEN EXCLUDED.reminder_time ELSE list_items.reminder_time END,
+                     reminder_fired = CASE WHEN EXCLUDED.reminder_time IS NOT NULL THEN FALSE ELSE list_items.reminder_fired END
+       RETURNING id, item_text, added_by, url, created_at, reminder_time`,
+      [userName, item.trim(), manualUrl, reminderTime]
     );
     syncListItemToConnections("to do", [item.trim()], userName).catch(() => {});
     res.json({ item: rows[0] });

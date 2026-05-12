@@ -42,6 +42,7 @@ import { ensureCalendarSmartTables } from "./routes/calendarSmart";
 import { ensureRestaurantCacheTable } from "./restaurants/restaurantIntelligence";
 import { ensureOrdersTable } from "./orders/ordersManager";
 import { startOrderTrackingScheduler } from "./orders/orderTrackingScheduler";
+import { startTodoReminderScheduler } from "./lists/todoReminderScheduler";
 import { ensureTravelTable } from "./travel/travelManager";
 import { ensureBillHistoryTable } from "./bills/billAnomalyScanner";
 import { ensureContextReminderColumns } from "./reminders/contextReminderManager";
@@ -389,6 +390,7 @@ app.listen(port, async (err) => {
   startJournalPatternScheduler();
   startPressureScheduler();
   startOrderTrackingScheduler();
+  startTodoReminderScheduler();
   startBackgroundEmailScanner();
 
   // Seed David's music preferences into profile_items so they persist and
