@@ -3218,6 +3218,25 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           forContact: extracted.forContact ?? null,
         });
 
+        // ── Mirror one-time, self-reminders onto the to-do list ─────────────
+        // Recurring reminders are habits, not tasks — skip those.
+        // Reminders for contacts belong on their list, not yours — skip those.
+        if (!extracted.forContact && !extracted.isRecurring) {
+          try {
+            await query(
+              `INSERT INTO list_items (user_name, list_name, item_text, reminder_time)
+               VALUES ($1, 'to do', $2, $3)
+               ON CONFLICT (user_name, list_name, lower(item_text))
+               DO UPDATE SET reminder_time  = EXCLUDED.reminder_time,
+                             reminder_fired = FALSE`,
+              [sessionUserName, extracted.reminderText, fireAt]
+            );
+            req.log.info({ text: extracted.reminderText, fireAt }, "[Reminder] Mirrored to to-do list");
+          } catch (todoErr) {
+            req.log.warn({ todoErr }, "[Reminder] Failed to mirror to to-do list — reminder still saved");
+          }
+        }
+
         req.log.info({ extracted, resolvedTime, fireAt, noTimeGiven, recurringLabel }, "Reminder saved");
 
         if (extracted.forContact) {
