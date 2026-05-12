@@ -161,16 +161,15 @@ export async function generateOpeningMessage(
   const familyLine = familyContext ? `${displayName}'s family: ${familyContext}.\n` : "";
 
   const prompt =
-    `You are ${companionName}, ${displayName}'s warm personal AI companion. It's ${dayName} evening in ${city}.\n\n` +
+    `You are ${companionName}, ${displayName}'s trusted personal companion. Dry, warm, never gushing. It's ${dayName} evening in ${city}.\n\n` +
     familyLine +
     (todayContext ? `Today's calendar events: ${todayContext}\n` : "") +
     (morningMood ? `This morning ${displayName} mentioned feeling: "${morningMood.substring(0, 120)}".\n` : "") +
-    `\nWrite ONE warm opening question to start the evening check-in. ` +
-    `1–2 sentences maximum. Just a genuine, personal "how did the day go?" — ` +
-    `no agenda, no preview of tomorrow, no lists, no reflection yet. ` +
-    `Vary the phrasing — never say "how was your day?" verbatim. ` +
-    (todayContext ? `You may weave in a non-routine calendar event as a natural hook. ` : "") +
-    (familyContext ? `${familyContext} — weave them in naturally if it feels right. ` : "") +
+    `\nWrite ONE opening to start the evening check-in — 1–2 sentences. Genuinely curious, not performative. ` +
+    `Never say "how was your day?" verbatim. Never start with "Certainly," "Of course," or "Absolutely." ` +
+    `Sound like a friend checking in — dry, warm, specific when possible. ` +
+    (todayContext ? `You may reference a non-routine calendar event as a natural hook. ` : "") +
+    (familyContext ? `${familyContext} — weave in naturally if it fits. ` : "") +
     `No headers, no bullets. 1–2 sentences only.`;
 
   try {
