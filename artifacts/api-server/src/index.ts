@@ -46,10 +46,9 @@ import { startTodoReminderScheduler } from "./lists/todoReminderScheduler";
 import { ensureTravelTable } from "./travel/travelManager";
 import { ensureBillHistoryTable } from "./bills/billAnomalyScanner";
 import { ensureContextReminderColumns } from "./reminders/contextReminderManager";
-import { ensureProactiveModeTable } from "./proactiveMode/proactiveModeManager";
+import { ensureProactiveModeTable, ensureTrustedSendersTable } from "./proactiveMode/proactiveModeManager";
 import { ensureContactCommunicationLogTable } from "./intelligence/crossDomainEngine";
 import { ensureNotificationVipsTable } from "./push/notificationVips";
-import { ensureFocusModeTable } from "./push/focusMode";
 import { startBackgroundEmailScanner } from "./email/backgroundEmailScanner";
 import { ensureSavedPlacesTable } from "./location/geofenceManager";
 import { ensureListItemColumns } from "./lists/listManager";
@@ -307,10 +306,16 @@ app.listen(port, async (err) => {
 
   try {
     await ensureNotificationVipsTable();
-    await ensureFocusModeTable();
-    logger.info("[startup] notification VIPs and focus mode tables ready");
+    logger.info("[startup] notification VIPs table ready");
   } catch (e) {
     logger.warn({ e }, "Notification intelligence tables initialization warning");
+  }
+
+  try {
+    await ensureTrustedSendersTable();
+    logger.info("[startup] trusted_senders table ready");
+  } catch (e) {
+    logger.warn({ e }, "Trusted senders table initialization warning");
   }
 
   try {

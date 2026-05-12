@@ -177,7 +177,7 @@ export async function assembleMorningActions(
   const { userName, detectedMeetings, calendarEvents, userCity, userLat, userLon } = input;
 
   // Fetch proactive mode (needed for cross-domain engine)
-  const mode = await getProactiveMode(userName).catch(() => "balanced" as const);
+  const mode = await getProactiveMode(userName).catch(() => "supervised" as const);
 
   // Run all data fetches in parallel — failures are non-fatal
   const [orders, travelSegments, billAnomalies, weatherData, crossDomainActions, emailDrafts] = await Promise.allSettled([
@@ -187,7 +187,7 @@ export async function assembleMorningActions(
     userLat && userLon && userCity
       ? getCachedWeather(userCity, userLat, userLon)
       : Promise.resolve(null),
-    mode !== "whisper"
+    mode !== "briefing_only"
       ? runCrossDomainEngine({
           userName,
           calendarEvents,

@@ -1,0 +1,66 @@
+Please implement the new Winston Mode system. This replaces proactive_mode entirely. This is a major architectural change — please read carefully before implementing.1. Database changes:
+
+Rename or replace the proactive_mode column with winston_mode in the user settings table
+Valid values: 'autopilot', 'supervised', 'briefing_only'
+Default: 'supervised'
+Add a new table: trusted_senders with columns: id, user_id, email_or_domain, name, created_at
+Migrate any existing proactive_mode data: whisper/vacation → briefing_only, balanced → supervised, full_partner → autopilot
+2. New endpoints:
+
+GET /api/settings/winston-mode — returns current mode
+POST /api/settings/winston-mode — saves mode (autopilot, supervised, briefing_only)
+GET /api/settings/trusted-senders — returns list of trusted senders
+POST /api/settings/trusted-senders — adds a trusted sender { name, emailOrDomain }
+DELETE /api/settings/trusted-senders/:id — removes a trusted sender
+3. Autopilot mode behavior:
+When winston_mode is 'autopilot':
+
+Meeting requests from trusted senders → automatically accept, add to calendar, send acceptance reply via Gmail
+Meeting requests from unknown senders → surface in morning briefing action buttons for user decision
+Bills within normal range → track silently, no notification
+Bill anomaly (>10% higher than usual) → immediate push notification
+Package out for delivery → immediate push notification
+Package delivered → immediate push notification
+Flight change or cancellation → immediate push notification
+Important email from VIP contact → immediate push notification with Claude summary
+Promotional/spam email → silently filtered, never surfaces
+Newsletter → summarized and held for morning briefing
+Email needing reply from trusted sender → Claude drafts reply, sends automatically
+Email needing reply from unknown sender → Claude drafts reply, surfaces in morning briefing action buttons
+4. Supervised mode behavior:
+When winston_mode is 'supervised':
+
+Meeting requests → Claude prepares accept/decline recommendation, surfaces in morning briefing action buttons for user decision
+Bills → track silently, surface anomalies in morning briefing
+Package updates → push notification for out for delivery and delivered only
+Flight changes → immediate push notification
+Email needing reply → Claude drafts reply, surfaces in morning briefing action buttons
+No automatic actions taken without user approval
+5. Briefing Only mode behavior:
+When winston_mode is 'briefing_only':
+
+No proactive push notifications except: VIP contacts, package delivered, flight cancelled
+Everything else held for morning briefing
+Morning briefing is the only touchpoint
+Email scanning runs every 2 hours
+No automatic actions
+6. Morning briefing action buttons — update based on mode:
+
+Autopilot: show what Winston already did. 'Winston accepted John's meeting request.' One tap to undo.
+Supervised: show what Winston prepared and needs approval. 'John requested a meeting — Accept or Decline?'
+Briefing Only: show what needs attention. Same as current behavior.
+7. Background email scanning frequency:
+
+Autopilot: every 15 minutes
+Supervised: every 30 minutes
+Briefing Only: every 2 hours
+8. VIP contacts:
+
+Always get through immediately regardless of winston_mode
+No change to existing VIP contact system
+9. Remove:
+
+Focus mode entirely — remove all focus mode endpoints and scheduled jobs
+Smart digest — already removed
+Digest interval settings
+Deploy when complete and confirm all endpoints are live with test results.

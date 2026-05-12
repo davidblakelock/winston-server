@@ -369,7 +369,7 @@ export interface CrossDomainInput {
 export async function runCrossDomainEngine(input: CrossDomainInput): Promise<MorningAction[]> {
   const { userName, calendarEvents, mode, userCity = "Dallas", userLat = 32.7767, userLon = -96.7970 } = input;
 
-  if (mode === "whisper") return [];
+  if (mode === "briefing_only") return [];
 
   const checks: Promise<MorningAction[]>[] = [
     checkCalendarTravelConflict(userName, calendarEvents),
@@ -379,7 +379,7 @@ export async function runCrossDomainEngine(input: CrossDomainInput): Promise<Mor
     checkStepAnomaly(userName),
   ];
 
-  if (mode === "full_partner" || mode === "vacation") {
+  if (mode === "autopilot") {
     checks.push(
       checkHealthCalendarRisk(userName, calendarEvents, userCity, userLat, userLon),
       checkRelationshipNudges(userName)

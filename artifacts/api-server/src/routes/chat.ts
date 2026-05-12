@@ -1132,17 +1132,15 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     // (e.g. user switched from balanced → whisper during the day) take effect
     // immediately without waiting for tomorrow's pre-gen cycle.
     //
-    // max_tokens per mode:
-    //   whisper      — 450  (~3-4 sentences)
-    //   balanced     — 600  (60-90 seconds)
-    //   full_partner — 900  (slightly richer)
-    //   vacation     — 200  (~1-2 sentences)
-    const deliveryProactiveMode = await getProactiveMode(sessionUserName).catch(() => "balanced" as const);
+    // max_tokens per Winston Mode:
+    //   briefing_only — 450  (~3-4 sentences, minimal)
+    //   supervised    — 600  (standard full briefing)
+    //   autopilot     — 900  (full + cross-domain insights)
+    const deliveryProactiveMode = await getProactiveMode(sessionUserName).catch(() => "supervised" as const);
     const deliveryFirstName = userProfile?.name?.split(" ")[0] ?? "there";
     const deliveryMaxTokens =
-      deliveryProactiveMode === "whisper"      ? 450  :
-      deliveryProactiveMode === "vacation"     ? 200  :
-      deliveryProactiveMode === "full_partner" ? 900  :
+      deliveryProactiveMode === "briefing_only" ? 450  :
+      deliveryProactiveMode === "autopilot"     ? 900  :
       600;
     // Appending the mode instruction at delivery time overrides whatever mode was
     // baked into the static preamble at pre-gen time. This handles mode changes mid-day.
@@ -1348,14 +1346,14 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     // Assemble full system prompt: pre-built static preamble + live blocks + static suffix +
     // delivery-time mode instruction.
     //
-    // For whisper and vacation modes the static suffix is intentionally SKIPPED.
+    // For briefing_only mode the static suffix is intentionally SKIPPED.
     // The suffix contains thousands of tokens of news blocks, sports scores, and a
     // "cover 10 stories" briefing instruction — Claude will follow that agenda even
-    // if the whisper instruction says "be brief". Dropping the suffix means Claude
-    // only sees the persona preamble + live email/calendar + the mode instruction,
-    // which produces the correct 3-4 sentence (whisper) or 1-2 sentence (vacation)
-    // output without being cut off mid-sentence by the token cap.
-    const deliverySuffix = (deliveryProactiveMode === "whisper" || deliveryProactiveMode === "vacation")
+    // if the briefing_only instruction says "be brief". Dropping the suffix means
+    // Claude only sees the persona preamble + live email/calendar + the mode
+    // instruction, which produces the correct 3-4 sentence output without being
+    // cut off mid-sentence by the token cap.
+    const deliverySuffix = deliveryProactiveMode === "briefing_only"
       ? deliveryModeInstruction
       : staticCtx.suffix + deliveryModeInstruction;
     const fullSystemPrompt = livePreamble + liveGmailBlock + meetingRequestsBlock + liveCalendarBlock + deliverySuffix;

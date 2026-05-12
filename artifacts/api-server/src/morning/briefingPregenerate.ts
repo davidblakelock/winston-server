@@ -254,14 +254,14 @@ function buildPeopleContextBlock(rawData: CollectedData, displayName?: string): 
   );
 }
 
-function buildNarrativeBriefingInstruction(city: string, companionName: string | null, displayName?: string, mode: import("../proactiveMode/proactiveModeManager.js").ProactiveMode = "balanced"): string {
+function buildNarrativeBriefingInstruction(city: string, companionName: string | null, displayName?: string, mode: import("../proactiveMode/proactiveModeManager.js").WinstonMode = "supervised"): string {
   const companion = companionName ?? "your companion";
   const firstName = displayName?.split(" ")[0] ?? "there";
 
-  if (mode === "whisper") {
+  if (mode === "briefing_only") {
     return `
 
-[MORNING BRIEFING — WHISPER MODE]
+[MORNING BRIEFING — BRIEFING ONLY MODE]
 
 You are ${companion}. Deliver an ultra-brief morning briefing for ${firstName}.
 
@@ -272,23 +272,6 @@ ABSOLUTE RULES — NO EXCEPTIONS:
 • Skip ALL of the following completely: news, sports, weather, entertainment, markets, health, TV shows, local content, venue concerts, bills (unless due today), relationship nudges, closing thought, My Day invite.
 • No bullet points. No markdown. Pure conversational prose for TTS.
 • If nothing critical exists: "Good morning, ${firstName}. Your day looks clear — nothing critical this morning. Let me know if you'd like more detail."
-
-`;
-  }
-
-  if (mode === "vacation") {
-    return `
-
-[MORNING BRIEFING — VACATION MODE]
-
-You are ${companion}. ${firstName} is on vacation and wants to be left alone unless something truly matters.
-
-ABSOLUTE RULES — NO EXCEPTIONS:
-• Total length: 2–3 sentences maximum. This overrides every other instruction.
-• Start with "Good morning, ${firstName}" and mention only what is genuinely critical — a VIP contact reaching out, a safety alert, or something that truly cannot wait.
-• Skip EVERYTHING else: news, sports, calendar, bills, health, entertainment, markets, reminders, relationship nudges, local content, closing thought, My Day invite.
-• No bullet points. No markdown. Pure conversational prose for TTS.
-• If nothing critical exists: "Good morning, ${firstName}. All clear — enjoy your vacation."
 
 `;
   }
@@ -391,7 +374,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       getSeenHeadlines(userName, 7).catch(() => new Set<string>()),    // news/Dallas: 7-day window (no story repeats within a week)
       getSeenHeadlines(userName, 14).catch(() => new Set<string>()),  // venue concerts: 14-day window (events repeat until show date)
       getBriefingPreferences(userName).catch(() => []),
-      getProactiveMode(userName).catch(() => "balanced" as const),
+      getProactiveMode(userName).catch(() => "supervised" as const),
     ]);
     const memoryBlock = formatMemoriesForContext(recentMemories);
     const dynamicProfileBlock = formatProfileForContext(allProfileItems);
@@ -670,7 +653,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     // News appears before Dallas local content and venue concerts so Claude gives it
     // appropriate prominence — national/international news is mandatory in every briefing.
     // ── Cross-domain intelligence (non-calendar checks — calendar runs live at delivery) ─
-    const crossDomainActions = proactiveMode !== "whisper"
+    const crossDomainActions = proactiveMode !== "briefing_only"
       ? await runCrossDomainEngine({
           userName,
           calendarEvents: [],

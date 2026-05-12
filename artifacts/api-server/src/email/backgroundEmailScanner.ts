@@ -166,7 +166,7 @@ async function processMeetingEmails(userName: string, since: Date): Promise<void
 
 async function runScan(userName: string): Promise<void> {
   // Read current mode and decide whether enough time has elapsed for a scan.
-  const mode = await getProactiveMode(userName).catch(() => "balanced" as const);
+  const mode = await getProactiveMode(userName).catch(() => "supervised" as const);
   const intervalMs = getModeEmailIntervalMs(mode);
   const lastScan = _lastScanAt.get(userName);
   const elapsedMs = lastScan ? Date.now() - lastScan.getTime() : Infinity;
@@ -196,11 +196,13 @@ async function runScan(userName: string): Promise<void> {
 }
 
 // ── Scheduler ─────────────────────────────────────────────────────────────────
-// Heartbeat fires every 30 min (the minimum interval, used by full_partner mode).
-// Actual scan frequency is gated by the user's proactive mode inside runScan().
+// Heartbeat fires every 15 min (the minimum interval, used by autopilot mode).
+// Actual scan frequency is gated by the user's Winston Mode inside runScan().
 
 export function startBackgroundEmailScanner(userName = NATIVE_USER): void {
-  cron.schedule("*/30 * * * *", async () => {
+  // Heartbeat every 15 min — the minimum interval used by autopilot mode.
+  // Actual scan frequency is gated by the user's Winston Mode inside runScan().
+  cron.schedule("*/15 * * * *", async () => {
     try {
       await runScan(userName);
     } catch (err) {
@@ -208,5 +210,5 @@ export function startBackgroundEmailScanner(userName = NATIVE_USER): void {
     }
   }, { timezone: TZ });
 
-  logger.info("[BgEmailScanner] Scheduler started — scanning every 30 minutes");
+  logger.info("[BgEmailScanner] Scheduler started — heartbeat every 15 minutes");
 }
