@@ -16,6 +16,7 @@
  *   - Package status change to out_for_delivery or delivered
  *   - Bill anomaly detected (charge >10% above average)
  *   - Meeting request that needs a response before tomorrow's briefing
+ *   - Restaurant reservation confirmation detected (OpenTable, Resy, Tock, direct)
  */
 
 import cron from "node-cron";
@@ -26,6 +27,7 @@ import { upsertOrder, getOrders } from "../orders/ordersManager.js";
 import { scanForBillAnomalies } from "../bills/billAnomalyScanner.js";
 import { scanEmailsForMeetings } from "../email/meetingScanner.js";
 import { setPendingMeetingRequests, getPendingMeetingRequests } from "../email/emailMeetingManager.js";
+import { scanReservationEmails } from "../email/reservationScanner.js";
 import { sendPushToAll } from "../push/pushManager.js";
 import { getProactiveMode, getModeEmailIntervalMs } from "../proactiveMode/proactiveModeManager.js";
 import type { MeetingRequest } from "../email/meetingScanner.js";
@@ -162,6 +164,22 @@ async function processMeetingEmails(userName: string, since: Date): Promise<void
   }
 }
 
+// ── Reservation confirmation scan logic ───────────────────────────────────────
+
+async function processReservationEmails(userName: string, since: Date): Promise<void> {
+  try {
+    const reservations = await scanReservationEmails(userName, since);
+    if (reservations.length > 0) {
+      logger.info(
+        { userName, count: reservations.length },
+        "[BgEmailScanner] Reservation confirmations processed"
+      );
+    }
+  } catch (err) {
+    logger.warn({ err }, "[BgEmailScanner] Reservation scan failed");
+  }
+}
+
 // ── Main scan tick ────────────────────────────────────────────────────────────
 
 async function runScan(userName: string): Promise<void> {
@@ -189,6 +207,7 @@ async function runScan(userName: string): Promise<void> {
     processOrderEmails(userName, since),
     processBillEmails(userName),
     processMeetingEmails(userName, since),
+    processReservationEmails(userName, since),
   ]);
 
   _lastScanAt.set(userName, scanStart);
