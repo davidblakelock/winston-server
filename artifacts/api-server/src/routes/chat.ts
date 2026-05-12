@@ -178,9 +178,14 @@ import {
 import {
   bookViaOpenTable,
   bookViaResy,
-  isOpenTableBookingReady,
-  isResyBookingReady,
+  isOpenTableBookingReadyForUser,
+  isResyBookingReadyForUser,
+  isApifyApiKeyConfigured,
 } from "../restaurants/apifyBooking.js";
+import {
+  getBookingCredentials,
+  type BookingCredentials,
+} from "../restaurants/bookingCredentialsManager.js";
 import {
   detectMeetingRequests,
   buildMeetingRequestsBlock,
@@ -2142,6 +2147,14 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           const otMetroId  = getOpenTableMetroId(restaurantCity);
           const resyCitySlug = getResyCitySlug(restaurantCity);
 
+          // Per-user booking credentials — fetched once, used by both Apify paths.
+          const bookingCreds = await getBookingCredentials(sessionUserName).catch(
+            (): BookingCredentials => ({
+              openTableEmail: null, openTablePassword: null,
+              resyEmail: null,     resyPassword: null,
+            })
+          );
+
           // Build search fallback URLs with the correct metro/city for this restaurant.
           const otBase = intent.dateISO && intent.timeISO
             ? `https://www.opentable.com/s/?covers=${partySize}&dateTime=${intent.dateISO}T${intent.timeISO}:00&term=${searchName}`
@@ -2167,7 +2180,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
             const reservationUrl = buildReservationUrl(details, intent.dateISO, intent.timeISO, intent.partySize);
 
             if (details.platform === "opentable" && reservationUrl) {
-              if (isOpenTableBookingReady() && intent.dateISO && intent.timeISO && details.platformSlug) {
+              if (isOpenTableBookingReadyForUser(bookingCreds) && intent.dateISO && intent.timeISO && details.platformSlug) {
                 // Apify zero-touch booking — respond immediately, book in background
                 const bookingDateLabel = intent.dateLabel ?? intent.dateISO;
                 const bookingTimeLabel = intent.timeLabel ?? intent.timeISO;
@@ -2187,7 +2200,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
                 Promise.resolve().then(async () => {
                   try {
                     const result = await bookViaOpenTable(
-                      _snap.slug, _snap.name, _snap.date, _snap.time, partySize
+                      _snap.slug, _snap.name, _snap.date, _snap.time, partySize, bookingCreds
                     );
                     if (result.success) {
                       await createCalendarEvent({
@@ -2240,11 +2253,14 @@ const chatHandlerCore = async (req: Request, res: Response) => {
                   restaurantName: details.name,
                   phone: details.phone ?? null,
                 };
-                (req as any)._hardcodedResponse = "";
+                // If Apify is configured but user hasn't connected OpenTable, prompt them.
+                (req as any)._hardcodedResponse = (isApifyApiKeyConfigured() && !bookingCreds.openTableEmail)
+                  ? `I've opened OpenTable for ${details.name} — connect your OpenTable account in Settings to enable zero-touch automatic booking next time.`
+                  : "";
               }
 
             } else if (details.platform === "resy" && reservationUrl) {
-              if (isResyBookingReady() && intent.dateISO && intent.timeISO && details.platformSlug) {
+              if (isResyBookingReadyForUser(bookingCreds) && intent.dateISO && intent.timeISO && details.platformSlug) {
                 const bookingDateLabel = intent.dateLabel ?? intent.dateISO;
                 const bookingTimeLabel = intent.timeLabel ?? intent.timeISO;
                 (req as any)._hardcodedResponse =
@@ -2264,7 +2280,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
                 Promise.resolve().then(async () => {
                   try {
                     const result = await bookViaResy(
-                      _snap.slug, _snap.city, _snap.name, _snap.date, _snap.time, partySize
+                      _snap.slug, _snap.city, _snap.name, _snap.date, _snap.time, partySize, bookingCreds
                     );
                     if (result.success) {
                       await createCalendarEvent({
@@ -2317,7 +2333,10 @@ const chatHandlerCore = async (req: Request, res: Response) => {
                   restaurantName: details.name,
                   phone: details.phone ?? null,
                 };
-                (req as any)._hardcodedResponse = "";
+                // If Apify is configured but user hasn't connected Resy, prompt them.
+                (req as any)._hardcodedResponse = (isApifyApiKeyConfigured() && !bookingCreds.resyEmail)
+                  ? `I've opened Resy for ${details.name} — connect your Resy account in Settings to enable zero-touch automatic booking next time.`
+                  : "";
               }
 
             } else if (details.platform === "yelp" && reservationUrl) {

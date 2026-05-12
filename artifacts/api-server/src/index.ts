@@ -53,6 +53,7 @@ import { startBackgroundEmailScanner } from "./email/backgroundEmailScanner";
 import { ensureSavedPlacesTable } from "./location/geofenceManager";
 import { ensureListItemColumns } from "./lists/listManager";
 import { ensureListShareTable } from "./lists/listShareManager";
+import { ensureBookingCredentialsColumns } from "./restaurants/bookingCredentialsManager";
 
 const rawPort = process.env["PORT"];
 
@@ -336,6 +337,12 @@ app.listen(port, async (err) => {
     await ensureListShareTable();
   } catch (e) {
     logger.warn({ e }, "List share permissions table initialization warning");
+  }
+
+  try {
+    await ensureBookingCredentialsColumns();
+  } catch (e) {
+    logger.warn({ e }, "Booking credentials columns initialization warning");
   }
 
   try {

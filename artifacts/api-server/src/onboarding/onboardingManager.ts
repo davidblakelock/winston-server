@@ -88,6 +88,11 @@ export async function ensureOnboardingTable(): Promise<void> {
   await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS home_address text`);
   await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS home_latitude numeric(10,7)`);
   await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS home_longitude numeric(10,7)`);
+  // Booking platform credentials (per-user, stored in DB — not env vars)
+  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS opentable_email    text`);
+  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS opentable_password text`);
+  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS resy_email         text`);
+  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS resy_password      text`);
 }
 
 type ProfileRow = {
