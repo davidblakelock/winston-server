@@ -245,6 +245,7 @@ import { populateCalendarSyncState } from "../departure/calendarSyncScheduler.js
 import { logBriefingStories } from "../morning/storyDedup.js";
 import { getDallasItems, getLocalContentCity, type LocalContentItem } from "../morning/dallasContent.js";
 import { createReminder } from "../reminders/reminderManager.js";
+import { getPendingRouteReminder, setPendingRouteReminder } from "../routeAware/routeAwareManager.js";
 import { nextOccurrenceForPattern, humanReadableRecurring } from "../reminders/recurringUtils.js";
 import { broadcastToUser } from "../reminders/sseStore.js";
 import { saveMoodCheckin } from "../mood/moodManager.js";
@@ -1080,6 +1081,12 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const DEPARTURE_TEXT_ACCEPT = /^(?:yes|yeah|yep|yup|sure|go\s+ahead|do\s+it|ok(?:ay)?|send\s+it|text\s+(her|him|them)|that\s+works?|sounds?\s+good)(?:[,\s!.]|$)/i;
   const isDepartureTextAccepted = !isMorningGreeting && !isTextFlowActive && !isTextMessageRequest
     && pendingDepartureOffer !== null && DEPARTURE_TEXT_ACCEPT.test(message.trim());
+
+  // R007-ROUTE: Route-aware stop reminder — user said yes after briefing offered a reminder
+  const pendingRouteReminder = getPendingRouteReminder();
+  const ROUTE_REMIND_ACCEPT = /^(?:yes|yeah|yep|yup|sure|ok(?:ay)?|go\s+ahead|do\s+it|please|absolutely|sounds?\s+good|set\s+(?:it|a\s+reminder|that)|add\s+(?:it|a\s+reminder))(?:[,\s!.]|$)/i;
+  const isRouteReminderAccepted = !isMorningGreeting && !isTextFlowActive && !isDepartureTextAccepted
+    && pendingRouteReminder !== null && ROUTE_REMIND_ACCEPT.test(message.trim());
   // Retry: user says something like "it didn't open" / "try again" within 30 min of last SMS dispatch
   const SMS_RETRY_PATTERN = /\b(it\s+didn.?t\s+(open|work)|try\s+again|open\s+(messages|messaging|it)\s+again|send\s+it\s+again|retry|re-?send|messages\s+(didn.?t|didn.t)\s+open)\b/i;
   const lastSmsPayload = getLastSmsPayload();
@@ -2002,6 +2009,37 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       req.log.warn({ err }, "[T006-DEP] Departure text composition failed");
       systemPrompt +=
         `\n\n[Departure Text — Error]\nTell ${displayName} you had trouble composing the text and ask them to try again.`;
+    }
+  }
+
+  // ── R007-ROUTE: Route-aware stop reminder — user confirmed the offer ─────────
+  if (isRouteReminderAccepted && pendingRouteReminder) {
+    try {
+      const endTime = new Date(pendingRouteReminder.eventEndIso);
+      const fireAt  = new Date(endTime.getTime() - 30 * 60 * 1000);
+      const fireLabel = fireAt.toLocaleTimeString("en-US", {
+        timeZone: "America/Chicago", hour: "numeric", minute: "2-digit",
+      });
+      await createReminder({
+        userName:     sessionUserName,
+        reminderText: pendingRouteReminder.reminderText,
+        fireAt,
+        timezone: "America/Chicago",
+      });
+      setPendingRouteReminder(null);
+      systemPrompt +=
+        `\n\n[Route Reminder Set]\n` +
+        `Reminder confirmed for ${fireLabel} — 30 minutes before ${pendingRouteReminder.eventSummary} ends. ` +
+        `The reminder text: "${pendingRouteReminder.reminderText}". ` +
+        `Confirm warmly in one sentence. Example: "Done — I'll remind you at ${fireLabel} to stop at ${pendingRouteReminder.businessName} on your way home."`;
+      req.log.info(
+        { fireAt: fireAt.toISOString(), business: pendingRouteReminder.businessName, event: pendingRouteReminder.eventSummary },
+        "[R007-ROUTE] Route stop reminder created"
+      );
+    } catch (err) {
+      req.log.warn({ err }, "[R007-ROUTE] Reminder creation failed");
+      systemPrompt +=
+        `\n\n[Route Reminder Error]\nTell the user you had trouble setting that reminder and ask them to try again.`;
     }
   }
 

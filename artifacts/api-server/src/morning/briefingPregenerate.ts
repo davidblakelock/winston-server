@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { toChicagoTime, chicagoDateStr, type CalendarEvent, fetchWeekEvents, formatCalendarForPrompt } from "../google/calendar.js";
+import { toChicagoTime, chicagoDateStr, type CalendarEvent, fetchWeekEvents, formatCalendarForPrompt, fetchTodayEvents, fetchTomorrowEvents } from "../google/calendar.js";
 import { fetchAndSummarizeEmails, formatEmailsForPrompt, buildImportantEmailInstruction } from "../google/gmail.js";
 import { estimateDriveTime, extractEventLocation } from "../departure/departureManager.js";
 import { getLastNightNotes, formatNotesForMorningBriefing } from "../winddown/winddownManager.js";
@@ -34,6 +34,7 @@ import { getStoredGarminData, formatGarminForBriefing } from "../garmin/garminSe
 import { getStoredFitData, formatFitForBriefing } from "../google/fit.js";
 import { getMydayEntries, type MydayEntry } from "../myday/mydayManager.js";
 import { getPendingSuggestion, markSuggestionSurfaced } from "../lifeCaptures/lifeCapturesManager.js";
+import { buildRouteAwareSuggestions, buildRouteAwareBlock } from "../routeAware/routeAwareManager.js";
 import { getOrdersForBriefing } from "../orders/ordersManager.js";
 import { getTodayTravelSegments, formatTravelForBriefing } from "../travel/travelManager.js";
 
@@ -696,6 +697,31 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       markSuggestionSurfaced(userName, pendingLifeSuggestion.id).catch(() => {});
     }
 
+    // ── Route-aware proactive suggestions ────────────────────────────────────
+    // Fetch today + tomorrow calendar events to find stops on the way home.
+    // Non-fatal: if Google APIs fail or home address is missing, routeAwareBlock = "".
+    let routeAwareBlock = "";
+    if (homeAddress) {
+      try {
+        const [todayEvts, tomorrowEvts] = await Promise.all([
+          fetchTodayEvents(userName).catch(() => null),
+          fetchTomorrowEvents(userName).catch(() => null),
+        ]);
+        const allEvts = [...(todayEvts ?? []), ...(tomorrowEvts ?? [])];
+        if (allEvts.length) {
+          const routeSuggestions = await buildRouteAwareSuggestions(
+            userName, allEvts, homeAddress, primaryCity
+          ).catch(() => []);
+          if (routeSuggestions.length) {
+            routeAwareBlock = buildRouteAwareBlock(userName, routeSuggestions);
+            logger.info({ userName, count: routeSuggestions.length }, "[RouteAware] Suggestions built for briefing");
+          }
+        }
+      } catch (err) {
+        logger.warn({ err }, "[RouteAware] Suggestion build failed — skipping");
+      }
+    }
+
     // All data blocks assembled — build the suffix.
     // The briefing instruction is the final element so Claude's marching orders
     // are the last thing it reads before generating the response.
@@ -725,7 +751,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
 
     const suffix = garminBlock + fitBlock + travelBlock + ordersBlock + tvMorningBlock + billsMorningBlock + datesBlock +
       sundaySummaryBlock + recFollowUpBlock + personalFollowUpsBlock +
-      mydayBlock + lifeSuggestionBlock + crossDomainBlock +
+      mydayBlock + lifeSuggestionBlock + crossDomainBlock + routeAwareBlock +
       dedupedNewsBlock + dallasEventsBlock + apifyEventBlock + dedupedVenueConcertsBlock + motivationContextBlock +
       buildNarrativeBriefingInstruction(primaryCity, userProfile?.companionName ?? null, userProfile?.name ?? undefined, proactiveMode) +
       modeInstruction;
