@@ -693,15 +693,6 @@ router.delete("/settings/vip-contacts/:id", async (req, res) => {
   }
 });
 
-// Focus mode has been removed — replaced by Winston Mode (autopilot/supervised/briefing_only).
-// These stub routes return a 410 Gone so native app callers get a clear signal to update.
-router.get("/settings/focus-mode", (_req, res) => {
-  res.status(410).json({ error: "Focus mode has been removed. Use /api/settings/winston-mode instead." });
-});
-router.post("/settings/focus-mode", (_req, res) => {
-  res.status(410).json({ error: "Focus mode has been removed. Use /api/settings/winston-mode instead." });
-});
-
 // ── Booking credentials ───────────────────────────────────────────────────────
 // Import lazily at the top of these handlers to avoid circular deps at module load.
 

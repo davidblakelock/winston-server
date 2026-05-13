@@ -1,44 +1,79 @@
 /**
  * Background Email Scanner
  *
- * Runs a heartbeat every 30 minutes. The actual scan interval is dynamically
- * determined by the user's proactive mode:
+ * Runs a heartbeat every 60 minutes and processes four categories of emails:
  *
- *   whisper      — every 2 hours  (120 min)
- *   balanced     — every 1 hour   ( 60 min)
- *   full_partner — every 30 min   ( 30 min)  ← minimum / heartbeat interval
- *   vacation     — every 4 hours  (240 min)
+ *   1. Meeting requests        → immediate push notification
+ *   2. Event invitations       → immediate push if not already on Google Calendar
+ *   3. Order confirmations     → saved to Order Tracker
+ *   4. Travel confirmations    → saved to Travel screen (flights, hotels, rental cars)
  *
- * Each tick reads the current mode from the DB and skips if not enough time
- * has elapsed since the last completed scan.
- *
- * Push notifications are sent ONLY for:
- *   - Package status change to out_for_delivery or delivered
- *   - Bill anomaly detected (charge >10% above average)
- *   - Meeting request that needs a response before tomorrow's briefing
- *   - Restaurant reservation confirmation detected (OpenTable, Resy, Tock, direct)
+ * Everything else is ignored.
  */
 
 import cron from "node-cron";
+import { google } from "googleapis";
+import Anthropic from "@anthropic-ai/sdk";
 import { logger } from "../lib/logger.js";
 import { NATIVE_USER } from "../auth/middleware.js";
+import { getAuthClientForUser } from "../google/oauth.js";
 import { scanOrderEmails } from "../orders/gmailOrderScanner.js";
 import { upsertOrder, getOrders } from "../orders/ordersManager.js";
-import { scanForBillAnomalies } from "../bills/billAnomalyScanner.js";
+import { scanTravelEmails } from "../travel/travelScanner.js";
+import { upsertTravelSegment } from "../travel/travelManager.js";
 import { scanEmailsForMeetings } from "../email/meetingScanner.js";
 import { setPendingMeetingRequests, getPendingMeetingRequests } from "../email/emailMeetingManager.js";
-
 import { sendPushToAll } from "../push/pushManager.js";
-import { getProactiveMode, getModeEmailIntervalMs } from "../proactiveMode/proactiveModeManager.js";
+import { MODEL_HAIKU } from "../lib/models.js";
 import type { MeetingRequest } from "../email/meetingScanner.js";
 
 const TZ = "America/Chicago";
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // ── Per-user last-scan timestamp (in-memory; resets on restart) ───────────────
 
 const _lastScanAt = new Map<string, Date>();
 
-// ── Order status push logic ───────────────────────────────────────────────────
+// Fixed scan interval: 60 minutes
+const SCAN_INTERVAL_MS = 60 * 60 * 1000;
+
+// ── Gmail body extraction helpers ─────────────────────────────────────────────
+
+interface GmailPart {
+  mimeType?: string;
+  body?: { data?: string };
+  parts?: GmailPart[];
+}
+
+function decodeBase64Url(data: string): string {
+  const b64 = data.replace(/-/g, "+").replace(/_/g, "/");
+  try { return Buffer.from(b64, "base64").toString("utf-8"); } catch { return ""; }
+}
+
+function extractBody(payload: GmailPart): string {
+  function walk(parts: GmailPart[]): string {
+    for (const mime of ["text/plain", "text/html"]) {
+      for (const p of parts) {
+        if (p.mimeType === mime && p.body?.data) return decodeBase64Url(p.body.data);
+        if (p.parts) { const r = walk(p.parts); if (r) return r; }
+      }
+    }
+    return "";
+  }
+  if (payload.parts?.length) return walk(payload.parts);
+  if (payload.body?.data) return decodeBase64Url(payload.body.data);
+  return "";
+}
+
+function stripHtml(html: string): string {
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&")
+    .replace(/\s{2,}/g, " ").trim();
+}
+
+// ── 1. Order confirmations → Order Tracker ────────────────────────────────────
 
 const NOTIFY_STATUSES = new Set(["out_for_delivery", "delivered"]);
 
@@ -84,27 +119,7 @@ async function processOrderEmails(userName: string, since: Date): Promise<void> 
   }
 }
 
-// ── Bill anomaly push logic ───────────────────────────────────────────────────
-
-async function processBillEmails(userName: string): Promise<void> {
-  try {
-    const anomalies = await scanForBillAnomalies(userName, 2);
-    if (anomalies.length === 0) return;
-
-    for (const anomaly of anomalies) {
-      const body = `${anomaly.retailer} billed $${anomaly.currentAmount.toFixed(2)} — ${anomaly.percentChange > 0 ? "+" : ""}${anomaly.percentChange.toFixed(0)}% vs. your usual $${anomaly.previousAmount.toFixed(2)}`;
-      await sendPushToAll(
-        { title: "Unusual Charge Detected", body, type: "bill-anomaly" },
-        userName
-      );
-      logger.info({ retailer: anomaly.retailer, pct: anomaly.percentChange }, "[BgEmailScanner] Bill anomaly push sent");
-    }
-  } catch (err) {
-    logger.warn({ err }, "[BgEmailScanner] Bill scan failed");
-  }
-}
-
-// ── Meeting request push logic ────────────────────────────────────────────────
+// ── 2. Meeting requests → immediate push ─────────────────────────────────────
 
 function isTomorrowOrSooner(meeting: MeetingRequest): boolean {
   if (!meeting.proposedDate) return false;
@@ -164,46 +179,201 @@ async function processMeetingEmails(userName: string, since: Date): Promise<void
   }
 }
 
+// ── 3. Event invitations → push if not already on Google Calendar ─────────────
+
+const EVENT_INVITE_KEYWORDS = [
+  "invitation:", "you're invited", "you have been invited",
+  "calendar invite", "event invitation", "has invited you",
+  "invited you to", "cordially invited", "join us for",
+  "save the date",
+];
+
+interface ExtractedEventInvite {
+  isInvite: boolean;
+  eventTitle: string | null;
+  eventDate: string | null;   // YYYY-MM-DD or null
+  organizer: string | null;
+}
+
+async function extractEventInviteInfo(
+  subject: string,
+  body: string,
+  from: string,
+): Promise<ExtractedEventInvite | null> {
+  const truncated = body.slice(0, 2500);
+  const prompt = `Determine if this email is a calendar event invitation (NOT a meeting request, NOT a newsletter). Return ONLY valid JSON.
+
+From: ${from}
+Subject: ${subject}
+
+Body:
+${truncated}
+
+Return JSON:
+{
+  "isInvite": true | false,
+  "eventTitle": "name of the event or null",
+  "eventDate": "YYYY-MM-DD or null if unknown/no specific date",
+  "organizer": "organizer name or null"
+}
+
+Count as invitations: event invites, party invitations, social gathering invites, conference invitations, webinar invitations, save-the-date emails.
+Do NOT count: meeting requests between two people (those are handled separately), newsletters, promotional emails, marketing.`;
+
+  try {
+    const resp = await anthropic.messages.create({
+      model: MODEL_HAIKU,
+      max_tokens: 200,
+      messages: [{ role: "user", content: prompt }],
+    });
+    const text = resp.content[0].type === "text" ? resp.content[0].text.trim() : "";
+    const m = text.match(/\{[\s\S]*\}/);
+    if (!m) return null;
+    return JSON.parse(m[0]) as ExtractedEventInvite;
+  } catch (err) {
+    logger.warn({ err }, "[BgEmailScanner] Event invite extraction failed");
+    return null;
+  }
+}
+
+async function isEventOnCalendar(userName: string, title: string, date: string | null): Promise<boolean> {
+  try {
+    const auth = await getAuthClientForUser(userName);
+    if (!auth) return false;
+    const calendar = google.calendar({ version: "v3", auth });
+
+    let timeMin: string;
+    let timeMax: string;
+
+    if (date) {
+      const d = new Date(date + "T00:00:00");
+      timeMin = new Date(d.getTime() - 24 * 60 * 60 * 1000).toISOString();
+      timeMax = new Date(d.getTime() + 2 * 24 * 60 * 60 * 1000).toISOString();
+    } else {
+      timeMin = new Date().toISOString();
+      timeMax = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
+    }
+
+    const resp = await calendar.events.list({
+      calendarId: "primary",
+      q: title,
+      timeMin,
+      timeMax,
+      maxResults: 5,
+      singleEvents: true,
+    });
+
+    return (resp.data.items?.length ?? 0) > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function processEventInvitations(userName: string, since: Date): Promise<void> {
+  try {
+    const auth = await getAuthClientForUser(userName);
+    if (!auth) return;
+    try { await auth.getAccessToken(); } catch { return; }
+
+    const gmail = google.gmail({ version: "v1", auth });
+    const subjectClauses = EVENT_INVITE_KEYWORDS.map((k) => `subject:"${k}"`).join(" OR ");
+    const q = `in:inbox (${subjectClauses}) -from:me after:${Math.floor(since.getTime() / 1000)}`;
+
+    const list = await gmail.users.messages.list({ userId: "me", maxResults: 20, q });
+    const messageIds = (list.data.messages ?? []).map((m) => m.id!).filter(Boolean);
+
+    if (messageIds.length === 0) return;
+    logger.info({ userName, count: messageIds.length }, "[BgEmailScanner] Event invite candidates");
+
+    for (const msgId of messageIds.slice(0, 10)) {
+      try {
+        const detail = await gmail.users.messages.get({ userId: "me", id: msgId, format: "full" });
+        const headers = detail.data.payload?.headers ?? [];
+        const getH = (n: string) =>
+          headers.find((h) => h.name?.toLowerCase() === n.toLowerCase())?.value ?? "";
+
+        const subject = getH("Subject");
+        const from = getH("From");
+
+        let body = extractBody((detail.data.payload ?? {}) as GmailPart);
+        if (body.includes("<")) body = stripHtml(body);
+        if (body.length < 20) continue;
+
+        const extracted = await extractEventInviteInfo(subject, body, from);
+        if (!extracted?.isInvite || !extracted.eventTitle) continue;
+
+        const alreadyOnCalendar = await isEventOnCalendar(userName, extracted.eventTitle, extracted.eventDate);
+        if (alreadyOnCalendar) {
+          logger.info({ title: extracted.eventTitle }, "[BgEmailScanner] Event already on calendar, skipping");
+          continue;
+        }
+
+        const dateStr = extracted.eventDate ? ` on ${extracted.eventDate}` : "";
+        const body2 = `${extracted.eventTitle}${dateStr}${extracted.organizer ? ` — from ${extracted.organizer}` : ""}`;
+        await sendPushToAll(
+          { title: "Event Invitation", body: body2, type: "calendar-update" },
+          userName
+        );
+        logger.info({ title: extracted.eventTitle, date: extracted.eventDate }, "[BgEmailScanner] Event invite push sent");
+      } catch (err) {
+        logger.warn({ err, msgId }, "[BgEmailScanner] Failed to process event invite");
+      }
+    }
+  } catch (err) {
+    logger.warn({ err }, "[BgEmailScanner] Event invitation scan failed");
+  }
+}
+
+// ── 4. Travel confirmations → Travel screen ───────────────────────────────────
+
+async function processTravelEmails(userName: string, since: Date): Promise<void> {
+  try {
+    const segments = await scanTravelEmails(userName, since);
+    if (segments.length === 0) return;
+
+    for (const seg of segments) {
+      await upsertTravelSegment(userName, seg);
+    }
+
+    logger.info({ userName, count: segments.length }, "[BgEmailScanner] Travel segments saved");
+  } catch (err) {
+    logger.warn({ err }, "[BgEmailScanner] Travel scan failed");
+  }
+}
+
 // ── Main scan tick ────────────────────────────────────────────────────────────
 
 async function runScan(userName: string): Promise<void> {
-  // Read current mode and decide whether enough time has elapsed for a scan.
-  const mode = await getProactiveMode(userName).catch(() => "supervised" as const);
-  const intervalMs = getModeEmailIntervalMs(mode);
   const lastScan = _lastScanAt.get(userName);
   const elapsedMs = lastScan ? Date.now() - lastScan.getTime() : Infinity;
 
-  if (elapsedMs < intervalMs) {
-    const nextInMin = Math.ceil((intervalMs - elapsedMs) / 60_000);
-    logger.info(
-      { userName, mode, intervalMin: intervalMs / 60_000, nextInMin },
-      "[BgEmailScanner] Skipping tick — not yet time for this mode"
-    );
+  if (elapsedMs < SCAN_INTERVAL_MS) {
+    const nextInMin = Math.ceil((SCAN_INTERVAL_MS - elapsedMs) / 60_000);
+    logger.info({ userName, nextInMin }, "[BgEmailScanner] Skipping tick — not yet time");
     return;
   }
 
-  const since = lastScan ?? new Date(Date.now() - intervalMs);
+  const since = lastScan ?? new Date(Date.now() - SCAN_INTERVAL_MS);
   const scanStart = new Date();
 
-  logger.info({ userName, mode, intervalMin: intervalMs / 60_000, since: since.toISOString() }, "[BgEmailScanner] Starting scan");
+  logger.info({ userName, since: since.toISOString() }, "[BgEmailScanner] Starting scan");
 
   await Promise.allSettled([
     processOrderEmails(userName, since),
-    processBillEmails(userName),
     processMeetingEmails(userName, since),
+    processEventInvitations(userName, since),
+    processTravelEmails(userName, since),
   ]);
 
   _lastScanAt.set(userName, scanStart);
-  logger.info({ userName, mode }, "[BgEmailScanner] Scan complete");
+  logger.info({ userName }, "[BgEmailScanner] Scan complete");
 }
 
 // ── Scheduler ─────────────────────────────────────────────────────────────────
-// Heartbeat fires every 15 min (the minimum interval, used by autopilot mode).
-// Actual scan frequency is gated by the user's Winston Mode inside runScan().
+// Heartbeat fires every 15 min to handle restarts gracefully.
+// Actual scan only runs when 60+ minutes have elapsed since the last scan.
 
 export function startBackgroundEmailScanner(userName = NATIVE_USER): void {
-  // Heartbeat every 15 min — the minimum interval used by autopilot mode.
-  // Actual scan frequency is gated by the user's Winston Mode inside runScan().
   cron.schedule("*/15 * * * *", async () => {
     try {
       await runScan(userName);
@@ -212,5 +382,5 @@ export function startBackgroundEmailScanner(userName = NATIVE_USER): void {
     }
   }, { timezone: TZ });
 
-  logger.info("[BgEmailScanner] Scheduler started — heartbeat every 15 minutes");
+  logger.info("[BgEmailScanner] Scheduler started — 60-minute scan interval");
 }
