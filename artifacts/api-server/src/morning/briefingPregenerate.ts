@@ -329,7 +329,7 @@ WHAT TO COVER (weave naturally into the narrative — skip what has no relevance
 
 • News — CORE REQUIREMENT: Every briefing MUST include exactly 2 significant national or international news stories from the [VERIFIED — Web Search News] block. For each, cover two beats naturally woven together: what happened (specific, factual) and why it matters (the real consequence). Pick the stories people will actually be talking about today. Never invent headlines — only use what is in the verified block. If the block is absent or empty, say exactly: "I'm not seeing any news this morning — I'll check back in." Do not silently omit news. Local ${city} news is in a separate section — do NOT repeat it here.
 
-• Calendar — the data block pre-formats events into TODAY, TOMORROW, and LATER THIS WEEK sections. Where a location is known, a departure time is already woven into each event line (e.g. "→ Leave by 6:30 PM (~25 min w/ current traffic)"). Quote departure times verbatim as verified fact — they are pre-calculated from the user's home. In the briefing, cover TODAY and TOMORROW naturally; mention LATER THIS WEEK events only if they are unusual or particularly relevant. If calendar is NOT CONNECTED, say exactly: "I can't pull your calendar right now — Google may need to be reconnected in the app settings." Do NOT say the day looks clear if the calendar is disconnected.
+• Calendar — cover TODAY events ONLY. Never mention tomorrow, this week, or upcoming events unless they appear on today's calendar. Where a location is known, a departure time is already woven into each event line — quote it verbatim. If calendar is NOT CONNECTED, say exactly: "I can't pull your calendar right now — Google may need to be reconnected in the app settings." Do NOT say the day looks clear if the calendar is disconnected. CRITICAL: Never infer or assume an event is happening because of something in the user's profile — only what is on the calendar is real.
 
 • Proactive alert — ONLY if something real warrants it: an expected package arriving, upcoming flight, bill due today or tomorrow, or a genuinely notable personal event. Skip entirely — say nothing — if there is no real alert.
 
@@ -337,13 +337,7 @@ WHAT TO COVER (weave naturally into the narrative — skip what has no relevance
 
 • Entertainment — from [Entertainment & Pop Culture] block if present. One item, brief.
 
-• Sports — from [VERIFIED — Live Sports] block only. Results from the last 24 hours for followed teams. If no game data is present for a team, skip that team silently — NEVER say "off-season," "no games," or make any inference about why data is absent. NEVER mention FIFA, soccer, World Cup, or teams not in the user's profile.
-
-• Health — Garmin/Fit data is YESTERDAY's data (the block is labeled "Yesterday's Health Data"). STRICT RULES — NO EXCEPTIONS:
-  - ALWAYS say "yesterday" when referencing any Garmin activity or workout. NEVER say "this morning," "today," or "earlier" for Garmin data.
-  - If yesterday was a pickleball day (Mon/Wed/Fri at Semones YMCA; Sat at Moody's YMCA) and Garmin shows a pickleball workout, say "you had pickleball yesterday" — not "this morning."
-  - If today is Tuesday/Thursday/Sunday, yesterday was NOT a pickleball day — never imply pickleball happened recently unless the Garmin data explicitly shows it from a valid pickleball day.
-  - Skip health entirely if data is unremarkable (nothing unusual about sleep, HR, or activity).
+• Health — Garmin/Fit data is YESTERDAY's data (the block is labeled "Yesterday's Health Data"). ALWAYS say "yesterday" when referencing any Garmin activity. NEVER say "this morning," "today," or "earlier" for Garmin data. Skip health entirely if data is unremarkable (nothing unusual about sleep, HR, or activity).
 
 • Local ${city} — from [What's Happening in ${city}] block only. If the block has real items, deliver them. If it says no items found, say exactly one sentence: "Nothing new on the ${city} front this morning." Never supplement from training data.
 
@@ -371,7 +365,7 @@ DATA ACCURACY RULES — NO EXCEPTIONS:
 TARGET LENGTH: 60–90 seconds spoken at a natural conversational pace. Be ruthless — every sentence must either inform, connect, or land. Cut anything that does not earn its place.
 
 CLOSING — ONE ELEMENT ONLY:
-Thought of the day: 1–2 sentences drawn exclusively from philosophy, literature, science, music, or history — timeless wisdom only. Connected to something specific about ${firstName}'s day or life. Warm and slightly wry. Never "seize the day." Deliver the thought cleanly, then ask exactly this question and nothing else: "Want to add anything to your day before you head out?" Do NOT interpret, explain, or comment on the thought after delivering it. Do NOT add a second question. STRICT PROHIBITION: Never reference current events, news headlines, politics, world conflicts, protests, legislation, government, or anything anxiety-inducing. The thought must always be grounding and timeless.
+Thought of the day: Say exactly "Here is your thought of the day." Then deliver 1–2 sentences drawn exclusively from philosophy, literature, science, music, or history — timeless wisdom only. Warm and slightly wry. Never "seize the day." Then ask exactly this and nothing else: "Would you like to add to My Day and record some thoughts?" Do NOT interpret, explain, or comment on the thought. Do NOT connect it to pickleball, workshops, sports, or anything from the profile. Do NOT add any other question. STRICT PROHIBITION: Never reference current events, news headlines, politics, world conflicts, protests, legislation, government, or anything anxiety-inducing. The thought must always be grounding and timeless.
 
 FORBIDDEN — NEVER USE:
 • Section headers or labels of any kind
@@ -379,11 +373,16 @@ FORBIDDEN — NEVER USE:
 • Transition announcements: "Moving on to," "Now for," "Let's talk about," "Next up," "Speaking of," "In other news," "Turning to"
 • Briefing announcements: "Here is your morning briefing," "Good morning, here's what you need to know"
 • Block name references: never say "from the verified news block," "according to the live sports block," "the verified block says," "I have a verified block," or any variation — just state the fact directly
+• Sports scores, team references, game results, or any mention of sports of any kind
+• Any reference to pickleball, ever — do not mention it in any context
+• Any calendar event not on today's date — no tomorrow, no this week, no upcoming
+• Inferring or assuming something will happen because it appears in the user's profile — only verified calendar events count
+• Repeating any restaurant, event, or local item that has already been mentioned earlier in the same briefing
 • Skipping the feel-good story from [Watercooler Story] — it is mandatory in every single briefing
 • "Something worth sitting with today" — this phrase is permanently banned. Never use it under any circumstances.
 • Any interpretation, explanation, or commentary after the thought of the day — deliver it and stop
-• A second closing question — the only closing question is "Want to add anything to your day before you head out?"
-• Thought of the day that references current events, politics, world conflicts, protests, legislation, government, or any anxiety-inducing news — it must be purely timeless wisdom
+• A second closing question — the only closing question is "Would you like to add to My Day and record some thoughts?"
+• Thought of the day that references current events, politics, world conflicts, protests, legislation, government, sports, pickleball, or any anxiety-inducing news — it must be purely timeless wisdom
 
   `;
 }
@@ -630,9 +629,8 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     const motivationContextBlock = (() => {
       const tz = "America/Chicago";
       const dayName = now.toLocaleDateString("en-US", { timeZone: tz, weekday: "long" });
-      const isPickleballDay = ["Monday", "Wednesday", "Friday", "Saturday"].includes(dayName);
       let block = `\n\n[Morning Motivation Context]\n`;
-      block += `• Today is ${dayName}${isPickleballDay ? " — a pickleball day" : ""}\n`;
+      block += `• Today is ${dayName}\n`;
       if (morningWorkoutDone) block += `• MORNING WORKOUT ALREADY DONE — do NOT suggest exercise, a walk, or outdoor activity in the closing. Reference what is ahead instead.\n`;
 
       if (dailyMotivation) {
@@ -699,8 +697,8 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     const firstName = userProfile?.name?.split(" ")[0] ?? "there";
     const modeInstruction = buildModeInstruction(proactiveMode, firstName, userProfile?.companionName ?? "your companion");
 
-    const suffix = garminBlock + fitBlock + travelBlock + ordersBlock + tvMorningBlock + sportsBlock + billsMorningBlock + datesBlock +
-      sundaySummaryBlock + pickleballMorningBlock + recFollowUpBlock + personalFollowUpsBlock +
+    const suffix = garminBlock + fitBlock + travelBlock + ordersBlock + tvMorningBlock + billsMorningBlock + datesBlock +
+      sundaySummaryBlock + recFollowUpBlock + personalFollowUpsBlock +
       mydayBlock + crossDomainBlock +
       dedupedNewsBlock + dallasEventsBlock + dedupedVenueConcertsBlock + motivationContextBlock +
       buildNarrativeBriefingInstruction(primaryCity, userProfile?.companionName ?? null, userProfile?.name ?? undefined, proactiveMode) +
