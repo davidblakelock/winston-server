@@ -80,14 +80,14 @@ router.post(
     } else if (typeof jsonBody.audioBase64 === "string" && jsonBody.audioBase64.length > 0) {
       const b64 = jsonBody.audioBase64;
 
-      // Detect proxy truncation: valid base64 length is always a multiple of 4
-      // (after stripping padding). A non-multiple strongly indicates the payload
-      // was cut off before reaching the server.
+      // Detect proxy truncation: after stripping '=' padding, a valid base64
+      // string's length mod 4 can be 0, 2, or 3. Only mod 4 === 1 is impossible
+      // in well-formed base64 and reliably indicates a truncated payload.
       const stripped = b64.replace(/=+$/, "");
-      if (stripped.length % 4 !== 0) {
+      if (stripped.length % 4 === 1) {
         logger.warn(
-          { b64Length: b64.length, userName },
-          "[Transcribe] base64 payload length not a multiple of 4 — likely truncated by proxy"
+          { b64Length: b64.length, strippedLength: stripped.length, userName },
+          "[Transcribe] base64 payload appears truncated (stripped length % 4 === 1)"
         );
         res.status(400).json({
           error: "Audio payload was truncated in transit",
