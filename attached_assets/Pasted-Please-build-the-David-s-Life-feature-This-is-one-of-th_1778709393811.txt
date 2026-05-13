@@ -1,0 +1,28 @@
+Please build the David's Life feature. This is one of the most important features in Winston. Read carefully before implementing.
+1. Database
+Create a new table life_captures with columns:
+
+id
+user_id
+captured_at (timestamp)
+content (the user's actual words — what they said)
+context (morning or evening)
+acted_on (boolean, default false)
+
+2. Capture flow
+When a user responds to the morning thought prompt or the evening wind-down question, save their response to the life_captures table. This is the user's own words — not Claude's interpretation. Just what they said, when they said it, and whether it was morning or evening context.
+3. Dot connecting — this is the key feature
+After each new capture is saved, run Claude Haiku on the last 30 days of captures plus the user's calendar, lists, and profile. Ask Claude one question: 'Is there anything in these captures that Winston could take a concrete action on right now — something involving the user's calendar, a reservation, travel planning, or their lists? If yes return one specific suggestion. If no return null.'
+If Claude returns a suggestion — store it. Surface it naturally in the next morning briefing or evening check-in as a single conversational sentence. Example: 'You mentioned wanting an exotic trip. You have a clear week in September — want me to start looking at options?' Never repeat the same suggestion twice. Never surface more than one suggestion per day.
+4. New endpoint
+GET /api/life — returns all captures for the user sorted by captured_at descending, most recent first
+5. Rename
+Rename 'My Day' to '[Name]'s Life' throughout the backend. The name should be read from the user's profile — not hardcoded. So David gets 'David's Life', Susan gets 'Susan's Life'.
+6. Important constraints
+
+Only surface suggestions Winston can actually act on — calendar gaps, reservations, travel research, list items. No vague life advice.
+Mention a suggestion once. If the user ignores it, drop it permanently.
+Never be preachy or repetitive.
+The user's words are sacred — store them exactly as spoken, never paraphrase or interpret.
+
+Deploy when complete.
