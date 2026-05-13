@@ -5,7 +5,7 @@ import { query } from "../db.js";
 import { lookupRestaurantUrl } from "../lists/autoUrlLookup.js";
 import { upsertProfile } from "../onboarding/onboardingManager.js";
 import { isApifyApiKeyConfigured } from "../restaurants/apifyBooking.js";
-import { getBookingCredentialStatus } from "../restaurants/bookingCredentialsManager.js";
+import { getResySession } from "../restaurants/bookingCredentialsManager.js";
 
 const router = Router();
 
@@ -210,10 +210,11 @@ router.get("/admin/timezone-check", async (req: Request, res: Response) => {
       [userName]
     );
 
-    const bookingStatus = await getBookingCredentialStatus(userName).catch(() => ({
-      openTableConnected: false,
-      resyConnected:      false,
-    }));
+    const resySession = await getResySession(userName).catch(() => null);
+    const bookingStatus = {
+      openTableConnected: isApifyApiKeyConfigured(), // guest booking — no login needed
+      resyConnected:      !!resySession,
+    };
 
     const todoReminders = todoRows.map((r) => {
       const fireMs = new Date(r.reminder_time).getTime();

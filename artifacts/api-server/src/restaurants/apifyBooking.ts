@@ -1,9 +1,7 @@
 import { logger } from "../lib/logger.js";
-import type { BookingCredentials } from "./bookingCredentialsManager.js";
 
 // ── Apify actor IDs ────────────────────────────────────────────────────────────
 const OPENTABLE_ACTOR_ID = "canadesk/opentable";
-const RESY_ACTOR_ID      = "clearpath/resy-booker";
 
 // ── Global API key (server-level, not per-user) ───────────────────────────────
 function getApiKey(): string { return (process.env.APIFY_API_KEY ?? "").trim(); }
@@ -12,14 +10,9 @@ export function isApifyApiKeyConfigured(): boolean {
   return !!getApiKey();
 }
 
-/** True when this user has OpenTable credentials saved AND the global API key exists. */
-export function isOpenTableBookingReadyForUser(creds: BookingCredentials): boolean {
-  return !!(getApiKey() && creds.openTableEmail && creds.openTablePassword);
-}
-
-/** True when this user has Resy credentials saved AND the global API key exists. */
-export function isResyBookingReadyForUser(creds: BookingCredentials): boolean {
-  return !!(getApiKey() && creds.resyEmail && creds.resyPassword);
+/** True when the Apify API key is configured (no user credentials needed for guest booking). */
+export function isOpenTableReady(): boolean {
+  return !!getApiKey();
 }
 
 // ── Result type ───────────────────────────────────────────────────────────────
@@ -35,6 +28,15 @@ export interface ApifyBookingResult {
   alternatives?: Array<{ time: string }>;
   /** Machine-readable reason when success=false. */
   error?: string;
+}
+
+// ── Guest info ────────────────────────────────────────────────────────────────
+
+export interface GuestInfo {
+  firstName: string;
+  lastName:  string;
+  email:     string;
+  phone:     string;
 }
 
 // ── Apify actor runner ────────────────────────────────────────────────────────
@@ -82,48 +84,53 @@ async function runActor(
   }
 }
 
-// ── OpenTable booking ─────────────────────────────────────────────────────────
+// ── OpenTable booking (guest mode — no login required) ────────────────────────
 
 /**
  * Book a reservation on OpenTable via the canadesk/opentable Apify actor.
- * Credentials are taken from the user's saved profile — never from env vars.
+ * Uses guest booking — only the user's name, email, and phone are needed.
+ * No OpenTable account or password is required.
  *
  * @param restaurantSlug  OpenTable slug (e.g. "nobu-dallas")
  * @param restaurantName  Human-readable name for notifications
  * @param dateISO         YYYY-MM-DD
  * @param timeHHMM        24-hour HH:MM
  * @param partySize       Party size (≥ 1)
- * @param creds           Per-user booking credentials from the database
+ * @param guest           User's name, email, and phone from their profile
  */
 export async function bookViaOpenTable(
   restaurantSlug: string,
   restaurantName: string,
-  dateISO: string,
-  timeHHMM: string,
-  partySize: number,
-  creds: BookingCredentials
+  dateISO:        string,
+  timeHHMM:       string,
+  partySize:      number,
+  guest:          GuestInfo,
 ): Promise<ApifyBookingResult> {
-  if (!isOpenTableBookingReadyForUser(creds)) {
-    return { success: false, error: "credentials_not_configured" };
+  if (!isOpenTableReady()) {
+    return { success: false, error: "apify_not_configured" };
   }
 
   logger.info(
     { restaurantSlug, restaurantName, dateISO, timeHHMM, partySize },
-    "[Apify] Starting OpenTable booking"
+    "[Apify] Starting OpenTable guest booking"
   );
 
   const result = await runActor(OPENTABLE_ACTOR_ID, {
     restaurantSlug,
     restaurantName,
-    restaurantId: restaurantSlug,
-    date:         dateISO,
-    time:         timeHHMM,
+    restaurantId:  restaurantSlug,
+    date:          dateISO,
+    time:          timeHHMM,
     partySize,
-    covers:       partySize,
-    email:        creds.openTableEmail,
-    password:     creds.openTablePassword,
-    firstName:    "David",
-    lastName:     "Lock",
+    covers:        partySize,
+    // Guest booking fields — no email/password
+    firstName:    guest.firstName,
+    lastName:     guest.lastName,
+    email:        guest.email,
+    phone:        guest.phone,
+    phoneNumber:  guest.phone,
+    guestMode:    true,
+    skipLogin:    true,
   });
 
   if (!result) {
@@ -171,101 +178,5 @@ export async function bookViaOpenTable(
     result["error"] ?? result["message"] ?? result["reason"] ?? "unavailable"
   );
   logger.warn({ restaurantName, error: errorMsg, alternatives }, "[Apify] OpenTable booking failed");
-  return { success: false, alternatives, error: errorMsg };
-}
-
-// ── Resy booking ──────────────────────────────────────────────────────────────
-
-/**
- * Book a reservation on Resy via the clearpath/resy-booker Apify actor.
- * Credentials are taken from the user's saved profile — never from env vars.
- *
- * @param restaurantSlug  Resy venue slug
- * @param citySlug        Resy city slug (e.g. "dal")
- * @param restaurantName  Human-readable name for notifications
- * @param dateISO         YYYY-MM-DD
- * @param timeHHMM        24-hour HH:MM
- * @param partySize       Party size
- * @param creds           Per-user booking credentials from the database
- */
-export async function bookViaResy(
-  restaurantSlug: string,
-  citySlug: string,
-  restaurantName: string,
-  dateISO: string,
-  timeHHMM: string,
-  partySize: number,
-  creds: BookingCredentials
-): Promise<ApifyBookingResult> {
-  if (!isResyBookingReadyForUser(creds)) {
-    return { success: false, error: "credentials_not_configured" };
-  }
-
-  logger.info(
-    { restaurantSlug, citySlug, restaurantName, dateISO, timeHHMM, partySize },
-    "[Apify] Starting Resy booking"
-  );
-
-  const result = await runActor(RESY_ACTOR_ID, {
-    restaurantSlug,
-    venueSlug:  restaurantSlug,
-    venue_id:   restaurantSlug,
-    city:       citySlug,
-    restaurantName,
-    date:       dateISO,
-    time:       timeHHMM,
-    time_slot:  timeHHMM,
-    partySize,
-    party_size: partySize,
-    seats:      partySize,
-    email:      creds.resyEmail,
-    password:   creds.resyPassword,
-  });
-
-  if (!result) {
-    return { success: false, error: "actor_failed" };
-  }
-
-  const isSuccess =
-    result["success"] === true           ||
-    result["status"]  === "confirmed"    ||
-    result["status"]  === "CONFIRMED"    ||
-    !!result["confirmationNumber"]       ||
-    !!result["reservation_id"]           ||
-    !!result["resyToken"];
-
-  if (isSuccess) {
-    const conf =
-      (result["confirmationNumber"] ??
-       result["reservation_id"] ??
-       result["resyToken"] ??
-       result["id"]) as string | undefined;
-    logger.info({ restaurantName, conf }, "[Apify] Resy booking confirmed");
-    return {
-      success: true,
-      confirmationNumber: conf ? String(conf) : undefined,
-      restaurantName: (result["restaurantName"] as string | undefined) ?? restaurantName,
-      date:      dateISO,
-      time:      timeHHMM,
-      partySize,
-    };
-  }
-
-  const rawAlts =
-    result["alternatives"] ??
-    result["availableTimes"] ??
-    result["available_times"] ??
-    result["slots"];
-
-  const alternatives = Array.isArray(rawAlts)
-    ? (rawAlts as Array<Record<string, unknown>>)
-        .slice(0, 3)
-        .map((a) => ({ time: String(a["time"] ?? a["timeLabel"] ?? a) }))
-    : undefined;
-
-  const errorMsg = String(
-    result["error"] ?? result["message"] ?? result["reason"] ?? "unavailable"
-  );
-  logger.warn({ restaurantName, error: errorMsg, alternatives }, "[Apify] Resy booking failed");
   return { success: false, alternatives, error: errorMsg };
 }

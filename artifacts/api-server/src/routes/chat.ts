@@ -178,15 +178,23 @@ import {
 } from "../restaurants/restaurantIntelligence.js";
 import {
   bookViaOpenTable,
-  bookViaResy,
-  isOpenTableBookingReadyForUser,
-  isResyBookingReadyForUser,
+  isOpenTableReady,
   isApifyApiKeyConfigured,
 } from "../restaurants/apifyBooking.js";
 import {
-  getBookingCredentials,
-  type BookingCredentials,
+  getUserBookingProfile,
+  getResySession,
+  saveResySession,
 } from "../restaurants/bookingCredentialsManager.js";
+import {
+  requestResyOtp,
+  verifyResyOtp,
+  bookViaResyDirect,
+  getPendingResyOtp,
+  setPendingResyOtp,
+  clearPendingResyOtp,
+  type PendingResyOtpState,
+} from "../restaurants/resyAuth.js";
 import {
   detectMeetingRequests,
   buildMeetingRequestsBlock,
@@ -2070,6 +2078,87 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     }
   }
 
+  // ── R001-OTP: Resy OTP verification reply ─────────────────────────────────
+  // If the user has a pending Resy OTP and their message is a short numeric code,
+  // handle it here — before any other routing.
+  {
+    const _pendingOtp = getPendingResyOtp(sessionUserName);
+    const _otpMatch   = _pendingOtp && /^\s*\d{4,8}\s*$/.test(message);
+    if (_pendingOtp && _otpMatch) {
+      const _code = message.trim();
+      try {
+        const _token = await verifyResyOtp(_pendingOtp.email, _code);
+        if (_token) {
+          clearPendingResyOtp(sessionUserName);
+          await saveResySession(sessionUserName, _token, 14 * 24 * 60 * 60 * 1000);
+          const _otp   = _pendingOtp;
+          const _user  = sessionUserName;
+          const _pSize = _otp.partySize;
+          (req as any)._hardcodedResponse =
+            `Got it — booking ${_otp.restaurantName} for ${_pSize} on ${_otp.dateLabel} at ${_otp.timeLabel}. I'll push you a confirmation once it's locked in.`;
+          Promise.resolve().then(async () => {
+            try {
+              const result = await bookViaResyDirect(
+                _otp.slug, _otp.city, _otp.restaurantName,
+                _otp.date, _otp.time, _pSize, _token
+              );
+              if (result.success) {
+                await createCalendarEvent({
+                  title:       `Reservation at ${_otp.restaurantName}`,
+                  date:        _otp.date,
+                  startTime:   _otp.timeLabel,
+                  endTime:     null,
+                  location:    _otp.addr,
+                  description: `Party of ${_pSize}${result.confirmationNumber ? `. Confirmation #${result.confirmationNumber}` : ""}`,
+                  allDay:      false,
+                }, _user).catch(() => {});
+                await sendPushToAll({
+                  title: "Reservation Confirmed ✓",
+                  body:  `${_otp.restaurantName} — ${_otp.dateLabel} at ${_otp.timeLabel}, party of ${_pSize}${result.confirmationNumber ? `. Conf #${result.confirmationNumber}` : ""}`,
+                  tag:   `reservation-confirmed-${Date.now()}`,
+                  notificationType: "reservation-confirmed",
+                  requireInteraction: true,
+                }, _user);
+              } else if (result.alternatives?.length) {
+                const alts = result.alternatives.map((a) => a.time).join(", ");
+                await sendPushToAll({
+                  title: `${_otp.restaurantName} — Check Alternatives`,
+                  body:  `${_otp.timeLabel} is taken. Available: ${alts}. Reply to book one.`,
+                  tag:   `reservation-alt-${Date.now()}`,
+                  notificationType: "reservation-alternatives",
+                  requireInteraction: true,
+                }, _user);
+              } else {
+                broadcastToUser(_user, "reservation-link", {
+                  type: "resy", url: _otp.fallbackUrl, restaurantName: _otp.restaurantName,
+                });
+                await sendPushToAll({
+                  title: `${_otp.restaurantName} — Manual Booking Needed`,
+                  body:  `Couldn't auto-book — opening Resy for you.`,
+                  tag:   `reservation-fallback-${Date.now()}`,
+                  notificationType: "reservation-fallback",
+                }, _user);
+              }
+            } catch (resyErr) {
+              req.log.warn({ resyErr }, "[R001-OTP] Async Resy booking after OTP verify failed");
+              broadcastToUser(_user, "reservation-link", {
+                type: "resy", url: _otp.fallbackUrl, restaurantName: _otp.restaurantName,
+              });
+            }
+          }).catch(() => {});
+        } else {
+          // Wrong code
+          (req as any)._hardcodedResponse =
+            `That code didn't work — check your email and try again, or say "cancel" to skip the booking.`;
+        }
+      } catch (otpErr) {
+        req.log.warn({ otpErr }, "[R001-OTP] OTP verify threw");
+        (req as any)._hardcodedResponse =
+          `Something went wrong verifying that code — try again or say "cancel".`;
+      }
+    }
+  }
+
   // ── R001: Restaurant intelligence — reservation, directions, info ───────────
   // Phase 1: New request — parse intent, look up Places, check calendar
   if (isRestaurantIntelRequest) {
@@ -2135,13 +2224,13 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           const otMetroId  = getOpenTableMetroId(restaurantCity);
           const resyCitySlug = getResyCitySlug(restaurantCity);
 
-          // Per-user booking credentials — fetched once, used by both Apify paths.
-          const bookingCreds = await getBookingCredentials(sessionUserName).catch(
-            (): BookingCredentials => ({
-              openTableEmail: null, openTablePassword: null,
-              resyEmail: null,     resyPassword: null,
-            })
-          );
+          // User booking profile (name, email, phone) + Resy session — fetched once.
+          const [guestProfile, resySession] = await Promise.all([
+            getUserBookingProfile(sessionUserName).catch(() => ({
+              firstName: "David", lastName: "Lock", email: "", phone: "",
+            })),
+            getResySession(sessionUserName).catch(() => null),
+          ]);
 
           // Build search fallback URLs with the correct metro/city for this restaurant.
           const otBase = intent.dateISO && intent.timeISO
@@ -2168,28 +2257,29 @@ const chatHandlerCore = async (req: Request, res: Response) => {
             const reservationUrl = buildReservationUrl(details, intent.dateISO, intent.timeISO, intent.partySize);
 
             if (details.platform === "opentable" && reservationUrl) {
-              if (isOpenTableBookingReadyForUser(bookingCreds) && intent.dateISO && intent.timeISO && details.platformSlug) {
-                // Apify zero-touch booking — respond immediately, book in background
+              if (isOpenTableReady() && intent.dateISO && intent.timeISO && details.platformSlug) {
+                // Apify guest booking — no login required, respond immediately
                 const bookingDateLabel = intent.dateLabel ?? intent.dateISO;
                 const bookingTimeLabel = intent.timeLabel ?? intent.timeISO;
                 (req as any)._hardcodedResponse =
                   `Booking ${details.name} for ${partySize} on ${bookingDateLabel} at ${bookingTimeLabel} — I'll push you a confirmation once it's locked in.${conflictNote}`;
                 const _snap = {
-                  slug: details.platformSlug!,
-                  name: details.name,
-                  addr: details.formattedAddress ?? details.name,
-                  date: intent.dateISO!,
-                  time: intent.timeISO!,
-                  timeLabel: bookingTimeLabel,
-                  dateLabel: bookingDateLabel,
-                  fallbackUrl: reservationUrl,
+                  slug:          details.platformSlug!,
+                  name:          details.name,
+                  addr:          details.formattedAddress ?? details.name,
+                  date:          intent.dateISO!,
+                  time:          intent.timeISO!,
+                  timeLabel:     bookingTimeLabel,
+                  dateLabel:     bookingDateLabel,
+                  fallbackUrl:   reservationUrl,
                   companionName: userProfile?.companionName ?? "your companion",
+                  guest:         guestProfile,
                 };
                 const _user = sessionUserName;
                 Promise.resolve().then(async () => {
                   try {
                     const result = await bookViaOpenTable(
-                      _snap.slug, _snap.name, _snap.date, _snap.time, partySize, bookingCreds
+                      _snap.slug, _snap.name, _snap.date, _snap.time, partySize, _snap.guest
                     );
                     if (result.success) {
                       await createCalendarEvent({
@@ -2242,35 +2332,35 @@ const chatHandlerCore = async (req: Request, res: Response) => {
                   restaurantName: details.name,
                   phone: details.phone ?? null,
                 };
-                // If Apify is configured but user hasn't connected OpenTable, prompt them.
-                (req as any)._hardcodedResponse = (isApifyApiKeyConfigured() && !bookingCreds.openTableEmail)
-                  ? `I've opened OpenTable for ${details.name} — connect your OpenTable account in Settings to enable zero-touch automatic booking next time.`
-                  : "";
+                (req as any)._hardcodedResponse = "";
               }
 
             } else if (details.platform === "resy" && reservationUrl) {
-              if (isResyBookingReadyForUser(bookingCreds) && intent.dateISO && intent.timeISO && details.platformSlug) {
+              if (!!resySession && intent.dateISO && intent.timeISO && details.platformSlug) {
+                // Active Resy session — book directly
                 const bookingDateLabel = intent.dateLabel ?? intent.dateISO;
                 const bookingTimeLabel = intent.timeLabel ?? intent.timeISO;
                 (req as any)._hardcodedResponse =
                   `Booking ${details.name} for ${partySize} on ${bookingDateLabel} at ${bookingTimeLabel} — I'll push you a confirmation once it's locked in.${conflictNote}`;
                 const _snap = {
-                  slug: details.platformSlug!,
-                  city: resyCitySlug ?? "us",
-                  name: details.name,
-                  addr: details.formattedAddress ?? details.name,
-                  date: intent.dateISO!,
-                  time: intent.timeISO!,
-                  timeLabel: bookingTimeLabel,
-                  dateLabel: bookingDateLabel,
-                  fallbackUrl: reservationUrl,
+                  slug:          details.platformSlug!,
+                  city:          resyCitySlug ?? "us",
+                  name:          details.name,
+                  addr:          details.formattedAddress ?? details.name,
+                  date:          intent.dateISO!,
+                  time:          intent.timeISO!,
+                  timeLabel:     bookingTimeLabel,
+                  dateLabel:     bookingDateLabel,
+                  fallbackUrl:   reservationUrl,
                   companionName: userProfile?.companionName ?? "your companion",
+                  sessionToken:  resySession.token,
                 };
                 const _user = sessionUserName;
                 Promise.resolve().then(async () => {
                   try {
-                    const result = await bookViaResy(
-                      _snap.slug, _snap.city, _snap.name, _snap.date, _snap.time, partySize, bookingCreds
+                    const result = await bookViaResyDirect(
+                      _snap.slug, _snap.city, _snap.name, _snap.date, _snap.time,
+                      partySize, _snap.sessionToken
                     );
                     if (result.success) {
                       await createCalendarEvent({
@@ -2309,24 +2399,61 @@ const chatHandlerCore = async (req: Request, res: Response) => {
                         notificationType: "reservation-fallback",
                       }, _user);
                     }
-                  } catch (apifyErr) {
-                    req.log.warn({ apifyErr }, "[Apify] Async Resy booking error — sending fallback URL");
+                  } catch (resyErr) {
+                    req.log.warn({ resyErr }, "[Resy] Async booking error — sending fallback URL");
                     broadcastToUser(_user, "reservation-link", {
                       type: "resy", url: _snap.fallbackUrl, restaurantName: _snap.name,
                     });
                   }
                 }).catch(() => {});
+
+              } else if (intent.dateISO && intent.timeISO && details.platformSlug) {
+                // No Resy session — trigger OTP verification flow
+                const resyEmail = guestProfile.email;
+                if (resyEmail) {
+                  const otpSent = await requestResyOtp(resyEmail).catch(() => false);
+                  if (otpSent) {
+                    setPendingResyOtp(sessionUserName, {
+                      email:          resyEmail,
+                      slug:           details.platformSlug,
+                      city:           resyCitySlug ?? "us",
+                      restaurantName: details.name,
+                      date:           intent.dateISO,
+                      time:           intent.timeISO,
+                      timeLabel:      intent.timeLabel ?? intent.timeISO,
+                      dateLabel:      intent.dateLabel ?? intent.dateISO,
+                      partySize,
+                      addr:           details.formattedAddress ?? details.name,
+                      fallbackUrl:    reservationUrl,
+                      companionName:  userProfile?.companionName ?? "your companion",
+                    });
+                    (req as any)._hardcodedResponse =
+                      `Resy needs to verify your identity — check your email for a code and reply with it.`;
+                    sendPushToAll({
+                      title: "Resy Verification Needed",
+                      body:  "Check your email for a code and reply with it in chat.",
+                      type:  "reservation-otp",
+                    }, sessionUserName).catch(() => {});
+                  } else {
+                    (req as any)._reservationPayload = {
+                      type: "resy", url: reservationUrl,
+                      restaurantName: details.name, phone: details.phone ?? null,
+                    };
+                    (req as any)._hardcodedResponse = "";
+                  }
+                } else {
+                  (req as any)._reservationPayload = {
+                    type: "resy", url: reservationUrl,
+                    restaurantName: details.name, phone: details.phone ?? null,
+                  };
+                  (req as any)._hardcodedResponse = "";
+                }
               } else {
                 (req as any)._reservationPayload = {
-                  type: "resy",
-                  url: reservationUrl,
-                  restaurantName: details.name,
-                  phone: details.phone ?? null,
+                  type: "resy", url: reservationUrl,
+                  restaurantName: details.name, phone: details.phone ?? null,
                 };
-                // If Apify is configured but user hasn't connected Resy, prompt them.
-                (req as any)._hardcodedResponse = (isApifyApiKeyConfigured() && !bookingCreds.resyEmail)
-                  ? `I've opened Resy for ${details.name} — connect your Resy account in Settings to enable zero-touch automatic booking next time.`
-                  : "";
+                (req as any)._hardcodedResponse = "";
               }
 
             } else if (details.platform === "yelp" && reservationUrl) {

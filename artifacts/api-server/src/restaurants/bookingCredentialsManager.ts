@@ -1,113 +1,127 @@
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 
-// ── Schema migration ──────────────────────────────────────────────────────────
+// ── Schema ────────────────────────────────────────────────────────────────────
 
-export async function ensureBookingCredentialsColumns(): Promise<void> {
-  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS opentable_email    text`);
-  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS opentable_password text`);
-  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS resy_email         text`);
-  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS resy_password      text`);
-  logger.info("[BookingCreds] Columns ensured (opentable_email, opentable_password, resy_email, resy_password)");
+/**
+ * Ensures the booking-related schema is up to date.
+ *   - Adds booking_phone to user_profiles (contact phone for reservations)
+ *   - Drops old credential columns (opentable_email/password, resy_email/password)
+ *   - Creates resy_sessions table for 14-day session storage
+ */
+export async function ensureBookingColumns(): Promise<void> {
+  // New: booking contact phone on user_profiles
+  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS booking_phone text`);
+
+  // Remove old credential columns — no longer stored
+  await query(`ALTER TABLE user_profiles DROP COLUMN IF EXISTS opentable_email`);
+  await query(`ALTER TABLE user_profiles DROP COLUMN IF EXISTS opentable_password`);
+  await query(`ALTER TABLE user_profiles DROP COLUMN IF EXISTS resy_email`);
+  await query(`ALTER TABLE user_profiles DROP COLUMN IF EXISTS resy_password`);
+
+  // Resy session tokens (14-day expiry)
+  await query(`
+    CREATE TABLE IF NOT EXISTS resy_sessions (
+      user_name  text PRIMARY KEY,
+      token      text NOT NULL,
+      email      text NOT NULL,
+      expires_at timestamptz NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  logger.info("[Booking] Schema ensured (booking_phone, resy_sessions)");
 }
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// ── User booking profile ──────────────────────────────────────────────────────
 
-export interface BookingCredentials {
-  openTableEmail:    string | null;
-  openTablePassword: string | null;
-  resyEmail:         string | null;
-  resyPassword:      string | null;
+export interface UserBookingProfile {
+  firstName: string;
+  lastName:  string;
+  email:     string;
+  phone:     string;
 }
 
-// ── Reads ─────────────────────────────────────────────────────────────────────
-
-export async function getBookingCredentials(userName: string): Promise<BookingCredentials> {
-  const { rows } = await query<{
-    opentable_email:    string | null;
-    opentable_password: string | null;
-    resy_email:         string | null;
-    resy_password:      string | null;
+/**
+ * Reads the user's booking contact info from the database.
+ *   - Name from user_profiles.name
+ *   - Email from google_users.email (primary) — the address David signed in with
+ *   - Phone from user_profiles.booking_phone (set conversationally if needed)
+ */
+export async function getUserBookingProfile(userName: string): Promise<UserBookingProfile> {
+  const { rows: profileRows } = await query<{
+    name:          string | null;
+    booking_phone: string | null;
   }>(
-    `SELECT opentable_email, opentable_password, resy_email, resy_password
-       FROM user_profiles
-      WHERE user_name = $1
-      LIMIT 1`,
+    `SELECT name, booking_phone FROM user_profiles WHERE user_name = $1 LIMIT 1`,
     [userName]
   );
-  if (rows.length === 0) {
-    return { openTableEmail: null, openTablePassword: null, resyEmail: null, resyPassword: null };
+
+  const profile = profileRows[0];
+  const fullName  = profile?.name ?? "David Lock";
+  const nameParts = fullName.trim().split(/\s+/);
+  const firstName = nameParts[0] ?? "David";
+  const lastName  = nameParts.slice(1).join(" ") || "Lock";
+
+  // Prefer booking_phone; if not set default to empty (OpenTable allows it)
+  const phone = profile?.booking_phone ?? "";
+
+  // Email: read from Google auth record (the address David used to sign in)
+  const { rows: authRows } = await query<{ email: string }>(
+    `SELECT email FROM google_users WHERE user_name = $1 LIMIT 1`,
+    [userName]
+  );
+  const email = authRows[0]?.email ?? "";
+
+  return { firstName, lastName, email, phone };
+}
+
+// ── Resy session management ───────────────────────────────────────────────────
+
+export interface ResySession {
+  token: string;
+  email: string;
+}
+
+/** Returns a valid Resy session token, or null if none / expired. */
+export async function getResySession(userName: string): Promise<ResySession | null> {
+  try {
+    const { rows } = await query<{
+      token: string; email: string; expires_at: string;
+    }>(
+      `SELECT token, email, expires_at FROM resy_sessions WHERE user_name = $1 LIMIT 1`,
+      [userName]
+    );
+    if (!rows[0]) return null;
+    if (new Date(rows[0].expires_at) < new Date()) {
+      await clearResySession(userName);
+      return null;
+    }
+    return { token: rows[0].token, email: rows[0].email };
+  } catch {
+    return null;
   }
-  const r = rows[0];
-  return {
-    openTableEmail:    r.opentable_email,
-    openTablePassword: r.opentable_password,
-    resyEmail:         r.resy_email,
-    resyPassword:      r.resy_password,
-  };
 }
 
-/** Returns which services have credentials set (never exposes passwords). */
-export async function getBookingCredentialStatus(
-  userName: string
-): Promise<{ openTableConnected: boolean; resyConnected: boolean }> {
-  const creds = await getBookingCredentials(userName);
-  return {
-    openTableConnected: !!(creds.openTableEmail && creds.openTablePassword),
-    resyConnected:      !!(creds.resyEmail      && creds.resyPassword),
-  };
-}
-
-// ── Writes ────────────────────────────────────────────────────────────────────
-
-export async function saveOpenTableCredentials(
+/** Persists a Resy session token for 14 days. */
+export async function saveResySession(
   userName: string,
+  token:    string,
   email:    string,
-  password: string
 ): Promise<void> {
+  const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
   await query(
-    `UPDATE user_profiles
-        SET opentable_email    = $1,
-            opentable_password = $2
-      WHERE user_name = $3`,
-    [email.trim(), password, userName]
+    `INSERT INTO resy_sessions (user_name, token, email, expires_at)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (user_name) DO UPDATE
+       SET token = $2, email = $3, expires_at = $4, created_at = NOW()`,
+    [userName, token, email, expiresAt.toISOString()]
   );
-  logger.info({ userName }, "[BookingCreds] OpenTable credentials saved");
+  logger.info({ userName }, "[Booking] Resy session saved (14 days)");
 }
 
-export async function saveResyCredentials(
-  userName: string,
-  email:    string,
-  password: string
-): Promise<void> {
-  await query(
-    `UPDATE user_profiles
-        SET resy_email    = $1,
-            resy_password = $2
-      WHERE user_name = $3`,
-    [email.trim(), password, userName]
-  );
-  logger.info({ userName }, "[BookingCreds] Resy credentials saved");
-}
-
-// ── Deletes ───────────────────────────────────────────────────────────────────
-
-export async function clearOpenTableCredentials(userName: string): Promise<void> {
-  await query(
-    `UPDATE user_profiles
-        SET opentable_email = NULL, opentable_password = NULL
-      WHERE user_name = $1`,
-    [userName]
-  );
-  logger.info({ userName }, "[BookingCreds] OpenTable credentials cleared");
-}
-
-export async function clearResyCredentials(userName: string): Promise<void> {
-  await query(
-    `UPDATE user_profiles
-        SET resy_email = NULL, resy_password = NULL
-      WHERE user_name = $1`,
-    [userName]
-  );
-  logger.info({ userName }, "[BookingCreds] Resy credentials cleared");
+/** Removes a stored Resy session (logout / force re-auth). */
+export async function clearResySession(userName: string): Promise<void> {
+  await query(`DELETE FROM resy_sessions WHERE user_name = $1`, [userName]);
+  logger.info({ userName }, "[Booking] Resy session cleared");
 }

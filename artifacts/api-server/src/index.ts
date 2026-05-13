@@ -52,7 +52,7 @@ import { startBackgroundEmailScanner } from "./email/backgroundEmailScanner";
 import { ensureSavedPlacesTable } from "./location/geofenceManager";
 import { ensureListItemColumns } from "./lists/listManager";
 import { ensureListShareTable } from "./lists/listShareManager";
-import { ensureBookingCredentialsColumns } from "./restaurants/bookingCredentialsManager";
+import { ensureBookingColumns } from "./restaurants/bookingCredentialsManager";
 
 const rawPort = process.env["PORT"];
 
@@ -332,7 +332,7 @@ app.listen(port, async (err) => {
   }
 
   try {
-    await ensureBookingCredentialsColumns();
+    await ensureBookingColumns();
   } catch (e) {
     logger.warn({ e }, "Booking credentials columns initialization warning");
   }
