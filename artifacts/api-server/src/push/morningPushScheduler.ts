@@ -3,7 +3,7 @@ import { sendPushToAll } from "./pushManager.js";
 import { logger } from "../lib/logger.js";
 import { getWatchedShows } from "../tv/showManager.js";
 import { fetchEpisodesForDate } from "../tv/tvmaze.js";
-import { preFetchMorningNews, preFetchDailyMotivation } from "../news/newsManager.js";
+import { preFetchMorningNews, preFetchDailyMotivation, checkMiddayNews } from "../news/newsManager.js";
 import { preFetchMorningBriefing } from "../morning/briefingPregenerate.js";
 import {
   getStaticBriefingContext,
@@ -61,8 +61,9 @@ function minutesSinceWake(localTime: string, wakeTime: string): number {
 // Note: morningPushDone is now DB-backed via wasPushSentToday() / markPushSent().
 // These maps track the pre-fetch actions (news/briefing) which are fire-and-forget.
 
-const prefetchDone: Map<string, string> = new Map();
+const prefetchDone: Map<string, string>     = new Map();
 const newsPrefetchDone: Map<string, string> = new Map();
+const middayCheckDone: Map<string, string>  = new Map();
 
 // ── Push body ──────────────────────────────────────────────────────────────────
 
@@ -189,6 +190,23 @@ async function runPerUserChecks(): Promise<void> {
     const minsSince = minutesSinceWake(localTime, wakeTime);
     if (minsSince >= 0 && minsSince <= WAKE_WINDOW_MINUTES && !wasPushSentToday(userName)) {
       await sendMorningPush(user, wakeTime, minsSince);
+    }
+
+    // 12:00 PM local time: check for significant breaking news since morning briefing
+    if (localTime === "12:00" && middayCheckDone.get(userName) !== today) {
+      middayCheckDone.set(userName, today);
+      checkMiddayNews(userName)
+        .then(async (story) => {
+          if (!story) return; // Nothing significant — send nothing
+          await sendPushToAll({
+            title: "Breaking News",
+            body:  story,
+            tag:   `midday-news-${today}`,
+            notificationType: "midday-news",
+          }, userName);
+          logger.info({ userName, story: story.slice(0, 80) }, "[MiddayNews] Push sent");
+        })
+        .catch((err) => logger.warn({ err, userName }, "[MiddayNews] Check error"));
     }
   }
 }

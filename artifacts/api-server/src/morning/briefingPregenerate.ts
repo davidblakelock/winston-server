@@ -18,6 +18,7 @@ import { collectSundayData, buildSundaySummaryBlock } from "../sundaySummary/sun
 import { getPendingPersonalFollowups, buildPersonalFollowupsBlock } from "../followups/followupManager.js";
 import { setStaticBriefingContext, setCachedBriefing } from "./briefingCache.js";
 import { fetchDallasContent, getDallasItems, buildDallasBlock } from "./dallasContent.js";
+import { fetchBestLocalEvent } from "../events/apifyEventsManager.js";
 import { runVenueScan, getVenueConcerts, buildVenueConcertsBlock, getFavoriteVenueNames } from "./venueMonitor.js";
 import {
   getSeenHeadlines,
@@ -483,7 +484,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       dietaryRestrictions: [],  // no field in rawData yet; reserved for future onboarding
     };
 
-    const [lastNightNotes, newsBlock, yesterdayEps, todayEps, sportsScores, upcomingBills, upcomingDates, sundayData, pendingFollowUps, dallasEvents, venueConcertsBlock, dailyMotivation, personalFollowUps, outForDeliveryOrders, todayTravelSegments] = await Promise.all([
+    const [lastNightNotes, newsBlock, yesterdayEps, todayEps, sportsScores, upcomingBills, upcomingDates, sundayData, pendingFollowUps, dallasEvents, venueConcertsBlock, dailyMotivation, personalFollowUps, outForDeliveryOrders, todayTravelSegments, apifyEventResult] = await Promise.all([
       getLastNightNotes().catch(() => []),
       fetchMorningNews(userName).catch(() => ""),
       fetchEpisodesForDate(yesterday, watchedIds).catch(() => []),
@@ -499,6 +500,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       getPendingPersonalFollowups(userName).catch(() => []),
       getOrdersForBriefing(userName).catch(() => []),
       getTodayTravelSegments(userName).catch(() => []),
+      fetchBestLocalEvent(primaryCity, allInterests.slice(0, 10), userName).catch(() => ({ event: null, block: "" })),
     ]);
 
     // Fetch Garmin health data (yesterday's stored data — no live API call needed)
@@ -697,10 +699,16 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     const firstName = userProfile?.name?.split(" ")[0] ?? "there";
     const modeInstruction = buildModeInstruction(proactiveMode, firstName, userProfile?.companionName ?? "your companion");
 
+    // Apify event discovery block (one curated local event from Eventbrite/Ticketmaster)
+    const apifyEventBlock = apifyEventResult.block ?? "";
+    if (apifyEventBlock) {
+      logger.info({ userName, event: apifyEventResult.event?.name }, "[Briefing] Apify local event included");
+    }
+
     const suffix = garminBlock + fitBlock + travelBlock + ordersBlock + tvMorningBlock + billsMorningBlock + datesBlock +
       sundaySummaryBlock + recFollowUpBlock + personalFollowUpsBlock +
       mydayBlock + crossDomainBlock +
-      dedupedNewsBlock + dallasEventsBlock + dedupedVenueConcertsBlock + motivationContextBlock +
+      dedupedNewsBlock + dallasEventsBlock + apifyEventBlock + dedupedVenueConcertsBlock + motivationContextBlock +
       buildNarrativeBriefingInstruction(primaryCity, userProfile?.companionName ?? null, userProfile?.name ?? undefined, proactiveMode) +
       modeInstruction;
 
