@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { toChicagoTime, type CalendarEvent, fetchWeekEvents, formatCalendarForPrompt } from "../google/calendar.js";
+import { toChicagoTime, chicagoDateStr, type CalendarEvent, fetchWeekEvents, formatCalendarForPrompt } from "../google/calendar.js";
 import { fetchAndSummarizeEmails, formatEmailsForPrompt, buildImportantEmailInstruction } from "../google/gmail.js";
 import { estimateDriveTime, extractEventLocation } from "../departure/departureManager.js";
 import { getLastNightNotes, formatNotesForMorningBriefing } from "../winddown/winddownManager.js";
@@ -36,65 +36,101 @@ import { getMydayEntries, type MydayEntry } from "../myday/mydayManager.js";
 import { getOrdersForBriefing } from "../orders/ordersManager.js";
 import { getTodayTravelSegments, formatTravelForBriefing } from "../travel/travelManager.js";
 
-// ── Departure times for calendar events ───────────────────────────────────────
-// Calculates leave-by time for each event that has a location.
-// Runs all geocode/routing calls in parallel with a 10 s per-event timeout.
-// Exported so chat.ts can call it at briefing delivery time with live calendar events.
-export async function buildCalendarDepartureTimes(events: CalendarEvent[], homeAddress: string, homeLat: number, homeLon: number): Promise<string> {
-  if (!events || events.length === 0) return "";
+// ── Smart calendar block with integrated departure times ──────────────────────
+// Builds a TODAY / TOMORROW / LATER THIS WEEK block where each event with a
+// known location already has the calculated "Leave by X" time woven in.
+// This replaces the old two-part pattern of formatCalendarForPrompt + a separate
+// departure-times appendix. Claude sees one pre-computed, human-readable block.
+export async function buildSmartCalendarBlock(
+  allEvents: CalendarEvent[],
+  homeAddress: string,
+  homeLat: number,
+  homeLon: number,
+): Promise<string> {
+  if (!allEvents || allEvents.length === 0) return "";
 
   const now = new Date();
   const TZ_LOCAL = "America/Chicago";
+  const todayStr    = chicagoDateStr(now);
+  const tomorrowStr = chicagoDateStr(new Date(now.getTime() + 86_400_000));
 
-  const items: string[] = [];
+  const todayEvents    = allEvents.filter((e) => e.isoDate === todayStr);
+  const tomorrowEvents = allEvents.filter((e) => e.isoDate === tomorrowStr);
+  const laterEvents    = allEvents.filter((e) => e.isoDate !== todayStr && e.isoDate !== tomorrowStr);
 
-  await Promise.all(
-    events.map(async (event) => {
-      if (event.allDay || !event.startIso) return;
+  // Compute departure time for a single event (null if no location or drive fails)
+  async function computeDep(event: CalendarEvent): Promise<string | null> {
+    if (event.allDay || !event.startIso) return null;
+    const start = new Date(event.startIso);
+    if (toChicagoTime(start).getTime() < toChicagoTime(now).getTime()) return null; // already past in CT
 
-      const eventStart = new Date(event.startIso);
-      // Use CT-aware comparison so DST boundary edge cases are handled correctly
-      if (toChicagoTime(eventStart).getTime() < toChicagoTime(now).getTime()) return; // already passed in CT
+    const location = extractEventLocation({
+      summary: event.summary,
+      location: event.location,
+      description: event.description,
+    });
+    if (!location || !homeAddress) return null;
 
-      const location = extractEventLocation({
-        summary: event.summary,
-        location: event.location,
-        description: event.description,
+    try {
+      const drive = await Promise.race([
+        estimateDriveTime(location, homeAddress, homeLat, homeLon),
+        new Promise<null>((r) => setTimeout(() => r(null), 8_000)),
+      ]);
+      if (!drive) return null;
+
+      const leaveAt  = new Date(start.getTime() - (drive.durationMinutes + 10) * 60_000);
+      const leaveStr = leaveAt.toLocaleTimeString("en-US", {
+        timeZone: TZ_LOCAL, hour: "numeric", minute: "2-digit", hour12: true,
       });
-      if (!location) return;
+      const mins       = Math.round(drive.durationMinutes / 5) * 5 || 5;
+      const sourceNote = drive.source === "google-maps" ? "w/ current traffic" : "est.";
+      return `Leave by ${leaveStr} (~${mins} min ${sourceNote})`;
+    } catch { return null; }
+  }
 
-      try {
-        const drive = await Promise.race([
-          estimateDriveTime(location, homeAddress, homeLat, homeLon),
-          new Promise<null>((resolve) => setTimeout(() => resolve(null), 10_000)),
-        ]);
-        if (!drive) return;
+  // Run departure calculations in parallel for today + tomorrow only
+  const actionable = [...todayEvents, ...tomorrowEvents];
+  const depResults = await Promise.all(actionable.map(computeDep));
+  const depMap     = new Map(actionable.map((e, i) => [e.id, depResults[i] ?? null]));
 
-        const BUFFER = 10;
-        const leaveAt = new Date(eventStart.getTime() - (drive.durationMinutes + BUFFER) * 60_000);
-        const leaveStr = leaveAt.toLocaleTimeString("en-US", {
-          timeZone: TZ_LOCAL,
-          hour: "numeric",
-          minute: "2-digit",
-          hour12: true,
-        });
-        const sourceNote =
-          drive.source === "google-maps" ? "based on current traffic" :
-          drive.source === "osrm"        ? "based on route"           :
-                                           "estimated";
-        items.push(
-          `  • ${event.summary} at ${event.start}: leave home by ${leaveStr} (~${Math.round(drive.durationMinutes)} min drive, ${sourceNote})`
-        );
-      } catch { /* skip silently if geocoding fails */ }
-    })
+  function formatLine(event: CalendarEvent): string {
+    const time = event.allDay
+      ? "All day"
+      : `${event.start}${event.end && event.end !== event.start ? ` – ${event.end}` : ""}`;
+    const loc = event.location ? ` · ${event.location}` : "";
+    const dep = depMap.get(event.id);
+    return dep
+      ? `• ${event.summary} — ${time}${loc}\n  → ${dep}`
+      : `• ${event.summary} — ${time}${loc}`;
+  }
+
+  const todayLabel    = `TODAY (${new Date(todayStr    + "T12:00:00").toLocaleDateString("en-US", { timeZone: TZ_LOCAL, weekday: "long", month: "long", day: "numeric" })})`;
+  const tomorrowLabel = `TOMORROW (${new Date(tomorrowStr + "T12:00:00").toLocaleDateString("en-US", { timeZone: TZ_LOCAL, weekday: "long", month: "long", day: "numeric" })})`;
+
+  const parts: string[] = [];
+
+  parts.push(
+    todayEvents.length > 0
+      ? `${todayLabel}:\n${todayEvents.map(formatLine).join("\n")}`
+      : `${todayLabel}: Nothing scheduled.`
   );
 
-  if (items.length === 0) return "";
-  return (
-    `\n\n[Departure Times — when to leave home for today's events]\n` +
-    items.join("\n") +
-    `\n(These are calculated from home at ${homeAddress || "home"})`
+  parts.push(
+    tomorrowEvents.length > 0
+      ? `${tomorrowLabel}:\n${tomorrowEvents.map(formatLine).join("\n")}`
+      : `${tomorrowLabel}: Nothing scheduled.`
   );
+
+  if (laterEvents.length > 0) {
+    const laterLines = laterEvents.map((e) => {
+      const time = e.allDay ? "All day" : e.start;
+      return `• ${e.summary} — ${e.dateLabel}, ${time}${e.location ? ` at ${e.location}` : ""}`;
+    });
+    parts.push(`LATER THIS WEEK:\n${laterLines.join("\n")}`);
+  }
+
+  const homeNote = homeAddress ? `\n(Departure times calculated from ${homeAddress})` : "";
+  return parts.join("\n\n") + homeNote;
 }
 
 // Dallas local content is now handled by dallasContent.ts (RSS feeds + web search fallback).
@@ -294,7 +330,7 @@ WHAT TO COVER (weave naturally into the narrative — skip what has no relevance
 
 • News — CORE REQUIREMENT: Every briefing MUST include exactly 2–3 significant national or international news stories from the [VERIFIED — Web Search News] block. Pick the stories people will actually be talking about today — tell what they mean, not just what happened. Prioritize major world events, politics, economy, and anything with direct impact. Never invent headlines — only use what is in the verified block. If the [VERIFIED — Web Search News] block is absent or empty, say exactly: "I'm not seeing any news this morning — I'll check back in." Do not silently omit news. Local ${city} news is covered in a dedicated local section — do NOT repeat local items here.
 
-• Calendar — TODAY AND TOMORROW ONLY. Never reference any event beyond tomorrow. State the day clearly: "today" or "tomorrow." Include departure times where calculated. If calendar is NOT CONNECTED, say exactly: "I can't pull your calendar right now — Google may need to be reconnected in the app settings." Do NOT say the day looks clear if the calendar is disconnected.
+• Calendar — the data block pre-formats events into TODAY, TOMORROW, and LATER THIS WEEK sections. Where a location is known, a departure time is already woven into each event line (e.g. "→ Leave by 6:30 PM (~25 min w/ current traffic)"). Quote departure times verbatim as verified fact — they are pre-calculated from the user's home. In the briefing, cover TODAY and TOMORROW naturally; mention LATER THIS WEEK events only if they are unusual or particularly relevant. If calendar is NOT CONNECTED, say exactly: "I can't pull your calendar right now — Google may need to be reconnected in the app settings." Do NOT say the day looks clear if the calendar is disconnected.
 
 • Proactive alert — ONLY if something real warrants it: an expected package arriving, upcoming flight, bill due today or tomorrow, or a genuinely notable personal event. Skip entirely — say nothing — if there is no real alert.
 
@@ -726,17 +762,17 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
         return new Date(ev.startIso) > preNow;
       }) ?? null;
 
-      // Departure times — capped at 6 s, runs while Gmail is still in-flight
-      const preDeparturePromise: Promise<string> = preLiveEvents !== null
+      // Smart calendar block (today+tomorrow w/ departure times) — capped at 8 s, runs while Gmail is still in-flight
+      const preSmartCalPromise: Promise<string> = preLiveEvents !== null
         ? Promise.race([
-            buildCalendarDepartureTimes(preLiveEvents, homeAddress, primaryLat, primaryLon),
-            new Promise<string>((resolve) => setTimeout(() => resolve(""), 6000)),
+            buildSmartCalendarBlock(preLiveEvents, homeAddress, primaryLat, primaryLon),
+            new Promise<string>((resolve) => setTimeout(() => resolve(""), 8000)),
           ])
         : Promise.resolve("");
 
       const preEmails = await emailPrePromise;
 
-      const [preDepartureTimes] = await Promise.all([preDeparturePromise]);
+      const [preSmartCalBlock] = await Promise.all([preSmartCalPromise]);
 
       logger.info(
         { userName, emailCount: preEmails?.length ?? "null", calCount: preLiveEvents?.length ?? "null", elapsedMs: Date.now() - t0pregen },
@@ -758,10 +794,13 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       // Build calendar block
       let preCalendarBlock: string;
       if (preLiveEvents !== null) {
+        const calContent = preSmartCalBlock.trim() !== ""
+          ? preSmartCalBlock
+          : formatCalendarForPrompt(preLiveEvents, "this week");
         preCalendarBlock =
-          `\n\n[VERIFIED — Google Calendar API — upcoming events from now through next 7 days (past events excluded)]\n` +
-          `${formatCalendarForPrompt(preLiveEvents, "this week")}${preDepartureTimes}\n\n` +
-          `⚠ CALENDAR RULE — NO EXCEPTIONS: Use ONLY the exact event title shown above. NEVER substitute, infer, or enrich event titles with names or context from memory. Report every event title letter-for-letter as written. If you want to add context, frame it as a question (INFERRED tier), never a statement.`;
+          `\n\n[VERIFIED — Google Calendar API — Today & Tomorrow with pre-calculated departure times, plus rest of week]\n` +
+          `${calContent}\n\n` +
+          `⚠ CALENDAR RULE — NO EXCEPTIONS: Use ONLY the exact event title shown above. NEVER substitute, infer, or enrich event titles with names or context from memory. Report every event title letter-for-letter as written. Departure times in the block are pre-calculated facts — state them directly ("Leave by 6:30 PM"). If you want to add any context beyond what's shown, frame it as a question (INFERRED tier), never a statement.`;
       } else {
         preCalendarBlock = `\n\n[VERIFIED — Google Calendar API — status: NOT CONNECTED]\nGoogle Calendar authentication failed — no refresh token. This means zero calendar data is available.\nCRITICAL RULES — NO EXCEPTIONS:\n• Say EXACTLY this one sentence: "I can't pull your calendar right now — Google may need to be reconnected in the app settings."\n• Do NOT say his calendar is clear, open, or free.\n• Do NOT say he has nothing scheduled or no events.\n• Do NOT mention any specific event, appointment, or meeting.\n• Do NOT use any qualifier about calendar status (e.g. "looks like a clear day", "you seem free", "nothing on the agenda").\n• The calendar is DISCONNECTED — you have NO information about it. Silence on calendar status is the only acceptable alternative to the one sentence above.`;
       }

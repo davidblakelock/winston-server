@@ -231,7 +231,7 @@ import {
   isJournalPromptsEnabled,
   type BriefingPreference,
 } from "../briefingPreferences/briefingPreferencesManager.js";
-import { preFetchMorningBriefing, buildCalendarDepartureTimes } from "../morning/briefingPregenerate.js";
+import { preFetchMorningBriefing, buildSmartCalendarBlock } from "../morning/briefingPregenerate.js";
 import { getProactiveMode, buildModeInstruction } from "../proactiveMode/proactiveModeManager.js";
 import { populateCalendarSyncState } from "../departure/calendarSyncScheduler.js";
 import { logBriefingStories } from "../morning/storyDedup.js";
@@ -1259,11 +1259,11 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       return new Date(ev.startIso) > deliveryNow;
     }) ?? null;
 
-    // Departure times capped at 3 s — runs while Gmail is still in flight.
-    const departurePromise: Promise<string> = liveEvents !== null
+    // Smart calendar block (today+tomorrow w/ departure times) — capped at 6 s, runs while Gmail is still in flight.
+    const smartCalPromise: Promise<string> = liveEvents !== null
       ? Promise.race([
-          buildCalendarDepartureTimes(liveEvents, homeAddress, primaryLat, primaryLon),
-          new Promise<string>((resolve) => setTimeout(() => resolve(""), 3000)),
+          buildSmartCalendarBlock(liveEvents, homeAddress, primaryLat, primaryLon),
+          new Promise<string>((resolve) => setTimeout(() => resolve(""), 6000)),
         ])
       : Promise.resolve("");
 
@@ -1324,9 +1324,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           ])
         : Promise.resolve([]);
 
-    // Phase 5 — await departure times + meeting detection together.
-    const [departureTimes, detectedMeetingsRaw] = await Promise.all([
-      departurePromise,
+    // Phase 5 — await smart calendar block + meeting detection together.
+    const [smartCalBlock, detectedMeetingsRaw] = await Promise.all([
+      smartCalPromise,
       detectPromise.catch(() => [] as Awaited<ReturnType<typeof detectMeetingRequests>>),
     ]);
 
@@ -1335,10 +1335,13 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     // Build live calendar block
     let liveCalendarBlock = "";
     if (liveEvents !== null) {
+      const calContent = smartCalBlock.trim() !== ""
+        ? smartCalBlock
+        : formatCalendarForPrompt(liveEvents, "this week");
       liveCalendarBlock =
-        `\n\n[VERIFIED — Google Calendar API — upcoming events from now through next 7 days (past events excluded)]\n` +
-        `${formatCalendarForPrompt(liveEvents, "this week")}${departureTimes}\n\n` +
-        `⚠ CALENDAR RULE — NO EXCEPTIONS: Use ONLY the exact event title shown above. NEVER substitute, infer, or enrich event titles with names or context from memory. Report every event title letter-for-letter as written. If you want to add context, frame it as a question (INFERRED tier), never a statement.`;
+        `\n\n[VERIFIED — Google Calendar API — Today & Tomorrow with pre-calculated departure times, plus rest of week]\n` +
+        `${calContent}\n\n` +
+        `⚠ CALENDAR RULE — NO EXCEPTIONS: Use ONLY the exact event title shown above. NEVER substitute, infer, or enrich event titles with names or context from memory. Report every event title letter-for-letter as written. Departure times in the block are pre-calculated facts — state them directly ("Leave by 6:30 PM"). If you want to add any context beyond what's shown, frame it as a question (INFERRED tier), never a statement.`;
     } else {
       liveCalendarBlock = `\n\n[VERIFIED — Google Calendar API — status: NOT CONNECTED]\nGoogle Calendar authentication failed — no refresh token. This means zero calendar data is available.\nCRITICAL RULES — NO EXCEPTIONS:\n• Say EXACTLY this one sentence: "I can't pull your calendar right now — Google may need to be reconnected in the app settings."\n• Do NOT say his calendar is clear, open, or free.\n• Do NOT say he has nothing scheduled or no events.\n• Do NOT mention any specific event, appointment, or meeting.\n• Do NOT use any qualifier about calendar status (e.g. "looks like a clear day", "you seem free", "nothing on the agenda").\n• The calendar is DISCONNECTED — you have NO information about it. Silence on calendar status is the only acceptable alternative to the one sentence above.`;
     }

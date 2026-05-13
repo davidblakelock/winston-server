@@ -27,7 +27,7 @@ import { upsertOrder, getOrders } from "../orders/ordersManager.js";
 import { scanForBillAnomalies } from "../bills/billAnomalyScanner.js";
 import { scanEmailsForMeetings } from "../email/meetingScanner.js";
 import { setPendingMeetingRequests, getPendingMeetingRequests } from "../email/emailMeetingManager.js";
-import { scanReservationEmails } from "../email/reservationScanner.js";
+
 import { sendPushToAll } from "../push/pushManager.js";
 import { getProactiveMode, getModeEmailIntervalMs } from "../proactiveMode/proactiveModeManager.js";
 import type { MeetingRequest } from "../email/meetingScanner.js";
@@ -164,22 +164,6 @@ async function processMeetingEmails(userName: string, since: Date): Promise<void
   }
 }
 
-// ── Reservation confirmation scan logic ───────────────────────────────────────
-
-async function processReservationEmails(userName: string, since: Date): Promise<void> {
-  try {
-    const reservations = await scanReservationEmails(userName, since);
-    if (reservations.length > 0) {
-      logger.info(
-        { userName, count: reservations.length },
-        "[BgEmailScanner] Reservation confirmations processed"
-      );
-    }
-  } catch (err) {
-    logger.warn({ err }, "[BgEmailScanner] Reservation scan failed");
-  }
-}
-
 // ── Main scan tick ────────────────────────────────────────────────────────────
 
 async function runScan(userName: string): Promise<void> {
@@ -207,7 +191,6 @@ async function runScan(userName: string): Promise<void> {
     processOrderEmails(userName, since),
     processBillEmails(userName),
     processMeetingEmails(userName, since),
-    processReservationEmails(userName, since),
   ]);
 
   _lastScanAt.set(userName, scanStart);
