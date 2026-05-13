@@ -309,9 +309,10 @@ async function sendExpoNotifications(
     sound: "default",
     priority: "high",
     channelId: "default",
-    // categoryId maps to a registered Expo notification category on the native app —
+    // categoryIdentifier maps to a registered Expo notification category on the native app —
     // enables OS-level action buttons (e.g. "Taken ✓", "Remind in 30 min").
-    ...(payload.categoryId ? { categoryId: payload.categoryId } : {}),
+    // NOTE: the Expo Push API requires the field to be named `categoryIdentifier` (not `categoryId`).
+    ...(payload.categoryId ? { categoryIdentifier: payload.categoryId } : {}),
     data: {
       // NOTE: do NOT include payload.url (web app URL) here — it causes the native
       // Android app to open the web app in a browser when the notification is tapped.
