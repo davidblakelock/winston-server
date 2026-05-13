@@ -31,7 +31,6 @@ import { getProactiveMode, buildModeInstruction } from "../proactiveMode/proacti
 import { runCrossDomainEngine, buildCrossDomainBlock } from "../intelligence/crossDomainEngine.js";
 import { getStoredGarminData, formatGarminForBriefing } from "../garmin/garminService.js";
 import { getStoredFitData, formatFitForBriefing } from "../google/fit.js";
-import { fetchMarkets, buildMarketsBlock } from "../markets/marketsManager.js";
 import { getMydayEntries, type MydayEntry } from "../myday/mydayManager.js";
 import { getOrdersForBriefing } from "../orders/ordersManager.js";
 import { getTodayTravelSegments, formatTravelForBriefing } from "../travel/travelManager.js";
@@ -328,15 +327,13 @@ WHAT TO COVER (weave naturally into the narrative — skip what has no relevance
 
 • Weather — ONE sentence only if genuinely actionable: severe weather incoming, dangerous heat, high rain chance on a day with outdoor plans. Skip entirely if conditions are unremarkable. Never list temperature, humidity, UV index, AQI, pollen, or wind speed — one actionable sentence or nothing.
 
-• News — CORE REQUIREMENT: Every briefing MUST include exactly 2–3 significant national or international news stories from the [VERIFIED — Web Search News] block. Pick the stories people will actually be talking about today — tell what they mean, not just what happened. Prioritize major world events, politics, economy, and anything with direct impact. Never invent headlines — only use what is in the verified block. If the [VERIFIED — Web Search News] block is absent or empty, say exactly: "I'm not seeing any news this morning — I'll check back in." Do not silently omit news. Local ${city} news is covered in a dedicated local section — do NOT repeat local items here.
+• News — CORE REQUIREMENT: Every briefing MUST include exactly 2 significant national or international news stories from the [VERIFIED — Web Search News] block. For each, cover two beats naturally woven together: what happened (specific, factual) and why it matters (the real consequence). Pick the stories people will actually be talking about today. Never invent headlines — only use what is in the verified block. If the block is absent or empty, say exactly: "I'm not seeing any news this morning — I'll check back in." Do not silently omit news. Local ${city} news is in a separate section — do NOT repeat it here.
 
 • Calendar — the data block pre-formats events into TODAY, TOMORROW, and LATER THIS WEEK sections. Where a location is known, a departure time is already woven into each event line (e.g. "→ Leave by 6:30 PM (~25 min w/ current traffic)"). Quote departure times verbatim as verified fact — they are pre-calculated from the user's home. In the briefing, cover TODAY and TOMORROW naturally; mention LATER THIS WEEK events only if they are unusual or particularly relevant. If calendar is NOT CONNECTED, say exactly: "I can't pull your calendar right now — Google may need to be reconnected in the app settings." Do NOT say the day looks clear if the calendar is disconnected.
 
 • Proactive alert — ONLY if something real warrants it: an expected package arriving, upcoming flight, bill due today or tomorrow, or a genuinely notable personal event. Skip entirely — say nothing — if there is no real alert.
 
 • Email — surface only what needs attention or action. Skip promotions, shipping notifications, auto-confirmations. If inbox is clear, one warm sentence. If Google is not connected, one sentence. Offer to help act on anything that matters.
-
-• Stock market — if [VERIFIED — Financial Markets] is present and markets are open, one sentence on direction and what it signals. Skip entirely if markets are closed, flat, or data is absent.
 
 • Entertainment — from [Entertainment & Pop Culture] block if present. One item, brief.
 
@@ -362,7 +359,7 @@ WHAT TO COVER (weave naturally into the narrative — skip what has no relevance
 
 • Sunday summary — if [Sunday Summary] block is present, weave in a brief weekly recap naturally — exercise, highlights, something to look forward to.
 
-• Feel-good story — ALWAYS INCLUDE: From the [Watercooler Story] block. Deliver it as two beats woven into one moment: what happened, then what makes it remarkable. A genuine moment of delight — not a transition, not an aside.
+• Feel-good story — MANDATORY, NON-NEGOTIABLE: The [Watercooler Story] block MUST appear in every briefing. No exceptions, regardless of length. It is not optional. Two beats: what happened, then what makes it remarkable. Genuine delight — not a throwaway line. If you are running long, cut something else — never the feel-good story.
 
 DATA ACCURACY RULES — NO EXCEPTIONS:
 • VERIFIED blocks are ground truth. State their content as fact without softening or hedging.
@@ -373,9 +370,8 @@ DATA ACCURACY RULES — NO EXCEPTIONS:
 
 TARGET LENGTH: 60–90 seconds spoken at a natural conversational pace. Be ruthless — every sentence must either inform, connect, or land. Cut anything that does not earn its place.
 
-CLOSING — ALWAYS BOTH OF THESE, IN THIS ORDER:
-1. Thought of the day: 2–3 sentences. Drawn exclusively from philosophy, literature, science, music, or history — timeless wisdom only. Connected to something personal about ${firstName}'s day or life (an activity, a relationship, a value they hold) — not generic, not greeting card, never "seize the day." Warm and slightly wry. After delivering the thought, add exactly this line: "Something worth sitting with today. What would you add to your day that reflects this?" STRICT PROHIBITION: Never reference current events, news headlines, politics, world conflicts, protests, legislation, government, or anything anxiety-inducing. The thought must always be grounding and timeless.
-2. Final line (on its own): Ask if there is anything from this morning they would like to dig into.
+CLOSING — ONE ELEMENT ONLY:
+Thought of the day: 1–2 sentences drawn exclusively from philosophy, literature, science, music, or history — timeless wisdom only. Connected to something specific about ${firstName}'s day or life. Warm and slightly wry. Never "seize the day." Deliver the thought cleanly, then ask exactly this question and nothing else: "Want to add anything to your day before you head out?" Do NOT interpret, explain, or comment on the thought after delivering it. Do NOT add a second question. STRICT PROHIBITION: Never reference current events, news headlines, politics, world conflicts, protests, legislation, government, or anything anxiety-inducing. The thought must always be grounding and timeless.
 
 FORBIDDEN — NEVER USE:
 • Section headers or labels of any kind
@@ -383,7 +379,10 @@ FORBIDDEN — NEVER USE:
 • Transition announcements: "Moving on to," "Now for," "Let's talk about," "Next up," "Speaking of," "In other news," "Turning to"
 • Briefing announcements: "Here is your morning briefing," "Good morning, here's what you need to know"
 • Block name references: never say "from the verified news block," "according to the live sports block," "the verified block says," "I have a verified block," or any variation — just state the fact directly
-• Open-ended close without the thought of the day — the briefing must always end with both closing elements
+• Skipping the feel-good story from [Watercooler Story] — it is mandatory in every single briefing
+• "Something worth sitting with today" — this phrase is permanently banned. Never use it under any circumstances.
+• Any interpretation, explanation, or commentary after the thought of the day — deliver it and stop
+• A second closing question — the only closing question is "Want to add anything to your day before you head out?"
 • Thought of the day that references current events, politics, world conflicts, protests, legislation, government, or any anxiety-inducing news — it must be purely timeless wisdom
 
   `;
@@ -666,10 +665,6 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
 
     const personalFollowUpsBlock = buildPersonalFollowupsBlock(personalFollowUps);
 
-    // ── Pre-market stock futures ───────────────────────────────────────────────
-    // Fetch markets data at pre-gen time so the briefing has pre-market direction.
-    const markets = await fetchMarkets().catch(() => null);
-    const marketsBlock = markets ? buildMarketsBlock(markets) : "";
 
     // ── Recent My Day entries (last 7 days) ───────────────────────────────────
     const recentMydayEntries = await getMydayEntries(userName).catch((): MydayEntry[] => []);
@@ -706,7 +701,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
 
     const suffix = garminBlock + fitBlock + travelBlock + ordersBlock + tvMorningBlock + sportsBlock + billsMorningBlock + datesBlock +
       sundaySummaryBlock + pickleballMorningBlock + recFollowUpBlock + personalFollowUpsBlock +
-      mydayBlock + marketsBlock + crossDomainBlock +
+      mydayBlock + crossDomainBlock +
       dedupedNewsBlock + dallasEventsBlock + dedupedVenueConcertsBlock + motivationContextBlock +
       buildNarrativeBriefingInstruction(primaryCity, userProfile?.companionName ?? null, userProfile?.name ?? undefined, proactiveMode) +
       modeInstruction;
@@ -716,7 +711,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       "weather": "visual-card-only",
       "email": "live-at-delivery",
       "calendar": "live-at-delivery",
-      "markets": !!marketsBlock,
+
       "news": dedupedNewsBlock.length > 0,
       "sports": !!(sportsScores),
       "garmin_health": !!garminBlock,

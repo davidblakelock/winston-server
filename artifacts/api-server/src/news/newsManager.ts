@@ -204,68 +204,35 @@ async function fetchNewsFromClaude(userName?: string): Promise<string> {
 
   const mainPrompt = `Today is ${todayStr}. Yesterday was ${yesterdayStr}. The current year is ${currentYear}.
 
-You are curating a morning news briefing for a listener in ${city}, ${state}. Use web search to find real, current news. RECENCY IS CRITICAL — every story must be from ${todayStr} or ${yesterdayStr} only.
+You are selecting the 2 most genuinely important news stories for a morning briefing. Use web search to find real, current breaking news. RECENCY IS CRITICAL — every story must be from ${todayStr} or ${yesterdayStr} only.
 
 MANDATORY DATE VALIDATION — before including ANY story you MUST verify its publication date via web search:
 • REJECT any story published before ${yesterdayStr} — no exceptions
-• REJECT any story from ${currentYear - 1} or earlier — these are old news, not current
-• REJECT any story about a past administration, expired policy, or concluded event
-• If you cannot confirm a publication date of ${todayStr} or ${yesterdayStr}, skip the story and find a different one
-• Search queries must include "${currentYear}" or "today" or "this week" to bias toward recent results
+• REJECT any story from ${currentYear - 1} or earlier
+• If you cannot confirm a publication date of ${todayStr} or ${yesterdayStr}, skip and find another
 
-LISTENER PROFILE:
-- Sports teams followed: ${sportsTeams.length > 0 ? sportsTeams.join(", ") : "none specified"}
-- Music interests: ${musicGenres.length > 0 ? musicGenres.join(", ") : "general"}
-- Other interests: pickleball, woodworking, boats, cooking, stock market, classic rock, jazz
+SELECTION CRITERIA — pick the 2 stories that are:
+• Genuinely on people's lips today — major world events, significant US political or economic developments, important technology or science news
+• Broad in relevance — NOT regional, NOT routine, NOT filler
+• Stories that actually matter to an intelligent adult starting their day
 
-STRUCTURE — Deliver EXACTLY 10 stories in this order:
+NO LOCAL NEWS. NO SPORTS. NO WEATHER. NO STOCK MARKET UPDATES. NO FILLER.
 
-STORIES 1–2: GLOBAL / WORLD NEWS (2 stories only)
-Two significant international stories that directly affect the United States or are of genuinely major world importance.
-STRICT GLOBAL EXCLUSIONS — skip any story about:
-• FIFA, World Cup, soccer/football trophies, international soccer competitions
-• Colombia, Mali, Sudan, or other countries with no direct US relevance today
-• Regional conflicts with no US involvement or global significance
-• Sports leagues that are not the listener's followed teams
-Choose only stories with direct US relevance (trade, diplomacy, military, economy) or genuinely historic global significance.
+For EACH of the 2 stories, write exactly TWO sentences:
+• Sentence 1: What happened — specific, factual, with names and numbers where relevant. Max 25 words.
+• Sentence 2: Why it matters — the real-world consequence, what it signals, or why a listener should care. Max 25 words.
 
-STORIES 3–7: NATIONAL (US) NEWS (5 stories)
-Five domestic US stories. Mix from these categories — each story from a DIFFERENT category:
-• US Politics / White House / Congress / legislation / Supreme Court
-• US Economy / business / corporate / trade / labor / market news
-• Technology: AI, software, major tech company (Apple, Google, Microsoft, OpenAI, Meta, Amazon)
-• Health / science / environment (US-focused)
-• Personalized wildcard: A US story relevant to the listener's interests — music (${musicGenres.join(", ") || "classic rock, jazz"}), woodworking, boats, cooking, stock market, or any other significant national story not covered above
-IMPORTANT: NO sports stories in Stories 1–10. Sports belongs exclusively to the dedicated Sports section delivered separately. Do NOT include any sports result, game, trade, draft, or team news in the Top 10 — not even for the listener's followed teams.
+OUTPUT FORMAT (follow exactly — no deviations):
+1. **[Bold Title — 4–6 words]** — [What happened, one sentence.] [Why it matters, one sentence.]
 
-STORIES 8–10: LOCAL NEWS — ${city.toUpperCase()}, ${state.toUpperCase()}
-Three stories specifically about ${city} or the DFW area — local government, business, development, infrastructure, culture, community events. Must be genuinely local to ${city}.
-LOCAL EXCLUSIONS — skip any story about:
-• Weather alerts, tornado warnings, or severe weather notices — weather is covered separately. Do NOT include any severe weather warnings, watches, or past weather events in local news.
-• Events that happened more than 24 hours ago
-If initial search is thin, search explicitly: "${city} news today", "${city} breaking news", "${city} ${state} news ${todayStr}". Always find three.
+2. **[Bold Title — 4–6 words]** — [What happened, one sentence.] [Why it matters, one sentence.]
 
-FORMATTING — MANDATORY:
-• Number every story 1 through 10
-• Each story: number + period + bold title (4-8 words) + em dash + ONE sentence only (max 25 words, specific facts/names/numbers)
-• ONE blank line between stories
-• No category labels, no headers, no extra commentary
-
-OUTPUT FORMAT (follow exactly):
-1. **[Bold Title Here]** — [One sentence, max 25 words.]
-
-2. **[Bold Title Here]** — [One sentence, max 25 words.]
-
-... (continue through 10)
-
-GLOBAL RULES:
-• All stories from ${todayStr} or ${yesterdayStr} only — max 48 hours old — publication year must be ${currentYear}
-• REJECT any article from ${currentYear - 1} or earlier regardless of how recent the search result appears
-• No two stories about the same person, company, or topic
-• NEVER include any sports stories in Stories 1–10 — sports is covered in a dedicated section
-• NEVER include FIFA, World Cup, soccer trophies, or international soccer in any section
-• NEVER include weather alerts, tornado warnings, or severe weather notices — weather has its own section
-• Only report real, verified stories — never fabricate`;
+RULES:
+• Exactly 2 stories — no more, no less
+• Stories from ${todayStr} or ${yesterdayStr} only — publication year must be ${currentYear}
+• No local news, no sports, no weather, no stock market, no entertainment — those have their own sections
+• No two stories on the same topic or person
+• Never fabricate — only real, verified, current stories`;
 
   console.log(`[API] Claude web_search (news headlines) — starting at ${new Date().toISOString()}`);
 
@@ -390,8 +357,7 @@ function formatNewsBlock(rawText: string, fetchedAt: Date): string {
   const sections: string[] = [];
   if (mainText) {
     sections.push(
-      `[Top 10 Stories — numbered, bold title + one sentence each]\n` +
-      `(Stories 1-2 are global/world with US relevance, 3-7 are national/US, 8-10 are local ${fetchedAt.toLocaleDateString("en-US", { timeZone: "America/Chicago", month: "long", day: "numeric" })})\n\n` +
+      `[Top Stories — 2 stories, bold title + what happened + why it matters]\n\n` +
       mainText
     );
   }
