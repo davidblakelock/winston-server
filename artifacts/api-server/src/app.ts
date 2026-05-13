@@ -35,8 +35,8 @@ app.use((_req, res, next) => {
   next();
 });
 
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ limit: "10mb", extended: true }));
+app.use(express.json({ limit: "70mb" }));
+app.use(express.urlencoded({ limit: "70mb", extended: true }));
 
 // Serve static files from the public folder
 const publicDir = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "public");

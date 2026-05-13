@@ -13,7 +13,7 @@ const router: IRouter = Router();
 // We enforce a decoded-audio cap and a generous fetch timeout so the caller
 // always receives a clear error instead of a silently truncated transcript.
 
-const MAX_AUDIO_BYTES = 20 * 1024 * 1024; // 20 MB decoded ≈ ~8 min of m4a @ 320 kbps
+const MAX_AUDIO_BYTES = 50 * 1024 * 1024; // 50 MB decoded ≈ ~20 min of m4a @ 320 kbps
 const SCRIBE_TIMEOUT_MS = 55_000;          // 55 s — safely under Replit proxy limit
 
 // ── Body parsing ───────────────────────────────────────────────────────────────
@@ -33,7 +33,7 @@ const upload = multer({
   { name: "file",  maxCount: 1 },
 ]);
 
-const jsonParser = express.json({ limit: "35mb" }); // base64 adds ~33 % overhead over MAX_AUDIO_BYTES
+const jsonParser = express.json({ limit: "70mb" }); // base64 adds ~33 % overhead over MAX_AUDIO_BYTES
 
 function flexibleParser(req: Request, res: Response, next: NextFunction): void {
   const ct = (req.headers["content-type"] ?? "").toLowerCase();
