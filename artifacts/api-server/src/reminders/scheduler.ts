@@ -125,11 +125,21 @@ export function startScheduler(): void {
         await sendPushToAll({
           title: reminder.for_contact
             ? `✅ Reminder sent to ${reminder.for_contact} — ${companionName}`
-            : `⏰ Reminder — ${companionName}`,
+            : reminder.push_category_id === "bill-action"
+              ? `Bill Due Soon`
+              : `⏰ Reminder — ${companionName}`,
           body: reminder.reminder_text,
-          tag: `reminder-${reminder.id}`,
+          tag: reminder.push_category_id === "bill-action"
+            ? (() => {
+                try {
+                  const d = reminder.push_data ? JSON.parse(reminder.push_data) as Record<string, unknown> : {};
+                  const cm = d.companionMessage ? JSON.parse(d.companionMessage as string) as Record<string, unknown> : {};
+                  return cm.billId ? `bill-${cm.billId}` : `reminder-${reminder.id}`;
+                } catch { return `reminder-${reminder.id}`; }
+              })()
+            : `reminder-${reminder.id}`,
           reminderId: reminder.id,
-          notificationType: "reminder",
+          notificationType: reminder.push_category_id === "bill-action" ? "bill-reminder" : "reminder",
           categoryId: reminder.push_category_id ?? "reminder-action",
           requireInteraction: !reminder.for_contact,
           ...extraPushData,

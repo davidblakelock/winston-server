@@ -1,9 +1,14 @@
 import cron from "node-cron";
 import { logger } from "../lib/logger.js";
 import { getActiveUsers } from "../onboarding/onboardingManager.js";
+import { getProfile } from "../onboarding/onboardingManager.js";
+import { sendPushToAll } from "../push/pushManager.js";
 import {
   getBills,
   computeNextDueDate,
+  markReminded,
+  buildBillReminderMessage,
+  type UpcomingBill,
 } from "./billManager.js";
 
 const TZ = "America/Chicago";
@@ -30,11 +35,16 @@ function daysBetween(a: Date, b: Date): number {
   return Math.round((Date.UTC(bY, bM - 1, bD) - Date.UTC(aY, aM - 1, aD)) / 86400000);
 }
 
+function formatDueDateLabel(d: Date): string {
+  return d.toLocaleDateString("en-US", {
+    timeZone: TZ,
+    month: "long",
+    day: "numeric",
+  });
+}
+
 let _lastCheckedDate: string | null = null;
 
-// Bill push notifications are disabled — bill reminders are handled exclusively
-// by the morning briefing. This scheduler runs to log upcoming bills for
-// observability only; no push or SSE is sent from here.
 async function checkBillReminders(): Promise<void> {
   const today = getLocalDateString();
   if (_lastCheckedDate === today) return;
@@ -50,21 +60,65 @@ async function checkBillReminders(): Promise<void> {
     const bills = await getBills(userName).catch(() => []);
     if (!bills.length) continue;
 
-    for (const bill of bills) {
-      const nextDue = computeNextDueDate(bill, now);
-      const daysUntil = daysBetween(now, nextDue);
+    const profile = await getProfile(userName).catch(() => null);
+    const displayName = profile?.name ?? userName;
 
-      if (daysUntil >= 0 && daysUntil <= bill.reminderLeadDays) {
+    for (const bill of bills) {
+      const nextDueDate = computeNextDueDate(bill, now);
+      const daysUntil = daysBetween(now, nextDueDate);
+
+      // Only notify within the lead window
+      if (daysUntil < 0 || daysUntil > bill.reminderLeadDays) continue;
+
+      // Skip if already reminded today
+      if (bill.lastRemindedDate === today) {
         logger.info(
-          { billId: bill.id, name: bill.name, daysUntil, userName },
-          "[BILLS] Bill upcoming — morning briefing will handle notification"
+          { billId: bill.id, name: bill.name, userName },
+          "[BILLS] Already reminded today — skipping"
         );
+        continue;
       }
+
+      const upcomingBill: UpcomingBill = {
+        ...bill,
+        nextDueDate,
+        daysUntilDue: daysUntil,
+        dueDateLabel: formatDueDateLabel(nextDueDate),
+      };
+
+      const body = buildBillReminderMessage(upcomingBill, displayName);
+
+      await sendPushToAll(
+        {
+          title: `Bill Due Soon`,
+          body,
+          tag: `bill-${bill.id}`,
+          notificationType: "bill-reminder",
+          categoryId: "bill-action",
+          requireInteraction: true,
+          companionMessage: JSON.stringify({
+            billId: bill.id,
+            billName: bill.name,
+            amount: bill.amount ?? "",
+          }),
+        },
+        userName
+      );
+
+      await markReminded(bill.id, today).catch((err) =>
+        logger.warn({ err, billId: bill.id }, "[BILLS] Failed to mark reminded")
+      );
+
+      logger.info(
+        { billId: bill.id, name: bill.name, daysUntil, userName },
+        "[BILLS] Bill reminder push sent"
+      );
     }
   }
 }
 
 export function startBillScheduler(): void {
+  // Run once at startup if already past 9 AM CT
   const startHour = parseInt(
     new Date().toLocaleTimeString("en-US", { timeZone: TZ, hour: "2-digit", hour12: false }),
     10
