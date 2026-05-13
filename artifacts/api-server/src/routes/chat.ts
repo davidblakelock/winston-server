@@ -1149,7 +1149,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       // Generation failed entirely — very unusual. Give a short honest message.
       const notReadyText = `I ran into an issue pulling your briefing together — please try again in a moment.`;
       if (isNativeMorning) {
-        res.json({ response: notReadyText, morningActions: [] });
+        res.json({ response: notReadyText });
         return;
       }
       // SSE path
@@ -1212,18 +1212,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       // or the user taps "morning briefing" twice in quick succession.
       const recentCached = getCachedBriefingIfRecent(sessionUserName, 90 * 60 * 1000);
       if (recentCached) {
-        req.log.info({ sessionUserName, chars: recentCached.length }, "Native morning briefing — cache hit (≤90 min), assembling actions and returning");
-        // Briefing text served from cache but actions are always freshly assembled
-        // so delivery/bill/draft cards reflect the current state.
-        const cachedActionsResult = await assembleMorningActions({
-          userName: sessionUserName,
-          detectedMeetings: [],
-          calendarEvents: [],
-          userCity: (userProfile?.rawData as CollectedData | undefined)?.city ?? (userProfile as Record<string, unknown> & { city?: string } | null)?.city ?? undefined,
-          userLat: userProfile?.latitude ?? 32.7767,
-          userLon: userProfile?.longitude ?? -96.7970,
-        }).catch(() => [] as MorningAction[]);
-        res.json({ response: recentCached, morningActions: cachedActionsResult });
+        req.log.info({ sessionUserName, chars: recentCached.length }, "Native morning briefing — cache hit (≤90 min), returning cached text");
+        res.json({ response: recentCached });
         return;
       }
       req.log.info({ sessionUserName }, "Native morning path — cache miss, fetching live calendar+email");
@@ -1360,20 +1350,22 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       req.log.warn({ err }, "[E007] Meeting detection failed — skipping");
     }
 
-    // ── Morning Actions — fire in background NOW, runs parallel with Claude ──
-    // Do NOT await here. The promise resolves while Claude generates the briefing.
+    // ── Morning Actions — SSE/web path only ──────────────────────────────────
+    // Native no longer receives morningActions; fire the promise only for SSE.
     const primaryCity = (userProfile?.rawData as CollectedData | undefined)?.city ?? userProfile?.city ?? "";
-    const morningActionsPromise: Promise<MorningAction[]> = assembleMorningActions({
-      userName: sessionUserName,
-      detectedMeetings,
-      calendarEvents: liveEvents ?? [],
-      userCity: primaryCity || undefined,
-      userLat: primaryLat,
-      userLon: primaryLon,
-    }).catch((err: unknown) => {
-      req.log.warn({ err }, "[MorningActions] Assembly failed — returning empty");
-      return [] as MorningAction[];
-    });
+    const morningActionsPromise: Promise<MorningAction[]> = isNativeMorning
+      ? Promise.resolve([])
+      : assembleMorningActions({
+          userName: sessionUserName,
+          detectedMeetings,
+          calendarEvents: liveEvents ?? [],
+          userCity: primaryCity || undefined,
+          userLat: primaryLat,
+          userLon: primaryLon,
+        }).catch((err: unknown) => {
+          req.log.warn({ err }, "[MorningActions] Assembly failed — returning empty");
+          return [] as MorningAction[];
+        });
 
     // Refresh the datetime block in the pre-generated preamble.
     // The preamble was built at ~5 AM; the stale time block is stripped and replaced
@@ -1403,29 +1395,26 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     );
 
     if (isNativeMorning) {
-      // ── Native: run Claude + morningActions in parallel, return both in one JSON ──
+      // ── Native: run Claude and return briefing text only — no action buttons ──
       // Uses Haiku (3-5 s) instead of Sonnet (15-20 s) — the briefing prompt is data-rich
       // and instruction-heavy, which Haiku handles well; the quality difference is minimal.
-      const [nativeBriefing, morningActionsResult] = await Promise.all([
-        anthropic.messages.create({
-          model: MODEL_HAIKU,
-          max_tokens: deliveryMaxTokens,
-          system: buildSystemBlocks(livePreamble, liveGmailBlock + meetingRequestsBlock + liveCalendarBlock + deliverySuffix),
-          messages: [{ role: "user", content: "good morning" }],
-        }),
-        morningActionsPromise,
-      ]);
+      const nativeBriefing = await anthropic.messages.create({
+        model: MODEL_HAIKU,
+        max_tokens: deliveryMaxTokens,
+        system: buildSystemBlocks(livePreamble, liveGmailBlock + meetingRequestsBlock + liveCalendarBlock + deliverySuffix),
+        messages: [{ role: "user", content: "good morning" }],
+      });
       const nativeBriefingText =
         nativeBriefing.content[0]?.type === "text" ? nativeBriefing.content[0].text : "";
       if (nativeBriefingText) {
         setCachedBriefing(sessionUserName, nativeBriefingText, staticCtx.dateKey);
         void logBriefingStories(sessionUserName, staticCtx.candidateStoryKeys);
         req.log.info(
-          { chars: nativeBriefingText.length, actionCount: morningActionsResult.length, totalMs: Date.now() - t0 },
+          { chars: nativeBriefingText.length, totalMs: Date.now() - t0 },
           "Morning briefing fetched (native) and cached"
         );
       }
-      res.json({ response: nativeBriefingText, morningActions: morningActionsResult });
+      res.json({ response: nativeBriefingText });
       return;
     }
 
@@ -4335,7 +4324,7 @@ If you cannot extract both, return null.`,
         nativeResp.content[0]?.type === "text" ? nativeResp.content[0].text : "";
       // [DIAG] Log the actual response text sent back to native app
       req.log.info({ responsePreview: nativeReply.slice(0, 300) }, "[DIAG:4] Native response sent");
-      const nativeResponseBody: Record<string, unknown> = { response: nativeReply, morningActions: [] };
+      const nativeResponseBody: Record<string, unknown> = { response: nativeReply };
       if (navigationUrl) nativeResponseBody.navigationUrl = navigationUrl;
       if ((req as any)._smsPayload) nativeResponseBody.smsPayload = (req as any)._smsPayload;
       if ((req as any)._reservationPayload) nativeResponseBody.reservationPayload = (req as any)._reservationPayload;
