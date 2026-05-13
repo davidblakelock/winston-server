@@ -1,14 +1,17 @@
 /**
  * Apify Events Manager
  *
- * Discovers local events via Eventbrite (Apify actor) and the Ticketmaster
- * Discovery API (direct, with Apify actor fallback). Filters candidates by
- * the user's interests via Claude Haiku and surfaces ONE genuinely relevant
- * event happening in the next 7 days for the morning briefing.
+ * Discovers local events via Ticketmaster. Two paths:
  *
- * Apify actors used:
- *   Eventbrite:    apify/eventbrite-scraper
- *   Ticketmaster:  lhotanova/ticketmaster-scraper  (fallback when no TM key)
+ * 1. Ticketmaster Discovery API — direct REST call when TICKETMASTER_API_KEY is set.
+ * 2. parseforge/ticketmaster-scraper — Apify actor fallback when no key is set.
+ *    Input: startUrls pointing at the Dallas events listing page.
+ *
+ * NOTE: Eventbrite Apify actors (parseforge, powerai, crawlerbros, nexgendata)
+ * were all tested 2026-05-13 and timed out or returned error items regardless of
+ * input format. Eventbrite scraping is not usable via Apify. Ticketmaster only.
+ *
+ * Claude Haiku filters candidates to ONE event genuinely matching user interests.
  */
 
 import Anthropic from "@anthropic-ai/sdk";
@@ -18,8 +21,8 @@ const anthropic = new Anthropic();
 
 function getApifyKey(): string { return (process.env.APIFY_API_KEY ?? "").trim(); }
 
-const EVENTBRITE_ACTOR_ID   = "apify/eventbrite-scraper";
-const TICKETMASTER_ACTOR_ID = "lhotanova/ticketmaster-scraper";
+// Validated 2026-05-13: 5 items in 16.6s, rich field set
+const TICKETMASTER_ACTOR_ID = "parseforge/ticketmaster-scraper";
 
 // ── Generic Apify runner ──────────────────────────────────────────────────────
 
@@ -40,7 +43,7 @@ async function runActor(
       method:  "POST",
       headers: { "Content-Type": "application/json" },
       body:    JSON.stringify(input),
-      signal:  AbortSignal.timeout((timeoutSec + 8) * 1000),
+      signal:  AbortSignal.timeout((timeoutSec + 10) * 1000),
     });
     if (!res.ok) {
       logger.warn({ actorId, status: res.status }, "[ApifyEvents] Actor run non-OK");
@@ -63,7 +66,7 @@ export interface LocalEvent {
   venue:       string;
   url:         string;
   description: string;
-  source:      "eventbrite" | "ticketmaster";
+  source:      "ticketmaster";
 }
 
 export interface ApifyEventResult {
@@ -71,28 +74,41 @@ export interface ApifyEventResult {
   block: string;   // Ready-to-inject briefing block (empty if no event found)
 }
 
-// ── Eventbrite ────────────────────────────────────────────────────────────────
+// ── Ticketmaster Discovery API (primary when key is set) ──────────────────────
 
-async function fetchEventbriteEvents(
-  city:      string,
-  interests: string[],
-): Promise<LocalEvent[]> {
-  const query = interests.slice(0, 4).join(" ") || "arts music culture festival";
-  const todayISO = new Date().toISOString().split("T")[0]!;
-  const endISO   = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0]!;
+async function fetchTicketmasterDirect(city: string): Promise<LocalEvent[]> {
+  const tmKey = process.env["TICKETMASTER_API_KEY"];
+  if (!tmKey) return [];
 
-  const items = await runActor(EVENTBRITE_ACTOR_ID, {
-    location:  city,
-    query,
-    maxItems:  25,
-    startDate: todayISO,
-    endDate:   endISO,
-  });
+  const now    = new Date();
+  const endISO = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0]!;
 
-  return items
-    .map((item): LocalEvent => {
-      const rawDate = String(item["startDate"] ?? item["start_date"] ?? item["date"] ?? "");
-      const dateISO = rawDate.slice(0, 10);
+  try {
+    const params = new URLSearchParams({
+      apikey:        tmKey,
+      city,
+      radius:        "30",
+      unit:          "miles",
+      sort:          "date,asc",
+      startDateTime: now.toISOString().replace(/\.\d+Z$/, "Z"),
+      endDateTime:   `${endISO}T23:59:59Z`,
+      size:          "20",
+    });
+    const res = await fetch(
+      `https://app.ticketmaster.com/discovery/v2/events.json?${params}`,
+      { signal: AbortSignal.timeout(10_000) }
+    );
+    if (!res.ok) return [];
+
+    const data = await res.json() as {
+      _embedded?: { events?: Array<Record<string, unknown>> };
+    };
+    const events = data._embedded?.events ?? [];
+
+    return events.map((e): LocalEvent => {
+      const dates   = (e["dates"] as Record<string, unknown> | undefined);
+      const start   = (dates?.["start"] as Record<string, unknown> | undefined);
+      const dateISO = String(start?.["localDate"] ?? "");
       let dateLabel = "";
       if (dateISO.length === 10) {
         try {
@@ -101,112 +117,83 @@ async function fetchEventbriteEvents(
           });
         } catch { dateLabel = dateISO; }
       }
+      const embedded = e["_embedded"] as Record<string, unknown> | undefined;
+      const venues   = embedded?.["venues"] as Array<Record<string, unknown>> | undefined;
+      const classif  = (e["classifications"] as Array<Record<string, unknown>> | undefined)?.[0];
       return {
-        name:        String(item["name"]        ?? item["title"]    ?? ""),
+        name:        String(e["name"] ?? ""),
         date:        dateLabel,
         dateISO,
-        venue:       String(item["venue"]        ?? item["venueName"] ?? item["location"] ?? city),
-        url:         String(item["url"]          ?? item["eventUrl"] ?? ""),
-        description: String(item["description"]  ?? item["shortDescription"] ?? ""),
-        source:      "eventbrite",
+        venue:       String(venues?.[0]?.["name"] ?? city),
+        url:         String(e["url"] ?? ""),
+        description: String((classif?.["segment"] as Record<string, unknown> | undefined)?.["name"] ?? ""),
+        source:      "ticketmaster",
       };
-    })
-    .filter((e) => e.name.length > 3 && e.dateISO.length === 10);
+    }).filter((e) => e.name.length > 3 && e.dateISO.length === 10);
+  } catch (err) {
+    logger.warn({ err }, "[ApifyEvents] Ticketmaster direct API threw");
+    return [];
+  }
 }
 
-// ── Ticketmaster ──────────────────────────────────────────────────────────────
+// ── Ticketmaster via Apify actor (fallback) ───────────────────────────────────
+//
+// parseforge/ticketmaster-scraper validated fields (2026-05-13):
+//   name, url, startDate, date, venue, city, state, segment, genre,
+//   latitude, longitude, priceMin, priceMax, ticketingStatus, ...
+//
+// Input: startUrls pointing at the city events listing sorted by date ascending.
 
-async function fetchTicketmasterEvents(city: string): Promise<LocalEvent[]> {
-  const now    = new Date();
-  const endISO = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0]!;
+async function fetchTicketmasterViaApify(city: string): Promise<LocalEvent[]> {
+  if (!getApifyKey()) return [];
 
-  // Prefer the direct Ticketmaster Discovery API when a key is set
-  const tmKey = process.env["TICKETMASTER_API_KEY"];
-  if (tmKey) {
-    try {
-      const params = new URLSearchParams({
-        apikey:        tmKey,
-        city,
-        radius:        "30",
-        unit:          "miles",
-        sort:          "date,asc",
-        startDateTime: now.toISOString().replace(/\.\d+Z$/, "Z"),
-        endDateTime:   `${endISO}T23:59:59Z`,
-        size:          "20",
-      });
-      const res = await fetch(
-        `https://app.ticketmaster.com/discovery/v2/events.json?${params}`,
-        { signal: AbortSignal.timeout(10_000) }
-      );
-      if (res.ok) {
-        const data = await res.json() as {
-          _embedded?: { events?: Array<Record<string, unknown>> };
-        };
-        const events = data._embedded?.events ?? [];
-        const mapped: LocalEvent[] = events.map((e) => {
-          const dates     = (e["dates"] as Record<string, unknown> | undefined);
-          const start     = (dates?.["start"] as Record<string, unknown> | undefined);
-          const dateISO   = String(start?.["localDate"] ?? "");
-          let dateLabel   = "";
-          if (dateISO.length === 10) {
-            try {
-              dateLabel = new Date(`${dateISO}T12:00:00`).toLocaleDateString("en-US", {
-                weekday: "long", month: "long", day: "numeric",
-              });
-            } catch { dateLabel = dateISO; }
-          }
-          const embedded  = e["_embedded"] as Record<string, unknown> | undefined;
-          const venues    = embedded?.["venues"] as Array<Record<string, unknown>> | undefined;
-          const classif   = (e["classifications"] as Array<Record<string, unknown>> | undefined)?.[0];
-          return {
-            name:        String(e["name"] ?? ""),
-            date:        dateLabel,
-            dateISO,
-            venue:       String(venues?.[0]?.["name"] ?? city),
-            url:         String(e["url"] ?? ""),
-            description: String((classif?.["segment"] as Record<string, unknown> | undefined)?.["name"] ?? ""),
-            source:      "ticketmaster" as const,
-          };
-        }).filter((e) => e.name.length > 3 && e.dateISO.length === 10);
-        logger.info({ count: mapped.length, source: "tm-direct" }, "[ApifyEvents] Ticketmaster direct API fetched");
-        return mapped;
-      }
-    } catch (err) {
-      logger.warn({ err }, "[ApifyEvents] Ticketmaster direct API threw — trying Apify actor");
-    }
-  }
-
-  // Fallback: Apify Ticketmaster actor
+  const citySlug = city.toLowerCase().replace(/\s+/g, "-");
   const items = await runActor(TICKETMASTER_ACTOR_ID, {
-    city,
-    maxItems:  20,
-    startDate: now.toISOString().split("T")[0]!,
-    endDate:   endISO,
-  });
-  const mapped: LocalEvent[] = items.map((item) => {
-    const rawDate = String(item["date"] ?? item["startDate"] ?? item["localDate"] ?? "");
-    const dateISO = rawDate.slice(0, 10);
-    let dateLabel = "";
-    if (dateISO.length === 10) {
-      try {
-        dateLabel = new Date(`${dateISO}T12:00:00`).toLocaleDateString("en-US", {
-          weekday: "long", month: "long", day: "numeric",
-        });
-      } catch { dateLabel = dateISO; }
-    }
-    return {
-      name:        String(item["name"]  ?? item["title"]    ?? ""),
-      date:        dateLabel,
-      dateISO,
-      venue:       String(item["venue"] ?? item["venueName"] ?? city),
-      url:         String(item["url"]   ?? ""),
-      description: String(item["description"] ?? item["genre"] ?? ""),
-      source:      "ticketmaster" as const,
-    };
-  }).filter((e) => e.name.length > 3 && e.dateISO.length === 10);
+    startUrls: [
+      { url: `https://www.ticketmaster.com/${citySlug}-tickets-4/city/${citySlug}` },
+    ],
+    maxItems: 25,
+  }, 75);
 
-  logger.info({ count: mapped.length, source: "apify-actor" }, "[ApifyEvents] Ticketmaster via Apify fetched");
-  return mapped;
+  logger.info({ count: items.length }, "[ApifyEvents] Ticketmaster Apify actor returned");
+
+  return items
+    .map((item): LocalEvent => {
+      // startDate: "2026-09-14T00:20:00Z" or date: "Sep 14, 2026"
+      const rawDate = String(item["startDate"] ?? item["date"] ?? "");
+      let dateISO   = "";
+      let dateLabel = "";
+
+      // Try ISO format first (startDate)
+      if (/^\d{4}-\d{2}-\d{2}/.test(rawDate)) {
+        dateISO = rawDate.slice(0, 10);
+      } else if (rawDate) {
+        // Fallback: parse human date
+        try {
+          const parsed = new Date(rawDate);
+          if (!isNaN(parsed.getTime())) dateISO = parsed.toISOString().slice(0, 10);
+        } catch { /* skip */ }
+      }
+
+      if (dateISO.length === 10) {
+        try {
+          dateLabel = new Date(`${dateISO}T12:00:00`).toLocaleDateString("en-US", {
+            weekday: "long", month: "long", day: "numeric",
+          });
+        } catch { dateLabel = dateISO; }
+      }
+
+      return {
+        name:        String(item["name"]  ?? ""),
+        date:        dateLabel,
+        dateISO,
+        venue:       String(item["venue"] ?? item["venueName"] ?? city),
+        url:         String(item["url"]   ?? ""),
+        description: String(item["segment"] ?? item["genre"] ?? item["category"] ?? ""),
+        source:      "ticketmaster",
+      };
+    })
+    .filter((e) => e.name.length > 3);
 }
 
 // ── Claude interest filter ────────────────────────────────────────────────────
@@ -221,28 +208,30 @@ async function selectBestEvent(
   const now       = new Date();
   const sevenDays = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
 
-  // Restrict to events in the next 7 days
   const upcoming = events.filter((e) => {
     if (!e.dateISO || e.dateISO.length !== 10) return false;
     const d = new Date(`${e.dateISO}T12:00:00`);
     return d >= now && d <= sevenDays;
   });
 
-  if (upcoming.length === 0) return null;
+  if (upcoming.length === 0) {
+    logger.info({ city, totalEvents: events.length }, "[ApifyEvents] No events within next 7 days");
+    return null;
+  }
   if (upcoming.length === 1) return upcoming[0]!;
 
   const interestStr = interests.slice(0, 10).join(", ") || "music, arts, culture";
   const list = upcoming.slice(0, 15).map((e, i) =>
-    `${i + 1}. "${e.name}" — ${e.date || e.dateISO} at ${e.venue} [${e.source}]${e.description ? `. ${e.description.slice(0, 80)}` : ""}`
+    `${i + 1}. "${e.name}" — ${e.date || e.dateISO} at ${e.venue}${e.description ? ` [${e.description}]` : ""}`
   ).join("\n");
 
   const prompt =
     `User interests: ${interestStr}.\n\n` +
     `Upcoming events in ${city} this week:\n${list}\n\n` +
     `Which ONE event number is most genuinely relevant to someone with these specific interests? ` +
-    `A music fan wouldn't care about a corporate conference. A woodworking enthusiast wouldn't care about a tech meetup. ` +
-    `Be selective — only pick an event that clearly aligns. Reply with just the number. ` +
-    `If none are a genuine match, reply with 0.`;
+    `Be selective — a music fan wouldn't care about a sporting event unless they specifically follow that team. ` +
+    `Only pick an event that clearly aligns with the stated interests. ` +
+    `Reply with just the number. If none are a genuine match, reply with 0.`;
 
   try {
     const resp = await anthropic.messages.create({
@@ -255,12 +244,9 @@ async function selectBestEvent(
       .map((b) => (b as { type: "text"; text: string }).text)
       .join("").trim();
     const num = parseInt(numStr, 10);
-    if (num >= 1 && num <= upcoming.length) {
-      return upcoming[num - 1]!;
-    }
+    if (num >= 1 && num <= upcoming.length) return upcoming[num - 1]!;
     return null;
   } catch {
-    // Fall back to first result if Claude call fails
     return upcoming[0]!;
   }
 }
@@ -279,7 +265,7 @@ const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
 /**
  * Fetch one relevant local event in the next 7 days that matches user interests.
- * Combines Eventbrite and Ticketmaster, selects the best match via Claude Haiku.
+ * Prioritises the Ticketmaster Discovery API; falls back to Apify actor.
  * Returns a ready-to-inject briefing block (empty string if nothing relevant found).
  */
 export async function fetchBestLocalEvent(
@@ -294,27 +280,25 @@ export async function fetchBestLocalEvent(
     return cached.result;
   }
 
-  // Require at least Apify key OR Ticketmaster key
-  if (!getApifyKey() && !process.env["TICKETMASTER_API_KEY"]) {
-    logger.info("[ApifyEvents] No API keys — skipping event discovery");
+  const hasTmKey   = !!process.env["TICKETMASTER_API_KEY"];
+  const hasApifyKey = !!getApifyKey();
+  if (!hasTmKey && !hasApifyKey) {
+    logger.info("[ApifyEvents] No API keys configured — skipping event discovery");
     return { event: null, block: "" };
   }
 
   try {
-    // Run both scrapers concurrently — graceful degradation if one fails
-    const [ebResult, tmResult] = await Promise.allSettled([
-      fetchEventbriteEvents(city, interests),
-      fetchTicketmasterEvents(city),
-    ]);
+    // Try direct API first (fast, no Apify credit cost); fall back to scraper
+    let events: LocalEvent[] = await fetchTicketmasterDirect(city);
 
-    const all: LocalEvent[] = [
-      ...(ebResult.status === "fulfilled" ? ebResult.value : []),
-      ...(tmResult.status === "fulfilled" ? tmResult.value : []),
-    ];
+    if (events.length === 0 && hasApifyKey) {
+      logger.info({ city }, "[ApifyEvents] Direct API returned nothing — trying Apify actor");
+      events = await fetchTicketmasterViaApify(city);
+    }
 
-    logger.info({ city, total: all.length }, "[ApifyEvents] Combined candidate events");
+    logger.info({ city, total: events.length }, "[ApifyEvents] Total candidate events");
 
-    const best = await selectBestEvent(all, interests, city);
+    const best = await selectBestEvent(events, interests, city);
 
     let result: ApifyEventResult;
     if (!best) {
@@ -322,11 +306,11 @@ export async function fetchBestLocalEvent(
     } else {
       const urlLine = best.url ? `\n  Tickets/info: ${best.url}` : "";
       const block =
-        `\n\n[VERIFIED — Local Event Discovery — Eventbrite/Ticketmaster]\n` +
+        `\n\n[VERIFIED — Local Event Discovery — Ticketmaster]\n` +
         `One upcoming ${city} event that may interest you:\n` +
         `• ${best.name} — ${best.date || best.dateISO} at ${best.venue}${urlLine}\n` +
-        `INSTRUCTION: Mention this event naturally in ONE sentence — name, date, venue. ` +
-        `Only include if it fits the briefing flow; skip silently if it feels forced.`;
+        `INSTRUCTION: Mention this event in ONE sentence — name, date, venue. ` +
+        `Only include if it fits the briefing flow naturally; skip silently if forced.`;
       result = { event: best, block };
       logger.info({ city, event: best.name, date: best.dateISO }, "[ApifyEvents] Best event selected");
     }
