@@ -256,6 +256,12 @@ import {
   getTodayMydayEntry,
   extractMydayContent,
 } from "../myday/mydayManager.js";
+import {
+  saveLifeCapture,
+  runDotConnector,
+  getPendingSuggestion,
+  markSuggestionSurfaced,
+} from "../lifeCaptures/lifeCapturesManager.js";
 
 // ── Calendar location context helpers ──────────────────────────────────────
 // Short-lived per-user cache of today's events so we don't hit the Google API
@@ -1021,7 +1027,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     const _lastContent = _lastAssistant?.content ?? "";
     const _isContextualMyDayPrompt =
       _lastContent.includes("What would you add to your day that reflects this?") ||
-      _lastContent.includes("Is there anything from today worth capturing in My Day before you rest?");
+      _lastContent.includes("worth capturing") ||
+      _lastContent.includes("record some thoughts");
     const _isSubstantive =
       message.trim().split(/\s+/).length >= 3 &&
       !/^(no|nope|nothing|nah|not really|i don'?t|skip|pass|never mind|nevermind|not tonight|maybe later|not now)$/i.test(message.trim());
@@ -1665,33 +1672,48 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     }
   }
 
-  // ── My Day — save today's log entry ─────────────────────────────────────────
+  // ── [Name]'s Life — save today's log entry ──────────────────────────────────
   if (isMydayAdd) {
+    const _lifeFirstName = userProfile?.name?.split(" ")[0] ?? "your";
+    const _lifeSectionName = `${_lifeFirstName}'s Life`;
     try {
       const content = extractMydayContent(message);
       const entry = await saveMydayEntry(sessionUserName, content);
-      req.log.info({ date: entry.entry_date, length: content.length }, "My Day entry saved");
+      req.log.info({ date: entry.entry_date, length: content.length }, "[Life] Entry saved");
+
+      // Determine capture context: evening if from wind-down closing, morning otherwise
+      const _priorAssistant = [...history].reverse().find((m) => m.role === "assistant");
+      const _priorContent   = _priorAssistant?.content ?? "";
+      const _captureCtx     = _priorContent.includes("worth capturing") ? "evening" : "morning";
+
+      // Save to life_captures (user's exact words) and run dot-connector in background
+      saveLifeCapture(sessionUserName, content, _captureCtx as "morning" | "evening")
+        .then(() => runDotConnector(sessionUserName).catch(() => {}))
+        .catch(() => {});
+
       systemPrompt +=
-        `\n\n[My Day — Entry Saved]\nThe following note has been saved to today's My Day log (${entry.entry_date}):\n"${entry.content}"\nAcknowledge warmly and briefly — something like "Got it, I've added that to your day." Don't repeat the content back verbatim unless it's very short.`;
+        `\n\n[${_lifeSectionName} — Entry Saved]\nThe following note has been saved to today's ${_lifeSectionName} log (${entry.entry_date}):\n"${entry.content}"\nAcknowledge warmly and briefly — something like "Got it, I've added that to ${_lifeSectionName}." Don't repeat the content back verbatim unless it's very short.`;
     } catch (err) {
-      req.log.warn({ err }, "My Day save failed");
-      systemPrompt += `\n\n[My Day — Save Error]\nTell the user you had trouble saving that note and ask them to try again.`;
+      req.log.warn({ err }, "[Life] Save failed");
+      systemPrompt += `\n\n[${_lifeSectionName} — Save Error]\nTell the user you had trouble saving that note and ask them to try again.`;
     }
   }
 
-  // ── My Day — read today's log entry ─────────────────────────────────────────
+  // ── [Name]'s Life — read today's log entry ──────────────────────────────────
   if (isMydayGet) {
+    const _lifeFirstName = userProfile?.name?.split(" ")[0] ?? "your";
+    const _lifeSectionName = `${_lifeFirstName}'s Life`;
     try {
       const entry = await getTodayMydayEntry(sessionUserName);
       if (!entry) {
-        systemPrompt += `\n\n[My Day — No Entry Yet]\nThe user hasn't added anything to their My Day log today. Let them know warmly — and let them know they can say things like "note that I finished the Henderson report" or "add to my day: had a great workout" to save notes throughout the day.`;
+        systemPrompt += `\n\n[${_lifeSectionName} — No Entry Yet]\nThe user hasn't added anything to their ${_lifeSectionName} log today. Let them know warmly — and let them know they can say things like "note that I finished the Henderson report" or "add to my day: had a great workout" to save notes throughout the day.`;
       } else {
-        systemPrompt += `\n\n[My Day — Today's Log]\nDate: ${entry.entry_date}\n\n${entry.content}\n\nRead this back warmly. This is the user's personal daily log — treat it with care. If it's long, summarize the key things and offer to go into detail.`;
+        systemPrompt += `\n\n[${_lifeSectionName} — Today's Log]\nDate: ${entry.entry_date}\n\n${entry.content}\n\nRead this back warmly. This is the user's personal daily log — treat it with care. If it's long, summarize the key things and offer to go into detail.`;
       }
-      req.log.info({ hasEntry: !!entry }, "My Day entry retrieved");
+      req.log.info({ hasEntry: !!entry }, "[Life] Entry retrieved");
     } catch (err) {
-      req.log.warn({ err }, "My Day get failed");
-      systemPrompt += `\n\n[My Day — Read Error]\nTell the user you had trouble reading their day log and ask them to try again.`;
+      req.log.warn({ err }, "[Life] Get failed");
+      systemPrompt += `\n\n[${_lifeSectionName} — Read Error]\nTell the user you had trouble reading their life log and ask them to try again.`;
     }
   }
 
@@ -3181,16 +3203,32 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       }
     } catch { /* non-fatal */ }
 
-    // ── Fetch today's My Day log entry for evening context ───────────────────
+    // ── Fetch today's [Name]'s Life log entry for evening context ────────────
+    const _windDownFirstName = (userProfile?.name ?? sessionUserName).split(" ")[0];
+    const _windDownLifeName  = `${_windDownFirstName}'s Life`;
     let todayMydayBlock = "";
     try {
       const mydayEntry = await getTodayMydayEntry(sessionUserName);
       if (mydayEntry?.content) {
         todayMydayBlock =
-          `\n\n[My Day — Today's Personal Log — use as richer context for the check-in]\n` +
+          `\n\n[${_windDownLifeName} — Today's Personal Log — use as richer context for the check-in]\n` +
           `${mydayEntry.content}\n` +
           `Reference this naturally if it fits — e.g. comment on something they logged, or ask how it went. ` +
           `Do NOT read the whole log back verbatim; treat it as private context only.`;
+      }
+    } catch { /* non-fatal */ }
+
+    // ── Inject pending life suggestion (dot-connector) ────────────────────────
+    let _windDownSuggestionBlock = "";
+    try {
+      const _pendingSug = await getPendingSuggestion(sessionUserName);
+      if (_pendingSug) {
+        _windDownSuggestionBlock =
+          `\n\n[${_windDownLifeName} — Actionable Suggestion]\n` +
+          `At a natural point in the check-in — ONLY ONCE — weave in this single sentence naturally: ` +
+          `"${_pendingSug.suggestion}"\n` +
+          `If the user responds positively, help them act on it. If they ignore it or redirect, drop it — never repeat.`;
+        markSuggestionSurfaced(sessionUserName, _pendingSug.id).catch(() => {});
       }
     } catch { /* non-fatal */ }
 
@@ -3378,13 +3416,14 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           `• At a natural pause, ask: "Anything you want to add to your shopping list, to-do list, or any reminders for tomorrow?"\n` +
           `• Close with a wind-down thought — drawn from Stoic philosophy, mindfulness, poetry, or nature. ` +
           `Warm, quiet, unhurried. 2–3 sentences. Never generic. Never motivational-poster language. ` +
-          `After the closing thought, end with exactly this: "Is there anything from today worth capturing in My Day before you rest?"\n\n` +
+          `After the closing thought, end with exactly this: "Is there anything from today worth capturing in ${_windDownLifeName} before you rest?"\n\n` +
           `STRICT RULES:\n` +
           `• Never prompt about routine activities (pickleball, gym, standing calls) — respond only if the user brings them up.\n` +
           `• No medication reminders. No music suggestions.\n` +
           `• If TV episode data appears below, mention it only if clearly new and the user hasn't heard it. When in doubt — leave it out.\n` +
           todayCalendarBlock +
           todayMydayBlock +
+          _windDownSuggestionBlock +
           tomorrowWeatherBlock +
           tomorrowCalendarBlock +
           tvEveningNote;

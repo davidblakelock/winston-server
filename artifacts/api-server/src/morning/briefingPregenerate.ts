@@ -33,6 +33,7 @@ import { runCrossDomainEngine, buildCrossDomainBlock } from "../intelligence/cro
 import { getStoredGarminData, formatGarminForBriefing } from "../garmin/garminService.js";
 import { getStoredFitData, formatFitForBriefing } from "../google/fit.js";
 import { getMydayEntries, type MydayEntry } from "../myday/mydayManager.js";
+import { getPendingSuggestion, markSuggestionSurfaced } from "../lifeCaptures/lifeCapturesManager.js";
 import { getOrdersForBriefing } from "../orders/ordersManager.js";
 import { getTodayTravelSegments, formatTravelForBriefing } from "../travel/travelManager.js";
 
@@ -350,7 +351,7 @@ WHAT TO COVER (weave naturally into the narrative — skip what has no relevance
 
 • TV shows — ONLY if [TV Shows — New Episodes] block is present. Never reference any show from memory or profile if that block is absent.
 
-• My Day — if [My Day — Recent Entries] has entries, reference them naturally when they connect to something in today's news, calendar, or conversation.
+• ${firstName}'s Life — if [${firstName}'s Life — Recent Entries] has entries, reference them naturally when they connect to something in today's news, calendar, or conversation.
 
 • Sunday summary — if [Sunday Summary] block is present, weave in a brief weekly recap naturally — exercise, highlights, something to look forward to.
 
@@ -366,7 +367,7 @@ DATA ACCURACY RULES — NO EXCEPTIONS:
 TARGET LENGTH: 60–90 seconds spoken at a natural conversational pace. Be ruthless — every sentence must either inform, connect, or land. Cut anything that does not earn its place.
 
 CLOSING — ONE ELEMENT ONLY:
-Thought of the day: Say exactly "Here is your thought of the day." Then deliver 1–2 sentences drawn exclusively from philosophy, literature, science, music, or history — timeless wisdom only. Warm and slightly wry. Never "seize the day." Then ask exactly this and nothing else: "Would you like to add to My Day and record some thoughts?" Do NOT interpret, explain, or comment on the thought. Do NOT connect it to pickleball, workshops, sports, or anything from the profile. Do NOT add any other question. STRICT PROHIBITION: Never reference current events, news headlines, politics, world conflicts, protests, legislation, government, or anything anxiety-inducing. The thought must always be grounding and timeless.
+Thought of the day: Say exactly "Here is your thought of the day." Then deliver 1–2 sentences drawn exclusively from philosophy, literature, science, music, or history — timeless wisdom only. Warm and slightly wry. Never "seize the day." Then ask exactly this and nothing else: "Would you like to add to ${firstName}'s Life and record some thoughts?" Do NOT interpret, explain, or comment on the thought. Do NOT connect it to pickleball, workshops, sports, or anything from the profile. Do NOT add any other question. STRICT PROHIBITION: Never reference current events, news headlines, politics, world conflicts, protests, legislation, government, or anything anxiety-inducing. The thought must always be grounding and timeless.
 
 FORBIDDEN — NEVER USE:
 • Section headers or labels of any kind
@@ -382,7 +383,7 @@ FORBIDDEN — NEVER USE:
 • Skipping the feel-good story from [Watercooler Story] — it is mandatory in every single briefing
 • "Something worth sitting with today" — this phrase is permanently banned. Never use it under any circumstances.
 • Any interpretation, explanation, or commentary after the thought of the day — deliver it and stop
-• A second closing question — the only closing question is "Would you like to add to My Day and record some thoughts?"
+• A second closing question — the only closing question is "Would you like to add to ${firstName}'s Life and record some thoughts?"
 • Thought of the day that references current events, politics, world conflicts, protests, legislation, government, sports, pickleball, or any anxiety-inducing news — it must be purely timeless wisdom
 
   `;
@@ -666,17 +667,34 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     const personalFollowUpsBlock = buildPersonalFollowupsBlock(personalFollowUps);
 
 
-    // ── Recent My Day entries (last 7 days) ───────────────────────────────────
-    const recentMydayEntries = await getMydayEntries(userName).catch((): MydayEntry[] => []);
+    // ── Recent [Name]'s Life entries (last 7 days) ───────────────────────────
+    const _briefingFirstName = userProfile?.name?.split(" ")[0] ?? "there";
+    const _lifeSectionName   = `${_briefingFirstName}'s Life`;
+    const [recentMydayEntries, pendingLifeSuggestion] = await Promise.all([
+      getMydayEntries(userName).catch((): MydayEntry[] => []),
+      getPendingSuggestion(userName).catch(() => null),
+    ]);
     const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
     const mydayFiltered = recentMydayEntries
       .filter((e) => new Date(e.entry_date) >= sevenDaysAgo)
       .slice(0, 7);
     const mydayBlock = mydayFiltered.length > 0
-      ? `\n\n[My Day — Recent Entries]\n` +
+      ? `\n\n[${_lifeSectionName} — Recent Entries]\n` +
         mydayFiltered.map((e) => `• ${e.entry_date}: ${e.content}`).join("\n") +
         `\nReference these naturally when they connect to something in today's news, calendar, or closing thought. Do not force them in.`
       : "";
+
+    // ── Life suggestion from dot-connector (surface once, never repeat) ───────
+    let lifeSuggestionBlock = "";
+    if (pendingLifeSuggestion) {
+      lifeSuggestionBlock =
+        `\n\n[${_lifeSectionName} — Actionable Suggestion]\n` +
+        `After the thought of the day — ONLY ONCE — weave this single sentence in naturally before the closing question: ` +
+        `"${pendingLifeSuggestion.suggestion}"\n` +
+        `If the user responds positively, help them act on it. If they ignore or redirect, drop it permanently.`;
+      // Mark surfaced immediately — it must only appear in one briefing ever
+      markSuggestionSurfaced(userName, pendingLifeSuggestion.id).catch(() => {});
+    }
 
     // All data blocks assembled — build the suffix.
     // The briefing instruction is the final element so Claude's marching orders
@@ -707,7 +725,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
 
     const suffix = garminBlock + fitBlock + travelBlock + ordersBlock + tvMorningBlock + billsMorningBlock + datesBlock +
       sundaySummaryBlock + recFollowUpBlock + personalFollowUpsBlock +
-      mydayBlock + crossDomainBlock +
+      mydayBlock + lifeSuggestionBlock + crossDomainBlock +
       dedupedNewsBlock + dallasEventsBlock + apifyEventBlock + dedupedVenueConcertsBlock + motivationContextBlock +
       buildNarrativeBriefingInstruction(primaryCity, userProfile?.companionName ?? null, userProfile?.name ?? undefined, proactiveMode) +
       modeInstruction;
