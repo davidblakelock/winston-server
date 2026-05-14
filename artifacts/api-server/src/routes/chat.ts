@@ -246,6 +246,12 @@ import { logBriefingStories } from "../morning/storyDedup.js";
 import { getDallasItems, getLocalContentCity, type LocalContentItem } from "../morning/dallasContent.js";
 import { createReminder } from "../reminders/reminderManager.js";
 import { getPendingRouteReminder, setPendingRouteReminder } from "../routeAware/routeAwareManager.js";
+import {
+  getPendingTripPlan,
+  setPendingTripPlan,
+  generateTripItinerary,
+  saveTripPlan,
+} from "../travel/tripPlanningManager.js";
 import { nextOccurrenceForPattern, humanReadableRecurring } from "../reminders/recurringUtils.js";
 import { broadcastToUser } from "../reminders/sseStore.js";
 import { saveMoodCheckin } from "../mood/moodManager.js";
@@ -413,6 +419,7 @@ function detectActiveListFromHistory(history: Array<{ role: string; content: str
   return null;
 }
 const NAVIGATION_PATTERN = /\b(take\s+me\s+to|directions?\s+to|navigate\s+to|get\s+me\s+to|how\s+do\s+i\s+get\s+to|maps?\s+to|open\s+maps?\s+(for|to)|i\s+need\s+to\s+go\s+to|i\s+need\s+directions?\s+to|i\s+want\s+to\s+go\s+to|can\s+you\s+take\s+me\s+to|take\s+me|get\s+directions?\s+to|show\s+me\s+how\s+to\s+get\s+to)\b/i;
+const TRIP_PLAN_START = /\b(?:i\s+want\s+to\s+plan|help\s+(?:me\s+)?plan|let'?s\s+plan|thinking\s+(?:of|about)\s+(?:a\s+)?trip|dream\s+trip|plan\s+(?:a\s+|my\s+|our\s+)?(?:trip|vacation|holiday|getaway|travel)(?:\s+to)?|i'?d\s+love\s+to\s+(?:plan|visit)|want\s+to\s+(?:plan|book)\s+(?:a\s+)?trip|planning\s+(?:a\s+|my\s+|our\s+)?(?:trip|vacation|holiday|getaway))\b/i;
 const STORY_READ_PATTERN = /\b(read\s+(me\s+)?(my\s+)?stor(y|ies)|show\s+(me\s+)?(my\s+)?stor(y|ies)|what\s+stor(y|ies)\s+have\s+i|tell\s+me\s+(my|the)\s+stor(y|ies)|ms\.?\s*peel\s+read\s+(me\s+)?(my\s+)?stor(y|ies)|olivia\s+stor(y|ies))\b/i;
 const STORY_COUNT_PATTERN = /\b(how\s+many\s+stor(y|ies)|stor(y|ies)\s+count|how\s+many\s+memories|number\s+of\s+stor(y|ies)|how\s+many\s+have\s+i\s+(captured|saved|told))\b/i;
 const TV_ADD_PATTERN = /\b(i\s+started\s+watching|i'?m\s+(now\s+)?watching|i\s+am\s+watching|started\s+watching|i\s+picked\s+up|i\s+just\s+started\s+.{1,60}|i\s+(?:want(?:ed)?\s+to|decided\s+to|plan(?:ning)?\s+to|going\s+to|about\s+to)\s+(?:start\s+)?watch(?:ing)?\b|i'?m\s+(?:going|planning)\s+to\s+(?:start\s+)?watch(?:ing)?\b|i'?m\s+(?:binging|binge\s+watching|checking\s+out|giving|trying)\s+.{1,60}|add\s+.+\s+to\s+my\s+(?:shows?|watch\s+list))\b/i;
@@ -1066,6 +1073,10 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isTextMessageRequest = !isMorningGreeting && TEXT_MESSAGE_PATTERN.test(message);
   const isTextFlowActive = !isMorningGreeting && pendingText !== null;
 
+  const pendingTripPlan = getPendingTripPlan();
+  const isTripPlanStart = !isMorningGreeting && !pendingTripPlan && TRIP_PLAN_START.test(message);
+  const isTripPlanFlowActive = !isMorningGreeting && pendingTripPlan !== null;
+
   // E007: Email meeting reply flow
   const pendingEmailReply = getPendingEmailReply();
   const pendingMeetingRequests = getPendingMeetingRequests();
@@ -1532,6 +1543,116 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         if (isNativeNewsDig) { res.json({ response: errMsg }); } else { res.json({ error: errMsg }); }
       }
       return;
+    }
+  }
+
+  // ── Trip planning: start or continue conversation flow ───────────────────────
+  if (isTripPlanStart || isTripPlanFlowActive) {
+    if (isTripPlanStart) {
+      // Extract destination from message
+      const destMatch =
+        message.match(/(?:to|in|for)\s+([A-Z][A-Za-z\s,'-]{2,40}?)(?:\s*[.!?]|$)/i) ??
+        message.match(/(?:trip|vacation|holiday|getaway|travel|visit)\s+(?:to\s+)?([A-Z][A-Za-z\s,'-]{2,35}?)(?:\s*[.!?]|$)/i);
+      const dest = destMatch?.[1]?.trim().replace(/[.!?,]+$/, "") ?? "";
+      setPendingTripPlan({ destination: dest || "your destination", phase: "nights" });
+      const destLabel = dest ? `to ${dest}` : "(destination to be confirmed)";
+      systemPrompt +=
+        `\n\n[Trip Planning — Getting Started]\n` +
+        `The user wants to plan a trip ${destLabel}. Phase: asking about duration.\n` +
+        `Your ONLY job right now: acknowledge their plan warmly in one sentence, then ask "How many nights are you thinking?" ` +
+        `If the destination wasn't clear from their message, ask them to confirm it first. Keep it brief and excited.`;
+    } else if (isTripPlanFlowActive && pendingTripPlan) {
+      const phase = pendingTripPlan.phase;
+
+      if (phase === "nights") {
+        const nightsMatch =
+          message.match(/\b(\d+)\s*nights?\b/i) ??
+          message.match(/\b(\d+)\s*(?:days?|nights?)\b/i) ??
+          message.match(/\b(\d+)\b/);
+        const nights = nightsMatch ? parseInt(nightsMatch[1]!, 10) : null;
+
+        if (nights && nights >= 1 && nights <= 45) {
+          setPendingTripPlan({ ...pendingTripPlan, phase: "vibe", nights });
+          systemPrompt +=
+            `\n\n[Trip Planning — Phase: vibe]\n` +
+            `Got it: ${nights} nights in ${pendingTripPlan.destination}.\n` +
+            `Your ONLY job: acknowledge the duration in one sentence, then ask: ` +
+            `"What's the vibe you're going for — relaxed, adventurous, or a mix of both?" Nothing else.`;
+        } else {
+          systemPrompt +=
+            `\n\n[Trip Planning — Clarify nights]\n` +
+            `The user's answer didn't include a clear number of nights. ` +
+            `Gently re-ask: "How many nights are you thinking for ${pendingTripPlan.destination}?"`;
+        }
+
+      } else if (phase === "vibe") {
+        const vibe =
+          /\brelax(?:ed|ing)?\b|\bchill(?:ed)?\b|\blaid[- ]?back\b|\bslow\b|\beasy\b|\bquiet\b/i.test(message)
+            ? "relaxed"
+          : /\badventur(?:ous|e)?\b|\bactive\b|\bbusy\b|\bpacked\b|\baction\b|\bexplor\b|\bhike\b/i.test(message)
+            ? "adventurous"
+          : "mix";
+        setPendingTripPlan({ ...pendingTripPlan, phase: "must_haves", vibe });
+        systemPrompt +=
+          `\n\n[Trip Planning — Phase: must_haves]\n` +
+          `Got it: vibe is "${vibe}".\n` +
+          `Your ONLY job: acknowledge in one sentence, then ask: ` +
+          `"Any must-haves — a specific experience, type of food, or something you definitely want to do?" ` +
+          `They can say "none" or "no" if they're open. Nothing else.`;
+
+      } else if (phase === "must_haves") {
+        const mustHaves =
+          /^\s*(?:no|none|nope|not\s+really|nothing\s+specific|whatever|open|nah|no\s+preference|not\s+sure)\s*[.!?]*\s*$/i.test(message)
+            ? ""
+            : message.trim();
+        setPendingTripPlan({ ...pendingTripPlan, phase: "been_before", mustHaves });
+        systemPrompt +=
+          `\n\n[Trip Planning — Phase: been_before]\n` +
+          `Got it: must-haves noted.\n` +
+          `Your ONLY job: acknowledge in one sentence, then ask: ` +
+          `"Have you been to ${pendingTripPlan.destination} before?" Nothing else.`;
+
+      } else if (phase === "been_before") {
+        const beenBefore =
+          /\b(?:yes|yeah|yep|yup|have|been|visited|went|before|prior|already|a\s+few\s+times?|once|twice|multiple\s+times?)\b/i.test(message);
+        const completedPlan = { ...pendingTripPlan, phase: "generating" as const, beenBefore };
+
+        req.log.info(
+          { dest: completedPlan.destination, nights: completedPlan.nights, vibe: completedPlan.vibe },
+          "[TripPlan] All questions answered — generating itinerary"
+        );
+
+        try {
+          const itinerary = await generateTripItinerary(completedPlan, userProfile as Record<string, unknown> | null);
+          await saveTripPlan(sessionUserName, completedPlan, itinerary);
+          setPendingTripPlan(null);
+
+          const daysText = itinerary.days
+            .map((d) => `Day ${d.day} — ${d.title}: ${d.morning} / ${d.afternoon} / ${d.evening}. Dinner: ${d.restaurant}. Special: ${d.specialExperience}. Tip: ${d.practicalNotes}`)
+            .join("\n");
+          const tipsText = itinerary.generalTips.join("; ");
+
+          systemPrompt +=
+            `\n\n[Trip Itinerary — ${itinerary.destination} — ${itinerary.nights} Nights]\n` +
+            `Summary: ${itinerary.summary}\n\n` +
+            `Day-by-day:\n${daysText}\n\n` +
+            `General tips: ${tipsText}\n\n` +
+            `TASK: Present this as a warm, enthusiastic day-by-day overview — like a knowledgeable friend walking them through an exciting plan. ` +
+            `Highlight one special/memorable experience per day. Name the restaurants specifically. ` +
+            `Keep each day description to 2-3 sentences. End with "Want me to adjust anything?" ` +
+            `Do NOT use bullet points — write it conversationally.`;
+
+          req.log.info({ dest: itinerary.destination, days: itinerary.days.length }, "[TripPlan] Itinerary injected into system prompt");
+
+        } catch (tripErr) {
+          req.log.warn({ err: tripErr }, "[TripPlan] Itinerary generation failed");
+          setPendingTripPlan(null);
+          systemPrompt +=
+            `\n\n[Trip Planning — Generation Error]\n` +
+            `The itinerary generation hit an error. Apologize briefly and warmly — ` +
+            `say you ran into a hiccup building the plan and ask them to try again in a moment. Keep it light.`;
+        }
+      }
     }
   }
 

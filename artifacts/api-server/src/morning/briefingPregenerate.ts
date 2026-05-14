@@ -12,7 +12,7 @@ import { fetchEpisodesForDate, formatEpisodeForPrompt } from "../tv/tvmaze.js";
 import { fetchSportsScores, formatSportsForPrompt } from "../sports/sportsManager.js";
 import { getUpcomingBills, formatBillsForPrompt } from "../bills/billManager.js";
 import { getUpcomingDates, formatDatesForPrompt } from "../dates/datesManager.js";
-import { isTodayPickleballDay } from "../pickleball/pickleballManager.js";
+import { getTodayTripDay, buildTripDayBlock } from "../travel/tripPlanningManager.js";
 import { getPendingFollowUps, buildRecommendationFollowUpBlock } from "../recommendations/recommendationsManager.js";
 import { collectSundayData, buildSundaySummaryBlock } from "../sundaySummary/sundaySummaryManager.js";
 import { getPendingPersonalFollowups, buildPersonalFollowupsBlock } from "../followups/followupManager.js";
@@ -402,7 +402,6 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     const now = new Date();
     const yesterday = new Date(now.getTime() - 86400000);
     const isSunday = now.toLocaleDateString("en-US", { timeZone: "America/Chicago", weekday: "long" }) === "Sunday";
-    const isPickleballMorning = isTodayPickleballDay();
 
     const [recentMemories, allProfileItems, userProfile, seenHeadlines, seenVenueHeadlines, briefingPrefs, proactiveMode] = await Promise.all([
       getRecentMemories(7).catch(() => []),
@@ -612,9 +611,6 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
 
     const sundaySummaryBlock = isSunday && sundayData ? buildSundaySummaryBlock(sundayData) : "";
 
-    const pickleballMorningBlock = isPickleballMorning && !sundaySummaryBlock
-      ? `\n\n[Schedule Note]\nToday is a pickleball day (Mon/Wed/Fri at Semones YMCA; Sat at Moody's YMCA).\nCRITICAL — INDOOR VENUE RULE: Both Semones YMCA and Moody's YMCA are fully indoor facilities. Rain, wind, lightning, and outdoor weather have NO effect on play there. NEVER suggest checking the weather before pickleball, NEVER warn about rain affecting pickleball, and NEVER say "hope the weather holds" in relation to pickleball. The ONLY weather exception is if extreme heat makes travel uncomfortable — but even then, be measured.`
-      : "";
 
     const recFollowUpBlock = pendingFollowUps.length > 0
       ? buildRecommendationFollowUpBlock(pendingFollowUps)
@@ -749,7 +745,10 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       logger.info({ userName, event: apifyEventResult.event?.name }, "[Briefing] Apify local event included");
     }
 
-    const suffix = garminBlock + fitBlock + travelBlock + ordersBlock + tvMorningBlock + billsMorningBlock + datesBlock +
+    const todayTrip = await getTodayTripDay(userName).catch(() => null);
+    const tripDayBlock = todayTrip ? buildTripDayBlock(todayTrip) : "";
+
+    const suffix = garminBlock + fitBlock + travelBlock + tripDayBlock + ordersBlock + tvMorningBlock + billsMorningBlock + datesBlock +
       sundaySummaryBlock + recFollowUpBlock + personalFollowUpsBlock +
       mydayBlock + lifeSuggestionBlock + crossDomainBlock + routeAwareBlock +
       dedupedNewsBlock + dallasEventsBlock + apifyEventBlock + dedupedVenueConcertsBlock + motivationContextBlock +

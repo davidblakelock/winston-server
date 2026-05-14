@@ -1,0 +1,40 @@
+Please make the following changes. Read all of them before starting. Deploy when all are complete.
+1. Fix pickleball and woodworking references — permanent fix
+Search the entire codebase for any hardcoded references to pickleball, Semones, woodworking, workshop, wood shop, or any hobby not confirmed in the current user profile. Remove them all permanently. Also clear the static briefing context cache and regenerate it fresh from the current database profile. David does not do woodworking and does not play pickleball — these references must never appear again.
+2. Switch news to NewsAPI.org
+Replace the Apify news actors for Reuters and AP with NewsAPI.org. Sign up for a free API key at newsapi.org and add it as a Replit secret called NEWS_API_KEY. NewsAPI.org has a free tier with 100 requests per day which is more than enough. Use it to fetch the top headlines from Reuters and AP sources. Claude then reads the headlines and selects 2-3 genuinely important stories with one sentence on what happened and one sentence on why it matters. Keep the Apify actors only for reservation booking and trip planning — not for daily news.
+3. Route-aware proactive suggestions
+When the morning briefing is generated and the user has a calendar event today or tomorrow that includes a location address:
+
+Calculate the route from the user's home address to the event location using the Google Maps Directions API
+Search for relevant businesses along that route using Google Places API within one mile:
+
+Grocery stores — if the shopping list has items
+Pharmacies — if the shopping list has pharmacy category items
+Any specific business mentioned in a to-do list item by name — for example 'pick up dry cleaning at Faber Cleaners'
+
+
+If a relevant business is found along the route — surface it conversationally in the morning briefing. Example: 'On your way home from the dentist, HEB is just off your route — you have a few things on your shopping list if you want to knock that out.' Or: 'Faber Cleaners on Mockingbird is half a mile off your route home — you have dry cleaning pickup on your to-do list.'
+Only surface this when there are actually items on the shopping list or relevant to-do items AND a business is genuinely close to the route
+Never surface this if the shopping list is empty and there are no relevant to-do items
+Do not use Apify for this — use the Google Maps API and Google Places API we already have access to
+
+4. Trip planning conversation flow
+When a user says something like 'I want to plan a trip to San Miguel' or 'help me plan a vacation to X' or when a new flight confirmation is detected in Gmail:
+
+Winston enters trip planning mode
+Ask the user four questions maximum: How many nights? What is the vibe — relaxed, adventurous, or mix? Any must-haves — specific food, activities, experiences? Have you been there before?
+Based on the answers AND the user's stored profile preferences — interests, food preferences, activity level, travel companions — generate a complete day by day itinerary
+The itinerary should include: specific restaurant recommendations, one special experience per day, practical notes about the destination
+For restaurants — search OpenTable and Resy via Apify for availability and book what you can. For everything else provide the recommendation and let the user book directly
+Store the completed itinerary in the travel screen
+Add confirmed bookings to Google Calendar automatically
+The morning of each travel day — surface the day's itinerary in the morning briefing
+
+5. David's Life — passive capture
+After every morning briefing conversation and every evening check-in conversation, run Claude Haiku on the conversation transcript and extract any meaningful statements the user made — goals mentioned, concerns expressed, feelings shared, accomplishments noted, intentions set. Store these captures in the life_captures table with: user_id, captured_at, content (user's exact words), context (morning or evening), acted_on (boolean default false).
+After each new capture is saved, check if any capture from the last 30 days suggests something Winston could take a concrete action on — involving the user's calendar, a restaurant booking, travel planning, or their lists. If yes, store one suggestion and surface it naturally in the next morning briefing or evening check-in as a single conversational sentence. Never repeat the same suggestion. Never surface more than one suggestion per day.
+Add GET /api/life endpoint that returns all captures for the user sorted by most recent first.
+6. Rename My Day to David's Life
+The name should be read dynamically from the user's profile — so David gets 'David's Life', any other user gets '[Their Name]'s Life'. Update all backend references accordingly.
+Deploy when complete and confirm each feature with a test result

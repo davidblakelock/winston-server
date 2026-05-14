@@ -2,7 +2,6 @@ import Anthropic from "@anthropic-ai/sdk";
 import { logger } from "../lib/logger.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
 import { getUpcomingDates } from "../dates/datesManager.js";
-import { isTodayPickleballDay } from "../pickleball/pickleballManager.js";
 import {
   fetchReutersHeadlines,
   fetchAPNewsHeadlines,
@@ -13,6 +12,7 @@ import {
   isApifyNewsConfigured,
   type ScrapedArticle,
 } from "./apifyNewsManager.js";
+import { isNewsApiConfigured, fetchNewsApiHeadlines } from "./newsApiManager.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -331,6 +331,67 @@ async function fetchTopStoriesViaApify(userName?: string): Promise<{ text: strin
   return { text, rawTitles };
 }
 
+// ── Top stories via NewsAPI.org (preferred) ───────────────────────────────────
+
+async function fetchTopStoriesViaNewsApi(userName?: string): Promise<{ text: string; rawTitles: string[] }> {
+  const ctx         = await resolveNewsContext(userName);
+  const now         = new Date();
+  const todayStr    = now.toLocaleDateString("en-US", {
+    timeZone: "America/Chicago", weekday: "long", month: "long", day: "numeric", year: "numeric",
+  });
+  const yesterday   = new Date(now.getTime() - 86400000);
+  const yesterdayStr = yesterday.toLocaleDateString("en-US", {
+    timeZone: "America/Chicago", weekday: "long", month: "long", day: "numeric",
+  });
+  const currentYear = now.getFullYear();
+
+  const articles = await fetchNewsApiHeadlines("reuters,the-associated-press", 30);
+
+  if (articles.length === 0) {
+    throw new Error("[TopStories] NewsAPI returned no articles — falling through to next source");
+  }
+
+  const rawTitles   = articles.map((a) => a.title).filter((t) => t.length > 5);
+  const headlinesBlock = formatArticlesForClaude(articles, "Reuters + AP News (NewsAPI.org) — Current Headlines", 30);
+
+  const teamsLine = ctx.sportsTeams.length > 0
+    ? `The listener follows these teams: ${ctx.sportsTeams.join(", ")}. Include a story about one if there is significant news from the last 48 hours.`
+    : `No specific sports teams on file.`;
+
+  const prompt =
+    `Today is ${todayStr}. Yesterday was ${yesterdayStr}. The current year is ${currentYear}.\n\n` +
+    `Here are real headlines from Reuters and AP News:\n\n${headlinesBlock}\n\n` +
+    `Select the 2 most genuinely important stories for a morning briefing. Prioritise:\n` +
+    `• Major world events, significant US political or economic developments, important technology or science news\n` +
+    `• Broad relevance — NOT regional, NOT routine, NOT filler\n` +
+    `• ${teamsLine}\n\n` +
+    `NO LOCAL NEWS. NO WEATHER. NO STOCK MARKET. NO FILLER.\n\n` +
+    `For EACH of the 2 selected stories, write exactly TWO sentences:\n` +
+    `• Sentence 1: What happened — specific, factual, with names and numbers. Max 25 words.\n` +
+    `• Sentence 2: Why it matters — real-world consequence or why a listener should care. Max 25 words.\n\n` +
+    `OUTPUT FORMAT (follow exactly):\n` +
+    `1. **[Bold Title — 4–6 words]** — [What happened.] [Why it matters.]\n\n` +
+    `2. **[Bold Title — 4–6 words]** — [What happened.] [Why it matters.]\n\n` +
+    `RULES: Exactly 2 stories. No two stories on the same topic. Never fabricate — only use headlines from the list above.`;
+
+  logger.info("[News] Claude (top-stories-newsapi) — curating from NewsAPI headlines");
+
+  const response = await anthropic.messages.create({
+    model:      "claude-sonnet-4-6",
+    max_tokens: 2000,
+    messages:   [{ role: "user", content: prompt }],
+  });
+
+  const text = response.content
+    .filter((b) => b.type === "text")
+    .map((b) => (b as { type: "text"; text: string }).text)
+    .join("\n").trim();
+
+  if (!text) throw new Error("Empty top-stories response from Claude (NewsAPI path)");
+  logger.info({ chars: text.length }, "[News] Top stories via NewsAPI complete");
+  return { text, rawTitles };
+}
+
 // ── Top stories via web_search (fallback) ─────────────────────────────────────
 
 async function fetchTopStoriesViaWebSearch(userName?: string): Promise<string> {
@@ -403,7 +464,22 @@ async function fetchNewsFromClaude(userName?: string): Promise<string> {
   let mainText:    string;
   let rawTitles:   string[] = [];
 
-  if (isApifyNewsConfigured()) {
+  if (isNewsApiConfigured()) {
+    try {
+      const result = await fetchTopStoriesViaNewsApi(userName);
+      mainText  = result.text;
+      rawTitles = result.rawTitles;
+    } catch (err) {
+      logger.warn({ err }, "[News] NewsAPI path failed — trying Apify fallback");
+      if (isApifyNewsConfigured()) {
+        const r2 = await fetchTopStoriesViaApify(userName).catch(() => null);
+        if (r2) { mainText = r2.text; rawTitles = r2.rawTitles; }
+        else mainText = await fetchTopStoriesViaWebSearch(userName);
+      } else {
+        mainText = await fetchTopStoriesViaWebSearch(userName);
+      }
+    }
+  } else if (isApifyNewsConfigured()) {
     try {
       const result = await fetchTopStoriesViaApify(userName);
       mainText  = result.text;
@@ -451,22 +527,31 @@ async function fetchNewsFromClaude(userName?: string): Promise<string> {
  * Call this at 12:00 PM local time from morningPushScheduler.
  */
 export async function checkMiddayNews(userName: string): Promise<string | null> {
-  if (!isApifyNewsConfigured()) {
-    logger.info({ userName }, "[MiddayNews] Apify not configured — skipping midday check");
+  if (!isNewsApiConfigured() && !isApifyNewsConfigured()) {
+    logger.info({ userName }, "[MiddayNews] No news source configured — skipping midday check");
     return null;
   }
 
   const morningTitles = getMorningHeadlines(userName);
 
-  const [reutersResult, apResult] = await Promise.allSettled([
-    fetchReutersHeadlines(20),
-    fetchAPNewsHeadlines(20),
-  ]);
+  let current: ScrapedArticle[] = [];
 
-  const current: ScrapedArticle[] = [
-    ...(reutersResult.status === "fulfilled" ? reutersResult.value : []),
-    ...(apResult.status      === "fulfilled" ? apResult.value      : []),
-  ];
+  if (isNewsApiConfigured()) {
+    current = await fetchNewsApiHeadlines("reuters,the-associated-press", 25).catch(() => []);
+    logger.info({ count: current.length }, "[MiddayNews] Fetched via NewsAPI");
+  }
+
+  if (current.length === 0 && isApifyNewsConfigured()) {
+    const [reutersResult, apResult] = await Promise.allSettled([
+      fetchReutersHeadlines(20),
+      fetchAPNewsHeadlines(20),
+    ]);
+    current = [
+      ...(reutersResult.status === "fulfilled" ? reutersResult.value : []),
+      ...(apResult.status      === "fulfilled" ? apResult.value      : []),
+    ];
+    logger.info({ count: current.length }, "[MiddayNews] Fetched via Apify fallback");
+  }
 
   if (current.length === 0) {
     logger.info({ userName }, "[MiddayNews] No articles fetched — skipping");
@@ -615,7 +700,7 @@ function formatNewsBlock(rawText: string, fetchedAt: Date): string {
 
   const body = sections.length > 0 ? sections.join("\n\n") : rawText;
   return (
-    `\n\n[VERIFIED — Apify Reuters + AP News — fetched at ${fetchedStr} CT, stories from past 24-48 hours]\n` +
+    `\n\n[VERIFIED — Reuters + AP News — fetched at ${fetchedStr} CT, stories from past 24-48 hours]\n` +
     body
   );
 }
@@ -651,13 +736,12 @@ async function fetchMotivationFromClaude(userName?: string): Promise<string> {
     timeZone: tz, weekday: "long", month: "long", day: "numeric", year: "numeric",
   });
   const dayName         = now.toLocaleDateString("en-US", { timeZone: tz, weekday: "long" });
-  const isPickleballDay = isTodayPickleballDay();
-
   const ctx          = await resolveNewsContext(userName).catch(() => null);
   const displayName  = ctx?.displayName  ?? "the listener";
   const companionName = ctx?.companionName ?? "your companion";
   const teams         = ctx?.sportsTeams  ?? [];
   const music         = ctx?.musicGenres  ?? ["classic rock", "jazz"];
+  const interests     = ctx?.interests    ?? [];
 
   // ── Step 1: Personal override (upcoming birthday/anniversary within 14 days) ──
   const upcomingDates  = await getUpcomingDates(14, userName).catch(() => []);
@@ -696,18 +780,14 @@ async function fetchMotivationFromClaude(userName?: string): Promise<string> {
   // ── Step 2: ZenQuotes + Claude personalization ──
   const zenQuote = await fetchZenQuote();
   if (zenQuote) {
-    const activityNote = isPickleballDay
-      ? `${displayName} has pickleball this morning (indoor at the YMCA).`
-      : `Today is a non-pickleball day for ${displayName}.`;
-
     const personalizationPrompt =
       `Today is ${todayStr} (${dayName}). You are ${companionName}, ${displayName}'s trusted morning companion.\n\n` +
       `TODAY'S QUOTE: "${zenQuote.q}" — ${zenQuote.a}\n\n` +
       `CONTEXT ABOUT ${displayName.toUpperCase()}:\n` +
-      `• ${activityNote}\n` +
-      `• Sports teams followed: ${teams.join(", ")}\n` +
-      `• Music loves: ${music.join(", ")}, and Jimmy Buffett\n` +
-      `• Other interests: woodworking, boats, cooking, family (daughter Olivia in Knoxville, girlfriend Susan in Dallas)\n\n` +
+      `• Sports teams followed: ${teams.join(", ") || "none on file"}\n` +
+      `• Music loves: ${music.join(", ")}\n` +
+      (interests.length > 0 ? `• Interests: ${interests.slice(0, 6).join(", ")}\n` : "") +
+      `\n` +
       `TASK: Deliver this quote naturally in 2-3 sentences, with a genuine personal connection to ${displayName}'s real life. ` +
       `Rules:\n` +
       `• Don't announce it as "today's quote" or "here's a quote"\n` +
@@ -736,7 +816,7 @@ async function fetchMotivationFromClaude(userName?: string): Promise<string> {
   const fallbackPrompt =
     `Today is ${todayStr} (${dayName}). You are ${companionName}, ${displayName}'s trusted morning companion.\n\n` +
     `No external quote or personal override today. Generate a warm, specific, grounding 2-3 sentence thought for ${displayName}. ` +
-    `Connect it to something real in his life — his interests (woodworking, boats, cooking, music), his routines, or something ahead in his day. ` +
+    `Connect it to something real in ${displayName}'s life — ${interests.length > 0 ? `his interests (${interests.slice(0, 5).join(", ")}), ` : ""}his routines, or something ahead in his day. ` +
     `Sound like a trusted friend. STRICT PROHIBITION: Never reference current events, politics, or news.`;
 
   const response = await anthropic.messages.create({

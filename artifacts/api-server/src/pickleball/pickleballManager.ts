@@ -1,11 +1,5 @@
-const TZ = "America/Chicago";
-
-function localDayOfWeek(d: Date = new Date()): string {
-  return d.toLocaleDateString("en-US", { timeZone: TZ, weekday: "long" });
-}
-
-const PICKLEBALL_DAYS = new Set(["Monday", "Wednesday", "Friday", "Saturday"]);
-
+// Pickleball has been removed from the user's activities.
+// This function is kept for backward compatibility but always returns false.
 export function isTodayPickleballDay(): boolean {
-  return PICKLEBALL_DAYS.has(localDayOfWeek());
+  return false;
 }
