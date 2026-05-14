@@ -272,6 +272,11 @@ const HARDCODED_PLACES = [
     address: "6000 Preston Road Dallas Texas 75205",
     keywords: ["moody", "moody ymca", "moody y"],
   },
+  {
+    name: "Semones YMCA",
+    address: "4332 Northaven Road Dallas Texas 75229",
+    keywords: ["semones", "semones ymca", "semones y", "the gym", "gym", "the y", "ymca"],
+  },
 ];
 
 router.get("/navigation/places", async (req, res) => {

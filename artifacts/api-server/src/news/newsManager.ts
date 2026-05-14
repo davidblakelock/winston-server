@@ -61,6 +61,12 @@ export function getStoredHeadlines(): ParsedStory[] {
 
 // ── Resolve user context ──────────────────────────────────────────────────────
 
+interface ProfilePerson {
+  name:         string;
+  relationship: string;
+  city?:        string;
+}
+
 interface NewsContext {
   displayName:   string;
   companionName: string;
@@ -69,17 +75,26 @@ interface NewsContext {
   sportsTeams:   string[];
   interests:     string[];
   musicGenres:   string[];
+  partner:       ProfilePerson | null;
+  family:        ProfilePerson[];
 }
+
+const PARTNER_RELS = /^(partner|girlfriend|boyfriend|spouse|wife|husband|fiancée?|fiancee?)/i;
+const FAMILY_RELS  = /^(daughter|son|child|parent|mother|father|mom|dad|brother|sister|sibling|grandm|grandp|stepmom|stepdad|stepson|stepdaughter)/i;
 
 async function resolveNewsContext(userName?: string): Promise<NewsContext> {
   if (!userName) return {
     displayName: "the listener", companionName: "your companion",
     city: "Dallas", state: "Texas",
     sportsTeams: [], interests: [], musicGenres: [],
+    partner: null, family: [],
   };
   const profile = await getProfile(userName).catch(() => null);
   const city    = profile?.city ?? "Dallas";
   const raw     = (profile?.rawData ?? {}) as Record<string, unknown>;
+  const people  = (raw["people"] as ProfilePerson[] | undefined) ?? [];
+  const partner = people.find((p) => PARTNER_RELS.test(p.relationship)) ?? null;
+  const family  = people.filter((p) => FAMILY_RELS.test(p.relationship));
   return {
     displayName:   (profile?.name ?? userName) as string,
     companionName: (profile?.companionName as string | undefined) ?? "your companion",
@@ -88,6 +103,8 @@ async function resolveNewsContext(userName?: string): Promise<NewsContext> {
     sportsTeams:   (raw["sportsTeams"] as string[] | undefined) ?? [],
     interests:     (raw["interests"]   as string[] | undefined) ?? [],
     musicGenres:   (raw["music"]       as string[] | undefined) ?? [],
+    partner,
+    family,
   };
 }
 
@@ -742,6 +759,16 @@ async function fetchMotivationFromClaude(userName?: string): Promise<string> {
   const teams         = ctx?.sportsTeams  ?? [];
   const music         = ctx?.musicGenres  ?? ["classic rock", "jazz"];
   const interests     = ctx?.interests    ?? [];
+  const partner       = ctx?.partner      ?? null;
+  const family        = ctx?.family       ?? [];
+
+  const partnerLine = partner
+    ? `• Partner: ${partner.name}${partner.city ? ` (${partner.city})` : ""}`
+    : null;
+  const familyLine = family.length > 0
+    ? `• Family: ${family.map((f) => `${f.name.split(" ")[0]} (${f.relationship}${f.city ? `, ${f.city}` : ""})`).join("; ")}`
+    : null;
+  const relationshipsBlock = [partnerLine, familyLine].filter(Boolean).join("\n");
 
   // ── Step 1: Personal override (upcoming birthday/anniversary within 14 days) ──
   const upcomingDates  = await getUpcomingDates(14, userName).catch(() => []);
@@ -787,12 +814,14 @@ async function fetchMotivationFromClaude(userName?: string): Promise<string> {
       `• Sports teams followed: ${teams.join(", ") || "none on file"}\n` +
       `• Music loves: ${music.join(", ")}\n` +
       (interests.length > 0 ? `• Interests: ${interests.slice(0, 6).join(", ")}\n` : "") +
+      (relationshipsBlock ? `${relationshipsBlock}\n` : "") +
       `\n` +
       `TASK: Deliver this quote naturally in 2-3 sentences, with a genuine personal connection to ${displayName}'s real life. ` +
       `Rules:\n` +
       `• Don't announce it as "today's quote" or "here's a quote"\n` +
       `• Weave it in naturally — e.g. "Here's something worth carrying through your ${dayName}:"\n` +
-      `• After the quote, add one sentence connecting it to something specific in his life\n` +
+      `• After the quote, add one sentence connecting it to something specific in his life — his interests, the people he loves, or something ahead in his day\n` +
+      `• You may reference his partner or family members by first name when it feels natural — not forced\n` +
       `• Sound like a trusted friend sharing something interesting, not a motivational poster\n` +
       `• Keep it to 2-3 sentences total — tight and warm\n` +
       `• STRICT PROHIBITION: Never reference current events, news, politics, world conflicts, protests, legislation, or government.`;
@@ -816,7 +845,12 @@ async function fetchMotivationFromClaude(userName?: string): Promise<string> {
   const fallbackPrompt =
     `Today is ${todayStr} (${dayName}). You are ${companionName}, ${displayName}'s trusted morning companion.\n\n` +
     `No external quote or personal override today. Generate a warm, specific, grounding 2-3 sentence thought for ${displayName}. ` +
-    `Connect it to something real in ${displayName}'s life — ${interests.length > 0 ? `his interests (${interests.slice(0, 5).join(", ")}), ` : ""}his routines, or something ahead in his day. ` +
+    `Connect it to something real in his life — ` +
+    (interests.length > 0 ? `his interests (${interests.slice(0, 5).join(", ")}), ` : "") +
+    (partner ? `his partner ${partner.name.split(" ")[0]}, ` : "") +
+    (family.length > 0 ? `his family (${family.map((f) => f.name.split(" ")[0]).slice(0, 3).join(", ")}), ` : "") +
+    `his routines, or something ahead in his day. ` +
+    `You may reference his partner or family members by first name when it feels natural — not forced. ` +
     `Sound like a trusted friend. STRICT PROHIBITION: Never reference current events, politics, or news.`;
 
   const response = await anthropic.messages.create({
