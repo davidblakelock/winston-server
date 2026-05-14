@@ -1,0 +1,45 @@
+Please build the [Name]'s Life feature correctly. This replaces the passive capture approach from the previous build. Read carefully before implementing.
+The core concept:
+[Name]'s Life is not passive surveillance. It only captures what the user explicitly shares in response to Winston's questions. Winston then engages with what's been shared — connecting dots, offering observations, and occasionally asking questions that help the user think more clearly.
+1. Morning intention capture:
+After the thought of the day in the morning briefing, Winston asks one purposeful question — rotating through these naturally:
+
+'What's the one thing that would make today feel worthwhile?'
+'What's been on your mind that deserves attention today?'
+'Is there someone you should reach out to today?'
+When the user responds, save their response to the life_captures table with context: 'morning'
+
+2. Evening reflection capture:
+At the natural end of the evening check-in conversation, Winston asks: 'One thing worth remembering from today?'
+When the user responds, save their response to life_captures with context: 'evening'
+3. Winston talks back — the Socratic mirror:
+When a new capture is saved, Claude reads the last 30 days of captures and looks for patterns worth surfacing. If a genuine pattern exists — surface it naturally in the next morning briefing or evening check-in as one conversational observation. Examples:
+
+'You've mentioned feeling stuck three times this month — always after a heavy week. What would unstuck look like for you?'
+'You've said you feel most energized after time outdoors. You have a clear afternoon today.'
+Never surface more than one observation per day. Never repeat the same observation. Never manufacture patterns that aren't there.
+
+4. Goal memory:
+When a user mentions wanting something — 'I want to read more' or 'I need to call Olivia more often' — extract and store it as a goal in life_captures with context: 'goal'. Winston checks in naturally when relevant — never on a schedule, never nagging. Just a friend who remembers.
+Example: 'You mentioned wanting to read more last month. You've added three books to your list. Have you started any of them?'
+5. Weekly gift — Sunday morning:
+Every Sunday morning, Claude reads the last 7 days of life_captures and writes one paragraph — warm, personal, insightful — about what it noticed from the week. Not a summary. Not a report. Something that feels like a thoughtful friend offering a genuine observation. Surface it at the end of the Sunday morning briefing.
+Example: 'Before the week starts — something worth noting from last week. You set out to have a difficult conversation and you had it. You mentioned feeling more settled than you have in months. And you said twice that you're exactly where you want to be. That's worth carrying into this week.'
+6. Annual letter:
+On a date stored in the user's profile (default: January 1st), Claude reads all life_captures from the past year and writes a personal letter. Warm, human language. About the year — what they went through, what they learned, who they're becoming. Store it and surface it in the morning briefing on that date.
+7. Database:
+The life_captures table should have: id, user_id, captured_at, content, context (morning/evening/goal/observation), acted_on (boolean)
+8. API endpoints:
+
+GET /api/life — returns all captures sorted by most recent first
+POST /api/life — saves a new capture manually
+
+9. Important constraints:
+
+Only store what the user explicitly said in response to Winston's questions
+Never store inferred meaning or passive observations from unrelated conversations
+Pattern observations must be genuinely based on what was captured — never manufactured
+Winston is a wise friend, not a therapist. If anything concerning surfaces, acknowledge it warmly and suggest professional support.
+The weekly gift and annual letter should feel personal and warm — not like a data report
+
+Deploy when complete and confirm with test results

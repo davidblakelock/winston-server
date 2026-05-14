@@ -33,7 +33,11 @@ import { runCrossDomainEngine, buildCrossDomainBlock } from "../intelligence/cro
 import { getStoredGarminData, formatGarminForBriefing } from "../garmin/garminService.js";
 import { getStoredFitData, formatFitForBriefing } from "../google/fit.js";
 import { getMydayEntries, type MydayEntry } from "../myday/mydayManager.js";
-import { getPendingSuggestion, markSuggestionSurfaced } from "../lifeCaptures/lifeCapturesManager.js";
+import {
+  getPendingSuggestion, markSuggestionSurfaced,
+  getPendingObservation, markObservationSurfaced,
+  getWeeklyGift, generateAndStoreAnnualLetter, getStoredAnnualLetter,
+} from "../lifeCaptures/lifeCapturesManager.js";
 import { buildRouteAwareSuggestions, buildRouteAwareBlock } from "../routeAware/routeAwareManager.js";
 import { getOrdersForBriefing } from "../orders/ordersManager.js";
 import { getTodayTravelSegments, formatTravelForBriefing } from "../travel/travelManager.js";
@@ -292,9 +296,10 @@ function buildPeopleContextBlock(rawData: CollectedData, displayName?: string): 
   );
 }
 
-function buildNarrativeBriefingInstruction(city: string, companionName: string | null, displayName?: string, mode: import("../proactiveMode/proactiveModeManager.js").WinstonMode = "supervised"): string {
+function buildNarrativeBriefingInstruction(city: string, companionName: string | null, displayName?: string, mode: import("../proactiveMode/proactiveModeManager.js").WinstonMode = "supervised", intentionQuestion?: string): string {
   const companion = companionName ?? "your companion";
   const firstName = displayName?.split(" ")[0] ?? "there";
+  const closingQuestion = intentionQuestion ?? `What's the one thing that would make today feel worthwhile?`;
 
   if (mode === "briefing_only") {
     return `
@@ -367,8 +372,9 @@ DATA ACCURACY RULES — NO EXCEPTIONS:
 
 TARGET LENGTH: 60–90 seconds spoken at a natural conversational pace. Be ruthless — every sentence must either inform, connect, or land. Cut anything that does not earn its place.
 
-CLOSING — ONE ELEMENT ONLY:
-Thought of the day: Say exactly "Here is your thought of the day." Then deliver 1–2 sentences drawn exclusively from philosophy, literature, science, music, or history — timeless wisdom only. Warm and slightly wry. Never "seize the day." Then ask exactly this and nothing else: "Would you like to add to ${firstName}'s Life and record some thoughts?" Do NOT interpret, explain, or comment on the thought. Do NOT connect it to pickleball, workshops, sports, or anything from the profile. Do NOT add any other question. STRICT PROHIBITION: Never reference current events, news headlines, politics, world conflicts, protests, legislation, government, or anything anxiety-inducing. The thought must always be grounding and timeless.
+CLOSING — TWO ELEMENTS, IN THIS ORDER:
+1. Thought of the day: Say exactly "Here is your thought of the day." Then deliver 1–2 sentences drawn exclusively from philosophy, literature, science, music, or history — timeless wisdom only. Warm and slightly wry. Never "seize the day." Do NOT interpret, explain, or comment on the thought. Do NOT connect it to pickleball, workshops, sports, or anything from the profile. STRICT PROHIBITION: Never reference current events, news headlines, politics, world conflicts, protests, legislation, government, or anything anxiety-inducing. The thought must always be grounding and timeless.
+2. Intention question: Immediately after the thought of the day, ask exactly this — word for word, nothing else: "${closingQuestion}" Do NOT add any other question. Do NOT add commentary. Stop after this question.
 
 FORBIDDEN — NEVER USE:
 • Section headers or labels of any kind
@@ -383,8 +389,8 @@ FORBIDDEN — NEVER USE:
 • Repeating any restaurant, event, or local item that has already been mentioned earlier in the same briefing
 • Skipping the feel-good story from [Watercooler Story] — it is mandatory in every single briefing
 • "Something worth sitting with today" — this phrase is permanently banned. Never use it under any circumstances.
-• Any interpretation, explanation, or commentary after the thought of the day — deliver it and stop
-• A second closing question — the only closing question is "Would you like to add to ${firstName}'s Life and record some thoughts?"
+• Any interpretation, explanation, or commentary after the thought of the day — deliver the thought, then ask the intention question, and stop
+• A third closing element — ONLY the thought of the day followed by the intention question
 • Thought of the day that references current events, politics, world conflicts, protests, legislation, government, sports, pickleball, or any anxiety-inducing news — it must be purely timeless wisdom
 
   `;
@@ -402,6 +408,22 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
     const now = new Date();
     const yesterday = new Date(now.getTime() - 86400000);
     const isSunday = now.toLocaleDateString("en-US", { timeZone: "America/Chicago", weekday: "long" }) === "Sunday";
+
+    // Annual letter date — default Jan 1, or from user profile
+    const ctMonth  = now.toLocaleDateString("en-US", { timeZone: "America/Chicago", month: "numeric" });
+    const ctDay    = now.toLocaleDateString("en-US", { timeZone: "America/Chicago", day: "numeric" });
+    const isAnnualLetterDay = ctMonth === "1" && ctDay === "1"; // Jan 1 default
+
+    // Rotating morning intention question (cycles every day)
+    const dayOfYear = Math.floor(
+      (now.getTime() - new Date(now.getFullYear(), 0, 0).getTime()) / 86400000
+    );
+    const INTENTION_QUESTIONS = [
+      `What's the one thing that would make today feel worthwhile?`,
+      `What's been on your mind that deserves attention today?`,
+      `Is there someone you should reach out to today?`,
+    ];
+    const intentionQuestion = INTENTION_QUESTIONS[dayOfYear % 3]!;
 
     const [recentMemories, allProfileItems, userProfile, seenHeadlines, seenVenueHeadlines, briefingPrefs, proactiveMode] = await Promise.all([
       getRecentMemories(7).catch(() => []),
@@ -485,7 +507,7 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       dietaryRestrictions: [],  // no field in rawData yet; reserved for future onboarding
     };
 
-    const [lastNightNotes, newsBlock, yesterdayEps, todayEps, sportsScores, upcomingBills, upcomingDates, sundayData, pendingFollowUps, dallasEvents, venueConcertsBlock, dailyMotivation, personalFollowUps, outForDeliveryOrders, todayTravelSegments, apifyEventResult] = await Promise.all([
+    const [lastNightNotes, newsBlock, yesterdayEps, todayEps, sportsScores, upcomingBills, upcomingDates, sundayData, pendingFollowUps, dallasEvents, venueConcertsBlock, dailyMotivation, personalFollowUps, outForDeliveryOrders, todayTravelSegments, apifyEventResult, weeklyGift, pendingObservation, annualLetter] = await Promise.all([
       getLastNightNotes().catch(() => []),
       fetchMorningNews(userName).catch(() => ""),
       fetchEpisodesForDate(yesterday, watchedIds).catch(() => []),
@@ -502,6 +524,11 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
       getOrdersForBriefing(userName).catch(() => []),
       getTodayTravelSegments(userName).catch(() => []),
       fetchBestLocalEvent(primaryCity, allInterests.slice(0, 10), userName).catch(() => ({ event: null, block: "" })),
+      isSunday ? getWeeklyGift(userName).catch(() => null) : Promise.resolve(null),
+      getPendingObservation(userName).catch(() => null),
+      isAnnualLetterDay
+        ? generateAndStoreAnnualLetter(userName).catch(() => null)
+        : Promise.resolve(null),
     ]);
 
     // Fetch Garmin health data (yesterday's stored data — no live API call needed)
@@ -689,8 +716,37 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
         `After the thought of the day — ONLY ONCE — weave this single sentence in naturally before the closing question: ` +
         `"${pendingLifeSuggestion.suggestion}"\n` +
         `If the user responds positively, help them act on it. If they ignore or redirect, drop it permanently.`;
-      // Mark surfaced immediately — it must only appear in one briefing ever
       markSuggestionSurfaced(userName, pendingLifeSuggestion.id).catch(() => {});
+    }
+
+    // ── Socratic mirror — pattern observation (surface once, never repeat) ───
+    let observationBlock = "";
+    if (pendingObservation) {
+      observationBlock =
+        `\n\n[${_lifeSectionName} — Pattern Observation]\n` +
+        `After the thought of the day, weave this observation in naturally — ONCE, as part of the flow: ` +
+        `"${pendingObservation.observation}"\n` +
+        `Deliver it as a warm, curious friend noticing something — not as analysis. ` +
+        `If it lands, let the user respond. If they redirect, drop it completely.`;
+      markObservationSurfaced(userName, pendingObservation.id).catch(() => {});
+    }
+
+    // ── Weekly gift — Sunday morning reflection ──────────────────────────────
+    const weeklyGiftBlock = isSunday && weeklyGift
+      ? `\n\n[${_lifeSectionName} — Weekly Reflection]\n` +
+        `At the very end of the Sunday briefing, after the thought of the day and before the closing question, ` +
+        `deliver this as one warm flowing paragraph — word for word:\n"${weeklyGift}"\n` +
+        `Deliver it as a thoughtful friend sharing what they noticed. No commentary. Just the paragraph.`
+      : "";
+
+    // ── Annual letter — Jan 1 (or configured date) ───────────────────────────
+    let annualLetterBlock = "";
+    if (isAnnualLetterDay && annualLetter) {
+      annualLetterBlock =
+        `\n\n[${_lifeSectionName} — Annual Letter]\n` +
+        `Before the thought of the day, tell ${_briefingFirstName} you have something for them. ` +
+        `Then deliver this letter — reading it warmly and naturally, as if you wrote it yourself:\n\n${annualLetter}\n\n` +
+        `Pause briefly after. Then continue to the thought of the day.`;
     }
 
     // ── Route-aware proactive suggestions ────────────────────────────────────
@@ -750,9 +806,9 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
 
     const suffix = garminBlock + fitBlock + travelBlock + tripDayBlock + ordersBlock + tvMorningBlock + billsMorningBlock + datesBlock +
       sundaySummaryBlock + recFollowUpBlock + personalFollowUpsBlock +
-      mydayBlock + lifeSuggestionBlock + crossDomainBlock + routeAwareBlock +
+      mydayBlock + lifeSuggestionBlock + observationBlock + weeklyGiftBlock + annualLetterBlock + crossDomainBlock + routeAwareBlock +
       dedupedNewsBlock + dallasEventsBlock + apifyEventBlock + dedupedVenueConcertsBlock + motivationContextBlock +
-      buildNarrativeBriefingInstruction(primaryCity, userProfile?.companionName ?? null, userProfile?.name ?? undefined, proactiveMode) +
+      buildNarrativeBriefingInstruction(primaryCity, userProfile?.companionName ?? null, userProfile?.name ?? undefined, proactiveMode, intentionQuestion) +
       modeInstruction;
 
     // Log which static sections have data

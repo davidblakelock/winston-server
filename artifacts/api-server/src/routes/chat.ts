@@ -266,8 +266,11 @@ import {
 import {
   saveLifeCapture,
   runDotConnector,
+  runPatternObservation,
   getPendingSuggestion,
   markSuggestionSurfaced,
+  getPendingObservation,
+  markObservationSurfaced,
 } from "../lifeCaptures/lifeCapturesManager.js";
 
 // ── Calendar location context helpers ──────────────────────────────────────
@@ -420,6 +423,7 @@ function detectActiveListFromHistory(history: Array<{ role: string; content: str
 }
 const NAVIGATION_PATTERN = /\b(take\s+me\s+to|directions?\s+to|navigate\s+to|get\s+me\s+to|how\s+do\s+i\s+get\s+to|maps?\s+to|open\s+maps?\s+(for|to)|i\s+need\s+to\s+go\s+to|i\s+need\s+directions?\s+to|i\s+want\s+to\s+go\s+to|can\s+you\s+take\s+me\s+to|take\s+me|get\s+directions?\s+to|show\s+me\s+how\s+to\s+get\s+to)\b/i;
 const TRIP_PLAN_START = /\b(?:i\s+want\s+to\s+plan|help\s+(?:me\s+)?plan|let'?s\s+plan|thinking\s+(?:of|about)\s+(?:a\s+)?trip|dream\s+trip|plan\s+(?:a\s+|my\s+|our\s+)?(?:trip|vacation|holiday|getaway|travel)(?:\s+to)?|i'?d\s+love\s+to\s+(?:plan|visit)|want\s+to\s+(?:plan|book)\s+(?:a\s+)?trip|planning\s+(?:a\s+|my\s+|our\s+)?(?:trip|vacation|holiday|getaway))\b/i;
+const GOAL_PATTERN = /\b(?:i\s+(?:want|need|should|have)\s+to\s+(?:(?:start\s+|be\s+)?(?:read(?:ing)?|call(?:ing)?|see(?:ing)?|visit(?:ing)?|spend(?:ing)?\s+(?:more\s+)?time|work(?:ing)?\s+(?:more\s+)?on|get\s+(?:back\s+)?(?:into|to)|focus(?:ing)?\s+(?:more\s+)?on|reconnect(?:ing)?|exercise|write|journal|meditat|paint|cook|learn|practice|travel|save|organiz|clean|reach\s+out)|more\s+\w+|less\s+\w+)|i'?(?:ve\s+been\s+meaning\s+to|d\s+love\s+to\s+(?:start|get))|my\s+goal\s+is\s+to|i'?m\s+trying\s+to\s+(?:be\s+better\s+at|get\s+(?:more\s+)?into|start))\b/i;
 const STORY_READ_PATTERN = /\b(read\s+(me\s+)?(my\s+)?stor(y|ies)|show\s+(me\s+)?(my\s+)?stor(y|ies)|what\s+stor(y|ies)\s+have\s+i|tell\s+me\s+(my|the)\s+stor(y|ies)|ms\.?\s*peel\s+read\s+(me\s+)?(my\s+)?stor(y|ies)|olivia\s+stor(y|ies))\b/i;
 const STORY_COUNT_PATTERN = /\b(how\s+many\s+stor(y|ies)|stor(y|ies)\s+count|how\s+many\s+memories|number\s+of\s+stor(y|ies)|how\s+many\s+have\s+i\s+(captured|saved|told))\b/i;
 const TV_ADD_PATTERN = /\b(i\s+started\s+watching|i'?m\s+(now\s+)?watching|i\s+am\s+watching|started\s+watching|i\s+picked\s+up|i\s+just\s+started\s+.{1,60}|i\s+(?:want(?:ed)?\s+to|decided\s+to|plan(?:ning)?\s+to|going\s+to|about\s+to)\s+(?:start\s+)?watch(?:ing)?\b|i'?m\s+(?:going|planning)\s+to\s+(?:start\s+)?watch(?:ing)?\b|i'?m\s+(?:binging|binge\s+watching|checking\s+out|giving|trying)\s+.{1,60}|add\s+.+\s+to\s+my\s+(?:shows?|watch\s+list))\b/i;
@@ -1800,6 +1804,12 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     }
   }
 
+  // ── Goal detection — fire-and-forget background save ────────────────────────
+  if (!isMorningGreeting && !isMydayAdd && !winddownActive && GOAL_PATTERN.test(message)) {
+    saveLifeCapture(sessionUserName, message.trim(), "goal").catch(() => {});
+    req.log.info({ chars: message.length }, "[LifeCaptures] Goal detected and queued for save");
+  }
+
   // ── [Name]'s Life — save today's log entry ──────────────────────────────────
   if (isMydayAdd) {
     const _lifeFirstName = userProfile?.name?.split(" ")[0] ?? "your";
@@ -1809,14 +1819,20 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       const entry = await saveMydayEntry(sessionUserName, content);
       req.log.info({ date: entry.entry_date, length: content.length }, "[Life] Entry saved");
 
-      // Determine capture context: evening if from wind-down closing, morning otherwise
+      // Determine capture context from the prior assistant message
       const _priorAssistant = [...history].reverse().find((m) => m.role === "assistant");
-      const _priorContent   = _priorAssistant?.content ?? "";
-      const _captureCtx     = _priorContent.includes("worth capturing") ? "evening" : "morning";
+      const _priorContent   = (_priorAssistant?.content ?? "").toLowerCase();
+      const _captureCtx =
+        _priorContent.includes("worth remembering") || _priorContent.includes("worth capturing")
+          ? "evening"
+          : "morning";
 
-      // Save to life_captures (user's exact words) and run dot-connector in background
-      saveLifeCapture(sessionUserName, content, _captureCtx as "morning" | "evening")
-        .then(() => runDotConnector(sessionUserName).catch(() => {}))
+      // Save to life_captures (user's exact words), run dot-connector + pattern observation in background
+      saveLifeCapture(sessionUserName, content, _captureCtx)
+        .then(() => {
+          runDotConnector(sessionUserName).catch(() => {});
+          runPatternObservation(sessionUserName).catch(() => {});
+        })
         .catch(() => {});
 
       systemPrompt +=
@@ -3391,6 +3407,19 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       }
     } catch { /* non-fatal */ }
 
+    // ── Inject pending Socratic observation ──────────────────────────────────
+    try {
+      const _pendingObs = await getPendingObservation(sessionUserName);
+      if (_pendingObs) {
+        _windDownSuggestionBlock +=
+          `\n\n[${_windDownLifeName} — Pattern Observation]\n` +
+          `At a quiet moment in the conversation — ONLY ONCE — weave in this observation naturally: ` +
+          `"${_pendingObs.observation}"\n` +
+          `Deliver it as a warm, curious friend noticing something. If they engage, explore it gently. If they redirect, let it go.`;
+        markObservationSurfaced(sessionUserName, _pendingObs.id).catch(() => {});
+      }
+    } catch { /* non-fatal */ }
+
     // ── Profile-based fallback when Google Calendar is unavailable ───────────
     if (!todayCalendarBlock) {
       const windDownDisplayName = userProfile?.name ?? sessionUserName;
@@ -3575,7 +3604,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           `• At a natural pause, ask: "Anything you want to add to your shopping list, to-do list, or any reminders for tomorrow?"\n` +
           `• Close with a wind-down thought — drawn from Stoic philosophy, mindfulness, poetry, or nature. ` +
           `Warm, quiet, unhurried. 2–3 sentences. Never generic. Never motivational-poster language. ` +
-          `After the closing thought, end with exactly this: "Is there anything from today worth capturing in ${_windDownLifeName} before you rest?"\n\n` +
+          `After the closing thought, end with exactly this: "One thing worth remembering from today?"\n\n` +
           `STRICT RULES:\n` +
           `• Never prompt about routine activities (pickleball, gym, standing calls) — respond only if the user brings them up.\n` +
           `• No medication reminders. No music suggestions.\n` +
