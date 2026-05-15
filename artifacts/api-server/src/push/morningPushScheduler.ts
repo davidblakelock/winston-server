@@ -86,41 +86,23 @@ async function buildMorningBody(user: ActiveUser): Promise<string> {
 
 // ── Send push for a user ───────────────────────────────────────────────────────
 
-async function sendMorningPush(user: ActiveUser, wakeTime: string, minsSince: number): Promise<void> {
+async function sendMorningPush(user: ActiveUser, wakeTime: string): Promise<void> {
   const { userName } = user;
 
+  // Try to restore an already-generated briefing from DB before anything else.
+  // This prevents duplicate Apify/Claude calls after server restarts.
   let staticCtx = getStaticBriefingContext(userName);
-
-  if (!staticCtx && minsSince < WAKE_WINDOW_MINUTES) {
-    // Briefing not ready yet — wait until next minute check before claiming the slot.
-    // Important: do NOT claim here, so the next tick can still try.
-    logger.info(
-      { userName, minsSince },
-      "[MorningPush] Briefing not ready at wake time — will retry next minute"
-    );
-    return;
-  }
-
   if (!staticCtx) {
-    // Window almost exhausted but briefing still not cached — generate inline now
-    // so the user never taps the notification and sees a loading state.
-    logger.warn(
-      { userName, minsSince },
-      "[MorningPush] Briefing still not ready — generating inline before push"
-    );
-    try {
-      await preFetchMorningBriefing(userName);
-      await loadStaticContextFromDb(userName).catch(() => false);
-      staticCtx = getStaticBriefingContext(userName);
-      logger.info({ userName, cached: !!staticCtx }, "[MorningPush] Inline pre-gen complete");
-    } catch (genErr) {
-      logger.error({ genErr, userName }, "[MorningPush] Inline pre-gen failed — sending push anyway");
+    await loadStaticContextFromDb(userName).catch(() => false);
+    staticCtx = getStaticBriefingContext(userName);
+    if (staticCtx) {
+      logger.info({ userName }, "[MorningPush] Briefing restored from DB cache");
     }
   }
 
-  // Briefing is ready (or we've given up waiting). Atomically claim the send slot now.
-  // claimMorningPushSlot uses INSERT ... ON CONFLICT DO UPDATE WHERE push_sent_at IS NULL
-  // so exactly one autoscale process wins across the cluster per day.
+  // Atomically claim the send slot — prevents double-send across restarts.
+  // Fire the push AT wake time regardless of whether the briefing is ready.
+  // The app fetches briefing on-demand if cache is cold; the push fires on time.
   const claimed = await claimMorningPushSlot(userName);
   if (!claimed) {
     logger.info({ userName }, "[MorningPush] Push slot already claimed — skipping (prevents double-send)");
@@ -139,11 +121,21 @@ async function sendMorningPush(user: ActiveUser, wakeTime: string, minsSince: nu
       requireInteraction: true,
     }, userName);
     logger.info(
-      { userName, wakeTime, minsSince, briefingReady: !!staticCtx },
+      { userName, wakeTime, briefingReady: !!staticCtx },
       "[MorningPush] Morning push sent"
     );
   } catch (err) {
     logger.error({ err, userName }, "[MorningPush] Failed to send morning push");
+    return;
+  }
+
+  // If briefing wasn't cached, generate it now in the background so it's
+  // ready when the user taps the notification (usually a few seconds later).
+  if (!staticCtx) {
+    logger.info({ userName }, "[MorningPush] Briefing not cached — generating in background after push");
+    preFetchMorningBriefing(userName).catch((err) =>
+      logger.warn({ err, userName }, "[MorningPush] Background briefing pre-gen failed")
+    );
   }
 }
 
@@ -186,10 +178,12 @@ async function runPerUserChecks(): Promise<void> {
       );
     }
 
-    // Within the 30-minute wake window: send push if not already sent today
+    // Within the 30-minute wake window: send push if not already sent today.
+    // sendMorningPush fires the push immediately at wake time — it no longer
+    // waits for the briefing to be ready, so the notification always arrives on time.
     const minsSince = minutesSinceWake(localTime, wakeTime);
     if (minsSince >= 0 && minsSince <= WAKE_WINDOW_MINUTES && !wasPushSentToday(userName)) {
-      await sendMorningPush(user, wakeTime, minsSince);
+      await sendMorningPush(user, wakeTime);
     }
 
     // 12:00 PM local time: check for significant breaking news since morning briefing

@@ -213,8 +213,9 @@ export function startWinddownScheduler(): void {
       const scheduledMinutes = toMinutes(settings.scheduledTime);
       const minutesPast = nowMinutes - scheduledMinutes;
 
-      // 60-minute window so a server restart near check-in time doesn't miss it entirely.
-      if (minutesPast < 0 || minutesPast >= 60) return;
+      // 15-minute catch window — provides recovery from brief server restarts without
+      // allowing the notification to fire drastically late.
+      if (minutesPast < 0 || minutesPast >= 15) return;
       if (await hasFiredToday()) {
         console.log(`EVENING_CHECK_IN: already fired today — skipping`);
         return;

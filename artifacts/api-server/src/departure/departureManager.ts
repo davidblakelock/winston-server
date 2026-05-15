@@ -18,7 +18,9 @@ export interface DepartureAlert {
 
 // ── Google Maps Directions API (with real-time traffic) ───────────────────────
 async function getGoogleMapsDuration(destination: string, homeAddress: string): Promise<DriveEstimate | null> {
-  const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+  // Use GOOGLE_MAPS_API_KEY if set; fall back to GOOGLE_PLACES_API_KEY which is
+  // on the same GCP project and usually has Directions API enabled too.
+  const apiKey = process.env.GOOGLE_MAPS_API_KEY ?? process.env.GOOGLE_PLACES_API_KEY;
   if (!apiKey) return null;
 
   const params = new URLSearchParams({
@@ -73,22 +75,56 @@ async function getGoogleMapsDuration(destination: string, homeAddress: string): 
   }
 }
 
-// ── Geocode destination using Nominatim (fallback only) ───────────────────────
-async function geocode(address: string): Promise<{ lat: number; lon: number } | null> {
-  const encoded = encodeURIComponent(address + " Dallas TX");
+// ── Google Geocoding API (primary geocoder — uses same key as Directions/Places) ──
+async function geocodeWithGoogle(address: string): Promise<{ lat: number; lon: number } | null> {
+  const apiKey = process.env.GOOGLE_MAPS_API_KEY ?? process.env.GOOGLE_PLACES_API_KEY;
+  if (!apiKey) return null;
+
+  const params = new URLSearchParams({ address, key: apiKey });
+  try {
+    const res = await fetch(
+      `https://maps.googleapis.com/maps/api/geocode/json?${params}`,
+      { signal: AbortSignal.timeout(6000) }
+    );
+    const data = await res.json() as {
+      status: string;
+      results?: Array<{ geometry: { location: { lat: number; lng: number } } }>;
+    };
+    if (data.status !== "OK" || !data.results?.length) return null;
+    const loc = data.results[0]!.geometry.location;
+    logger.info({ address, lat: loc.lat, lon: loc.lng }, "Geocoded via Google Geocoding API");
+    return { lat: loc.lat, lon: loc.lng };
+  } catch (err) {
+    logger.warn({ err, address }, "Google Geocoding API failed");
+    return null;
+  }
+}
+
+// ── Nominatim geocoding (fallback only — rate-limited public instance) ────────
+async function geocodeWithNominatim(address: string): Promise<{ lat: number; lon: number } | null> {
+  // Only append city hint if the address doesn't already include a state or zip
+  const hasState = /\b[A-Z]{2}\b|\b\d{5}\b/.test(address);
+  const query = hasState ? address : address + " Dallas TX";
+  const encoded = encodeURIComponent(query);
   const url = `https://nominatim.openstreetmap.org/search?q=${encoded}&format=json&limit=1`;
 
   try {
     const res = await fetch(url, {
-      headers: { "User-Agent": "WinstonCompanion/1.0 (personal assistant)" },
+      headers: { "User-Agent": "WinstonCompanion/1.0 david@winstoncompanion.app" },
       signal: AbortSignal.timeout(5000),
     });
     const data = await res.json() as Array<{ lat: string; lon: string }>;
     if (!data.length) return null;
-    return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
+    logger.info({ address, result: data[0] }, "Geocoded via Nominatim fallback");
+    return { lat: parseFloat(data[0]!.lat), lon: parseFloat(data[0]!.lon) };
   } catch {
     return null;
   }
+}
+
+async function geocode(address: string): Promise<{ lat: number; lon: number } | null> {
+  // Try Google first (better accuracy, handles business names), fall back to Nominatim
+  return (await geocodeWithGoogle(address)) ?? (await geocodeWithNominatim(address));
 }
 
 // ── OSRM route duration (free, no API key, no traffic) ────────────────────────

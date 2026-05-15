@@ -1,4 +1,5 @@
-// Winston Service Worker — handles web push notifications and notification tap routing.
+// Winston Service Worker v3 — handles web push notifications and notification tap routing.
+// Version bump forces browser to install the updated SW on next page load.
 
 // ── Auth state ────────────────────────────────────────────────────────────────
 // authToken is set by the page via postMessage when the user is logged in.
@@ -89,6 +90,9 @@ self.addEventListener("push", (event) => {
       billId: null,
       billName: null,
       billAmount: null,
+      // Departure: store mapsUrl directly so click handler can open Maps
+      mapsUrl: payload.mapsUrl ?? payload.mapsDeepLink ?? null,
+      destination: payload.destination ?? null,
     },
   };
 
@@ -112,12 +116,16 @@ self.addEventListener("push", (event) => {
       { action: "remind-tomorrow", title: "Remind Me Tomorrow" },
     ];
   } else if (payload.categoryId === "medication-action") {
+    // "Done ✓" dismisses and marks taken. "Remind in 30 min" snoozes.
     options.actions = [
-      { action: "taken", title: "Taken ✓" },
+      { action: "taken", title: "Done ✓" },
       { action: "remind-30m", title: "Remind in 30 min" },
     ];
   } else if (payload.categoryId === "reminder-action") {
     options.actions = [{ action: "done", title: "Done ✓" }];
+  } else if (payload.categoryId === "departure-action") {
+    // Departure — show Open in Maps button
+    options.actions = [{ action: "open-maps", title: "Open in Maps 🗺️" }];
   }
 
   event.waitUntil(self.registration.showNotification(title, options));
@@ -155,6 +163,7 @@ self.addEventListener("notificationclick", (event) => {
         return;
       }
 
+      // Medication: "Done ✓" → POST taken, dismiss, no app open
       if (action === "taken") {
         await fetch(`${base}/api/medications/taken`, {
           method: "POST",
@@ -164,8 +173,8 @@ self.addEventListener("notificationclick", (event) => {
         return;
       }
 
-      // "remind-30m" is the current action id; "remind-1h" kept for backwards compat
-      // with any cached service workers that still show the old label.
+      // Medication: "Remind in 30 min" → snooze, dismiss, no app open
+      // "remind-1h" kept for backwards compat with cached service workers.
       if (action === "remind-30m" || action === "remind-1h") {
         await fetch(`${base}/api/medications/snooze-reminder`, {
           method: "POST",
@@ -184,24 +193,31 @@ self.addEventListener("notificationclick", (event) => {
         return;
       }
 
+      // Departure: "Open in Maps 🗺️" action button — open Maps directly
+      if (action === "open-maps") {
+        const mapsUrl = data.mapsUrl ?? null;
+        if (mapsUrl) {
+          await self.clients.openWindow(mapsUrl);
+        }
+        return;
+      }
+
       // ── Bill reminder: body tap also dismisses without opening the app ────
       if (data.notificationType === "bill-reminder") return;
 
-      // ── Medication: body tap closes the notification — action buttons handle Taken / Remind ──
-      // Tapping the body of a medication notification does nothing (no app open).
-      // The user must tap "Taken ✓" or "Remind in 30 min" action buttons.
+      // ── Medication: body tap closes the notification — user must use action buttons ──
+      // "Done ✓" marks taken. "Remind in 30 min" snoozes. Body tap = dismiss only.
       if (data.categoryId === "medication-action") return;
 
       // ── Departure alert: body tap opens Google Maps directly ──────────────
+      // mapsUrl is stored in data.mapsUrl by the push handler above.
       if (data.notificationType === "departure") {
-        try {
-          const cm = data.companionMessage ? JSON.parse(data.companionMessage) : null;
-          const mapsUrl = cm?.mapsUrl ?? null;
-          if (mapsUrl) {
-            await self.clients.openWindow(mapsUrl);
-            return;
-          }
-        } catch (_) { /* fall through to default */ }
+        const mapsUrl = data.mapsUrl ?? null;
+        if (mapsUrl) {
+          await self.clients.openWindow(mapsUrl);
+          return;
+        }
+        // Fall through to app open if no mapsUrl (shouldn't happen)
       }
 
       // ── Main tap (no action button) — open the app ────────────────────────
