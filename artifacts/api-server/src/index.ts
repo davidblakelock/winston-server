@@ -230,6 +230,18 @@ app.listen(port, async (err) => {
   }
 
   try {
+    await query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS message_id TEXT`);
+    await query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS chat_messages_message_id_idx
+       ON chat_messages (message_id)
+       WHERE message_id IS NOT NULL`
+    );
+    logger.info("[startup] chat_messages.message_id dedup column ready");
+  } catch (e) {
+    logger.warn({ e }, "chat_messages message_id migration warning");
+  }
+
+  try {
     await ensureContactsTable();
   } catch (e) {
     logger.warn({ e }, "Contacts table initialization warning");

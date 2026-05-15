@@ -4816,6 +4816,27 @@ If you cannot extract both, return null.`,
 
   res.end();
 
+  // ── Server-side history persistence ──────────────────────────────────────
+  // Save the user message and assistant reply directly in the chat handler so
+  // history survives server restarts regardless of whether the client calls
+  // POST /api/messages. message_id deduplicates if the client also saves.
+  if (!isAutoGreeting) {
+    query(
+      `INSERT INTO chat_messages (user_name, role, content, message_id)
+       VALUES ($1, 'user', $2, $3)
+       ON CONFLICT (message_id) WHERE message_id IS NOT NULL DO NOTHING`,
+      [sessionUserName, message.slice(0, 8000), `${messageId}:user`]
+    ).catch(() => {});
+  }
+  if (reply && !streamError) {
+    query(
+      `INSERT INTO chat_messages (user_name, role, content, message_id)
+       VALUES ($1, 'assistant', $2, $3)
+       ON CONFLICT (message_id) WHERE message_id IS NOT NULL DO NOTHING`,
+      [sessionUserName, reply.slice(0, 8000), `${messageId}:assistant`]
+    ).catch(() => {});
+  }
+
   if (reply && !streamError) {
     // ── Cross-device chat sync: broadcast the assistant reply to all other ──
     // clients for this user so it appears on their other devices immediately.

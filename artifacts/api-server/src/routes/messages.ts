@@ -118,7 +118,7 @@ router.post("/messages", async (req: Request, res: Response) => {
     }
 
     // Insert all messages — skip system messages
-    const toSave = messages.filter(
+    const toSave = (messages as Array<{ role: string; content: string; messageId?: string }>).filter(
       (m) => m.role === "user" || m.role === "assistant"
     );
 
@@ -126,9 +126,13 @@ router.post("/messages", async (req: Request, res: Response) => {
     const savedAt = new Date().toISOString();
 
     for (const m of toSave) {
+      // Use ON CONFLICT to deduplicate when the server already saved via chatHandlerCore
+      const msgId = m.messageId ?? null;
       await query(
-        "INSERT INTO chat_messages (user_name, role, content) VALUES ($1, $2, $3) RETURNING id",
-        [userName, m.role, m.content.slice(0, 8000)] // cap at 8k chars
+        `INSERT INTO chat_messages (user_name, role, content, message_id)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (message_id) WHERE message_id IS NOT NULL DO NOTHING`,
+        [userName, m.role, m.content.slice(0, 8000), msgId]
       );
       // Broadcast to all other devices for this user so chat stays in sync
       broadcastToUser(userName, "chat_sync", {
