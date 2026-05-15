@@ -16,6 +16,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { logger } from "../lib/logger.js";
+import { getCachedApify, setCachedApify } from "../lib/apifyCache.js";
 
 const anthropic = new Anthropic();
 
@@ -251,7 +252,7 @@ async function selectBestEvent(
   }
 }
 
-// ── In-memory cache ───────────────────────────────────────────────────────────
+// ── In-memory + DB cache ──────────────────────────────────────────────────────
 
 interface EventCache {
   result:    ApifyEventResult;
@@ -259,7 +260,9 @@ interface EventCache {
   city:      string;
 }
 const _cache = new Map<string, EventCache>();
-const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+// Use 24-hour TTL — events don't change minute-to-minute; this avoids running
+// the Ticketmaster actor more than once per day per user.
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -273,11 +276,27 @@ export async function fetchBestLocalEvent(
   interests: string[],
   userName?: string,
 ): Promise<ApifyEventResult> {
-  const cacheKey = userName ?? city;
-  const cached   = _cache.get(cacheKey);
+  const cacheKey   = userName ?? city;
+  const dbCacheKey = `events:${cacheKey}`;
+
+  // 1. In-memory cache (fastest)
+  const cached = _cache.get(cacheKey);
   if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS && cached.city === city) {
-    logger.info({ city, cacheKey }, "[ApifyEvents] Serving from cache");
+    logger.info({ city, cacheKey }, "[ApifyEvents] Serving from in-memory cache");
     return cached.result;
+  }
+
+  // 2. DB cache — survives restarts, prevents repeated Ticketmaster actor runs
+  const dbCached = await getCachedApify(dbCacheKey, CACHE_TTL_MS);
+  if (dbCached) {
+    try {
+      const result = JSON.parse(dbCached) as ApifyEventResult;
+      logger.info({ city, cacheKey }, "[ApifyEvents] Serving from DB cache — skipping Apify");
+      _cache.set(cacheKey, { result, fetchedAt: Date.now(), city });
+      return result;
+    } catch {
+      // Invalid JSON — fall through to fresh fetch
+    }
   }
 
   const hasTmKey   = !!process.env["TICKETMASTER_API_KEY"];
@@ -316,6 +335,8 @@ export async function fetchBestLocalEvent(
     }
 
     _cache.set(cacheKey, { result, fetchedAt: Date.now(), city });
+    // Persist to DB so the Ticketmaster actor doesn't re-run on every restart
+    setCachedApify(dbCacheKey, JSON.stringify(result)).catch(() => {});
     return result;
   } catch (err) {
     logger.warn({ err, city }, "[ApifyEvents] fetchBestLocalEvent threw");

@@ -13,6 +13,7 @@ import {
   type ScrapedArticle,
 } from "./apifyNewsManager.js";
 import { isNewsApiConfigured, fetchNewsApiHeadlines } from "./newsApiManager.js";
+import { getCachedApify, setCachedApify } from "../lib/apifyCache.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -117,16 +118,10 @@ async function fetchWatercoolerViaApify(): Promise<string> {
   });
   const currentYear = now.getFullYear();
 
-  // Fetch both oddity feeds concurrently
-  const [reutersOdd, apOdd] = await Promise.allSettled([
-    fetchReutersOddlyEnough(12),
-    fetchAPOddities(12),
-  ]);
-
-  const combined: ScrapedArticle[] = [
-    ...(reutersOdd.status === "fulfilled" ? reutersOdd.value : []),
-    ...(apOdd.status     === "fulfilled" ? apOdd.value     : []),
-  ];
+  // Fetch one oddity feed — fetchAPOddities is an alias for the same
+  // Google News actor with the same query; calling both wastes Apify credits.
+  const oddItems = await fetchReutersOddlyEnough(15).catch((): ScrapedArticle[] => []);
+  const combined: ScrapedArticle[] = oddItems;
 
   if (combined.length === 0) {
     throw new Error("[Watercooler] Apify returned no oddity articles");
@@ -639,16 +634,28 @@ export async function preFetchMorningNews(userName?: string): Promise<void> {
   }
 }
 
+const NEWS_DB_CACHE_KEY = "morning_news_content";
+const NEWS_DB_TTL_MS    = 6 * 60 * 60 * 1000; // 6 hours
+
 export async function fetchMorningNews(userName?: string): Promise<string> {
+  // 1. Check in-memory cache first (fastest)
   if (isCacheFresh() && _cache) {
     const ageMs    = Date.now() - _cache.fetchedAt.getTime();
     const ageHours = (ageMs / (1000 * 60 * 60)).toFixed(1);
     if (ageMs > STALE_WARN_MS) {
       logger.warn({ ageHours }, "[News] Serving STALE cached news");
     } else {
-      logger.info({ ageHours, chars: _cache.content.length }, "[News] Morning news served from cache");
+      logger.info({ ageHours, chars: _cache.content.length }, "[News] Morning news served from in-memory cache");
     }
     return _cache.content;
+  }
+
+  // 2. Check DB cache (survives restarts — prevents redundant Apify actor runs)
+  const dbCached = await getCachedApify(NEWS_DB_CACHE_KEY, NEWS_DB_TTL_MS);
+  if (dbCached) {
+    logger.info({ chars: dbCached.length }, "[News] Morning news restored from DB cache — skipping Apify");
+    _cache = { content: dbCached, fetchedAt: new Date() };
+    return dbCached;
   }
 
   const TIMEOUT_MS = 120_000;
@@ -659,6 +666,8 @@ export async function fetchMorningNews(userName?: string): Promise<string> {
   try {
     const content = await Promise.race([fetchNewsFromClaude(userName), timeout]);
     _cache = { content, fetchedAt: new Date() };
+    // 3. Persist to DB so restarts don't re-run Apify actors
+    setCachedApify(NEWS_DB_CACHE_KEY, content).catch(() => {});
     return content;
   } catch (err) {
     logger.warn({ err }, "[News] Morning news fetch failed or timed out — skipping news section");

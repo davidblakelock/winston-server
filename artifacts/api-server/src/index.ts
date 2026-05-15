@@ -223,6 +223,13 @@ app.listen(port, async (err) => {
   }
 
   try {
+    const { ensureApifyCacheTable } = await import("./lib/apifyCache.js");
+    await ensureApifyCacheTable();
+  } catch (e) {
+    logger.warn({ e }, "apify_cache table initialization warning");
+  }
+
+  try {
     await ensureContactsTable();
   } catch (e) {
     logger.warn({ e }, "Contacts table initialization warning");

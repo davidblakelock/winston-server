@@ -11,6 +11,7 @@ import {
   claimMorningPushSlot,
   wasPushSentToday,
 } from "../morning/briefingCache.js";
+import { wasApifyDailyFlagSet, setApifyDailyFlag } from "../lib/apifyCache.js";
 import { getActiveUsers, type ActiveUser } from "../onboarding/onboardingManager.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
@@ -186,21 +187,30 @@ async function runPerUserChecks(): Promise<void> {
       await sendMorningPush(user, wakeTime);
     }
 
-    // 12:00 PM local time: check for significant breaking news since morning briefing
+    // 12:00 PM local time: check for significant breaking news since morning briefing.
+    // Guard is now DB-backed so server restarts don't cause duplicate midday Apify runs.
     if (localTime === "12:00" && middayCheckDone.get(userName) !== today) {
-      middayCheckDone.set(userName, today);
-      checkMiddayNews(userName)
-        .then(async (story) => {
-          if (!story) return; // Nothing significant — send nothing
-          await sendPushToAll({
-            title: "Breaking News",
-            body:  story,
-            tag:   `midday-news-${today}`,
-            notificationType: "midday-news",
-          }, userName);
-          logger.info({ userName, story: story.slice(0, 80) }, "[MiddayNews] Push sent");
-        })
-        .catch((err) => logger.warn({ err, userName }, "[MiddayNews] Check error"));
+      middayCheckDone.set(userName, today); // in-memory fast-path
+      const dbFlagKey = `midday_check_done:${userName}`;
+      wasApifyDailyFlagSet(dbFlagKey, today).then((alreadyDone) => {
+        if (alreadyDone) {
+          logger.info({ userName, today }, "[MiddayNews] Skipped — DB flag already set for today");
+          return;
+        }
+        setApifyDailyFlag(dbFlagKey, today).catch(() => {});
+        checkMiddayNews(userName)
+          .then(async (story) => {
+            if (!story) return; // Nothing significant — send nothing
+            await sendPushToAll({
+              title: "Breaking News",
+              body:  story,
+              tag:   `midday-news-${today}`,
+              notificationType: "midday-news",
+            }, userName);
+            logger.info({ userName, story: story.slice(0, 80) }, "[MiddayNews] Push sent");
+          })
+          .catch((err) => logger.warn({ err, userName }, "[MiddayNews] Check error"));
+      }).catch((err) => logger.warn({ err, userName }, "[MiddayNews] DB flag check error"));
     }
   }
 }
