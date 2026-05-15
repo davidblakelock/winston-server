@@ -246,7 +246,7 @@ async function startupPrefetch(): Promise<void> {
         );
         // Small delay to let the rest of startup finish first
         setTimeout(() => {
-          sendMorningPush(user, wakeTime, minsSince).catch((err) =>
+          sendMorningPush(user, wakeTime).catch((err) =>
             logger.error({ err, userName }, "[MorningPush] Startup push send failed")
           );
         }, 5000);

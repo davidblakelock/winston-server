@@ -6,6 +6,7 @@ import { lookupRestaurantUrl } from "../lists/autoUrlLookup.js";
 import { upsertProfile } from "../onboarding/onboardingManager.js";
 import { isApifyApiKeyConfigured } from "../restaurants/apifyBooking.js";
 import { getResySession } from "../restaurants/bookingCredentialsManager.js";
+import { estimateDriveTime } from "../departure/departureManager.js";
 
 const router = Router();
 
@@ -268,6 +269,61 @@ router.get("/admin/timezone-check", async (req: Request, res: Response) => {
   } catch (err) {
     req.log.error({ err }, "[ADMIN] timezone-check error");
     res.status(500).json({ error: "internal_error" });
+  }
+});
+
+/**
+ * GET /api/admin/test-maps?destination=...&origin=...
+ *
+ * Manually triggers a Google Maps Directions + Geocoding call and returns the
+ * raw result. Check server logs for full request/response details including
+ * status codes and response body snippets.
+ */
+router.get("/admin/test-maps", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const destination = String(req.query["destination"] ?? "Prestonwood Country Club, Dallas, TX");
+  const origin      = String(req.query["origin"]      ?? "");
+
+  req.log.info({ destination, origin }, "[AdminTestMaps] Starting test");
+
+  try {
+    // Pull home address from profile if no origin provided
+    let homeAddress = origin;
+    let homeLat = 32.9; // fallback approx
+    let homeLon = -96.8;
+
+    if (!homeAddress) {
+      const { rows } = await query<{ home_address?: string; home_lat?: number; home_lon?: number }>(
+        `SELECT raw_data->>'home_address' AS home_address,
+                (raw_data->>'home_lat')::float AS home_lat,
+                (raw_data->>'home_lon')::float AS home_lon
+           FROM user_profiles WHERE user_name = $1 LIMIT 1`,
+        [userName]
+      );
+      homeAddress = rows[0]?.home_address ?? "6230 Orchid Ln, Dallas TX 75230";
+      homeLat     = rows[0]?.home_lat ?? 32.9;
+      homeLon     = rows[0]?.home_lon ?? -96.8;
+    }
+
+    req.log.info({ homeAddress, homeLat, homeLon, destination }, "[AdminTestMaps] Calling estimateDriveTime");
+
+    const result = await estimateDriveTime(destination, homeAddress, homeLat, homeLon);
+
+    req.log.info({ result }, "[AdminTestMaps] estimateDriveTime complete");
+
+    res.json({
+      destination,
+      homeAddress,
+      homeLat,
+      homeLon,
+      result,
+      note: "Check server logs for full [GoogleMaps] request/response details including status codes and response bodies.",
+    });
+  } catch (err) {
+    req.log.error({ err }, "[AdminTestMaps] Error");
+    res.status(500).json({ error: String(err) });
   }
 });
 

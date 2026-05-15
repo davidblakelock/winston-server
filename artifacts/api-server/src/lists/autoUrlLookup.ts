@@ -75,8 +75,11 @@ async function lookupRestaurantWebsite(name: string, city = "Dallas"): Promise<s
   const nameEncodeCity = / (malibu|manhattan|nyc|new york|miami|chicago|la |los angeles|san francisco|austin|houston|nashville|vegas)/i.test(name);
   const query_text = nameEncodeCity ? `${name} restaurant` : `${name} restaurant ${city}`;
 
+  const PLACES_TEXT_URL = "https://places.googleapis.com/v1/places:searchText";
+  logger.info({ label: "PlacesText", url: PLACES_TEXT_URL, query_text }, "[AutoURL] → Places request");
+
   try {
-    const searchResp = await fetch("https://places.googleapis.com/v1/places:searchText", {
+    const searchResp = await fetch(PLACES_TEXT_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -90,6 +93,13 @@ async function lookupRestaurantWebsite(name: string, city = "Dallas"): Promise<s
       }),
       signal: AbortSignal.timeout(10000),
     });
+
+    const clonedResp = searchResp.clone();
+    const bodySnippet = (await clonedResp.text()).slice(0, 300);
+    logger.info(
+      { label: "PlacesText", status: searchResp.status, statusText: searchResp.statusText, body: bodySnippet },
+      "[AutoURL] ← Places response"
+    );
 
     if (!searchResp.ok) {
       logger.warn({ status: searchResp.status }, "[AutoURL] Places API error");

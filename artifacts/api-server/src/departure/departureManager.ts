@@ -16,12 +16,46 @@ export interface DepartureAlert {
   minutesUntilLeave: number;
 }
 
+// ── Diagnostic helper — logs full URL (key masked), status, and body snippet ──
+function maskKey(url: string): string {
+  return url.replace(/([?&]key=)([^&]+)/, (_m, prefix: string, key: string) =>
+    `${prefix}***${(key as string).slice(-4)}`
+  );
+}
+
+async function loggedFetch(
+  label: string,
+  url: string,
+  init?: RequestInit
+): Promise<Response> {
+  const safeUrl = maskKey(url);
+  logger.info({ label, url: safeUrl, method: init?.method ?? "GET" }, "[GoogleMaps] → request");
+  const res = await fetch(url, init);
+  // Clone to allow body to be read twice (once for logging, once for caller)
+  const clone = res.clone();
+  const bodySnippet = (await clone.text()).slice(0, 300);
+  logger.info(
+    { label, url: safeUrl, status: res.status, statusText: res.statusText, body: bodySnippet },
+    "[GoogleMaps] ← response"
+  );
+  return res;
+}
+
 // ── Google Maps Directions API (with real-time traffic) ───────────────────────
 async function getGoogleMapsDuration(destination: string, homeAddress: string): Promise<DriveEstimate | null> {
   // Use GOOGLE_MAPS_API_KEY if set; fall back to GOOGLE_PLACES_API_KEY which is
   // on the same GCP project and usually has Directions API enabled too.
-  const apiKey = process.env.GOOGLE_MAPS_API_KEY ?? process.env.GOOGLE_PLACES_API_KEY;
-  if (!apiKey) return null;
+  const mapsKey  = process.env.GOOGLE_MAPS_API_KEY;
+  const placesKey = process.env.GOOGLE_PLACES_API_KEY;
+  const apiKey   = mapsKey ?? placesKey;
+  logger.info(
+    { hasMapsKey: !!mapsKey, hasPlacesKey: !!placesKey, usingKey: mapsKey ? "GOOGLE_MAPS_API_KEY" : "GOOGLE_PLACES_API_KEY" },
+    "[GoogleMaps] Directions — key selection"
+  );
+  if (!apiKey) {
+    logger.warn("[GoogleMaps] Directions — no API key available, skipping");
+    return null;
+  }
 
   const params = new URLSearchParams({
     origin: homeAddress,
@@ -31,15 +65,18 @@ async function getGoogleMapsDuration(destination: string, homeAddress: string): 
     key: apiKey,
   });
 
+  const fullUrl = `https://maps.googleapis.com/maps/api/directions/json?${params.toString()}`;
+
   try {
-    const res = await fetch(
-      `https://maps.googleapis.com/maps/api/directions/json?${params.toString()}`,
-      { signal: AbortSignal.timeout(8000) }
-    );
-    if (!res.ok) return null;
+    const res = await loggedFetch("Directions", fullUrl, { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) {
+      logger.warn({ status: res.status, destination }, "[GoogleMaps] Directions HTTP error — returning null");
+      return null;
+    }
 
     const data = await res.json() as {
       status: string;
+      error_message?: string;
       routes?: Array<{
         legs?: Array<{
           distance?: { value: number };
@@ -50,7 +87,10 @@ async function getGoogleMapsDuration(destination: string, homeAddress: string): 
     };
 
     if (data.status !== "OK" || !data.routes?.length) {
-      logger.warn({ status: data.status, destination }, "Google Maps Directions API non-OK status");
+      logger.warn(
+        { status: data.status, error_message: data.error_message, destination },
+        "[GoogleMaps] Directions non-OK status"
+      );
       return null;
     }
 
@@ -70,7 +110,7 @@ async function getGoogleMapsDuration(destination: string, homeAddress: string): 
       source: "google-maps",
     };
   } catch (err) {
-    logger.warn({ err, destination }, "Google Maps Directions API call failed");
+    logger.warn({ err, destination }, "[GoogleMaps] Directions fetch threw");
     return null;
   }
 }
@@ -78,24 +118,33 @@ async function getGoogleMapsDuration(destination: string, homeAddress: string): 
 // ── Google Geocoding API (primary geocoder — uses same key as Directions/Places) ──
 async function geocodeWithGoogle(address: string): Promise<{ lat: number; lon: number } | null> {
   const apiKey = process.env.GOOGLE_MAPS_API_KEY ?? process.env.GOOGLE_PLACES_API_KEY;
-  if (!apiKey) return null;
+  if (!apiKey) {
+    logger.warn("[GoogleMaps] Geocoding — no API key available");
+    return null;
+  }
 
   const params = new URLSearchParams({ address, key: apiKey });
+  const fullUrl = `https://maps.googleapis.com/maps/api/geocode/json?${params}`;
+
   try {
-    const res = await fetch(
-      `https://maps.googleapis.com/maps/api/geocode/json?${params}`,
-      { signal: AbortSignal.timeout(6000) }
-    );
+    const res = await loggedFetch("Geocoding", fullUrl, { signal: AbortSignal.timeout(6000) });
     const data = await res.json() as {
       status: string;
+      error_message?: string;
       results?: Array<{ geometry: { location: { lat: number; lng: number } } }>;
     };
-    if (data.status !== "OK" || !data.results?.length) return null;
+    if (data.status !== "OK" || !data.results?.length) {
+      logger.warn(
+        { status: data.status, error_message: data.error_message, address },
+        "[GoogleMaps] Geocoding non-OK status"
+      );
+      return null;
+    }
     const loc = data.results[0]!.geometry.location;
-    logger.info({ address, lat: loc.lat, lon: loc.lng }, "Geocoded via Google Geocoding API");
+    logger.info({ address, lat: loc.lat, lon: loc.lng }, "[GoogleMaps] Geocoding success");
     return { lat: loc.lat, lon: loc.lng };
   } catch (err) {
-    logger.warn({ err, address }, "Google Geocoding API failed");
+    logger.warn({ err, address }, "[GoogleMaps] Geocoding fetch threw");
     return null;
   }
 }
@@ -108,16 +157,27 @@ async function geocodeWithNominatim(address: string): Promise<{ lat: number; lon
   const encoded = encodeURIComponent(query);
   const url = `https://nominatim.openstreetmap.org/search?q=${encoded}&format=json&limit=1`;
 
+  logger.info({ label: "Nominatim", url, address, query }, "[GoogleMaps] Nominatim → request");
   try {
     const res = await fetch(url, {
       headers: { "User-Agent": "WinstonCompanion/1.0 david@winstoncompanion.app" },
       signal: AbortSignal.timeout(5000),
     });
+    const clone = res.clone();
+    const bodySnippet = (await clone.text()).slice(0, 300);
+    logger.info(
+      { label: "Nominatim", status: res.status, statusText: res.statusText, body: bodySnippet },
+      "[GoogleMaps] Nominatim ← response"
+    );
     const data = await res.json() as Array<{ lat: string; lon: string }>;
-    if (!data.length) return null;
-    logger.info({ address, result: data[0] }, "Geocoded via Nominatim fallback");
+    if (!data.length) {
+      logger.warn({ address, query }, "[GoogleMaps] Nominatim returned no results");
+      return null;
+    }
+    logger.info({ address, result: data[0] }, "[GoogleMaps] Nominatim geocoding success");
     return { lat: parseFloat(data[0]!.lat), lon: parseFloat(data[0]!.lon) };
-  } catch {
+  } catch (err) {
+    logger.warn({ err, address }, "[GoogleMaps] Nominatim fetch threw");
     return null;
   }
 }

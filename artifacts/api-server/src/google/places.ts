@@ -1,3 +1,14 @@
+import { logger } from "../lib/logger.js";
+
+async function loggedFetch(label: string, url: string, init?: RequestInit): Promise<Response> {
+  logger.info({ label, url, method: init?.method ?? "GET" }, "[Places] → request");
+  const res = await fetch(url, init);
+  const clone = res.clone();
+  const bodySnippet = (await clone.text()).slice(0, 300);
+  logger.info({ label, url, status: res.status, statusText: res.statusText, body: bodySnippet }, "[Places] ← response");
+  return res;
+}
+
 export interface PlaceResult {
   name: string;
   rating?: number;
@@ -57,8 +68,9 @@ export async function searchNearbyPlaces(
 
   const textQuery = `${placeType} near ${city}`;
 
+  const SEARCH_URL = "https://places.googleapis.com/v1/places:searchText";
   try {
-    const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
+    const res = await loggedFetch("PlacesText-Nearby", SEARCH_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -82,7 +94,7 @@ export async function searchNearbyPlaces(
 
     if (!res.ok) {
       const err = await res.text();
-      console.error(`[Places] Nearby search error ${res.status}: ${err.slice(0, 200)}`);
+      logger.warn({ status: res.status, body: err.slice(0, 200) }, "[Places] Nearby search non-OK");
       return [];
     }
 
@@ -163,8 +175,9 @@ export async function searchRestaurants(
     ? `best restaurants in ${city}`
     : `${cuisineOrQuery} restaurants in ${city}`;
 
+  const SEARCH_URL = "https://places.googleapis.com/v1/places:searchText";
   try {
-    const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
+    const res = await loggedFetch("PlacesText-Restaurants", SEARCH_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -187,7 +200,7 @@ export async function searchRestaurants(
 
     if (!res.ok) {
       const err = await res.text();
-      console.error(`[Places] API error ${res.status}: ${err.slice(0, 200)}`);
+      logger.warn({ status: res.status, body: err.slice(0, 200) }, "[Places] Restaurant search non-OK");
       return [];
     }
 

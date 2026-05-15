@@ -113,6 +113,22 @@ interface DirectionsResult {
   distanceKm:  number;
 }
 
+// ── Diagnostic helper ─────────────────────────────────────────────────────────
+function maskKey(url: string): string {
+  return url.replace(/([?&]key=)([^&]+)/, (_m, prefix: string, key: string) =>
+    `${prefix}***${(key as string).slice(-4)}`
+  );
+}
+async function loggedFetch(label: string, url: string, init?: RequestInit): Promise<Response> {
+  const safeUrl = maskKey(url);
+  logger.info({ label, url: safeUrl, method: init?.method ?? "GET" }, "[RouteAware] → request");
+  const res = await fetch(url, init);
+  const clone = res.clone();
+  const bodySnippet = (await clone.text()).slice(0, 300);
+  logger.info({ label, url: safeUrl, status: res.status, statusText: res.statusText, body: bodySnippet }, "[RouteAware] ← response");
+  return res;
+}
+
 async function fetchRoute(
   origin:      string,
   destination: string,
@@ -123,16 +139,20 @@ async function fetchRoute(
     `?origin=${encodeURIComponent(origin)}` +
     `&destination=${encodeURIComponent(destination)}` +
     `&key=${apiKey}`;
-  const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+  const res = await loggedFetch("Directions", url, { signal: AbortSignal.timeout(8000) });
   if (!res.ok) return null;
   const data = await res.json() as {
     status: string;
+    error_message?: string;
     routes: Array<{
       overview_polyline: { points: string };
       legs: Array<{ duration: { value: number }; distance: { value: number } }>;
     }>;
   };
-  if (data.status !== "OK" || !data.routes.length) return null;
+  if (data.status !== "OK" || !data.routes.length) {
+    logger.warn({ status: data.status, error_message: data.error_message, origin, destination }, "[RouteAware] Directions non-OK");
+    return null;
+  }
   const route = data.routes[0]!;
   return {
     polyline:    route.overview_polyline.points,
@@ -169,7 +189,7 @@ async function nearbyBusinesses(
     },
   };
 
-  const res = await fetch(PLACES_NEARBY_URL, {
+  const res = await loggedFetch("PlacesNearby", PLACES_NEARBY_URL, {
     method:  "POST",
     headers: { "Content-Type": "application/json", "X-Goog-Api-Key": apiKey, "X-Goog-FieldMask": PLACES_FIELD_MASK },
     body:    JSON.stringify(body),
@@ -196,7 +216,7 @@ async function findBusinessByName(
   apiKey:       string,
 ): Promise<PlaceResult | null> {
   const body = { textQuery: `${businessName} ${city}`, maxResultCount: 1 };
-  const res = await fetch(PLACES_TEXT_URL, {
+  const res = await loggedFetch("PlacesText", PLACES_TEXT_URL, {
     method:  "POST",
     headers: { "Content-Type": "application/json", "X-Goog-Api-Key": apiKey, "X-Goog-FieldMask": PLACES_FIELD_MASK },
     body:    JSON.stringify(body),

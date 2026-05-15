@@ -126,12 +126,27 @@ export async function findNearbyStore(
     url.searchParams.set("type", "store");
     url.searchParams.set("key", apiKey);
 
+    const safeUrl = url.toString().replace(/([?&]key=)([^&]+)/, (_m, prefix: string, key: string) =>
+      `${prefix}***${(key as string).slice(-4)}`
+    );
+    logger.info({ label: "PlacesNearby", url: safeUrl, lat, lng }, "[Geofence] → request");
+
     const res = await fetch(url.toString(), { signal: AbortSignal.timeout(8000) });
+    const clone = res.clone();
+    const bodySnippet = (await clone.text()).slice(0, 300);
+    logger.info(
+      { label: "PlacesNearby", url: safeUrl, status: res.status, statusText: res.statusText, body: bodySnippet },
+      "[Geofence] ← response"
+    );
+
     if (!res.ok) return null;
 
     const body = (await res.json()) as { results?: PlaceResult[] };
     const place = body.results?.[0];
-    if (!place) return null;
+    if (!place) {
+      logger.info({ lat, lng }, "[Geofence] No nearby store found in results");
+      return null;
+    }
 
     const storeType = classifyStoreType(place.types);
     return { storeName: place.name, storeType, storeTypes: place.types };
