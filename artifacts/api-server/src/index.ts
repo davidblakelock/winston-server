@@ -54,6 +54,9 @@ import { ensureSavedPlacesTable } from "./location/geofenceManager";
 import { ensureListItemColumns } from "./lists/listManager";
 import { ensureListShareTable } from "./lists/listShareManager";
 import { ensureBookingColumns } from "./restaurants/bookingCredentialsManager";
+import { ensureServiceProvidersTable } from "./providers/providerManager";
+import { startProviderScheduler } from "./providers/providerScheduler";
+import { startConnectBirthdayScheduler } from "./connect/connectBirthdayScheduler";
 
 const rawPort = process.env["PORT"];
 
@@ -345,6 +348,21 @@ app.listen(port, async (err) => {
   }
 
   try {
+    await ensureServiceProvidersTable();
+    logger.info("[startup] service_providers table ready");
+  } catch (e) {
+    logger.warn({ e }, "Service providers table initialization warning");
+  }
+
+  // Migrate auto_pay column onto financial_obligations if it doesn't exist yet
+  try {
+    await query(`ALTER TABLE financial_obligations ADD COLUMN IF NOT EXISTS auto_pay boolean DEFAULT false`);
+    logger.info("[startup] financial_obligations.auto_pay column ready");
+  } catch (e) {
+    logger.warn({ e }, "auto_pay column migration warning");
+  }
+
+  try {
     await query(
       `CREATE UNIQUE INDEX IF NOT EXISTS watched_shows_user_name_lower_idx
        ON watched_shows (user_name, lower(show_name))`
@@ -403,6 +421,8 @@ app.listen(port, async (err) => {
   startOrderTrackingScheduler();
   startTodoReminderScheduler();
   startBackgroundEmailScanner();
+  startProviderScheduler();
+  startConnectBirthdayScheduler();
 
   // Seed David's music preferences into profile_items so they persist and
   // can be referenced in any conversation naturally.

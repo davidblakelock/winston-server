@@ -26,6 +26,7 @@ export interface Bill {
   reminderLeadDays: number;
   notes: string | null;
   lastRemindedDate: string | null;
+  autoPay: boolean;
 }
 
 export interface UpcomingBill extends Bill {
@@ -121,9 +122,11 @@ export async function getBills(userName = NATIVE_STORED_NAME): Promise<Bill[]> {
     reminder_lead_days: number;
     notes: string | null;
     last_reminded_date: string | null;
+    auto_pay: boolean;
   }>(
     `SELECT id, name, category, amount, frequency, due_day, due_months,
-            reminder_lead_days, notes, last_reminded_date
+            reminder_lead_days, notes, last_reminded_date,
+            COALESCE(auto_pay, false) AS auto_pay
      FROM financial_obligations
      WHERE user_name = $1 AND active = true
      ORDER BY name ASC`,
@@ -140,6 +143,7 @@ export async function getBills(userName = NATIVE_STORED_NAME): Promise<Bill[]> {
     reminderLeadDays: r.reminder_lead_days,
     notes: r.notes,
     lastRemindedDate: r.last_reminded_date,
+    autoPay: r.auto_pay,
   }));
 }
 
@@ -223,6 +227,7 @@ export async function addBill(
       reminderLeadDays: rows[0].reminder_lead_days,
       notes: rows[0].notes,
       lastRemindedDate: rows[0].last_reminded_date,
+      autoPay: false,
     },
   };
 }

@@ -64,6 +64,12 @@ async function checkBillReminders(): Promise<void> {
     const displayName = profile?.name ?? userName;
 
     for (const bill of bills) {
+      // Skip auto-pay bills — they handle themselves
+      if (bill.autoPay) {
+        logger.info({ billId: bill.id, name: bill.name, userName }, "[BILLS] Auto-pay — skipping reminder");
+        continue;
+      }
+
       const nextDueDate = computeNextDueDate(bill, now);
       const daysUntil = daysBetween(now, nextDueDate);
 

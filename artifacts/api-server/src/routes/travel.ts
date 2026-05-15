@@ -6,6 +6,7 @@ import {
   upsertTravelSegment,
   deleteTravelSegment,
 } from "../travel/travelManager.js";
+import { getActiveTripPlans } from "../travel/tripPlanningManager.js";
 import { scanTravelEmails } from "../travel/travelScanner.js";
 import { logger } from "../lib/logger.js";
 
@@ -90,6 +91,21 @@ router.delete("/travel/:id", async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "[Travel] DELETE error");
     res.status(500).json({ error: "Failed to delete segment" });
+  }
+});
+
+// ── GET /api/trips ────────────────────────────────────────────────────────────
+// Returns all saved trip plans for the authenticated user.
+router.get("/trips", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  try {
+    const plans = await getActiveTripPlans(userName);
+    res.json({ plans });
+  } catch (err) {
+    req.log.error({ err }, "[Trips] GET /trips error");
+    res.status(500).json({ error: "Failed to load trip plans" });
   }
 });
 

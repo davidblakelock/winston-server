@@ -32,6 +32,7 @@ import calendarSmartRouter from "./calendarSmart";
 import travelRouter from "./travel";
 import ttsRouter from "./tts";
 import locationRouter from "./location";
+import providersRouter from "./providers";
 
 const router: IRouter = Router();
 
@@ -68,5 +69,6 @@ router.use(calendarSmartRouter);
 router.use(travelRouter);
 router.use(ttsRouter);
 router.use(locationRouter);
+router.use(providersRouter);
 
 export default router;

@@ -52,7 +52,47 @@ export async function ensureConnectTables(): Promise<void> {
     )
   `);
 
+  // Add birthday/key-date columns if they don't exist yet
+  await query(`ALTER TABLE winston_connections ADD COLUMN IF NOT EXISTS date_of_birth DATE`);
+  await query(`ALTER TABLE winston_connections ADD COLUMN IF NOT EXISTS key_dates JSONB DEFAULT '[]'`);
+
   logger.info("[Connect] Tables ready");
+}
+
+// ── Birthday / key-date profile update ───────────────────────────────────────
+
+export async function updateConnectionProfile(
+  id: number,
+  userName: string,
+  data: {
+    dateOfBirth?: string | null;
+    keyDates?: Array<{ label: string; date: string }> | null;
+  }
+): Promise<boolean> {
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  let idx = 1;
+
+  if (data.dateOfBirth !== undefined) {
+    sets.push(`date_of_birth = $${idx++}`);
+    vals.push(data.dateOfBirth || null);
+  }
+  if (data.keyDates !== undefined) {
+    sets.push(`key_dates = $${idx++}`);
+    vals.push(data.keyDates ? JSON.stringify(data.keyDates) : "[]");
+  }
+
+  if (!sets.length) return false;
+
+  vals.push(id, userName);
+  const { rows } = await query(
+    `UPDATE winston_connections SET ${sets.join(", ")}
+      WHERE id = $${idx}
+        AND (requester_user_name = $${idx + 1} OR recipient_user_name = $${idx + 1})
+     RETURNING id`,
+    vals
+  );
+  return rows.length > 0;
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────

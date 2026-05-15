@@ -1,0 +1,144 @@
+import { Router, type Request, type Response } from "express";
+import express from "express";
+import { authenticate } from "../auth/middleware.js";
+import {
+  getProviders,
+  createProvider,
+  updateProvider,
+  deleteProvider,
+  type ProviderCategory,
+} from "../providers/providerManager.js";
+
+const router = Router();
+
+const VALID_CATEGORIES: ProviderCategory[] = [
+  "medical", "legal", "financial", "home", "auto", "personal",
+];
+
+function isValidCategory(v: unknown): v is ProviderCategory {
+  return typeof v === "string" && VALID_CATEGORIES.includes(v as ProviderCategory);
+}
+
+// ── GET /api/providers ────────────────────────────────────────────────────────
+// Returns all providers grouped by category.
+router.get("/providers", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  try {
+    const grouped = await getProviders(userName);
+    res.json({ providers: grouped });
+  } catch (err) {
+    req.log.error({ err }, "[Providers] GET /providers error");
+    res.status(500).json({ error: "Failed to load providers" });
+  }
+});
+
+// ── POST /api/providers ───────────────────────────────────────────────────────
+// Creates a new service provider.
+router.post(
+  "/providers",
+  express.json({ limit: "1mb" }),
+  async (req: Request, res: Response) => {
+    const userName = await authenticate(req, res);
+    if (!userName) return;
+
+    const body = req.body as Record<string, unknown>;
+    const { name, category, phone, email, company, notes, lastContactDate, nextDueDate, googleContactId } = body;
+
+    if (!name || typeof name !== "string" || name.trim().length === 0) {
+      res.status(400).json({ error: "name is required" });
+      return;
+    }
+    const cat: ProviderCategory = isValidCategory(category) ? category : "personal";
+
+    try {
+      const provider = await createProvider(userName, {
+        name: name.trim(),
+        category: cat,
+        phone: typeof phone === "string" ? phone.trim() || null : null,
+        email: typeof email === "string" ? email.trim() || null : null,
+        company: typeof company === "string" ? company.trim() || null : null,
+        notes: typeof notes === "string" ? notes.trim() || null : null,
+        lastContactDate: typeof lastContactDate === "string" ? lastContactDate : null,
+        nextDueDate: typeof nextDueDate === "string" ? nextDueDate : null,
+        googleContactId: typeof googleContactId === "string" ? googleContactId : null,
+      });
+      req.log.info({ userName, id: provider.id, name: provider.name }, "[Providers] Created");
+      res.status(201).json({ provider });
+    } catch (err) {
+      req.log.error({ err }, "[Providers] POST /providers error");
+      res.status(500).json({ error: "Failed to create provider" });
+    }
+  }
+);
+
+// ── PUT /api/providers/:id ────────────────────────────────────────────────────
+// Updates a provider.
+router.put(
+  "/providers/:id",
+  express.json({ limit: "1mb" }),
+  async (req: Request, res: Response) => {
+    const userName = await authenticate(req, res);
+    if (!userName) return;
+
+    const id = parseInt(String(req.params["id"] ?? ""), 10);
+    if (isNaN(id)) {
+      res.status(400).json({ error: "invalid id" });
+      return;
+    }
+
+    const body = req.body as Record<string, unknown>;
+    const updates: Parameters<typeof updateProvider>[2] = {};
+
+    if (body["name"] !== undefined)            updates.name            = String(body["name"]).trim();
+    if (body["category"] !== undefined)        updates.category        = isValidCategory(body["category"]) ? body["category"] : "personal";
+    if (body["phone"] !== undefined)           updates.phone           = body["phone"] ? String(body["phone"]) : null;
+    if (body["email"] !== undefined)           updates.email           = body["email"] ? String(body["email"]) : null;
+    if (body["company"] !== undefined)         updates.company         = body["company"] ? String(body["company"]) : null;
+    if (body["notes"] !== undefined)           updates.notes           = body["notes"] ? String(body["notes"]) : null;
+    if (body["lastContactDate"] !== undefined) updates.lastContactDate = body["lastContactDate"] ? String(body["lastContactDate"]) : null;
+    if (body["nextDueDate"] !== undefined)     updates.nextDueDate     = body["nextDueDate"] ? String(body["nextDueDate"]) : null;
+    if (body["googleContactId"] !== undefined) updates.googleContactId = body["googleContactId"] ? String(body["googleContactId"]) : null;
+
+    try {
+      const provider = await updateProvider(id, userName, updates);
+      if (!provider) {
+        res.status(404).json({ error: "Provider not found" });
+        return;
+      }
+      req.log.info({ userName, id }, "[Providers] Updated");
+      res.json({ provider });
+    } catch (err) {
+      req.log.error({ err }, "[Providers] PUT /providers/:id error");
+      res.status(500).json({ error: "Failed to update provider" });
+    }
+  }
+);
+
+// ── DELETE /api/providers/:id ─────────────────────────────────────────────────
+router.delete("/providers/:id", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const id = parseInt(String(req.params["id"] ?? ""), 10);
+  if (isNaN(id)) {
+    res.status(400).json({ error: "invalid id" });
+    return;
+  }
+
+  try {
+    const deleted = await deleteProvider(id, userName);
+    if (!deleted) {
+      res.status(404).json({ error: "Provider not found" });
+      return;
+    }
+    req.log.info({ userName, id }, "[Providers] Deleted");
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error({ err }, "[Providers] DELETE /providers/:id error");
+    res.status(500).json({ error: "Failed to delete provider" });
+  }
+});
+
+export default router;

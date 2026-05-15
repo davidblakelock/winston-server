@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from "express";
+import express from "express";
 import { authenticate } from "../auth/middleware.js";
 import { logger } from "../lib/logger.js";
 import {
@@ -14,6 +15,7 @@ import {
   toggleSharedListItem,
   deleteSharedListItem,
   createSharedList,
+  updateConnectionProfile,
 } from "../connect/connectManager.js";
 import {
   createGroup,
@@ -879,6 +881,48 @@ router.post("/connect/groups/:id/confirm-time", async (req: Request, res: Respon
     res.status(500).json({ error: "Failed to confirm time" });
   }
 });
+
+// ── PATCH /api/connect/:id/profile ──────────────────────────────────────────
+// Updates date_of_birth and/or key_dates on a connection profile.
+// Body: { dateOfBirth?: "YYYY-MM-DD" | null, keyDates?: [{ label, date }] | null }
+router.patch(
+  "/connect/:id/profile",
+  express.json({ limit: "1mb" }),
+  async (req: Request, res: Response) => {
+    const userName = await authenticate(req, res);
+    if (!userName) return;
+
+    const id = parseInt(String(req.params["id"] ?? ""), 10);
+    if (isNaN(id)) {
+      res.status(400).json({ error: "invalid connection id" });
+      return;
+    }
+
+    const body = req.body as { dateOfBirth?: string | null; keyDates?: Array<{ label: string; date: string }> | null };
+
+    const data: Parameters<typeof updateConnectionProfile>[2] = {};
+    if ("dateOfBirth" in body) data.dateOfBirth = body.dateOfBirth ?? null;
+    if ("keyDates" in body)    data.keyDates    = Array.isArray(body.keyDates) ? body.keyDates : null;
+
+    if (!Object.keys(data).length) {
+      res.status(400).json({ error: "Provide dateOfBirth and/or keyDates" });
+      return;
+    }
+
+    try {
+      const updated = await updateConnectionProfile(id, userName, data);
+      if (!updated) {
+        res.status(404).json({ error: "Connection not found" });
+        return;
+      }
+      req.log.info({ userName, id, fields: Object.keys(data) }, "[Connect] Profile updated");
+      res.json({ ok: true });
+    } catch (err) {
+      req.log.error({ err }, "[Connect] PATCH /connect/:id/profile error");
+      res.status(500).json({ error: "Failed to update connection profile" });
+    }
+  }
+);
 
 export { logger };
 export default router;

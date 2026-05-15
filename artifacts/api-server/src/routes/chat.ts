@@ -256,6 +256,7 @@ import { nextOccurrenceForPattern, humanReadableRecurring } from "../reminders/r
 import { broadcastToUser } from "../reminders/sseStore.js";
 import { saveMoodCheckin } from "../mood/moodManager.js";
 import { findConnectionByLabel, saveConnectMessage, markMessageDelivered } from "../connect/connectManager.js";
+import { getAllProviders, touchLastContactDate } from "../providers/providerManager.js";
 import { sendPushToAll } from "../push/pushManager.js";
 import { extractAndSaveFollowups } from "../followups/followupManager.js";
 import {
@@ -817,7 +818,7 @@ WHAT YOU CAN DO — Answer naturally when __USER__ asks "What can you do?" or "W
 • Lists — shopping lists, to-do lists. Add, read, or clear them anytime.
 • Medications — track his medications and remind him when it's time to take them.
 • Evening check-in — each evening at a time he sets, you check in, ask how his day went, preview the next day, and help him capture any thoughts before he sleeps.
-• My Day log — __USER__ can say things like "note that I finished the report" or "add to my day: great workout" and you'll save it to his personal daily log. He can also ask "what did I write today?" to hear it back. During the evening check-in, you'll naturally reference what he logged during the day.
+• __USER__'s Life log — __USER__ can say things like "note that I finished the report" or "add to my day: great workout" and you'll save it to his personal daily log. He can also ask "what did I write today?" to hear it back. During the evening check-in, you'll naturally reference what he logged during the day.
 • Bills — track bill due dates and send reminders before they're due.
 • Birthdays and anniversaries — save important dates and get reminded well ahead of time.
 • Departure alerts — tell him when it's time to leave for an appointment, accounting for drive time.
@@ -1551,6 +1552,10 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   }
 
   // ── Trip planning: start or continue conversation flow ───────────────────────
+  req.log.info(
+    { isTripPlanStart, isTripPlanFlowActive, pendingPhase: pendingTripPlan?.phase ?? null },
+    "[TripPlan] Intent check"
+  );
   if (isTripPlanStart || isTripPlanFlowActive) {
     if (isTripPlanStart) {
       // Extract destination from message
@@ -1802,6 +1807,35 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     } catch (err) {
       req.log.warn({ err }, "Bill remove failed");
     }
+  }
+
+  // ── Service provider mention detection — update last_contact_date ───────────
+  // Catches phrases like "Just left Dr. Martinez", "Had the AC serviced today",
+  // "Saw my dentist", "Just got back from the accountant"
+  const PROVIDER_MENTION_PATTERN = /\b(?:just\s+(?:left|saw|got\s+back\s+from|visited|met\s+with|spoke\s+with|talked\s+to|finished\s+with)|had\s+(?:a\s+)?(?:my\s+)?(?:appointment|session|visit|checkup|check-?up|meeting|service|call)\s+(?:with|at)|saw\s+(?:my\s+)?|met\s+with|spoke\s+with|appointment\s+with|serviced\s+today|was\s+serviced)\b/i;
+  if (!isMorningGreeting && PROVIDER_MENTION_PATTERN.test(message)) {
+    getAllProviders(sessionUserName)
+      .then((providers) => {
+        const lowerMsg = message.toLowerCase();
+        const matched = providers.find((p) =>
+          lowerMsg.includes(p.name.toLowerCase()) ||
+          (p.company && lowerMsg.includes(p.company.toLowerCase()))
+        );
+        if (matched) {
+          touchLastContactDate(matched.id, sessionUserName).catch(() => {});
+          req.log.info(
+            { providerId: matched.id, name: matched.name },
+            "[Providers] Mention detected — last_contact_date updated"
+          );
+          systemPrompt +=
+            `\n\n[Service Provider Mention]\n` +
+            `The user just mentioned ${matched.name}${matched.company ? ` (${matched.company})` : ""}. ` +
+            `Their last contact date has been updated to today. ` +
+            `After responding naturally to what they said, ask warmly: ` +
+            `"Anything you want me to note from that, or should I schedule something for next time?"`;
+        }
+      })
+      .catch(() => {});
   }
 
   // ── Goal detection — fire-and-forget background save ────────────────────────
