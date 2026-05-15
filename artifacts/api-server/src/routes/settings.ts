@@ -65,6 +65,7 @@ router.get("/settings/profile", async (req, res) => {
   if (!userName) return;
   const profile = await getProfile(userName);
   res.json({
+    firstName: profile?.name ?? null,
     voiceId: profile?.voiceId ?? null,
     companionName: profile?.companionName ?? null,
     photoUrl: profile?.photoUrl ?? null,
