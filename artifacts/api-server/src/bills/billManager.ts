@@ -175,7 +175,8 @@ export async function addBill(
   dueMonths: string | null,
   amount?: string,
   notes?: string,
-  userName = NATIVE_STORED_NAME
+  userName = NATIVE_STORED_NAME,
+  autoPay = false
 ): Promise<{ success: boolean; alreadyExists: boolean; bill?: Bill }> {
   const existing = await query(
     `SELECT id FROM financial_obligations
@@ -188,20 +189,21 @@ export async function addBill(
   }
 
   const leadDays = defaultLeadDays(frequency);
-  console.log(`[BILL SAVE] Attempting to save — name="${name}" category="${category}" freq="${frequency}" dueDay=${dueDay} dueMonths=${dueMonths ?? "null"} amount=${amount ?? "null"}`);
+  console.log(`[BILL SAVE] Attempting to save — name="${name}" category="${category}" freq="${frequency}" dueDay=${dueDay} dueMonths=${dueMonths ?? "null"} amount=${amount ?? "null"} autoPay=${autoPay}`);
 
   const { rows } = await query<{
     id: number; name: string; category: string; amount: string | null;
     frequency: string; due_day: number; due_months: string | null;
     reminder_lead_days: number; notes: string | null; last_reminded_date: string | null;
+    auto_pay: boolean;
   }>(
     `INSERT INTO financial_obligations
        (user_name, name, category, amount, frequency, due_day, due_months,
-        reminder_lead_days, notes)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        reminder_lead_days, notes, auto_pay)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      RETURNING id, name, category, amount, frequency, due_day, due_months,
-               reminder_lead_days, notes, last_reminded_date`,
-    [userName, name, category, amount ?? null, frequency, dueDay, dueMonths ?? null, leadDays, notes ?? null]
+               reminder_lead_days, notes, last_reminded_date, auto_pay`,
+    [userName, name, category, amount ?? null, frequency, dueDay, dueMonths ?? null, leadDays, notes ?? null, autoPay]
   );
 
   console.log(`[BILL SAVE] Supabase response — rowCount=${rows.length} rows=${JSON.stringify(rows)}`);
@@ -227,7 +229,7 @@ export async function addBill(
       reminderLeadDays: rows[0].reminder_lead_days,
       notes: rows[0].notes,
       lastRemindedDate: rows[0].last_reminded_date,
-      autoPay: false,
+      autoPay: rows[0].auto_pay ?? false,
     },
   };
 }

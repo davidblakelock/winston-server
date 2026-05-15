@@ -1082,6 +1082,10 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isTripPlanStart = !isMorningGreeting && !pendingTripPlan && TRIP_PLAN_START.test(message);
   const isTripPlanFlowActive = !isMorningGreeting && pendingTripPlan !== null;
 
+  // Declared early so code paths before the winddown section can reference it safely.
+  // The actual value is fetched via isWinddownActive() in the winddown section below.
+  let winddownActive = false;
+
   // E007: Email meeting reply flow
   const pendingEmailReply = getPendingEmailReply();
   const pendingMeetingRequests = getPendingMeetingRequests();
@@ -3370,7 +3374,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   // On-demand activation: if the user explicitly triggers "good evening" (via button tap or
   // typing), activate the check-in for today regardless of the scheduled 9 PM time.
   // The scheduled job and the button are two independent entry points — both should work.
-  let winddownActive = await isWinddownActive().catch(() => false);
+  winddownActive = await isWinddownActive().catch(() => false);
   if (isEveningGreeting && !winddownActive) {
     try {
       await markFiredToday();        // INSERT today's row (idempotent — no-op if already exists)

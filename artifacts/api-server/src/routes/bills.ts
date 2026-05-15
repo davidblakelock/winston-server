@@ -137,16 +137,16 @@ router.get("/bills", express.json({ limit: "1mb" }), async (req, res) => {
 router.post("/bills", express.json({ limit: "1mb" }), async (req, res) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
-  const { name, category, frequency, dueDay, dueMonths, amount, notes } = req.body as {
+  const { name, category, frequency, dueDay, dueMonths, amount, notes, autoPay } = req.body as {
     name: string; category: Category; frequency: Frequency;
-    dueDay: number; dueMonths?: string | null; amount?: string; notes?: string;
+    dueDay: number; dueMonths?: string | null; amount?: string; notes?: string; autoPay?: boolean;
   };
   if (!name || !category || !frequency || !dueDay) {
     res.status(400).json({ error: "name, category, frequency, dueDay are required" });
     return;
   }
   try {
-    const result = await addBill(name, category, frequency, dueDay, dueMonths ?? null, amount, notes, userName);
+    const result = await addBill(name, category, frequency, dueDay, dueMonths ?? null, amount, notes, userName, autoPay ?? false);
     if (result.alreadyExists) {
       res.json({ ok: true, alreadyExists: true });
     } else {
