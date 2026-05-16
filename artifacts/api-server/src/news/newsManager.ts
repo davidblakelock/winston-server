@@ -553,20 +553,10 @@ export async function checkMiddayNews(userName: string): Promise<string | null> 
     logger.info({ count: current.length }, "[MiddayNews] Fetched via NewsAPI");
   }
 
-  if (current.length === 0 && isApifyNewsConfigured()) {
-    const [reutersResult, apResult] = await Promise.allSettled([
-      fetchReutersHeadlines(20),
-      fetchAPNewsHeadlines(20),
-    ]);
-    current = [
-      ...(reutersResult.status === "fulfilled" ? reutersResult.value : []),
-      ...(apResult.status      === "fulfilled" ? apResult.value      : []),
-    ];
-    logger.info({ count: current.length }, "[MiddayNews] Fetched via Apify fallback");
-  }
-
+  // Apify is NOT used as a midday fallback — it burns actor credits for background
+  // checks the user never explicitly requested. If NewsAPI isn't configured, skip.
   if (current.length === 0) {
-    logger.info({ userName }, "[MiddayNews] No articles fetched — skipping");
+    logger.info({ userName }, "[MiddayNews] NewsAPI not configured and Apify midday disabled — skipping");
     return null;
   }
 
@@ -628,7 +618,10 @@ export async function preFetchMorningNews(userName?: string): Promise<void> {
     logger.info("[News] Starting morning news pre-fetch");
     const content = await fetchNewsFromClaude(userName);
     _cache = { content, fetchedAt: new Date() };
-    logger.info({ chars: content.length }, "[News] Morning news pre-fetched and cached");
+    // Also write to DB cache so a restart between pre-fetch and wake time
+    // doesn't cause the 3 Apify news actors to re-run unnecessarily.
+    setCachedApify(NEWS_DB_CACHE_KEY, content).catch(() => {});
+    logger.info({ chars: content.length }, "[News] Morning news pre-fetched and cached (in-memory + DB)");
   } catch (err) {
     logger.warn({ err }, "[News] Morning news pre-fetch failed — will retry on demand");
   }

@@ -276,13 +276,15 @@ export async function fetchBestLocalEvent(
   interests: string[],
   userName?: string,
 ): Promise<ApifyEventResult> {
-  const cacheKey   = userName ?? city;
-  const dbCacheKey = `events:${cacheKey}`;
+  // Cache is keyed by CITY (not by userName) so all users in the same city share
+  // one Ticketmaster actor run per day — prevents N actor runs for N users.
+  const cacheKey   = city;
+  const dbCacheKey = `events:city:${city}`;
 
   // 1. In-memory cache (fastest)
   const cached = _cache.get(cacheKey);
   if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS && cached.city === city) {
-    logger.info({ city, cacheKey }, "[ApifyEvents] Serving from in-memory cache");
+    logger.info({ city }, "[ApifyEvents] Serving from in-memory cache (city-shared)");
     return cached.result;
   }
 
@@ -291,7 +293,7 @@ export async function fetchBestLocalEvent(
   if (dbCached) {
     try {
       const result = JSON.parse(dbCached) as ApifyEventResult;
-      logger.info({ city, cacheKey }, "[ApifyEvents] Serving from DB cache — skipping Apify");
+      logger.info({ city }, "[ApifyEvents] Serving from DB cache (city-shared) — skipping Apify");
       _cache.set(cacheKey, { result, fetchedAt: Date.now(), city });
       return result;
     } catch {
@@ -335,7 +337,7 @@ export async function fetchBestLocalEvent(
     }
 
     _cache.set(cacheKey, { result, fetchedAt: Date.now(), city });
-    // Persist to DB so the Ticketmaster actor doesn't re-run on every restart
+    // Persist to DB (city-keyed) so all users share one result and restarts don't re-run
     setCachedApify(dbCacheKey, JSON.stringify(result)).catch(() => {});
     return result;
   } catch (err) {
