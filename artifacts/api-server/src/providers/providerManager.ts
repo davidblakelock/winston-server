@@ -101,6 +101,24 @@ export async function createProvider(
     googleContactId?: string | null;
   }
 ): Promise<ServiceProvider> {
+  // Deduplication: if a provider with the same name (case-insensitive) and phone
+  // already exists for this user, return the existing record instead of inserting.
+  const { rows: existing } = await query<ProviderRow>(
+    `SELECT ${SELECT_COLS} FROM service_providers
+      WHERE user_name = $1
+        AND lower(name) = lower($2)
+        AND (
+          ($3::text IS NOT NULL AND phone = $3)
+          OR ($3::text IS NULL AND phone IS NULL)
+        )
+      LIMIT 1`,
+    [userName, data.name, data.phone ?? null]
+  );
+  if (existing.length > 0) {
+    logger.info({ userName, name: data.name }, "[Providers] Duplicate suppressed — returning existing");
+    return rowToProvider(existing[0]!);
+  }
+
   const { rows } = await query<ProviderRow>(
     `INSERT INTO service_providers
        (user_name, name, category, phone, email, company, notes,
