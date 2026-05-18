@@ -27,7 +27,7 @@ import {
   type ParsedDeleteEvent,
 } from "../google/calendarWriter.js";
 import { hasCalendarWriteScope } from "../google/oauth.js";
-import { searchContacts, formatContactsForPrompt, saveCuratedContact, getCuratedContacts, createGoogleContact, updateGoogleContact, type Contact as GoogleContact } from "../google/contacts.js";
+import { searchContacts, formatContactsForPrompt, saveCuratedContact, getCuratedContacts, createGoogleContact, updateGoogleContact, updateContactDate, type Contact as GoogleContact } from "../google/contacts.js";
 import {
   getMedications,
   hasTakenMedicationsToday,
@@ -1840,6 +1840,78 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         }
       })
       .catch(() => {});
+  }
+
+  // ── Morning intention / evening reflection explicit capture ─────────────────
+  // When the last assistant message ended with the morning intention question or
+  // the evening "one thing worth remembering" question, save the user's response
+  // to life_captures. Runs fire-and-forget so it never delays the response.
+  if (!isMorningGreeting && !isMydayAdd && message.trim().length > 3) {
+    const _lcLastAssist = [...history].reverse().find((m) => m.role === "assistant");
+    const _lcPriorText  = (_lcLastAssist?.content ?? "").toLowerCase();
+    const MORNING_INTENTION_QS = [
+      "what's the one thing that would make today feel worthwhile",
+      "what's been on your mind that deserves attention today",
+      "is there someone you should reach out to today",
+    ];
+    const isRespondingToMorningQ = MORNING_INTENTION_QS.some((q) => _lcPriorText.includes(q));
+    const isRespondingToEveningQ = _lcPriorText.includes("one thing worth remembering from today");
+
+    if (isRespondingToMorningQ) {
+      saveLifeCapture(sessionUserName, message.trim(), "morning")
+        .then(() => {
+          runDotConnector(sessionUserName).catch(() => {});
+          runPatternObservation(sessionUserName).catch(() => {});
+        })
+        .catch(() => {});
+      req.log.info({ chars: message.length }, "[LifeCaptures] Morning intention response saved");
+    } else if (isRespondingToEveningQ) {
+      saveLifeCapture(sessionUserName, message.trim(), "evening")
+        .then(() => {
+          runDotConnector(sessionUserName).catch(() => {});
+          runPatternObservation(sessionUserName).catch(() => {});
+        })
+        .catch(() => {});
+      req.log.info({ chars: message.length }, "[LifeCaptures] Evening reflection saved");
+    }
+  }
+
+  // ── Contact birthday / anniversary conversational update ─────────────────────
+  // "Susan's birthday is June 15" → update google_contacts row, fire-and-forget.
+  if (!isMorningGreeting) {
+    const _bdayMatch = message.match(
+      /\b([\w][\w\s'-]{1,25}?)'s?\s+birthday\s+is\s+((?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?|\d{1,2}\/\d{1,2})/i
+    );
+    const _anniMatch = message.match(
+      /\b([\w][\w\s'-]{1,25}?)'s?\s+anniversary\s+is\s+((?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?|\d{1,2}\/\d{1,2})/i
+    );
+    const _parseMMDD = (raw: string): string | null => {
+      const slash = raw.match(/^(\d{1,2})\/(\d{1,2})$/);
+      if (slash) return `${slash[1]!.padStart(2, "0")}-${slash[2]!.padStart(2, "0")}`;
+      const MONTHS: Record<string, string> = {
+        jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06",
+        jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12",
+      };
+      const md = raw.match(/([a-z]{3})\w*\s+(\d{1,2})/i);
+      if (md) {
+        const mon = MONTHS[md[1]!.toLowerCase().slice(0, 3)];
+        if (mon) return `${mon}-${md[2]!.padStart(2, "0")}`;
+      }
+      return null;
+    };
+    if (_bdayMatch) {
+      const mmdd = _parseMMDD(_bdayMatch[2]!);
+      if (mmdd) {
+        updateContactDate(sessionUserName, _bdayMatch[1]!, "birthday", mmdd).catch(() => {});
+        req.log.info({ name: _bdayMatch[1], mmdd }, "[CONTACTS] Birthday update queued");
+      }
+    } else if (_anniMatch) {
+      const mmdd = _parseMMDD(_anniMatch[2]!);
+      if (mmdd) {
+        updateContactDate(sessionUserName, _anniMatch[1]!, "anniversary", mmdd).catch(() => {});
+        req.log.info({ name: _anniMatch[1], mmdd }, "[CONTACTS] Anniversary update queued");
+      }
+    }
   }
 
   // ── Goal detection — fire-and-forget background save ────────────────────────

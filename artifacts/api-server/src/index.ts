@@ -57,6 +57,7 @@ import { ensureBookingColumns } from "./restaurants/bookingCredentialsManager";
 import { ensureServiceProvidersTable } from "./providers/providerManager";
 import { startProviderScheduler } from "./providers/providerScheduler";
 import { startConnectBirthdayScheduler } from "./connect/connectBirthdayScheduler";
+import { startContactBirthdayScheduler } from "./google/contactBirthdayScheduler";
 
 const rawPort = process.env["PORT"];
 
@@ -442,6 +443,7 @@ app.listen(port, async (err) => {
   startBackgroundEmailScanner();
   startProviderScheduler();
   startConnectBirthdayScheduler();
+  startContactBirthdayScheduler();
 
   // Seed David's music preferences into profile_items so they persist and
   // can be referenced in any conversation naturally.

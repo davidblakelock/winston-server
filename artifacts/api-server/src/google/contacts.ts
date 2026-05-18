@@ -37,6 +37,9 @@ export async function ensureContactsTable(): Promise<void> {
     CREATE INDEX IF NOT EXISTS google_contacts_user_name_idx
     ON google_contacts(user_name)
   `);
+  // Idempotent column additions — safe to run on every startup
+  await query(`ALTER TABLE google_contacts ADD COLUMN IF NOT EXISTS birthday TEXT`).catch(() => {});
+  await query(`ALTER TABLE google_contacts ADD COLUMN IF NOT EXISTS anniversary TEXT`).catch(() => {});
   logger.info("[CONTACTS] google_contacts table ready");
 }
 
@@ -225,6 +228,32 @@ export async function removeCuratedContact(name: string, userName: string): Prom
     `DELETE FROM google_contacts WHERE user_name = $1 AND LOWER(display_name) = LOWER($2) RETURNING id`,
     [userName, name]
   );
+  return rows.length > 0;
+}
+
+/**
+ * Set or update a birthday or anniversary on an existing curated contact.
+ * dateMMDD should be in "MM-DD" format (e.g. "06-15" for June 15).
+ * Returns true if a matching contact was found and updated.
+ */
+export async function updateContactDate(
+  userName: string,
+  contactName: string,
+  field: "birthday" | "anniversary",
+  dateMMDD: string
+): Promise<boolean> {
+  const col = field === "birthday" ? "birthday" : "anniversary";
+  const { rows } = await query(
+    `UPDATE google_contacts
+        SET ${col} = $1
+      WHERE user_name = $2
+        AND LOWER(display_name) LIKE LOWER($3)
+      RETURNING id`,
+    [dateMMDD, userName, `%${contactName.trim()}%`]
+  );
+  if (rows.length > 0) {
+    logger.info({ userName, contactName, field, dateMMDD }, "[CONTACTS] Date updated on contact");
+  }
   return rows.length > 0;
 }
 
