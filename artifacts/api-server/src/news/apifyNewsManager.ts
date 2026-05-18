@@ -13,9 +13,12 @@
  */
 
 import { logger } from "../lib/logger.js";
+import { claimActorRun } from "../lib/apifyCache.js";
 
 function getApifyKey(): string { return (process.env.APIFY_API_KEY ?? "").trim(); }
 export function isApifyNewsConfigured(): boolean { return !!getApifyKey(); }
+
+const ACTOR_LOCK_TTL_MS = 23 * 60 * 60 * 1000; // 23 hours — hard daily cap per actor
 
 // ── Validated actor IDs (tested 2026-05-13) ───────────────────────────────────
 const APNEWS_ACTOR_ID      = "nexgendata/ap-news-scraper";
@@ -96,6 +99,11 @@ function normalise(
  * Returns ~20 articles; fields: title, url, source, scrapedAt.
  */
 export async function fetchAPNewsHeadlines(maxItems = 25): Promise<ScrapedArticle[]> {
+  const allowed = await claimActorRun("news:ap_news", ACTOR_LOCK_TTL_MS);
+  if (!allowed) {
+    logger.info("[ApifyNews] AP News actor blocked by 23 h DB lock — returning empty");
+    return [];
+  }
   const items = await runActor(APNEWS_ACTOR_ID, { maxItems }, 60);
   logger.info({ count: items.length }, "[ApifyNews] AP News headlines fetched");
   return normalise(items, "AP News");
@@ -109,6 +117,11 @@ export async function fetchAPNewsHeadlines(maxItems = 25): Promise<ScrapedArticl
  * Returns up to 50 articles from major sources.
  */
 export async function fetchWorldNewsHeadlines(maxItems = 30): Promise<ScrapedArticle[]> {
+  const allowed = await claimActorRun("news:world_news", ACTOR_LOCK_TTL_MS);
+  if (!allowed) {
+    logger.info("[ApifyNews] World news actor blocked by 23 h DB lock — returning empty");
+    return [];
+  }
   const items = await runActor(GOOGLENEWS_ACTOR_ID, {
     queries:  ["breaking world news today"],
     maxItems,
@@ -124,6 +137,11 @@ export async function fetchWorldNewsHeadlines(maxItems = 30): Promise<ScrapedArt
  * Used for the morning briefing watercooler segment.
  */
 export async function fetchWatercoolerHeadlines(maxItems = 15): Promise<ScrapedArticle[]> {
+  const allowed = await claimActorRun("news:watercooler", ACTOR_LOCK_TTL_MS);
+  if (!allowed) {
+    logger.info("[ApifyNews] Watercooler actor blocked by 23 h DB lock — returning empty");
+    return [];
+  }
   const items = await runActor(GOOGLENEWS_ACTOR_ID, {
     queries:  ["bizarre unusual heartwarming funny unexpected news today"],
     maxItems,

@@ -396,7 +396,25 @@ FORBIDDEN — NEVER USE:
   `;
 }
 
+// In-flight dedup for preFetchMorningBriefing — prevents multiple concurrent
+// pre-gen calls (from startup + cron tick + sendMorningPush fallback) from each
+// spawning their own set of Apify actor runs. All concurrent callers for the
+// same user share the single in-flight promise.
+const _prefetchInFlight = new Map<string, Promise<void>>();
+
 export async function preFetchMorningBriefing(userName: string): Promise<void> {
+  const existing = _prefetchInFlight.get(userName);
+  if (existing) {
+    logger.info({ userName }, "[Briefing] preFetchMorningBriefing already in flight — deduplicating concurrent call");
+    return existing;
+  }
+
+  const promise = _doBriefingPrefetch(userName).finally(() => { _prefetchInFlight.delete(userName); });
+  _prefetchInFlight.set(userName, promise);
+  return promise;
+}
+
+async function _doBriefingPrefetch(userName: string): Promise<void> {
   // Capture the CT date NOW, before any async work. setCachedBriefing receives this
   // key explicitly so a briefing that starts on April 6 and finishes after midnight
   // is NOT cached with April 7's key while containing April 6 calendar data.

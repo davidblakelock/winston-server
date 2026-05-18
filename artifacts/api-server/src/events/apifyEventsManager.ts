@@ -16,7 +16,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { logger } from "../lib/logger.js";
-import { getCachedApify, setCachedApify } from "../lib/apifyCache.js";
+import { getCachedApify, setCachedApify, claimActorRun } from "../lib/apifyCache.js";
 
 const anthropic = new Anthropic();
 
@@ -148,6 +148,14 @@ async function fetchTicketmasterDirect(city: string): Promise<LocalEvent[]> {
 async function fetchTicketmasterViaApify(city: string): Promise<LocalEvent[]> {
   if (!getApifyKey()) return [];
 
+  // Hard 23 h DB lock — prevents repeated actor runs from concurrent callers or restarts
+  const lockKey = `events:ticketmaster:${city.toLowerCase().replace(/\s+/g, "-")}`;
+  const allowed = await claimActorRun(lockKey, ACTOR_LOCK_TTL_MS);
+  if (!allowed) {
+    logger.info({ city }, "[ApifyEvents] Ticketmaster actor blocked by 23 h DB lock — returning empty");
+    return [];
+  }
+
   const citySlug = city.toLowerCase().replace(/\s+/g, "-");
   const items = await runActor(TICKETMASTER_ACTOR_ID, {
     startUrls: [
@@ -263,6 +271,11 @@ const _cache = new Map<string, EventCache>();
 // Use 24-hour TTL — events don't change minute-to-minute; this avoids running
 // the Ticketmaster actor more than once per day per user.
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const ACTOR_LOCK_TTL_MS = 23 * 60 * 60 * 1000; // hard 23 h DB lock per city
+
+// In-flight dedup — prevents concurrent callers for the same city from each
+// spawning their own Apify actor run before any of them writes the result back.
+const _fetchInFlight = new Map<string, Promise<ApifyEventResult>>();
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -308,40 +321,56 @@ export async function fetchBestLocalEvent(
     return { event: null, block: "" };
   }
 
-  try {
-    // Try direct API first (fast, no Apify credit cost); fall back to scraper
-    let events: LocalEvent[] = await fetchTicketmasterDirect(city);
-
-    if (events.length === 0 && hasApifyKey) {
-      logger.info({ city }, "[ApifyEvents] Direct API returned nothing — trying Apify actor");
-      events = await fetchTicketmasterViaApify(city);
-    }
-
-    logger.info({ city, total: events.length }, "[ApifyEvents] Total candidate events");
-
-    const best = await selectBestEvent(events, interests, city);
-
-    let result: ApifyEventResult;
-    if (!best) {
-      result = { event: null, block: "" };
-    } else {
-      const urlLine = best.url ? `\n  Tickets/info: ${best.url}` : "";
-      const block =
-        `\n\n[VERIFIED — Local Event Discovery — Ticketmaster]\n` +
-        `One upcoming ${city} event that may interest you:\n` +
-        `• ${best.name} — ${best.date || best.dateISO} at ${best.venue}${urlLine}\n` +
-        `INSTRUCTION: Mention this event in ONE sentence — name, date, venue. ` +
-        `Only include if it fits the briefing flow naturally; skip silently if forced.`;
-      result = { event: best, block };
-      logger.info({ city, event: best.name, date: best.dateISO }, "[ApifyEvents] Best event selected");
-    }
-
-    _cache.set(cacheKey, { result, fetchedAt: Date.now(), city });
-    // Persist to DB (city-keyed) so all users share one result and restarts don't re-run
-    setCachedApify(dbCacheKey, JSON.stringify(result)).catch(() => {});
-    return result;
-  } catch (err) {
-    logger.warn({ err, city }, "[ApifyEvents] fetchBestLocalEvent threw");
-    return { event: null, block: "" };
+  // In-flight dedup — all concurrent callers for the same city share one fetch promise.
+  // This prevents the race where N callers all see a DB cache miss simultaneously and
+  // each fire the Apify actor before any of them has written the result back.
+  const existingFlight = _fetchInFlight.get(cacheKey);
+  if (existingFlight) {
+    logger.info({ city }, "[ApifyEvents] fetchBestLocalEvent already in flight — deduplicating");
+    return existingFlight;
   }
+
+  const fetchPromise = (async (): Promise<ApifyEventResult> => {
+    try {
+      // Try direct API first (fast, no Apify credit cost); fall back to scraper
+      let events: LocalEvent[] = await fetchTicketmasterDirect(city);
+
+      if (events.length === 0 && hasApifyKey) {
+        logger.info({ city }, "[ApifyEvents] Direct API returned nothing — trying Apify actor");
+        events = await fetchTicketmasterViaApify(city);
+      }
+
+      logger.info({ city, total: events.length }, "[ApifyEvents] Total candidate events");
+
+      const best = await selectBestEvent(events, interests, city);
+
+      let result: ApifyEventResult;
+      if (!best) {
+        result = { event: null, block: "" };
+      } else {
+        const urlLine = best.url ? `\n  Tickets/info: ${best.url}` : "";
+        const block =
+          `\n\n[VERIFIED — Local Event Discovery — Ticketmaster]\n` +
+          `One upcoming ${city} event that may interest you:\n` +
+          `• ${best.name} — ${best.date || best.dateISO} at ${best.venue}${urlLine}\n` +
+          `INSTRUCTION: Mention this event in ONE sentence — name, date, venue. ` +
+          `Only include if it fits the briefing flow naturally; skip silently if forced.`;
+        result = { event: best, block };
+        logger.info({ city, event: best.name, date: best.dateISO }, "[ApifyEvents] Best event selected");
+      }
+
+      _cache.set(cacheKey, { result, fetchedAt: Date.now(), city });
+      // Persist to DB (city-keyed) so all users share one result and restarts don't re-run
+      setCachedApify(dbCacheKey, JSON.stringify(result)).catch(() => {});
+      return result;
+    } catch (err) {
+      logger.warn({ err, city }, "[ApifyEvents] fetchBestLocalEvent threw");
+      return { event: null, block: "" };
+    } finally {
+      _fetchInFlight.delete(cacheKey);
+    }
+  })();
+
+  _fetchInFlight.set(cacheKey, fetchPromise);
+  return fetchPromise;
 }

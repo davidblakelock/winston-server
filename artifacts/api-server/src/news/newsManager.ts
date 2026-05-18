@@ -28,6 +28,10 @@ let _cache: NewsCache | null = null;
 const CACHE_TTL_MS  = 6 * 60 * 60 * 1000;
 const STALE_WARN_MS = 12 * 60 * 60 * 1000;
 
+// In-flight dedup — prevents concurrent callers from each spawning their own Apify run.
+// All callers after the first latch onto the same promise and share the result.
+let _fetchInFlight: Promise<string> | null = null;
+
 function isCacheFresh(): boolean {
   if (!_cache) return false;
   return Date.now() - _cache.fetchedAt.getTime() < CACHE_TTL_MS;
@@ -468,6 +472,18 @@ async function fetchTopStoriesViaWebSearch(userName?: string): Promise<string> {
 // ── Core fetch: top stories + entertainment + watercooler ─────────────────────
 
 async function fetchNewsFromClaude(userName?: string): Promise<string> {
+  // In-flight dedup: if a fetch is already running, latch onto it instead of
+  // spawning a second concurrent Apify run. All concurrent callers share one result.
+  if (_fetchInFlight) {
+    logger.info("[News] fetchNewsFromClaude already in flight — deduplicating concurrent call");
+    return _fetchInFlight;
+  }
+
+  _fetchInFlight = _doFetchNewsFromClaude(userName).finally(() => { _fetchInFlight = null; });
+  return _fetchInFlight;
+}
+
+async function _doFetchNewsFromClaude(userName?: string): Promise<string> {
   const { musicGenres, interests } = await resolveNewsContext(userName);
   const cleanInterests = interests
     .filter((i) => !/YMCA|pickleball|Monday|Wednesday|Friday|Saturday|morning/i.test(i))
@@ -614,6 +630,16 @@ export async function checkMiddayNews(userName: string): Promise<string | null> 
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export async function preFetchMorningNews(userName?: string): Promise<void> {
+  // Check DB cache first — if news was already fetched today (within 6 h), skip entirely.
+  // This was previously missing: preFetchMorningNews called fetchNewsFromClaude directly
+  // without any cache check, causing Apify actors to fire on every call regardless.
+  const dbCached = await getCachedApify(NEWS_DB_CACHE_KEY, NEWS_DB_TTL_MS);
+  if (dbCached) {
+    logger.info("[News] DB cache is fresh — skipping morning news pre-fetch (no Apify run)");
+    if (!_cache) _cache = { content: dbCached, fetchedAt: new Date() };
+    return;
+  }
+
   try {
     logger.info("[News] Starting morning news pre-fetch");
     const content = await fetchNewsFromClaude(userName);

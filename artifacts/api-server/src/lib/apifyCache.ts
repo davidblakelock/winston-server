@@ -89,6 +89,45 @@ export async function setApifyDailyFlag(key: string, dateKey: string): Promise<v
   }
 }
 
+// ── Atomic per-actor run lock ─────────────────────────────────────────────────
+
+/**
+ * Atomically claim an Apify actor run slot using a DB-level hard lock.
+ *
+ * Returns true  → you won the slot; proceed with the actor run.
+ * Returns false → a successful run already happened within ttlMs; skip entirely.
+ *
+ * Uses INSERT ... ON CONFLICT DO UPDATE WHERE fetched_at < cutoff so that only
+ * ONE caller across concurrent processes/restarts can win.  The lock key is
+ * stored as "lock:<key>" separate from the result cache key, so it persists
+ * even after the result entry is overwritten with real content.
+ */
+export async function claimActorRun(key: string, ttlMs: number): Promise<boolean> {
+  const lockKey = `lock:${key}`;
+  const cutoff  = new Date(Date.now() - ttlMs).toISOString();
+  try {
+    const { rows } = await query<{ cache_key: string }>(
+      `INSERT INTO apify_cache (cache_key, content, fetched_at)
+       VALUES ($1, 'claimed', NOW())
+       ON CONFLICT (cache_key) DO UPDATE
+         SET content    = 'claimed',
+             fetched_at = NOW()
+         WHERE apify_cache.fetched_at < $2::timestamptz
+       RETURNING cache_key`,
+      [lockKey, cutoff]
+    );
+    if (rows.length > 0) {
+      logger.info({ key }, "[ApifyCache] Actor lock claimed — proceeding with run");
+      return true;
+    }
+    logger.info({ key }, "[ApifyCache] Actor lock is fresh — skipping run (within 23 h)");
+    return false;
+  } catch (err) {
+    logger.warn({ err, key }, "[ApifyCache] claimActorRun DB error — allowing run as fallback");
+    return true;
+  }
+}
+
 // ── Table creation (called from index.ts startup) ─────────────────────────────
 
 export async function ensureApifyCacheTable(): Promise<void> {
