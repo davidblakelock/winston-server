@@ -264,10 +264,27 @@ async function startupPrefetch(): Promise<void> {
       continue;
     }
 
-    logger.info({ userName }, "[MorningPush] Startup — no DB cache found, pre-generating briefing");
-    preFetchMorningBriefing(userName).catch((err) =>
-      logger.warn({ err, userName }, "[MorningPush] Startup briefing error")
-    );
+    // Only pre-generate on startup if we're inside the morning window (05:00–07:30 CT).
+    // A midnight restart should NOT trigger a pre-gen — it would use overnight news
+    // and that stale briefing would be served at 6 AM instead of fresh content.
+    // The scheduled cron (at preFetchTime each morning) handles the real pre-gen.
+    const startupLocalTime = new Date().toLocaleTimeString("en-US", {
+      timeZone: DEFAULT_TZ,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+    const startupHour = parseInt(startupLocalTime.split(":")[0]!, 10);
+    const inMorningWindow = startupHour >= 5 && startupHour < 8;
+
+    if (!inMorningWindow) {
+      logger.info({ userName, startupLocalTime }, "[MorningPush] Startup — outside morning window, skipping pre-gen (cron will handle it at 5:40 AM CT)");
+    } else {
+      logger.info({ userName }, "[MorningPush] Startup — in morning window, no DB cache found, pre-generating briefing");
+      preFetchMorningBriefing(userName).catch((err) =>
+        logger.warn({ err, userName }, "[MorningPush] Startup briefing error")
+      );
+    }
   }
 }
 

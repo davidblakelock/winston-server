@@ -252,8 +252,33 @@ export function clearStaticBriefingContext(userName: string): void {
 }
 
 /**
+ * Returns true if the given UTC timestamp was built during the legitimate morning
+ * pre-generation window (05:00–07:30 CT). Briefings built outside this window
+ * (e.g. a midnight server-restart pre-gen or a late-night chat "good morning")
+ * should NOT be served as the push-notification briefing — they contain stale
+ * overnight news and will have been generated before the Apify morning actors ran.
+ */
+function isBuiltInMorningWindow(builtAtMs: number): boolean {
+  const hourCT = parseInt(
+    new Date(builtAtMs).toLocaleTimeString("en-US", {
+      timeZone: "America/Chicago",
+      hour: "2-digit",
+      hour12: false,
+    }),
+    10
+  );
+  // 05:00–07:29 CT covers the scheduled pre-gen window (5:40 AM) with buffer
+  return hourCT >= 5 && hourCT < 8;
+}
+
+/**
  * Attempts to load today's static context (and push-sent state) from the DB
  * into the in-memory caches. Returns true if a valid entry was found.
+ *
+ * Push-sent state is ALWAYS restored (so we never double-send after a restart).
+ * Static context and briefing text are only restored if they were built during
+ * the legitimate morning window (05:00–07:59 CT) — this prevents a midnight
+ * startup pre-gen from being served as the morning briefing hours later.
  */
 export async function loadStaticContextFromDb(userName: string): Promise<boolean> {
   const today = ctDateKey();
@@ -275,12 +300,31 @@ export async function loadStaticContextFromDb(userName: string): Promise<boolean
     const row = res.rows[0];
     if (!row) return false;
 
+    // ALWAYS restore push-sent state — this prevents double-sending regardless
+    // of whether the briefing content itself is considered fresh.
+    if (row.push_sent_at) {
+      const sentDate = new Date(row.push_sent_at).toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+      if (sentDate === today) {
+        _pushSentDone.set(userName, today);
+        console.log(`[BriefingCache] Push already sent today for ${userName} — restored from DB`);
+      }
+    }
+
     // Preamble/suffix are NULLed by /api/briefing/refresh to force re-generation.
     // Treat a null preamble as a cache miss so the morning briefing re-generates fresh.
     if (!row.preamble || !row.suffix) return false;
 
     const builtAt = new Date(row.built_at).getTime();
     if (Date.now() - builtAt > STATIC_MAX_AGE_MS) return false;
+
+    // Reject briefings built outside the 05:00–07:59 CT morning window.
+    // A server restart at midnight triggers an immediate pre-gen with overnight
+    // news; that stale content must not be cached as the morning briefing.
+    // The morning scheduler will regenerate fresh content at 05:40 CT.
+    if (!isBuiltInMorningWindow(builtAt)) {
+      console.log(`[BriefingCache] Briefing for ${userName} built outside morning window (${new Date(builtAt).toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour12: false })} CT) — discarding content, will regenerate`);
+      return false;
+    }
 
     // Invalidate cached context that was built before weather was removed from
     // the briefing. If the suffix still contains a [VERIFIED — Google Weather API]
@@ -297,15 +341,6 @@ export async function loadStaticContextFromDb(userName: string): Promise<boolean
       dateKey: today,
       builtAt,
     });
-
-    // Restore push-sent state so we don't re-send after a restart
-    if (row.push_sent_at) {
-      const sentDate = new Date(row.push_sent_at).toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
-      if (sentDate === today) {
-        _pushSentDone.set(userName, today);
-        console.log(`[BriefingCache] Push already sent today for ${userName} — restored from DB`);
-      }
-    }
 
     // Restore briefing text if present
     if (row.briefing_text) {
