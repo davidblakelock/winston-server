@@ -1,0 +1,64 @@
+
+"Please make the following fixes. Read everything before starting. Deploy when complete and confirm each item.
+1. Fix Trip Planning — highest priority
+The trip planning feature is completely non-functional. When a user says 'I want to plan a trip' or 'help me plan a vacation to X' nothing happens — Winston responds generically. Please:
+
+Verify the intent detection is actually deployed and triggering in chat.ts
+Fix the four question flow so it triggers correctly
+After four questions generate a complete day-by-day itinerary using Claude Sonnet and the user's profile preferences
+Save the itinerary to the trip_plans table
+Return it in the chat response so the user sees it immediately
+Test by saying 'I want to plan a trip to Paris' and confirm the four question flow triggers and an itinerary is generated
+
+2. Fix David's Life Capture Flow
+The life_captures table exists but nothing is being saved to it. Fix the following:
+
+After the morning briefing thought of the day, Winston asks one purposeful question rotating through: 'What's the one thing that would make today feel worthwhile?' / 'What's been on your mind that deserves attention today?' / 'Is there someone you should reach out to today?'
+When the user responds to that question, save their response to life_captures with context: 'morning'
+At the end of the evening check-in, Winston asks: 'One thing worth remembering from today?'
+When the user responds, save to life_captures with context: 'evening'
+This is explicit capture only — not passive mining of conversations
+GET /api/life should return all captures sorted by most recent first
+Test by going through a morning briefing and confirming the capture is saved
+
+3. Fix Conversation History
+Every time the user opens Winston the chat starts completely fresh. Load the last 20 messages from the conversations table when the chat-native endpoint initializes. The user should see recent conversation history when they open the app. Test by having a conversation, closing the app, reopening it, and confirming previous messages appear.
+4. Add firstName to Profile Endpoint
+The GET /api/settings/profile endpoint returns companionName but not the user's actual first name. Add a firstName field that returns the user's real first name — not the companion name. For davidblakelock firstName should be 'David'. Store this in the user settings table. This is needed so David's Life shows 'David's Life' not 'James's Life'.
+5. Fix Google Maps Geocoding
+Departure alerts and route-aware suggestions are not working because Google Maps API calls are failing silently. The logging added previously should now show what's happening. Please:
+
+Review the logs from Google Maps API calls
+Identify exactly why geocoding and directions calls are failing
+Fix the root cause
+Test by triggering a departure alert for a calendar event that has a location address and confirming it fires correctly
+
+6. Birthday and Key Date Reminders from Contacts
+This should NOT be part of Winston Connect. It should be a general contacts feature:
+
+When a user tells Winston someone's birthday or anniversary — 'Susan's birthday is June 15' — store it against that person's contact record
+Also read date_of_birth and anniversary fields from Google Contacts where available
+7 days before the date send a push notification: 'A reminder — Susan's birthday is in 7 days'
+This applies to anyone in the user's contacts, not just Winston Connect users
+
+7. Verify Bill Reminders
+Bill due date reminders appear to be working but need verification. Please confirm:
+
+Bills are being detected from email correctly
+The bills table has correct due dates
+Push notifications are firing 3 days before due dates
+Only fires when auto_pay is false
+Report back with the current bills in the database and their due dates
+
+8. Service Providers Backend
+Create a service_providers table: id, user_id, name, category (medical/legal/financial/home/auto/personal), phone, email, company, notes, last_contact_date, next_due_date, google_contact_id, created_at
+Endpoints:
+
+GET /api/providers — returns all providers grouped by category
+POST /api/providers — creates a new provider
+PUT /api/providers/:id — updates a provider
+DELETE /api/providers/:id — removes a provider
+
+When a provider has a next_due_date within 7 days send a push notification: 'Your appointment with [Name] is due next week.'
+When the user mentions a provider in conversation — 'Just left Dr. Martinez' or 'Had the AC serviced today' — update last_contact_date automatically and ask if anything needs to be noted or scheduled for next time.
+Deploy when complete and confirm each item with a test result.
