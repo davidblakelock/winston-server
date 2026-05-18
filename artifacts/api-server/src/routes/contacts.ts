@@ -100,8 +100,14 @@ router.get("/contacts/search", async (req: Request, res: Response) => {
 
     const contacts = result.contacts.map((c) => ({
       name: c.name,
-      ...(c.email ? { email: c.email } : {}),
-      ...(c.phone ? { phone: c.phone } : {}),
+      ...(c.phone        ? { phone: c.phone }               : {}),
+      ...(c.email        ? { email: c.email }               : {}),
+      ...(c.address      ? { address: c.address }           : {}),
+      ...(c.organization ? { organization: c.organization } : {}),
+      ...(c.website      ? { website: c.website }           : {}),
+      ...(c.birthday     ? { birthday: c.birthday }         : {}),
+      ...(c.notes        ? { notes: c.notes }               : {}),
+      ...(c.resourceName ? { resourceName: c.resourceName } : {}),
     }));
 
     req.log.info({ userName, q, count: contacts.length }, "[CONTACTS] GET /contacts/search");

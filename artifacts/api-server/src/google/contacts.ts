@@ -6,6 +6,10 @@ export interface Contact {
   email?: string;
   phone?: string;
   address?: string;
+  organization?: string;
+  website?: string;
+  birthday?: string;
+  notes?: string;
   resourceName?: string;
 }
 
@@ -127,7 +131,10 @@ async function getAccessToken(): Promise<{ token: string; hasContactsScope: bool
 async function searchContactsLive(searchName: string, token: string): Promise<Contact[]> {
   const url = new URL("https://people.googleapis.com/v1/people:searchContacts");
   url.searchParams.set("query", searchName);
-  url.searchParams.set("readMask", "names,emailAddresses,phoneNumbers,addresses");
+  url.searchParams.set(
+    "readMask",
+    "names,emailAddresses,phoneNumbers,addresses,organizations,urls,birthdays,biographies"
+  );
   url.searchParams.set("pageSize", "10");
 
   const resp = await fetch(url.toString(), {
@@ -148,6 +155,13 @@ async function searchContactsLive(searchName: string, token: string): Promise<Co
         emailAddresses?: Array<{ value?: string }>;
         phoneNumbers?: Array<{ value?: string }>;
         addresses?: Array<{ formattedValue?: string }>;
+        organizations?: Array<{ name?: string; title?: string }>;
+        urls?: Array<{ value?: string }>;
+        birthdays?: Array<{
+          date?: { year?: number; month?: number; day?: number };
+          text?: string;
+        }>;
+        biographies?: Array<{ value?: string }>;
       };
     }>;
   };
@@ -158,13 +172,43 @@ async function searchContactsLive(searchName: string, token: string): Promise<Co
     if (!person) continue;
     const displayName = person.names?.[0]?.displayName;
     if (!displayName) continue;
+
     const c: Contact = {
       name: displayName,
       resourceName: person.resourceName,
     };
+
     if (person.emailAddresses?.[0]?.value) c.email = person.emailAddresses[0].value;
     if (person.phoneNumbers?.[0]?.value) c.phone = person.phoneNumbers[0].value;
     if (person.addresses?.[0]?.formattedValue) c.address = person.addresses[0].formattedValue;
+
+    // Organization: prefer "name (title)" if both exist, else just name
+    const org = person.organizations?.[0];
+    if (org?.name) {
+      c.organization = org.title ? `${org.name} — ${org.title}` : org.name;
+    }
+
+    // Website: first URL
+    if (person.urls?.[0]?.value) c.website = person.urls[0].value;
+
+    // Birthday: use text if present, else build from date parts
+    const bday = person.birthdays?.[0];
+    if (bday) {
+      if (bday.text) {
+        c.birthday = bday.text;
+      } else if (bday.date) {
+        const { year, month, day } = bday.date;
+        const parts: string[] = [];
+        if (month) parts.push(String(month).padStart(2, "0"));
+        if (day) parts.push(String(day).padStart(2, "0"));
+        if (year) parts.unshift(String(year));
+        c.birthday = year ? parts.join("-") : parts.join("-");
+      }
+    }
+
+    // Notes / biography
+    if (person.biographies?.[0]?.value) c.notes = person.biographies[0].value;
+
     contacts.push(c);
   }
 
