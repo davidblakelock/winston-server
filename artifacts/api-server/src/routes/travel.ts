@@ -2,100 +2,21 @@ import { Router, type IRouter } from "express";
 import express from "express";
 import { authenticate } from "../auth/middleware.js";
 import {
-  getUpcomingTravel,
-  upsertTravelSegment,
-  deleteTravelSegment,
-} from "../travel/travelManager.js";
-import { getActiveTripPlans } from "../travel/tripPlanningManager.js";
-import { scanTravelEmails } from "../travel/travelScanner.js";
+  getActiveTripPlans,
+  getTripPlanById,
+  saveTripPlan,
+  updateTripPlan,
+  deleteTripPlan,
+  parseTripIntent,
+  generateTripItinerary,
+  type TripItinerary,
+} from "../travel/tripPlanningManager.js";
 import { logger } from "../lib/logger.js";
 
 const router: IRouter = Router();
 
-// ── Sync state (in-memory — resets on restart, good enough for single user) ───
-const _lastSyncAt = new Map<string, Date>();
-
-// ── GET /api/travel ───────────────────────────────────────────────────────────
-// Returns all upcoming travel segments sorted by departure date.
-router.get("/travel", async (req, res) => {
-  const userName = await authenticate(req, res);
-  if (!userName) return;
-
-  try {
-    const segments = await getUpcomingTravel(userName);
-    res.json({ segments, lastSyncAt: _lastSyncAt.get(userName)?.toISOString() ?? null });
-  } catch (err) {
-    req.log.error({ err }, "[Travel] GET /travel error");
-    res.status(500).json({ error: "Failed to load travel" });
-  }
-});
-
-// ── POST /api/travel/sync ─────────────────────────────────────────────────────
-// Scans Gmail for travel confirmations (last 180 days on first run).
-// Body: { force?: boolean } — set true to ignore the 30-min throttle
-router.post("/travel/sync", express.json({ limit: "1mb" }), async (req, res) => {
-  const userName = await authenticate(req, res);
-  if (!userName) return;
-
-  const force = Boolean((req.body as { force?: boolean })?.force);
-  const lastSync = _lastSyncAt.get(userName);
-  const THROTTLE_MS = 30 * 60 * 1000;
-
-  if (!force && lastSync && Date.now() - lastSync.getTime() < THROTTLE_MS) {
-    const segments = await getUpcomingTravel(userName);
-    res.json({ ok: true, newSegments: 0, segments, throttled: true });
-    return;
-  }
-
-  req.log.info({ userName }, "[Travel] Sync started");
-
-  try {
-    const scanned = await scanTravelEmails(userName, lastSync ?? undefined);
-    let newCount = 0;
-
-    for (const seg of scanned) {
-      const inserted = await upsertTravelSegment(userName, seg);
-      if (inserted) newCount++;
-    }
-
-    _lastSyncAt.set(userName, new Date());
-    req.log.info({ userName, scanned: scanned.length, newCount }, "[Travel] Sync complete");
-
-    const segments = await getUpcomingTravel(userName);
-    res.json({ ok: true, newSegments: newCount, segments, throttled: false });
-  } catch (err) {
-    req.log.error({ err }, "[Travel] POST /travel/sync error");
-    res.status(500).json({ error: "Travel sync failed" });
-  }
-});
-
-// ── DELETE /api/travel/:id ────────────────────────────────────────────────────
-router.delete("/travel/:id", async (req, res) => {
-  const userName = await authenticate(req, res);
-  if (!userName) return;
-
-  const id = parseInt(req.params.id, 10);
-  if (isNaN(id)) {
-    res.status(400).json({ error: "Invalid travel segment id" });
-    return;
-  }
-
-  try {
-    const deleted = await deleteTravelSegment(id, userName);
-    if (!deleted) {
-      res.status(404).json({ error: "Travel segment not found" });
-      return;
-    }
-    req.log.info({ userName, id }, "[Travel] Segment deleted");
-    res.json({ ok: true });
-  } catch (err) {
-    req.log.error({ err }, "[Travel] DELETE error");
-    res.status(500).json({ error: "Failed to delete segment" });
-  }
-});
-
-// ── GET /api/trips ────────────────────────────────────────────────────────────
-// Returns all saved trip plans for the authenticated user.
+// ── GET /api/trips ─────────────────────────────────────────────────────────────
+// Returns all trip plans for the user sorted by start_date
 router.get("/trips", async (req, res) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
@@ -106,6 +27,141 @@ router.get("/trips", async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "[Trips] GET /trips error");
     res.status(500).json({ error: "Failed to load trip plans" });
+  }
+});
+
+// ── GET /api/trips/:id ─────────────────────────────────────────────────────────
+// Returns a single trip plan with full itinerary
+router.get("/trips/:id", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid trip plan id" }); return; }
+
+  try {
+    const plan = await getTripPlanById(id, userName);
+    if (!plan) { res.status(404).json({ error: "Trip plan not found" }); return; }
+    res.json({ plan });
+  } catch (err) {
+    req.log.error({ err }, "[Trips] GET /trips/:id error");
+    res.status(500).json({ error: "Failed to load trip plan" });
+  }
+});
+
+// ── POST /api/trips ────────────────────────────────────────────────────────────
+// Creates a new trip plan (with or without itinerary)
+// Body: { message?: string, destination?: string, nights?: number, itinerary?: TripItinerary, ... }
+router.post("/trips", express.json({ limit: "2mb" }), async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const body = req.body as {
+    message?: string;
+    destination?: string;
+    nights?: number;
+    startDate?: string;
+    endDate?: string;
+    partyDesc?: string;
+    vibe?: string;
+    mustHaves?: string;
+    budget?: string;
+    itinerary?: TripItinerary;
+    status?: string;
+  };
+
+  try {
+    // If a complete itinerary is provided, save directly
+    if (body.itinerary) {
+      const intent = parseTripIntent(body.message ?? body.destination ?? body.itinerary.destination);
+      if (body.destination) intent.destination = body.destination;
+      if (body.nights) intent.nights = body.nights;
+      if (body.startDate) intent.startDate = body.startDate;
+      if (body.partyDesc) intent.partyDesc = body.partyDesc;
+      if (body.vibe) intent.vibe = body.vibe;
+
+      const id = await saveTripPlan(userName, intent, body.itinerary);
+      const plan = await getTripPlanById(id, userName);
+      req.log.info({ id, destination: intent.destination }, "[Trips] Trip plan saved with provided itinerary");
+      res.status(201).json({ plan });
+      return;
+    }
+
+    // Otherwise generate a new itinerary from the provided details
+    const rawMsg = body.message ?? body.destination ?? "";
+    const intent = parseTripIntent(rawMsg);
+    if (body.destination) intent.destination = body.destination;
+    if (body.nights) intent.nights = body.nights;
+    if (body.startDate) intent.startDate = body.startDate;
+    if (body.endDate) intent.endDate = body.endDate;
+    if (body.partyDesc) intent.partyDesc = body.partyDesc;
+    if (body.vibe) intent.vibe = body.vibe;
+    if (body.mustHaves) intent.mustHaves = body.mustHaves;
+    if (body.budget) intent.budget = body.budget;
+
+    if (!intent.destination) {
+      res.status(400).json({ error: "destination is required" });
+      return;
+    }
+
+    req.log.info({ destination: intent.destination, nights: intent.nights }, "[Trips] Generating itinerary");
+    const itinerary = await generateTripItinerary(intent, null);
+    const id = await saveTripPlan(userName, intent, itinerary);
+    const plan = await getTripPlanById(id, userName);
+    res.status(201).json({ plan });
+  } catch (err) {
+    req.log.error({ err }, "[Trips] POST /trips error");
+    res.status(500).json({ error: "Failed to create trip plan" });
+  }
+});
+
+// ── PUT /api/trips/:id ─────────────────────────────────────────────────────────
+// Updates a trip plan (partial update)
+router.put("/trips/:id", express.json({ limit: "2mb" }), async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid trip plan id" }); return; }
+
+  const body = req.body as {
+    trip_name?: string;
+    destination?: string;
+    start_date?: string;
+    end_date?: string;
+    nights?: number;
+    itinerary?: TripItinerary;
+    status?: string;
+  };
+
+  try {
+    const updated = await updateTripPlan(id, userName, body);
+    if (!updated) { res.status(404).json({ error: "Trip plan not found" }); return; }
+    req.log.info({ id, userName }, "[Trips] Trip plan updated");
+    res.json({ plan: updated });
+  } catch (err) {
+    req.log.error({ err }, "[Trips] PUT /trips/:id error");
+    res.status(500).json({ error: "Failed to update trip plan" });
+  }
+});
+
+// ── DELETE /api/trips/:id ──────────────────────────────────────────────────────
+// Removes a trip plan
+router.delete("/trips/:id", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid trip plan id" }); return; }
+
+  try {
+    const deleted = await deleteTripPlan(id, userName);
+    if (!deleted) { res.status(404).json({ error: "Trip plan not found" }); return; }
+    req.log.info({ id, userName }, "[Trips] Trip plan deleted");
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error({ err }, "[Trips] DELETE /trips/:id error");
+    res.status(500).json({ error: "Failed to delete trip plan" });
   }
 });
 

@@ -43,7 +43,6 @@ import { ensureRestaurantCacheTable } from "./restaurants/restaurantIntelligence
 import { ensureOrdersTable } from "./orders/ordersManager";
 import { startOrderTrackingScheduler } from "./orders/orderTrackingScheduler";
 import { startTodoReminderScheduler } from "./lists/todoReminderScheduler";
-import { ensureTravelTable } from "./travel/travelManager";
 import { ensureTripPlansTable } from "./travel/tripPlanningManager";
 import { ensureContextReminderColumns } from "./reminders/contextReminderManager";
 import { ensureProactiveModeTable, ensureTrustedSendersTable } from "./proactiveMode/proactiveModeManager";
@@ -292,12 +291,6 @@ app.listen(port, async (err) => {
     await ensureOrdersTable();
   } catch (e) {
     logger.warn({ e }, "Orders table initialization warning");
-  }
-
-  try {
-    await ensureTravelTable();
-  } catch (e) {
-    logger.warn({ e }, "Travel table initialization warning");
   }
 
   try {

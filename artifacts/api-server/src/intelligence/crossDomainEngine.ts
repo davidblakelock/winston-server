@@ -7,7 +7,6 @@
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { getStoredGarminData } from "../garmin/garminService.js";
-import { getTodayTravelSegments } from "../travel/travelManager.js";
 import { getCachedWeather } from "../weather/weatherCache.js";
 import type { CalendarEvent } from "../google/calendar.js";
 import type { MorningAction, MorningActionType } from "../morning/morningActions.js";
@@ -94,45 +93,6 @@ function fmtTime(isoStr: string): string {
   });
 }
 
-// ── Check 1: Calendar + Travel conflict ───────────────────────────────────────
-
-async function checkCalendarTravelConflict(
-  userName: string,
-  events: CalendarEvent[]
-): Promise<MorningAction[]> {
-  try {
-    const segments = await getTodayTravelSegments(userName);
-    if (segments.length === 0) return [];
-
-    const conflicts: MorningAction[] = [];
-    for (const seg of segments) {
-      const depIso = seg.departure_time ?? seg.pickup_datetime ?? seg.checkin_date;
-      if (!depIso) continue;
-      const depMs = new Date(depIso).getTime();
-
-      for (const event of events) {
-        if (event.allDay || !event.startIso) continue;
-        const evMs = new Date(event.startIso).getTime();
-        const overlapMs = Math.abs(evMs - depMs);
-        if (overlapMs < 4 * 60 * 60 * 1000) {
-          const carrier = seg.airline ?? seg.car_rental_company ?? seg.hotel_name ?? seg.segment_type;
-          conflicts.push({
-            type: "cross_domain_insight" as MorningActionType,
-            title: "Travel + Calendar Conflict",
-            detail: `${carrier} departs around ${fmtTime(depIso)} and "${event.summary}" is at ${fmtTime(event.startIso)} — these overlap. One may need to move.`,
-            severity: "warning",
-            data: { type: "travel_calendar_conflict", segmentType: seg.segment_type, eventSummary: event.summary },
-          });
-          break;
-        }
-      }
-    }
-    return conflicts;
-  } catch (err) {
-    logger.warn({ err, userName }, "[CrossDomain] Travel conflict check failed");
-    return [];
-  }
-}
 
 // ── Check 2: Departure risk (back-to-back < 30 min) ──────────────────────────
 
@@ -372,7 +332,6 @@ export async function runCrossDomainEngine(input: CrossDomainInput): Promise<Mor
   if (mode === "briefing_only") return [];
 
   const checks: Promise<MorningAction[]>[] = [
-    checkCalendarTravelConflict(userName, calendarEvents),
     Promise.resolve(checkDepartureRisk(calendarEvents)),
     Promise.resolve(checkScheduleStress(calendarEvents)),
     checkUpcomingDates(userName),

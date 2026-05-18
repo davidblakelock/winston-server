@@ -19,8 +19,6 @@ import { NATIVE_USER } from "../auth/middleware.js";
 import { getAuthClientForUser } from "../google/oauth.js";
 import { scanOrderEmails } from "../orders/gmailOrderScanner.js";
 import { upsertOrder, getOrders } from "../orders/ordersManager.js";
-import { scanTravelEmails } from "../travel/travelScanner.js";
-import { upsertTravelSegment } from "../travel/travelManager.js";
 import { scanEmailsForMeetings } from "../email/meetingScanner.js";
 import { setPendingMeetingRequests, getPendingMeetingRequests } from "../email/emailMeetingManager.js";
 import { sendPushToAll } from "../push/pushManager.js";
@@ -324,23 +322,6 @@ async function processEventInvitations(userName: string, since: Date): Promise<v
   }
 }
 
-// ── 4. Travel confirmations → Travel screen ───────────────────────────────────
-
-async function processTravelEmails(userName: string, since: Date): Promise<void> {
-  try {
-    const segments = await scanTravelEmails(userName, since);
-    if (segments.length === 0) return;
-
-    for (const seg of segments) {
-      await upsertTravelSegment(userName, seg);
-    }
-
-    logger.info({ userName, count: segments.length }, "[BgEmailScanner] Travel segments saved");
-  } catch (err) {
-    logger.warn({ err }, "[BgEmailScanner] Travel scan failed");
-  }
-}
-
 // ── Main scan tick ────────────────────────────────────────────────────────────
 
 async function runScan(userName: string): Promise<void> {
@@ -362,7 +343,6 @@ async function runScan(userName: string): Promise<void> {
     processOrderEmails(userName, since),
     processMeetingEmails(userName, since),
     processEventInvitations(userName, since),
-    processTravelEmails(userName, since),
   ]);
 
   _lastScanAt.set(userName, scanStart);

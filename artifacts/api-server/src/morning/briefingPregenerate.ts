@@ -40,7 +40,6 @@ import {
 } from "../lifeCaptures/lifeCapturesManager.js";
 import { buildRouteAwareSuggestions, buildRouteAwareBlock } from "../routeAware/routeAwareManager.js";
 import { getOrdersForBriefing } from "../orders/ordersManager.js";
-import { getTodayTravelSegments, formatTravelForBriefing } from "../travel/travelManager.js";
 
 // ── Smart calendar block with integrated departure times ──────────────────────
 // Builds a TODAY / TOMORROW / LATER THIS WEEK block where each event with a
@@ -525,7 +524,7 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
       dietaryRestrictions: [],  // no field in rawData yet; reserved for future onboarding
     };
 
-    const [lastNightNotes, newsBlock, yesterdayEps, todayEps, sportsScores, upcomingBills, upcomingDates, sundayData, pendingFollowUps, dallasEvents, venueConcertsBlock, dailyMotivation, personalFollowUps, outForDeliveryOrders, todayTravelSegments, apifyEventResult, weeklyGift, pendingObservation, annualLetter] = await Promise.all([
+    const [lastNightNotes, newsBlock, yesterdayEps, todayEps, sportsScores, upcomingBills, upcomingDates, sundayData, pendingFollowUps, dallasEvents, venueConcertsBlock, dailyMotivation, personalFollowUps, outForDeliveryOrders, apifyEventResult, weeklyGift, pendingObservation, annualLetter] = await Promise.all([
       getLastNightNotes().catch(() => []),
       fetchMorningNews(userName).catch(() => ""),
       fetchEpisodesForDate(yesterday, watchedIds).catch(() => []),
@@ -540,7 +539,6 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
       fetchDailyMotivation(userName).catch(() => ""),
       getPendingPersonalFollowups(userName).catch(() => []),
       getOrdersForBriefing(userName).catch(() => []),
-      getTodayTravelSegments(userName).catch(() => []),
       fetchBestLocalEvent(primaryCity, allInterests.slice(0, 10), userName).catch(() => ({ event: null, block: "" })),
       isSunday ? getWeeklyGift(userName).catch(() => null) : Promise.resolve(null),
       getPendingObservation(userName).catch(() => null),
@@ -636,8 +634,6 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
 
 
     const sportsBlock = sportsScores ? formatSportsForPrompt(sportsScores) : "";
-
-    const travelBlock = formatTravelForBriefing(todayTravelSegments);
 
     const ordersBlock = (() => {
       if (!outForDeliveryOrders || outForDeliveryOrders.length === 0) return "";
@@ -822,7 +818,7 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
     const todayTrip = await getTodayTripDay(userName).catch(() => null);
     const tripDayBlock = todayTrip ? buildTripDayBlock(todayTrip) : "";
 
-    const suffix = garminBlock + fitBlock + travelBlock + tripDayBlock + ordersBlock + tvMorningBlock + billsMorningBlock + datesBlock +
+    const suffix = garminBlock + fitBlock + tripDayBlock + ordersBlock + tvMorningBlock + billsMorningBlock + datesBlock +
       sundaySummaryBlock + recFollowUpBlock + personalFollowUpsBlock +
       mydayBlock + lifeSuggestionBlock + observationBlock + weeklyGiftBlock + annualLetterBlock + crossDomainBlock + routeAwareBlock +
       dedupedNewsBlock + dallasEventsBlock + apifyEventBlock + dedupedVenueConcertsBlock + motivationContextBlock +

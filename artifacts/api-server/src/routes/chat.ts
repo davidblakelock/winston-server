@@ -249,6 +249,7 @@ import { getPendingRouteReminder, setPendingRouteReminder } from "../routeAware/
 import {
   getPendingTripPlan,
   setPendingTripPlan,
+  parseTripIntent,
   generateTripItinerary,
   saveTripPlan,
 } from "../travel/tripPlanningManager.js";
@@ -1561,109 +1562,117 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     "[TripPlan] Intent check"
   );
   if (isTripPlanStart || isTripPlanFlowActive) {
+    const _generateAndInject = async (intent: ReturnType<typeof parseTripIntent>) => {
+      req.log.info(
+        { dest: intent.destination, nights: intent.nights, vibe: intent.vibe },
+        "[TripPlan] Enough info — generating itinerary"
+      );
+      try {
+        const itinerary = await generateTripItinerary(intent, userProfile as Record<string, unknown> | null);
+        await saveTripPlan(sessionUserName, intent, itinerary);
+        setPendingTripPlan(null);
+
+        const daysText = itinerary.days
+          .map((d) => {
+            const rest = d.restaurant?.name
+              ? `Dinner: ${d.restaurant.name} (${d.restaurant.cuisine}).`
+              : "";
+            const hotel = d.hotel?.name ? `Hotel: ${d.hotel.name}.` : "";
+            return `Day ${d.day} — ${d.title}: ${d.morning} / ${d.afternoon} / ${d.evening}. ${rest} ${hotel} Tips: ${d.practicalNotes}`;
+          })
+          .join("\n");
+        const tipsText = itinerary.generalTips.join("; ");
+
+        systemPrompt +=
+          `\n\n[Trip Itinerary — ${itinerary.tripName || itinerary.destination} — ${itinerary.nights} Nights]\n` +
+          `Summary: ${itinerary.summary}\n\n` +
+          `Day-by-day:\n${daysText}\n\n` +
+          `General tips: ${tipsText}\n\n` +
+          `TASK: Present this as a warm, enthusiastic day-by-day overview — like a knowledgeable friend walking them through an exciting plan. ` +
+          `Name every restaurant and hotel specifically. Mention one memorable highlight per day. ` +
+          `Keep each day to 2-3 sentences. End with "Want me to tweak anything?" ` +
+          `Write conversationally — no bullet points.`;
+
+        req.log.info({ dest: itinerary.destination, days: itinerary.days.length }, "[TripPlan] Itinerary injected into system prompt");
+      } catch (tripErr) {
+        req.log.warn({ err: tripErr }, "[TripPlan] Itinerary generation failed");
+        setPendingTripPlan(null);
+        systemPrompt +=
+          `\n\n[Trip Planning — Generation Error]\n` +
+          `The itinerary generation hit an error. Apologize briefly and warmly — ` +
+          `say you ran into a hiccup building the plan and ask them to try again in a moment. Keep it light.`;
+      }
+    };
+
     if (isTripPlanStart) {
-      // Extract destination from message
-      const destMatch =
-        message.match(/(?:to|in|for)\s+([A-Z][A-Za-z\s,'-]{2,40}?)(?:\s*[.!?]|$)/i) ??
-        message.match(/(?:trip|vacation|holiday|getaway|travel|visit)\s+(?:to\s+)?([A-Z][A-Za-z\s,'-]{2,35}?)(?:\s*[.!?]|$)/i);
-      const dest = destMatch?.[1]?.trim().replace(/[.!?,]+$/, "") ?? "";
-      setPendingTripPlan({ destination: dest || "your destination", phase: "nights" });
-      const destLabel = dest ? `to ${dest}` : "(destination to be confirmed)";
-      systemPrompt +=
-        `\n\n[Trip Planning — Getting Started]\n` +
-        `The user wants to plan a trip ${destLabel}. Phase: asking about duration.\n` +
-        `Your ONLY job right now: acknowledge their plan warmly in one sentence, then ask "How many nights are you thinking?" ` +
-        `If the destination wasn't clear from their message, ask them to confirm it first. Keep it brief and excited.`;
+      // Parse everything from the initial message — ask ONE follow-up only if truly critical info is missing
+      const intent = parseTripIntent(message);
+
+      if (!intent.destination) {
+        // No destination at all — ask for it
+        setPendingTripPlan({ intent, phase: "clarify", missingField: "destination" });
+        systemPrompt +=
+          `\n\n[Trip Planning — Need Destination]\n` +
+          `The user wants to plan a trip but the destination isn't clear. ` +
+          `Acknowledge their trip idea warmly in one sentence, then ask: "Where are you thinking?" Nothing else.`;
+      } else if (!intent.nights && !intent.startDate) {
+        // Have destination but no duration or timing — ask once
+        setPendingTripPlan({ intent, phase: "clarify", missingField: "nights" });
+        systemPrompt +=
+          `\n\n[Trip Planning — Need Duration]\n` +
+          `Destination: ${intent.destination}. Party: ${intent.partyDesc ?? "not specified"}. Vibe: ${intent.vibe ?? "not specified"}.\n` +
+          `Acknowledge their idea warmly in one sentence${intent.partyDesc ? ` — mention ${intent.partyDesc}` : ""}, then ask: "How long are you thinking?" Nothing else.`;
+      } else {
+        // Have enough — generate immediately without asking anything
+        setPendingTripPlan({ intent, phase: "generating" });
+        await _generateAndInject(intent);
+      }
+
     } else if (isTripPlanFlowActive && pendingTripPlan) {
-      const phase = pendingTripPlan.phase;
+      const { intent, missingField } = pendingTripPlan;
 
-      if (phase === "nights") {
-        const nightsMatch =
-          message.match(/\b(\d+)\s*nights?\b/i) ??
-          message.match(/\b(\d+)\s*(?:days?|nights?)\b/i) ??
-          message.match(/\b(\d+)\b/);
-        const nights = nightsMatch ? parseInt(nightsMatch[1]!, 10) : null;
+      if (missingField === "destination") {
+        // User answered with destination
+        const updatedIntent = parseTripIntent(message);
+        const dest = updatedIntent.destination || message.trim().replace(/[.!?]+$/, "").trim();
+        intent.destination = dest;
 
-        if (nights && nights >= 1 && nights <= 45) {
-          setPendingTripPlan({ ...pendingTripPlan, phase: "vibe", nights });
+        if (!intent.nights && !intent.startDate) {
+          setPendingTripPlan({ intent, phase: "clarify", missingField: "nights" });
           systemPrompt +=
-            `\n\n[Trip Planning — Phase: vibe]\n` +
-            `Got it: ${nights} nights in ${pendingTripPlan.destination}.\n` +
-            `Your ONLY job: acknowledge the duration in one sentence, then ask: ` +
-            `"What's the vibe you're going for — relaxed, adventurous, or a mix of both?" Nothing else.`;
+            `\n\n[Trip Planning — Need Duration]\n` +
+            `Destination confirmed: ${dest}.\n` +
+            `Acknowledge in one sentence, then ask: "How long are you thinking?" Nothing else.`;
         } else {
-          systemPrompt +=
-            `\n\n[Trip Planning — Clarify nights]\n` +
-            `The user's answer didn't include a clear number of nights. ` +
-            `Gently re-ask: "How many nights are you thinking for ${pendingTripPlan.destination}?"`;
+          setPendingTripPlan({ intent, phase: "generating" });
+          await _generateAndInject(intent);
         }
 
-      } else if (phase === "vibe") {
-        const vibe =
-          /\brelax(?:ed|ing)?\b|\bchill(?:ed)?\b|\blaid[- ]?back\b|\bslow\b|\beasy\b|\bquiet\b/i.test(message)
-            ? "relaxed"
-          : /\badventur(?:ous|e)?\b|\bactive\b|\bbusy\b|\bpacked\b|\baction\b|\bexplor\b|\bhike\b/i.test(message)
-            ? "adventurous"
-          : "mix";
-        setPendingTripPlan({ ...pendingTripPlan, phase: "must_haves", vibe });
-        systemPrompt +=
-          `\n\n[Trip Planning — Phase: must_haves]\n` +
-          `Got it: vibe is "${vibe}".\n` +
-          `Your ONLY job: acknowledge in one sentence, then ask: ` +
-          `"Any must-haves — a specific experience, type of food, or something you definitely want to do?" ` +
-          `They can say "none" or "no" if they're open. Nothing else.`;
+      } else if (missingField === "nights") {
+        // User answered with duration
+        const nightsM =
+          message.match(/\b(\d+)\s*nights?\b/i) ??
+          message.match(/\b(\d+)\s*days?\b/i) ??
+          message.match(/\bweekend\b/i) ? null : message.match(/\b(\d+)\b/);
+        const isWeekend = /\bweekend\b/i.test(message);
+        const isWeek = /\b(?:a\s+)?week\b/i.test(message);
 
-      } else if (phase === "must_haves") {
-        const mustHaves =
-          /^\s*(?:no|none|nope|not\s+really|nothing\s+specific|whatever|open|nah|no\s+preference|not\s+sure)\s*[.!?]*\s*$/i.test(message)
-            ? ""
-            : message.trim();
-        setPendingTripPlan({ ...pendingTripPlan, phase: "been_before", mustHaves });
-        systemPrompt +=
-          `\n\n[Trip Planning — Phase: been_before]\n` +
-          `Got it: must-haves noted.\n` +
-          `Your ONLY job: acknowledge in one sentence, then ask: ` +
-          `"Have you been to ${pendingTripPlan.destination} before?" Nothing else.`;
+        let nights: number | null = null;
+        if (isWeekend) nights = 2;
+        else if (isWeek) nights = 6;
+        else if (nightsM) {
+          const n = parseInt(nightsM[1]!, 10);
+          nights = /\bday/i.test(nightsM[0]!) ? Math.max(1, n - 1) : n;
+        }
 
-      } else if (phase === "been_before") {
-        const beenBefore =
-          /\b(?:yes|yeah|yep|yup|have|been|visited|went|before|prior|already|a\s+few\s+times?|once|twice|multiple\s+times?)\b/i.test(message);
-        const completedPlan = { ...pendingTripPlan, phase: "generating" as const, beenBefore };
-
-        req.log.info(
-          { dest: completedPlan.destination, nights: completedPlan.nights, vibe: completedPlan.vibe },
-          "[TripPlan] All questions answered — generating itinerary"
-        );
-
-        try {
-          const itinerary = await generateTripItinerary(completedPlan, userProfile as Record<string, unknown> | null);
-          await saveTripPlan(sessionUserName, completedPlan, itinerary);
-          setPendingTripPlan(null);
-
-          const daysText = itinerary.days
-            .map((d) => `Day ${d.day} — ${d.title}: ${d.morning} / ${d.afternoon} / ${d.evening}. Dinner: ${d.restaurant}. Special: ${d.specialExperience}. Tip: ${d.practicalNotes}`)
-            .join("\n");
-          const tipsText = itinerary.generalTips.join("; ");
-
+        if (nights && nights >= 1 && nights <= 30) {
+          intent.nights = nights;
+          setPendingTripPlan({ intent, phase: "generating" });
+          await _generateAndInject(intent);
+        } else {
           systemPrompt +=
-            `\n\n[Trip Itinerary — ${itinerary.destination} — ${itinerary.nights} Nights]\n` +
-            `Summary: ${itinerary.summary}\n\n` +
-            `Day-by-day:\n${daysText}\n\n` +
-            `General tips: ${tipsText}\n\n` +
-            `TASK: Present this as a warm, enthusiastic day-by-day overview — like a knowledgeable friend walking them through an exciting plan. ` +
-            `Highlight one special/memorable experience per day. Name the restaurants specifically. ` +
-            `Keep each day description to 2-3 sentences. End with "Want me to adjust anything?" ` +
-            `Do NOT use bullet points — write it conversationally.`;
-
-          req.log.info({ dest: itinerary.destination, days: itinerary.days.length }, "[TripPlan] Itinerary injected into system prompt");
-
-        } catch (tripErr) {
-          req.log.warn({ err: tripErr }, "[TripPlan] Itinerary generation failed");
-          setPendingTripPlan(null);
-          systemPrompt +=
-            `\n\n[Trip Planning — Generation Error]\n` +
-            `The itinerary generation hit an error. Apologize briefly and warmly — ` +
-            `say you ran into a hiccup building the plan and ask them to try again in a moment. Keep it light.`;
+            `\n\n[Trip Planning — Clarify Duration]\n` +
+            `The user didn't give a clear trip length. Gently re-ask: "How many nights are you thinking for ${intent.destination}?"`;
         }
       }
     }

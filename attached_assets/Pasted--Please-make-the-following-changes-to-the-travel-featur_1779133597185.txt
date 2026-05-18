@@ -1,0 +1,43 @@
+
+"Please make the following changes to the travel feature. This is a complete replacement of the current approach.
+The concept:
+The travel screen is a trip planning companion — not a confirmation storage system. Remove all email scanning for travel confirmations. Remove the /api/travel/sync endpoint. Remove the travel segments table. Google and Apple Wallet already handle boarding passes and confirmation emails better than we can. Winston's value is in planning trips, not storing confirmations.
+The conversation flow:
+When a user describes a trip — 'I want a 4 day road trip through Arkansas' or 'help me plan a romantic getaway to San Miguel' or 'I want to take Susan to Napa for our anniversary' — Winston enters trip planning mode naturally. No rigid four question flow. Winston reads what the user said and asks ONE follow-up question only if something genuinely critical is missing — dates, party size, or budget if not mentioned. If the user has given enough to work with, skip straight to planning. The conversation should feel like talking to a well-traveled friend, not filling out a form.
+The itinerary generation:
+After the conversation Winston generates a complete day by day itinerary using Claude Sonnet. The itinerary must include:
+
+Trip name and destination
+Travel dates and number of nights
+For each day: date label, morning activity, afternoon activity, evening activity or dinner
+Hotel recommendation for each night — name, why it fits, website URL
+Restaurant recommendations — name, cuisine style, why it fits, OpenTable/Resy booking link where available
+Practical notes — getting around, weather, what to know
+The itinerary should be personalized based on the user's profile — interests, food preferences, travel style, who they are traveling with
+
+Database:
+Create a trip_plans table with these columns:
+
+id
+user_id
+destination
+trip_name
+start_date
+end_date
+nights
+itinerary (JSON — day by day plan with hotels, restaurants, activities)
+status (planning/confirmed/completed)
+created_at
+updated_at
+
+Endpoints:
+
+GET /api/trips — returns all trip plans for the user sorted by start_date
+GET /api/trips/:id — returns a single trip plan with full itinerary
+POST /api/trips — creates a new trip plan
+PUT /api/trips/:id — updates a trip plan
+DELETE /api/trips/:id — removes a trip plan
+
+Restaurant booking:
+When the itinerary includes a restaurant recommendation, check OpenTable and Resy via Apify for availability. If available, include the booking link in the itinerary. If not available via OpenTable or Resy, include the restaurant website and phone number.
+**Deploy when complete and test by saying 'I want to plan a 4 day road trip through Arkansas stopping at Hot Springs, Eureka Springs and Bentonville' and confirm Winston enters planning mode naturally and generates a complete itinerary.

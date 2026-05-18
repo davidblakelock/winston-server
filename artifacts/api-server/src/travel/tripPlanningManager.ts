@@ -1,33 +1,46 @@
 /**
  * Trip Planning Manager
  *
- * Handles the conversational trip planning flow:
- *   1. User expresses intent → server asks up to 4 questions
- *   2. Generates full day-by-day itinerary with Claude Sonnet
- *   3. Stores in trip_plans table
- *   4. Surfaces today's itinerary day in the morning briefing
+ * Winston's trip planning companion — full conversational flow, day-by-day
+ * itinerary generation, and CRUD for saved trip plans.
  *
- * Pending state is in-memory (same pattern as other conversational flows).
+ * Conversation flow:
+ *   - User describes a trip → parse what they gave, ask ONE follow-up only
+ *     if something critical is genuinely missing (dates, duration, party).
+ *   - Generate complete day-by-day itinerary with Claude Sonnet.
+ *   - Store in trip_plans table.
  */
 
 import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { NATIVE_USER } from "../auth/middleware.js";
+import { MODEL_SONNET } from "../lib/models.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // ── Pending conversation state ────────────────────────────────────────────────
 
-export type TripPlanPhase = "nights" | "vibe" | "must_haves" | "been_before" | "generating";
+export type TripPlanPhase = "clarify" | "generating";
+
+export interface ParsedTripIntent {
+  destination: string;
+  nights?: number;
+  startDate?: string;      // YYYY-MM-DD
+  endDate?: string;        // YYYY-MM-DD
+  partySize?: number;
+  partyDesc?: string;      // "my wife Susan", "solo", etc.
+  vibe?: string;           // "romantic", "adventurous", "relaxed", etc.
+  mustHaves?: string;
+  beenBefore?: boolean;
+  budget?: string;         // "budget", "mid-range", "luxury"
+  rawMessage: string;      // original user message
+}
 
 export interface PendingTripPlan {
-  destination: string;
-  phase:       TripPlanPhase;
-  nights?:     number;
-  vibe?:       string;
-  mustHaves?:  string;
-  beenBefore?: boolean;
+  intent: ParsedTripIntent;
+  phase: TripPlanPhase;
+  missingField?: "nights" | "destination" | "dates";
 }
 
 let _pendingTripPlan: PendingTripPlan | null = null;
@@ -37,24 +50,44 @@ export function setPendingTripPlan(p: PendingTripPlan | null): void { _pendingTr
 
 // ── Itinerary types ───────────────────────────────────────────────────────────
 
+export interface ItineraryRestaurant {
+  name: string;
+  cuisine: string;
+  whyItFits: string;
+  bookingUrl?: string;   // OpenTable or Resy link if known
+  websiteUrl?: string;
+  phone?: string;
+}
+
+export interface ItineraryHotel {
+  name: string;
+  whyItFits: string;
+  websiteUrl?: string;
+  priceRange?: string;   // "$", "$$", "$$$", "$$$$"
+}
+
 export interface ItineraryDay {
-  day:               number;
-  title:             string;
-  morning:           string;
-  afternoon:         string;
-  evening:           string;
-  restaurant:        string;
-  restaurantUrl?:    string;
-  specialExperience: string;
-  practicalNotes:    string;
+  day: number;
+  date?: string;           // YYYY-MM-DD if start date known
+  title: string;           // evocative day title
+  morning: string;
+  afternoon: string;
+  evening: string;
+  restaurant: ItineraryRestaurant;
+  hotel: ItineraryHotel;   // where they sleep this night
+  practicalNotes: string;
 }
 
 export interface TripItinerary {
+  tripName: string;
   destination: string;
-  nights:      number;
-  summary:     string;
+  startDate?: string;    // YYYY-MM-DD
+  endDate?: string;      // YYYY-MM-DD
+  nights: number;
+  partyDesc?: string;
+  summary: string;
   generalTips: string[];
-  days:        ItineraryDay[];
+  days: ItineraryDay[];
 }
 
 // ── DB setup ──────────────────────────────────────────────────────────────────
@@ -66,84 +99,201 @@ export async function ensureTripPlansTable(): Promise<void> {
         id           SERIAL PRIMARY KEY,
         user_name    TEXT NOT NULL DEFAULT '${NATIVE_USER}',
         destination  TEXT NOT NULL,
+        trip_name    TEXT,
         start_date   DATE,
+        end_date     DATE,
         nights       INTEGER,
-        vibe         TEXT,
-        must_haves   TEXT,
-        been_before  BOOLEAN,
-        itinerary    TEXT,
-        status       TEXT NOT NULL DEFAULT 'active',
+        itinerary    JSONB,
+        status       TEXT NOT NULL DEFAULT 'planning',
         created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `);
+    // Add columns to existing tables (idempotent)
+    await query(`ALTER TABLE trip_plans ADD COLUMN IF NOT EXISTS trip_name TEXT`).catch(() => {});
+    await query(`ALTER TABLE trip_plans ADD COLUMN IF NOT EXISTS end_date DATE`).catch(() => {});
+    // Migrate itinerary column from TEXT to JSONB if needed
+    await query(`
+      DO $$ BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name='trip_plans' AND column_name='itinerary' AND data_type='text'
+        ) THEN
+          ALTER TABLE trip_plans ALTER COLUMN itinerary TYPE JSONB USING
+            CASE WHEN itinerary IS NULL THEN NULL
+                 ELSE itinerary::jsonb END;
+        END IF;
+      END $$
+    `).catch(() => {});
     logger.info("[TripPlan] trip_plans table ready");
   } catch (err) {
     logger.warn({ err }, "[TripPlan] Table creation warning");
   }
 }
 
+// ── Intent parsing helpers ────────────────────────────────────────────────────
+
+/**
+ * Parse a user message for trip intent details.
+ * Returns whatever could be extracted — caller decides what's missing.
+ */
+export function parseTripIntent(message: string): ParsedTripIntent {
+  const msg = message.trim();
+
+  // Destination extraction — common patterns
+  const destPatterns = [
+    /(?:to|through|in|around|visit(?:ing)?)\s+([A-Z][A-Za-z\s,'-]{2,50}?)(?:\s+for|\s+with|\s+stopping|[.!?]|$)/i,
+    /(?:road\s+trip|trip|vacation|holiday|getaway|travel|visit)\s+(?:through|to\s+)?([A-Z][A-Za-z\s,'-]{2,45}?)(?:\s+for|\s+with|\s+stopping|[.!?]|$)/i,
+    /(?:romantic|anniversary|birthday|solo|family)\s+(?:trip|getaway|vacation)\s+(?:to\s+)?([A-Z][A-Za-z\s,'-]{2,40}?)(?:\s+for|\s+with|[.!?]|$)/i,
+  ];
+  let destination = "";
+  for (const pat of destPatterns) {
+    const m = msg.match(pat);
+    if (m?.[1]) {
+      destination = m[1].trim().replace(/[.,!?]+$/, "").trim();
+      break;
+    }
+  }
+
+  // Duration — nights or days
+  const nightsM =
+    msg.match(/\b(\d+)\s*(?:-\s*)?night/i) ??
+    msg.match(/\b(\d+)\s*(?:-\s*)?day/i);
+  let nights: number | undefined;
+  if (nightsM) {
+    nights = parseInt(nightsM[1]!, 10);
+    if (/\bday/i.test(nightsM[0]!)) nights = Math.max(1, nights - 1);
+  } else if (/\bweekend\b/i.test(msg)) {
+    nights = 2;
+  }
+
+  // Party description
+  let partyDesc: string | undefined;
+  let partySize: number | undefined;
+  const partyM = msg.match(/(?:with|take|bring|for)\s+(my\s+(?:wife|husband|partner|girlfriend|boyfriend|family|kids?|son|daughter|friend|buddy|dad|mom|parents?|sister|brother)\s*(?:\w+)?(?:\s+and\s+\w+)?|(?:just\s+)?(?:solo|by\s+myself)|(\d+)\s+(?:of\s+us|people|adults?|friends?))/i);
+  if (partyM) {
+    partyDesc = partyM[1]?.trim().replace(/[.,!?]+$/, "");
+    const numM = partyDesc?.match(/\b(\d+)\b/);
+    if (numM) partySize = parseInt(numM[1]!, 10);
+    else if (/solo|myself/i.test(partyDesc ?? "")) partySize = 1;
+    else if (/wife|husband|partner|girlfriend|boyfriend/i.test(partyDesc ?? "")) partySize = 2;
+  }
+
+  // Vibe / occasion
+  let vibe: string | undefined;
+  if (/romantic|anniversary|honeymoon/i.test(msg)) vibe = "romantic";
+  else if (/adventure|adventur|hik(?:e|ing)|outdoor|active/i.test(msg)) vibe = "adventurous";
+  else if (/relax|chill|lazy|slow|restful|peaceful/i.test(msg)) vibe = "relaxed";
+  else if (/birthday/i.test(msg)) vibe = "celebratory";
+  else if (/family|kids?/i.test(msg)) vibe = "family-friendly";
+  else if (/road\s+trip/i.test(msg)) vibe = "road trip";
+
+  // Budget
+  let budget: string | undefined;
+  if (/\b(luxury|high[\s-]?end|splurge|five[\s-]?star)\b/i.test(msg)) budget = "luxury";
+  else if (/\b(budget|cheap|affordable|inexpensive|backpack)\b/i.test(msg)) budget = "budget";
+
+  // Start date
+  let startDate: string | undefined;
+  const dateM = msg.match(/\b(?:in\s+)?(?:late\s+)?(?:January|February|March|April|May|June|July|August|September|October|November|December)\b|\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/i);
+  if (dateM) startDate = dateM[0];
+
+  // Must-haves (after "want to", "need", "must", "have to")
+  const mustM = msg.match(/(?:must|need(?:\s+to)?|have\s+to|want\s+to\s+(?:make\s+sure|definitely)|definitely)\s+(?:see|visit|try|do|experience)\s+([^,.!?]+)/i);
+  const mustHaves = mustM?.[1]?.trim();
+
+  return { destination, nights, startDate, partySize, partyDesc, vibe, mustHaves, budget, beenBefore: undefined, rawMessage: msg };
+}
+
 // ── Itinerary generation ──────────────────────────────────────────────────────
 
 export async function generateTripItinerary(
-  plan:        PendingTripPlan,
+  intent: ParsedTripIntent,
   userProfile: Record<string, unknown> | null,
 ): Promise<TripItinerary> {
   const rawData   = (userProfile?.rawData as Record<string, unknown>) ?? {};
-  const interests = (rawData.interests as string[] | undefined)?.join(", ")   ?? "good food, culture, exploration";
-  const favRestaurants = (rawData.restaurants as string[] | undefined)?.slice(0, 5).join(", ") ?? "";
+  const interests = (rawData.interests as string[] | undefined)?.join(", ") ?? "good food, culture, exploration";
   const dietaryRestrictions = (rawData.dietaryRestrictions as string[] | undefined)?.join(", ") ?? "";
+  const foodPrefs = (rawData.foodPreferences as string[] | undefined)?.join(", ") ?? "";
 
-  const nights      = plan.nights ?? 3;
-  const vibe        = plan.vibe ?? "mix of relaxed and adventurous";
-  const mustHaves   = plan.mustHaves || "None specified";
-  const beenBefore  = plan.beenBefore ? "Yes — focus on beyond-the-tourist experiences" : "No — include iconic highlights alongside hidden gems";
-  const destination = plan.destination;
+  const nights    = intent.nights ?? 3;
+  const totalDays = nights + 1;
+  const dest      = intent.destination;
+  const party     = intent.partyDesc ?? (intent.partySize === 1 ? "solo" : "couple");
+  const vibe      = intent.vibe ?? "mix of relaxed and adventurous";
+  const mustHaves = intent.mustHaves || "None specified";
+  const budget    = intent.budget ?? "mid-range";
 
-  const prompt =
-    `You are creating a personal travel itinerary for a trip to ${destination}.\n\n` +
-    `TRIP DETAILS:\n` +
-    `• Destination: ${destination}\n` +
-    `• Duration: ${nights} nights (${nights + 1} days)\n` +
-    `• Vibe: ${vibe}\n` +
-    `• Must-haves: ${mustHaves}\n` +
-    `• Been there before: ${beenBefore}\n` +
-    `• Traveler interests: ${interests}\n` +
-    (favRestaurants ? `• Favorite restaurant style at home: ${favRestaurants}\n` : "") +
-    (dietaryRestrictions ? `• Dietary restrictions: ${dietaryRestrictions}\n` : "") +
-    `\nGenerate a complete, specific, day-by-day itinerary using REAL place names.\n\n` +
-    `RULES:\n` +
-    `• Restaurants must be real, named establishments with brief notes on what they're known for\n` +
-    `• Activities must be specific — actual neighborhoods, markets, museums, trails (not generic "explore the city")\n` +
-    `• One special/memorable experience per day — something that makes this day stand out\n` +
-    `• Practical notes should be genuinely useful: timing, reservations, transport between places\n` +
-    `• If vibe is "relaxed" — avoid back-to-back obligations; leave breathing room\n` +
-    `• If vibe is "adventurous" — pack the days with interesting experiences\n` +
-    `• Day 1 accounts for travel/arrival; don't over-schedule it\n` +
-    `• Last day accounts for checkout/departure\n\n` +
-    `Return ONLY valid JSON (no markdown, no explanation) with this exact structure:\n` +
-    `{\n` +
-    `  "destination": "${destination}",\n` +
-    `  "nights": ${nights},\n` +
-    `  "summary": "One sentence capturing the spirit of this trip",\n` +
-    `  "generalTips": ["tip1", "tip2", "tip3", "tip4"],\n` +
-    `  "days": [\n` +
-    `    {\n` +
-    `      "day": 1,\n` +
-    `      "title": "Short evocative title for the day",\n` +
-    `      "morning": "What to do in the morning (specific places/activities)",\n` +
-    `      "afternoon": "What to do in the afternoon",\n` +
-    `      "evening": "Evening plan / area to be in",\n` +
-    `      "restaurant": "Restaurant name — what it's known for, price range ($ $$ $$$ $$$$)",\n` +
-    `      "specialExperience": "The one unforgettable thing about this day",\n` +
-    `      "practicalNotes": "Timing, reservations, transport, or insider tips"\n` +
-    `    }\n` +
-    `  ]\n` +
-    `}`;
+  const startDateNote = intent.startDate
+    ? `Start date / approximate timing: ${intent.startDate}`
+    : "Start date not specified — omit dates from the itinerary, just use Day 1, Day 2 labels";
+
+  const prompt = `You are creating a personalized travel itinerary for a trip to ${dest}.
+
+TRIP DETAILS:
+• Destination: ${dest}
+• Duration: ${nights} nights (${totalDays} days)
+• Traveling with: ${party}
+• Vibe: ${vibe}
+• Must-haves: ${mustHaves}
+• Budget level: ${budget}
+• ${startDateNote}
+• Traveler interests: ${interests}
+${foodPrefs ? `• Food preferences: ${foodPrefs}` : ""}
+${dietaryRestrictions ? `• Dietary restrictions: ${dietaryRestrictions}` : ""}
+
+Generate a complete, specific, day-by-day itinerary using REAL place names.
+
+RULES:
+• Use real named establishments, neighborhoods, parks, museums, trails — no generic descriptions
+• Hotels: recommend real properties that fit the budget level and vibe
+• Restaurants: real establishments with specific cuisine and why they fit this traveler
+• Include OpenTable or Resy booking URLs where you know them (e.g. https://www.opentable.com/r/restaurant-slug); if unsure, include the restaurant website URL instead
+• Day 1 accounts for travel/arrival — lighter schedule
+• Last day accounts for departure — morning activities only before checkout
+• Practical notes should be genuinely useful: timing, reservations needed, transport, insider tips
+• If vibe is "romantic" — intimate venues, sunset spots, private experiences
+• If vibe is "road trip" — stopping points, driving times, scenic routes
+• If traveling with kids — family-friendly activities and restaurants
+• One hotel per night (can repeat same hotel for multi-night stays in one city)
+
+Return ONLY valid JSON with this exact structure (no markdown, no explanation):
+{
+  "tripName": "Short evocative name for this trip e.g. 'Arkansas River Road' or 'Napa for Two'",
+  "destination": "${dest}",
+  "nights": ${nights},
+  "partyDesc": "${party}",
+  "summary": "One vivid sentence capturing the spirit of this trip",
+  "generalTips": ["Practical tip 1", "Practical tip 2", "Practical tip 3", "Practical tip 4"],
+  "days": [
+    {
+      "day": 1,
+      "title": "Short evocative title for the day",
+      "morning": "What to do in the morning — specific places, activities",
+      "afternoon": "What to do in the afternoon — specific places",
+      "evening": "Evening plan — neighborhood, activity, or wind-down",
+      "restaurant": {
+        "name": "Restaurant name",
+        "cuisine": "Cuisine type and style",
+        "whyItFits": "One sentence on why this fits the vibe and traveler",
+        "bookingUrl": "https://www.opentable.com/... or https://resy.com/... if known, else null",
+        "websiteUrl": "Restaurant website URL if known, else null",
+        "phone": null
+      },
+      "hotel": {
+        "name": "Hotel name",
+        "whyItFits": "One sentence on why this hotel fits",
+        "websiteUrl": "Hotel website URL",
+        "priceRange": "$$ or $$$ or $$$$ matching the budget"
+      },
+      "practicalNotes": "Timing, reservations needed, transport, or insider tips"
+    }
+  ]
+}`;
 
   const response = await anthropic.messages.create({
-    model:      "claude-sonnet-4-6",
-    max_tokens: 4000,
+    model:      MODEL_SONNET,
+    max_tokens: 5000,
     messages:   [{ role: "user", content: prompt }],
   });
 
@@ -156,48 +306,121 @@ export async function generateTripItinerary(
   if (!jsonMatch) throw new Error("[TripPlan] No JSON found in Claude response");
 
   const itinerary = JSON.parse(jsonMatch[0]) as TripItinerary;
-  logger.info({ destination, nights, days: itinerary.days?.length }, "[TripPlan] Itinerary generated");
+  logger.info({ destination: dest, nights, days: itinerary.days?.length }, "[TripPlan] Itinerary generated");
   return itinerary;
 }
 
-// ── DB persistence ────────────────────────────────────────────────────────────
+// ── CRUD ──────────────────────────────────────────────────────────────────────
+
+export interface TripPlanRow {
+  id: number;
+  user_name: string;
+  destination: string;
+  trip_name: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  nights: number | null;
+  itinerary: TripItinerary | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
 
 export async function saveTripPlan(
   userName:  string,
-  plan:      PendingTripPlan,
+  intent:    ParsedTripIntent,
   itinerary: TripItinerary,
 ): Promise<number> {
+  const startDate = intent.startDate ?? itinerary.startDate ?? null;
+  const endDate   = itinerary.endDate ?? null;
+  const nights    = intent.nights ?? itinerary.nights ?? null;
+
   const { rows } = await query<{ id: number }>(
     `INSERT INTO trip_plans
-       (user_name, destination, nights, vibe, must_haves, been_before, itinerary, status)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, 'active')
+       (user_name, destination, trip_name, start_date, end_date, nights, itinerary, status)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, 'planning')
      RETURNING id`,
     [
       userName,
-      plan.destination,
-      plan.nights ?? null,
-      plan.vibe ?? null,
-      plan.mustHaves ?? null,
-      plan.beenBefore ?? null,
+      intent.destination,
+      itinerary.tripName ?? null,
+      startDate,
+      endDate,
+      nights,
       JSON.stringify(itinerary),
     ]
   );
   const id = rows[0]?.id ?? 0;
-  logger.info({ id, destination: plan.destination, userName }, "[TripPlan] Saved to DB");
+  logger.info({ id, destination: intent.destination, userName }, "[TripPlan] Saved to DB");
   return id;
 }
 
-export async function getActiveTripPlans(userName = NATIVE_USER): Promise<Array<{
-  id: number; destination: string; nights: number | null; start_date: string | null; itinerary: string | null;
-}>> {
-  const { rows } = await query(
-    `SELECT id, destination, nights, start_date, itinerary
+export async function getActiveTripPlans(userName = NATIVE_USER): Promise<TripPlanRow[]> {
+  const { rows } = await query<TripPlanRow>(
+    `SELECT id, user_name, destination, trip_name, start_date, end_date, nights, itinerary, status, created_at, updated_at
      FROM trip_plans
-     WHERE user_name = $1 AND status = 'active'
-     ORDER BY created_at DESC`,
+     WHERE user_name = $1
+     ORDER BY COALESCE(start_date::text, created_at::text) DESC`,
     [userName]
   );
-  return rows as Array<{ id: number; destination: string; nights: number | null; start_date: string | null; itinerary: string | null }>;
+  return rows;
+}
+
+export async function getTripPlanById(id: number, userName: string): Promise<TripPlanRow | null> {
+  const { rows } = await query<TripPlanRow>(
+    `SELECT id, user_name, destination, trip_name, start_date, end_date, nights, itinerary, status, created_at, updated_at
+     FROM trip_plans
+     WHERE id = $1 AND user_name = $2`,
+    [id, userName]
+  );
+  return rows[0] ?? null;
+}
+
+export async function updateTripPlan(
+  id: number,
+  userName: string,
+  updates: {
+    trip_name?: string | null;
+    destination?: string;
+    start_date?: string | null;
+    end_date?: string | null;
+    nights?: number | null;
+    itinerary?: TripItinerary | null;
+    status?: string;
+  },
+): Promise<TripPlanRow | null> {
+  const setClauses: string[] = ["updated_at = NOW()"];
+  const values: unknown[] = [];
+  let idx = 1;
+
+  if ("trip_name" in updates) { setClauses.push(`trip_name = $${idx++}`); values.push(updates.trip_name ?? null); }
+  if ("destination" in updates) { setClauses.push(`destination = $${idx++}`); values.push(updates.destination); }
+  if ("start_date" in updates) { setClauses.push(`start_date = $${idx++}`); values.push(updates.start_date ?? null); }
+  if ("end_date" in updates) { setClauses.push(`end_date = $${idx++}`); values.push(updates.end_date ?? null); }
+  if ("nights" in updates) { setClauses.push(`nights = $${idx++}`); values.push(updates.nights ?? null); }
+  if ("itinerary" in updates) { setClauses.push(`itinerary = $${idx++}::jsonb`); values.push(updates.itinerary ? JSON.stringify(updates.itinerary) : null); }
+  if ("status" in updates) { setClauses.push(`status = $${idx++}`); values.push(updates.status); }
+
+  if (setClauses.length === 1) return getTripPlanById(id, userName); // nothing to update
+
+  values.push(id);
+  values.push(userName);
+
+  const { rows } = await query<TripPlanRow>(
+    `UPDATE trip_plans SET ${setClauses.join(", ")}
+     WHERE id = $${idx++} AND user_name = $${idx}
+     RETURNING id, user_name, destination, trip_name, start_date, end_date, nights, itinerary, status, created_at, updated_at`,
+    values
+  );
+  return rows[0] ?? null;
+}
+
+export async function deleteTripPlan(id: number, userName: string): Promise<boolean> {
+  const { rows } = await query<{ id: number }>(
+    `DELETE FROM trip_plans WHERE id = $1 AND user_name = $2 RETURNING id`,
+    [id, userName]
+  );
+  return rows.length > 0;
 }
 
 // ── Today's travel day detection ──────────────────────────────────────────────
@@ -210,11 +433,6 @@ export interface TodayTripDay {
   itinerary:   TripItinerary;
 }
 
-/**
- * Returns today's itinerary day if the user has an active trip plan
- * whose start_date falls such that today is one of the travel days.
- * Falls back to using created_at as the start date if start_date is null.
- */
 export async function getTodayTripDay(userName = NATIVE_USER): Promise<TodayTripDay | null> {
   const plans = await getActiveTripPlans(userName).catch(() => []);
   if (!plans.length) return null;
@@ -222,16 +440,11 @@ export async function getTodayTripDay(userName = NATIVE_USER): Promise<TodayTrip
   const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
 
   for (const plan of plans) {
-    if (!plan.itinerary) continue;
-    let itinerary: TripItinerary;
-    try { itinerary = JSON.parse(plan.itinerary) as TripItinerary; }
-    catch { continue; }
-
+    if (!plan.itinerary || !plan.start_date) continue;
+    const itinerary = plan.itinerary;
     const nights = plan.nights ?? itinerary.nights ?? 3;
-    const startStr = plan.start_date ?? null;
-    if (!startStr) continue;
 
-    const startDate = new Date(startStr + "T00:00:00");
+    const startDate = new Date(plan.start_date + "T00:00:00");
     for (let i = 0; i <= nights; i++) {
       const dayDate = new Date(startDate);
       dayDate.setDate(dayDate.getDate() + i);
@@ -255,17 +468,20 @@ export async function getTodayTripDay(userName = NATIVE_USER): Promise<TodayTrip
 export function buildTripDayBlock(todayTrip: TodayTripDay): string {
   const { destination, dayNumber, day, itinerary } = todayTrip;
   const totalDays = itinerary.days.length;
+  const hotelNote = day.hotel?.name ? `\nTonight's hotel: ${day.hotel.name}` : "";
+  const restaurantNote = day.restaurant?.name
+    ? `\nTonight's dinner: ${day.restaurant.name} — ${day.restaurant.cuisine}`
+    : "";
 
   return (
     `\n\n[Trip Day — ${destination}: Day ${dayNumber} of ${totalDays}]\n` +
-    `Today's title: ${day.title}\n` +
+    `Today's theme: ${day.title}\n` +
     `Morning: ${day.morning}\n` +
     `Afternoon: ${day.afternoon}\n` +
     `Evening: ${day.evening}\n` +
-    `Tonight's restaurant: ${day.restaurant}\n` +
-    `Special experience: ${day.specialExperience}\n` +
+    `${restaurantNote}${hotelNote}\n` +
     `Practical notes: ${day.practicalNotes}\n\n` +
-    `Surface this warmly near the start of the briefing — they are traveling today. ` +
-    `Give the day a sense of excitement and anticipation. Lead with the special experience.`
+    `Surface this warmly near the start of the briefing — they are on a trip today. ` +
+    `Give the day a sense of excitement. Reference specific places by name.`
   );
 }
