@@ -119,6 +119,7 @@ app.listen(port, async (err) => {
       "winddown_schedules",
       "onboarding_state",
       "bill_payment_log",
+      "chat_messages",
     ];
     let totalMigrated = 0;
     for (const table of userDataTables) {

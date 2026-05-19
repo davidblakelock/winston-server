@@ -891,12 +891,14 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
   if (history.length === 0 && !isAutoGreeting) {
     try {
+      // Include all alias names so legacy 'David' messages load until migration runs.
+      const aliasNames = [sessionUserName, "David", "david"];
       const { rows: dbHistory } = await query<{ role: string; content: string }>(
         `SELECT role, content FROM chat_messages
-         WHERE user_name = $1
+         WHERE user_name = ANY($1)
          ORDER BY created_at DESC, id DESC
          LIMIT $2`,
-        [sessionUserName, ACTIVE_CONTEXT_LIMIT]
+        [aliasNames, ACTIVE_CONTEXT_LIMIT]
       );
       if (dbHistory.length > 0) {
         history = dbHistory.reverse(); // chronological order
@@ -4939,6 +4941,25 @@ If you cannot extract both, return null.`,
         nativeResponseBody.navigationUrl = rp2.url;
       }
       res.json(nativeResponseBody);
+
+      // ── Persist messages (fire-and-forget, must not block response) ────────
+      const nativeMsgId = randomUUID();
+      if (!isAutoGreeting) {
+        query(
+          `INSERT INTO chat_messages (user_name, role, content, message_id)
+           VALUES ($1, 'user', $2, $3)
+           ON CONFLICT (message_id) WHERE message_id IS NOT NULL DO NOTHING`,
+          [sessionUserName, message.slice(0, 8000), `${nativeMsgId}:user`]
+        ).catch((e) => req.log.warn({ e }, "[CHAT] Native user message save failed"));
+      }
+      if (nativeReply) {
+        query(
+          `INSERT INTO chat_messages (user_name, role, content, message_id)
+           VALUES ($1, 'assistant', $2, $3)
+           ON CONFLICT (message_id) WHERE message_id IS NOT NULL DO NOTHING`,
+          [sessionUserName, nativeReply.slice(0, 8000), `${nativeMsgId}:assistant`]
+        ).catch((e) => req.log.warn({ e }, "[CHAT] Native assistant message save failed"));
+      }
     } catch (err: unknown) {
       const errStatus = (err as Record<string, unknown>)?.status as number | undefined;
       req.log.error({ err, errStatus }, "Claude native error");
