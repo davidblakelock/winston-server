@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
 import express from "express";
+import Anthropic from "@anthropic-ai/sdk";
 import { authenticate } from "../auth/middleware.js";
 import {
   getActiveTripPlans,
@@ -9,9 +10,14 @@ import {
   deleteTripPlan,
   parseTripIntent,
   generateTripItinerary,
+  buildTravelProfileContext,
   type TripItinerary,
 } from "../travel/tripPlanningManager.js";
+import { getProfile, type CollectedData } from "../onboarding/onboardingManager.js";
+import { MODEL_SONNET } from "../lib/models.js";
 import { logger } from "../lib/logger.js";
+
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const router: IRouter = Router();
 
@@ -46,6 +52,71 @@ router.get("/trips/:id", async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "[Trips] GET /trips/:id error");
     res.status(500).json({ error: "Failed to load trip plan" });
+  }
+});
+
+// ── POST /api/trips/plan ───────────────────────────────────────────────────────
+// Conversational travel advisor overview — no saving, no parsing.
+// Body: { description: string }
+// Returns: { response: string }
+router.post("/trips/plan", express.json({ limit: "1mb" }), async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const { description } = req.body as { description?: string };
+  if (!description || description.trim().length < 3) {
+    res.status(400).json({ error: "description is required" });
+    return;
+  }
+
+  try {
+    // Pull profile for personalization
+    const profile = await getProfile(userName);
+    const rawData = (profile?.rawData ?? {}) as CollectedData;
+    const profileCtx = buildTravelProfileContext(rawData, profile);
+
+    const today = new Date().toLocaleDateString("en-US", {
+      timeZone: "America/Chicago",
+      weekday: "long", year: "numeric", month: "long", day: "numeric",
+    });
+
+    const systemPrompt = `You are a deeply knowledgeable, opinionated travel advisor — the kind of friend who has been everywhere, remembers exactly what made each place worth it, and gives you the real answer instead of a generic guidebook list.
+
+Today is ${today}.${profileCtx}
+
+When someone asks about a trip, you:
+1. Open with a vivid, honest take on the destination — what makes it genuinely worth going, what the vibe is, what kind of traveler it suits
+2. Walk through the essential stops and neighborhoods — specific places, not categories
+3. Recommend where to stay — real properties, with a brief reason each fits this traveler
+4. Cover what to do — a mix of the can't-miss and the off-the-beaten-path, matched to who they are
+5. Highlight where to eat — real restaurants with cuisine and a one-line reason they fit; favor places with real character over hotel restaurants
+6. Close naturally with 2–3 specific options for how they might want to go deeper: "Want me to sketch out a day-by-day itinerary?", "Want me to zero in on the food and nightlife?", "Want me to look at what's realistic for that number of nights?" — give actual useful options, not generic ones
+
+Personalization rules (read the traveler profile above):
+- Match restaurant suggestions to stated food preferences and dining style
+- Match activities to stated interests — active vs. cultural, intensity level
+- If they're traveling with someone, make recommendations feel like they're designed for two, not solo tourism
+- Reference interests naturally: "knowing you're into live music, this is the stretch of the city you want"
+- Respect any health or dietary notes in food suggestions
+
+Tone: conversational, specific, confident. No bullet walls unless listing restaurants or hotels. Write like you're talking to a friend, not filing a report. No "Great question!" or filler preamble — just start with something real.`;
+
+    req.log.info({ userName, descLen: description.length }, "[TripPlan] /trips/plan conversational overview");
+
+    const message = await anthropic.messages.create({
+      model: MODEL_SONNET,
+      max_tokens: 1500,
+      system: systemPrompt,
+      messages: [{ role: "user", content: description.trim() }],
+    });
+
+    const text = message.content[0].type === "text" ? message.content[0].text : "";
+    req.log.info({ userName, outputLen: text.length }, "[TripPlan] /trips/plan response ready");
+
+    res.json({ response: text });
+  } catch (err) {
+    req.log.error({ err }, "[TripPlan] POST /trips/plan error");
+    res.status(500).json({ error: "Failed to generate travel overview" });
   }
 });
 
