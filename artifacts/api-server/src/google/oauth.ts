@@ -1,5 +1,6 @@
 import { google } from "googleapis";
 import { query } from "../db.js";
+import { getUserAliasNames } from "../auth/userAliases.js";
 
 // ── Invalid-grant sentinel ─────────────────────────────────────────────────────
 // Thrown by calendar/gmail functions when Google revokes the refresh token.
@@ -23,13 +24,16 @@ export function isInvalidGrant(err: unknown): boolean {
 }
 
 // Clear both Google credential stores for a user.
+// Deletes ALL alias rows (e.g. 'David', 'davidblakelock') so legacy-named rows
+// don't persist and trigger repeated invalid_grant cycles.
 // Uses RETURNING so the DELETE routes through exec_dml_ret (required for Supabase DML).
 export async function clearGoogleTokensForUser(userName: string): Promise<void> {
+  const names = getUserAliasNames(userName);
   await Promise.allSettled([
-    query("DELETE FROM google_auth WHERE user_name = $1 RETURNING user_name", [userName]),
-    query("DELETE FROM user_integrations WHERE user_name = $1 AND provider = 'google' RETURNING user_name", [userName]),
+    query("DELETE FROM google_auth WHERE user_name = ANY($1::text[]) RETURNING user_name", [names]),
+    query("DELETE FROM user_integrations WHERE user_name = ANY($1::text[]) AND provider = 'google' RETURNING user_name", [names]),
   ]);
-  console.log(`[OAuth] clearGoogleTokensForUser(${userName}) — stale tokens removed`);
+  console.log(`[OAuth] clearGoogleTokensForUser(${userName}) — stale tokens removed for: ${names.join(", ")}`);
 }
 
 // ── Identity-only scopes (used for sign-in — minimal permissions) ─────────────
