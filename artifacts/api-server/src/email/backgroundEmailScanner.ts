@@ -461,10 +461,13 @@ async function runScan(userName: string): Promise<void> {
 
   // ── Order scan ────────────────────────────────────────────────────────────
   if (shouldScanOrders) {
-    // On first scan (or after a token reset), look back 30 days so historical orders
-    // are captured. SCAN_INTERVAL_MS is the polling gate, not the initial lookback.
-    const since = lastOrderScan ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    logger.info({ userName, since: since.toISOString() }, "[BgEmailScanner] Starting order scan");
+    // If no orders have ever been found for this user, always look back 30 days —
+    // even if last_scan_at exists (it may have been set before auth was working).
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const existingOrders = await getOrders(userName);
+    const hasOrders = existingOrders.length > 0;
+    const since = hasOrders ? (lastOrderScan ?? thirtyDaysAgo) : thirtyDaysAgo;
+    logger.info({ userName, since: since.toISOString(), hasOrders }, "[BgEmailScanner] Starting order scan");
 
     const orderQ = buildOrderQuery(since);
     const { processed: orders, skipped: orderSkipped } = await fetchAndClassify(

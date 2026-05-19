@@ -44,9 +44,13 @@ router.post("/orders/sync", express.json({ limit: "1mb" }), async (req, res) => 
   try {
     // ── Step 1: Gmail scan ──────────────────────────────────────────────────
     const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-    const lastScan = force ? null : await getLastOrderScanAt(userName);
+    const existingOrders = await getOrders(userName);
+    const hasOrders = existingOrders.length > 0;
+    // Force flag OR no orders ever found → ignore last_scan_at, look back 90 days
+    const lastScan = (force || !hasOrders) ? null : await getLastOrderScanAt(userName);
     const since = lastScan ?? ninetyDaysAgo;
     if (force) req.log.info({ userName, since }, "[Orders] Force sync — using 90-day lookback");
+    else if (!hasOrders) req.log.info({ userName, since }, "[Orders] No orders on record — using 90-day lookback");
 
     const scanned = await scanOrderEmails(userName, since);
     let newCount = 0;
