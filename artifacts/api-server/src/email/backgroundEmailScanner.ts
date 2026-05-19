@@ -1,16 +1,14 @@
 /**
  * Background Email Scanner — Unified Claude Classification
  *
- * Runs a heartbeat every 60 minutes. Fetches recent inbox emails with a broad
- * subject-keyword query and sends each to Claude Haiku for classification +
- * extraction in a single call. Routes actionable emails to the appropriate
- * downstream handler.
+ * Two separate Gmail queries per scan:
+ *   1. ORDER scan  — broad query, no inbox restriction (orders land in Promotions/Updates),
+ *                    up to 50 candidates, processes up to 40. email_id passed for dedup.
+ *                    Aftership tracking registered immediately on discovery.
+ *   2. SOCIAL scan — meetings + events, inbox only, up to 30 candidates, processes up to 20.
  *
- * Categories handled:
- *   1. order             → upsert into Order Tracker; push if status changed to out_for_delivery/delivered
- *   2. meeting           → store as pending meeting request; push if tomorrow-or-sooner
- *   3. event             → push if not already on Google Calendar
- *   4. none              → silently ignored
+ * Claude Haiku classifies + extracts each email in a single call.
+ * Last-scan timestamp is persisted to DB (order_sync_state) so restarts don't re-process.
  */
 
 import cron from "node-cron";
@@ -19,7 +17,13 @@ import Anthropic from "@anthropic-ai/sdk";
 import { logger } from "../lib/logger.js";
 import { NATIVE_USER } from "../auth/middleware.js";
 import { getAuthClientForUser } from "../google/oauth.js";
-import { upsertOrder, getOrders } from "../orders/ordersManager.js";
+import {
+  upsertOrder,
+  getOrders,
+  getLastOrderScanAt,
+  updateLastOrderScanAt,
+} from "../orders/ordersManager.js";
+import { trackOrder, isAfterShipEnabled } from "../orders/aftershipTracker.js";
 import { setPendingMeetingRequests, getPendingMeetingRequests } from "../email/emailMeetingManager.js";
 import { sendPushToAll } from "../push/pushManager.js";
 import { MODEL_HAIKU } from "../lib/models.js";
@@ -28,9 +32,10 @@ import type { DetectedMeetingRequest } from "../email/emailMeetingManager.js";
 const TZ = "America/Chicago";
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-// ── Per-user last-scan timestamp (in-memory; resets on restart) ───────────────
+// ── Social scan in-memory last-scan (meetings/events only) ────────────────────
+// Orders use DB-backed getLastOrderScanAt / updateLastOrderScanAt.
 
-const _lastScanAt = new Map<string, Date>();
+const _socialLastScanAt = new Map<string, Date>();
 const SCAN_INTERVAL_MS = 60 * 60 * 1000;
 
 // ── Gmail body helpers ────────────────────────────────────────────────────────
@@ -71,26 +76,33 @@ function stripHtml(html: string): string {
     .replace(/\s{2,}/g, " ").trim();
 }
 
-// ── Unified Gmail query ───────────────────────────────────────────────────────
-// Broad union of keywords from the former order, meeting, and event scanners.
+// ── Gmail query builders ──────────────────────────────────────────────────────
 
-const UNIFIED_SUBJECT_KEYWORDS = [
-  // orders / shipping
+// No `in:inbox` — order/shipping emails land in Promotions, Updates, or the
+// dedicated Orders tab. Restricting to inbox silently drops nearly everything.
+const ORDER_SUBJECT_KEYWORDS = [
   "order confirmation", "your order", "has shipped", "out for delivery",
   "delivered", "shipment notification", "shipping confirmation", "order shipped",
   "package delivered", "your package", "order update", "tracking number",
-  // meetings / scheduling
+  "order receipt", "purchase confirmation", "payment confirmed",
+];
+
+function buildOrderQuery(since: Date): string {
+  const clauses = ORDER_SUBJECT_KEYWORDS.map((k) => `subject:"${k}"`).join(" OR ");
+  return `(${clauses}) -in:spam -in:trash -from:me after:${Math.floor(since.getTime() / 1000)}`;
+}
+
+const SOCIAL_SUBJECT_KEYWORDS = [
   "meeting", "meet", "call", "invite", "invitation", "calendar",
   "schedule", "zoom", "teams", "google meet", "webex", "are you free",
   "can we talk", "set up a time", "calendly",
-  // events / social
   "you're invited", "you have been invited", "event invitation",
   "has invited you", "invited you to", "cordially invited",
   "join us for", "save the date",
 ];
 
-function buildUnifiedQuery(since: Date): string {
-  const clauses = UNIFIED_SUBJECT_KEYWORDS.map((k) => `subject:"${k}"`).join(" OR ");
+function buildSocialQuery(since: Date): string {
+  const clauses = SOCIAL_SUBJECT_KEYWORDS.map((k) => `subject:"${k}"`).join(" OR ");
   return `in:inbox -in:spam -in:trash -from:me (${clauses}) after:${Math.floor(since.getTime() / 1000)}`;
 }
 
@@ -203,6 +215,7 @@ const NOTIFY_STATUSES = new Set(["out_for_delivery", "delivered"]);
 async function handleOrder(userName: string, msgId: string, result: ClassifiedEmail): Promise<void> {
   if (!result.retailer || !result.itemName) return;
 
+  // Fetch current orders to detect status changes for push notifications
   const existing = await getOrders(userName);
   const existingByTracking = new Map(
     existing.filter((o) => o.tracking_number).map((o) => [o.tracking_number!, o.status])
@@ -211,7 +224,8 @@ async function handleOrder(userName: string, msgId: string, result: ClassifiedEm
     ? existingByTracking.get(result.trackingNumber) ?? null
     : null;
 
-  await upsertOrder(userName, {
+  // email_id is critical — it drives ON CONFLICT deduplication in the DB
+  const saved = await upsertOrder(userName, {
     retailer: result.retailer,
     item_name: result.itemName,
     order_number: result.orderNumber ?? null,
@@ -220,8 +234,30 @@ async function handleOrder(userName: string, msgId: string, result: ClassifiedEm
     status: result.status ?? "ordered",
     expected_date: result.expectedDate ?? null,
     order_total: result.orderTotal ?? null,
+    email_id: msgId,
     order_url: result.orderUrl ?? null,
   });
+
+  logger.info(
+    { retailer: result.retailer, item: result.itemName, status: result.status ?? "ordered", msgId },
+    "[BgEmailScanner] Order upserted"
+  );
+
+  // Register with Aftership immediately so the tracking scheduler can start polling
+  if (saved && result.trackingNumber && isAfterShipEnabled()) {
+    trackOrder(result.trackingNumber, null, result.carrier)
+      .then((trackResult) => {
+        if (trackResult) {
+          logger.info(
+            { orderId: saved.id, trackingNumber: result.trackingNumber, status: trackResult.status },
+            "[BgEmailScanner] Aftership registration + initial track successful"
+          );
+        }
+      })
+      .catch((err) => {
+        logger.warn({ err, trackingNumber: result.trackingNumber }, "[BgEmailScanner] Aftership registration failed");
+      });
+  }
 
   const newStatus = result.status ?? "ordered";
   const statusChanged = prevStatus !== null && prevStatus !== newStatus;
@@ -233,7 +269,6 @@ async function handleOrder(userName: string, msgId: string, result: ClassifiedEm
     );
     logger.info({ tracking: result.trackingNumber, prevStatus, newStatus }, "[BgEmailScanner] Order push sent");
   }
-  logger.info({ retailer: result.retailer, item: result.itemName, status: newStatus }, "[BgEmailScanner] Order upserted");
 }
 
 // ── Meeting handler ───────────────────────────────────────────────────────────
@@ -321,56 +356,37 @@ async function handleEvent(userName: string, msgId: string, result: ClassifiedEm
   logger.info({ title, date: result.eventDate }, "[BgEmailScanner] Event invite push sent");
 }
 
-// ── Main unified scan ─────────────────────────────────────────────────────────
+// ── Shared email fetch helper ─────────────────────────────────────────────────
 
-async function runScan(userName: string): Promise<void> {
-  const lastScan = _lastScanAt.get(userName);
-  const elapsedMs = lastScan ? Date.now() - lastScan.getTime() : Infinity;
-
-  if (elapsedMs < SCAN_INTERVAL_MS) {
-    const nextInMin = Math.ceil((SCAN_INTERVAL_MS - elapsedMs) / 60_000);
-    logger.info({ userName, nextInMin }, "[BgEmailScanner] Skipping tick — not yet time");
-    return;
-  }
-
-  const since = lastScan ?? new Date(Date.now() - SCAN_INTERVAL_MS);
-  const scanStart = new Date();
-
-  logger.info({ userName, since: since.toISOString() }, "[BgEmailScanner] Starting unified scan");
-
-  const auth = await getAuthClientForUser(userName);
-  if (!auth) {
-    logger.warn({ userName }, "[BgEmailScanner] No auth client");
-    return;
-  }
-  try { await auth.getAccessToken(); } catch {
-    logger.warn({ userName }, "[BgEmailScanner] Token refresh failed");
-    return;
-  }
-
-  const gmail = google.gmail({ version: "v1", auth });
-  const q = buildUnifiedQuery(since);
-
+async function fetchAndClassify(
+  gmail: ReturnType<typeof google.gmail>,
+  q: string,
+  maxFetch: number,
+  maxProcess: number,
+  userName: string,
+  handler: (userName: string, msgId: string, result: ClassifiedEmail) => Promise<void>,
+  label: string,
+): Promise<{ processed: number; skipped: number }> {
   let messageIds: string[] = [];
   try {
-    const list = await gmail.users.messages.list({ userId: "me", maxResults: 30, q });
+    const list = await gmail.users.messages.list({ userId: "me", maxResults: maxFetch, q });
     messageIds = (list.data.messages ?? []).map((m) => m.id!).filter(Boolean);
   } catch (err) {
-    logger.warn({ err }, "[BgEmailScanner] Gmail list failed");
-    return;
+    logger.warn({ err, label }, "[BgEmailScanner] Gmail list failed");
+    return { processed: 0, skipped: 0 };
   }
 
   if (messageIds.length === 0) {
-    logger.info({ userName }, "[BgEmailScanner] No candidate emails");
-    _lastScanAt.set(userName, scanStart);
-    return;
+    logger.info({ userName, label }, "[BgEmailScanner] No candidate emails");
+    return { processed: 0, skipped: 0 };
   }
 
-  logger.info({ userName, count: messageIds.length }, "[BgEmailScanner] Candidate emails found");
+  logger.info({ userName, label, count: messageIds.length }, "[BgEmailScanner] Candidate emails found");
 
-  let orders = 0, meetings = 0, events = 0, skipped = 0;
+  let processed = 0;
+  let skipped = 0;
 
-  for (const msgId of messageIds.slice(0, 20)) {
+  for (const msgId of messageIds.slice(0, maxProcess)) {
     try {
       const detail = await gmail.users.messages.get({ userId: "me", id: msgId, format: "full" });
       const headers = detail.data.payload?.headers ?? [];
@@ -388,24 +404,89 @@ async function runScan(userName: string): Promise<void> {
       const result = await classifyEmail(from, subject, date, body);
       if (!result) { skipped++; continue; }
 
-      if (result.type === "order") {
-        await handleOrder(userName, msgId, result);
-        orders++;
-      } else if (result.type === "meeting") {
-        await handleMeeting(userName, msgId, result);
-        meetings++;
-      } else if (result.type === "event") {
-        await handleEvent(userName, msgId, result);
-        events++;
-      }
+      await handler(userName, msgId, result);
+      processed++;
     } catch (err) {
-      logger.warn({ err, msgId }, "[BgEmailScanner] Failed to process email");
+      logger.warn({ err, msgId, label }, "[BgEmailScanner] Failed to process email");
       skipped++;
     }
   }
 
-  _lastScanAt.set(userName, scanStart);
-  logger.info({ userName, orders, meetings, events, skipped }, "[BgEmailScanner] Unified scan complete");
+  return { processed, skipped };
+}
+
+// ── Main scan ─────────────────────────────────────────────────────────────────
+
+async function runScan(userName: string): Promise<void> {
+  // ── Orders: use DB-backed last-scan time ──────────────────────────────────
+  const lastOrderScan = await getLastOrderScanAt(userName);
+  const orderSinceMs = lastOrderScan ? Date.now() - lastOrderScan.getTime() : Infinity;
+  const shouldScanOrders = orderSinceMs >= SCAN_INTERVAL_MS;
+
+  // ── Social (meetings/events): in-memory ───────────────────────────────────
+  const lastSocialScan = _socialLastScanAt.get(userName);
+  const socialSinceMs = lastSocialScan ? Date.now() - lastSocialScan.getTime() : Infinity;
+  const shouldScanSocial = socialSinceMs >= SCAN_INTERVAL_MS;
+
+  if (!shouldScanOrders && !shouldScanSocial) {
+    const nextInMin = Math.ceil((SCAN_INTERVAL_MS - Math.min(orderSinceMs, socialSinceMs)) / 60_000);
+    logger.info({ userName, nextInMin }, "[BgEmailScanner] Skipping tick — not yet time");
+    return;
+  }
+
+  const scanStart = new Date();
+
+  const auth = await getAuthClientForUser(userName);
+  if (!auth) {
+    logger.warn({ userName }, "[BgEmailScanner] No auth client");
+    return;
+  }
+  try { await auth.getAccessToken(); } catch {
+    logger.warn({ userName }, "[BgEmailScanner] Token refresh failed");
+    return;
+  }
+
+  const gmail = google.gmail({ version: "v1", auth });
+
+  // ── Order scan ────────────────────────────────────────────────────────────
+  if (shouldScanOrders) {
+    const since = lastOrderScan ?? new Date(Date.now() - SCAN_INTERVAL_MS);
+    logger.info({ userName, since: since.toISOString() }, "[BgEmailScanner] Starting order scan");
+
+    const orderQ = buildOrderQuery(since);
+    const { processed: orders, skipped: orderSkipped } = await fetchAndClassify(
+      gmail, orderQ, 50, 40, userName,
+      async (u, id, res) => {
+        if (res.type === "order") await handleOrder(u, id, res);
+      },
+      "orders"
+    );
+
+    await updateLastOrderScanAt(userName);
+    logger.info({ userName, orders, skipped: orderSkipped }, "[BgEmailScanner] Order scan complete");
+  }
+
+  // ── Social scan ───────────────────────────────────────────────────────────
+  if (shouldScanSocial) {
+    const since = lastSocialScan ?? new Date(Date.now() - SCAN_INTERVAL_MS);
+    logger.info({ userName, since: since.toISOString() }, "[BgEmailScanner] Starting social scan");
+
+    const socialQ = buildSocialQuery(since);
+    let meetings = 0, events = 0, skipped = 0;
+
+    const { processed, skipped: socialSkipped } = await fetchAndClassify(
+      gmail, socialQ, 30, 20, userName,
+      async (u, id, res) => {
+        if (res.type === "meeting") { await handleMeeting(u, id, res); meetings++; }
+        else if (res.type === "event") { await handleEvent(u, id, res); events++; }
+      },
+      "social"
+    );
+    skipped = socialSkipped;
+
+    _socialLastScanAt.set(userName, scanStart);
+    logger.info({ userName, meetings, events, skipped }, "[BgEmailScanner] Social scan complete");
+  }
 }
 
 // ── Scheduler ─────────────────────────────────────────────────────────────────
@@ -419,5 +500,5 @@ export function startBackgroundEmailScanner(userName = NATIVE_USER): void {
     }
   }, { timezone: TZ });
 
-  logger.info("[BgEmailScanner] Scheduler started — unified Claude scan, 60-minute interval");
+  logger.info("[BgEmailScanner] Scheduler started — order scan (DB-backed) + social scan (in-memory), 60-min interval");
 }
