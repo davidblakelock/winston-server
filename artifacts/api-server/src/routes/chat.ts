@@ -427,6 +427,9 @@ function detectActiveListFromHistory(history: Array<{ role: string; content: str
 }
 const NAVIGATION_PATTERN = /\b(take\s+me\s+to|directions?\s+to|navigate\s+to|get\s+me\s+to|how\s+do\s+i\s+get\s+to|maps?\s+to|open\s+maps?\s+(for|to)|i\s+need\s+to\s+go\s+to|i\s+need\s+directions?\s+to|i\s+want\s+to\s+go\s+to|can\s+you\s+take\s+me\s+to|take\s+me|get\s+directions?\s+to|show\s+me\s+how\s+to\s+get\s+to)\b/i;
 const TRIP_PLAN_START = /\b(?:i\s+want\s+to\s+plan|help\s+(?:me\s+)?plan|let'?s\s+plan|thinking\s+(?:of|about)\s+(?:a\s+)?trip|dream\s+trip|plan\s+(?:a\s+|my\s+|our\s+)?(?:trip|vacation|holiday|getaway|travel)(?:\s+to)?|i'?d\s+love\s+to\s+(?:plan|visit)|want\s+to\s+(?:plan|book)\s+(?:a\s+)?trip|planning\s+(?:a\s+|my\s+|our\s+)?(?:trip|vacation|holiday|getaway)|road\s+trip\s+(?:to|through|across|around|in)|(?:weekend|overnight|day|week(?:long)?|solo|family|romantic|anniversary|birthday|quick|short|long)\s+trip\s+(?:to|in|through|across)|(?:build|create|make|generate)\s+(?:me\s+)?(?:an?\s+)?itinerary|(?:book|booking)\s+(?:a\s+|my\s+)?(?:trip|vacation|holiday|getaway|flight\s+to)|(?:i(?:'?m|\s+am)|we(?:'?re|\s+are))\s+(?:taking|planning)\s+(?:a\s+)?(?:trip|vacation|holiday|getaway)\s+to|(?:take\s+(?:a|me\s+on\s+a|us\s+on\s+a)\s+(?:trip|vacation|holiday))\s+to)\b/i;
+// Matches explicit requests to generate + save a formal day-by-day itinerary.
+// Only evaluated when already in a trip conversation (phase === "overview").
+const TRIP_ITINERARY_REQUEST = /\b(?:(?:build|make|create|generate|write)\s+(?:(?:me\s+|us\s+)?(?:the\s+|a\s+)?(?:full\s+|complete\s+|detailed\s+)?)?(?:itinerary|day.by.day|plan|schedule)|(?:full|complete|detailed)\s+(?:itinerary|plan|schedule|breakdown)|give\s+(?:me\s+|us\s+)?(?:the\s+|a\s+)?(?:full\s+|complete\s+)?(?:itinerary|plan|day.by.day|schedule)|day.by.day|yes[,\s]+(?:please[,\s]+)?(?:build|make|create|do|go\s+ahead)|go\s+ahead\s+(?:and\s+)?(?:build|make|create)|build\s+it(?:\s+out)?|yes\s+(?:build|make|create)\s+it|(?:the\s+)?(?:romantic|adventure|family|solo|foodie|cultural|luxury|budget|relaxed|active)\s+version)\b/i;
 const GOAL_PATTERN = /\b(?:i\s+(?:want|need|should|have)\s+to\s+(?:(?:start\s+|be\s+)?(?:read(?:ing)?|call(?:ing)?|see(?:ing)?|visit(?:ing)?|spend(?:ing)?\s+(?:more\s+)?time|work(?:ing)?\s+(?:more\s+)?on|get\s+(?:back\s+)?(?:into|to)|focus(?:ing)?\s+(?:more\s+)?on|reconnect(?:ing)?|exercise|write|journal|meditat|paint|cook|learn|practice|travel|save|organiz|clean|reach\s+out)|more\s+\w+|less\s+\w+)|i'?(?:ve\s+been\s+meaning\s+to|d\s+love\s+to\s+(?:start|get))|my\s+goal\s+is\s+to|i'?m\s+trying\s+to\s+(?:be\s+better\s+at|get\s+(?:more\s+)?into|start))\b/i;
 const STORY_READ_PATTERN = /\b(read\s+(me\s+)?(my\s+)?stor(y|ies)|show\s+(me\s+)?(my\s+)?stor(y|ies)|what\s+stor(y|ies)\s+have\s+i|tell\s+me\s+(my|the)\s+stor(y|ies)|ms\.?\s*peel\s+read\s+(me\s+)?(my\s+)?stor(y|ies)|olivia\s+stor(y|ies))\b/i;
 const STORY_COUNT_PATTERN = /\b(how\s+many\s+stor(y|ies)|stor(y|ies)\s+count|how\s+many\s+memories|number\s+of\s+stor(y|ies)|how\s+many\s+have\s+i\s+(captured|saved|told))\b/i;
@@ -1559,37 +1562,50 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     }
   }
 
-  // ── Trip planning: start or continue conversation flow ───────────────────────
-  console.log(`TRIP DETECTION TRIGGERED — isTripPlanStart=${isTripPlanStart} isTripPlanFlowActive=${isTripPlanFlowActive} msg="${message.slice(0, 80)}"`);
+  // ── Trip planning: conversational overview first, formal itinerary on explicit request ──
   req.log.info(
     { isTripPlanStart, isTripPlanFlowActive, pendingPhase: pendingTripPlan?.phase ?? null },
     "[TripPlan] Intent check"
   );
   if (isTripPlanStart || isTripPlanFlowActive) {
-    console.log("TRIP INTENT MATCHED — entering trip planning block");
-    const _generateAndInject = async (intent: ReturnType<typeof parseTripIntent>, nightsWasDefaulted = false) => {
-      console.log(`TRIP GENERATING — dest="${intent.destination}" nights=${intent.nights} vibe="${intent.vibe ?? "none"}" defaulted=${nightsWasDefaulted}`);
+
+    // ── Helper: parse nights from a natural-language reply ──────────────────────
+    const _parseNightsFromReply = (msg: string): number | null => {
+      // Parentheses required: ?? has higher precedence than ?: — without them the
+      // ternary swallows the whole left-hand chain, returning null on any match.
+      const m =
+        msg.match(/\b(\d+)\s*nights?\b/i) ??
+        msg.match(/\b(\d+)\s*days?\b/i) ??
+        (/\bweekend\b/i.test(msg) ? null : msg.match(/\b(\d+)\b/));
+      if (/\bweekend\b/i.test(msg)) return 2;
+      if (/\b(?:a\s+)?week\b/i.test(msg)) return 6;
+      if (m) {
+        const n = parseInt(m[1]!, 10);
+        return /\bday/i.test(m[0]!) ? Math.max(1, n - 1) : n;
+      }
+      return null;
+    };
+
+    // ── Helper: generate full JSON itinerary and inject into system prompt ──────
+    const _generateAndInject = async (intent: ReturnType<typeof parseTripIntent>) => {
       req.log.info(
         { dest: intent.destination, nights: intent.nights, vibe: intent.vibe },
-        "[TripPlan] Enough info — generating itinerary"
+        "[TripPlan] Generating formal itinerary"
       );
       try {
         const itinerary = await generateTripItinerary(intent, userProfile as Record<string, unknown> | null);
         await saveTripPlan(sessionUserName, intent, itinerary);
         setPendingTripPlan(null);
-        console.log(`TRIP SAVED — dest="${intent.destination}" days=${itinerary.days.length}`);
+        req.log.info({ dest: itinerary.destination, days: itinerary.days.length }, "[TripPlan] Itinerary saved to DB");
 
         const daysText = itinerary.days
           .map((d) => {
-            const rest = d.restaurant?.name
-              ? `Dinner: ${d.restaurant.name} (${d.restaurant.cuisine}).`
-              : "";
+            const rest = d.restaurant?.name ? `Dinner: ${d.restaurant.name} (${d.restaurant.cuisine}).` : "";
             const hotel = d.hotel?.name ? `Hotel: ${d.hotel.name}.` : "";
             return `Day ${d.day} — ${d.title}: ${d.morning} / ${d.afternoon} / ${d.evening}. ${rest} ${hotel} Tips: ${d.practicalNotes}`;
           })
           .join("\n");
         const tipsText = itinerary.generalTips.join("; ");
-        const defaultedNights = nightsWasDefaulted;
 
         systemPrompt +=
           `\n\n[Trip Itinerary — ${itinerary.tripName || itinerary.destination} — ${itinerary.nights} Nights]\n` +
@@ -1599,14 +1615,12 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           `TASK: Present this as a warm, enthusiastic day-by-day overview — like a knowledgeable friend walking them through an exciting plan. ` +
           `Name every restaurant and hotel specifically. Mention one memorable highlight per day. ` +
           `Keep each day to 2-3 sentences. ` +
-          (defaultedNights ? `Naturally mention that you built this as a ${itinerary.nights}-night trip and they can ask for more or fewer days. ` : ``) +
           `At the very end, tell them this itinerary has been saved to their travel screen so they can pull it up anytime. ` +
           `Then ask "Want me to tweak anything?" ` +
           `Write conversationally — no bullet points.`;
 
         req.log.info({ dest: itinerary.destination, days: itinerary.days.length }, "[TripPlan] Itinerary injected into system prompt");
       } catch (tripErr) {
-        console.log(`TRIP GENERATION ERROR — ${(tripErr as Error).message}`);
         req.log.warn({ err: tripErr }, "[TripPlan] Itinerary generation failed");
         setPendingTripPlan(null);
         systemPrompt +=
@@ -1616,76 +1630,96 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       }
     };
 
-    if (isTripPlanStart) {
-      // Parse everything from the initial message.
-      // Ask for destination if missing, ask for nights if missing — never silently default.
+    // ── Priority 1: Active conversation + explicit itinerary request — always wins ──
+    // This MUST come before the isTripPlanStart check because confirmation phrases like
+    // "yes build the full itinerary" also match TRIP_PLAN_START ("build...itinerary").
+    if (isTripPlanFlowActive && pendingTripPlan && TRIP_ITINERARY_REQUEST.test(message)) {
+      const { intent } = pendingTripPlan;
+      // Merge any nights given in this message (e.g. "yes build it — 4 nights")
+      const replyNights = _parseNightsFromReply(message);
+      if (replyNights) intent.nights = replyNights;
+
+      if (!intent.nights) {
+        // Need nights before we can generate — ask once
+        setPendingTripPlan({ intent, phase: "clarify", missingField: "nights" });
+        systemPrompt +=
+          `\n\n[Trip Planning — Need Duration for Itinerary]\n` +
+          `The user wants a full itinerary for ${intent.destination}. ` +
+          `In one sentence, tell them you're ready to build it, then ask: "How many nights are you thinking?" Nothing else.`;
+      } else {
+        // Have everything — generate the formal itinerary
+        setPendingTripPlan({ intent, phase: "generating" });
+        await _generateAndInject(intent);
+      }
+
+    // ── Priority 2: New trip conversation starting ────────────────────────────────
+    } else if (isTripPlanStart) {
       const intent = parseTripIntent(message);
 
       if (!intent.destination) {
-        // No destination — ask first
+        // No destination — only blocker before we can give an overview
         setPendingTripPlan({ intent, phase: "clarify", missingField: "destination" });
-        console.log("TRIP NEEDS DESTINATION — asking user");
         systemPrompt +=
           `\n\n[Trip Planning — Need Destination]\n` +
-          `The user wants to plan a trip but the destination isn't clear. ` +
-          `Acknowledge their trip idea warmly in one sentence, then ask: "Where are you thinking?" Nothing else.`;
-      } else if (!intent.nights) {
-        // Have destination but no duration — ask for nights
-        setPendingTripPlan({ intent, phase: "clarify", missingField: "nights" });
-        console.log(`TRIP NEEDS NIGHTS — asking user for ${intent.destination}`);
-        systemPrompt +=
-          `\n\n[Trip Planning — Need Duration]\n` +
-          `The user wants to plan a trip to ${intent.destination} but hasn't said how long. ` +
-          `Acknowledge their destination warmly in one sentence, then ask: "How many nights are you thinking?" Nothing else.`;
+          `The user wants to plan a trip but hasn't named a destination. ` +
+          `Acknowledge their excitement warmly in one sentence, then ask: "Where are you thinking?" Nothing else.`;
+
       } else {
-        // Have both destination and nights — generate immediately
-        setPendingTripPlan({ intent, phase: "generating" });
-        await _generateAndInject(intent, false);
+        // Have destination → give rich conversational overview (fast path, no JSON generation)
+        setPendingTripPlan({ intent, phase: "overview" });
+        const vibeHint = intent.vibe ? ` The user mentioned: "${intent.vibe}".` : "";
+        const nightsHint = intent.nights ? ` They're thinking roughly ${intent.nights} nights.` : "";
+        const stopsHint = intent.stops?.length ? ` Stops mentioned: ${intent.stops.join(", ")}.` : "";
+        systemPrompt +=
+          `\n\n[Trip Planning — Conversational Overview: ${intent.destination}]${vibeHint}${nightsHint}${stopsHint}\n` +
+          `TASK: Respond like a brilliant, well-traveled friend who knows this destination deeply. ` +
+          `Give a rich, enthusiastic overview — not a list, a conversation. Cover:\n` +
+          `  • The overall feel and why this trip is a great idea\n` +
+          `  • A suggested route or flow (what order to visit things, if relevant)\n` +
+          `  • 2-4 specific places to see or do (with a sentence on why each is worth it)\n` +
+          `  • A standout restaurant or two with a quick note on why\n` +
+          `  • A hotel recommendation or neighborhood to stay in\n` +
+          `  • Any insider tip or timing note that would genuinely help\n` +
+          `Write this as flowing, enthusiastic prose — no bullet points, no headers. ` +
+          `Then end with 2-3 short, specific questions or options to go deeper — like:\n` +
+          `"Want me to build a full day-by-day itinerary for this?" or ` +
+          `"Want the foodie version or more of an outdoor adventure?" or ` +
+          `"Are you thinking relaxed or packed with activities?" ` +
+          `Keep the whole response under 250 words and make it feel exciting.`;
       }
 
+    // ── Priority 3: Continuing an existing trip conversation ─────────────────────
     } else if (isTripPlanFlowActive && pendingTripPlan) {
-      const { intent, missingField } = pendingTripPlan;
+      const { intent } = pendingTripPlan;
 
-      if (missingField === "destination") {
-        // User answered with destination
+      // ── User just answered "where are you thinking?" ────────────────────────
+      if (pendingTripPlan.phase === "clarify" && pendingTripPlan.missingField === "destination") {
         const updatedIntent = parseTripIntent(message);
         const dest = updatedIntent.destination || message.trim().replace(/[.!?]+$/, "").trim();
         intent.destination = dest;
-        // Merge any nights they may have included in this reply too
         if (!intent.nights && updatedIntent.nights) intent.nights = updatedIntent.nights;
 
-        if (!intent.nights) {
-          // Still no duration — ask for it
-          setPendingTripPlan({ intent, phase: "clarify", missingField: "nights" });
-          console.log(`TRIP NEEDS NIGHTS — asking user for ${intent.destination}`);
-          systemPrompt +=
-            `\n\n[Trip Planning — Need Duration]\n` +
-            `Great, the destination is ${intent.destination}. Now ask: "How many nights are you thinking?" One sentence, nothing else.`;
-        } else {
-          // Have everything — generate
-          setPendingTripPlan({ intent, phase: "generating" });
-          await _generateAndInject(intent, false);
-        }
+        // Now give the conversational overview for this destination
+        setPendingTripPlan({ intent, phase: "overview" });
+        const vibeHint = intent.vibe ? ` Vibe: "${intent.vibe}".` : "";
+        const nightsHint = intent.nights ? ` Roughly ${intent.nights} nights.` : "";
+        systemPrompt +=
+          `\n\n[Trip Planning — Conversational Overview: ${dest}]${vibeHint}${nightsHint}\n` +
+          `TASK: Respond like a brilliant, well-traveled friend who knows ${dest} deeply. ` +
+          `Give a rich, enthusiastic overview — not a list, a conversation. Cover:\n` +
+          `  • The overall feel and why this trip is a great idea\n` +
+          `  • A suggested route or flow\n` +
+          `  • 2-4 specific places to see or do (with a sentence on why)\n` +
+          `  • A standout restaurant or two\n` +
+          `  • A hotel recommendation or neighborhood to stay in\n` +
+          `  • An insider tip or timing note\n` +
+          `Write as flowing, enthusiastic prose — no bullet points. ` +
+          `Then end with 2-3 questions or options to go deeper, including "Want me to build a full day-by-day itinerary?" ` +
+          `Keep the whole response under 250 words and make it feel exciting.`;
 
-      } else if (missingField === "nights") {
-        // User answered with duration
-        // Parentheses required: ?? has higher precedence than ?: so without them the ternary
-        // swallows the entire left-hand chain, returning null whenever any match succeeds.
-        const nightsM =
-          message.match(/\b(\d+)\s*nights?\b/i) ??
-          message.match(/\b(\d+)\s*days?\b/i) ??
-          (/\bweekend\b/i.test(message) ? null : message.match(/\b(\d+)\b/));
-        const isWeekend = /\bweekend\b/i.test(message);
-        const isWeek = /\b(?:a\s+)?week\b/i.test(message);
-
-        let nights: number | null = null;
-        if (isWeekend) nights = 2;
-        else if (isWeek) nights = 6;
-        else if (nightsM) {
-          const n = parseInt(nightsM[1]!, 10);
-          nights = /\bday/i.test(nightsM[0]!) ? Math.max(1, n - 1) : n;
-        }
-
+      // ── User provided nights after being asked ──────────────────────────────
+      } else if (pendingTripPlan.phase === "clarify" && pendingTripPlan.missingField === "nights") {
+        const nights = _parseNightsFromReply(message);
         if (nights && nights >= 1 && nights <= 30) {
           intent.nights = nights;
           setPendingTripPlan({ intent, phase: "generating" });
@@ -1696,14 +1730,22 @@ const chatHandlerCore = async (req: Request, res: Response) => {
             `The user didn't give a clear trip length. Gently re-ask: "How many nights are you thinking for ${intent.destination}?"`;
         }
 
+      // ── User is chatting about the trip (follow-up questions, details) ──────
+      } else if (pendingTripPlan.phase === "overview") {
+        // Keep the conversation going with destination context
+        systemPrompt +=
+          `\n\n[Trip Discussion — ${intent.destination}]\n` +
+          `You're in an ongoing trip conversation about ${intent.destination}. ` +
+          `Answer the user's question or comment naturally and helpfully, drawing on your knowledge of this destination. ` +
+          `Keep responses warm and conversational. If appropriate, you can mention that you can build a full ` +
+          `day-by-day itinerary whenever they're ready.`;
+
+      // ── Guard: second message arrived while formal itinerary is generating ──
       } else if (pendingTripPlan.phase === "generating") {
-        // A second request arrived while the first is still generating.
-        // Tell Claude to hold — don't discard the pending state.
         systemPrompt +=
           `\n\n[Trip Planning — In Progress]\n` +
-          `You're actively building a ${intent.destination} itinerary right now. ` +
-          `If the user sent another message mid-generation, let them know in one warm sentence ` +
-          `that you're still putting their trip together and you'll have it ready in just a moment.`;
+          `You're actively building a formal itinerary for ${intent.destination} right now. ` +
+          `Let the user know warmly in one sentence that you're still putting it together and it'll be ready in just a moment.`;
       }
     }
   }
