@@ -6,9 +6,13 @@ import {
   createPerson,
   updatePerson,
   deletePerson,
+  ensureKeyPeopleColumns,
   type CreatePersonInput,
   type UpdatePersonInput,
 } from "../people/peopleManager.js";
+
+// Run column migrations on startup — non-fatal
+ensureKeyPeopleColumns().catch(() => {});
 
 const router = Router();
 
@@ -37,7 +41,7 @@ router.post(
     if (!userName) return;
 
     const body = req.body as Record<string, unknown>;
-    const { name, relationship, phone, email, birthday, anniversary, notes, googleContactId } = body;
+    const { name, relationship, phone, email, address, birthday, anniversary, notes, googleContactId, winstonConnected } = body;
 
     if (!name || typeof name !== "string" || !name.trim()) {
       res.status(400).json({ error: "name is required" });
@@ -49,10 +53,12 @@ router.post(
       relationship: typeof relationship === "string" ? relationship.trim() || null : null,
       phone: typeof phone === "string" ? phone.trim() || null : null,
       email: typeof email === "string" ? email.trim() || null : null,
+      address: typeof address === "string" ? address.trim() || null : null,
       birthday: typeof birthday === "string" ? birthday || null : null,
       anniversary: typeof anniversary === "string" ? anniversary || null : null,
       notes: typeof notes === "string" ? notes.trim() || null : null,
       googleContactId: typeof googleContactId === "string" ? googleContactId || null : null,
+      winstonConnected: typeof winstonConnected === "boolean" ? winstonConnected : false,
     };
 
     try {
@@ -87,10 +93,12 @@ router.put(
     if (body["relationship"] !== undefined)    updates.relationship    = body["relationship"] ? String(body["relationship"]) : null;
     if (body["phone"] !== undefined)           updates.phone           = body["phone"] ? String(body["phone"]) : null;
     if (body["email"] !== undefined)           updates.email           = body["email"] ? String(body["email"]) : null;
+    if (body["address"] !== undefined)         updates.address         = body["address"] ? String(body["address"]) : null;
     if (body["birthday"] !== undefined)        updates.birthday        = body["birthday"] ? String(body["birthday"]) : null;
     if (body["anniversary"] !== undefined)     updates.anniversary     = body["anniversary"] ? String(body["anniversary"]) : null;
     if (body["notes"] !== undefined)           updates.notes           = body["notes"] ? String(body["notes"]) : null;
     if (body["googleContactId"] !== undefined) updates.googleContactId = body["googleContactId"] ? String(body["googleContactId"]) : null;
+    if (body["winstonConnected"] !== undefined) updates.winstonConnected = Boolean(body["winstonConnected"]);
 
     try {
       const person = await updatePerson(id, userName, updates);

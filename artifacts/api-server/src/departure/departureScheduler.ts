@@ -84,9 +84,15 @@ async function checkDepartureAlertsForUser(userName: string): Promise<void> {
     ?? (profile?.longitude && profile.longitude !== 0 ? profile.longitude : null)
     ?? -96.7970;
 
-  if (!homeAddress) {
-    logger.warn({ userName }, "Departure check skipped — no home address in profile");
+  // If no text address, fall back to "lat,lon" — Google Maps Directions API accepts coordinates as origin.
+  // This unblocks users who have GPS coordinates saved but never filled in a street address.
+  const effectiveHomeAddress = homeAddress || `${homeLat},${homeLon}`;
+  if (!effectiveHomeAddress) {
+    logger.warn({ userName }, "Departure check skipped — no home address or coordinates in profile");
     return;
+  }
+  if (!homeAddress) {
+    logger.info({ userName, effectiveHomeAddress }, "Departure check: using coordinate fallback for home address");
   }
 
   let events: Awaited<ReturnType<typeof fetchTodayEvents>>;
@@ -122,7 +128,7 @@ async function checkDepartureAlertsForUser(userName: string): Promise<void> {
     const alreadySent = await hasAlertBeenSent(event.summary, today, userName);
     if (alreadySent) continue;
 
-    const drive = await estimateDriveTime(location, homeAddress, homeLat, homeLon);
+    const drive = await estimateDriveTime(location, effectiveHomeAddress, homeLat, homeLon);
     if (!drive) continue;
 
     const fire = shouldFireAlert(start, drive.durationMinutes, now);
@@ -143,7 +149,7 @@ async function checkDepartureAlertsForUser(userName: string): Promise<void> {
     // when tapped via Linking.openURL; falls back to browser on web.
     const mapsUrl =
       `https://www.google.com/maps/dir/?api=1` +
-      `&origin=${encodeURIComponent(homeAddress)}` +
+      `&origin=${encodeURIComponent(effectiveHomeAddress)}` +
       `&destination=${encodeURIComponent(location)}` +
       `&travelmode=driving`;
 

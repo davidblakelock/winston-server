@@ -237,8 +237,9 @@ export async function estimateDriveTime(
   homeLon: number
 ): Promise<DriveEstimate | null> {
   if (!homeAddress) {
-    logger.warn({ destination }, "estimateDriveTime: home address missing — cannot calculate");
-    return null;
+    // Fall back to coordinate string so Google Maps can still route
+    homeAddress = `${homeLat},${homeLon}`;
+    logger.info({ destination, homeAddress }, "estimateDriveTime: using coordinate fallback for home");
   }
 
   // 1. Google Maps — real-time traffic, most accurate

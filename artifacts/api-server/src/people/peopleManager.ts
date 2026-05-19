@@ -8,10 +8,12 @@ export interface KeyPerson {
   relationship: string | null;
   phone: string | null;
   email: string | null;
+  address: string | null;
   birthday: string | null;
   anniversary: string | null;
   notes: string | null;
   googleContactId: string | null;
+  winstonConnected: boolean;
   createdAt: string;
 }
 
@@ -22,12 +24,19 @@ type PersonRow = {
   relationship: string | null;
   phone: string | null;
   email: string | null;
+  address: string | null;
   birthday: string | null;
   anniversary: string | null;
   notes: string | null;
   google_contact_id: string | null;
+  winston_connected: boolean;
   created_at: string;
 };
+
+export async function ensureKeyPeopleColumns(): Promise<void> {
+  await query(`ALTER TABLE key_people ADD COLUMN IF NOT EXISTS address TEXT`).catch(() => {});
+  await query(`ALTER TABLE key_people ADD COLUMN IF NOT EXISTS winston_connected BOOLEAN NOT NULL DEFAULT FALSE`).catch(() => {});
+}
 
 function rowToPerson(r: PersonRow): KeyPerson {
   return {
@@ -37,10 +46,12 @@ function rowToPerson(r: PersonRow): KeyPerson {
     relationship: r.relationship,
     phone: r.phone,
     email: r.email,
+    address: r.address ?? null,
     birthday: r.birthday,
     anniversary: r.anniversary,
     notes: r.notes,
     googleContactId: r.google_contact_id,
+    winstonConnected: r.winston_connected ?? false,
     createdAt: r.created_at,
   };
 }
@@ -58,17 +69,19 @@ export interface CreatePersonInput {
   relationship?: string | null;
   phone?: string | null;
   email?: string | null;
+  address?: string | null;
   birthday?: string | null;
   anniversary?: string | null;
   notes?: string | null;
   googleContactId?: string | null;
+  winstonConnected?: boolean;
 }
 
 export async function createPerson(userName: string, input: CreatePersonInput): Promise<KeyPerson> {
   const res = await query<PersonRow>(
     `INSERT INTO key_people
-       (user_name, name, relationship, phone, email, birthday, anniversary, notes, google_contact_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       (user_name, name, relationship, phone, email, address, birthday, anniversary, notes, google_contact_id, winston_connected)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      RETURNING *`,
     [
       userName,
@@ -76,10 +89,12 @@ export async function createPerson(userName: string, input: CreatePersonInput): 
       input.relationship ?? null,
       input.phone ?? null,
       input.email ?? null,
+      input.address ?? null,
       input.birthday ?? null,
       input.anniversary ?? null,
       input.notes ?? null,
       input.googleContactId ?? null,
+      input.winstonConnected ?? false,
     ]
   );
   const row = res.rows[0];
@@ -104,10 +119,12 @@ export async function updatePerson(
     relationship: "relationship",
     phone: "phone",
     email: "email",
+    address: "address",
     birthday: "birthday",
     anniversary: "anniversary",
     notes: "notes",
     googleContactId: "google_contact_id",
+    winstonConnected: "winston_connected",
   };
 
   for (const [key, col] of Object.entries(fieldMap)) {
