@@ -119,7 +119,7 @@ Tone: conversational, specific, confident. No bullet walls unless listing restau
 
     const message = await anthropic.messages.create({
       model: MODEL_SONNET,
-      max_tokens: 1500,
+      max_tokens: 2000,
       system: systemPrompt,
       messages: [{ role: "user", content: description.trim() }],
     });
@@ -131,6 +131,151 @@ Tone: conversational, specific, confident. No bullet walls unless listing restau
   } catch (err) {
     req.log.error({ err }, "[TripPlan] POST /trips/plan error");
     res.status(500).json({ error: "Failed to generate travel overview" });
+  }
+});
+
+// ── POST /api/trips/chat ───────────────────────────────────────────────────────
+// Multi-turn conversational follow-up for a trip plan.
+// Maintains travel advisor context across messages. Detects when the user
+// asks for a full itinerary via <<BUILD_ITINERARY>> signal from Claude,
+// generates + saves it, and returns { action: "itinerary_saved", tripId }.
+//
+// Body: {
+//   message: string,
+//   history: { role: "user" | "assistant", content: string }[],
+//   context?: {
+//     planResponse?: string,   // the initial /trips/plan response
+//     description?: string,    // original user query
+//     destination?: string,
+//     nights?: number,
+//     startDate?: string,
+//   }
+// }
+// Returns: { response, action?, tripId?, tripName? }
+router.post("/trips/chat", express.json({ limit: "2mb" }), async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const body = req.body as {
+    message?: string;
+    history?: { role: "user" | "assistant"; content: string }[];
+    context?: {
+      planResponse?: string;
+      description?: string;
+      destination?: string;
+      nights?: number;
+      startDate?: string;
+    };
+  };
+
+  if (!body.message || body.message.trim().length < 1) {
+    res.status(400).json({ error: "message is required" });
+    return;
+  }
+
+  try {
+    const profile = await getProfile(userName);
+    const rawData = (profile?.rawData ?? {}) as CollectedData;
+    const profileCtx = buildTravelProfileContext(rawData, profile);
+
+    const ctx = body.context ?? {};
+    const destination = ctx.destination ?? "the destination discussed";
+    const nights = ctx.nights ?? 3;
+    const today = new Date().toLocaleDateString("en-US", {
+      timeZone: "America/Chicago",
+      weekday: "long", year: "numeric", month: "long", day: "numeric",
+    });
+
+    const planContext = ctx.planResponse
+      ? `\n\nINITIAL OVERVIEW YOU PROVIDED:\n${ctx.planResponse.slice(0, 3000)}`
+      : "";
+
+    const systemPrompt = `You are a deeply knowledgeable, opinionated travel advisor continuing a conversation about a trip to ${destination}.
+
+Today is ${today}.${profileCtx}${planContext}
+
+You are in the FOLLOW-UP phase of travel planning. The user has already seen your initial overview and is now refining, asking questions, or asking you to go deeper.
+
+How to respond:
+- If they want to adjust the vibe (more romantic, more adventurous, different budget) — rework the recommendations specifically, keep booking links, end with follow-up options
+- If they want to zoom in (food only, activities only, a specific day) — go deep on that slice, keep links
+- If they want a different duration — reshape the plan for the new number of nights
+- Continue including Markdown booking links for any hotels, restaurants, or attractions you mention
+- Keep responses conversational and specific — not generic or listy
+- End every response with 1–2 natural follow-up options unless the user has explicitly asked you to build the full itinerary
+
+ITINERARY SIGNAL — if and ONLY IF the user explicitly asks you to build, create, generate, or save the full day-by-day itinerary, respond conversationally confirming you'll build it, then append the exact token <<BUILD_ITINERARY>> at the very end of your response on its own line. Do not use this token unless they clearly want the structured itinerary saved. Never show this token to the user — it will be stripped automatically.
+
+Tone: conversational, direct, confident. Same voice as the initial overview.`;
+
+    // Build message history — trim to last 10 turns to stay within context limits
+    const history = (body.history ?? []).slice(-10);
+
+    req.log.info(
+      { userName, destination, historyLen: history.length, msgLen: body.message.length },
+      "[TripPlan] /trips/chat follow-up"
+    );
+
+    const response = await anthropic.messages.create({
+      model: MODEL_SONNET,
+      max_tokens: 2000,
+      system: systemPrompt,
+      messages: [
+        ...history.map((h) => ({ role: h.role as "user" | "assistant", content: h.content })),
+        { role: "user", content: body.message.trim() },
+      ],
+    });
+
+    let text = response.content[0].type === "text" ? response.content[0].text : "";
+    const wantsBuild = text.includes("<<BUILD_ITINERARY>>");
+
+    // Strip the signal token before sending to client
+    text = text.replace(/\s*<<BUILD_ITINERARY>>\s*/g, "").trim();
+
+    req.log.info(
+      { userName, destination, wantsBuild, outputLen: text.length },
+      "[TripPlan] /trips/chat response ready"
+    );
+
+    if (!wantsBuild) {
+      res.json({ response: text });
+      return;
+    }
+
+    // User wants the full itinerary — generate and save it
+    try {
+      const intentSource = ctx.description ?? ctx.destination ?? destination;
+      const intent = parseTripIntent(intentSource);
+      if (ctx.destination) intent.destination = ctx.destination;
+      if (ctx.nights) intent.nights = ctx.nights;
+      if (ctx.startDate) intent.startDate = ctx.startDate;
+      if (!intent.destination) intent.destination = destination;
+      if (!intent.nights) intent.nights = nights;
+
+      req.log.info({ userName, destination: intent.destination, nights: intent.nights }, "[TripPlan] /trips/chat — generating full itinerary");
+
+      const itinerary = await generateTripItinerary(intent, profile as Record<string, unknown> | null);
+      const tripId = await saveTripPlan(userName, intent, itinerary);
+
+      req.log.info({ userName, tripId, tripName: itinerary.tripName }, "[TripPlan] /trips/chat — itinerary saved");
+
+      res.json({
+        response: text,
+        action: "itinerary_saved",
+        tripId,
+        tripName: itinerary.tripName,
+      });
+    } catch (buildErr) {
+      req.log.error({ buildErr }, "[TripPlan] /trips/chat — itinerary generation failed");
+      // Still return the text response — save failure shouldn't kill the conversation
+      res.json({
+        response: text + "\n\n(Note: There was an issue saving the itinerary — try tapping \"Save as Itinerary\" manually.)",
+        action: null,
+      });
+    }
+  } catch (err) {
+    req.log.error({ err }, "[TripPlan] POST /trips/chat error");
+    res.status(500).json({ error: "Failed to continue travel conversation" });
   }
 });
 
