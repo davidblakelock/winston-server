@@ -111,6 +111,8 @@ function buildSocialQuery(since: Date): string {
 interface ClassifiedEmail {
   type: "order" | "meeting" | "event" | "none";
   summary: string | null;
+  // passed through so handlers can use it as a fallback label
+  _subject?: string;
   // order fields
   retailer?: string | null;
   itemName?: string | null;
@@ -201,6 +203,8 @@ Rules:
     if (!m) return null;
     const parsed = JSON.parse(m[0]) as ClassifiedEmail;
     if (!parsed.type || parsed.type === "none") return null;
+    // Stamp the original subject so handlers can use it as a fallback label
+    parsed._subject = subject;
     return parsed;
   } catch (err) {
     logger.warn({ err }, "[BgEmailScanner] Claude classification failed");
@@ -213,7 +217,14 @@ Rules:
 const NOTIFY_STATUSES = new Set(["out_for_delivery", "delivered"]);
 
 async function handleOrder(userName: string, msgId: string, result: ClassifiedEmail): Promise<void> {
-  if (!result.retailer || !result.itemName) return;
+  // retailer is the minimum viable field — drop only if it's missing.
+  // itemName falls back to the email subject so vague "Your order has shipped" emails
+  // still get recorded rather than silently dropped.
+  if (!result.retailer) {
+    logger.info({ msgId, subject: result._subject }, "[BgEmailScanner] Order dropped — no retailer extracted");
+    return;
+  }
+  const itemName = result.itemName || result._subject || "Order";
 
   // Fetch current orders to detect status changes for push notifications
   const existing = await getOrders(userName);
@@ -227,7 +238,7 @@ async function handleOrder(userName: string, msgId: string, result: ClassifiedEm
   // email_id is critical — it drives ON CONFLICT deduplication in the DB
   const saved = await upsertOrder(userName, {
     retailer: result.retailer,
-    item_name: result.itemName,
+    item_name: itemName,
     order_number: result.orderNumber ?? null,
     tracking_number: result.trackingNumber ?? null,
     carrier: result.carrier ?? null,
@@ -239,7 +250,7 @@ async function handleOrder(userName: string, msgId: string, result: ClassifiedEm
   });
 
   logger.info(
-    { retailer: result.retailer, item: result.itemName, status: result.status ?? "ordered", msgId },
+    { retailer: result.retailer, item: itemName, status: result.status ?? "ordered", msgId },
     "[BgEmailScanner] Order upserted"
   );
 
@@ -450,7 +461,9 @@ async function runScan(userName: string): Promise<void> {
 
   // ── Order scan ────────────────────────────────────────────────────────────
   if (shouldScanOrders) {
-    const since = lastOrderScan ?? new Date(Date.now() - SCAN_INTERVAL_MS);
+    // On first scan (or after a token reset), look back 30 days so historical orders
+    // are captured. SCAN_INTERVAL_MS is the polling gate, not the initial lookback.
+    const since = lastOrderScan ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     logger.info({ userName, since: since.toISOString() }, "[BgEmailScanner] Starting order scan");
 
     const orderQ = buildOrderQuery(since);
