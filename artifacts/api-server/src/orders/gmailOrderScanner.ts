@@ -21,13 +21,40 @@ const ORDER_SUBJECT_KEYWORDS = [
   "your package",
   "order update",
   "tracking number",
+  // Additional patterns missed by the above
+  "your delivery",
+  "delivery scheduled",
+  "delivery notification",
+  "package notification",
+  "delivery exception",
+  "attempted delivery",
+  "ready for pickup",
+];
+
+// Known carrier sender domains — emails from these are captured even if the
+// subject doesn't match a keyword (e.g. "FedEx Shipment 123456789").
+const CARRIER_SENDER_DOMAINS = [
+  "fedex.com",
+  "ups.com",
+  "usps.com",
+  "dhl.com",
+  "ontrac.com",
+  "lasership.com",
+  "amazon.com",
+  "notifications.amazon.com",
 ];
 
 function buildGmailQuery(since?: Date): string {
   const subjectClauses = ORDER_SUBJECT_KEYWORDS
     .map((k) => `subject:"${k}"`)
     .join(" OR ");
-  let q = `(${subjectClauses}) -in:spam -in:trash`;
+
+  // Also catch emails from known carrier domains that mention package/tracking.
+  // e.g. "Your FedEx package is on the way" never matches the subject keywords above.
+  const fromClauses = CARRIER_SENDER_DOMAINS.map((d) => `from:${d}`).join(" OR ");
+  const carrierClause = `(${fromClauses}) (package OR delivery OR shipment OR tracking OR order)`;
+
+  let q = `((${subjectClauses}) OR (${carrierClause})) -in:spam -in:trash`;
   if (since) {
     const epoch = Math.floor(since.getTime() / 1000);
     q += ` after:${epoch}`;
