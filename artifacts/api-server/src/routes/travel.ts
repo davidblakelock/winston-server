@@ -87,10 +87,17 @@ Today is ${today}.${profileCtx}
 When someone asks about a trip, you:
 1. Open with a vivid, honest take on the destination — what makes it genuinely worth going, what the vibe is, what kind of traveler it suits
 2. Walk through the essential stops and neighborhoods — specific places, not categories
-3. Recommend where to stay — real properties, with a brief reason each fits this traveler
-4. Cover what to do — a mix of the can't-miss and the off-the-beaten-path, matched to who they are
-5. Highlight where to eat — real restaurants with cuisine and a one-line reason they fit; favor places with real character over hotel restaurants
+3. Recommend where to stay — real properties with a brief reason each fits this traveler, and a direct booking link for each hotel
+4. Cover what to do — a mix of the can't-miss and the off-the-beaten-path, matched to who they are; include each attraction's official website link
+5. Highlight where to eat — real restaurants with cuisine and a one-line reason they fit; favor places with real character over hotel restaurants; include a reservation link for each restaurant
 6. Close naturally with 2–3 specific options for how they might want to go deeper: "Want me to sketch out a day-by-day itinerary?", "Want me to zero in on the food and nightlife?", "Want me to look at what's realistic for that number of nights?" — give actual useful options, not generic ones
+
+BOOKING LINKS — include these for every hotel, restaurant, and major attraction you mention:
+- Hotels: link directly to the hotel's own website OR their Booking.com page — use format [Hotel Name](https://...) inline after the hotel name
+- Restaurants: link to their OpenTable page (https://www.opentable.com/r/restaurant-name-city) or Resy page (https://resy.com/cities/CITY/restaurant-name) if you know it; otherwise link the restaurant's own website — use format [Reserve on OpenTable](https://...) or [Reserve on Resy](https://...) or [Website](https://...)
+- Attractions & activities: link to the official website — use format [Official Site](https://...) inline
+- Only include links you are confident are real and correct. If you're not sure of the exact URL, omit the link rather than guess.
+- Format all links as Markdown: [Link Text](https://url) — these will be rendered as tappable links in the mobile app
 
 Personalization rules (read the traveler profile above):
 - Match restaurant suggestions to stated food preferences and dining style
@@ -117,6 +124,139 @@ Tone: conversational, specific, confident. No bullet walls unless listing restau
   } catch (err) {
     req.log.error({ err }, "[TripPlan] POST /trips/plan error");
     res.status(500).json({ error: "Failed to generate travel overview" });
+  }
+});
+
+// ── POST /api/trips/save ───────────────────────────────────────────────────────
+// Converts a conversational /trips/plan response into a structured itinerary
+// and saves it to trip_plans.
+// Body: { planResponse: string, description?: string, destination?: string, nights?: number, startDate?: string }
+// Returns: { id, destination, tripName, nights, startDate, endDate, status }
+router.post("/trips/save", express.json({ limit: "2mb" }), async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const body = req.body as {
+    planResponse?: string;
+    description?: string;
+    destination?: string;
+    nights?: number;
+    startDate?: string;
+  };
+
+  if (!body.planResponse || body.planResponse.trim().length < 20) {
+    res.status(400).json({ error: "planResponse is required" });
+    return;
+  }
+
+  try {
+    const profile = await getProfile(userName);
+    const rawData = (profile?.rawData ?? {}) as CollectedData;
+    const profileCtx = buildTravelProfileContext(rawData, profile);
+
+    // Parse intent from the original user description (or fall back to destination hint)
+    const intentSource = body.description ?? body.destination ?? body.planResponse.slice(0, 200);
+    const intent = parseTripIntent(intentSource);
+    if (body.destination) intent.destination = body.destination;
+    if (body.nights) intent.nights = body.nights;
+    if (body.startDate) intent.startDate = body.startDate;
+
+    const nights = intent.nights ?? 3;
+    const dest = intent.destination || "the destination mentioned in the overview";
+    const party = intent.partyDesc ?? "couple";
+
+    req.log.info({ userName, dest, nights }, "[TripPlan] /trips/save — extracting itinerary from plan text");
+
+    const extractionPrompt = `You are converting a conversational travel advisor overview into a structured day-by-day itinerary.
+
+ORIGINAL OVERVIEW:
+${body.planResponse}
+
+TRIP CONTEXT:
+- Destination: ${dest}
+- Duration: ${nights} nights (${nights + 1} days)
+- Traveling with: ${party}
+${intent.startDate ? `- Start date: ${intent.startDate}` : ""}
+${profileCtx}
+
+Extract or infer a complete day-by-day itinerary from the overview above. Where the overview is specific, use exactly those recommendations. Where it is general, infer the most fitting specific options based on the destination, vibe, and traveler profile.
+
+For booking links:
+- Restaurants: include real OpenTable (https://www.opentable.com/r/...) or Resy (https://resy.com/cities/.../...) links where you know them; otherwise the restaurant website
+- Hotels: include the hotel's direct website or Booking.com page
+- Leave null if genuinely unknown — do not guess URLs
+
+Return ONLY valid JSON — no markdown, no explanation:
+{
+  "tripName": "Short evocative name e.g. 'Savannah for Two' or 'Hill Country Long Weekend'",
+  "destination": "${dest}",
+  "nights": ${nights},
+  "partyDesc": "${party}",
+  "summary": "One vivid sentence capturing the spirit of this trip",
+  "generalTips": ["Tip 1", "Tip 2", "Tip 3"],
+  "days": [
+    {
+      "day": 1,
+      "title": "Short evocative day title",
+      "morning": "Morning plan — specific places and activities",
+      "afternoon": "Afternoon plan — specific places",
+      "evening": "Evening plan — neighborhood or activity",
+      "restaurant": {
+        "name": "Restaurant name",
+        "cuisine": "Cuisine type and style",
+        "whyItFits": "One sentence why this fits the traveler",
+        "bookingUrl": "OpenTable or Resy URL, or null",
+        "websiteUrl": "Restaurant website, or null",
+        "phone": null
+      },
+      "hotel": {
+        "name": "Hotel name",
+        "whyItFits": "One sentence why this hotel fits",
+        "websiteUrl": "Hotel website URL, or null",
+        "priceRange": "$$, $$$, or $$$$"
+      },
+      "practicalNotes": "Timing, reservations needed, transport, or insider tips"
+    }
+  ]
+}`;
+
+    const message = await anthropic.messages.create({
+      model: MODEL_SONNET,
+      max_tokens: 8000,
+      messages: [{ role: "user", content: extractionPrompt }],
+    });
+
+    const rawText = message.content[0].type === "text" ? message.content[0].text : "";
+    const stripped = rawText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+    const jsonMatch = stripped.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      req.log.error({ rawText: rawText.slice(0, 500) }, "[TripPlan] /trips/save — no JSON in Claude response");
+      res.status(500).json({ error: "Failed to extract itinerary structure from plan" });
+      return;
+    }
+
+    const itinerary = JSON.parse(jsonMatch[0]) as TripItinerary;
+
+    const id = await saveTripPlan(userName, intent, itinerary);
+    const plan = await getTripPlanById(id, userName);
+
+    req.log.info(
+      { id, destination: itinerary.destination, tripName: itinerary.tripName, nights: itinerary.nights },
+      "[TripPlan] /trips/save — saved"
+    );
+
+    res.status(201).json({
+      id,
+      destination: plan?.destination ?? itinerary.destination,
+      tripName: plan?.trip_name ?? itinerary.tripName,
+      nights: plan?.nights ?? itinerary.nights,
+      startDate: plan?.start_date ?? null,
+      endDate: plan?.end_date ?? null,
+      status: plan?.status ?? "planning",
+    });
+  } catch (err) {
+    req.log.error({ err }, "[TripPlan] POST /trips/save error");
+    res.status(500).json({ error: "Failed to save trip plan" });
   }
 });
 
