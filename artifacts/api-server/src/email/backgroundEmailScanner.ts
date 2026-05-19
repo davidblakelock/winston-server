@@ -1,14 +1,16 @@
 /**
- * Background Email Scanner
+ * Background Email Scanner — Unified Claude Classification
  *
- * Runs a heartbeat every 60 minutes and processes four categories of emails:
+ * Runs a heartbeat every 60 minutes. Fetches recent inbox emails with a broad
+ * subject-keyword query and sends each to Claude Haiku for classification +
+ * extraction in a single call. Routes actionable emails to the appropriate
+ * downstream handler.
  *
- *   1. Meeting requests        → immediate push notification
- *   2. Event invitations       → immediate push if not already on Google Calendar
- *   3. Order confirmations     → saved to Order Tracker
- *   4. Travel confirmations    → saved to Travel screen (flights, hotels, rental cars)
- *
- * Everything else is ignored.
+ * Categories handled:
+ *   1. order             → upsert into Order Tracker; push if status changed to out_for_delivery/delivered
+ *   2. meeting           → store as pending meeting request; push if tomorrow-or-sooner
+ *   3. event             → push if not already on Google Calendar
+ *   4. none              → silently ignored
  */
 
 import cron from "node-cron";
@@ -17,13 +19,11 @@ import Anthropic from "@anthropic-ai/sdk";
 import { logger } from "../lib/logger.js";
 import { NATIVE_USER } from "../auth/middleware.js";
 import { getAuthClientForUser } from "../google/oauth.js";
-import { scanOrderEmails } from "../orders/gmailOrderScanner.js";
 import { upsertOrder, getOrders } from "../orders/ordersManager.js";
-import { scanEmailsForMeetings } from "../email/meetingScanner.js";
 import { setPendingMeetingRequests, getPendingMeetingRequests } from "../email/emailMeetingManager.js";
 import { sendPushToAll } from "../push/pushManager.js";
 import { MODEL_HAIKU } from "../lib/models.js";
-import type { MeetingRequest } from "../email/meetingScanner.js";
+import type { DetectedMeetingRequest } from "../email/emailMeetingManager.js";
 
 const TZ = "America/Chicago";
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -31,11 +31,9 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 // ── Per-user last-scan timestamp (in-memory; resets on restart) ───────────────
 
 const _lastScanAt = new Map<string, Date>();
-
-// Fixed scan interval: 60 minutes
 const SCAN_INTERVAL_MS = 60 * 60 * 1000;
 
-// ── Gmail body extraction helpers ─────────────────────────────────────────────
+// ── Gmail body helpers ────────────────────────────────────────────────────────
 
 interface GmailPart {
   mimeType?: string;
@@ -66,263 +64,264 @@ function extractBody(payload: GmailPart): string {
 function stripHtml(html: string): string {
   return html
     .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
     .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&")
+    .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'")
     .replace(/\s{2,}/g, " ").trim();
 }
 
-// ── 1. Order confirmations → Order Tracker ────────────────────────────────────
+// ── Unified Gmail query ───────────────────────────────────────────────────────
+// Broad union of keywords from the former order, meeting, and event scanners.
 
-const NOTIFY_STATUSES = new Set(["out_for_delivery", "delivered"]);
-
-async function processOrderEmails(userName: string, since: Date): Promise<void> {
-  try {
-    const scanned = await scanOrderEmails(userName, since);
-    if (scanned.length === 0) return;
-
-    const existing = await getOrders(userName);
-    const existingByTracking = new Map(
-      existing
-        .filter((o) => o.tracking_number)
-        .map((o) => [o.tracking_number!, o.status])
-    );
-
-    for (const order of scanned) {
-      const prevStatus = order.tracking_number
-        ? existingByTracking.get(order.tracking_number) ?? null
-        : null;
-
-      await upsertOrder(userName, order);
-
-      const newStatus = order.status ?? "ordered";
-      const statusChanged = prevStatus !== null && prevStatus !== newStatus;
-
-      if (statusChanged && NOTIFY_STATUSES.has(newStatus)) {
-        const label = newStatus === "delivered" ? "Delivered" : "Out for delivery";
-        const body = `${label}: ${order.item_name ?? "Your package"}${order.retailer ? ` from ${order.retailer}` : ""}`;
-        await sendPushToAll(
-          { title: "Package Update", body, type: "order-update" },
-          userName
-        );
-        logger.info(
-          { tracking: order.tracking_number, prevStatus, newStatus },
-          "[BgEmailScanner] Order status push sent"
-        );
-      }
-    }
-
-    logger.info({ userName, count: scanned.length }, "[BgEmailScanner] Orders processed");
-  } catch (err) {
-    logger.warn({ err }, "[BgEmailScanner] Order scan failed");
-  }
-}
-
-// ── 2. Meeting requests → immediate push ─────────────────────────────────────
-
-function isTomorrowOrSooner(meeting: MeetingRequest): boolean {
-  if (!meeting.proposedDate) return false;
-  const today = new Date();
-  const tomorrow = new Date(today);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowStr = tomorrow.toLocaleDateString("en-CA", { timeZone: TZ });
-  return meeting.proposedDate <= tomorrowStr;
-}
-
-async function processMeetingEmails(userName: string, since: Date): Promise<void> {
-  try {
-    const meetings = await scanEmailsForMeetings(userName, since);
-    if (meetings.length === 0) return;
-
-    const existing = getPendingMeetingRequests();
-    const existingIds = new Set(existing.map((m) => m.gmailId));
-    const newMeetings = meetings.filter((m) => !existingIds.has(m.emailId));
-
-    if (newMeetings.length > 0) {
-      const allMeetings = [
-        ...existing,
-        ...newMeetings.map((m) => ({
-          gmailId: m.emailId,
-          gmailThreadId: m.emailId,
-          from: m.organizer,
-          fromEmail: m.organizerEmail,
-          subject: m.subject,
-          proposedDateTimeStr: m.proposedDate
-            ? `${m.proposedDate}${m.proposedStartTime ? " " + m.proposedStartTime : ""}`
-            : null,
-          isOpenEnded: !m.proposedDate,
-          calendarStatus: (m.hasConflict ? "conflict" : "free") as "free" | "conflict" | "unknown",
-          conflictEvent: m.conflictingEvent,
-          suggestedAlternative: null,
-        })),
-      ];
-      setPendingMeetingRequests(allMeetings);
-    }
-
-    const urgent = newMeetings.filter(isTomorrowOrSooner);
-    for (const meeting of urgent) {
-      const when = meeting.proposedDate
-        ? `${meeting.proposedDate}${meeting.proposedStartTime ? " at " + meeting.proposedStartTime : ""}`
-        : "soon";
-      const body = `${meeting.organizer} wants to meet ${when}${meeting.hasConflict ? " — you have a conflict" : ""}`;
-      await sendPushToAll(
-        { title: "Meeting Request Needs Response", body, type: "calendar-update" },
-        userName
-      );
-      logger.info({ organizer: meeting.organizer, date: meeting.proposedDate }, "[BgEmailScanner] Meeting push sent");
-    }
-
-    logger.info({ userName, total: meetings.length, urgent: urgent.length }, "[BgEmailScanner] Meetings processed");
-  } catch (err) {
-    logger.warn({ err }, "[BgEmailScanner] Meeting scan failed");
-  }
-}
-
-// ── 3. Event invitations → push if not already on Google Calendar ─────────────
-
-const EVENT_INVITE_KEYWORDS = [
-  "invitation:", "you're invited", "you have been invited",
-  "calendar invite", "event invitation", "has invited you",
-  "invited you to", "cordially invited", "join us for",
-  "save the date",
+const UNIFIED_SUBJECT_KEYWORDS = [
+  // orders / shipping
+  "order confirmation", "your order", "has shipped", "out for delivery",
+  "delivered", "shipment notification", "shipping confirmation", "order shipped",
+  "package delivered", "your package", "order update", "tracking number",
+  // meetings / scheduling
+  "meeting", "meet", "call", "invite", "invitation", "calendar",
+  "schedule", "zoom", "teams", "google meet", "webex", "are you free",
+  "can we talk", "set up a time", "calendly",
+  // events / social
+  "you're invited", "you have been invited", "event invitation",
+  "has invited you", "invited you to", "cordially invited",
+  "join us for", "save the date",
 ];
 
-interface ExtractedEventInvite {
-  isInvite: boolean;
-  eventTitle: string | null;
-  eventDate: string | null;   // YYYY-MM-DD or null
-  organizer: string | null;
+function buildUnifiedQuery(since: Date): string {
+  const clauses = UNIFIED_SUBJECT_KEYWORDS.map((k) => `subject:"${k}"`).join(" OR ");
+  return `in:inbox -in:spam -in:trash -from:me (${clauses}) after:${Math.floor(since.getTime() / 1000)}`;
 }
 
-async function extractEventInviteInfo(
-  subject: string,
-  body: string,
-  from: string,
-): Promise<ExtractedEventInvite | null> {
-  const truncated = body.slice(0, 2500);
-  const prompt = `Determine if this email is a calendar event invitation (NOT a meeting request, NOT a newsletter). Return ONLY valid JSON.
+// ── Claude Haiku: classify + extract in one call ──────────────────────────────
 
+interface ClassifiedEmail {
+  type: "order" | "meeting" | "event" | "none";
+  summary: string | null;
+  // order fields
+  retailer?: string | null;
+  itemName?: string | null;
+  orderNumber?: string | null;
+  trackingNumber?: string | null;
+  carrier?: string | null;
+  expectedDate?: string | null;
+  orderTotal?: string | null;
+  orderUrl?: string | null;
+  status?: "ordered" | "shipped" | "in_transit" | "out_for_delivery" | "delivered" | null;
+  // meeting fields
+  eventTitle?: string | null;
+  proposedDate?: string | null;
+  proposedStartTime?: string | null;
+  proposedEndTime?: string | null;
+  location?: string | null;
+  description?: string | null;
+  // event fields
+  eventDate?: string | null;
+  organizer?: string | null;
+  organizerEmail?: string | null;
+}
+
+async function classifyEmail(
+  from: string,
+  subject: string,
+  date: string,
+  body: string,
+): Promise<ClassifiedEmail | null> {
+  const today = new Date().toISOString().split("T")[0];
+  const truncated = body.slice(0, 3000);
+
+  const prompt = `Today: ${today}
 From: ${from}
 Subject: ${subject}
+Date: ${date}
 
 Body:
 ${truncated}
 
-Return JSON:
+Classify this email and extract relevant details. Return ONLY valid JSON:
+
 {
-  "isInvite": true | false,
-  "eventTitle": "name of the event or null",
-  "eventDate": "YYYY-MM-DD or null if unknown/no specific date",
-  "organizer": "organizer name or null"
+  "type": "order" | "meeting" | "event" | "none",
+  "summary": "one actionable sentence for the recipient, or null",
+
+  // Include if type="order" — shipping/order/delivery emails:
+  "retailer": exact retailer name or null,
+  "itemName": specific product name (never just "your order") or null,
+  "orderNumber": string or null,
+  "trackingNumber": carrier tracking number or null,
+  "carrier": "UPS" | "FedEx" | "USPS" | "DHL" | null,
+  "expectedDate": "YYYY-MM-DD" or null,
+  "orderTotal": "$XX.XX" or null,
+  "orderUrl": tracking/order URL or null,
+  "status": "ordered" | "shipped" | "in_transit" | "out_for_delivery" | "delivered" | null,
+
+  // Include if type="meeting" — someone personally requesting a meeting/call/appointment:
+  "eventTitle": meeting name or null,
+  "proposedDate": "YYYY-MM-DD" or null,
+  "proposedStartTime": "HH:MM" (24h) or null,
+  "proposedEndTime": "HH:MM" (24h) or null,
+  "location": location or null,
+  "description": brief description or null,
+  "organizer": sender display name or null,
+  "organizerEmail": sender email or null,
+
+  // Include if type="event" — invitation to a group event/party/conference:
+  "eventTitle": event name or null,
+  "eventDate": "YYYY-MM-DD" or null,
+  "organizer": organizer name or null
 }
 
-Count as invitations: event invites, party invitations, social gathering invites, conference invitations, webinar invitations, save-the-date emails.
-Do NOT count: meeting requests between two people (those are handled separately), newsletters, promotional emails, marketing.`;
+Rules:
+- type="order": order/shipping/delivery emails from retailers or carriers
+- type="meeting": someone personally requesting to schedule a 1:1 or small-group meeting, call, or appointment
+- type="event": invitation to attend an event (party, conference, webinar, save-the-date) not yet on calendar
+- type="none": newsletters, promotions, auto-notifications, marketing, unsubscribe offers, anything not actionable`;
 
   try {
     const resp = await anthropic.messages.create({
       model: MODEL_HAIKU,
-      max_tokens: 200,
+      max_tokens: 500,
       messages: [{ role: "user", content: prompt }],
     });
     const text = resp.content[0].type === "text" ? resp.content[0].text.trim() : "";
     const m = text.match(/\{[\s\S]*\}/);
     if (!m) return null;
-    return JSON.parse(m[0]) as ExtractedEventInvite;
+    const parsed = JSON.parse(m[0]) as ClassifiedEmail;
+    if (!parsed.type || parsed.type === "none") return null;
+    return parsed;
   } catch (err) {
-    logger.warn({ err }, "[BgEmailScanner] Event invite extraction failed");
+    logger.warn({ err }, "[BgEmailScanner] Claude classification failed");
     return null;
   }
 }
+
+// ── Order handler ─────────────────────────────────────────────────────────────
+
+const NOTIFY_STATUSES = new Set(["out_for_delivery", "delivered"]);
+
+async function handleOrder(userName: string, msgId: string, result: ClassifiedEmail): Promise<void> {
+  if (!result.retailer || !result.itemName) return;
+
+  const existing = await getOrders(userName);
+  const existingByTracking = new Map(
+    existing.filter((o) => o.tracking_number).map((o) => [o.tracking_number!, o.status])
+  );
+  const prevStatus = result.trackingNumber
+    ? existingByTracking.get(result.trackingNumber) ?? null
+    : null;
+
+  await upsertOrder(userName, {
+    retailer: result.retailer,
+    item_name: result.itemName,
+    order_number: result.orderNumber ?? null,
+    tracking_number: result.trackingNumber ?? null,
+    carrier: result.carrier ?? null,
+    status: result.status ?? "ordered",
+    expected_date: result.expectedDate ?? null,
+    order_total: result.orderTotal ?? null,
+    order_url: result.orderUrl ?? null,
+  });
+
+  const newStatus = result.status ?? "ordered";
+  const statusChanged = prevStatus !== null && prevStatus !== newStatus;
+  if (statusChanged && NOTIFY_STATUSES.has(newStatus)) {
+    const label = newStatus === "delivered" ? "Delivered" : "Out for delivery";
+    await sendPushToAll(
+      { title: "Package Update", body: `${label}: ${result.itemName} from ${result.retailer}`, tag: "order-update" },
+      userName,
+    );
+    logger.info({ tracking: result.trackingNumber, prevStatus, newStatus }, "[BgEmailScanner] Order push sent");
+  }
+  logger.info({ retailer: result.retailer, item: result.itemName, status: newStatus }, "[BgEmailScanner] Order upserted");
+}
+
+// ── Meeting handler ───────────────────────────────────────────────────────────
+
+function isTomorrowOrSooner(proposedDate: string | null | undefined): boolean {
+  if (!proposedDate) return false;
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowStr = tomorrow.toLocaleDateString("en-CA", { timeZone: TZ });
+  return proposedDate <= tomorrowStr;
+}
+
+async function handleMeeting(userName: string, msgId: string, result: ClassifiedEmail): Promise<void> {
+  const organizer = result.organizer ?? "Someone";
+  const existing = getPendingMeetingRequests();
+  const existingIds = new Set(existing.map((m) => m.gmailId));
+  if (existingIds.has(msgId)) return;
+
+  const newRequest: DetectedMeetingRequest = {
+    gmailId: msgId,
+    gmailThreadId: msgId,
+    from: organizer,
+    fromEmail: result.organizerEmail ?? "",
+    subject: result.eventTitle ?? "Meeting request",
+    proposedDateTimeStr: result.proposedDate
+      ? `${result.proposedDate}${result.proposedStartTime ? " " + result.proposedStartTime : ""}`
+      : null,
+    isOpenEnded: !result.proposedDate,
+    calendarStatus: "unknown",
+    conflictEvent: null,
+    suggestedAlternative: null,
+  };
+
+  setPendingMeetingRequests([...existing, newRequest]);
+
+  if (isTomorrowOrSooner(result.proposedDate)) {
+    const when = result.proposedDate
+      ? `${result.proposedDate}${result.proposedStartTime ? " at " + result.proposedStartTime : ""}`
+      : "soon";
+    await sendPushToAll(
+      { title: "Meeting Request Needs Response", body: `${organizer} wants to meet ${when}`, tag: "meeting-request" },
+      userName,
+    );
+    logger.info({ organizer, date: result.proposedDate }, "[BgEmailScanner] Meeting push sent");
+  }
+  logger.info({ organizer, date: result.proposedDate }, "[BgEmailScanner] Meeting queued");
+}
+
+// ── Event handler ─────────────────────────────────────────────────────────────
 
 async function isEventOnCalendar(userName: string, title: string, date: string | null): Promise<boolean> {
   try {
     const auth = await getAuthClientForUser(userName);
     if (!auth) return false;
     const calendar = google.calendar({ version: "v3", auth });
-
-    let timeMin: string;
-    let timeMax: string;
-
-    if (date) {
-      const d = new Date(date + "T00:00:00");
-      timeMin = new Date(d.getTime() - 24 * 60 * 60 * 1000).toISOString();
-      timeMax = new Date(d.getTime() + 2 * 24 * 60 * 60 * 1000).toISOString();
-    } else {
-      timeMin = new Date().toISOString();
-      timeMax = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
-    }
-
+    const timeMin = date
+      ? new Date(new Date(date + "T00:00:00").getTime() - 86400000).toISOString()
+      : new Date().toISOString();
+    const timeMax = date
+      ? new Date(new Date(date + "T00:00:00").getTime() + 2 * 86400000).toISOString()
+      : new Date(Date.now() + 90 * 86400000).toISOString();
     const resp = await calendar.events.list({
-      calendarId: "primary",
-      q: title,
-      timeMin,
-      timeMax,
-      maxResults: 5,
-      singleEvents: true,
+      calendarId: "primary", q: title, timeMin, timeMax, maxResults: 5, singleEvents: true,
     });
-
     return (resp.data.items?.length ?? 0) > 0;
-  } catch {
-    return false;
-  }
+  } catch { return false; }
 }
 
-async function processEventInvitations(userName: string, since: Date): Promise<void> {
-  try {
-    const auth = await getAuthClientForUser(userName);
-    if (!auth) return;
-    try { await auth.getAccessToken(); } catch { return; }
+async function handleEvent(userName: string, msgId: string, result: ClassifiedEmail): Promise<void> {
+  const title = result.eventTitle;
+  if (!title) return;
 
-    const gmail = google.gmail({ version: "v1", auth });
-    const subjectClauses = EVENT_INVITE_KEYWORDS.map((k) => `subject:"${k}"`).join(" OR ");
-    const q = `in:inbox (${subjectClauses}) -from:me after:${Math.floor(since.getTime() / 1000)}`;
-
-    const list = await gmail.users.messages.list({ userId: "me", maxResults: 20, q });
-    const messageIds = (list.data.messages ?? []).map((m) => m.id!).filter(Boolean);
-
-    if (messageIds.length === 0) return;
-    logger.info({ userName, count: messageIds.length }, "[BgEmailScanner] Event invite candidates");
-
-    for (const msgId of messageIds.slice(0, 10)) {
-      try {
-        const detail = await gmail.users.messages.get({ userId: "me", id: msgId, format: "full" });
-        const headers = detail.data.payload?.headers ?? [];
-        const getH = (n: string) =>
-          headers.find((h) => h.name?.toLowerCase() === n.toLowerCase())?.value ?? "";
-
-        const subject = getH("Subject");
-        const from = getH("From");
-
-        let body = extractBody((detail.data.payload ?? {}) as GmailPart);
-        if (body.includes("<")) body = stripHtml(body);
-        if (body.length < 20) continue;
-
-        const extracted = await extractEventInviteInfo(subject, body, from);
-        if (!extracted?.isInvite || !extracted.eventTitle) continue;
-
-        const alreadyOnCalendar = await isEventOnCalendar(userName, extracted.eventTitle, extracted.eventDate);
-        if (alreadyOnCalendar) {
-          logger.info({ title: extracted.eventTitle }, "[BgEmailScanner] Event already on calendar, skipping");
-          continue;
-        }
-
-        const dateStr = extracted.eventDate ? ` on ${extracted.eventDate}` : "";
-        const body2 = `${extracted.eventTitle}${dateStr}${extracted.organizer ? ` — from ${extracted.organizer}` : ""}`;
-        await sendPushToAll(
-          { title: "Event Invitation", body: body2, type: "calendar-update" },
-          userName
-        );
-        logger.info({ title: extracted.eventTitle, date: extracted.eventDate }, "[BgEmailScanner] Event invite push sent");
-      } catch (err) {
-        logger.warn({ err, msgId }, "[BgEmailScanner] Failed to process event invite");
-      }
-    }
-  } catch (err) {
-    logger.warn({ err }, "[BgEmailScanner] Event invitation scan failed");
+  const alreadyOnCalendar = await isEventOnCalendar(userName, title, result.eventDate ?? null);
+  if (alreadyOnCalendar) {
+    logger.info({ title }, "[BgEmailScanner] Event already on calendar, skipping");
+    return;
   }
+
+  const dateStr = result.eventDate ? ` on ${result.eventDate}` : "";
+  const org = result.organizer ? ` — from ${result.organizer}` : "";
+  await sendPushToAll(
+    { title: "Event Invitation", body: `${title}${dateStr}${org}`, tag: "event-invite" },
+    userName,
+  );
+  logger.info({ title, date: result.eventDate }, "[BgEmailScanner] Event invite push sent");
 }
 
-// ── Main scan tick ────────────────────────────────────────────────────────────
+// ── Main unified scan ─────────────────────────────────────────────────────────
 
 async function runScan(userName: string): Promise<void> {
   const lastScan = _lastScanAt.get(userName);
@@ -337,21 +336,79 @@ async function runScan(userName: string): Promise<void> {
   const since = lastScan ?? new Date(Date.now() - SCAN_INTERVAL_MS);
   const scanStart = new Date();
 
-  logger.info({ userName, since: since.toISOString() }, "[BgEmailScanner] Starting scan");
+  logger.info({ userName, since: since.toISOString() }, "[BgEmailScanner] Starting unified scan");
 
-  await Promise.allSettled([
-    processOrderEmails(userName, since),
-    processMeetingEmails(userName, since),
-    processEventInvitations(userName, since),
-  ]);
+  const auth = await getAuthClientForUser(userName);
+  if (!auth) {
+    logger.warn({ userName }, "[BgEmailScanner] No auth client");
+    return;
+  }
+  try { await auth.getAccessToken(); } catch {
+    logger.warn({ userName }, "[BgEmailScanner] Token refresh failed");
+    return;
+  }
+
+  const gmail = google.gmail({ version: "v1", auth });
+  const q = buildUnifiedQuery(since);
+
+  let messageIds: string[] = [];
+  try {
+    const list = await gmail.users.messages.list({ userId: "me", maxResults: 30, q });
+    messageIds = (list.data.messages ?? []).map((m) => m.id!).filter(Boolean);
+  } catch (err) {
+    logger.warn({ err }, "[BgEmailScanner] Gmail list failed");
+    return;
+  }
+
+  if (messageIds.length === 0) {
+    logger.info({ userName }, "[BgEmailScanner] No candidate emails");
+    _lastScanAt.set(userName, scanStart);
+    return;
+  }
+
+  logger.info({ userName, count: messageIds.length }, "[BgEmailScanner] Candidate emails found");
+
+  let orders = 0, meetings = 0, events = 0, skipped = 0;
+
+  for (const msgId of messageIds.slice(0, 20)) {
+    try {
+      const detail = await gmail.users.messages.get({ userId: "me", id: msgId, format: "full" });
+      const headers = detail.data.payload?.headers ?? [];
+      const getH = (n: string) =>
+        headers.find((h) => h.name?.toLowerCase() === n.toLowerCase())?.value ?? "";
+
+      const from = getH("From");
+      const subject = getH("Subject");
+      const date = getH("Date");
+
+      let body = extractBody((detail.data.payload ?? {}) as GmailPart);
+      if (body.includes("<")) body = stripHtml(body);
+      if (body.length < 30) { skipped++; continue; }
+
+      const result = await classifyEmail(from, subject, date, body);
+      if (!result) { skipped++; continue; }
+
+      if (result.type === "order") {
+        await handleOrder(userName, msgId, result);
+        orders++;
+      } else if (result.type === "meeting") {
+        await handleMeeting(userName, msgId, result);
+        meetings++;
+      } else if (result.type === "event") {
+        await handleEvent(userName, msgId, result);
+        events++;
+      }
+    } catch (err) {
+      logger.warn({ err, msgId }, "[BgEmailScanner] Failed to process email");
+      skipped++;
+    }
+  }
 
   _lastScanAt.set(userName, scanStart);
-  logger.info({ userName }, "[BgEmailScanner] Scan complete");
+  logger.info({ userName, orders, meetings, events, skipped }, "[BgEmailScanner] Unified scan complete");
 }
 
 // ── Scheduler ─────────────────────────────────────────────────────────────────
-// Heartbeat fires every 15 min to handle restarts gracefully.
-// Actual scan only runs when 60+ minutes have elapsed since the last scan.
 
 export function startBackgroundEmailScanner(userName = NATIVE_USER): void {
   cron.schedule("*/15 * * * *", async () => {
@@ -362,5 +419,5 @@ export function startBackgroundEmailScanner(userName = NATIVE_USER): void {
     }
   }, { timezone: TZ });
 
-  logger.info("[BgEmailScanner] Scheduler started — 60-minute scan interval");
+  logger.info("[BgEmailScanner] Scheduler started — unified Claude scan, 60-minute interval");
 }

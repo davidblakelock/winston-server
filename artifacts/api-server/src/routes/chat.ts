@@ -1967,65 +1967,80 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   }
 
   // ── Service provider mention detection — update last_contact_date ───────────
-  // Catches phrases like "Just left Dr. Martinez", "Had the AC serviced today",
-  // "Saw my dentist", "Just got back from the accountant"
-  const PROVIDER_MENTION_PATTERN = /\b(?:just\s+(?:left|saw|got\s+back\s+from|visited|met\s+with|spoke\s+with|talked\s+to|finished\s+with)|had\s+(?:a\s+)?(?:my\s+)?(?:appointment|session|visit|checkup|check-?up|meeting|service|call)\s+(?:with|at)|saw\s+(?:my\s+)?|met\s+with|spoke\s+with|appointment\s+with|serviced\s+today|was\s+serviced)\b/i;
-  if (!isMorningGreeting && PROVIDER_MENTION_PATTERN.test(message)) {
+  // Claude Haiku determines if the user mentioned interacting with a provider
+  // today, replacing regex + exact-name matching for better natural language coverage.
+  if (!isMorningGreeting) {
     getAllProviders(sessionUserName)
-      .then((providers) => {
-        const lowerMsg = message.toLowerCase();
-        const matched = providers.find((p) =>
-          lowerMsg.includes(p.name.toLowerCase()) ||
-          (p.company && lowerMsg.includes(p.company.toLowerCase()))
-        );
-        if (matched) {
-          touchLastContactDate(matched.id, sessionUserName).catch(() => {});
-          req.log.info(
-            { providerId: matched.id, name: matched.name },
-            "[Providers] Mention detected — last_contact_date updated"
-          );
-          systemPrompt +=
-            `\n\n[Service Provider Mention]\n` +
-            `The user just mentioned ${matched.name}${matched.company ? ` (${matched.company})` : ""}. ` +
-            `Their last contact date has been updated to today. ` +
-            `After responding naturally to what they said, ask warmly: ` +
-            `"Anything you want me to note from that, or should I schedule something for next time?"`;
-        }
+      .then(async (providers) => {
+        if (providers.length === 0) return;
+        const providerList = providers
+          .map((p) => `${p.name}${p.company ? ` (${p.company})` : ""}`)
+          .join(", ");
+        try {
+          const resp = await anthropic.messages.create({
+            model: MODEL_HAIKU,
+            max_tokens: 60,
+            messages: [{
+              role: "user",
+              content:
+                `User message: "${message.trim().slice(0, 300)}"\n` +
+                `Service providers on file: ${providerList}\n\n` +
+                `Did the user just interact with (visit, see, be serviced by, have an appointment with) one of these providers today? ` +
+                `Reply with the provider's exact name if yes, or "no" if not.`,
+            }],
+          });
+          const result = resp.content[0].type === "text" ? resp.content[0].text.trim() : "no";
+          if (result.toLowerCase() !== "no") {
+            const matched = providers.find((p) =>
+              result.toLowerCase().includes(p.name.toLowerCase()) ||
+              (p.company && result.toLowerCase().includes(p.company.toLowerCase()))
+            );
+            if (matched) {
+              touchLastContactDate(matched.id, sessionUserName).catch(() => {});
+              req.log.info(
+                { providerId: matched.id, name: matched.name },
+                "[Providers] Mention detected via Claude — last_contact_date updated"
+              );
+            }
+          }
+        } catch { /* non-critical */ }
       })
       .catch(() => {});
   }
 
   // ── Morning intention / evening reflection explicit capture ─────────────────
-  // When the last assistant message ended with the morning intention question or
-  // the evening "one thing worth remembering" question, save the user's response
-  // to life_captures. Runs fire-and-forget so it never delays the response.
+  // Claude Haiku determines whether the user's message is a meaningful life
+  // capture response (morning intention or evening reflection), replacing brittle
+  // string-matching against exact question phrasing.
   if (!isMorningGreeting && !isMydayAdd && message.trim().length > 3) {
     const _lcLastAssist = [...history].reverse().find((m) => m.role === "assistant");
-    const _lcPriorText  = (_lcLastAssist?.content ?? "").toLowerCase();
-    const MORNING_INTENTION_QS = [
-      "what's the one thing that would make today feel worthwhile",
-      "what's been on your mind that deserves attention today",
-      "is there someone you should reach out to today",
-    ];
-    const isRespondingToMorningQ = MORNING_INTENTION_QS.some((q) => _lcPriorText.includes(q));
-    const isRespondingToEveningQ = _lcPriorText.includes("one thing worth remembering from today");
-
-    if (isRespondingToMorningQ) {
-      saveLifeCapture(sessionUserName, message.trim(), "morning")
-        .then(() => {
-          runDotConnector(sessionUserName).catch(() => {});
-          runPatternObservation(sessionUserName).catch(() => {});
-        })
-        .catch(() => {});
-      req.log.info({ chars: message.length }, "[LifeCaptures] Morning intention response saved");
-    } else if (isRespondingToEveningQ) {
-      saveLifeCapture(sessionUserName, message.trim(), "evening")
-        .then(() => {
-          runDotConnector(sessionUserName).catch(() => {});
-          runPatternObservation(sessionUserName).catch(() => {});
-        })
-        .catch(() => {});
-      req.log.info({ chars: message.length }, "[LifeCaptures] Evening reflection saved");
+    const _lcPriorText  = (_lcLastAssist?.content ?? "").slice(0, 600);
+    if (_lcPriorText.length > 20) {
+      (async () => {
+        try {
+          const cls = await anthropic.messages.create({
+            model: MODEL_HAIKU,
+            max_tokens: 10,
+            messages: [{
+              role: "user",
+              content:
+                `Conversation context:\nAI said: "${_lcPriorText}"\nUser replied: "${message.trim().slice(0, 300)}"\n\n` +
+                `Is this user reply a meaningful personal reflection or intention worth saving to a life journal?\n` +
+                `- "morning" = user is responding to a morning intention question (what they want to accomplish, what's on their mind)\n` +
+                `- "evening" = user is responding to an evening reflection question (something worth remembering, how today went)\n` +
+                `- "no" = general conversation, not a capture-worthy response\n\n` +
+                `Reply with exactly one word: morning, evening, or no`,
+            }],
+          });
+          const verdict = cls.content[0].type === "text" ? cls.content[0].text.trim().toLowerCase() : "no";
+          if (verdict === "morning" || verdict === "evening") {
+            await saveLifeCapture(sessionUserName, message.trim(), verdict);
+            runDotConnector(sessionUserName).catch(() => {});
+            runPatternObservation(sessionUserName).catch(() => {});
+            req.log.info({ chars: message.length, context: verdict }, "[LifeCaptures] Capture saved via Claude classification");
+          }
+        } catch { /* non-critical */ }
+      })();
     }
   }
 
