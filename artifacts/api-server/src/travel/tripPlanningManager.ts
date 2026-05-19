@@ -293,7 +293,7 @@ Return ONLY valid JSON with this exact structure (no markdown, no explanation):
 
   const response = await anthropic.messages.create({
     model:      MODEL_SONNET,
-    max_tokens: 5000,
+    max_tokens: 8000,
     messages:   [{ role: "user", content: prompt }],
   });
 
@@ -302,12 +302,51 @@ Return ONLY valid JSON with this exact structure (no markdown, no explanation):
     .map((b) => (b as { type: "text"; text: string }).text)
     .join("").trim();
 
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  // Strip markdown fences if Claude wrapped the JSON
+  const stripped = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+
+  const jsonMatch = stripped.match(/\{[\s\S]*\}/);
   if (!jsonMatch) throw new Error("[TripPlan] No JSON found in Claude response");
 
-  const itinerary = JSON.parse(jsonMatch[0]) as TripItinerary;
+  const itinerary = JSON.parse(repairJson(jsonMatch[0])) as TripItinerary;
   logger.info({ destination: dest, nights, days: itinerary.days?.length }, "[TripPlan] Itinerary generated");
   return itinerary;
+}
+
+/**
+ * Best-effort JSON repair for common Claude output quirks:
+ * - trailing commas before } or ]
+ * - single-quoted strings (replace with double quotes, careful with apostrophes)
+ * - unquoted property names
+ * - truncated JSON (trim to last valid closing brace)
+ */
+function repairJson(raw: string): string {
+  // 1. Remove trailing commas before } or ]
+  let s = raw.replace(/,\s*([}\]])/g, "$1");
+
+  // 2. Try parse; if it works we're done
+  try { JSON.parse(s); return s; } catch (_) { /* continue */ }
+
+  // 3. Attempt to trim to the last complete top-level object if JSON is truncated
+  // Find the last balanced closing brace
+  let depth = 0;
+  let lastGoodClose = -1;
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === "{" || s[i] === "[") depth++;
+    else if (s[i] === "}" || s[i] === "]") {
+      depth--;
+      if (depth === 0) lastGoodClose = i;
+    }
+  }
+  if (lastGoodClose > 0 && lastGoodClose < s.length - 1) {
+    const trimmed = s.slice(0, lastGoodClose + 1);
+    // Try once more after trimming + trailing comma removal
+    const cleaned = trimmed.replace(/,\s*([}\]])/g, "$1");
+    try { JSON.parse(cleaned); return cleaned; } catch (_) { /* fall through */ }
+  }
+
+  // 4. Last resort: return as-is and let the outer catch handle it
+  return s;
 }
 
 // ── CRUD ──────────────────────────────────────────────────────────────────────

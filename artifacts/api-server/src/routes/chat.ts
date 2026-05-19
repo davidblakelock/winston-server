@@ -1592,7 +1592,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           `General tips: ${tipsText}\n\n` +
           `TASK: Present this as a warm, enthusiastic day-by-day overview — like a knowledgeable friend walking them through an exciting plan. ` +
           `Name every restaurant and hotel specifically. Mention one memorable highlight per day. ` +
-          `Keep each day to 2-3 sentences. End with "Want me to tweak anything?" ` +
+          `Keep each day to 2-3 sentences. ` +
+          `At the very end, tell them this itinerary has been saved to their travel screen so they can pull it up anytime. ` +
+          `Then ask "Want me to tweak anything?" ` +
           `Write conversationally — no bullet points.`;
 
         req.log.info({ dest: itinerary.destination, days: itinerary.days.length }, "[TripPlan] Itinerary injected into system prompt");
