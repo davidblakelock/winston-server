@@ -1559,12 +1559,15 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   }
 
   // ── Trip planning: start or continue conversation flow ───────────────────────
+  console.log(`TRIP DETECTION TRIGGERED — isTripPlanStart=${isTripPlanStart} isTripPlanFlowActive=${isTripPlanFlowActive} msg="${message.slice(0, 80)}"`);
   req.log.info(
     { isTripPlanStart, isTripPlanFlowActive, pendingPhase: pendingTripPlan?.phase ?? null },
     "[TripPlan] Intent check"
   );
   if (isTripPlanStart || isTripPlanFlowActive) {
-    const _generateAndInject = async (intent: ReturnType<typeof parseTripIntent>) => {
+    console.log("TRIP INTENT MATCHED — entering trip planning block");
+    const _generateAndInject = async (intent: ReturnType<typeof parseTripIntent>, nightsWasDefaulted = false) => {
+      console.log(`TRIP GENERATING — dest="${intent.destination}" nights=${intent.nights} vibe="${intent.vibe ?? "none"}" defaulted=${nightsWasDefaulted}`);
       req.log.info(
         { dest: intent.destination, nights: intent.nights, vibe: intent.vibe },
         "[TripPlan] Enough info — generating itinerary"
@@ -1573,6 +1576,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         const itinerary = await generateTripItinerary(intent, userProfile as Record<string, unknown> | null);
         await saveTripPlan(sessionUserName, intent, itinerary);
         setPendingTripPlan(null);
+        console.log(`TRIP SAVED — dest="${intent.destination}" days=${itinerary.days.length}`);
 
         const daysText = itinerary.days
           .map((d) => {
@@ -1584,6 +1588,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           })
           .join("\n");
         const tipsText = itinerary.generalTips.join("; ");
+        const defaultedNights = nightsWasDefaulted;
 
         systemPrompt +=
           `\n\n[Trip Itinerary — ${itinerary.tripName || itinerary.destination} — ${itinerary.nights} Nights]\n` +
@@ -1593,12 +1598,14 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           `TASK: Present this as a warm, enthusiastic day-by-day overview — like a knowledgeable friend walking them through an exciting plan. ` +
           `Name every restaurant and hotel specifically. Mention one memorable highlight per day. ` +
           `Keep each day to 2-3 sentences. ` +
+          (defaultedNights ? `Naturally mention that you built this as a ${itinerary.nights}-night trip and they can ask for more or fewer days. ` : ``) +
           `At the very end, tell them this itinerary has been saved to their travel screen so they can pull it up anytime. ` +
           `Then ask "Want me to tweak anything?" ` +
           `Write conversationally — no bullet points.`;
 
         req.log.info({ dest: itinerary.destination, days: itinerary.days.length }, "[TripPlan] Itinerary injected into system prompt");
       } catch (tripErr) {
+        console.log(`TRIP GENERATION ERROR — ${(tripErr as Error).message}`);
         req.log.warn({ err: tripErr }, "[TripPlan] Itinerary generation failed");
         setPendingTripPlan(null);
         systemPrompt +=
@@ -1609,48 +1616,40 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     };
 
     if (isTripPlanStart) {
-      // Parse everything from the initial message — ask ONE follow-up only if truly critical info is missing
+      // Parse everything from the initial message — generate immediately with smart defaults.
+      // Do NOT ask clarifying questions; default nights to 3 if unspecified.
+      // The pending state lives in server memory and does not survive restarts,
+      // so any clarify round-trip is fragile. Generate now, let user tweak after.
       const intent = parseTripIntent(message);
 
       if (!intent.destination) {
-        // No destination at all — ask for it
+        // No destination at all — only case where we must ask
         setPendingTripPlan({ intent, phase: "clarify", missingField: "destination" });
+        console.log("TRIP NEEDS DESTINATION — asking user");
         systemPrompt +=
           `\n\n[Trip Planning — Need Destination]\n` +
           `The user wants to plan a trip but the destination isn't clear. ` +
           `Acknowledge their trip idea warmly in one sentence, then ask: "Where are you thinking?" Nothing else.`;
-      } else if (!intent.nights && !intent.startDate) {
-        // Have destination but no duration or timing — ask once
-        setPendingTripPlan({ intent, phase: "clarify", missingField: "nights" });
-        systemPrompt +=
-          `\n\n[Trip Planning — Need Duration]\n` +
-          `Destination: ${intent.destination}. Party: ${intent.partyDesc ?? "not specified"}. Vibe: ${intent.vibe ?? "not specified"}.\n` +
-          `Acknowledge their idea warmly in one sentence${intent.partyDesc ? ` — mention ${intent.partyDesc}` : ""}, then ask: "How long are you thinking?" Nothing else.`;
       } else {
-        // Have enough — generate immediately without asking anything
+        // Have destination — default nights to 3 if not specified, generate immediately
+        const nightsDefaulted = !intent.nights;
+        if (nightsDefaulted) intent.nights = 3;
         setPendingTripPlan({ intent, phase: "generating" });
-        await _generateAndInject(intent);
+        await _generateAndInject(intent, nightsDefaulted);
       }
 
     } else if (isTripPlanFlowActive && pendingTripPlan) {
       const { intent, missingField } = pendingTripPlan;
 
       if (missingField === "destination") {
-        // User answered with destination
+        // User answered with destination — default nights and generate immediately
         const updatedIntent = parseTripIntent(message);
         const dest = updatedIntent.destination || message.trim().replace(/[.!?]+$/, "").trim();
         intent.destination = dest;
-
-        if (!intent.nights && !intent.startDate) {
-          setPendingTripPlan({ intent, phase: "clarify", missingField: "nights" });
-          systemPrompt +=
-            `\n\n[Trip Planning — Need Duration]\n` +
-            `Destination confirmed: ${dest}.\n` +
-            `Acknowledge in one sentence, then ask: "How long are you thinking?" Nothing else.`;
-        } else {
-          setPendingTripPlan({ intent, phase: "generating" });
-          await _generateAndInject(intent);
-        }
+        const nightsDefaulted = !intent.nights;
+        if (nightsDefaulted) intent.nights = 3;
+        setPendingTripPlan({ intent, phase: "generating" });
+        await _generateAndInject(intent, nightsDefaulted);
 
       } else if (missingField === "nights") {
         // User answered with duration
@@ -1678,6 +1677,15 @@ const chatHandlerCore = async (req: Request, res: Response) => {
             `\n\n[Trip Planning — Clarify Duration]\n` +
             `The user didn't give a clear trip length. Gently re-ask: "How many nights are you thinking for ${intent.destination}?"`;
         }
+
+      } else if (pendingTripPlan.phase === "generating") {
+        // A second request arrived while the first is still generating.
+        // Tell Claude to hold — don't discard the pending state.
+        systemPrompt +=
+          `\n\n[Trip Planning — In Progress]\n` +
+          `You're actively building a ${intent.destination} itinerary right now. ` +
+          `If the user sent another message mid-generation, let them know in one warm sentence ` +
+          `that you're still putting their trip together and you'll have it ready in just a moment.`;
       }
     }
   }

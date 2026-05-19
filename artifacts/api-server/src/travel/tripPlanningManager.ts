@@ -140,11 +140,14 @@ export async function ensureTripPlansTable(): Promise<void> {
 export function parseTripIntent(message: string): ParsedTripIntent {
   const msg = message.trim();
 
-  // Destination extraction — common patterns
+  // Destination extraction — most specific patterns first to avoid greedy "to plan" captures
   const destPatterns = [
-    /(?:to|through|in|around|visit(?:ing)?)\s+([A-Z][A-Za-z\s,'-]{2,50}?)(?:\s+for|\s+with|\s+stopping|[.!?]|$)/i,
+    // "trip/road trip/vacation/travel to X" or "trip through X"
     /(?:road\s+trip|trip|vacation|holiday|getaway|travel|visit)\s+(?:through|to\s+)?([A-Z][A-Za-z\s,'-]{2,45}?)(?:\s+for|\s+with|\s+stopping|[.!?]|$)/i,
+    // "romantic/anniversary/birthday/solo/family trip to X"
     /(?:romantic|anniversary|birthday|solo|family)\s+(?:trip|getaway|vacation)\s+(?:to\s+)?([A-Z][A-Za-z\s,'-]{2,40}?)(?:\s+for|\s+with|[.!?]|$)/i,
+    // "to/through/in/around X" — fallback; skip common verbs that follow "to" (plan, go, see, etc.)
+    /(?:to|through|in|around|visit(?:ing)?)\s+(?!(?:plan|go|see|do|get|book|check|make|take|have|find|look|help|try|start|stop|visit)\b)([A-Z][A-Za-z\s,'-]{2,50}?)(?:\s+for|\s+with|\s+stopping|[.!?]|$)/i,
   ];
   let destination = "";
   for (const pat of destPatterns) {
