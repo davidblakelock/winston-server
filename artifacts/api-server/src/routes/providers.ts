@@ -8,17 +8,15 @@ import {
   deleteProvider,
   getCategories,
   createCategory,
-  type ProviderCategory,
 } from "../providers/providerManager.js";
 
 const router = Router();
 
-const VALID_CATEGORIES: ProviderCategory[] = [
-  "medical", "legal", "financial", "home", "auto", "personal",
-];
-
-function isValidCategory(v: unknown): v is ProviderCategory {
-  return typeof v === "string" && VALID_CATEGORIES.includes(v as ProviderCategory);
+// Returns the category string as-is (any non-empty string is valid — the DB
+// column is plain TEXT). Falls back to "personal" only when nothing is supplied.
+function resolveCategory(v: unknown): string {
+  if (typeof v === "string" && v.trim()) return v.trim();
+  return "personal";
 }
 
 // ── GET /api/providers/categories ─────────────────────────────────────────────
@@ -96,7 +94,7 @@ router.post(
       res.status(400).json({ error: "name is required" });
       return;
     }
-    const cat: ProviderCategory = isValidCategory(category) ? category : "personal";
+    const cat = resolveCategory(category);
 
     try {
       const provider = await createProvider(userName, {
@@ -141,7 +139,7 @@ router.put(
     const updates: Parameters<typeof updateProvider>[2] = {};
 
     if (body["name"] !== undefined)            updates.name            = String(body["name"]).trim();
-    if (body["category"] !== undefined)        updates.category        = isValidCategory(body["category"]) ? body["category"] : "personal";
+    if (body["category"] !== undefined)        updates.category        = resolveCategory(body["category"]);
     if (body["specialty"] !== undefined)       updates.specialty       = body["specialty"] ? String(body["specialty"]) : null;
     if (body["phone"] !== undefined)           updates.phone           = body["phone"] ? String(body["phone"]) : null;
     if (body["email"] !== undefined)           updates.email           = body["email"] ? String(body["email"]) : null;

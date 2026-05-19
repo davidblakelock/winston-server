@@ -138,7 +138,7 @@ export interface ServiceProvider {
   id: number;
   userName: string;
   name: string;
-  category: ProviderCategory;
+  category: string;
   specialty: string | null;
   phone: string | null;
   email: string | null;
@@ -218,7 +218,7 @@ function rowToProvider(r: {
 }): ServiceProvider {
   return {
     id: r.id, userName: r.user_name, name: r.name,
-    category: r.category as ProviderCategory,
+    category: r.category,
     specialty: r.specialty, phone: r.phone, email: r.email,
     address: r.address, website: r.website,
     company: r.company, notes: r.notes,
@@ -271,7 +271,7 @@ export async function createProvider(
   userName: string,
   data: {
     name: string;
-    category: ProviderCategory;
+    category: string;
     specialty?: string | null;
     phone?: string | null;
     email?: string | null;
@@ -325,7 +325,7 @@ export async function updateProvider(
   id: number,
   userName: string,
   data: Partial<{
-    name: string; category: ProviderCategory;
+    name: string; category: string;
     specialty: string | null;
     phone: string | null; email: string | null;
     address: string | null; website: string | null;
