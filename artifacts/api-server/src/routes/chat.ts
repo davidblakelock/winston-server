@@ -253,7 +253,10 @@ import {
   parseTripIntent,
   generateTripItinerary,
   saveTripPlan,
+  buildTravelProfileContext,
+  enrichItineraryWithHotelAvailability,
 } from "../travel/tripPlanningManager.js";
+import { parseToISODate, isBookingAvailabilityReady } from "../travel/hotelAvailability.js";
 import { nextOccurrenceForPattern, humanReadableRecurring } from "../reminders/recurringUtils.js";
 import { broadcastToUser } from "../reminders/sseStore.js";
 import { saveMoodCheckin } from "../mood/moodManager.js";
@@ -1586,6 +1589,12 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       return null;
     };
 
+    // ── Travel profile context (used in both overview and formal itinerary prompts) ──
+    const _travelProfile = buildTravelProfileContext(
+      (userProfile?.rawData ?? {}) as CollectedData,
+      userProfile as { healthNotes?: string | null; name?: string | null } | null,
+    );
+
     // ── Helper: generate full JSON itinerary and inject into system prompt ──────
     const _generateAndInject = async (intent: ReturnType<typeof parseTripIntent>) => {
       req.log.info(
@@ -1594,6 +1603,16 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       );
       try {
         const itinerary = await generateTripItinerary(intent, userProfile as Record<string, unknown> | null);
+
+        // ── Hotel availability enrichment (runs only when APIFY_API_KEY + real date) ──
+        const hasSpecificDate = !!parseToISODate(intent.startDate);
+        if (isBookingAvailabilityReady() && hasSpecificDate) {
+          req.log.info({ dest: itinerary.destination }, "[TripPlan] Running hotel availability check");
+          await enrichItineraryWithHotelAvailability(itinerary, intent).catch((err) => {
+            req.log.warn({ err }, "[TripPlan] Hotel enrichment failed — continuing without it");
+          });
+        }
+
         await saveTripPlan(sessionUserName, intent, itinerary);
         setPendingTripPlan(null);
         req.log.info({ dest: itinerary.destination, days: itinerary.days.length }, "[TripPlan] Itinerary saved to DB");
@@ -1601,25 +1620,74 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         const daysText = itinerary.days
           .map((d) => {
             const rest = d.restaurant?.name ? `Dinner: ${d.restaurant.name} (${d.restaurant.cuisine}).` : "";
-            const hotel = d.hotel?.name ? `Hotel: ${d.hotel.name}.` : "";
+            const hotelAvailNote =
+              d.hotel?.availabilityChecked && d.hotel.available && d.hotel.bookingUrl
+                ? ` [AVAILABLE on Booking.com: ${d.hotel.bookingUrl}${d.hotel.priceRange ? ` — ${d.hotel.priceRange}` : ""}]`
+                : d.hotel?.availabilityChecked && !d.hotel.available && d.hotel.alternativeName
+                  ? ` [NOT AVAILABLE — Alternative: ${d.hotel.alternativeName}${d.hotel.alternativeBookingUrl ? ` → ${d.hotel.alternativeBookingUrl}` : ""}${d.hotel.alternativePricePerNight ? ` (${d.hotel.alternativePricePerNight})` : ""}]`
+                  : "";
+            const hotel = d.hotel?.name ? `Hotel: ${d.hotel.name}${hotelAvailNote}.` : "";
             return `Day ${d.day} — ${d.title}: ${d.morning} / ${d.afternoon} / ${d.evening}. ${rest} ${hotel} Tips: ${d.practicalNotes}`;
           })
           .join("\n");
         const tipsText = itinerary.generalTips.join("; ");
 
+        // Build hotel availability summary for Claude's awareness
+        const checkedHotels = itinerary.days
+          .filter((d) => d.hotel?.availabilityChecked)
+          .reduce<Array<{ name: string; available: boolean; bookingUrl?: string; alt?: string; altUrl?: string; price?: string }>>(
+            (acc, d) => {
+              const h = d.hotel!;
+              if (!acc.find((x) => x.name === h.name)) {
+                acc.push({
+                  name:       h.name,
+                  available:  h.available ?? false,
+                  bookingUrl: h.bookingUrl,
+                  alt:        h.alternativeName,
+                  altUrl:     h.alternativeBookingUrl,
+                  price:      h.priceRange,
+                });
+              }
+              return acc;
+            },
+            [],
+          );
+
+        const hotelAvailBlock = checkedHotels.length
+          ? `\nHOTEL AVAILABILITY (verified on Booking.com for these dates):\n` +
+            checkedHotels
+              .map((h) =>
+                h.available
+                  ? `• ${h.name}: ✓ AVAILABLE — book at ${h.bookingUrl}${h.price ? ` (${h.price})` : ""}`
+                  : h.alt
+                    ? `• ${h.name}: ✗ NOT showing on Booking.com — best available alternative: ${h.alt}${h.altUrl ? ` → ${h.altUrl}` : ""}${h.price ? ` (${h.price})` : ""}`
+                    : `• ${h.name}: ✗ Not found on Booking.com — advise the user to verify directly`,
+              )
+              .join("\n")
+          : "";
+
+        const hotelInstruction = checkedHotels.length
+          ? `\nHOTEL AVAILABILITY INSTRUCTIONS:\n` +
+            `• For hotels marked AVAILABLE: mention the Booking.com link naturally in your response so the user can book directly (e.g. "you can book the Hotel Monteleone right on Booking.com — I've got the link saved").\n` +
+            `• For hotels NOT AVAILABLE: acknowledge it warmly and pivot to the alternative — mention its name and link.\n` +
+            `• Weave this naturally into the day-by-day presentation — don't dump all hotel statuses in one block.\n`
+          : "";
+
         systemPrompt +=
           `\n\n[Trip Itinerary — ${itinerary.tripName || itinerary.destination} — ${itinerary.nights} Nights]\n` +
           `Summary: ${itinerary.summary}\n\n` +
           `Day-by-day:\n${daysText}\n\n` +
-          `General tips: ${tipsText}\n\n` +
-          `TASK: Present this as a warm, enthusiastic day-by-day overview — like a knowledgeable friend walking them through an exciting plan. ` +
+          `General tips: ${tipsText}` +
+          hotelAvailBlock +
+          `\n\nTASK: Present this as a warm, enthusiastic day-by-day overview — like a knowledgeable friend walking them through an exciting plan. ` +
           `Name every restaurant and hotel specifically. Mention one memorable highlight per day. ` +
           `Keep each day to 2-3 sentences. ` +
+          hotelInstruction +
           `At the very end, tell them this itinerary has been saved to their travel screen so they can pull it up anytime. ` +
           `Then ask "Want me to tweak anything?" ` +
           `Write conversationally — no bullet points.`;
 
-        req.log.info({ dest: itinerary.destination, days: itinerary.days.length }, "[TripPlan] Itinerary injected into system prompt");
+        req.log.info({ dest: itinerary.destination, days: itinerary.days.length, hotelChecks: checkedHotels.length }, "[TripPlan] Itinerary injected into system prompt");
       } catch (tripErr) {
         req.log.warn({ err: tripErr }, "[TripPlan] Itinerary generation failed");
         setPendingTripPlan(null);
@@ -1667,18 +1735,20 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       } else {
         // Have destination → give rich conversational overview (fast path, no JSON generation)
         setPendingTripPlan({ intent, phase: "overview" });
-        const vibeHint = intent.vibe ? ` The user mentioned: "${intent.vibe}".` : "";
+        const vibeHint   = intent.vibe ? ` The user mentioned: "${intent.vibe}".` : "";
         const nightsHint = intent.nights ? ` They're thinking roughly ${intent.nights} nights.` : "";
-        const stopsHint = intent.stops?.length ? ` Stops mentioned: ${intent.stops.join(", ")}.` : "";
+        const stopsHint  = intent.stops?.length ? ` Stops mentioned: ${intent.stops.join(", ")}.` : "";
         systemPrompt +=
-          `\n\n[Trip Planning — Conversational Overview: ${intent.destination}]${vibeHint}${nightsHint}${stopsHint}\n` +
-          `TASK: Respond like a brilliant, well-traveled friend who knows this destination deeply. ` +
+          `\n\n[Trip Planning — Conversational Overview: ${intent.destination}]${vibeHint}${nightsHint}${stopsHint}` +
+          (_travelProfile ? `\n${_travelProfile}` : "") + `\n` +
+          `TASK: Respond like a brilliant, well-traveled friend who knows this destination deeply AND knows this traveler personally. ` +
+          `Use the traveler profile above to make every suggestion feel tailored — reference their food preferences, activity level, who they're traveling with. ` +
           `Give a rich, enthusiastic overview — not a list, a conversation. Cover:\n` +
-          `  • The overall feel and why this trip is a great idea\n` +
+          `  • The overall feel and why this trip is a great idea FOR THEM specifically\n` +
           `  • A suggested route or flow (what order to visit things, if relevant)\n` +
-          `  • 2-4 specific places to see or do (with a sentence on why each is worth it)\n` +
-          `  • A standout restaurant or two with a quick note on why\n` +
-          `  • A hotel recommendation or neighborhood to stay in\n` +
+          `  • 2-4 specific places to see or do (with a sentence on why each fits this traveler)\n` +
+          `  • A standout restaurant or two that matches their food preferences\n` +
+          `  • A hotel recommendation or neighborhood to stay in that fits their style\n` +
           `  • Any insider tip or timing note that would genuinely help\n` +
           `Write this as flowing, enthusiastic prose — no bullet points, no headers. ` +
           `Then end with 2-3 short, specific questions or options to go deeper — like:\n` +
@@ -1701,17 +1771,19 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
         // Now give the conversational overview for this destination
         setPendingTripPlan({ intent, phase: "overview" });
-        const vibeHint = intent.vibe ? ` Vibe: "${intent.vibe}".` : "";
+        const vibeHint   = intent.vibe ? ` Vibe: "${intent.vibe}".` : "";
         const nightsHint = intent.nights ? ` Roughly ${intent.nights} nights.` : "";
         systemPrompt +=
-          `\n\n[Trip Planning — Conversational Overview: ${dest}]${vibeHint}${nightsHint}\n` +
-          `TASK: Respond like a brilliant, well-traveled friend who knows ${dest} deeply. ` +
+          `\n\n[Trip Planning — Conversational Overview: ${dest}]${vibeHint}${nightsHint}` +
+          (_travelProfile ? `\n${_travelProfile}` : "") + `\n` +
+          `TASK: Respond like a brilliant, well-traveled friend who knows ${dest} deeply AND knows this traveler personally. ` +
+          `Use the traveler profile above — tailor suggestions to their food preferences, travel companion, and interests. ` +
           `Give a rich, enthusiastic overview — not a list, a conversation. Cover:\n` +
-          `  • The overall feel and why this trip is a great idea\n` +
+          `  • The overall feel and why this trip is a great idea FOR THEM\n` +
           `  • A suggested route or flow\n` +
-          `  • 2-4 specific places to see or do (with a sentence on why)\n` +
-          `  • A standout restaurant or two\n` +
-          `  • A hotel recommendation or neighborhood to stay in\n` +
+          `  • 2-4 specific places to see or do that match their interests\n` +
+          `  • A standout restaurant that fits their food preferences\n` +
+          `  • A hotel recommendation or neighborhood that fits their style\n` +
           `  • An insider tip or timing note\n` +
           `Write as flowing, enthusiastic prose — no bullet points. ` +
           `Then end with 2-3 questions or options to go deeper, including "Want me to build a full day-by-day itinerary?" ` +

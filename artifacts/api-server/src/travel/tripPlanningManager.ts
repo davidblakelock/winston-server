@@ -16,6 +16,19 @@ import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { NATIVE_USER } from "../auth/middleware.js";
 import { MODEL_SONNET } from "../lib/models.js";
+import {
+  isPartnerRelationship,
+  type CollectedData,
+  type UserProfile,
+} from "../onboarding/onboardingManager.js";
+import {
+  searchBookingAvailability,
+  matchHotelToResults,
+  parseToISODate,
+  addNightsToISO,
+  isBookingAvailabilityReady,
+  type BookingHotel,
+} from "./hotelAvailability.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -34,6 +47,7 @@ export interface ParsedTripIntent {
   mustHaves?: string;
   beenBefore?: boolean;
   budget?: string;         // "budget", "mid-range", "luxury"
+  stops?: string[];        // road-trip stops mentioned
   rawMessage: string;      // original user message
 }
 
@@ -63,7 +77,13 @@ export interface ItineraryHotel {
   name: string;
   whyItFits: string;
   websiteUrl?: string;
-  priceRange?: string;   // "$", "$$", "$$$", "$$$$"
+  priceRange?: string;          // "$", "$$", "$$$", "$$$$"
+  bookingUrl?: string;          // Booking.com deep link (populated post-generation)
+  available?: boolean;          // true = confirmed on Booking.com for these dates
+  availabilityChecked?: boolean;
+  alternativeName?: string;     // best available alternative when this hotel isn't found
+  alternativeBookingUrl?: string;
+  alternativePricePerNight?: string;
 }
 
 export interface ItineraryDay {
@@ -208,16 +228,62 @@ export function parseTripIntent(message: string): ParsedTripIntent {
   return { destination, nights, startDate, partySize, partyDesc, vibe, mustHaves, budget, beenBefore: undefined, rawMessage: msg };
 }
 
+// ── Travel profile helper ─────────────────────────────────────────────────────
+
+/**
+ * Extracts travel-relevant signals from the user profile for use in both
+ * the conversational overview prompt and the formal itinerary generation.
+ */
+export function buildTravelProfileContext(
+  rawData: CollectedData,
+  profile?: Pick<UserProfile, "healthNotes" | "name"> | null,
+): string {
+  const lines: string[] = [];
+
+  // Travel companion — derive from people list
+  const partner = rawData.people?.find((p) => isPartnerRelationship(p.relationship ?? ""));
+  if (partner) {
+    const relation = partner.relationship ?? "partner";
+    lines.push(`Traveling with: ${partner.name} (${profile?.name?.split(" ")[0] ?? "David"}'s ${relation})`);
+  }
+
+  // Interests — split into activity signals and cultural signals
+  const interests = rawData.interests ?? [];
+  const active  = interests.filter((i) => /golf|hik|pickleball|bike|run|outdoor|sport|tennis|ski|climb|kayak|active|adventure/i.test(i));
+  const culture = interests.filter((i) => /music|jazz|art|museum|history|theater|concert|food|wine|film|culinary|read|cook/i.test(i));
+  if (active.length)  lines.push(`Active interests: ${active.join(", ")}`);
+  if (culture.length) lines.push(`Cultural/leisure interests: ${culture.join(", ")}`);
+  if (!active.length && !culture.length && interests.length) {
+    lines.push(`Interests: ${interests.slice(0, 5).join(", ")}`);
+  }
+
+  // Food
+  if (rawData.foodPreferences?.length) {
+    lines.push(`Food preferences: ${rawData.foodPreferences.join(", ")}`);
+  }
+  if (rawData.restaurants?.length) {
+    lines.push(`Favorite restaurants (style reference): ${rawData.restaurants.slice(0, 4).join(", ")}`);
+  }
+
+  // Health / dietary
+  if (profile?.healthNotes) {
+    lines.push(`Health/dietary notes: ${profile.healthNotes}`);
+  }
+
+  return lines.length
+    ? `\nTraveler profile:\n${lines.map((l) => `  • ${l}`).join("\n")}`
+    : "";
+}
+
 // ── Itinerary generation ──────────────────────────────────────────────────────
 
 export async function generateTripItinerary(
   intent: ParsedTripIntent,
   userProfile: Record<string, unknown> | null,
 ): Promise<TripItinerary> {
-  const rawData   = (userProfile?.rawData as Record<string, unknown>) ?? {};
-  const interests = (rawData.interests as string[] | undefined)?.join(", ") ?? "good food, culture, exploration";
-  const dietaryRestrictions = (rawData.dietaryRestrictions as string[] | undefined)?.join(", ") ?? "";
-  const foodPrefs = (rawData.foodPreferences as string[] | undefined)?.join(", ") ?? "";
+  const rawData   = (userProfile?.rawData ?? {}) as CollectedData;
+  const profile   = userProfile as Pick<UserProfile, "healthNotes" | "name"> | null;
+  const travelCtx = buildTravelProfileContext(rawData, profile);
 
   const nights    = intent.nights ?? 3;
   const totalDays = nights + 1;
@@ -231,7 +297,7 @@ export async function generateTripItinerary(
     ? `Start date / approximate timing: ${intent.startDate}`
     : "Start date not specified — omit dates from the itinerary, just use Day 1, Day 2 labels";
 
-  const prompt = `You are creating a personalized travel itinerary for a trip to ${dest}.
+  const prompt = `You are creating a highly personalized travel itinerary for a trip to ${dest}.
 
 TRIP DETAILS:
 • Destination: ${dest}
@@ -241,16 +307,21 @@ TRIP DETAILS:
 • Must-haves: ${mustHaves}
 • Budget level: ${budget}
 • ${startDateNote}
-• Traveler interests: ${interests}
-${foodPrefs ? `• Food preferences: ${foodPrefs}` : ""}
-${dietaryRestrictions ? `• Dietary restrictions: ${dietaryRestrictions}` : ""}
+${travelCtx}
 
 Generate a complete, specific, day-by-day itinerary using REAL place names.
 
-RULES:
+PERSONALIZATION RULES (read traveler profile above carefully):
+• Tailor every restaurant choice to the stated food preferences and dining style
+• Match activity intensity to stated interests (active vs cultural/relaxed)
+• If traveling with a partner — make it feel like a trip designed for two, not generic tourism
+• Reference interests naturally in the "whyItFits" fields (e.g. "knowing you love live jazz, this is the spot")
+• Respect any dietary/health notes when selecting restaurants
+
+GENERAL RULES:
 • Use real named establishments, neighborhoods, parks, museums, trails — no generic descriptions
-• Hotels: recommend real properties that fit the budget level and vibe
-• Restaurants: real establishments with specific cuisine and why they fit this traveler
+• Hotels: recommend real properties that genuinely fit the budget, vibe, and who they are
+• Restaurants: real establishments with specific cuisine and a genuine reason they fit THIS traveler
 • Include OpenTable or Resy booking URLs where you know them (e.g. https://www.opentable.com/r/restaurant-slug); if unsure, include the restaurant website URL instead
 • Day 1 accounts for travel/arrival — lighter schedule
 • Last day accounts for departure — morning activities only before checkout
@@ -314,6 +385,87 @@ Return ONLY valid JSON with this exact structure (no markdown, no explanation):
   const itinerary = JSON.parse(repairJson(jsonMatch[0])) as TripItinerary;
   logger.info({ destination: dest, nights, days: itinerary.days?.length }, "[TripPlan] Itinerary generated");
   return itinerary;
+}
+
+// ── Hotel availability enrichment ─────────────────────────────────────────────
+
+/**
+ * Post-processes a generated itinerary by checking Booking.com availability
+ * for each unique hotel recommended by Claude. Mutates hotel objects in-place.
+ *
+ * Only runs when:
+ *   1. APIFY_API_KEY is configured
+ *   2. A specific (parseable) start date is known from the intent
+ *
+ * Falls back silently on any error so the core itinerary is never blocked.
+ */
+export async function enrichItineraryWithHotelAvailability(
+  itinerary: TripItinerary,
+  intent:    ParsedTripIntent,
+): Promise<void> {
+  if (!isBookingAvailabilityReady()) {
+    logger.info("[HotelAvail] Skipping hotel enrichment — APIFY_API_KEY not set");
+    return;
+  }
+
+  const checkIn = parseToISODate(intent.startDate);
+  if (!checkIn) {
+    logger.info({ startDate: intent.startDate }, "[HotelAvail] Skipping — no parseable start date");
+    return;
+  }
+
+  const nights   = intent.nights ?? itinerary.nights ?? 3;
+  const checkOut = addNightsToISO(checkIn, nights);
+  const adults   = intent.partySize ?? 2;
+
+  logger.info(
+    { dest: itinerary.destination, checkIn, checkOut, adults },
+    "[HotelAvail] Running Booking.com availability check"
+  );
+
+  let searchResults: BookingHotel[];
+  try {
+    searchResults = await searchBookingAvailability(itinerary.destination, checkIn, checkOut, adults);
+  } catch (err) {
+    logger.warn({ err }, "[HotelAvail] Search threw — skipping enrichment");
+    return;
+  }
+
+  if (!searchResults.length) {
+    logger.info({ dest: itinerary.destination }, "[HotelAvail] No results from Booking.com");
+    return;
+  }
+
+  // Match each unique hotel name once, then apply to all days using that hotel
+  const cache = new Map<string, ReturnType<typeof matchHotelToResults>>();
+
+  for (const day of itinerary.days) {
+    if (!day.hotel?.name) continue;
+    const name = day.hotel.name;
+
+    if (!cache.has(name)) {
+      cache.set(name, matchHotelToResults(name, searchResults));
+    }
+    const match = cache.get(name)!;
+
+    day.hotel.availabilityChecked = true;
+    if (match.matched) {
+      day.hotel.available  = true;
+      day.hotel.bookingUrl = match.matched.bookingUrl;
+      if (match.matched.pricePerNight) day.hotel.priceRange = match.matched.pricePerNight;
+      logger.info({ hotel: name, url: match.matched.bookingUrl }, "[HotelAvail] ✓ Available");
+    } else {
+      day.hotel.available = false;
+      if (match.bestAlternative) {
+        day.hotel.alternativeName          = match.bestAlternative.name;
+        day.hotel.alternativeBookingUrl    = match.bestAlternative.bookingUrl;
+        day.hotel.alternativePricePerNight = match.bestAlternative.pricePerNight;
+        logger.info({ hotel: name, alt: match.bestAlternative.name }, "[HotelAvail] ✗ Not found — alt suggested");
+      } else {
+        logger.info({ hotel: name }, "[HotelAvail] ✗ Not found — no alternative available");
+      }
+    }
+  }
 }
 
 /**
