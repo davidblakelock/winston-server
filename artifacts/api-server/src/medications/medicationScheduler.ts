@@ -72,8 +72,8 @@ export function startMedicationScheduler(): void {
           if (!taken) {
             const medText = buildMedReminderText(meds);
             sendPushToAll({
-              title: `💊 Medication Reminder — ${companion}`,
-              body: `Time to take your ${medText}.`,
+              title: "Time for your medications 💊",
+              body: "Have you taken your medications?",
               tag: "medication-morning",
               notificationType: "medication",
               categoryId: "medication-action",
