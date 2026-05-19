@@ -1,0 +1,16 @@
+Please refactor the following features to call the Anthropic Claude API directly instead of using pattern matching, regex, or complex detection logic. This will make everything more accurate, more natural, and easier to maintain.
+1. Trip Planning — /api/trips/plan (new endpoint)
+Create POST /api/trips/plan. Take the user's trip description and call Claude Sonnet directly with a travel-specific system prompt. Claude should respond like a knowledgeable travel advisor — rich conversational overview, suggested stops, hotels, restaurants, activities, options to go deeper. Include user profile data for personalization — who they're traveling with, food preferences, activity level. Return Claude's plain text response immediately. No JSON parsing, no intent detection, no rigid question flow. When the user confirms they want the full itinerary, THEN generate and save to trip_plans.
+2. Morning Briefing Generation
+Stop assembling the briefing in code. Instead pull all raw data — weather, calendar events, email summary, news headlines, packages — and send everything to Claude in one call. Claude writes the briefing as a coherent natural narrative. The system prompt should tell Claude who the user is, their preferences, what they care about, and ask it to write a morning briefing in their companion's voice. Remove all the assembly and formatting code.
+3. Email Triage
+Stop using pattern matching to detect meeting requests and event invitations. For each email that comes in during background scanning, send it to Claude with this prompt: 'Here is an email. Is this a meeting request, event invitation, order confirmation, or nothing actionable? If actionable summarize what the user needs to know in one sentence.' Use Claude's response to decide what notification to send. Far more accurate than regex.
+4. Evening Check-In
+Remove the scripted question flow entirely. When the user opens evening check-in, send Claude the user's morning intention capture, their calendar events from today, and tell Claude to have a natural reflective conversation. Claude knows how to ask meaningful questions without a script. The only instruction: end the conversation by capturing one thing worth remembering.
+5. David's Life Capture
+Remove the pattern matching that tries to detect when a user is responding to morning/evening questions. Instead pass the full conversation context to Claude and ask it to determine: is this response worth capturing? If yes what is the essence of what the user said? Claude makes this judgment far better than pattern matching.
+6. Route-Aware Suggestions
+When building this feature — send the calendar event with location, the user's shopping list, and their to-do list to Claude. Ask Claude: are there any relevant stops the user should make on the way to this appointment? Return Claude's suggestion as a natural conversational notification.
+7. Service Provider Detection in Chat
+Remove the code that tries to detect provider mentions. Instead include the user's service providers list in Claude's context and let Claude naturally understand when the user mentions a provider and trigger the last_contact_date update.
+Deploy each one as it's completed and confirm with a test result."
