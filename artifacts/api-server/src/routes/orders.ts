@@ -33,17 +33,20 @@ router.get("/orders", async (req, res) => {
 // 1. Scans Gmail for new order/shipping emails since last sync (90 days on first run).
 // 2. Parses each email with Claude Haiku.
 // 3. Updates live tracking status via AfterShip for all orders with tracking numbers.
+// Body: { force?: boolean } — when true, ignores last_scan_at and looks back 90 days.
 router.post("/orders/sync", express.json({ limit: "1mb" }), async (req, res) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
 
-  req.log.info({ userName }, "[Orders] Sync started");
+  const force = req.body?.force === true;
+  req.log.info({ userName, force }, "[Orders] Sync started");
 
   try {
     // ── Step 1: Gmail scan ──────────────────────────────────────────────────
-    const lastScan = await getLastOrderScanAt(userName);
     const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+    const lastScan = force ? null : await getLastOrderScanAt(userName);
     const since = lastScan ?? ninetyDaysAgo;
+    if (force) req.log.info({ userName, since }, "[Orders] Force sync — using 90-day lookback");
 
     const scanned = await scanOrderEmails(userName, since);
     let newCount = 0;
