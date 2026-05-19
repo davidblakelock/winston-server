@@ -353,6 +353,11 @@ async function sendExpoNotifications(
       // On tap, the native app calls Linking.openURL(data.deepLink) to navigate directly
       // to the relevant screen.  This is distinct from `payload.url` (web push only).
       ...(payload.deepLink ? { deepLink: payload.deepLink } : {}),
+      // Bill-action fields — passed directly so the native app can call
+      // POST /api/bills/:billId/paid or POST /api/bills/:billId/remind-due-date
+      // without parsing companionMessage.
+      ...(payload.billId != null ? { billId: payload.billId } : {}),
+      ...(payload.dueDateISO ? { dueDateISO: payload.dueDateISO } : {}),
     },
   }));
 
