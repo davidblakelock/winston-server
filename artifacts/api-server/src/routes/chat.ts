@@ -228,6 +228,7 @@ import {
   getPendingDepartureTextOffer,
   clearPendingDepartureTextOffer,
   type MessageTone,
+  type TextContactCandidate,
 } from "../text/textMessageComposer.js";
 import {
   BRIEFING_PREF_PATTERN,
@@ -258,6 +259,7 @@ import { broadcastToUser } from "../reminders/sseStore.js";
 import { saveMoodCheckin } from "../mood/moodManager.js";
 import { findConnectionByLabel, saveConnectMessage, markMessageDelivered } from "../connect/connectManager.js";
 import { getAllProviders, touchLastContactDate } from "../providers/providerManager.js";
+import { getPeople, type KeyPerson } from "../people/peopleManager.js";
 import { sendPushToAll } from "../push/pushManager.js";
 import { extractAndSaveFollowups } from "../followups/followupManager.js";
 import {
@@ -2853,7 +2855,87 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     const displayName = userProfile?.name ?? sessionUserName;
     const toneOverride = detectToneOverride(message);
 
-    if (pendingText.phase === "awaiting_intent") {
+    // ── T006-DISAMBIG: User is choosing which person to text ─────────────────
+    if (pendingText.phase === "awaiting_disambiguation" && pendingText.candidates) {
+      const candidates = pendingText.candidates;
+      const lowerMsg = message.toLowerCase().trim();
+
+      // Try to resolve the candidate the user picked.
+      // Match by: ordinal ("first", "second"), name fragment, or relationship.
+      let resolved: TextContactCandidate | null = null;
+
+      // Ordinal: "the first one", "first", "#1", "1st"
+      const ordinalMatch = lowerMsg.match(/\b(?:the\s+)?(first|1st|second|2nd|third|3rd|fourth|4th)\b/);
+      if (ordinalMatch) {
+        const ordMap: Record<string, number> = { first: 0, "1st": 0, second: 1, "2nd": 1, third: 2, "3rd": 2, fourth: 3, "4th": 3 };
+        const idx = ordMap[ordinalMatch[1]!] ?? -1;
+        if (idx >= 0 && idx < candidates.length) resolved = candidates[idx]!;
+      }
+
+      // Name or relationship fragment match
+      if (!resolved) {
+        resolved = candidates.find((c) =>
+          lowerMsg.includes(c.name.toLowerCase()) ||
+          (c.name.split(" ")[1] && lowerMsg.includes((c.name.split(" ")[1] ?? "").toLowerCase())) ||
+          (c.relationship && lowerMsg.includes(c.relationship.toLowerCase()))
+        ) ?? null;
+      }
+
+      if (resolved) {
+        // Resolved — transition to the appropriate next phase
+        const inlineIntent = pendingText.inlineIntent;
+        const hasInline = (inlineIntent?.length ?? 0) >= 10;
+        const tone: MessageTone = detectToneFromRelationship(resolved.relationship ?? resolved.name);
+
+        if (hasInline && inlineIntent) {
+          try {
+            const composed = await composeTextMessage({
+              recipientName: resolved.name,
+              relationship: resolved.relationship,
+              tone,
+              userIntent: inlineIntent,
+              senderName: displayName,
+            });
+            setPendingText({
+              phase: "awaiting_confirmation",
+              recipientName: resolved.name,
+              recipientPhone: resolved.phone,
+              relationship: resolved.relationship,
+              tone,
+              composedBody: composed.body,
+            });
+            systemPrompt +=
+              `\n\n[Text Message Composed for ${resolved.name}]\n` +
+              `Message body (${toneLabel(tone)} tone):\n"${composed.body}"\n\n` +
+              `Read this message back to ${displayName} word for word, then ask if it looks right. ` +
+              `Say something like: "Here's what I've got: [read message verbatim]. ` +
+              `Does that work? Just say yes and I'll hand it off to your Messages app so you can tap Send." ` +
+              `CRITICAL HONESTY RULES: (1) You are composing — NOT sending. (2) Messages app opens AFTER user says yes. (3) Never say "sending now" or "opening Messages".`;
+          } catch (compErr) {
+            req.log.warn({ compErr }, "[T006-DISAMBIG] Inline composition after disambiguation failed");
+            setPendingText({ phase: "awaiting_intent", recipientName: resolved.name, recipientPhone: resolved.phone, relationship: resolved.relationship, tone });
+            systemPrompt += `\n\n[Text Message Flow — ${resolved.name} selected]\nAsk ${displayName} what they'd like to say to ${resolved.name}.`;
+          }
+        } else {
+          setPendingText({ phase: "awaiting_intent", recipientName: resolved.name, recipientPhone: resolved.phone, relationship: resolved.relationship, tone });
+          const phoneNote = resolved.phone ? `Got ${resolved.name}'s number.` : `I don't have a number for ${resolved.name}, but I'll compose it and you can fill that in.`;
+          systemPrompt += `\n\n[Text Message Flow — ${resolved.name} selected]\n${phoneNote} Ask ${displayName} what they'd like to say.`;
+        }
+        req.log.info({ resolved: resolved.name, phone: !!resolved.phone }, "[T006-DISAMBIG] Candidate resolved");
+      } else {
+        // Couldn't figure out which one — re-ask more specifically
+        const list = candidates.map((c, i) => {
+          const rel = c.relationship ? ` (${c.relationship})` : "";
+          const src = c.source === "key_people" ? " — from your key people" : "";
+          return `${i + 1}. ${c.name}${rel}${src}`;
+        }).join("\n");
+        systemPrompt +=
+          `\n\n[Text Message — Disambiguation Needed Again]\n` +
+          `Could not determine which person ${displayName} means. Options:\n${list}\n\n` +
+          `Ask them to say the first name, last name, or "the first one" / "the second one".`;
+        req.log.info("[T006-DISAMBIG] Could not resolve — re-asking");
+      }
+    } else if (pendingText.phase === "awaiting_intent") {
       // User has told us what they want to say — compose the message
       const effectiveTone: MessageTone = toneOverride ?? pendingText.tone;
       try {
@@ -3028,29 +3110,100 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       const hasInlineContent = inlineIntent.length >= 10;
 
       try {
-        // Look up contact for phone number and relationship
-        const contactResult = await searchContacts(targetName, sessionUserName);
-        const contact = contactResult.contacts[0] ?? null;
-        const phone = contact?.phone ?? null;
+        // ── Contact resolution: key_people first, then Google Contacts ──────
+        // Build a list of candidates matching targetName.
+        // Priority rule: any match in key_people beats any Google Contact.
+        // If more than one candidate exists across both sources, ask which one.
 
-        // Check if the name matches anyone in the profile for relationship context
-        const profilePeopleAll = ((userProfile?.rawData as CollectedData)?.people ?? []) as Array<{ name: string; relationship?: string }>;
-        const profileMatch = profilePeopleAll.find(
-          (p) => p.name.toLowerCase().includes(targetName.toLowerCase()) ||
-                 targetName.toLowerCase().includes(p.name.split(" ")[0]?.toLowerCase() ?? "")
-        );
-        const relationship = profileMatch?.relationship ?? undefined;
+        const allKeyPeople = await getPeople(sessionUserName).catch((): KeyPerson[] => []);
+        const lowerTarget = targetName.toLowerCase();
+
+        const keyMatches = allKeyPeople.filter((p) => {
+          const first = p.name.split(" ")[0]?.toLowerCase() ?? "";
+          const full  = p.name.toLowerCase();
+          return first === lowerTarget || full === lowerTarget || full.includes(lowerTarget);
+        });
+
+        let candidates: TextContactCandidate[] = keyMatches.map((p) => ({
+          name: p.name,
+          phone: p.phone ?? null,
+          relationship: p.relationship ?? undefined,
+          source: "key_people" as const,
+        }));
+
+        // Only fall back to Google Contacts when key_people has no match
+        if (candidates.length === 0) {
+          const contactResult = await searchContacts(targetName, sessionUserName);
+          // Filter to contacts whose display name starts with the target first name
+          // (avoids pulling in unrelated contacts from a fuzzy search)
+          const filtered = contactResult.contacts.filter((c) => {
+            const first = (c.name ?? "").split(" ")[0]?.toLowerCase() ?? "";
+            return first === lowerTarget || (c.name ?? "").toLowerCase().includes(lowerTarget);
+          });
+          candidates = filtered.map((c) => ({
+            name: c.name ?? targetName,
+            phone: c.phone ?? null,
+            relationship: undefined,
+            source: "contacts" as const,
+          }));
+        }
+
+        // ── Disambiguation: multiple people with the same first name ─────────
+        if (candidates.length > 1) {
+          const inlineTone = detectInlineTone(message);
+          const tone: MessageTone = inlineTone ?? "casual";
+          setPendingText({
+            phase: "awaiting_disambiguation",
+            recipientName: targetName,
+            recipientPhone: null,
+            tone,
+            candidates,
+            inlineIntent: hasInlineContent ? inlineIntent : undefined,
+          });
+
+          const list = candidates.map((c, i) => {
+            const rel  = c.relationship ? ` (${c.relationship})` : "";
+            const src  = c.source === "key_people" ? " — key person" : "";
+            return `${i + 1}. ${c.name}${rel}${src}`;
+          }).join("\n");
+          systemPrompt +=
+            `\n\n[Text Message — Multiple "${targetName}" Found]\n` +
+            `${list}\n\n` +
+            `Tell ${userProfile?.name ?? sessionUserName} you found ${candidates.length} people named ` +
+            `"${targetName}" and ask which one they mean. ` +
+            `Read the numbered list back naturally (name + label). ` +
+            `They can say the full name, last name, relationship, or "the first one" / "the second one".`;
+
+          req.log.info({ targetName, count: candidates.length }, "[T006] Disambiguation required");
+        } else {
+        // ── Single match or no match — proceed with the original flow ────────
+        const singleCandidate = candidates[0] ?? null;
+        const phone = singleCandidate?.phone ?? null;
+
+        // Relationship: use key_people first, fall back to profile rawData
+        let relationship = singleCandidate?.relationship;
+        if (!relationship) {
+          const profilePeopleAll = ((userProfile?.rawData as CollectedData)?.people ?? []) as Array<{ name: string; relationship?: string }>;
+          const profileMatch = profilePeopleAll.find(
+            (p) => p.name.toLowerCase().includes(lowerTarget) ||
+                   lowerTarget.includes(p.name.split(" ")[0]?.toLowerCase() ?? "")
+          );
+          relationship = profileMatch?.relationship;
+        }
+
         // Check if the user specified a tone inline ("text Sarah in a flirty tone")
         const inlineTone = detectInlineTone(message);
         const tone: MessageTone = inlineTone ?? detectToneFromRelationship(relationship ?? targetName);
         const displayName = userProfile?.name ?? sessionUserName;
         const toneLbl = toneLabel(tone);
 
+        const resolvedName = singleCandidate?.name ?? targetName;
+
         if (hasInlineContent) {
           // User gave us the content in the same message — compose immediately
           try {
             const composed = await composeTextMessage({
-              recipientName: contact?.name ?? targetName,
+              recipientName: resolvedName,
               relationship,
               tone,
               userIntent: inlineIntent,
@@ -3059,7 +3212,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
             setPendingText({
               phase: "awaiting_confirmation",
-              recipientName: contact?.name ?? targetName,
+              recipientName: resolvedName,
               recipientPhone: phone,
               relationship,
               tone,
@@ -3068,7 +3221,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
             const toneNote = ` (${toneLabel(tone)} tone)`;
             systemPrompt +=
-              `\n\n[Text Message Composed for ${contact?.name ?? targetName}]\n` +
+              `\n\n[Text Message Composed for ${resolvedName}]\n` +
               `Message body${toneNote}:\n"${composed.body}"\n\n` +
               `Read this message back to ${displayName} word for word, then ask if it looks right. ` +
               `Say something like: "Here's what I've got: [read message verbatim]. ` +
@@ -3078,35 +3231,38 @@ const chatHandlerCore = async (req: Request, res: Response) => {
               `(2) The Messages app will only open AFTER the user says yes — do NOT say it is opening now. ` +
               `(3) Never say "I'll send that", "sending now", "opening Messages", or any variation that implies immediate action.`;
 
-            req.log.info({ targetName: contact?.name ?? targetName, hasPhone: !!phone, tone, inlineContent: inlineIntent.slice(0, 60) }, "[T006] Inline content detected — composed immediately");
+            req.log.info({ targetName: resolvedName, hasPhone: !!phone, tone, inlineContent: inlineIntent.slice(0, 60) }, "[T006] Inline content detected — composed immediately");
           } catch (compErr) {
             req.log.warn({ compErr }, "[T006] Inline composition failed — falling back to awaiting_intent");
-            setPendingText({ phase: "awaiting_intent", recipientName: contact?.name ?? targetName, recipientPhone: phone, relationship, tone });
+            setPendingText({ phase: "awaiting_intent", recipientName: resolvedName, recipientPhone: phone, relationship, tone });
             systemPrompt +=
-              `\n\n[Text Message Flow Started — Recipient: ${contact?.name ?? targetName}]\n` +
+              `\n\n[Text Message Flow Started — Recipient: ${resolvedName}]\n` +
               `Ask ${displayName} what they'd like to say.`;
           }
         } else {
           // No inline content — ask what they want to say
           setPendingText({
             phase: "awaiting_intent",
-            recipientName: contact?.name ?? targetName,
+            recipientName: resolvedName,
             recipientPhone: phone,
             relationship,
             tone,
           });
 
-          const phoneNote = phone ? `I found ${contact?.name ?? targetName}'s number.` : `I didn't find a number for ${targetName} in your contacts, but I'll compose it and you can fill that in.`;
+          const phoneNote = phone
+            ? `I found ${resolvedName}'s number.`
+            : `I didn't find a number for ${resolvedName} in your contacts, but I'll compose it and you can fill that in.`;
           const toneNote = inlineTone ? ` I'll keep it ${toneLbl}.` : (relationship ? ` Since they're your ${relationship}, I'll keep it ${toneLbl}.` : ` I'll write it ${toneLbl}.`);
 
           systemPrompt +=
-            `\n\n[Text Message Flow Started — Recipient: ${contact?.name ?? targetName}]\n` +
+            `\n\n[Text Message Flow Started — Recipient: ${resolvedName}]\n` +
             `${phoneNote}${toneNote}\n\n` +
             `Ask ${displayName} what they'd like to say — something like: ` +
             `"${phoneNote.replace("I", "Got it — ")} What would you like to say?"`;
 
-          req.log.info({ targetName, hasPhone: !!phone, relationship, tone }, "[T006] Text message flow started — awaiting intent");
+          req.log.info({ targetName: resolvedName, source: singleCandidate?.source ?? "none", hasPhone: !!phone, relationship, tone }, "[T006] Text message flow started — awaiting intent");
         }
+        } // end else (single/no match branch)
       } catch (err) {
         req.log.warn({ err }, "[T006] Contact lookup failed");
         setPendingText({

@@ -274,13 +274,25 @@ export async function composeTextMessage(opts: ComposeTextOptions): Promise<Comp
 // ── In-memory pending text state ─────────────────────────────────────────────
 // Single-user for now (native mode is always NATIVE_USER)
 
+export interface TextContactCandidate {
+  name: string;
+  phone: string | null;
+  relationship?: string;
+  source: "key_people" | "contacts";
+}
+
 export interface PendingTextState {
-  phase: "awaiting_intent" | "awaiting_confirmation";
+  phase: "awaiting_disambiguation" | "awaiting_intent" | "awaiting_confirmation";
   recipientName: string;
   recipientPhone: string | null;
   relationship?: string;
   tone: MessageTone;
   composedBody?: string;
+  // Populated only during the awaiting_disambiguation phase
+  candidates?: TextContactCandidate[];
+  // Original user request carried through disambiguation so we can
+  // resume the intent or inline-content flow after the user picks one.
+  inlineIntent?: string;
 }
 
 export interface SmsPayload {
