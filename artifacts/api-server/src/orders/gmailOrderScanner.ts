@@ -157,8 +157,8 @@ ${truncatedBody}
 
 Return JSON with exactly these fields (null for any not found):
 {
-  "retailer": "Amazon" | "Nordstrom" | exact retailer name — NOT the shipping carrier,
-  "item_name": exact product name — be specific, NOT just "Amazon order" (e.g. "Vitamix 5200 Blender" or "Nike Air Max 270 Men's Size 11"),
+  "retailer": retailer/sender name — for carrier notification emails (FedEx, UPS, USPS, DHL) use the shipper name from the email or the carrier name itself,
+  "item_name": product name if listed, otherwise use "Package" for carrier shipping notifications,
   "order_number": order/confirmation number as string,
   "tracking_number": carrier tracking number (NOT order number),
   "carrier": "UPS" | "FedEx" | "USPS" | "DHL" | null,
@@ -169,12 +169,14 @@ Return JSON with exactly these fields (null for any not found):
 }
 
 Rules:
-- item_name MUST be the actual product name. If the email lists multiple items, list the first or most prominent one. Never say "your order" or "Amazon package".
+- item_name: use the exact product name if listed. For carrier shipping notifications without a product name, use "Package" — never return null for carrier emails.
+- retailer: for FedEx/UPS/USPS/DHL shipping notifications, use the shipper name if shown, otherwise use the carrier name (e.g. "FedEx").
 - If this is a shipping notification → status is "shipped" or "in_transit"
 - If "out for delivery" → status is "out_for_delivery"
 - If delivered confirmation → status is "delivered"
 - If just an order confirmation (no tracking yet) → status is "ordered"
-- If this does NOT appear to be a real order/shipping email, return null`;
+- Only return null if this is clearly NOT order or shipping related (e.g. a newsletter, marketing promo with no actual shipment, account alert)
+- Digital purchases (movies, music, software) are NOT physical orders — return null for those`;
 
   try {
     const resp = await anthropic.messages.create({
@@ -183,14 +185,23 @@ Rules:
       messages: [{ role: "user", content: prompt }],
     });
     const text = resp.content[0].type === "text" ? resp.content[0].text.trim() : "";
-    if (!text || text === "null") return null;
+    if (!text || text === "null") {
+      logger.info({ subject, from }, "[OrderScanner] Claude returned null — not an order email");
+      return null;
+    }
     const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return null;
+    if (!jsonMatch) {
+      logger.warn({ subject, from, text }, "[OrderScanner] Claude response had no JSON");
+      return null;
+    }
     const parsed = JSON.parse(jsonMatch[0]) as ParsedOrder;
-    if (!parsed.retailer || !parsed.item_name) return null;
+    if (!parsed.retailer || !parsed.item_name) {
+      logger.info({ subject, from, parsed }, "[OrderScanner] Missing retailer or item_name — skipping");
+      return null;
+    }
     return parsed;
   } catch (err) {
-    logger.warn({ err }, "[OrderScanner] Claude Haiku parse failed");
+    logger.warn({ err, subject, from }, "[OrderScanner] Claude Haiku parse failed");
     return null;
   }
 }
