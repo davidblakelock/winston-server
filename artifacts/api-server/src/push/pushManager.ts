@@ -115,6 +115,10 @@ export interface PushPayload {
   // Optional auto-trigger message — native app sends this text on the user's behalf when tapped,
   // so the briefing/conversation starts immediately without manual input.
   autoSendMessage?: string;
+  // Bill-action specific: passed directly in data so the native app can build
+  // REST URLs (e.g. POST /api/bills/:billId/paid) without parsing companionMessage.
+  billId?: number;
+  dueDateISO?: string; // YYYY-MM-DD of the bill's next due date
 }
 
 // ── Web Push Subscription management ─────────────────────────────────────────
