@@ -28,3 +28,15 @@ const USER_ALIASES: Record<string, string> = {
 export function resolveUserAlias(name: string): string {
   return USER_ALIASES[name] ?? name;
 }
+
+/**
+ * Return every username that maps to the given canonical name, plus the
+ * canonical name itself. Used by clearGoogleTokensForUser so a DELETE
+ * hits both the canonical row and any legacy-named rows.
+ */
+export function getUserAliasNames(canonicalName: string): string[] {
+  const aliases = Object.entries(USER_ALIASES)
+    .filter(([, v]) => v === canonicalName)
+    .map(([k]) => k);
+  return [canonicalName, ...aliases];
+}
