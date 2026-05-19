@@ -4944,13 +4944,15 @@ If you cannot extract both, return null.`,
 
       // ── Persist messages (fire-and-forget, must not block response) ────────
       const nativeMsgId = randomUUID();
+      req.log.info({ user: sessionUserName, isAutoGreeting, hasReply: !!nativeReply }, "[CHAT] Native save triggered");
       if (!isAutoGreeting) {
         query(
           `INSERT INTO chat_messages (user_name, role, content, message_id)
            VALUES ($1, 'user', $2, $3)
            ON CONFLICT (message_id) WHERE message_id IS NOT NULL DO NOTHING`,
           [sessionUserName, message.slice(0, 8000), `${nativeMsgId}:user`]
-        ).catch((e) => req.log.warn({ e }, "[CHAT] Native user message save failed"));
+        ).then(() => req.log.info("[CHAT] Native user message saved"))
+         .catch((e) => req.log.warn({ e }, "[CHAT] Native user message save failed"));
       }
       if (nativeReply) {
         query(
@@ -4958,7 +4960,8 @@ If you cannot extract both, return null.`,
            VALUES ($1, 'assistant', $2, $3)
            ON CONFLICT (message_id) WHERE message_id IS NOT NULL DO NOTHING`,
           [sessionUserName, nativeReply.slice(0, 8000), `${nativeMsgId}:assistant`]
-        ).catch((e) => req.log.warn({ e }, "[CHAT] Native assistant message save failed"));
+        ).then(() => req.log.info("[CHAT] Native assistant message saved"))
+         .catch((e) => req.log.warn({ e }, "[CHAT] Native assistant message save failed"));
       }
     } catch (err: unknown) {
       const errStatus = (err as Record<string, unknown>)?.status as number | undefined;
@@ -5157,6 +5160,33 @@ If you cannot extract both, return null.`,
 };
 
 router.post("/chat", chatHandlerCore);
+
+// ── GET /api/chat/history ─────────────────────────────────────────────────────
+// Returns recent chat messages for the authenticated user so the native app can
+// restore conversation history on startup.
+// Query params:
+//   limit  — max messages to return (default 40, max 100)
+router.get("/chat/history", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const limit = Math.min(100, Math.max(1, parseInt((req.query as Record<string, string>).limit ?? "40", 10) || 40));
+  try {
+    const aliasNames = [userName, "David", "david"];
+    const { rows } = await query<{ role: string; content: string; created_at: string }>(
+      `SELECT role, content, created_at
+       FROM chat_messages
+       WHERE user_name = ANY($1)
+       ORDER BY created_at DESC, id DESC
+       LIMIT $2`,
+      [aliasNames, limit]
+    );
+    // Return chronological order (oldest first) so clients can render top-to-bottom
+    res.json({ messages: rows.reverse() });
+  } catch (err) {
+    req.log.error({ err }, "[CHAT/HISTORY] Query failed");
+    res.status(500).json({ error: "Failed to load history" });
+  }
+});
 
 // ── /api/chat-native ─────────────────────────────────────────────────────────
 // Identical to /chat but returns a single JSON object {"response":"<full text>"}

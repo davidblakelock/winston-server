@@ -1,0 +1,46 @@
+"Please fix the following issues overnight. Read everything before starting. Deploy each fix and confirm with a test result.
+1. Conversation History Persistence
+Messages are not persisting between app sessions. When the user closes and reopens the app the chat starts completely fresh.
+
+Verify messages are being saved to chat_messages table after every conversation — run a query and show the count and most recent entries for davidblakelock
+When /api/chat-native receives a request with empty message history, hydrate the last 20 messages from chat_messages for that user
+Test by having a conversation, simulating a fresh app start, and confirming previous messages appear
+
+2. Trip Planning Edge Cases
+Trip planning is working but Winston is flagging calendar appointments that occur BEFORE the trip starts. When planning a trip Winston should only flag calendar conflicts that fall within the actual travel dates. If the user says they are leaving Friday, Thursday appointments are irrelevant. Fix the calendar conflict detection to only consider events within the trip date range.
+3. Medication Notification Category
+The medication reminder push notification must use exactly categoryIdentifier: 'medication-action' in the notification payload. The native app has registered this category with two action buttons — identifier 'taken' buttonTitle 'Done ✓' and identifier 'snooze' buttonTitle 'Remind me in 30 min' — both with opensAppToForeground: false. Verify the backend is sending exactly this categoryIdentifier. Test by triggering a medication reminder and confirming the two action buttons appear on the notification without opening the app.
+4. Key People Backend
+Build the key_people table and endpoints:
+
+Table: id, user_id, name, relationship, phone, email, address, birthday, anniversary, notes, google_contact_id, winston_connected (boolean), created_at
+GET /api/people — returns all key people for the user as { people: [...] }
+POST /api/people — creates a new person
+PUT /api/people/:id — updates a person
+DELETE /api/people/:id — removes a person
+The address field should be populated from Google Contacts when available
+winston_connected should default to false
+
+5. Departure Alerts — Google Maps Fix
+Departure alerts are not working because Google Maps geocoding is failing silently. Please:
+
+Check the server logs for Google Maps API calls and identify exactly why geocoding is failing
+Fix the root cause — verify the GOOGLE_PLACES_API_KEY or GOOGLE_MAPS_API_KEY environment variable is set and has the Geocoding API and Directions API enabled
+Test by creating a calendar event with a real Dallas address as the location, triggering the departure alert check, and confirming it calculates drive time correctly and sends a push notification with the correct departure time
+The notification should say something like 'Leave by 3:15pm for your 4pm dentist appointment — 22 min drive based on current traffic'
+
+6. David's Life Capture
+Verify the morning intention capture and evening reflection capture are actually saving to the life_captures table.
+
+Check the database — are there any entries in life_captures for davidblakelock?
+If not, trace why the capture is not firing after the morning briefing intention question and evening check-in reflection question
+Fix and test end to end — go through a morning briefing, respond to the intention question, and confirm the response appears in GET /api/life
+
+7. Continuous Conversation Sensitivity
+The continuous conversation is triggering too easily from background noise. The silence detection timer fires after 6 seconds and treats any audio as speech. Please:
+
+Increase the silence detection threshold — only trigger transcription if the audio contains actual speech above a minimum volume threshold
+If the transcription returns an empty string or very short text (under 3 words) do not send it to Claude and do not restart the listening cycle — just restart listening silently
+This should dramatically reduce false triggers from background noise
+
+Deploy all fixes and report back with test results for each one.
