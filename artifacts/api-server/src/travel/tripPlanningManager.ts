@@ -62,52 +62,55 @@ let _pendingTripPlan: PendingTripPlan | null = null;
 export function getPendingTripPlan(): PendingTripPlan | null { return _pendingTripPlan; }
 export function setPendingTripPlan(p: PendingTripPlan | null): void { _pendingTripPlan = p; }
 
-// ── Itinerary types ───────────────────────────────────────────────────────────
+// ── Itinerary types (native app schema) ──────────────────────────────────────
 
-export interface ItineraryRestaurant {
-  name: string;
-  cuisine: string;
-  whyItFits: string;
-  bookingUrl?: string;   // OpenTable or Resy link if known
-  websiteUrl?: string;
-  phone?: string;
+export interface NativeActivity {
+  time: string;        // "Morning" | "Afternoon" | "Evening" or a specific time string
+  title: string;
+  description: string;
+  notes: string;
 }
 
-export interface ItineraryHotel {
-  name: string;
-  whyItFits: string;
-  websiteUrl?: string;
-  priceRange?: string;          // "$", "$$", "$$$", "$$$$"
-  bookingUrl?: string;          // Booking.com deep link (populated post-generation)
-  available?: boolean;          // true = confirmed on Booking.com for these dates
-  availabilityChecked?: boolean;
-  alternativeName?: string;     // best available alternative when this hotel isn't found
-  alternativeBookingUrl?: string;
-  alternativePricePerNight?: string;
+export interface NativeMeal {
+  time: string;        // "Breakfast" | "Lunch" | "Dinner"
+  title: string;       // Restaurant name
+  description: string; // Cuisine, vibe, why it fits
+  bookingUrl: string;  // OpenTable / Resy / website URL, or "" if unknown
 }
 
-export interface ItineraryDay {
-  day: number;
-  date?: string;           // YYYY-MM-DD if start date known
-  title: string;           // evocative day title
-  morning: string;
-  afternoon: string;
-  evening: string;
-  restaurant: ItineraryRestaurant;
-  hotel: ItineraryHotel;   // where they sleep this night
-  practicalNotes: string;
+export interface NativeItineraryDay {
+  dayNumber: number;
+  label: string;      // Evocative day title
+  location: string;   // City or neighborhood for this day
+  hotel: {
+    name: string;
+    websiteUrl: string;
+    notes: string;
+    // enriched by Booking.com post-generation:
+    bookingUrl?: string;
+    available?: boolean;
+    availabilityChecked?: boolean;
+    alternativeName?: string;
+    alternativeBookingUrl?: string;
+    alternativePricePerNight?: string;
+  };
+  activities: NativeActivity[];
+  meals: NativeMeal[];
 }
 
-export interface TripItinerary {
-  tripName: string;
+export interface NativeItinerary {
+  days: NativeItineraryDay[];
+  practicalNotes: string[];
+}
+
+export interface NativeTripPlan {
+  trip_name: string;
   destination: string;
-  startDate?: string;    // YYYY-MM-DD
-  endDate?: string;      // YYYY-MM-DD
   nights: number;
-  partyDesc?: string;
-  summary: string;
-  generalTips: string[];
-  days: ItineraryDay[];
+  start_date?: string | null;  // YYYY-MM-DD or null
+  end_date?: string | null;    // YYYY-MM-DD or null
+  status: "planning";
+  itinerary: NativeItinerary;
 }
 
 // ── DB setup ──────────────────────────────────────────────────────────────────
@@ -275,12 +278,24 @@ export function buildTravelProfileContext(
     : "";
 }
 
+// ── Date sanitizer ────────────────────────────────────────────────────────────
+
+/**
+ * Returns the string unchanged if it is already YYYY-MM-DD, otherwise null.
+ * Prevents natural-language strings like "mid-October" from crashing the
+ * PostgreSQL DATE column.
+ */
+function toISODateOrNull(dateStr: string | null | undefined): string | null {
+  if (!dateStr) return null;
+  return /^\d{4}-\d{2}-\d{2}$/.test(dateStr) ? dateStr : null;
+}
+
 // ── Itinerary generation ──────────────────────────────────────────────────────
 
 export async function generateTripItinerary(
   intent: ParsedTripIntent,
   userProfile: Record<string, unknown> | null,
-): Promise<TripItinerary> {
+): Promise<NativeTripPlan> {
   const rawData   = (userProfile?.rawData ?? {}) as CollectedData;
   const profile   = userProfile as Pick<UserProfile, "healthNotes" | "name"> | null;
   const travelCtx = buildTravelProfileContext(rawData, profile);
@@ -294,75 +309,75 @@ export async function generateTripItinerary(
   const budget    = intent.budget ?? "mid-range";
 
   const startDateNote = intent.startDate
-    ? `Start date / approximate timing: ${intent.startDate}`
-    : "Start date not specified — omit dates from the itinerary, just use Day 1, Day 2 labels";
+    ? `Start date / approximate timing: ${intent.startDate} — if this resolves to a specific calendar date, output it as start_date (YYYY-MM-DD); otherwise output null`
+    : "Start date not specified — output null for start_date and end_date";
 
-  const prompt = `You are creating a highly personalized travel itinerary for a trip to ${dest}.
+  const dayTemplate = `{
+      "dayNumber": 1,
+      "label": "Evocative day title, e.g. 'Delta Blues and First Bites'",
+      "location": "City or neighborhood name",
+      "hotel": {
+        "name": "Real hotel name",
+        "websiteUrl": "https://... (hotel's own website)",
+        "notes": "Why this specific hotel fits this traveler, vibe, and budget"
+      },
+      "activities": [
+        { "time": "Morning",   "title": "Activity name", "description": "What to do and why it's great here — specific trails, galleries, streets, views", "notes": "Timing, parking, reservations, insider tip" },
+        { "time": "Afternoon", "title": "Activity name", "description": "Specific afternoon plan", "notes": "Practical tip" },
+        { "time": "Evening",   "title": "Activity name", "description": "Evening wind-down or experience", "notes": "Practical tip" }
+      ],
+      "meals": [
+        { "time": "Lunch",  "title": "Restaurant name", "description": "Cuisine style and why it fits this traveler", "bookingUrl": "https://www.opentable.com/... or https://resy.com/... or restaurant website, or empty string" },
+        { "time": "Dinner", "title": "Restaurant name", "description": "Cuisine style and why it fits this traveler", "bookingUrl": "https://... or empty string" }
+      ]
+    }`;
+
+  const prompt = `You are creating a highly personalized, complete travel itinerary.
 
 TRIP DETAILS:
 • Destination: ${dest}
-• Duration: ${nights} nights (${totalDays} days)
+• Duration: ${nights} nights / ${totalDays} days
 • Traveling with: ${party}
 • Vibe: ${vibe}
 • Must-haves: ${mustHaves}
-• Budget level: ${budget}
+• Budget: ${budget}
 • ${startDateNote}
 ${travelCtx}
 
-Generate a complete, specific, day-by-day itinerary using REAL place names.
+RULES — read carefully:
+• Use REAL named places: specific hotels, restaurants, trails, museums, streets, neighborhoods
+• Never use generic descriptions ("a nice restaurant", "local hotel") — be opinionated and specific
+• hotel.websiteUrl: the hotel's own website (not booking.com) — required on every day
+• hotel.notes: explain WHY this property fits this traveler's vibe and budget
+• activities: 2–3 per day (Morning / Afternoon / Evening); rich descriptions with specific place names
+• meals: 1–2 per day; real restaurants with genuine reasons they fit this traveler
+• bookingUrl: OpenTable or Resy link if you know it, otherwise restaurant website, otherwise ""
+• Day 1: arrival day — lighter activities, settle-in feel
+• Day ${totalDays}: departure morning — one activity max, then checkout
+• For road trips: vary the location per day as the route progresses; include driving times in notes
+• practicalNotes: 4–6 genuinely useful tips (best time to visit, reservations needed, what to pack, local transit)
+• trip_name: creative and evocative, NOT just "${dest} Trip" — capture the spirit (e.g. "Ozark Slow Burn", "Delta Blues and Crater Dust")
+• start_date / end_date: YYYY-MM-DD only — output null if the date cannot be resolved to a specific calendar date
 
-PERSONALIZATION RULES (read traveler profile above carefully):
-• Tailor every restaurant choice to the stated food preferences and dining style
-• Match activity intensity to stated interests (active vs cultural/relaxed)
-• If traveling with a partner — make it feel like a trip designed for two, not generic tourism
-• Reference interests naturally in the "whyItFits" fields (e.g. "knowing you love live jazz, this is the spot")
-• Respect any dietary/health notes when selecting restaurants
+Personalization:
+• Tailor restaurants to any food preferences stated in the traveler profile
+• Match activity intensity to stated interests (outdoor/active vs cultural/relaxed)
+• If traveling with a partner, make it feel designed for two, not generic tourism
+• Reference the traveler's interests naturally in descriptions and notes
 
-GENERAL RULES:
-• Use real named establishments, neighborhoods, parks, museums, trails — no generic descriptions
-• Hotels: recommend real properties that genuinely fit the budget, vibe, and who they are
-• Restaurants: real establishments with specific cuisine and a genuine reason they fit THIS traveler
-• Include OpenTable or Resy booking URLs where you know them (e.g. https://www.opentable.com/r/restaurant-slug); if unsure, include the restaurant website URL instead
-• Day 1 accounts for travel/arrival — lighter schedule
-• Last day accounts for departure — morning activities only before checkout
-• Practical notes should be genuinely useful: timing, reservations needed, transport, insider tips
-• If vibe is "romantic" — intimate venues, sunset spots, private experiences
-• If vibe is "road trip" — stopping points, driving times, scenic routes
-• If traveling with kids — family-friendly activities and restaurants
-• One hotel per night (can repeat same hotel for multi-night stays in one city)
-
-Return ONLY valid JSON with this exact structure (no markdown, no explanation):
+Return ONLY valid JSON — no markdown fences, no explanation:
 {
-  "tripName": "Short evocative name for this trip e.g. 'Arkansas River Road' or 'Napa for Two'",
+  "trip_name": "Creative evocative name",
   "destination": "${dest}",
   "nights": ${nights},
-  "partyDesc": "${party}",
-  "summary": "One vivid sentence capturing the spirit of this trip",
-  "generalTips": ["Practical tip 1", "Practical tip 2", "Practical tip 3", "Practical tip 4"],
-  "days": [
-    {
-      "day": 1,
-      "title": "Short evocative title for the day",
-      "morning": "What to do in the morning — specific places, activities",
-      "afternoon": "What to do in the afternoon — specific places",
-      "evening": "Evening plan — neighborhood, activity, or wind-down",
-      "restaurant": {
-        "name": "Restaurant name",
-        "cuisine": "Cuisine type and style",
-        "whyItFits": "One sentence on why this fits the vibe and traveler",
-        "bookingUrl": "https://www.opentable.com/... or https://resy.com/... if known, else null",
-        "websiteUrl": "Restaurant website URL if known, else null",
-        "phone": null
-      },
-      "hotel": {
-        "name": "Hotel name",
-        "whyItFits": "One sentence on why this hotel fits",
-        "websiteUrl": "Hotel website URL",
-        "priceRange": "$$ or $$$ or $$$$ matching the budget"
-      },
-      "practicalNotes": "Timing, reservations needed, transport, or insider tips"
-    }
-  ]
+  "start_date": "YYYY-MM-DD or null",
+  "end_date": "YYYY-MM-DD or null",
+  "itinerary": {
+    "days": [
+      ${dayTemplate}
+    ],
+    "practicalNotes": ["Tip 1", "Tip 2", "Tip 3", "Tip 4", "Tip 5"]
+  }
 }`;
 
   const response = await anthropic.messages.create({
@@ -382,9 +397,17 @@ Return ONLY valid JSON with this exact structure (no markdown, no explanation):
   const jsonMatch = stripped.match(/\{[\s\S]*\}/);
   if (!jsonMatch) throw new Error("[TripPlan] No JSON found in Claude response");
 
-  const itinerary = JSON.parse(repairJson(jsonMatch[0])) as TripItinerary;
-  logger.info({ destination: dest, nights, days: itinerary.days?.length }, "[TripPlan] Itinerary generated");
-  return itinerary;
+  const plan = JSON.parse(repairJson(jsonMatch[0])) as NativeTripPlan;
+
+  // Sanitize dates so natural-language strings don't crash the DB DATE column
+  plan.start_date = toISODateOrNull(plan.start_date);
+  plan.end_date   = toISODateOrNull(plan.end_date);
+
+  logger.info(
+    { destination: dest, nights, days: plan.itinerary?.days?.length },
+    "[TripPlan] Itinerary generated"
+  );
+  return plan;
 }
 
 // ── Hotel availability enrichment ─────────────────────────────────────────────
@@ -400,46 +423,46 @@ Return ONLY valid JSON with this exact structure (no markdown, no explanation):
  * Falls back silently on any error so the core itinerary is never blocked.
  */
 export async function enrichItineraryWithHotelAvailability(
-  itinerary: TripItinerary,
-  intent:    ParsedTripIntent,
+  plan:   NativeTripPlan,
+  intent: ParsedTripIntent,
 ): Promise<void> {
   if (!isBookingAvailabilityReady()) {
     logger.info("[HotelAvail] Skipping hotel enrichment — APIFY_API_KEY not set");
     return;
   }
 
-  const checkIn = parseToISODate(intent.startDate);
+  const checkIn = parseToISODate(intent.startDate ?? plan.start_date ?? null);
   if (!checkIn) {
     logger.info({ startDate: intent.startDate }, "[HotelAvail] Skipping — no parseable start date");
     return;
   }
 
-  const nights   = intent.nights ?? itinerary.nights ?? 3;
+  const nights   = intent.nights ?? plan.nights ?? 3;
   const checkOut = addNightsToISO(checkIn, nights);
   const adults   = intent.partySize ?? 2;
 
   logger.info(
-    { dest: itinerary.destination, checkIn, checkOut, adults },
+    { dest: plan.destination, checkIn, checkOut, adults },
     "[HotelAvail] Running Booking.com availability check"
   );
 
   let searchResults: BookingHotel[];
   try {
-    searchResults = await searchBookingAvailability(itinerary.destination, checkIn, checkOut, adults);
+    searchResults = await searchBookingAvailability(plan.destination, checkIn, checkOut, adults);
   } catch (err) {
     logger.warn({ err }, "[HotelAvail] Search threw — skipping enrichment");
     return;
   }
 
   if (!searchResults.length) {
-    logger.info({ dest: itinerary.destination }, "[HotelAvail] No results from Booking.com");
+    logger.info({ dest: plan.destination }, "[HotelAvail] No results from Booking.com");
     return;
   }
 
   // Match each unique hotel name once, then apply to all days using that hotel
   const cache = new Map<string, ReturnType<typeof matchHotelToResults>>();
 
-  for (const day of itinerary.days) {
+  for (const day of plan.itinerary.days) {
     if (!day.hotel?.name) continue;
     const name = day.hotel.name;
 
@@ -452,7 +475,6 @@ export async function enrichItineraryWithHotelAvailability(
     if (match.matched) {
       day.hotel.available  = true;
       day.hotel.bookingUrl = match.matched.bookingUrl;
-      if (match.matched.pricePerNight) day.hotel.priceRange = match.matched.pricePerNight;
       logger.info({ hotel: name, url: match.matched.bookingUrl }, "[HotelAvail] ✓ Available");
     } else {
       day.hotel.available = false;
