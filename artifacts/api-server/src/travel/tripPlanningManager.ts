@@ -536,20 +536,24 @@ export interface TripPlanRow {
   start_date: string | null;
   end_date: string | null;
   nights: number | null;
-  itinerary: TripItinerary | null;
+  itinerary: NativeItinerary | null;
   status: string;
   created_at: string;
   updated_at: string;
 }
 
+/**
+ * Save a NativeTripPlan to the DB.
+ * Top-level fields (destination, trip_name, start_date, end_date, nights, status)
+ * become individual columns; the nested itinerary object goes into the JSONB column.
+ * Dates are validated to YYYY-MM-DD before insert to prevent PostgreSQL DATE errors.
+ */
 export async function saveTripPlan(
-  userName:  string,
-  intent:    ParsedTripIntent,
-  itinerary: TripItinerary,
+  userName: string,
+  plan: NativeTripPlan,
 ): Promise<number> {
-  const startDate = intent.startDate ?? itinerary.startDate ?? null;
-  const endDate   = itinerary.endDate ?? null;
-  const nights    = intent.nights ?? itinerary.nights ?? null;
+  const startDate = toISODateOrNull(plan.start_date);
+  const endDate   = toISODateOrNull(plan.end_date);
 
   const { rows } = await query<{ id: number }>(
     `INSERT INTO trip_plans
@@ -558,16 +562,16 @@ export async function saveTripPlan(
      RETURNING id`,
     [
       userName,
-      intent.destination,
-      itinerary.tripName ?? null,
+      plan.destination,
+      plan.trip_name ?? null,
       startDate,
       endDate,
-      nights,
-      JSON.stringify(itinerary),
+      plan.nights ?? null,
+      JSON.stringify(plan.itinerary),
     ]
   );
   const id = rows[0]?.id ?? 0;
-  logger.info({ id, destination: intent.destination, userName }, "[TripPlan] Saved to DB");
+  logger.info({ id, destination: plan.destination, userName }, "[TripPlan] Saved to DB");
   return id;
 }
 

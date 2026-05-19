@@ -1607,20 +1607,20 @@ If the conversation is not about a trip, set destination to null.`,
           intent,
           userProfile as Record<string, unknown> | null
         );
-        await saveTripPlan(sessionUserName, intent, itinerary);
+        await saveTripPlan(sessionUserName, itinerary);
 
         req.log.info(
-          { dest: itinerary.destination, days: itinerary.days.length, tripName: itinerary.tripName },
+          { dest: itinerary.destination, days: itinerary.itinerary.days.length, tripName: itinerary.trip_name },
           "[TripPlan] Itinerary saved to DB"
         );
 
-        const daysPreview = itinerary.days
-          .map((d) => `Day ${d.day} — ${d.title}: ${d.morning}`)
+        const daysPreview = itinerary.itinerary.days
+          .map((d) => `Day ${d.dayNumber} — ${d.label}: ${d.activities?.[0]?.description ?? d.activities?.[0]?.title ?? d.location}`)
           .join("; ");
 
         systemPrompt +=
-          `\n\n[Trip Itinerary Saved — "${itinerary.tripName}"]\n` +
-          `You just built and saved a day-by-day itinerary called "${itinerary.tripName}" ` +
+          `\n\n[Trip Itinerary Saved — "${itinerary.trip_name}"]\n` +
+          `You just built and saved a day-by-day itinerary called "${itinerary.trip_name}" ` +
           `(${itinerary.nights} nights in ${itinerary.destination}) to ${sessionUserName}'s travel screen.\n` +
           `Day previews: ${daysPreview}\n\n` +
           `TASK: Tell them it's saved — mention the trip name specifically — and give a warm, enthusiastic ` +

@@ -11,7 +11,7 @@ import {
   parseTripIntent,
   generateTripItinerary,
   buildTravelProfileContext,
-  type TripItinerary,
+  type NativeTripPlan,
 } from "../travel/tripPlanningManager.js";
 import { getProfile, type CollectedData } from "../onboarding/onboardingManager.js";
 import { MODEL_SONNET } from "../lib/models.js";
@@ -107,45 +107,39 @@ TRIP CONTEXT:
 ${intent.startDate ? `- Start date: ${intent.startDate}` : ""}
 ${profileCtx}
 
-Extract or infer a complete day-by-day itinerary from the overview above. Where the overview is specific, use exactly those recommendations. Where it is general, infer the most fitting specific options based on the destination, vibe, and traveler profile.
-
-For booking links:
-- Restaurants: include real OpenTable (https://www.opentable.com/r/...) or Resy (https://resy.com/cities/.../...) links where you know them; otherwise the restaurant website
-- Hotels: include the hotel's direct website or Booking.com page
-- Leave null if genuinely unknown — do not guess URLs
+Extract or infer a complete day-by-day itinerary. Where the overview is specific, use those recommendations exactly. Where general, infer the best specific options for the destination, vibe, and traveler.
 
 Return ONLY valid JSON — no markdown, no explanation:
 {
-  "tripName": "Short evocative name e.g. 'Savannah for Two' or 'Hill Country Long Weekend'",
+  "trip_name": "Creative evocative name (not just '${dest} Trip')",
   "destination": "${dest}",
   "nights": ${nights},
-  "partyDesc": "${party}",
-  "summary": "One vivid sentence capturing the spirit of this trip",
-  "generalTips": ["Tip 1", "Tip 2", "Tip 3"],
-  "days": [
-    {
-      "day": 1,
-      "title": "Short evocative day title",
-      "morning": "Morning plan — specific places and activities",
-      "afternoon": "Afternoon plan — specific places",
-      "evening": "Evening plan — neighborhood or activity",
-      "restaurant": {
-        "name": "Restaurant name",
-        "cuisine": "Cuisine type and style",
-        "whyItFits": "One sentence why this fits the traveler",
-        "bookingUrl": "OpenTable or Resy URL, or null",
-        "websiteUrl": "Restaurant website, or null",
-        "phone": null
-      },
-      "hotel": {
-        "name": "Hotel name",
-        "whyItFits": "One sentence why this hotel fits",
-        "websiteUrl": "Hotel website URL, or null",
-        "priceRange": "$$, $$$, or $$$$"
-      },
-      "practicalNotes": "Timing, reservations needed, transport, or insider tips"
-    }
-  ]
+  "start_date": "YYYY-MM-DD or null",
+  "end_date": "YYYY-MM-DD or null",
+  "itinerary": {
+    "days": [
+      {
+        "dayNumber": 1,
+        "label": "Evocative day title",
+        "location": "City or neighborhood",
+        "hotel": {
+          "name": "Real hotel name",
+          "websiteUrl": "Hotel direct website URL",
+          "notes": "Why this hotel fits this traveler and vibe"
+        },
+        "activities": [
+          { "time": "Morning",   "title": "Activity", "description": "Specific plan", "notes": "Practical tip" },
+          { "time": "Afternoon", "title": "Activity", "description": "Specific plan", "notes": "Practical tip" },
+          { "time": "Evening",   "title": "Activity", "description": "Specific plan", "notes": "Practical tip" }
+        ],
+        "meals": [
+          { "time": "Lunch",  "title": "Restaurant name", "description": "Cuisine and why it fits", "bookingUrl": "OpenTable/Resy/website URL or empty string" },
+          { "time": "Dinner", "title": "Restaurant name", "description": "Cuisine and why it fits", "bookingUrl": "URL or empty string" }
+        ]
+      }
+    ],
+    "practicalNotes": ["Tip 1", "Tip 2", "Tip 3", "Tip 4"]
+  }
 }`;
 
     const message = await anthropic.messages.create({
@@ -163,21 +157,21 @@ Return ONLY valid JSON — no markdown, no explanation:
       return;
     }
 
-    const itinerary = JSON.parse(jsonMatch[0]) as TripItinerary;
+    const nativePlan = JSON.parse(jsonMatch[0]) as NativeTripPlan;
 
-    const id = await saveTripPlan(userName, intent, itinerary);
+    const id = await saveTripPlan(userName, nativePlan);
     const plan = await getTripPlanById(id, userName);
 
     req.log.info(
-      { id, destination: itinerary.destination, tripName: itinerary.tripName, nights: itinerary.nights },
+      { id, destination: nativePlan.destination, tripName: nativePlan.trip_name, nights: nativePlan.nights },
       "[TripPlan] /trips/save — saved"
     );
 
     res.status(201).json({
       id,
-      destination: plan?.destination ?? itinerary.destination,
-      tripName: plan?.trip_name ?? itinerary.tripName,
-      nights: plan?.nights ?? itinerary.nights,
+      destination: plan?.destination ?? nativePlan.destination,
+      tripName: plan?.trip_name ?? nativePlan.trip_name,
+      nights: plan?.nights ?? nativePlan.nights,
       startDate: plan?.start_date ?? null,
       endDate: plan?.end_date ?? null,
       status: plan?.status ?? "planning",
@@ -205,23 +199,16 @@ router.post("/trips", express.json({ limit: "2mb" }), async (req, res) => {
     vibe?: string;
     mustHaves?: string;
     budget?: string;
-    itinerary?: TripItinerary;
+    itinerary?: NativeTripPlan;
     status?: string;
   };
 
   try {
-    // If a complete itinerary is provided, save directly
+    // If a complete NativeTripPlan is provided, save directly
     if (body.itinerary) {
-      const intent = parseTripIntent(body.message ?? body.destination ?? body.itinerary.destination);
-      if (body.destination) intent.destination = body.destination;
-      if (body.nights) intent.nights = body.nights;
-      if (body.startDate) intent.startDate = body.startDate;
-      if (body.partyDesc) intent.partyDesc = body.partyDesc;
-      if (body.vibe) intent.vibe = body.vibe;
-
-      const id = await saveTripPlan(userName, intent, body.itinerary);
+      const id = await saveTripPlan(userName, body.itinerary);
       const plan = await getTripPlanById(id, userName);
-      req.log.info({ id, destination: intent.destination }, "[Trips] Trip plan saved with provided itinerary");
+      req.log.info({ id, destination: body.itinerary.destination }, "[Trips] Trip plan saved with provided itinerary");
       res.status(201).json({ plan });
       return;
     }
@@ -232,7 +219,6 @@ router.post("/trips", express.json({ limit: "2mb" }), async (req, res) => {
     if (body.destination) intent.destination = body.destination;
     if (body.nights) intent.nights = body.nights;
     if (body.startDate) intent.startDate = body.startDate;
-    if (body.endDate) intent.endDate = body.endDate;
     if (body.partyDesc) intent.partyDesc = body.partyDesc;
     if (body.vibe) intent.vibe = body.vibe;
     if (body.mustHaves) intent.mustHaves = body.mustHaves;
@@ -244,8 +230,8 @@ router.post("/trips", express.json({ limit: "2mb" }), async (req, res) => {
     }
 
     req.log.info({ destination: intent.destination, nights: intent.nights }, "[Trips] Generating itinerary");
-    const itinerary = await generateTripItinerary(intent, null);
-    const id = await saveTripPlan(userName, intent, itinerary);
+    const generatedPlan = await generateTripItinerary(intent, null);
+    const id = await saveTripPlan(userName, generatedPlan);
     const plan = await getTripPlanById(id, userName);
     res.status(201).json({ plan });
   } catch (err) {
@@ -269,7 +255,7 @@ router.put("/trips/:id", express.json({ limit: "2mb" }), async (req, res) => {
     start_date?: string;
     end_date?: string;
     nights?: number;
-    itinerary?: TripItinerary;
+    itinerary?: NativeTripPlan["itinerary"];
     status?: string;
   };
 
