@@ -1082,7 +1082,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isTextFlowActive = !isMorningGreeting && pendingText !== null;
 
   const pendingTripPlan = getPendingTripPlan();
-  const isTripPlanStart = !isMorningGreeting && !pendingTripPlan && TRIP_PLAN_START.test(message);
+  // Allow isTripPlanStart even if there's a pending trip — a new trip request should always override.
+  const isTripPlanStart = !isMorningGreeting && TRIP_PLAN_START.test(message);
   const isTripPlanFlowActive = !isMorningGreeting && pendingTripPlan !== null;
 
   // Declared early so code paths before the winddown section can reference it safely.
@@ -1616,47 +1617,64 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     };
 
     if (isTripPlanStart) {
-      // Parse everything from the initial message — generate immediately with smart defaults.
-      // Do NOT ask clarifying questions; default nights to 3 if unspecified.
-      // The pending state lives in server memory and does not survive restarts,
-      // so any clarify round-trip is fragile. Generate now, let user tweak after.
+      // Parse everything from the initial message.
+      // Ask for destination if missing, ask for nights if missing — never silently default.
       const intent = parseTripIntent(message);
 
       if (!intent.destination) {
-        // No destination at all — only case where we must ask
+        // No destination — ask first
         setPendingTripPlan({ intent, phase: "clarify", missingField: "destination" });
         console.log("TRIP NEEDS DESTINATION — asking user");
         systemPrompt +=
           `\n\n[Trip Planning — Need Destination]\n` +
           `The user wants to plan a trip but the destination isn't clear. ` +
           `Acknowledge their trip idea warmly in one sentence, then ask: "Where are you thinking?" Nothing else.`;
+      } else if (!intent.nights) {
+        // Have destination but no duration — ask for nights
+        setPendingTripPlan({ intent, phase: "clarify", missingField: "nights" });
+        console.log(`TRIP NEEDS NIGHTS — asking user for ${intent.destination}`);
+        systemPrompt +=
+          `\n\n[Trip Planning — Need Duration]\n` +
+          `The user wants to plan a trip to ${intent.destination} but hasn't said how long. ` +
+          `Acknowledge their destination warmly in one sentence, then ask: "How many nights are you thinking?" Nothing else.`;
       } else {
-        // Have destination — default nights to 3 if not specified, generate immediately
-        const nightsDefaulted = !intent.nights;
-        if (nightsDefaulted) intent.nights = 3;
+        // Have both destination and nights — generate immediately
         setPendingTripPlan({ intent, phase: "generating" });
-        await _generateAndInject(intent, nightsDefaulted);
+        await _generateAndInject(intent, false);
       }
 
     } else if (isTripPlanFlowActive && pendingTripPlan) {
       const { intent, missingField } = pendingTripPlan;
 
       if (missingField === "destination") {
-        // User answered with destination — default nights and generate immediately
+        // User answered with destination
         const updatedIntent = parseTripIntent(message);
         const dest = updatedIntent.destination || message.trim().replace(/[.!?]+$/, "").trim();
         intent.destination = dest;
-        const nightsDefaulted = !intent.nights;
-        if (nightsDefaulted) intent.nights = 3;
-        setPendingTripPlan({ intent, phase: "generating" });
-        await _generateAndInject(intent, nightsDefaulted);
+        // Merge any nights they may have included in this reply too
+        if (!intent.nights && updatedIntent.nights) intent.nights = updatedIntent.nights;
+
+        if (!intent.nights) {
+          // Still no duration — ask for it
+          setPendingTripPlan({ intent, phase: "clarify", missingField: "nights" });
+          console.log(`TRIP NEEDS NIGHTS — asking user for ${intent.destination}`);
+          systemPrompt +=
+            `\n\n[Trip Planning — Need Duration]\n` +
+            `Great, the destination is ${intent.destination}. Now ask: "How many nights are you thinking?" One sentence, nothing else.`;
+        } else {
+          // Have everything — generate
+          setPendingTripPlan({ intent, phase: "generating" });
+          await _generateAndInject(intent, false);
+        }
 
       } else if (missingField === "nights") {
         // User answered with duration
+        // Parentheses required: ?? has higher precedence than ?: so without them the ternary
+        // swallows the entire left-hand chain, returning null whenever any match succeeds.
         const nightsM =
           message.match(/\b(\d+)\s*nights?\b/i) ??
           message.match(/\b(\d+)\s*days?\b/i) ??
-          message.match(/\bweekend\b/i) ? null : message.match(/\b(\d+)\b/);
+          (/\bweekend\b/i.test(message) ? null : message.match(/\b(\d+)\b/));
         const isWeekend = /\bweekend\b/i.test(message);
         const isWeek = /\b(?:a\s+)?week\b/i.test(message);
 
