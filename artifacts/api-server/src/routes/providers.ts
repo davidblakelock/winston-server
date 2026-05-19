@@ -6,6 +6,8 @@ import {
   createProvider,
   updateProvider,
   deleteProvider,
+  getCategories,
+  createCategory,
   type ProviderCategory,
 } from "../providers/providerManager.js";
 
@@ -18,6 +20,50 @@ const VALID_CATEGORIES: ProviderCategory[] = [
 function isValidCategory(v: unknown): v is ProviderCategory {
   return typeof v === "string" && VALID_CATEGORIES.includes(v as ProviderCategory);
 }
+
+// ── GET /api/providers/categories ─────────────────────────────────────────────
+// Returns built-in defaults + any custom categories for the user.
+router.get("/providers/categories", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  try {
+    const categories = await getCategories(userName);
+    res.json({ categories });
+  } catch (err) {
+    req.log.error({ err }, "[Providers] GET /providers/categories error");
+    res.status(500).json({ error: "Failed to load categories" });
+  }
+});
+
+// ── POST /api/providers/categories ────────────────────────────────────────────
+// Creates a custom category. Returns the record (or the matching default if it
+// duplicates a built-in name).
+router.post(
+  "/providers/categories",
+  express.json({ limit: "1mb" }),
+  async (req: Request, res: Response) => {
+    const userName = await authenticate(req, res);
+    if (!userName) return;
+
+    const body = req.body as Record<string, unknown>;
+    const categoryName = body["categoryName"] ?? body["category_name"] ?? body["name"];
+
+    if (!categoryName || typeof categoryName !== "string" || !categoryName.trim()) {
+      res.status(400).json({ error: "categoryName is required" });
+      return;
+    }
+
+    try {
+      const { record, created } = await createCategory(userName, categoryName);
+      req.log.info({ userName, categoryName: record.categoryName, created }, "[Providers] Category upserted");
+      res.status(created ? 201 : 200).json({ category: record });
+    } catch (err) {
+      req.log.error({ err }, "[Providers] POST /providers/categories error");
+      res.status(500).json({ error: "Failed to create category" });
+    }
+  }
+);
 
 // ── GET /api/providers ────────────────────────────────────────────────────────
 // Returns all providers grouped by category.

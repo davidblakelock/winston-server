@@ -53,7 +53,7 @@ import { ensureSavedPlacesTable } from "./location/geofenceManager";
 import { ensureListItemColumns } from "./lists/listManager";
 import { ensureListShareTable } from "./lists/listShareManager";
 import { ensureBookingColumns } from "./restaurants/bookingCredentialsManager";
-import { ensureServiceProvidersTable } from "./providers/providerManager";
+import { ensureServiceProvidersTable, ensureProviderCategoriesTable } from "./providers/providerManager";
 import { startProviderScheduler } from "./providers/providerScheduler";
 import { startConnectBirthdayScheduler } from "./connect/connectBirthdayScheduler";
 import { startContactBirthdayScheduler } from "./google/contactBirthdayScheduler";
@@ -365,6 +365,13 @@ app.listen(port, async (err) => {
     logger.info("[startup] service_providers table ready");
   } catch (e) {
     logger.warn({ e }, "Service providers table initialization warning");
+  }
+
+  try {
+    await ensureProviderCategoriesTable();
+    logger.info("[startup] provider_categories table ready");
+  } catch (e) {
+    logger.warn({ e }, "Provider categories table initialization warning");
   }
 
   // Migrate auto_pay column onto financial_obligations if it doesn't exist yet

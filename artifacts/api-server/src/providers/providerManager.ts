@@ -3,6 +3,121 @@ import { logger } from "../lib/logger.js";
 
 export type ProviderCategory = "medical" | "legal" | "financial" | "home" | "auto" | "personal";
 
+// ── Provider categories ────────────────────────────────────────────────────────
+
+export const DEFAULT_CATEGORIES = ["Medical", "Legal", "Financial", "Home", "Auto", "Personal"] as const;
+
+export interface ProviderCategoryRecord {
+  id: number;
+  userName: string;
+  categoryName: string;
+  isDefault: boolean;
+  createdAt: string;
+}
+
+export async function ensureProviderCategoriesTable(): Promise<void> {
+  await query(`
+    CREATE TABLE IF NOT EXISTS provider_categories (
+      id            SERIAL PRIMARY KEY,
+      user_name     TEXT NOT NULL,
+      category_name TEXT NOT NULL,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  // Unique index: one entry per user per category name (case-insensitive), idempotent
+  await query(`
+    DO $$ BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_indexes
+        WHERE tablename = 'provider_categories'
+          AND indexname = 'provider_categories_user_name_idx'
+      ) THEN
+        CREATE UNIQUE INDEX provider_categories_user_name_idx
+          ON provider_categories (user_name, lower(category_name));
+      END IF;
+    END $$
+  `).catch(() => {});
+
+  logger.info("[Providers] provider_categories table ready");
+}
+
+export async function getCategories(userName: string): Promise<ProviderCategoryRecord[]> {
+  const { rows } = await query<{
+    id: number; user_name: string; category_name: string; created_at: string;
+  }>(
+    `SELECT id, user_name, category_name, created_at::text
+       FROM provider_categories
+      WHERE user_name = $1
+      ORDER BY category_name ASC`,
+    [userName]
+  );
+
+  // Defaults always come first with synthetic negative ids so they never clash with DB rows.
+  const defaults: ProviderCategoryRecord[] = DEFAULT_CATEGORIES.map((name, i) => ({
+    id: -(i + 1),
+    userName,
+    categoryName: name,
+    isDefault: true,
+    createdAt: "",
+  }));
+
+  const custom: ProviderCategoryRecord[] = rows.map((r) => ({
+    id: r.id,
+    userName: r.user_name,
+    categoryName: r.category_name,
+    isDefault: false,
+    createdAt: r.created_at,
+  }));
+
+  return [...defaults, ...custom];
+}
+
+export async function createCategory(
+  userName: string,
+  categoryName: string
+): Promise<{ record: ProviderCategoryRecord; created: boolean }> {
+  const trimmed = categoryName.trim();
+
+  // If it matches a built-in default, return that default — no DB insert needed.
+  const defaultIdx = DEFAULT_CATEGORIES.findIndex(
+    (d) => d.toLowerCase() === trimmed.toLowerCase()
+  );
+  if (defaultIdx !== -1) {
+    return {
+      record: {
+        id: -(defaultIdx + 1),
+        userName,
+        categoryName: DEFAULT_CATEGORIES[defaultIdx]!,
+        isDefault: true,
+        createdAt: "",
+      },
+      created: false,
+    };
+  }
+
+  const { rows } = await query<{
+    id: number; user_name: string; category_name: string; created_at: string;
+  }>(
+    `INSERT INTO provider_categories (user_name, category_name)
+     VALUES ($1, $2)
+     ON CONFLICT (user_name, lower(category_name)) DO UPDATE SET category_name = EXCLUDED.category_name
+     RETURNING id, user_name, category_name, created_at::text`,
+    [userName, trimmed]
+  );
+  const r = rows[0]!;
+  return {
+    record: {
+      id: r.id,
+      userName: r.user_name,
+      categoryName: r.category_name,
+      isDefault: false,
+      createdAt: r.created_at,
+    },
+    created: true,
+  };
+}
+
 export interface ServiceProvider {
   id: number;
   userName: string;
