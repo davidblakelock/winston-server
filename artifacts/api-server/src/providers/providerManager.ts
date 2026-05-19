@@ -15,17 +15,54 @@ export interface ProviderCategoryRecord {
   createdAt: string;
 }
 
+// ── Internal: seed the 6 built-in categories for one user (idempotent) ─────────
+async function seedDefaultCategoriesForUser(userName: string): Promise<void> {
+  await query(
+    `INSERT INTO provider_categories (user_name, category_name, is_default)
+     VALUES
+       ($1, 'Medical',   TRUE),
+       ($1, 'Legal',     TRUE),
+       ($1, 'Financial', TRUE),
+       ($1, 'Home',      TRUE),
+       ($1, 'Auto',      TRUE),
+       ($1, 'Personal',  TRUE)
+     ON CONFLICT (user_name, lower(category_name)) DO NOTHING`,
+    [userName]
+  ).catch((e) => logger.warn({ e, userName }, "[Providers] seed categories partial error"));
+}
+
+type CategoryRow = {
+  id: number; user_name: string; category_name: string; is_default: boolean; created_at: string;
+};
+
+function rowToCategory(r: CategoryRow): ProviderCategoryRecord {
+  return {
+    id: r.id,
+    userName: r.user_name,
+    categoryName: r.category_name,
+    isDefault: r.is_default,
+    createdAt: r.created_at,
+  };
+}
+
 export async function ensureProviderCategoriesTable(): Promise<void> {
   await query(`
     CREATE TABLE IF NOT EXISTS provider_categories (
       id            SERIAL PRIMARY KEY,
       user_name     TEXT NOT NULL,
       category_name TEXT NOT NULL,
+      is_default    BOOLEAN NOT NULL DEFAULT FALSE,
       created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
 
-  // Unique index: one entry per user per category name (case-insensitive), idempotent
+  // Add is_default to existing deployments that pre-date this column
+  await query(`
+    ALTER TABLE provider_categories
+      ADD COLUMN IF NOT EXISTS is_default BOOLEAN NOT NULL DEFAULT FALSE
+  `).catch(() => {});
+
+  // Unique index (idempotent)
   await query(`
     DO $$ BEGIN
       IF NOT EXISTS (
@@ -39,38 +76,36 @@ export async function ensureProviderCategoriesTable(): Promise<void> {
     END $$
   `).catch(() => {});
 
+  // Seed defaults for every user that already exists
+  const { rows: users } = await query<{ user_name: string }>(
+    `SELECT user_name FROM user_profiles`
+  ).catch(() => ({ rows: [] as { user_name: string }[] }));
+
+  await Promise.all(users.map((u) => seedDefaultCategoriesForUser(u.user_name)));
+
   logger.info("[Providers] provider_categories table ready");
 }
 
 export async function getCategories(userName: string): Promise<ProviderCategoryRecord[]> {
-  const { rows } = await query<{
-    id: number; user_name: string; category_name: string; created_at: string;
-  }>(
-    `SELECT id, user_name, category_name, created_at::text
+  // Ensure this user's defaults exist — handles users created after server startup
+  const { rows: existing } = await query<{ cnt: string }>(
+    `SELECT COUNT(*)::text AS cnt FROM provider_categories
+     WHERE user_name = $1 AND is_default = TRUE`,
+    [userName]
+  );
+  if (parseInt(existing[0]?.cnt ?? "0", 10) === 0) {
+    await seedDefaultCategoriesForUser(userName);
+  }
+
+  const { rows } = await query<CategoryRow>(
+    `SELECT id, user_name, category_name, is_default, created_at::text
        FROM provider_categories
       WHERE user_name = $1
-      ORDER BY category_name ASC`,
+      ORDER BY is_default DESC, category_name ASC`,
     [userName]
   );
 
-  // Defaults always come first with synthetic negative ids so they never clash with DB rows.
-  const defaults: ProviderCategoryRecord[] = DEFAULT_CATEGORIES.map((name, i) => ({
-    id: -(i + 1),
-    userName,
-    categoryName: name,
-    isDefault: true,
-    createdAt: "",
-  }));
-
-  const custom: ProviderCategoryRecord[] = rows.map((r) => ({
-    id: r.id,
-    userName: r.user_name,
-    categoryName: r.category_name,
-    isDefault: false,
-    createdAt: r.created_at,
-  }));
-
-  return [...defaults, ...custom];
+  return rows.map(rowToCategory);
 }
 
 export async function createCategory(
@@ -79,43 +114,24 @@ export async function createCategory(
 ): Promise<{ record: ProviderCategoryRecord; created: boolean }> {
   const trimmed = categoryName.trim();
 
-  // If it matches a built-in default, return that default — no DB insert needed.
-  const defaultIdx = DEFAULT_CATEGORIES.findIndex(
-    (d) => d.toLowerCase() === trimmed.toLowerCase()
-  );
-  if (defaultIdx !== -1) {
-    return {
-      record: {
-        id: -(defaultIdx + 1),
-        userName,
-        categoryName: DEFAULT_CATEGORIES[defaultIdx]!,
-        isDefault: true,
-        createdAt: "",
-      },
-      created: false,
-    };
-  }
-
-  const { rows } = await query<{
-    id: number; user_name: string; category_name: string; created_at: string;
-  }>(
-    `INSERT INTO provider_categories (user_name, category_name)
-     VALUES ($1, $2)
-     ON CONFLICT (user_name, lower(category_name)) DO UPDATE SET category_name = EXCLUDED.category_name
-     RETURNING id, user_name, category_name, created_at::text`,
+  // Return existing row if the category already exists (default or custom)
+  const { rows: existing } = await query<CategoryRow>(
+    `SELECT id, user_name, category_name, is_default, created_at::text
+       FROM provider_categories
+      WHERE user_name = $1 AND lower(category_name) = lower($2)`,
     [userName, trimmed]
   );
-  const r = rows[0]!;
-  return {
-    record: {
-      id: r.id,
-      userName: r.user_name,
-      categoryName: r.category_name,
-      isDefault: false,
-      createdAt: r.created_at,
-    },
-    created: true,
-  };
+  if (existing.length > 0) {
+    return { record: rowToCategory(existing[0]!), created: false };
+  }
+
+  const { rows } = await query<CategoryRow>(
+    `INSERT INTO provider_categories (user_name, category_name, is_default)
+     VALUES ($1, $2, FALSE)
+     RETURNING id, user_name, category_name, is_default, created_at::text`,
+    [userName, trimmed]
+  );
+  return { record: rowToCategory(rows[0]!), created: true };
 }
 
 export interface ServiceProvider {

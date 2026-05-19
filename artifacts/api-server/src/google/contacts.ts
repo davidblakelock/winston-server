@@ -210,7 +210,7 @@ async function searchContactsLive(searchName: string, token: string): Promise<Co
     "readMask",
     "names,emailAddresses,phoneNumbers,addresses,organizations,urls,birthdays,biographies"
   );
-  url.searchParams.set("pageSize", "10");
+  url.searchParams.set("pageSize", "30"); // 30 is Google's max for searchContacts
 
   const resp = await fetch(url.toString(), {
     headers: { Authorization: `Bearer ${token}` },
