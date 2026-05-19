@@ -425,8 +425,9 @@ function detectActiveListFromHistory(history: Array<{ role: string; content: str
   return null;
 }
 const NAVIGATION_PATTERN = /\b(take\s+me\s+to|directions?\s+to|navigate\s+to|get\s+me\s+to|how\s+do\s+i\s+get\s+to|maps?\s+to|open\s+maps?\s+(for|to)|i\s+need\s+to\s+go\s+to|i\s+need\s+directions?\s+to|i\s+want\s+to\s+go\s+to|can\s+you\s+take\s+me\s+to|take\s+me|get\s+directions?\s+to|show\s+me\s+how\s+to\s+get\s+to)\b/i;
-// Matches explicit save/build requests for a trip itinerary in main chat
-const TRIP_SAVE_INTENT = /\b(?:save\s+(?:this\s+)?(?:trip|itinerary|plan|it\b)|build\s+(?:(?:the|a|full|me\s+(?:the|a))\s+)?itinerary|create\s+(?:(?:the|a|full)\s+)?itinerary|make\s+(?:(?:the|a|full)\s+)?itinerary|generate\s+(?:(?:the|a|full)\s+)?itinerary|yes[,\s]+(?:please[,\s]+)?(?:build|make|create|save|do\s+it|go\s+ahead)|go\s+ahead\s+(?:and\s+)?(?:build|make|create|save)|let'?s\s+(?:build|save|do)\s+it|yes[,\s]+let'?s\s+do\s+it|add\s+(?:it\s+)?to\s+my\s+(?:trips?|travel)|save\s+to\s+(?:my\s+)?(?:trips?|travel\s+screen))\b/i;
+// Matches explicit save/build requests for a trip itinerary in main chat.
+// Intentionally broad — false positives bail gracefully when Haiku finds no trip destination.
+const TRIP_SAVE_INTENT = /\b(?:save\s+(?:this|my|the|our|it)\b|build\s+(?:(?:me|us)\s+)?(?:(?:the|a|an?)\s+)?(?:full\s+)?itinerary|build\s+it(?:\s+out)?\b|create\s+(?:(?:me|us)\s+)?(?:(?:the|a|an?)\s+)?(?:full\s+)?itinerary|make\s+(?:(?:the|a|an?)\s+)?(?:full\s+)?itinerary|generate\s+(?:(?:the|a|an?)\s+)?(?:full\s+)?itinerary|yes[,\s]+(?:please[,\s]+)?(?:build|make|create|save|do\s+it|go\s+ahead)|go\s+ahead(?:\s+and\s+(?:build|make|create|save))?|let'?s\s+(?:build|save|do|go\s+ahead)\b|yes[,\s]+let'?s\s+(?:do|build|save)\s+it|add\s+(?:it\s+)?to\s+my\s+(?:trips?|travel)|save\s+to\s+(?:my\s+)?(?:trips?|travel\s+screen)|book\s+it\b)\b/i;
 const GOAL_PATTERN = /\b(?:i\s+(?:want|need|should|have)\s+to\s+(?:(?:start\s+|be\s+)?(?:read(?:ing)?|call(?:ing)?|see(?:ing)?|visit(?:ing)?|spend(?:ing)?\s+(?:more\s+)?time|work(?:ing)?\s+(?:more\s+)?on|get\s+(?:back\s+)?(?:into|to)|focus(?:ing)?\s+(?:more\s+)?on|reconnect(?:ing)?|exercise|write|journal|meditat|paint|cook|learn|practice|travel|save|organiz|clean|reach\s+out)|more\s+\w+|less\s+\w+)|i'?(?:ve\s+been\s+meaning\s+to|d\s+love\s+to\s+(?:start|get))|my\s+goal\s+is\s+to|i'?m\s+trying\s+to\s+(?:be\s+better\s+at|get\s+(?:more\s+)?into|start))\b/i;
 const STORY_READ_PATTERN = /\b(read\s+(me\s+)?(my\s+)?stor(y|ies)|show\s+(me\s+)?(my\s+)?stor(y|ies)|what\s+stor(y|ies)\s+have\s+i|tell\s+me\s+(my|the)\s+stor(y|ies)|ms\.?\s*peel\s+read\s+(me\s+)?(my\s+)?stor(y|ies)|olivia\s+stor(y|ies))\b/i;
 const STORY_COUNT_PATTERN = /\b(how\s+many\s+stor(y|ies)|stor(y|ies)\s+count|how\s+many\s+memories|number\s+of\s+stor(y|ies)|how\s+many\s+have\s+i\s+(captured|saved|told))\b/i;
@@ -978,7 +979,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isCallRequest = !isReminderRequest && CALL_PATTERN.test(message);
   const isStoryRead = STORY_READ_PATTERN.test(message);
   const isStoryCount = STORY_COUNT_PATTERN.test(message);
-  const isProfileRequest = PROFILE_PATTERN.test(message);
+  const isTripSaveIntent = !isMorningGreeting && TRIP_SAVE_INTENT.test(message);
+  // Guard: don't run profile handler when a trip save is being detected — they conflict
+  const isProfileRequest = !isTripSaveIntent && PROFILE_PATTERN.test(message);
   // IMPORTANT: Reminder requests (REMINDER_PATTERN) must NEVER route to Google Calendar.
   // IMPORTANT: CREATE is evaluated before MODIFY — explicit "add/create/schedule/put on calendar"
   // always wins, even if the event title contains a word like "move" or "transfer".
@@ -1559,7 +1562,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   // save a formal day-by-day itinerary, we detect the intent, extract context from
   // recent conversation history, generate the structured plan, and inject a confirmation
   // so Claude acknowledges the save naturally in its response.
-  if (!isMorningGreeting && TRIP_SAVE_INTENT.test(message)) {
+  if (isTripSaveIntent) {
     try {
       // Build a readable summary of recent conversation for context extraction
       const recentHistory = history.slice(-12);
