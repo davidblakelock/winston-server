@@ -33,15 +33,23 @@ const ORDER_SUBJECT_KEYWORDS = [
 
 // Known carrier sender domains — emails from these are captured even if the
 // subject doesn't match a keyword (e.g. "FedEx Shipment 123456789").
+// Include subdomains (e.g. e.fedex.com, pkge.net for FedEx) explicitly since
+// Gmail's from: operator does NOT match subdomains automatically.
 const CARRIER_SENDER_DOMAINS = [
   "fedex.com",
+  "e.fedex.com",
+  "fedexemail.com",
   "ups.com",
+  "pkginfo.ups.com",
   "usps.com",
+  "email.usps.com",
   "dhl.com",
+  "dhlexpress.com",
   "ontrac.com",
   "lasership.com",
   "amazon.com",
   "notifications.amazon.com",
+  "ship.amazon.com",
 ];
 
 function buildGmailQuery(since?: Date): string {
