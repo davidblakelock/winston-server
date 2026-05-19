@@ -248,15 +248,11 @@ import { getDallasItems, getLocalContentCity, type LocalContentItem } from "../m
 import { createReminder } from "../reminders/reminderManager.js";
 import { getPendingRouteReminder, setPendingRouteReminder } from "../routeAware/routeAwareManager.js";
 import {
-  getPendingTripPlan,
-  setPendingTripPlan,
   parseTripIntent,
   generateTripItinerary,
   saveTripPlan,
   buildTravelProfileContext,
-  enrichItineraryWithHotelAvailability,
 } from "../travel/tripPlanningManager.js";
-import { parseToISODate, isBookingAvailabilityReady } from "../travel/hotelAvailability.js";
 import { nextOccurrenceForPattern, humanReadableRecurring } from "../reminders/recurringUtils.js";
 import { broadcastToUser } from "../reminders/sseStore.js";
 import { saveMoodCheckin } from "../mood/moodManager.js";
@@ -429,10 +425,8 @@ function detectActiveListFromHistory(history: Array<{ role: string; content: str
   return null;
 }
 const NAVIGATION_PATTERN = /\b(take\s+me\s+to|directions?\s+to|navigate\s+to|get\s+me\s+to|how\s+do\s+i\s+get\s+to|maps?\s+to|open\s+maps?\s+(for|to)|i\s+need\s+to\s+go\s+to|i\s+need\s+directions?\s+to|i\s+want\s+to\s+go\s+to|can\s+you\s+take\s+me\s+to|take\s+me|get\s+directions?\s+to|show\s+me\s+how\s+to\s+get\s+to)\b/i;
-const TRIP_PLAN_START = /\b(?:i\s+want\s+to\s+plan|help\s+(?:me\s+)?plan|let'?s\s+plan|thinking\s+(?:of|about)\s+(?:a\s+)?trip|dream\s+trip|plan\s+(?:a\s+|my\s+|our\s+)?(?:trip|vacation|holiday|getaway|travel)(?:\s+to)?|i'?d\s+love\s+to\s+(?:plan|visit)|want\s+to\s+(?:plan|book)\s+(?:a\s+)?trip|planning\s+(?:a\s+|my\s+|our\s+)?(?:trip|vacation|holiday|getaway)|road\s+trip\s+(?:to|through|across|around|in)|(?:weekend|overnight|day|week(?:long)?|solo|family|romantic|anniversary|birthday|quick|short|long)\s+trip\s+(?:to|in|through|across)|(?:build|create|make|generate)\s+(?:me\s+)?(?:an?\s+)?itinerary|(?:book|booking)\s+(?:a\s+|my\s+)?(?:trip|vacation|holiday|getaway|flight\s+to)|(?:i(?:'?m|\s+am)|we(?:'?re|\s+are))\s+(?:taking|planning)\s+(?:a\s+)?(?:trip|vacation|holiday|getaway)\s+to|(?:take\s+(?:a|me\s+on\s+a|us\s+on\s+a)\s+(?:trip|vacation|holiday))\s+to)\b/i;
-// Matches explicit requests to generate + save a formal day-by-day itinerary.
-// Only evaluated when already in a trip conversation (phase === "overview").
-const TRIP_ITINERARY_REQUEST = /\b(?:(?:build|make|create|generate|write)\s+(?:(?:me\s+|us\s+)?(?:the\s+|a\s+)?(?:full\s+|complete\s+|detailed\s+)?)?(?:itinerary|day.by.day|plan|schedule)|(?:full|complete|detailed)\s+(?:itinerary|plan|schedule|breakdown)|give\s+(?:me\s+|us\s+)?(?:the\s+|a\s+)?(?:full\s+|complete\s+)?(?:itinerary|plan|day.by.day|schedule)|day.by.day|yes[,\s]+(?:please[,\s]+)?(?:build|make|create|do|go\s+ahead)|go\s+ahead\s+(?:and\s+)?(?:build|make|create)|build\s+it(?:\s+out)?|yes\s+(?:build|make|create)\s+it|(?:the\s+)?(?:romantic|adventure|family|solo|foodie|cultural|luxury|budget|relaxed|active)\s+version)\b/i;
+// Matches explicit save/build requests for a trip itinerary in main chat
+const TRIP_SAVE_INTENT = /\b(?:save\s+(?:this\s+)?(?:trip|itinerary|plan|it\b)|build\s+(?:(?:the|a|full|me\s+(?:the|a))\s+)?itinerary|create\s+(?:(?:the|a|full)\s+)?itinerary|make\s+(?:(?:the|a|full)\s+)?itinerary|generate\s+(?:(?:the|a|full)\s+)?itinerary|yes[,\s]+(?:please[,\s]+)?(?:build|make|create|save|do\s+it|go\s+ahead)|go\s+ahead\s+(?:and\s+)?(?:build|make|create|save)|let'?s\s+(?:build|save|do)\s+it|yes[,\s]+let'?s\s+do\s+it|add\s+(?:it\s+)?to\s+my\s+(?:trips?|travel)|save\s+to\s+(?:my\s+)?(?:trips?|travel\s+screen))\b/i;
 const GOAL_PATTERN = /\b(?:i\s+(?:want|need|should|have)\s+to\s+(?:(?:start\s+|be\s+)?(?:read(?:ing)?|call(?:ing)?|see(?:ing)?|visit(?:ing)?|spend(?:ing)?\s+(?:more\s+)?time|work(?:ing)?\s+(?:more\s+)?on|get\s+(?:back\s+)?(?:into|to)|focus(?:ing)?\s+(?:more\s+)?on|reconnect(?:ing)?|exercise|write|journal|meditat|paint|cook|learn|practice|travel|save|organiz|clean|reach\s+out)|more\s+\w+|less\s+\w+)|i'?(?:ve\s+been\s+meaning\s+to|d\s+love\s+to\s+(?:start|get))|my\s+goal\s+is\s+to|i'?m\s+trying\s+to\s+(?:be\s+better\s+at|get\s+(?:more\s+)?into|start))\b/i;
 const STORY_READ_PATTERN = /\b(read\s+(me\s+)?(my\s+)?stor(y|ies)|show\s+(me\s+)?(my\s+)?stor(y|ies)|what\s+stor(y|ies)\s+have\s+i|tell\s+me\s+(my|the)\s+stor(y|ies)|ms\.?\s*peel\s+read\s+(me\s+)?(my\s+)?stor(y|ies)|olivia\s+stor(y|ies))\b/i;
 const STORY_COUNT_PATTERN = /\b(how\s+many\s+stor(y|ies)|stor(y|ies)\s+count|how\s+many\s+memories|number\s+of\s+stor(y|ies)|how\s+many\s+have\s+i\s+(captured|saved|told))\b/i;
@@ -1087,11 +1081,6 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isTextMessageRequest = !isMorningGreeting && TEXT_MESSAGE_PATTERN.test(message);
   const isTextFlowActive = !isMorningGreeting && pendingText !== null;
 
-  const pendingTripPlan = getPendingTripPlan();
-  // Allow isTripPlanStart even if there's a pending trip — a new trip request should always override.
-  const isTripPlanStart = !isMorningGreeting && TRIP_PLAN_START.test(message);
-  const isTripPlanFlowActive = !isMorningGreeting && pendingTripPlan !== null;
-
   // Declared early so code paths before the winddown section can reference it safely.
   // The actual value is fetched via isWinddownActive() in the winddown section below.
   let winddownActive = false;
@@ -1565,262 +1554,88 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     }
   }
 
-  // ── Trip planning: conversational overview first, formal itinerary on explicit request ──
-  req.log.info(
-    { isTripPlanStart, isTripPlanFlowActive, pendingPhase: pendingTripPlan?.phase ?? null },
-    "[TripPlan] Intent check"
-  );
-  if (isTripPlanStart || isTripPlanFlowActive) {
+  // ── Trip itinerary save: user says "save this" / "build the itinerary" / "yes let's do it" ──
+  // Trip planning itself happens naturally through Claude. When the user is ready to
+  // save a formal day-by-day itinerary, we detect the intent, extract context from
+  // recent conversation history, generate the structured plan, and inject a confirmation
+  // so Claude acknowledges the save naturally in its response.
+  if (!isMorningGreeting && TRIP_SAVE_INTENT.test(message)) {
+    try {
+      // Build a readable summary of recent conversation for context extraction
+      const recentHistory = history.slice(-12);
+      const historyText = recentHistory
+        .map((h) => `${h.role === "user" ? "User" : "Winston"}: ${h.content.slice(0, 500)}`)
+        .join("\n");
 
-    // ── Helper: parse nights from a natural-language reply ──────────────────────
-    const _parseNightsFromReply = (msg: string): number | null => {
-      // Parentheses required: ?? has higher precedence than ?: — without them the
-      // ternary swallows the whole left-hand chain, returning null on any match.
-      const m =
-        msg.match(/\b(\d+)\s*nights?\b/i) ??
-        msg.match(/\b(\d+)\s*days?\b/i) ??
-        (/\bweekend\b/i.test(msg) ? null : msg.match(/\b(\d+)\b/));
-      if (/\bweekend\b/i.test(msg)) return 2;
-      if (/\b(?:a\s+)?week\b/i.test(msg)) return 6;
-      if (m) {
-        const n = parseInt(m[1]!, 10);
-        return /\bday/i.test(m[0]!) ? Math.max(1, n - 1) : n;
-      }
-      return null;
-    };
+      // Quick Haiku call to extract trip context from conversation
+      const extractionResp = await anthropic.messages.create({
+        model: MODEL_HAIKU,
+        max_tokens: 200,
+        system: `Extract trip planning details from this conversation. Respond ONLY with valid JSON — no explanation, no markdown.
+Format: {"destination":"string or null","nights":number or null,"vibe":"string or null","startDate":"string or null"}
+If the conversation is not about a trip, set destination to null.`,
+        messages: [{ role: "user", content: historyText || `User just said: "${message}"` }],
+      });
 
-    // ── Travel profile context (used in both overview and formal itinerary prompts) ──
-    const _travelProfile = buildTravelProfileContext(
-      (userProfile?.rawData ?? {}) as CollectedData,
-      userProfile as { healthNotes?: string | null; name?: string | null } | null,
-    );
+      const extractedText = extractionResp.content[0].type === "text"
+        ? extractionResp.content[0].text.trim()
+        : "{}";
 
-    // ── Helper: generate full JSON itinerary and inject into system prompt ──────
-    const _generateAndInject = async (intent: ReturnType<typeof parseTripIntent>) => {
-      req.log.info(
-        { dest: intent.destination, nights: intent.nights, vibe: intent.vibe },
-        "[TripPlan] Generating formal itinerary"
-      );
+      let extracted: { destination?: string | null; nights?: number | null; vibe?: string | null; startDate?: string | null } = {};
       try {
-        const itinerary = await generateTripItinerary(intent, userProfile as Record<string, unknown> | null);
+        extracted = JSON.parse(extractedText.replace(/^```json\s*/i, "").replace(/```$/i, "").trim());
+      } catch {
+        // Malformed JSON — treat as no trip context
+      }
 
-        // ── Hotel availability enrichment (runs only when APIFY_API_KEY + real date) ──
-        const hasSpecificDate = !!parseToISODate(intent.startDate);
-        if (isBookingAvailabilityReady() && hasSpecificDate) {
-          req.log.info({ dest: itinerary.destination }, "[TripPlan] Running hotel availability check");
-          await enrichItineraryWithHotelAvailability(itinerary, intent).catch((err) => {
-            req.log.warn({ err }, "[TripPlan] Hotel enrichment failed — continuing without it");
-          });
-        }
+      if (extracted.destination) {
+        const intent = parseTripIntent(`${extracted.nights ?? 3} nights in ${extracted.destination}${extracted.vibe ? `, ${extracted.vibe}` : ""}`);
+        intent.destination = extracted.destination;
+        if (extracted.nights) intent.nights = extracted.nights;
+        if (extracted.vibe) intent.vibe = extracted.vibe;
+        if (extracted.startDate) intent.startDate = extracted.startDate;
 
+        req.log.info(
+          { dest: intent.destination, nights: intent.nights, vibe: intent.vibe },
+          "[TripPlan] Save intent detected — generating itinerary"
+        );
+
+        const itinerary = await generateTripItinerary(
+          intent,
+          userProfile as Record<string, unknown> | null
+        );
         await saveTripPlan(sessionUserName, intent, itinerary);
-        setPendingTripPlan(null);
-        req.log.info({ dest: itinerary.destination, days: itinerary.days.length }, "[TripPlan] Itinerary saved to DB");
 
-        const daysText = itinerary.days
-          .map((d) => {
-            const rest = d.restaurant?.name ? `Dinner: ${d.restaurant.name} (${d.restaurant.cuisine}).` : "";
-            const hotelAvailNote =
-              d.hotel?.availabilityChecked && d.hotel.available && d.hotel.bookingUrl
-                ? ` [AVAILABLE on Booking.com: ${d.hotel.bookingUrl}${d.hotel.priceRange ? ` — ${d.hotel.priceRange}` : ""}]`
-                : d.hotel?.availabilityChecked && !d.hotel.available && d.hotel.alternativeName
-                  ? ` [NOT AVAILABLE — Alternative: ${d.hotel.alternativeName}${d.hotel.alternativeBookingUrl ? ` → ${d.hotel.alternativeBookingUrl}` : ""}${d.hotel.alternativePricePerNight ? ` (${d.hotel.alternativePricePerNight})` : ""}]`
-                  : "";
-            const hotel = d.hotel?.name ? `Hotel: ${d.hotel.name}${hotelAvailNote}.` : "";
-            return `Day ${d.day} — ${d.title}: ${d.morning} / ${d.afternoon} / ${d.evening}. ${rest} ${hotel} Tips: ${d.practicalNotes}`;
-          })
-          .join("\n");
-        const tipsText = itinerary.generalTips.join("; ");
+        req.log.info(
+          { dest: itinerary.destination, days: itinerary.days.length, tripName: itinerary.tripName },
+          "[TripPlan] Itinerary saved to DB"
+        );
 
-        // Build hotel availability summary for Claude's awareness
-        const checkedHotels = itinerary.days
-          .filter((d) => d.hotel?.availabilityChecked)
-          .reduce<Array<{ name: string; available: boolean; bookingUrl?: string; alt?: string; altUrl?: string; price?: string }>>(
-            (acc, d) => {
-              const h = d.hotel!;
-              if (!acc.find((x) => x.name === h.name)) {
-                acc.push({
-                  name:       h.name,
-                  available:  h.available ?? false,
-                  bookingUrl: h.bookingUrl,
-                  alt:        h.alternativeName,
-                  altUrl:     h.alternativeBookingUrl,
-                  price:      h.priceRange,
-                });
-              }
-              return acc;
-            },
-            [],
-          );
-
-        const hotelAvailBlock = checkedHotels.length
-          ? `\nHOTEL AVAILABILITY (verified on Booking.com for these dates):\n` +
-            checkedHotels
-              .map((h) =>
-                h.available
-                  ? `• ${h.name}: ✓ AVAILABLE — book at ${h.bookingUrl}${h.price ? ` (${h.price})` : ""}`
-                  : h.alt
-                    ? `• ${h.name}: ✗ NOT showing on Booking.com — best available alternative: ${h.alt}${h.altUrl ? ` → ${h.altUrl}` : ""}${h.price ? ` (${h.price})` : ""}`
-                    : `• ${h.name}: ✗ Not found on Booking.com — advise the user to verify directly`,
-              )
-              .join("\n")
-          : "";
-
-        const hotelInstruction = checkedHotels.length
-          ? `\nHOTEL AVAILABILITY INSTRUCTIONS:\n` +
-            `• For hotels marked AVAILABLE: mention the Booking.com link naturally in your response so the user can book directly (e.g. "you can book the Hotel Monteleone right on Booking.com — I've got the link saved").\n` +
-            `• For hotels NOT AVAILABLE: acknowledge it warmly and pivot to the alternative — mention its name and link.\n` +
-            `• Weave this naturally into the day-by-day presentation — don't dump all hotel statuses in one block.\n`
-          : "";
+        const daysPreview = itinerary.days
+          .map((d) => `Day ${d.day} — ${d.title}: ${d.morning}`)
+          .join("; ");
 
         systemPrompt +=
-          `\n\n[Trip Itinerary — ${itinerary.tripName || itinerary.destination} — ${itinerary.nights} Nights]\n` +
-          `Summary: ${itinerary.summary}\n\n` +
-          `Day-by-day:\n${daysText}\n\n` +
-          `General tips: ${tipsText}` +
-          hotelAvailBlock +
-          `\n\nTASK: Present this as a warm, enthusiastic day-by-day overview — like a knowledgeable friend walking them through an exciting plan. ` +
-          `Name every restaurant and hotel specifically. Mention one memorable highlight per day. ` +
-          `Keep each day to 2-3 sentences. ` +
-          hotelInstruction +
-          `At the very end, tell them this itinerary has been saved to their travel screen so they can pull it up anytime. ` +
-          `Then ask "Want me to tweak anything?" ` +
-          `Write conversationally — no bullet points.`;
-
-        req.log.info({ dest: itinerary.destination, days: itinerary.days.length, hotelChecks: checkedHotels.length }, "[TripPlan] Itinerary injected into system prompt");
-      } catch (tripErr) {
-        req.log.warn({ err: tripErr }, "[TripPlan] Itinerary generation failed");
-        setPendingTripPlan(null);
-        systemPrompt +=
-          `\n\n[Trip Planning — Generation Error]\n` +
-          `The itinerary generation hit an error. Apologize briefly and warmly — ` +
-          `say you ran into a hiccup building the plan and ask them to try again in a moment. Keep it light.`;
-      }
-    };
-
-    // ── Priority 1: Active conversation + explicit itinerary request — always wins ──
-    // This MUST come before the isTripPlanStart check because confirmation phrases like
-    // "yes build the full itinerary" also match TRIP_PLAN_START ("build...itinerary").
-    if (isTripPlanFlowActive && pendingTripPlan && TRIP_ITINERARY_REQUEST.test(message)) {
-      const { intent } = pendingTripPlan;
-      // Merge any nights given in this message (e.g. "yes build it — 4 nights")
-      const replyNights = _parseNightsFromReply(message);
-      if (replyNights) intent.nights = replyNights;
-
-      if (!intent.nights) {
-        // Need nights before we can generate — ask once
-        setPendingTripPlan({ intent, phase: "clarify", missingField: "nights" });
-        systemPrompt +=
-          `\n\n[Trip Planning — Need Duration for Itinerary]\n` +
-          `The user wants a full itinerary for ${intent.destination}. ` +
-          `In one sentence, tell them you're ready to build it, then ask: "How many nights are you thinking?" Nothing else.`;
+          `\n\n[Trip Itinerary Saved — "${itinerary.tripName}"]\n` +
+          `You just built and saved a day-by-day itinerary called "${itinerary.tripName}" ` +
+          `(${itinerary.nights} nights in ${itinerary.destination}) to ${sessionUserName}'s travel screen.\n` +
+          `Day previews: ${daysPreview}\n\n` +
+          `TASK: Tell them it's saved — mention the trip name specifically — and give a warm, enthusiastic ` +
+          `1-sentence teaser for each day (e.g. "Day 1 kicks off in the French Quarter with a slow morning ` +
+          `and a legendary beignet stop"). End by asking if they want to tweak anything. ` +
+          `Write conversationally, under 200 words, no bullet points.`;
       } else {
-        // Have everything — generate the formal itinerary
-        setPendingTripPlan({ intent, phase: "generating" });
-        await _generateAndInject(intent);
+        req.log.info({ message: message.slice(0, 60) }, "[TripPlan] Save intent matched but no trip context found — letting Claude handle naturally");
       }
-
-    // ── Priority 2: New trip conversation starting ────────────────────────────────
-    } else if (isTripPlanStart) {
-      const intent = parseTripIntent(message);
-
-      if (!intent.destination) {
-        // No destination — only blocker before we can give an overview
-        setPendingTripPlan({ intent, phase: "clarify", missingField: "destination" });
-        systemPrompt +=
-          `\n\n[Trip Planning — Need Destination]\n` +
-          `The user wants to plan a trip but hasn't named a destination. ` +
-          `Acknowledge their excitement warmly in one sentence, then ask: "Where are you thinking?" Nothing else.`;
-
-      } else {
-        // Have destination → give rich conversational overview (fast path, no JSON generation)
-        setPendingTripPlan({ intent, phase: "overview" });
-        const vibeHint   = intent.vibe ? ` The user mentioned: "${intent.vibe}".` : "";
-        const nightsHint = intent.nights ? ` They're thinking roughly ${intent.nights} nights.` : "";
-        const stopsHint  = intent.stops?.length ? ` Stops mentioned: ${intent.stops.join(", ")}.` : "";
-        systemPrompt +=
-          `\n\n[Trip Planning — Conversational Overview: ${intent.destination}]${vibeHint}${nightsHint}${stopsHint}` +
-          (_travelProfile ? `\n${_travelProfile}` : "") + `\n` +
-          `TASK: Respond like a brilliant, well-traveled friend who knows this destination deeply AND knows this traveler personally. ` +
-          `Use the traveler profile above to make every suggestion feel tailored — reference their food preferences, activity level, who they're traveling with. ` +
-          `Give a rich, enthusiastic overview — not a list, a conversation. Cover:\n` +
-          `  • The overall feel and why this trip is a great idea FOR THEM specifically\n` +
-          `  • A suggested route or flow (what order to visit things, if relevant)\n` +
-          `  • 2-4 specific places to see or do (with a sentence on why each fits this traveler)\n` +
-          `  • A standout restaurant or two that matches their food preferences\n` +
-          `  • A hotel recommendation or neighborhood to stay in that fits their style\n` +
-          `  • Any insider tip or timing note that would genuinely help\n` +
-          `Write this as flowing, enthusiastic prose — no bullet points, no headers. ` +
-          `Then end with 2-3 short, specific questions or options to go deeper — like:\n` +
-          `"Want me to build a full day-by-day itinerary for this?" or ` +
-          `"Want the foodie version or more of an outdoor adventure?" or ` +
-          `"Are you thinking relaxed or packed with activities?" ` +
-          `Keep the whole response under 250 words and make it feel exciting.`;
-      }
-
-    // ── Priority 3: Continuing an existing trip conversation ─────────────────────
-    } else if (isTripPlanFlowActive && pendingTripPlan) {
-      const { intent } = pendingTripPlan;
-
-      // ── User just answered "where are you thinking?" ────────────────────────
-      if (pendingTripPlan.phase === "clarify" && pendingTripPlan.missingField === "destination") {
-        const updatedIntent = parseTripIntent(message);
-        const dest = updatedIntent.destination || message.trim().replace(/[.!?]+$/, "").trim();
-        intent.destination = dest;
-        if (!intent.nights && updatedIntent.nights) intent.nights = updatedIntent.nights;
-
-        // Now give the conversational overview for this destination
-        setPendingTripPlan({ intent, phase: "overview" });
-        const vibeHint   = intent.vibe ? ` Vibe: "${intent.vibe}".` : "";
-        const nightsHint = intent.nights ? ` Roughly ${intent.nights} nights.` : "";
-        systemPrompt +=
-          `\n\n[Trip Planning — Conversational Overview: ${dest}]${vibeHint}${nightsHint}` +
-          (_travelProfile ? `\n${_travelProfile}` : "") + `\n` +
-          `TASK: Respond like a brilliant, well-traveled friend who knows ${dest} deeply AND knows this traveler personally. ` +
-          `Use the traveler profile above — tailor suggestions to their food preferences, travel companion, and interests. ` +
-          `Give a rich, enthusiastic overview — not a list, a conversation. Cover:\n` +
-          `  • The overall feel and why this trip is a great idea FOR THEM\n` +
-          `  • A suggested route or flow\n` +
-          `  • 2-4 specific places to see or do that match their interests\n` +
-          `  • A standout restaurant that fits their food preferences\n` +
-          `  • A hotel recommendation or neighborhood that fits their style\n` +
-          `  • An insider tip or timing note\n` +
-          `Write as flowing, enthusiastic prose — no bullet points. ` +
-          `Then end with 2-3 questions or options to go deeper, including "Want me to build a full day-by-day itinerary?" ` +
-          `Keep the whole response under 250 words and make it feel exciting.`;
-
-      // ── User provided nights after being asked ──────────────────────────────
-      } else if (pendingTripPlan.phase === "clarify" && pendingTripPlan.missingField === "nights") {
-        const nights = _parseNightsFromReply(message);
-        if (nights && nights >= 1 && nights <= 30) {
-          intent.nights = nights;
-          setPendingTripPlan({ intent, phase: "generating" });
-          await _generateAndInject(intent);
-        } else {
-          systemPrompt +=
-            `\n\n[Trip Planning — Clarify Duration]\n` +
-            `The user didn't give a clear trip length. Gently re-ask: "How many nights are you thinking for ${intent.destination}?"`;
-        }
-
-      // ── User is chatting about the trip (follow-up questions, details) ──────
-      } else if (pendingTripPlan.phase === "overview") {
-        // Keep the conversation going with destination context
-        systemPrompt +=
-          `\n\n[Trip Discussion — ${intent.destination}]\n` +
-          `You're in an ongoing trip conversation about ${intent.destination}. ` +
-          `Answer the user's question or comment naturally and helpfully, drawing on your knowledge of this destination. ` +
-          `Keep responses warm and conversational. If appropriate, you can mention that you can build a full ` +
-          `day-by-day itinerary whenever they're ready.`;
-
-      // ── Guard: second message arrived while formal itinerary is generating ──
-      } else if (pendingTripPlan.phase === "generating") {
-        systemPrompt +=
-          `\n\n[Trip Planning — In Progress]\n` +
-          `You're actively building a formal itinerary for ${intent.destination} right now. ` +
-          `Let the user know warmly in one sentence that you're still putting it together and it'll be ready in just a moment.`;
-      }
+    } catch (tripErr) {
+      req.log.warn({ err: tripErr }, "[TripPlan] Save intent handler failed — letting Claude respond naturally");
+      systemPrompt +=
+        `\n\n[Trip Itinerary — Generation Error]\n` +
+        `You tried to build an itinerary but hit an error. Apologize briefly and warmly, ` +
+        `say you ran into a hiccup and ask them to try again in a moment.`;
     }
   }
+
 
   if (isSportsRequest) {
     try {
