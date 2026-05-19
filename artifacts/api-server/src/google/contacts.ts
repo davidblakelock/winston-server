@@ -166,15 +166,25 @@ async function searchContactsLive(searchName: string, token: string): Promise<Co
     }>;
   };
 
-  const contacts: Contact[] = [];
+  // Scored contact — carries the raw org name separately for matching purposes.
+  type ScoredEntry = { contact: Contact; orgName: string };
+  const entries: ScoredEntry[] = [];
+
   for (const result of data.results ?? []) {
     const person = result.person;
     if (!person) continue;
+
+    // displayName may be the person's name OR the company name for org-only contacts.
     const displayName = person.names?.[0]?.displayName;
-    if (!displayName) continue;
+    const org = person.organizations?.[0];
+    const rawOrgName = org?.name ?? "";
+
+    // Need at least a displayName or an org name to be useful.
+    const effectiveName = displayName ?? rawOrgName;
+    if (!effectiveName) continue;
 
     const c: Contact = {
-      name: displayName,
+      name: effectiveName,
       resourceName: person.resourceName,
     };
 
@@ -182,10 +192,9 @@ async function searchContactsLive(searchName: string, token: string): Promise<Co
     if (person.phoneNumbers?.[0]?.value) c.phone = person.phoneNumbers[0].value;
     if (person.addresses?.[0]?.formattedValue) c.address = person.addresses[0].formattedValue;
 
-    // Organization: prefer "name (title)" if both exist, else just name
-    const org = person.organizations?.[0];
-    if (org?.name) {
-      c.organization = org.title ? `${org.name} — ${org.title}` : org.name;
+    // Organization: prefer "name — title" if both exist, else just name
+    if (rawOrgName) {
+      c.organization = org?.title ? `${rawOrgName} — ${org.title}` : rawOrgName;
     }
 
     // Website: first URL
@@ -209,30 +218,33 @@ async function searchContactsLive(searchName: string, token: string): Promise<Co
     // Notes / biography
     if (person.biographies?.[0]?.value) c.notes = person.biographies[0].value;
 
-    contacts.push(c);
+    entries.push({ contact: c, orgName: rawOrgName });
   }
 
-  // ── Best-match name filter ─────────────────────────────────────────────────
-  // The People API searches ALL contact fields (notes, tags, email, phone)
-  // so results can include people who merely mention the search name in a note.
-  // Strategy: score every result by how many search words appear in displayName,
-  // then keep ONLY those that tied for the highest score.
-  // If the top score is 0 (no result's name contains any search word) → return []
-  // so the caller treats it as "not found" and Claude says so honestly.
+  // ── Multi-field relevance filter ───────────────────────────────────────────
+  // The People API searches ALL contact fields, so results can include contacts
+  // who merely mention the search term in a note or tag.
+  // Score each result by how many search words appear across:
+  //   name, organization name, phone number, email address.
+  // Keep only results that tied for the highest score.
+  // Score of 0 across all fields → return [] so Claude says "not found" honestly.
   const searchWords = searchName.toLowerCase().split(/\s+/).filter((w) => w.length > 1);
-  if (searchWords.length === 0) return contacts;
+  if (searchWords.length === 0) return entries.map((e) => e.contact);
 
-  const scored = contacts.map((c) => ({
-    contact: c,
-    score: searchWords.filter((w) => c.name.toLowerCase().includes(w)).length,
-  }));
+  const scored = entries.map(({ contact: c, orgName }) => {
+    const fields = [
+      c.name.toLowerCase(),
+      orgName.toLowerCase(),
+      (c.phone ?? "").toLowerCase(),
+      (c.email ?? "").toLowerCase(),
+    ];
+    const score = searchWords.filter((w) => fields.some((f) => f.includes(w))).length;
+    return { contact: c, score };
+  });
 
   const maxScore = Math.max(...scored.map((s) => s.score), 0);
-  if (maxScore === 0) return []; // no name overlap at all — treat as no match
+  if (maxScore === 0) return []; // no match across any field — treat as not found
 
-  // Return all contacts that tied for the best score.
-  // If only one wins (typical for a full "First Last" search), caller gets one result.
-  // If multiple tie (e.g. two people named "Susan"), caller shows "which one?" prompt.
   return scored.filter((s) => s.score === maxScore).map((s) => s.contact);
 }
 
