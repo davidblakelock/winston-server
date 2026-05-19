@@ -16,7 +16,7 @@ export interface Contact {
 export interface ContactSearchResult {
   contacts: Contact[];
   needsReauth: boolean;
-  source: "live" | "curated" | "none";
+  source: "live" | "curated" | "connections" | "none";
 }
 
 // ── Table management ──────────────────────────────────────────────────────────
@@ -124,9 +124,84 @@ async function getAccessToken(): Promise<{ token: string; hasContactsScope: bool
   return null;
 }
 
+// ── Shared person-field type used by both search paths ────────────────────────
+type PersonResource = {
+  resourceName?: string;
+  names?: Array<{ displayName?: string }>;
+  emailAddresses?: Array<{ value?: string }>;
+  phoneNumbers?: Array<{ value?: string }>;
+  addresses?: Array<{ formattedValue?: string }>;
+  organizations?: Array<{ name?: string; title?: string }>;
+  urls?: Array<{ value?: string }>;
+  birthdays?: Array<{
+    date?: { year?: number; month?: number; day?: number };
+    text?: string;
+  }>;
+  biographies?: Array<{ value?: string }>;
+};
+
+/** Convert a raw People API person object into a Contact, or null if unusable. */
+function personResourceToContact(person: PersonResource): { contact: Contact; orgName: string } | null {
+  const displayName = person.names?.[0]?.displayName;
+  const org = person.organizations?.[0];
+  const rawOrgName = org?.name ?? "";
+  const effectiveName = displayName ?? rawOrgName;
+  if (!effectiveName) return null;
+
+  const c: Contact = { name: effectiveName, resourceName: person.resourceName };
+
+  if (person.emailAddresses?.[0]?.value) c.email = person.emailAddresses[0].value;
+  if (person.phoneNumbers?.[0]?.value)   c.phone = person.phoneNumbers[0].value;
+  if (person.addresses?.[0]?.formattedValue) c.address = person.addresses[0].formattedValue;
+  if (rawOrgName) c.organization = org?.title ? `${rawOrgName} — ${org.title}` : rawOrgName;
+  if (person.urls?.[0]?.value) c.website = person.urls[0].value;
+
+  const bday = person.birthdays?.[0];
+  if (bday) {
+    if (bday.text) {
+      c.birthday = bday.text;
+    } else if (bday.date) {
+      const { year, month, day } = bday.date;
+      const parts: string[] = [];
+      if (month) parts.push(String(month).padStart(2, "0"));
+      if (day)   parts.push(String(day).padStart(2, "0"));
+      if (year)  parts.unshift(String(year));
+      c.birthday = parts.join("-");
+    }
+  }
+
+  if (person.biographies?.[0]?.value) c.notes = person.biographies[0].value;
+
+  return { contact: c, orgName: rawOrgName };
+}
+
+/** Score and filter a list of contacts against search words across name/org/phone/email. */
+function scoreAndFilter(
+  entries: Array<{ contact: Contact; orgName: string }>,
+  searchWords: string[]
+): Contact[] {
+  if (searchWords.length === 0) return entries.map((e) => e.contact);
+
+  const scored = entries.map(({ contact: c, orgName }) => {
+    const fields = [
+      c.name.toLowerCase(),
+      orgName.toLowerCase(),
+      (c.phone ?? "").toLowerCase(),
+      (c.email ?? "").toLowerCase(),
+    ];
+    const score = searchWords.filter((w) => fields.some((f) => f.includes(w))).length;
+    return { contact: c, score };
+  });
+
+  const maxScore = Math.max(...scored.map((s) => s.score), 0);
+  if (maxScore === 0) return [];
+  return scored.filter((s) => s.score === maxScore).map((s) => s.contact);
+}
+
 // ── Live search via Google People API ─────────────────────────────────────────
 // Uses people:searchContacts — searches by name in real time.
-// No local cache involved. Results come directly from Google.
+// NOTE: This API does NOT index organization-only contacts (contacts with no
+// personal name). Falls back to searchConnectionsLocally for those cases.
 
 async function searchContactsLive(searchName: string, token: string): Promise<Contact[]> {
   const url = new URL("https://people.googleapis.com/v1/people:searchContacts");
@@ -147,105 +222,66 @@ async function searchContactsLive(searchName: string, token: string): Promise<Co
     return [];
   }
 
-  const data = await resp.json() as {
-    results?: Array<{
-      person?: {
-        resourceName?: string;
-        names?: Array<{ displayName?: string }>;
-        emailAddresses?: Array<{ value?: string }>;
-        phoneNumbers?: Array<{ value?: string }>;
-        addresses?: Array<{ formattedValue?: string }>;
-        organizations?: Array<{ name?: string; title?: string }>;
-        urls?: Array<{ value?: string }>;
-        birthdays?: Array<{
-          date?: { year?: number; month?: number; day?: number };
-          text?: string;
-        }>;
-        biographies?: Array<{ value?: string }>;
-      };
-    }>;
-  };
+  const data = await resp.json() as { results?: Array<{ person?: PersonResource }> };
 
-  // Scored contact — carries the raw org name separately for matching purposes.
-  type ScoredEntry = { contact: Contact; orgName: string };
-  const entries: ScoredEntry[] = [];
+  logger.info(`[CONTACTS] searchContacts raw results: ${data.results?.length ?? 0} for "${searchName}"`);
 
-  for (const result of data.results ?? []) {
-    const person = result.person;
-    if (!person) continue;
+  const entries = (data.results ?? [])
+    .map((r) => r.person ? personResourceToContact(r.person) : null)
+    .filter((e): e is NonNullable<typeof e> => e !== null);
 
-    // displayName may be the person's name OR the company name for org-only contacts.
-    const displayName = person.names?.[0]?.displayName;
-    const org = person.organizations?.[0];
-    const rawOrgName = org?.name ?? "";
+  const searchWords = searchName.toLowerCase().split(/\s+/).filter((w) => w.length > 1);
+  return scoreAndFilter(entries, searchWords);
+}
 
-    // Need at least a displayName or an org name to be useful.
-    const effectiveName = displayName ?? rawOrgName;
-    if (!effectiveName) continue;
+// ── Fallback: scan all connections locally ─────────────────────────────────────
+// Used when searchContactsLive returns nothing — covers org-only contacts that
+// Google's search index doesn't surface (no personal name, only organization).
+// Fetches up to 2 pages of 1000 contacts each (2000 total) and filters locally.
 
-    const c: Contact = {
-      name: effectiveName,
-      resourceName: person.resourceName,
+async function searchConnectionsLocally(searchName: string, token: string): Promise<Contact[]> {
+  const searchWords = searchName.toLowerCase().split(/\s+/).filter((w) => w.length > 1);
+  if (searchWords.length === 0) return [];
+
+  const persons: PersonResource[] = [];
+  let pageToken: string | undefined;
+  let pages = 0;
+
+  do {
+    const url = new URL("https://people.googleapis.com/v1/people/me/connections");
+    url.searchParams.set(
+      "personFields",
+      "names,emailAddresses,phoneNumbers,addresses,organizations,urls,birthdays,biographies"
+    );
+    url.searchParams.set("pageSize", "1000");
+    if (pageToken) url.searchParams.set("pageToken", pageToken);
+
+    const resp = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!resp.ok) {
+      logger.warn(`[CONTACTS] connections.list HTTP ${resp.status} during local search`);
+      break;
+    }
+
+    const data = await resp.json() as {
+      connections?: PersonResource[];
+      nextPageToken?: string;
+      totalPeople?: number;
     };
 
-    if (person.emailAddresses?.[0]?.value) c.email = person.emailAddresses[0].value;
-    if (person.phoneNumbers?.[0]?.value) c.phone = person.phoneNumbers[0].value;
-    if (person.addresses?.[0]?.formattedValue) c.address = person.addresses[0].formattedValue;
+    if (data.connections) persons.push(...data.connections);
+    pageToken = data.nextPageToken;
+    pages++;
+  } while (pageToken && pages < 2); // cap at 2000 contacts
 
-    // Organization: prefer "name — title" if both exist, else just name
-    if (rawOrgName) {
-      c.organization = org?.title ? `${rawOrgName} — ${org.title}` : rawOrgName;
-    }
+  logger.info(`[CONTACTS] connections.list loaded ${persons.length} contacts for local org search`);
 
-    // Website: first URL
-    if (person.urls?.[0]?.value) c.website = person.urls[0].value;
+  const entries = persons
+    .map((p) => personResourceToContact(p))
+    .filter((e): e is NonNullable<typeof e> => e !== null);
 
-    // Birthday: use text if present, else build from date parts
-    const bday = person.birthdays?.[0];
-    if (bday) {
-      if (bday.text) {
-        c.birthday = bday.text;
-      } else if (bday.date) {
-        const { year, month, day } = bday.date;
-        const parts: string[] = [];
-        if (month) parts.push(String(month).padStart(2, "0"));
-        if (day) parts.push(String(day).padStart(2, "0"));
-        if (year) parts.unshift(String(year));
-        c.birthday = year ? parts.join("-") : parts.join("-");
-      }
-    }
-
-    // Notes / biography
-    if (person.biographies?.[0]?.value) c.notes = person.biographies[0].value;
-
-    entries.push({ contact: c, orgName: rawOrgName });
-  }
-
-  // ── Multi-field relevance filter ───────────────────────────────────────────
-  // The People API searches ALL contact fields, so results can include contacts
-  // who merely mention the search term in a note or tag.
-  // Score each result by how many search words appear across:
-  //   name, organization name, phone number, email address.
-  // Keep only results that tied for the highest score.
-  // Score of 0 across all fields → return [] so Claude says "not found" honestly.
-  const searchWords = searchName.toLowerCase().split(/\s+/).filter((w) => w.length > 1);
-  if (searchWords.length === 0) return entries.map((e) => e.contact);
-
-  const scored = entries.map(({ contact: c, orgName }) => {
-    const fields = [
-      c.name.toLowerCase(),
-      orgName.toLowerCase(),
-      (c.phone ?? "").toLowerCase(),
-      (c.email ?? "").toLowerCase(),
-    ];
-    const score = searchWords.filter((w) => fields.some((f) => f.includes(w))).length;
-    return { contact: c, score };
-  });
-
-  const maxScore = Math.max(...scored.map((s) => s.score), 0);
-  if (maxScore === 0) return []; // no match across any field — treat as not found
-
-  return scored.filter((s) => s.score === maxScore).map((s) => s.contact);
+  return scoreAndFilter(entries, searchWords);
 }
 
 // ── Curated contact management ────────────────────────────────────────────────
@@ -333,14 +369,23 @@ export async function searchContacts(searchQuery: string, userName?: string): Pr
       return { contacts: [], needsReauth: true, source: "none" };
     }
 
-    const contacts = await searchContactsLive(searchQuery, tokenInfo.token);
+    let contacts = await searchContactsLive(searchQuery, tokenInfo.token);
+    let source: "live" | "connections" | "none" = contacts.length > 0 ? "live" : "none";
 
-    console.log(`[CONTACTS] Live search returned ${contacts.length} result(s) for "${searchQuery}":`);
-    contacts.forEach((c, i) => {
-      console.log(`[CONTACTS]   [${i + 1}] name="${c.name}" phone=${c.phone ?? "null"} email=${c.email ?? "null"}`);
-    });
+    // searchContacts doesn't index org-only contacts (no personal name field).
+    // Fall back to a local scan of all connections when the primary search misses.
+    if (contacts.length === 0) {
+      logger.info(`[CONTACTS] searchContacts returned 0 — trying local connections scan for "${searchQuery}"`);
+      contacts = await searchConnectionsLocally(searchQuery, tokenInfo.token);
+      source = contacts.length > 0 ? "connections" : "none";
+    }
 
-    return { contacts, needsReauth: false, source: contacts.length > 0 ? "live" : "none" };
+    logger.info(
+      { count: contacts.length, source },
+      `[CONTACTS] search complete for "${searchQuery}"`
+    );
+
+    return { contacts, needsReauth: false, source };
   } catch (err: unknown) {
     logger.error({ err }, "[CONTACTS] searchContacts failed");
     return { contacts: [], needsReauth: false, source: "none" };
