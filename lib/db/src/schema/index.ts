@@ -369,6 +369,25 @@ export const userIntegrations = pgTable(
   (t) => [uniqueIndex("user_integrations_user_provider").on(t.userName, t.provider)]
 );
 
+// ── Key People ───────────────────────────────────────────────────────────────
+export const keyPeople = pgTable(
+  "key_people",
+  {
+    id: serial("id").primaryKey(),
+    userName: text("user_name").notNull().default("David"),
+    name: text("name").notNull(),
+    relationship: text("relationship"),
+    phone: text("phone"),
+    email: text("email"),
+    birthday: date("birthday"),           // YYYY-MM-DD
+    anniversary: date("anniversary"),     // YYYY-MM-DD
+    notes: text("notes"),
+    googleContactId: text("google_contact_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).default(sql`now()`),
+  },
+  (t) => [index("key_people_user_name_idx").on(t.userName)]
+);
+
 // ── User Profiles (onboarding) ──────────────────────────────────────────────
 export const userProfiles = pgTable("user_profiles", {
   id: serial("id").primaryKey(),

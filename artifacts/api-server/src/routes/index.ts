@@ -33,6 +33,7 @@ import travelRouter from "./travel";
 import ttsRouter from "./tts";
 import locationRouter from "./location";
 import providersRouter from "./providers";
+import peopleRouter from "./people";
 
 const router: IRouter = Router();
 
@@ -70,5 +71,6 @@ router.use(travelRouter);
 router.use(ttsRouter);
 router.use(locationRouter);
 router.use(providersRouter);
+router.use(peopleRouter);
 
 export default router;
