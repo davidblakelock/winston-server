@@ -35,6 +35,31 @@ export async function ensureServiceProvidersTable(): Promise<void> {
       created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+
+  // Remove duplicates (keep oldest per user/name/phone) then enforce uniqueness.
+  // Runs idempotently — safe on every startup.
+  await query(`
+    DELETE FROM service_providers
+    WHERE id NOT IN (
+      SELECT MIN(id)
+      FROM service_providers
+      GROUP BY user_name, lower(name), phone
+    )
+  `).catch(() => {});
+
+  await query(`
+    DO $$ BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_indexes
+        WHERE tablename = 'service_providers'
+          AND indexname = 'service_providers_user_name_idx'
+      ) THEN
+        CREATE UNIQUE INDEX service_providers_user_name_idx
+          ON service_providers (user_name, lower(name), phone);
+      END IF;
+    END $$
+  `).catch(() => {});
+
   logger.info("[Providers] service_providers table ready");
 }
 
