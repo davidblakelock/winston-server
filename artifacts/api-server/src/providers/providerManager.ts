@@ -8,8 +8,11 @@ export interface ServiceProvider {
   userName: string;
   name: string;
   category: ProviderCategory;
+  specialty: string | null;
   phone: string | null;
   email: string | null;
+  address: string | null;
+  website: string | null;
   company: string | null;
   notes: string | null;
   lastContactDate: string | null;
@@ -25,8 +28,11 @@ export async function ensureServiceProvidersTable(): Promise<void> {
       user_name         TEXT NOT NULL,
       name              TEXT NOT NULL,
       category          TEXT NOT NULL DEFAULT 'personal',
+      specialty         TEXT,
       phone             TEXT,
       email             TEXT,
+      address           TEXT,
+      website           TEXT,
       company           TEXT,
       notes             TEXT,
       last_contact_date DATE,
@@ -35,6 +41,14 @@ export async function ensureServiceProvidersTable(): Promise<void> {
       created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+
+  // Add new columns to existing tables (idempotent)
+  await query(`
+    ALTER TABLE service_providers
+      ADD COLUMN IF NOT EXISTS specialty TEXT,
+      ADD COLUMN IF NOT EXISTS address   TEXT,
+      ADD COLUMN IF NOT EXISTS website   TEXT
+  `).catch(() => {});
 
   // Remove duplicates (keep oldest per user/name/phone) then enforce uniqueness.
   // Runs idempotently — safe on every startup.
@@ -65,28 +79,38 @@ export async function ensureServiceProvidersTable(): Promise<void> {
 
 function rowToProvider(r: {
   id: number; user_name: string; name: string; category: string;
-  phone: string | null; email: string | null; company: string | null;
-  notes: string | null; last_contact_date: string | null; next_due_date: string | null;
+  specialty: string | null; phone: string | null; email: string | null;
+  address: string | null; website: string | null;
+  company: string | null; notes: string | null;
+  last_contact_date: string | null; next_due_date: string | null;
   google_contact_id: string | null; created_at: string;
 }): ServiceProvider {
   return {
     id: r.id, userName: r.user_name, name: r.name,
-    category: r.category as ProviderCategory, phone: r.phone, email: r.email,
-    company: r.company, notes: r.notes, lastContactDate: r.last_contact_date,
-    nextDueDate: r.next_due_date, googleContactId: r.google_contact_id, createdAt: r.created_at,
+    category: r.category as ProviderCategory,
+    specialty: r.specialty, phone: r.phone, email: r.email,
+    address: r.address, website: r.website,
+    company: r.company, notes: r.notes,
+    lastContactDate: r.last_contact_date,
+    nextDueDate: r.next_due_date,
+    googleContactId: r.google_contact_id,
+    createdAt: r.created_at,
   };
 }
 
 type ProviderRow = {
   id: number; user_name: string; name: string; category: string;
-  phone: string | null; email: string | null; company: string | null;
-  notes: string | null; last_contact_date: string | null; next_due_date: string | null;
+  specialty: string | null; phone: string | null; email: string | null;
+  address: string | null; website: string | null;
+  company: string | null; notes: string | null;
+  last_contact_date: string | null; next_due_date: string | null;
   google_contact_id: string | null; created_at: string;
 };
 
 const SELECT_COLS = `
-  id, user_name, name, category, phone, email, company, notes,
-  last_contact_date::text, next_due_date::text, google_contact_id, created_at::text
+  id, user_name, name, category, specialty, phone, email, address, website,
+  company, notes, last_contact_date::text, next_due_date::text,
+  google_contact_id, created_at::text
 `;
 
 export async function getProviders(
@@ -117,8 +141,11 @@ export async function createProvider(
   data: {
     name: string;
     category: ProviderCategory;
+    specialty?: string | null;
     phone?: string | null;
     email?: string | null;
+    address?: string | null;
+    website?: string | null;
     company?: string | null;
     notes?: string | null;
     lastContactDate?: string | null;
@@ -146,14 +173,18 @@ export async function createProvider(
 
   const { rows } = await query<ProviderRow>(
     `INSERT INTO service_providers
-       (user_name, name, category, phone, email, company, notes,
-        last_contact_date, next_due_date, google_contact_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+       (user_name, name, category, specialty, phone, email, address, website,
+        company, notes, last_contact_date, next_due_date, google_contact_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
      RETURNING ${SELECT_COLS}`,
     [
       userName, data.name, data.category,
-      data.phone ?? null, data.email ?? null, data.company ?? null, data.notes ?? null,
-      data.lastContactDate ?? null, data.nextDueDate ?? null, data.googleContactId ?? null,
+      data.specialty ?? null,
+      data.phone ?? null, data.email ?? null,
+      data.address ?? null, data.website ?? null,
+      data.company ?? null, data.notes ?? null,
+      data.lastContactDate ?? null, data.nextDueDate ?? null,
+      data.googleContactId ?? null,
     ]
   );
   return rowToProvider(rows[0]!);
@@ -164,8 +195,11 @@ export async function updateProvider(
   userName: string,
   data: Partial<{
     name: string; category: ProviderCategory;
-    phone: string | null; email: string | null; company: string | null;
-    notes: string | null; lastContactDate: string | null; nextDueDate: string | null;
+    specialty: string | null;
+    phone: string | null; email: string | null;
+    address: string | null; website: string | null;
+    company: string | null; notes: string | null;
+    lastContactDate: string | null; nextDueDate: string | null;
     googleContactId: string | null;
   }>
 ): Promise<ServiceProvider | null> {
@@ -175,8 +209,11 @@ export async function updateProvider(
 
   if (data.name !== undefined)            { sets.push(`name = $${idx++}`);              vals.push(data.name); }
   if (data.category !== undefined)        { sets.push(`category = $${idx++}`);          vals.push(data.category); }
+  if (data.specialty !== undefined)       { sets.push(`specialty = $${idx++}`);         vals.push(data.specialty); }
   if (data.phone !== undefined)           { sets.push(`phone = $${idx++}`);             vals.push(data.phone); }
   if (data.email !== undefined)           { sets.push(`email = $${idx++}`);             vals.push(data.email); }
+  if (data.address !== undefined)         { sets.push(`address = $${idx++}`);           vals.push(data.address); }
+  if (data.website !== undefined)         { sets.push(`website = $${idx++}`);           vals.push(data.website); }
   if (data.company !== undefined)         { sets.push(`company = $${idx++}`);           vals.push(data.company); }
   if (data.notes !== undefined)           { sets.push(`notes = $${idx++}`);             vals.push(data.notes); }
   if (data.lastContactDate !== undefined) { sets.push(`last_contact_date = $${idx++}`); vals.push(data.lastContactDate); }

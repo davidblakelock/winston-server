@@ -44,7 +44,7 @@ router.post(
     if (!userName) return;
 
     const body = req.body as Record<string, unknown>;
-    const { name, category, phone, email, company, notes, lastContactDate, nextDueDate, googleContactId } = body;
+    const { name, category, specialty, phone, email, address, website, company, notes, lastContactDate, nextDueDate, googleContactId } = body;
 
     if (!name || typeof name !== "string" || name.trim().length === 0) {
       res.status(400).json({ error: "name is required" });
@@ -56,8 +56,11 @@ router.post(
       const provider = await createProvider(userName, {
         name: name.trim(),
         category: cat,
+        specialty: typeof specialty === "string" ? specialty.trim() || null : null,
         phone: typeof phone === "string" ? phone.trim() || null : null,
         email: typeof email === "string" ? email.trim() || null : null,
+        address: typeof address === "string" ? address.trim() || null : null,
+        website: typeof website === "string" ? website.trim() || null : null,
         company: typeof company === "string" ? company.trim() || null : null,
         notes: typeof notes === "string" ? notes.trim() || null : null,
         lastContactDate: typeof lastContactDate === "string" ? lastContactDate : null,
@@ -93,8 +96,11 @@ router.put(
 
     if (body["name"] !== undefined)            updates.name            = String(body["name"]).trim();
     if (body["category"] !== undefined)        updates.category        = isValidCategory(body["category"]) ? body["category"] : "personal";
+    if (body["specialty"] !== undefined)       updates.specialty       = body["specialty"] ? String(body["specialty"]) : null;
     if (body["phone"] !== undefined)           updates.phone           = body["phone"] ? String(body["phone"]) : null;
     if (body["email"] !== undefined)           updates.email           = body["email"] ? String(body["email"]) : null;
+    if (body["address"] !== undefined)         updates.address         = body["address"] ? String(body["address"]) : null;
+    if (body["website"] !== undefined)         updates.website         = body["website"] ? String(body["website"]) : null;
     if (body["company"] !== undefined)         updates.company         = body["company"] ? String(body["company"]) : null;
     if (body["notes"] !== undefined)           updates.notes           = body["notes"] ? String(body["notes"]) : null;
     if (body["lastContactDate"] !== undefined) updates.lastContactDate = body["lastContactDate"] ? String(body["lastContactDate"]) : null;
