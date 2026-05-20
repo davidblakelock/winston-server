@@ -94,11 +94,11 @@ router.post("/bills/remind-tomorrow", express.json({ limit: "1mb" }), async (req
     const name = billName?.trim() || `Bill #${billId}`;
     const amtPart = amount ? ` of ${amount}` : "";
 
-    // Schedule for 9 AM tomorrow (Central Time)
+    // Schedule for 8 AM tomorrow (Central Time)
     const now = new Date();
     const tomorrowCT = new Date(now.toLocaleString("en-US", { timeZone: "America/Chicago" }));
     tomorrowCT.setDate(tomorrowCT.getDate() + 1);
-    tomorrowCT.setHours(9, 0, 0, 0);
+    tomorrowCT.setHours(8, 0, 0, 0);
     // Convert back to UTC-aware Date by building ISO string with offset
     const fireAt = new Date(
       tomorrowCT.toLocaleString("en-US", { timeZone: "UTC" })
@@ -146,6 +146,63 @@ router.post("/bills/:id/paid", async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "[BILLS] POST /bills/:id/paid error");
     res.status(500).json({ error: "Failed to mark bill as paid" });
+  }
+});
+
+// ── POST /api/bills/:id/remind-tomorrow ───────────────────────────────────────
+// REST-style endpoint for the "Remind Tomorrow" notification action button.
+// Schedules a push reminder for 8 AM CT tomorrow. App stays closed.
+// Response: { ok: true, reminderId: number, fireAt: string (ISO) }
+router.post("/bills/:id/remind-tomorrow", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const id = parseInt(String(req.params["id"] ?? ""), 10);
+  if (isNaN(id)) {
+    res.status(400).json({ error: "invalid bill id" });
+    return;
+  }
+
+  try {
+    const bills = await getBills(userName);
+    const bill = bills.find((b) => b.id === id);
+    if (!bill) {
+      res.status(404).json({ error: "Bill not found" });
+      return;
+    }
+
+    const nextDueDate = computeNextDueDate(bill);
+    const dueDateStr = nextDueDate.toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+
+    // Schedule for 8 AM tomorrow (Central Time)
+    const now = new Date();
+    const tomorrowCT = new Date(now.toLocaleString("en-US", { timeZone: "America/Chicago" }));
+    tomorrowCT.setDate(tomorrowCT.getDate() + 1);
+    tomorrowCT.setHours(8, 0, 0, 0);
+    const fireAt = new Date(tomorrowCT.toLocaleString("en-US", { timeZone: "UTC" }));
+
+    const amtPart = bill.amount ? ` of ${bill.amount}` : "";
+    const reminder = await createReminder({
+      userName,
+      reminderText: `Your ${bill.name}${amtPart} payment — have you paid it yet?`,
+      fireAt,
+      timezone: "America/Chicago",
+      pushCategoryId: "bill-action",
+      pushData: {
+        companionMessage: JSON.stringify({ billId: id, billName: bill.name, amount: bill.amount ?? "" }),
+        billId: id,
+        dueDateISO: dueDateStr,
+      },
+    });
+
+    req.log.info(
+      { userName, billId: id, reminderId: reminder.id, fireAt: fireAt.toISOString() },
+      "[BILLS] Remind-tomorrow reminder created via REST action button"
+    );
+    res.json({ ok: true, reminderId: reminder.id, fireAt: fireAt.toISOString() });
+  } catch (err) {
+    req.log.error({ err }, "[BILLS] POST /bills/:id/remind-tomorrow error");
+    res.status(500).json({ error: "Failed to schedule tomorrow reminder" });
   }
 });
 
