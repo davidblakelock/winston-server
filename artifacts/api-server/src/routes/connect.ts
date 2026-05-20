@@ -21,6 +21,7 @@ import {
   createGroup,
   getGroupsForUser,
   getGroup,
+  getGroupWithMemberDetails,
   addGroupMember,
   removeGroupMember,
   deleteGroup,
@@ -28,7 +29,7 @@ import {
   saveGroupMessage,
 } from "../connect/groupManager.js";
 import { sendPushToAll } from "../push/pushManager.js";
-import { fetchWeekEvents, createCalendarEvent } from "../google/calendar.js";
+import { fetchEventsForDateRange, createCalendarEvent } from "../google/calendar.js";
 
 const router = Router();
 
@@ -355,6 +356,35 @@ router.get("/connect/groups", async (req: Request, res: Response) => {
   }
 });
 
+// ── GET /api/connect/groups/:id ───────────────────────────────────────────────
+
+router.get("/connect/groups/:id", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const groupId = parseInt(req.params.id ?? "", 10);
+  if (isNaN(groupId)) {
+    res.status(400).json({ error: "Invalid group id" });
+    return;
+  }
+
+  try {
+    const group = await getGroupWithMemberDetails(groupId);
+    if (!group) {
+      res.status(404).json({ error: "Group not found" });
+      return;
+    }
+    if (!group.members.includes(userName)) {
+      res.status(403).json({ error: "Not a group member" });
+      return;
+    }
+    res.json({ group });
+  } catch (err) {
+    req.log.error({ err }, "[Groups] Failed to get group detail");
+    res.status(500).json({ error: "Failed to get group" });
+  }
+});
+
 // ── POST /api/connect/groups/:id/add-member ───────────────────────────────────
 // Body: { userName: string }
 
@@ -611,19 +641,32 @@ router.post("/connect/groups/:id/find-time", async (req: Request, res: Response)
   }
 
   try {
-    const group = await getGroup(groupId);
+    const group = await getGroupWithMemberDetails(groupId);
     if (!group) {
       res.status(404).json({ error: "Group not found" });
       return;
     }
 
-    // Fetch each member's events in parallel; skip members without Google Calendar
+    if (!group.members.includes(userName)) {
+      res.status(403).json({ error: "Not a group member" });
+      return;
+    }
+
+    // Split members: those with Google Calendar vs. those without
+    const withCalendar: string[] = [];
+    const withoutCalendar: string[] = [];
+    for (const m of group.memberDetails) {
+      if (m.winstonConnected) withCalendar.push(m.username);
+      else withoutCalendar.push(m.username);
+    }
+
+    // Fetch busy blocks for the requested date range (not just the current week)
     const memberBusyMap = new Map<string, Array<{ start: number; end: number }>>();
 
     await Promise.allSettled(
-      group.members.map(async (member) => {
+      withCalendar.map(async (member) => {
         try {
-          const events = await fetchWeekEvents(false, member);
+          const events = await fetchEventsForDateRange(startDate, endDate, member);
           if (!events) return;
           const busy: Array<{ start: number; end: number }> = [];
           for (const ev of events) {
@@ -632,29 +675,67 @@ router.post("/connect/groups/:id/find-time", async (req: Request, res: Response)
           }
           memberBusyMap.set(member, busy);
         } catch {
-          // Member has no Google Calendar — exclude from scheduling
+          // No calendar data available — skip
         }
       })
     );
 
-    // Generate candidate slots (9am–6pm CST, every 30 min) across the date range
-    const slots: Array<{ start: string; end: string; label: string }> = [];
-    const start = new Date(startDate + "T00:00:00");
-    const end = new Date(endDate + "T23:59:59");
+    // Send push to members without Google Calendar asking them to share availability
+    if (withoutCalendar.length > 0) {
+      const requesterDetail = group.memberDetails.find((m) => m.username === userName);
+      const requesterName = requesterDetail?.name ?? userName;
+      await Promise.allSettled(
+        withoutCalendar
+          .filter((m) => m !== userName)
+          .map((m) =>
+            sendPushToAll(
+              {
+                title: `${group.name} — Scheduling`,
+                body: `${requesterName} is looking for a time that works for everyone. Please reply with your availability for ${startDate} – ${endDate}.`,
+                tag: `group-${groupId}-findtime-${Date.now()}`,
+                notificationType: "connect-message",
+                companionMessage: `${requesterName} wants to find a meeting time for "${group.name}" (${startDate} – ${endDate}). Check with them directly about your availability.`,
+                requireInteraction: true,
+              },
+              m
+            )
+          )
+      );
+    }
+
+    // Generate candidate slots (9am–6pm CT, every 30 min) across the date range
     const dur = (durationMinutes ?? 60) * 60 * 1000;
     const participatingMembers = [...memberBusyMap.keys()];
+    const allSlots: Array<{ start: string; end: string; label: string }> = [];
 
-    const cursor = new Date(start);
-    while (cursor <= end && slots.length < 20) {
-      // 9am CST = 15:00 UTC (CDT) or 14:00 CST
-      const dayStart = new Date(cursor);
-      dayStart.setUTCHours(14, 0, 0, 0); // 9am CST
+    // Walk day by day from startDate to endDate
+    const rangeStart = new Date(startDate + "T12:00:00Z");
+    const rangeEnd = new Date(endDate + "T12:00:00Z");
 
-      const dayEnd = new Date(cursor);
-      dayEnd.setUTCHours(23, 0, 0, 0); // 6pm CST
+    for (
+      const cursor = new Date(rangeStart);
+      cursor <= rangeEnd && allSlots.length < 50;
+      cursor.setUTCDate(cursor.getUTCDate() + 1)
+    ) {
+      // Skip Sundays (0) — keep Mon–Sat; adjust to taste
+      const ctDate = new Date(cursor.toLocaleString("en-US", { timeZone: "America/Chicago" }));
+      if (ctDate.getDay() === 0) continue;
 
-      let slotStart = dayStart.getTime();
-      while (slotStart + dur <= dayEnd.getTime() && slots.length < 20) {
+      // CT midnight of this day
+      const ctDateStr = cursor.toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+      const ctParts = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", timeZoneName: "shortOffset" })
+        .formatToParts(cursor);
+      const offsetStr = ctParts.find((p) => p.type === "timeZoneName")?.value ?? "GMT-5";
+      const offsetHours = parseInt(offsetStr.replace("GMT", "") || "-5", 10);
+      const utcHour = String(-offsetHours).padStart(2, "0");
+      const ctMidnight = new Date(`${ctDateStr}T${utcHour}:00:00.000Z`);
+
+      // 9am CT = ctMidnight + 9h, 6pm CT = ctMidnight + 18h
+      const dayStart = ctMidnight.getTime() + 9 * 3600000;
+      const dayEnd = ctMidnight.getTime() + 18 * 3600000;
+
+      let slotStart = dayStart;
+      while (slotStart + dur <= dayEnd && allSlots.length < 50) {
         const slotEnd = slotStart + dur;
         let isFree = true;
 
@@ -679,26 +760,28 @@ router.post("/connect/groups/:id/find-time", async (req: Request, res: Response)
             hour: "numeric",
             minute: "2-digit",
           });
-          slots.push({
-            start: startDt.toISOString(),
-            end: endDt.toISOString(),
-            label,
-          });
+          allSlots.push({ start: startDt.toISOString(), end: endDt.toISOString(), label });
         }
-        slotStart += 30 * 60 * 1000; // advance 30 min
+        slotStart += 30 * 60 * 1000;
       }
-      cursor.setDate(cursor.getDate() + 1);
     }
 
+    // Return top 3 free slots
+    const suggestedSlots = allSlots.slice(0, 3);
+
     req.log.info(
-      { groupId, slotsFound: slots.length, membersChecked: participatingMembers.length },
+      { groupId, slotsFound: suggestedSlots.length, membersChecked: participatingMembers.length, notified: withoutCalendar.length },
       "[Groups] find-time complete"
     );
     res.json({
       group: group.name,
-      membersChecked: participatingMembers,
+      membersWithCalendar: withCalendar,
+      membersWithoutCalendar: withoutCalendar,
       durationMinutes,
-      availableSlots: slots,
+      suggestedSlots,
+      note: withoutCalendar.length > 0
+        ? `${withoutCalendar.length} member(s) without Google Calendar have been notified to share their availability.`
+        : undefined,
     });
   } catch (err) {
     req.log.error({ err }, "[Groups] Failed to find time");

@@ -64,6 +64,17 @@ export interface ConnectGroupWithMembers extends ConnectGroup {
   members: string[];
 }
 
+export interface ConnectGroupMemberDetail {
+  username: string;
+  name: string;
+  winstonConnected: boolean;
+}
+
+export interface ConnectGroupWithMemberDetails extends ConnectGroup {
+  members: string[];
+  memberDetails: ConnectGroupMemberDetail[];
+}
+
 // ── Group CRUD ────────────────────────────────────────────────────────────────
 
 export async function createGroup(
@@ -201,6 +212,53 @@ export async function renameGroup(
   );
   logger.info({ groupId, newName }, "[Groups] Group renamed");
   return rows[0] ?? null;
+}
+
+// ── Enriched group detail ─────────────────────────────────────────────────────
+
+async function memberHasGoogleCalendar(userName: string): Promise<boolean> {
+  const { rows } = await query<{ id: number }>(
+    `SELECT 1 AS id FROM user_integrations
+     WHERE user_name = $1 AND provider = 'google'
+       AND (access_token IS NOT NULL OR refresh_token IS NOT NULL)
+     LIMIT 1`,
+    [userName]
+  ).catch(() => ({ rows: [] as Array<{ id: number }> }));
+  if (rows.length > 0) return true;
+  const { rows: ga } = await query<{ id: number }>(
+    `SELECT 1 AS id FROM google_auth
+     WHERE user_name = $1
+       AND (access_token IS NOT NULL OR refresh_token IS NOT NULL)
+     LIMIT 1`,
+    [userName]
+  ).catch(() => ({ rows: [] as Array<{ id: number }> }));
+  return ga.length > 0;
+}
+
+export async function getGroupWithMemberDetails(
+  groupId: number
+): Promise<ConnectGroupWithMemberDetails | null> {
+  const group = await getGroup(groupId);
+  if (!group) return null;
+
+  const memberDetails = await Promise.all(
+    group.members.map(async (username) => {
+      const [profileRows, hasCalendar] = await Promise.all([
+        query<{ name: string | null }>(
+          `SELECT name FROM user_profiles WHERE user_name = $1 ORDER BY id DESC LIMIT 1`,
+          [username]
+        ).then((r) => r.rows),
+        memberHasGoogleCalendar(username),
+      ]);
+      return {
+        username,
+        name: profileRows[0]?.name ?? username,
+        winstonConnected: hasCalendar,
+      };
+    })
+  );
+
+  return { ...group, memberDetails };
 }
 
 export async function saveGroupMessage(

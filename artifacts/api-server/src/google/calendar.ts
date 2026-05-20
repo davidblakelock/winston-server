@@ -322,6 +322,33 @@ export async function fetchWeekEvents(filterPast = true, userName?: string): Pro
   return filterPast ? events.filter((event) => !isEventInPast(event)) : events;
 }
 
+/**
+ * Fetch events across an arbitrary date range (YYYY-MM-DD).
+ * Uses CT midnight as the time window boundaries.
+ * Returns null if the user has no Google Calendar auth.
+ */
+export async function fetchEventsForDateRange(
+  startDate: string,
+  endDate: string,
+  userName?: string
+): Promise<CalendarEvent[] | null> {
+  const auth = await resolveAuthClient(userName);
+  if (!auth) return null;
+
+  const calendar = google.calendar({ version: "v3", auth });
+  const now = new Date();
+  const todayStr = getLocalYMD(now);
+  const tomorrowStr = getLocalYMD(new Date(now.getTime() + 86400000));
+
+  // Use noon UTC so chicagoDateStr maps to the correct CT calendar date
+  const timeMin = ctMidnightOf(new Date(startDate + "T12:00:00Z")).toISOString();
+  const timeMax = new Date(
+    ctMidnightOf(new Date(endDate + "T12:00:00Z")).getTime() + 86400000
+  ).toISOString();
+
+  return fetchEventsFromAllCalendars(calendar, timeMin, timeMax, todayStr, tomorrowStr, 200);
+}
+
 export function formatCalendarForPrompt(events: CalendarEvent[], label = "today"): string {
   if (events.length === 0) {
     return `Calendar is clear ${label} — nothing scheduled.`;
