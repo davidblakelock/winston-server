@@ -3,10 +3,10 @@ import { logger } from "../lib/logger.js";
 import { getActiveUsers } from "../onboarding/onboardingManager.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
 import { sendPushToAll } from "../push/pushManager.js";
+import { query } from "../db.js";
 import {
   getBills,
   computeNextDueDate,
-  markReminded,
   buildBillReminderMessage,
   type UpcomingBill,
 } from "./billManager.js";
@@ -76,11 +76,24 @@ async function checkBillReminders(): Promise<void> {
       // Only notify within the lead window
       if (daysUntil < 0 || daysUntil > bill.reminderLeadDays) continue;
 
-      // Skip if already reminded today
-      if (bill.lastRemindedDate === today) {
+      // Atomically claim the send slot in the DB BEFORE pushing.
+      // This prevents double-fires across server restarts: if the UPDATE returns
+      // 0 rows, another process (or a prior run in the same day) already claimed
+      // it — skip. If it returns 1 row, we own the send and can safely push.
+      // This replaces the old read-then-write pattern which could race across
+      // restarts because _lastCheckedDate is in-memory and resets on each deploy.
+      const claimed = await query<{ id: number }>(
+        `UPDATE financial_obligations
+            SET last_reminded_date = $1
+          WHERE id = $2
+            AND (last_reminded_date IS NULL OR last_reminded_date < $1)
+          RETURNING id`,
+        [today, bill.id]
+      );
+      if (!claimed.rows.length) {
         logger.info(
           { billId: bill.id, name: bill.name, userName },
-          "[BILLS] Already reminded today — skipping"
+          "[BILLS] Already reminded today (atomic DB claim) — skipping"
         );
         continue;
       }
@@ -115,10 +128,6 @@ async function checkBillReminders(): Promise<void> {
           }),
         },
         userName
-      );
-
-      await markReminded(bill.id, today).catch((err) =>
-        logger.warn({ err, billId: bill.id }, "[BILLS] Failed to mark reminded")
       );
 
       logger.info(

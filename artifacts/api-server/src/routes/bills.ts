@@ -7,6 +7,22 @@ import { scanForBillAnomalies } from "../bills/billAnomalyScanner.js";
 
 const router: IRouter = Router();
 
+// ── Timezone helper ───────────────────────────────────────────────────────────
+// Returns a UTC Date that represents `hourCT:00:00` in America/Chicago on `dateStr`.
+// Works correctly for both CDT (UTC-5) and CST (UTC-6) by probing the actual
+// Intl offset rather than hardcoding it — immune to DST transitions.
+function fireAtCT(dateStr: string, hourCT: number): Date {
+  // Start with a naive UTC guess (treat CT time as UTC).
+  const approxUtc = new Date(`${dateStr}T${String(hourCT).padStart(2, "0")}:00:00.000Z`);
+  // Ask Intl what CT hour that UTC moment corresponds to.
+  const ctHour = parseInt(
+    approxUtc.toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "2-digit", hour12: false }),
+    10
+  );
+  // Shift by the difference to land on the correct UTC equivalent.
+  return new Date(approxUtc.getTime() + (hourCT - ctHour) * 3_600_000);
+}
+
 // ── POST /api/bills/mark-paid ─────────────────────────────────────────────────
 // Called by the native app when the user taps "Mark Paid ✓" on the bill
 // notification action button. Logs the bill as paid and suppresses further
@@ -95,14 +111,9 @@ router.post("/bills/remind-tomorrow", express.json({ limit: "1mb" }), async (req
     const amtPart = amount ? ` of ${amount}` : "";
 
     // Schedule for 8 AM tomorrow (Central Time)
-    const now = new Date();
-    const tomorrowCT = new Date(now.toLocaleString("en-US", { timeZone: "America/Chicago" }));
-    tomorrowCT.setDate(tomorrowCT.getDate() + 1);
-    tomorrowCT.setHours(8, 0, 0, 0);
-    // Convert back to UTC-aware Date by building ISO string with offset
-    const fireAt = new Date(
-      tomorrowCT.toLocaleString("en-US", { timeZone: "UTC" })
-    );
+    const tomorrowDateStr = new Date(Date.now() + 86_400_000)
+      .toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+    const fireAt = fireAtCT(tomorrowDateStr, 8);
 
     const reminder = await createReminder({
       userName,
@@ -175,11 +186,9 @@ router.post("/bills/:id/remind-tomorrow", async (req, res) => {
     const dueDateStr = nextDueDate.toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
 
     // Schedule for 8 AM tomorrow (Central Time)
-    const now = new Date();
-    const tomorrowCT = new Date(now.toLocaleString("en-US", { timeZone: "America/Chicago" }));
-    tomorrowCT.setDate(tomorrowCT.getDate() + 1);
-    tomorrowCT.setHours(8, 0, 0, 0);
-    const fireAt = new Date(tomorrowCT.toLocaleString("en-US", { timeZone: "UTC" }));
+    const tomorrowDateStr2 = new Date(Date.now() + 86_400_000)
+      .toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+    const fireAt = fireAtCT(tomorrowDateStr2, 8);
 
     const amtPart = bill.amount ? ` of ${bill.amount}` : "";
     const reminder = await createReminder({
@@ -234,13 +243,8 @@ router.post("/bills/:id/remind-due-date", async (req, res) => {
     const nextDueDate = computeNextDueDate(bill);
     const dueDateStr = nextDueDate.toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
 
-    // Build a fire time of 9 AM CT on the due date using the same pattern as
-    // remind-tomorrow so timezone handling is consistent across the codebase.
-    const tempCT = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Chicago" }));
-    const [y, m, d] = dueDateStr.split("-").map(Number);
-    tempCT.setFullYear(y, m - 1, d);
-    tempCT.setHours(9, 0, 0, 0);
-    const fireAt = new Date(tempCT.toLocaleString("en-US", { timeZone: "UTC" }));
+    // Build a fire time of 9 AM CT on the due date.
+    const fireAt = fireAtCT(dueDateStr, 9);
 
     const amtPart = bill.amount ? ` of ${bill.amount}` : "";
     const reminder = await createReminder({

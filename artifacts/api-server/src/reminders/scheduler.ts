@@ -54,7 +54,6 @@ export function startScheduler(): void {
         const speakText = `Hey ${reminder.user_name}, your reminder: ${reminder.reminder_text}.`;
 
         // ── 2. Broadcast via SSE to EVERY connected device for this user ──
-        console.log("SCHEDULER: firing reminder id", reminder.id, "text:", reminder.reminder_text);
         broadcastToUser(reminder.user_name, "reminder", {
           id: reminder.id,
           userName: reminder.user_name,
