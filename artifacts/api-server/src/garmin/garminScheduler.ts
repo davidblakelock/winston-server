@@ -66,7 +66,7 @@ async function syncAllFitUsers(): Promise<void> {
 }
 
 export function startGarminScheduler(): void {
-  cron.schedule("* * * * *", async () => {
+  cron.schedule("5 * * * * *", async () => {
     try {
       const t = localTime();
       const today = new Date().toLocaleDateString("en-CA", { timeZone: TZ });

@@ -22,7 +22,7 @@ interface ReminderRow {
 
 
 export function startScheduler(): void {
-  cron.schedule("* * * * *", async () => {
+  cron.schedule("15 * * * * *", async () => {
     try {
       // Select only 'pending' reminders whose fire_at has passed.
       // Using status = 'pending' (not last_fired_at) is the definitive guard against
