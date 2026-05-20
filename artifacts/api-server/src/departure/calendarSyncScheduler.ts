@@ -564,26 +564,36 @@ async function runDepartureAlerts(): Promise<void> {
 
 export function startCalendarSyncScheduler(): void {
   // New-event / moved-event detection — every 5 minutes
+  let _syncRunning = false;
   cron.schedule(
     "*/5 7-22 * * *",
     async () => {
+      if (_syncRunning) return;
+      _syncRunning = true;
       try {
         await runCalendarSync();
       } catch (err) {
         logger.error({ err }, "Calendar sync scheduler error");
+      } finally {
+        _syncRunning = false;
       }
     },
     { timezone: TZ }
   );
 
   // Departure-time alerts — every 2 minutes (finer resolution so we don't miss the window)
+  let _departRunning = false;
   cron.schedule(
     "*/2 6-23 * * *",
     async () => {
+      if (_departRunning) return;
+      _departRunning = true;
       try {
         await runDepartureAlerts();
       } catch (err) {
         logger.error({ err }, "Departure alert scheduler error");
+      } finally {
+        _departRunning = false;
       }
     },
     { timezone: TZ }

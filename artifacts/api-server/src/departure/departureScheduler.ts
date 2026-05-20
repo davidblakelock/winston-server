@@ -212,11 +212,16 @@ async function checkDepartureAlerts(): Promise<void> {
 }
 
 export function startDepartureScheduler(): void {
+  let _running = false;
   cron.schedule("*/2 * * * *", async () => {
+    if (_running) return;
+    _running = true;
     try {
       await checkDepartureAlerts();
     } catch (err) {
       logger.error({ err }, "Departure scheduler error");
+    } finally {
+      _running = false;
     }
   });
 

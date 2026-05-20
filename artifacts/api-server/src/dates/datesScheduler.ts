@@ -153,12 +153,17 @@ export async function startDatesScheduler(): Promise<void> {
     logger.warn({ err }, "Dates scheduler — ensureLogTable failed on startup, will retry next run");
   });
 
-  cron.schedule("* * * * *", async () => {
+  let _running = false;
+  cron.schedule("20 * * * * *", async () => {
+    if (_running) return;
+    _running = true;
     try {
       if (localTime() !== "09:00") return;
       await checkDateReminders();
     } catch (err) {
       logger.error({ err }, "Dates scheduler error");
+    } finally {
+      _running = false;
     }
   });
 

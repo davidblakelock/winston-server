@@ -23,7 +23,10 @@ function getCurrentLocalTime(): string {
 }
 
 export function startMedicationScheduler(): void {
-  cron.schedule("* * * * *", async () => {
+  let _running = false;
+  cron.schedule("10 * * * * *", async () => {
+    if (_running) return;
+    _running = true;
     try {
       const localTime = getCurrentLocalTime();
 
@@ -94,6 +97,8 @@ export function startMedicationScheduler(): void {
       }
     } catch (err) {
       logger.error({ err }, "Medication scheduler error");
+    } finally {
+      _running = false;
     }
   });
 

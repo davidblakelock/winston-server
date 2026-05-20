@@ -293,9 +293,16 @@ async function startupPrefetch(): Promise<void> {
 export function startMorningPushScheduler(): void {
   void startupPrefetch();
 
+  let _running = false;
   // Every minute: check each active user's wake_time
-  cron.schedule("* * * * *", () => {
-    void runPerUserChecks();
+  cron.schedule("30 * * * * *", async () => {
+    if (_running) return;
+    _running = true;
+    try {
+      await runPerUserChecks();
+    } finally {
+      _running = false;
+    }
   });
 
   logger.info("[MorningPush] Scheduler started — running per-user checks every minute");

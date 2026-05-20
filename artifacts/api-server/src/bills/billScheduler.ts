@@ -139,7 +139,10 @@ export function startBillScheduler(): void {
     setTimeout(() => checkBillReminders().catch(() => {}), 5000);
   }
 
-  cron.schedule("* * * * *", async () => {
+  let _running = false;
+  cron.schedule("0 * * * * *", async () => {
+    if (_running) return;
+    _running = true;
     try {
       const localTime = getLocalTime();
       const [h] = localTime.split(":").map(Number);
@@ -147,6 +150,8 @@ export function startBillScheduler(): void {
       await checkBillReminders();
     } catch (err) {
       logger.error({ err }, "Bill scheduler error");
+    } finally {
+      _running = false;
     }
   });
 

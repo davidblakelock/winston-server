@@ -12,7 +12,10 @@ interface TodoReminderRow {
 }
 
 export function startTodoReminderScheduler(): void {
-  cron.schedule("* * * * *", async () => {
+  let _running = false;
+  cron.schedule("50 * * * * *", async () => {
+    if (_running) return;
+    _running = true;
     try {
       const { rows } = await query<TodoReminderRow>(
         `SELECT id, user_name, item_text, reminder_time
@@ -80,6 +83,8 @@ export function startTodoReminderScheduler(): void {
       }
     } catch (err) {
       logger.error({ err }, "[TodoReminder] Scheduler error");
+    } finally {
+      _running = false;
     }
   });
 

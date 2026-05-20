@@ -190,7 +190,10 @@ export async function generateOpeningMessage(
 }
 
 export function startWinddownScheduler(): void {
-  cron.schedule("* * * * *", async () => {
+  let _running = false;
+  cron.schedule("40 * * * * *", async () => {
+    if (_running) return;
+    _running = true;
     try {
       const settings = await getSettingsCached();
 
@@ -254,6 +257,8 @@ export function startWinddownScheduler(): void {
       }, primaryUser).catch(() => {});
     } catch (err) {
       logger.error({ err }, "Evening check-in scheduler error");
+    } finally {
+      _running = false;
     }
   });
 
