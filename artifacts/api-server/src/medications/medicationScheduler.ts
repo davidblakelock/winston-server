@@ -79,7 +79,7 @@ export function startMedicationScheduler(): void {
               body: "Have you taken your medications?",
               tag: "medication-morning",
               notificationType: "medication",
-              categoryId: "medication-action",
+              categoryIdentifier: "medication-action",
               requireInteraction: true,
             }, userName).catch((err: unknown) => {
               logger.error({ err, userName }, "[MED] Push delivery failed");

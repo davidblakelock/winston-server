@@ -111,7 +111,8 @@ export interface PushPayload {
   alertExpires?: string;
   // Notification action category — maps to a registered Expo notification category on the native app.
   // e.g. "medication-action" shows "Taken ✓" and "Remind in 30 min" buttons.
-  categoryId?: string;
+  // Named categoryIdentifier to match the Expo Push API field name exactly.
+  categoryIdentifier?: string;
   // Optional auto-trigger message — native app sends this text on the user's behalf when tapped,
   // so the briefing/conversation starts immediately without manual input.
   autoSendMessage?: string;
@@ -184,7 +185,7 @@ async function sendWebPushNotifications(
     reminderText: payload.body,
     reminderId: payload.reminderId ?? null,
     companionMessage: payload.companionMessage ?? null,
-    categoryId: payload.categoryId ?? null,
+    categoryIdentifier: payload.categoryIdentifier ?? null,
   });
 
   let sent = 0;
@@ -315,8 +316,7 @@ async function sendExpoNotifications(
     channelId: "default",
     // categoryIdentifier maps to a registered Expo notification category on the native app —
     // enables OS-level action buttons (e.g. "Taken ✓", "Remind in 30 min").
-    // NOTE: the Expo Push API requires the field to be named `categoryIdentifier` (not `categoryId`).
-    ...(payload.categoryId ? { categoryIdentifier: payload.categoryId } : {}),
+    ...(payload.categoryIdentifier ? { categoryIdentifier: payload.categoryIdentifier } : {}),
     data: {
       // NOTE: do NOT include payload.url (web app URL) here — it causes the native
       // Android app to open the web app in a browser when the notification is tapped.
@@ -345,10 +345,9 @@ async function sendExpoNotifications(
       ...(payload.alertExpires ? { alertExpires: payload.alertExpires } : {}),
       // autoSendMessage: native app sends this text automatically when tapped (no user typing).
       ...(payload.autoSendMessage ? { autoSendMessage: payload.autoSendMessage } : {}),
-      // Mirror categoryId in data so the native app can read it from either location.
-      // Some Expo versions surface notification.request.content.categoryIdentifier unreliably;
-      // data.categoryId is always accessible in the response handler.
-      ...(payload.categoryId ? { categoryId: payload.categoryId } : {}),
+      // Mirror categoryIdentifier in data so the native app can always read it from
+      // notification.request.content.data regardless of Expo version quirks.
+      ...(payload.categoryIdentifier ? { categoryIdentifier: payload.categoryIdentifier } : {}),
       // deepLink: native-app custom scheme URL (e.g. "winston://lists?tab=todo").
       // On tap, the native app calls Linking.openURL(data.deepLink) to navigate directly
       // to the relevant screen.  This is distinct from `payload.url` (web push only).

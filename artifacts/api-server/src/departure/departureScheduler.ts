@@ -186,7 +186,7 @@ async function checkDepartureAlertsForUser(userName: string): Promise<void> {
       mapsDeepLink,             // compact Maps deep-link (preferred on mobile)
       destination: location,    // raw destination for native app to build its own URL
       notificationType: "departure",
-      categoryId: "departure-action",  // native app registered category for tap → Maps
+      categoryIdentifier: "departure-action",  // native app registered category for tap → Maps
       requireInteraction: true,
     }, userName).catch(() => {});
 

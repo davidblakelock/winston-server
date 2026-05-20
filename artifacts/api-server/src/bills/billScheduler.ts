@@ -100,7 +100,7 @@ async function checkBillReminders(): Promise<void> {
           body,
           tag: `bill-${bill.id}`,
           notificationType: "bill-reminder",
-          categoryId: "bill-action",
+          categoryIdentifier: "bill-action",
           requireInteraction: true,
           // Top-level fields so native action buttons can build REST URLs without
           // parsing companionMessage: POST /api/bills/:billId/paid

@@ -140,7 +140,7 @@ export function startScheduler(): void {
             : `reminder-${reminder.id}`,
           reminderId: reminder.id,
           notificationType: reminder.push_category_id === "bill-action" ? "bill-reminder" : "reminder",
-          categoryId: reminder.push_category_id ?? "reminder-action",
+          categoryIdentifier: reminder.push_category_id ?? "reminder-action",
           requireInteraction: !reminder.for_contact,
           ...extraPushData,
         }, reminder.user_name);
