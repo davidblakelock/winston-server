@@ -5,6 +5,7 @@ import { logger } from "../lib/logger.js";
 import {
   createInvite,
   acceptInvite,
+  syncWinstonConnectedOnAccept,
   getConnections,
   getPendingInvites,
   saveConnectMessage,
@@ -81,6 +82,11 @@ router.post("/connect/accept", async (req: Request, res: Response) => {
     }
 
     req.log.info({ connectionId: connection.id, userName }, "[Connect] Invite accepted");
+
+    // Sync winston_connected flag in key_people for both users
+    syncWinstonConnectedOnAccept(connection).catch((err) =>
+      req.log.warn({ err }, "[Connect] key_people sync after accept failed")
+    );
 
     await sendPushToAll({
       title: "Winston Connect",

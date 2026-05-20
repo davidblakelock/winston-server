@@ -335,3 +335,44 @@ export async function createSharedList(
   );
   return rows[0]!;
 }
+
+// ── Winston Connect ↔ key_people sync ────────────────────────────────────────
+
+/**
+ * After an invite is accepted, mark winston_connected = true in key_people for
+ * both sides of the connection — wherever a person's stored name matches the
+ * other party's label (case-insensitive exact match).
+ *
+ * requester_label  = how the requester identifies themselves
+ * recipient_label  = how the accepter identifies themselves
+ *
+ * So in the REQUESTER's key_people we look for the recipient_label name, and
+ * in the RECIPIENT's key_people we look for the requester_label name.
+ */
+export async function syncWinstonConnectedOnAccept(
+  connection: WinstonConnection
+): Promise<void> {
+  const { requester_user_name, recipient_user_name, requester_label, recipient_label } = connection;
+  if (!recipient_user_name || !requester_label || !recipient_label) return;
+
+  await Promise.all([
+    // Requester's list: find the person whose name matches how the accepter calls themselves
+    query(
+      `UPDATE key_people SET winston_connected = true
+       WHERE user_name = $1 AND LOWER(name) = LOWER($2)`,
+      [requester_user_name, recipient_label]
+    ).catch((err) => logger.warn({ err, userName: requester_user_name }, "[Connect] key_people sync failed for requester")),
+
+    // Recipient's list: find the person whose name matches how the requester calls themselves
+    query(
+      `UPDATE key_people SET winston_connected = true
+       WHERE user_name = $1 AND LOWER(name) = LOWER($2)`,
+      [recipient_user_name, requester_label]
+    ).catch((err) => logger.warn({ err, userName: recipient_user_name }, "[Connect] key_people sync failed for recipient")),
+  ]);
+
+  logger.info(
+    { requester: requester_user_name, recipient: recipient_user_name, requesterLabel: requester_label, recipientLabel: recipient_label },
+    "[Connect] winston_connected synced to key_people for both sides"
+  );
+}

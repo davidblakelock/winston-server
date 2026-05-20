@@ -57,8 +57,25 @@ function rowToPerson(r: PersonRow): KeyPerson {
 }
 
 export async function getPeople(userName: string): Promise<KeyPerson[]> {
+  // Cross-reference each person's name against active Winston Connect connections
+  // so winston_connected reflects live connection state even if the DB column
+  // wasn't set when the connection was first created.
   const res = await query<PersonRow>(
-    `SELECT * FROM key_people WHERE user_name = $1 ORDER BY name ASC`,
+    `SELECT kp.id, kp.user_name, kp.name, kp.relationship, kp.phone, kp.email,
+            kp.address, kp.birthday, kp.anniversary, kp.notes,
+            kp.google_contact_id, kp.created_at,
+            (kp.winston_connected OR EXISTS (
+              SELECT 1 FROM winston_connections wc
+              WHERE wc.status = 'accepted'
+                AND (
+                  (wc.requester_user_name = kp.user_name AND LOWER(wc.recipient_label) = LOWER(kp.name))
+                  OR
+                  (wc.recipient_user_name = kp.user_name AND LOWER(wc.requester_label) = LOWER(kp.name))
+                )
+            )) AS winston_connected
+     FROM key_people kp
+     WHERE kp.user_name = $1
+     ORDER BY kp.name ASC`,
     [userName]
   );
   return res.rows.map(rowToPerson);
