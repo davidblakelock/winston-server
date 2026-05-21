@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import express from "express";
 import { authenticate } from "../auth/middleware.js";
-import { markBillPaid, getBills, addBill, computeNextDueDate, type Category, type Frequency } from "../bills/billManager.js";
+import { markBillPaid, getBills, addBill, computeNextDueDate, computeCycleStartDate, type Category, type Frequency } from "../bills/billManager.js";
 import { createReminder } from "../reminders/reminderManager.js";
 import { scanForBillAnomalies } from "../bills/billAnomalyScanner.js";
 
@@ -277,12 +277,46 @@ router.post("/bills/:id/remind-due-date", async (req, res) => {
 });
 
 // ── GET /api/bills — list all tracked bills for the authenticated user ─────────
+// Returns each bill enriched with:
+//   isPaid        — true only when the user explicitly tapped "Mark Paid" this cycle
+//   isOverdue     — true when past due and NOT marked paid
+//   nextDueDateISO — YYYY-MM-DD (CT)
+//   nextDueDateLabel — human-readable "May 23"
+//   daysUntilDue  — integer (negative = overdue)
 router.get("/bills", express.json({ limit: "1mb" }), async (req, res) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
   try {
     const bills = await getBills(userName);
-    res.json({ bills });
+    const now = new Date();
+    const TZ = "America/Chicago";
+
+    const enriched = bills.map((b) => {
+      const nextDueDate = computeNextDueDate(b, now);
+      const nextDueDateISO = nextDueDate.toLocaleDateString("en-CA", { timeZone: TZ });
+      const nextDueDateLabel = nextDueDate.toLocaleDateString("en-US", {
+        timeZone: TZ, month: "long", day: "numeric",
+      });
+      const todayStr = now.toLocaleDateString("en-CA", { timeZone: TZ });
+      const [tY, tM, tD] = todayStr.split("-").map(Number);
+      const [nY, nM, nD] = nextDueDateISO.split("-").map(Number);
+      const daysUntilDue = Math.round(
+        (Date.UTC(nY, nM - 1, nD) - Date.UTC(tY, tM - 1, tD)) / 86400000
+      );
+      const cycleStart = computeCycleStartDate(b, now);
+      const isPaid = b.paidThroughDate != null && b.paidThroughDate >= cycleStart;
+      const isOverdue = !isPaid && daysUntilDue < 0;
+      return {
+        ...b,
+        nextDueDateISO,
+        nextDueDateLabel,
+        daysUntilDue,
+        isPaid,
+        isOverdue,
+      };
+    });
+
+    res.json({ bills: enriched });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }

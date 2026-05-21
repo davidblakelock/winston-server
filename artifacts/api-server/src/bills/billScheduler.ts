@@ -7,6 +7,7 @@ import { query } from "../db.js";
 import {
   getBills,
   computeNextDueDate,
+  computeCycleStartDate,
   buildBillReminderMessage,
   type UpcomingBill,
 } from "./billManager.js";
@@ -70,6 +71,15 @@ async function checkBillReminders(): Promise<void> {
         continue;
       }
 
+      // Skip if user already marked this bill as paid this cycle
+      if (bill.paidThroughDate) {
+        const cycleStart = computeCycleStartDate(bill, now);
+        if (bill.paidThroughDate >= cycleStart) {
+          logger.info({ billId: bill.id, name: bill.name, userName }, "[BILLS] Already paid this cycle — skipping reminder");
+          continue;
+        }
+      }
+
       const nextDueDate = computeNextDueDate(bill, now);
       const daysUntil = daysBetween(now, nextDueDate);
 
@@ -103,6 +113,8 @@ async function checkBillReminders(): Promise<void> {
         nextDueDate,
         daysUntilDue: daysUntil,
         dueDateLabel: formatDueDateLabel(nextDueDate),
+        isPaid: false,
+        isOverdue: daysUntil < 0,
       };
 
       const body = buildBillReminderMessage(upcomingBill, displayName);

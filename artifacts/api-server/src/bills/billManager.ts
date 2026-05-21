@@ -26,6 +26,8 @@ export interface Bill {
   reminderLeadDays: number;
   notes: string | null;
   lastRemindedDate: string | null;
+  /** Set ONLY when the user explicitly taps "Mark Paid" — never by the scheduler */
+  paidThroughDate: string | null;
   autoPay: boolean;
 }
 
@@ -33,6 +35,8 @@ export interface UpcomingBill extends Bill {
   nextDueDate: Date;
   daysUntilDue: number;
   dueDateLabel: string;
+  isPaid: boolean;
+  isOverdue: boolean;
 }
 
 // ── Lead-time defaults by frequency ──────────────────────────────────────────
@@ -122,10 +126,12 @@ export async function getBills(userName = NATIVE_STORED_NAME): Promise<Bill[]> {
     reminder_lead_days: number;
     notes: string | null;
     last_reminded_date: string | null;
+    paid_through_date: string | null;
     auto_pay: boolean;
   }>(
     `SELECT id, name, category, amount, frequency, due_day, due_months,
             reminder_lead_days, notes, last_reminded_date,
+            paid_through_date,
             COALESCE(auto_pay, false) AS auto_pay
      FROM financial_obligations
      WHERE user_name = $1 AND active = true
@@ -143,6 +149,7 @@ export async function getBills(userName = NATIVE_STORED_NAME): Promise<Bill[]> {
     reminderLeadDays: r.reminder_lead_days,
     notes: r.notes,
     lastRemindedDate: r.last_reminded_date,
+    paidThroughDate: r.paid_through_date,
     autoPay: r.auto_pay,
   }));
 }
@@ -154,11 +161,16 @@ export async function getUpcomingBills(daysAhead = 60, userName = NATIVE_STORED_
   const upcoming: UpcomingBill[] = bills.map((b) => {
     const nextDueDate = computeNextDueDate(b, now);
     const daysUntilDue = daysBetween(now, nextDueDate);
+    const cycleStart = computeCycleStartDate(b, now);
+    const isPaid = b.paidThroughDate != null && b.paidThroughDate >= cycleStart;
+    const isOverdue = !isPaid && daysUntilDue < 0;
     return {
       ...b,
       nextDueDate,
       daysUntilDue,
       dueDateLabel: formatDueDateLabel(nextDueDate),
+      isPaid,
+      isOverdue,
     };
   });
 
@@ -229,6 +241,7 @@ export async function addBill(
       reminderLeadDays: rows[0].reminder_lead_days,
       notes: rows[0].notes,
       lastRemindedDate: rows[0].last_reminded_date,
+      paidThroughDate: null,
       autoPay: rows[0].auto_pay ?? false,
     },
   };
@@ -251,6 +264,59 @@ export async function markReminded(id: number, date: string): Promise<void> {
   );
 }
 
+
+// ── Schema migrations ─────────────────────────────────────────────────────────
+// paid_through_date: set ONLY by explicit user "Mark Paid" action.
+// Kept separate from last_reminded_date (scheduler dedup) so the native app
+// can correctly show green/red status independent of reminder-send history.
+query(`ALTER TABLE financial_obligations ADD COLUMN IF NOT EXISTS paid_through_date DATE`).catch(() => {});
+
+// ── Billing cycle helpers ──────────────────────────────────────────────────────
+
+/**
+ * Returns the ISO date string (YYYY-MM-DD, CT) of the start of the current
+ * billing cycle — i.e. the most recent past occurrence of the bill's due day.
+ * If paid_through_date >= this date, the bill is considered paid this cycle.
+ */
+export function computeCycleStartDate(bill: Bill, now: Date = new Date()): string {
+  const tz = "America/Chicago";
+  const todayStr = now.toLocaleDateString("en-CA", { timeZone: tz });
+  const [todayY, todayM, todayD] = todayStr.split("-").map(Number);
+
+  function clampDay(year: number, month: number, day: number): string {
+    const maxDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    return new Date(Date.UTC(year, month - 1, Math.min(day, maxDay), 12))
+      .toLocaleDateString("en-CA", { timeZone: tz });
+  }
+
+  if (bill.frequency === "monthly") {
+    // If we're on or past the due day this month, cycle started this month
+    if (todayD >= bill.dueDay) {
+      return clampDay(todayY, todayM, bill.dueDay);
+    }
+    // Otherwise cycle started last month
+    const prevM = todayM === 1 ? 12 : todayM - 1;
+    const prevY = todayM === 1 ? todayY - 1 : todayY;
+    return clampDay(prevY, prevM, bill.dueDay);
+  }
+
+  const months = (bill.dueMonths ?? "")
+    .split(",")
+    .map((s) => parseInt(s.trim(), 10))
+    .filter((n) => n >= 1 && n <= 12)
+    .sort((a, b) => a - b);
+
+  if (!months.length) return "1970-01-01";
+
+  // Find the most recent past due month/day
+  for (let yr = todayY; yr >= todayY - 1; yr--) {
+    for (let i = months.length - 1; i >= 0; i--) {
+      const candidate = clampDay(yr, months[i], bill.dueDay);
+      if (candidate <= todayStr) return candidate;
+    }
+  }
+  return "1970-01-01";
+}
 
 // ── Bill payment log ──────────────────────────────────────────────────────────
 // Tracks when a user marks a bill as paid (from notification action button).
@@ -278,9 +344,12 @@ export async function markBillPaid(
      RETURNING id`,
     [userName, billId, billName, today]
   );
-  // Update last_reminded_date to suppress further reminders this cycle
+  // Set paid_through_date (user-explicit paid signal) and also advance
+  // last_reminded_date so the scheduler won't fire again this cycle.
   await query(
-    `UPDATE financial_obligations SET last_reminded_date = $1 WHERE id = $2 RETURNING id`,
+    `UPDATE financial_obligations
+        SET paid_through_date = $1, last_reminded_date = $1
+      WHERE id = $2 RETURNING id`,
     [today, billId]
   );
 }
