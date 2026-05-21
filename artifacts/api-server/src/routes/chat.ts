@@ -3180,44 +3180,34 @@ If the conversation is not about a trip, set destination to null.`,
         req.log.info("[T006-DISAMBIG] Could not resolve — re-asking");
       }
     } else if (pendingText.phase === "awaiting_intent") {
-      // User has told us what they want to say — compose the message
-      const effectiveTone: MessageTone = toneOverride ?? pendingText.tone;
-      try {
-        const composed = await composeTextMessage({
-          recipientName: pendingText.recipientName,
-          relationship: pendingText.relationship,
-          tone: effectiveTone,
-          userIntent: message,
-          senderName: displayName,
-        });
+      // User has told us what they want to say — use it VERBATIM.
+      // Do NOT call Claude to compose/rewrite: the user's exact words are the message.
+      // Adding greetings ("Hey Susan,"), closings ("See you soon!"), or tone shaping
+      // changes content the user never asked for. If they want a rewrite they can
+      // explicitly ask ("make it warmer", "make it more professional") which triggers
+      // the tone-override re-compose path in awaiting_confirmation.
+      const body = sanitizeSmsBody(message);
 
-        setPendingText({
-          ...pendingText,
-          phase: "awaiting_confirmation",
-          tone: effectiveTone,
-          composedBody: composed.body,
-        });
+      setPendingText({
+        ...pendingText,
+        phase: "awaiting_confirmation",
+        composedBody: body,
+      });
 
-        const toneNote = ` (${toneLabel(effectiveTone)} tone)`;
-        systemPrompt +=
-          `\n\n[Text Message Composed for ${pendingText.recipientName}]\n` +
-          `Message body${toneNote}:\n"${composed.body}"\n\n` +
-          `Read this message back to ${displayName} word for word, then ask if it looks right. ` +
-          `Say something like: "Here's what I've got: [read message verbatim]. ` +
-          `Does that work? Just say yes and I'll hand it off to your Messages app so you can tap Send." ` +
-          `If they want changes, they can describe edits or request a different tone (warm, friendly, playful, flirty, professional, formal, or casual). ` +
-          `CRITICAL HONESTY RULES: ` +
-          `(1) You are composing the message — you are NOT sending it and you CANNOT send it. ` +
-          `(2) The Messages app will only open AFTER the user says yes — do NOT say it is opening now. ` +
-          `(3) Never say "I'll send that", "sending now", "opening Messages", or any variation that implies immediate action.`;
+      systemPrompt +=
+        `\n\n[Text Message Ready for ${pendingText.recipientName}]\n` +
+        `Message body:\n"${body}"\n\n` +
+        `Read this back to ${displayName} WORD FOR WORD — do not change, add, or remove anything. ` +
+        `Then ask: "Does that look right? Say yes and I'll open Messages so you can tap Send." ` +
+        `If they want changes, they can describe edits or request a different tone ` +
+        `(warm, friendly, playful, flirty, professional, formal, or casual) and you will rewrite it. ` +
+        `CRITICAL HONESTY RULES: ` +
+        `(1) You are NOT sending it — you CANNOT send it. ` +
+        `(2) Messages only opens AFTER the user says yes — do NOT say it is opening now. ` +
+        `(3) Never say "sending now", "opening Messages", or anything implying immediate action. ` +
+        `(4) Read the message back VERBATIM — do not paraphrase, expand, or add to it.`;
 
-        req.log.info({ recipient: pendingText.recipientName, tone: effectiveTone }, "[T006] Message composed — awaiting confirmation");
-      } catch (err) {
-        req.log.warn({ err }, "[T006] Message composition failed");
-        setPendingText(null);
-        systemPrompt +=
-          `\n\n[Text Message — Composition Error]\nTell ${displayName} you had trouble composing that message and ask them to try again.`;
-      }
+      req.log.info({ recipient: pendingText.recipientName, body: body.slice(0, 80) }, "[T006] Intent received — using verbatim, skipping Claude compose");
     } else if (pendingText.phase === "awaiting_confirmation") {
       if (toneOverride !== null) {
         // User wants to change the tone — re-compose with existing body as base
@@ -3277,11 +3267,14 @@ If the conversation is not about a trip, set destination to null.`,
         const cleanPhone = phone ? sanitizePhone(phone) : "";
 
         // Build an sms: URI that iOS will resolve to the right conversation thread.
-        // sms:<phone>?body=<encoded> — iOS opens directly to that contact's thread.
-        // sms:?body=<encoded>        — iOS shows the inbox/new-compose (no recipient known).
+        // iOS requires & (not ?) to separate the phone from the body when both are
+        // present — using ? causes some iOS versions to open then fall back to the
+        // conversation list rather than staying in the correct thread.
+        // sms:<phone>&body=<encoded> — iOS opens directly to that contact's thread.
+        // sms:?body=<encoded>        — iOS shows inbox/new-compose (no recipient known).
         const encodedBody = encodeURIComponent(body);
         const smsUri = cleanPhone
-          ? `sms:${cleanPhone}?body=${encodedBody}`
+          ? `sms:${cleanPhone}&body=${encodedBody}`
           : `sms:?body=${encodedBody}`;
 
         const smsPayload = {
