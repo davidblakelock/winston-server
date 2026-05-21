@@ -73,13 +73,13 @@ const middayCheckDone: Map<string, string>  = new Map();
 async function buildMorningBody(user: ActiveUser): Promise<string> {
   const base = `Your morning briefing is ready — tap to open.`;
   try {
-    const watchedShows = await getWatchedShows();
+    const watchedShows = await getWatchedShows(user.userName);
     const watchedIds = watchedShows.filter((s) => s.tvmazeId).map((s) => s.tvmazeId!);
     const todayEps = await fetchEpisodesForDate(new Date(), watchedIds);
     if (todayEps.length > 0) {
       const show = todayEps[0];
       const extra = todayEps.length > 1 ? ` (+${todayEps.length - 1} more)` : "";
-      return `Your morning briefing is ready — tap to open. New ${show.showName} tonight${extra}!`;
+      return `Your morning briefing is ready — tap to open. New ${show.showName} today${extra}!`;
     }
   } catch {
     // ignore — use base body

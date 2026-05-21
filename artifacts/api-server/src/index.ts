@@ -57,6 +57,7 @@ import { ensureServiceProvidersTable, ensureProviderCategoriesTable } from "./pr
 import { startProviderScheduler } from "./providers/providerScheduler";
 import { startConnectBirthdayScheduler } from "./connect/connectBirthdayScheduler";
 import { startContactBirthdayScheduler } from "./google/contactBirthdayScheduler";
+import { startTvEpisodeScheduler } from "./tv/tvEpisodeScheduler";
 
 const rawPort = process.env["PORT"];
 
@@ -445,6 +446,7 @@ app.listen(port, async (err) => {
   startProviderScheduler();
   startConnectBirthdayScheduler();
   startContactBirthdayScheduler();
+  void startTvEpisodeScheduler();
 
   // Seed David's music preferences into profile_items so they persist and
   // can be referenced in any conversation naturally.
