@@ -1,4 +1,4 @@
-// Winston Service Worker v3 — handles web push notifications and notification tap routing.
+// Winston Service Worker v4 — handles web push notifications and notification tap routing.
 // Version bump forces browser to install the updated SW on next page load.
 
 // ── Auth state ────────────────────────────────────────────────────────────────
@@ -235,8 +235,31 @@ self.addEventListener("notificationclick", (event) => {
       const existing = clients.find((c) => c.url.startsWith(self.registration.scope));
 
       if (existing) {
-        await existing.focus();
-        existing.postMessage({ type: "NOTIFICATION_TAP", data });
+        // Determine whether the existing window is already at the root chat screen.
+        const scopePathname = new URL(self.registration.scope).pathname.replace(/\/$/, "") || "/";
+        const existingPathname = new URL(existing.url).pathname.replace(/\/$/, "") || "/";
+        const alreadyAtRoot = existingPathname === scopePathname;
+
+        if (alreadyAtRoot) {
+          // Already on Chat — focus it, then post with a short delay.
+          // On Android, bringing a backgrounded tab to the foreground briefly "thaws" JS.
+          // Posting immediately races against listener re-registration; 300 ms clears that.
+          await existing.focus().catch(() => {});
+          setTimeout(() => {
+            existing.postMessage({ type: "NOTIFICATION_TAP", data });
+          }, 300);
+        } else {
+          // On a sub-page (Settings, Lists, etc.) — navigate to root so Chat.tsx mounts
+          // fresh and the IDB mount-fallback delivers the notification payload reliably.
+          const navigated = await existing.navigate(self.registration.scope).catch(() => null);
+          const target = navigated ?? existing;
+          await target.focus().catch(() => {});
+          // IDB is already written above and is the primary handoff.
+          // postMessage is a backup after the page has had time to load and register listeners.
+          setTimeout(() => {
+            target.postMessage({ type: "NOTIFICATION_TAP", data });
+          }, 800);
+        }
       } else {
         const newClient = await self.clients.openWindow("/");
         // IDB is the primary handoff for new windows (postMessage races the load).
