@@ -5196,12 +5196,13 @@ router.get("/chat-native", (_req: Request, res: Response) => {
   res.json({ ok: true, status: "ready" });
 });
 router.post("/chat-native", async (req: Request, res: Response) => {
-  // Fast path: voice activation trigger — skip the full pipeline, return a brief Bond-style prompt
-  if ((req.body as { message?: string })?.message === "voice_trigger") {
+  // Fast path: voice activation trigger — skip the full pipeline, return a brief personalized greeting
+  if ((req.body as { message?: string })?.message === "__voice_trigger__") {
     const userName = await authenticate(req, res);
     if (!userName) return;
-    const greetings = ["Yes?", "Go ahead.", "At your service.", "What do you need?", "Listening."];
-    const reply = greetings[Math.floor(Math.random() * greetings.length)];
+    const profile = await getProfile(userName).catch(() => null);
+    const firstName = profile?.name?.split(" ")[0] ?? null;
+    const reply = firstName ? `Hey ${firstName}, what do you need?` : "Hey, what do you need?";
     res.json({ response: reply });
     return;
   }
