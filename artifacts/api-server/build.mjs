@@ -22,6 +22,11 @@ async function buildAll() {
     outdir: distDir,
     outExtension: { ".js": ".mjs" },
     logLevel: "info",
+    // Bake the build timestamp into the bundle so /api/version always
+    // reflects the moment this binary was compiled, not when it started.
+    define: {
+      __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
+    },
     // Some packages may not be bundleable, so we externalize them, we can add more here as needed.
     // Some of the packages below may not be imported or installed, but we're adding them in case they are in the future.
     // Examples of unbundleable packages:
