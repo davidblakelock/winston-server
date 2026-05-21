@@ -175,12 +175,17 @@ import {
   getOpenTableMetroId,
   getResyCitySlug,
   findBookingPlatformByWebSearch,
+  getPendingBookingConfirmation,
+  setPendingBookingConfirmation,
+  clearPendingBookingConfirmation,
   type PendingReservation,
+  type PendingBookingConfirmation,
 } from "../restaurants/restaurantIntelligence.js";
 import {
   bookViaOpenTable,
   isOpenTableReady,
   isApifyApiKeyConfigured,
+  type ApifyBookingResult,
 } from "../restaurants/apifyBooking.js";
 import {
   getUserBookingProfile,
@@ -191,6 +196,8 @@ import {
   requestResyOtp,
   verifyResyOtp,
   bookViaResyDirect,
+  resolveResyVenueId,
+  findResySlots,
   getPendingResyOtp,
   setPendingResyOtp,
   clearPendingResyOtp,

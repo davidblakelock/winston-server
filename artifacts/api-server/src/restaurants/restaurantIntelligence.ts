@@ -125,6 +125,41 @@ export function getPendingReservation(): PendingReservation | null { return _pen
 export function setPendingReservation(r: PendingReservation | null): void { _pendingReservation = r; }
 export function clearPendingReservation(): void { _pendingReservation = null; }
 
+// ── Booking confirmation state ─────────────────────────────────────────────
+// Stores everything needed while waiting for the user to provide
+// party size + guest names before the booking is actually submitted.
+export interface PendingBookingConfirmation {
+  restaurantName:     string;
+  details:            RestaurantDetails;
+  dateISO:            string;
+  timeISO:            string;
+  dateLabel:          string;
+  timeLabel:          string;
+  restaurantCity:     string;
+  openTableSearchUrl: string;
+  resySearchUrl:      string;
+  yelpSearchUrl:      string;
+  resySessionToken:   string | null;
+  resyCitySlug:       string | null;
+  conflictNote:       string;
+  // Guest contact info for the booking form
+  guestFirstName:     string;
+  guestLastName:      string;
+  guestEmail:         string;
+  guestPhone:         string;
+}
+
+let _pendingBookingConf: PendingBookingConfirmation | null = null;
+export function getPendingBookingConfirmation(): PendingBookingConfirmation | null {
+  return _pendingBookingConf;
+}
+export function setPendingBookingConfirmation(s: PendingBookingConfirmation | null): void {
+  _pendingBookingConf = s;
+}
+export function clearPendingBookingConfirmation(): void {
+  _pendingBookingConf = null;
+}
+
 // ── DB cache ──────────────────────────────────────────────────────────────────
 export async function ensureRestaurantCacheTable(): Promise<void> {
   await query(`

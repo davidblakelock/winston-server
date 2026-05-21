@@ -163,7 +163,7 @@ interface ResyVenueSlot {
   };
 }
 
-async function resolveResyVenueId(
+export async function resolveResyVenueId(
   slug:  string,
   city:  string,
   token: string,
@@ -179,7 +179,7 @@ async function resolveResyVenueId(
   }
 }
 
-async function findResySlots(
+export async function findResySlots(
   venueId:   string,
   dateISO:   string,
   partySize: number,
