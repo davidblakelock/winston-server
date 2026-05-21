@@ -8,10 +8,15 @@ import {
   shouldFireAlert,
   buildDepartureAlertMessage,
   extractEventLocation,
+  computeLeaveAt,
 } from "./departureManager.js";
 import { fetchTodayEvents } from "../google/calendar.js";
 import { query } from "../db.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
+import {
+  searchNearbyVenueTypes,
+  buildNeighborhoodBrief,
+} from "../maps/googleMapsIntel.js";
 
 // ── Schema migration: add user_name to departure_alert_log if missing ─────────
 query(`ALTER TABLE departure_alert_log ADD COLUMN IF NOT EXISTS user_name text NOT NULL DEFAULT '${NATIVE_STORED_NAME}'`)
@@ -134,7 +139,7 @@ async function checkDepartureAlertsForUser(userName: string): Promise<void> {
     const fire = shouldFireAlert(start, drive.durationMinutes, now);
     if (!fire) continue;
 
-    const message = buildDepartureAlertMessage(
+    const baseMessage = buildDepartureAlertMessage(
       event.summary,
       start,
       drive.durationMinutes,
@@ -164,9 +169,57 @@ async function checkDepartureAlertsForUser(userName: string): Promise<void> {
       minute: "2-digit",
       hour12: true,
     });
+    const leaveAt = computeLeaveAt(start, drive.durationMinutes);
+    const leaveTimeStr = leaveAt.toLocaleTimeString("en-US", {
+      timeZone: TZ,
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
     const roundedMins = Math.round(drive.durationMinutes / 5) * 5 || 5;
     const trafficLabel = drive.source === "google-maps" ? "w/ traffic" : "est.";
-    const pushBody = `${roundedMins} min ${trafficLabel} · Leave now for ${eventTimeStr}${location.length < 50 ? ` · ${location}` : ""}`;
+
+    // ── Neighborhood intelligence — parking + nearby spots ──────────────────
+    let neighborhoodBrief: string | null = null;
+    try {
+      const rawData = profile?.rawData as { foodPreferences?: string[]; interests?: string[] } | null;
+      const userPrefs = [
+        ...(rawData?.foodPreferences ?? []),
+        ...(rawData?.interests ?? []).filter((i) => /bar|cocktail|coffee|wine|drink|whiskey/i.test(i)),
+      ].slice(0, 4);
+
+      // Pick the most relevant nearby category based on event time
+      const eventHour = start.toLocaleString("en-US", { timeZone: TZ, hour: "numeric", hour12: false });
+      const nearbyType = parseInt(eventHour, 10) >= 17 ? "cocktail bar" : "coffee shop";
+
+      const nearbyData = await searchNearbyVenueTypes(location, ["parking", nearbyType], 2);
+
+      const hasParking = (nearbyData.get("parking") ?? []).length > 0;
+      const hasNearby = (nearbyData.get(nearbyType) ?? []).length > 0;
+
+      if (hasParking || hasNearby) {
+        neighborhoodBrief = await buildNeighborhoodBrief(
+          event.summary,
+          eventTimeStr,
+          leaveTimeStr,
+          drive.durationMinutes,
+          location,
+          nearbyData,
+          userPrefs
+        );
+        logger.info(
+          { event: event.summary, hasParking, hasNearby, hasBrief: !!neighborhoodBrief },
+          "[NeighborhoodIntel] Brief built"
+        );
+      }
+    } catch (err) {
+      logger.warn({ err }, "[NeighborhoodIntel] Failed to build neighborhood brief — using base alert");
+    }
+
+    const message = neighborhoodBrief ?? baseMessage;
+    const pushBody = neighborhoodBrief
+      ? neighborhoodBrief.replace(/\n+/g, " ").slice(0, 160)
+      : `${roundedMins} min ${trafficLabel} · Leave now for ${eventTimeStr}${location.length < 50 ? ` · ${location}` : ""}`;
 
     broadcastToUser(userName, "reminder", {
       id: `departure-${event.summary}-${Date.now()}`,
@@ -178,7 +231,7 @@ async function checkDepartureAlertsForUser(userName: string): Promise<void> {
     });
 
     await sendPushToAll({
-      title: `🚗 Leave now — ${event.summary}`,
+      title: `🚗 Leave by ${leaveTimeStr} — ${event.summary}`,
       body: pushBody,
       tag: `departure-${userName}-${event.summary}`,
       url: mapsUrl,             // web push click action

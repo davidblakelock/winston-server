@@ -153,6 +153,10 @@ import {
   formatNearbyPlacesForPrompt,
 } from "../google/places.js";
 import {
+  searchGoogleMapsPlaces,
+  formatGoogleMapsPlacesForPrompt,
+} from "../maps/googleMapsIntel.js";
+import {
   collectSundayData,
   buildSundaySummaryBlock,
 } from "../sundaySummary/sundaySummaryManager.js";
@@ -2094,15 +2098,29 @@ If the conversation is not about a trip, set destination to null.`,
     try {
       const city = userProfile?.city ?? "Dallas";
       const cuisine = extractCuisineFromMessage(message);
-      const places = await searchRestaurants(cuisine, city, 5);
-      if (places.length > 0) {
-        systemPrompt += formatPlacesForPrompt(places, city, cuisine);
-        req.log.info({ city, cuisine, count: places.length }, "[Places] Restaurant results injected");
+      const apifyQuery = `${cuisine || "restaurant"} ${city} TX`;
+
+      // Run Apify (rich live data) and Google Places (fast fallback) in parallel.
+      // Apify wins if it returns in time — it provides real hours, price, phone, open/closed status.
+      const [apifyResult, placesResult] = await Promise.allSettled([
+        searchGoogleMapsPlaces(apifyQuery, 4, 10),
+        searchRestaurants(cuisine, city, 5),
+      ]);
+
+      const apifyPlaces = apifyResult.status === "fulfilled" ? apifyResult.value : [];
+      const googlePlaces = placesResult.status === "fulfilled" ? placesResult.value : [];
+
+      if (apifyPlaces.length > 0) {
+        systemPrompt += formatGoogleMapsPlacesForPrompt(apifyPlaces, cuisine, city);
+        req.log.info({ city, cuisine, count: apifyPlaces.length, source: "apify-maps" }, "[MapsIntel] Apify restaurant data injected");
+      } else if (googlePlaces.length > 0) {
+        systemPrompt += formatPlacesForPrompt(googlePlaces, city, cuisine);
+        req.log.info({ city, cuisine, count: googlePlaces.length, source: "google-places" }, "[MapsIntel] Google Places fallback injected");
       } else {
-        req.log.info({ city, cuisine }, "[Places] No results — Claude will use training knowledge");
+        req.log.info({ city, cuisine }, "[MapsIntel] No live results — Claude will use training knowledge");
       }
     } catch (err) {
-      req.log.warn({ err }, "[Places] Search failed — continuing without live results");
+      req.log.warn({ err }, "[MapsIntel] Restaurant search failed — continuing without live results");
     }
   }
 

@@ -40,6 +40,7 @@ import { ensureConnectTables } from "./connect/connectManager";
 import { ensureGroupTables } from "./connect/groupManager";
 import { ensureCalendarSmartTables } from "./routes/calendarSmart";
 import { ensureRestaurantCacheTable } from "./restaurants/restaurantIntelligence";
+import { ensureGoogleMapsCacheTable } from "./maps/googleMapsIntel";
 import { ensureOrdersTable } from "./orders/ordersManager";
 import { startOrderTrackingScheduler } from "./orders/orderTrackingScheduler";
 import { startTodoReminderScheduler } from "./lists/todoReminderScheduler";
@@ -287,6 +288,13 @@ app.listen(port, async (err) => {
     logger.info("[startup] restaurant_places_cache table ready");
   } catch (e) {
     logger.warn({ e }, "Restaurant places cache table initialization warning");
+  }
+
+  try {
+    await ensureGoogleMapsCacheTable();
+    logger.info("[startup] google_maps_place_cache table ready");
+  } catch (e) {
+    logger.warn({ e }, "Google Maps place cache table initialization warning");
   }
 
   try {
