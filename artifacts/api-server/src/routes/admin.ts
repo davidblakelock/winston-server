@@ -327,4 +327,106 @@ router.get("/admin/test-maps", async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * GET /admin/search-text?q=<term>
+ * Temporary debug endpoint — searches key tables for a text term.
+ */
+router.get("/admin/search-text", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const term = String(req.query["q"] ?? "").trim();
+  if (!term) { res.status(400).json({ error: "q param required" }); return; }
+
+  const results: Record<string, unknown[]> = {};
+
+  const searches: Array<{ label: string; sql: string; params: unknown[] }> = [
+    {
+      label: "conversation_memories",
+      sql: `SELECT id, conversation_date::text, summary FROM conversation_memories WHERE summary ILIKE $1 ORDER BY conversation_date DESC LIMIT 5`,
+      params: [`%${term}%`],
+    },
+    {
+      label: "user_profiles_raw_data",
+      sql: `SELECT user_name, raw_data::text AS raw FROM user_profiles WHERE raw_data::text ILIKE $1 LIMIT 3`,
+      params: [`%${term}%`],
+    },
+    {
+      label: "profile_items",
+      sql: `SELECT id, category, name, detail FROM profile_items WHERE (name ILIKE $1 OR detail ILIKE $1) LIMIT 10`,
+      params: [`%${term}%`],
+    },
+    {
+      label: "chat_messages_recent",
+      sql: `SELECT id, role, LEFT(content, 300) AS content, created_at FROM chat_messages WHERE content ILIKE $1 ORDER BY created_at DESC LIMIT 5`,
+      params: [`%${term}%`],
+    },
+    {
+      label: "digest_log",
+      sql: `SELECT id, LEFT(digest_text, 500) AS digest_text, sent_at FROM digest_log WHERE digest_text ILIKE $1 ORDER BY sent_at DESC LIMIT 3`,
+      params: [`%${term}%`],
+    },
+    {
+      label: "calendar_sync_state",
+      sql: `SELECT user_name, event_id, event_summary, event_start_iso FROM calendar_sync_state WHERE event_summary ILIKE $1 OR event_location ILIKE $1 LIMIT 5`,
+      params: [`%${term}%`],
+    },
+    {
+      label: "key_people",
+      sql: `SELECT id, user_name, name, relationship, notes FROM key_people WHERE (name ILIKE $1 OR notes ILIKE $1) LIMIT 10`,
+      params: [`%${term}%`],
+    },
+  ];
+
+  for (const s of searches) {
+    try {
+      const { rows } = await query(s.sql, s.params);
+      if (rows.length > 0) results[s.label] = rows;
+    } catch (e) {
+      results[s.label] = [{ error: String(e) }];
+    }
+  }
+
+  res.json({ term, results });
+});
+
+/**
+ * DELETE /admin/delete-memory/:id
+ * Temporary debug endpoint — deletes a single conversation_memory row by id.
+ */
+router.delete("/admin/delete-memory/:id", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const id = parseInt(req.params["id"] ?? "", 10);
+  if (isNaN(id)) { res.status(400).json({ error: "invalid id" }); return; }
+
+  try {
+    const { rowCount } = await query(`DELETE FROM conversation_memories WHERE id = $1`, [id]);
+    res.json({ deleted: rowCount ?? 0, id });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+/**
+ * DELETE /admin/delete-profile-item/:id
+ * Temporary debug endpoint — deletes a single profile_items row by id.
+ */
+router.delete("/admin/delete-profile-item/:id", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const id = parseInt(req.params["id"] ?? "", 10);
+  if (isNaN(id)) { res.status(400).json({ error: "invalid id" }); return; }
+
+  try {
+    const { rowCount } = await query(`DELETE FROM profile_items WHERE id = $1`, [id]);
+    res.json({ deleted: rowCount ?? 0, id });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
 export default router;
+
