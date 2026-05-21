@@ -160,6 +160,36 @@ export function clearPendingBookingConfirmation(): void {
   _pendingBookingConf = null;
 }
 
+// ── Last booking attempt ──────────────────────────────────────────────────
+// Short-term context injected into the system prompt so Claude can answer
+// follow-up questions ("Did you book that?") accurately instead of
+// defaulting to "I can't make reservations."
+export interface LastBookingAttempt {
+  restaurantName:     string;
+  dateLabel:          string;
+  timeLabel:          string;
+  partySize:          number;
+  status:             "confirmed" | "monthly_limit" | "resy_otp_sent" | "no_availability" | "failed";
+  confirmationNumber?: string;
+  phone?:             string;
+  openTableUrl:       string;
+  resyUrl:            string;
+  timestamp:          number;
+}
+
+let _lastBookingAttempt: LastBookingAttempt | null = null;
+export function getLastBookingAttempt(): LastBookingAttempt | null {
+  if (!_lastBookingAttempt) return null;
+  if (Date.now() - _lastBookingAttempt.timestamp > 30 * 60 * 1000) {
+    _lastBookingAttempt = null;
+    return null;
+  }
+  return _lastBookingAttempt;
+}
+export function setLastBookingAttempt(a: LastBookingAttempt): void {
+  _lastBookingAttempt = a;
+}
+
 // ── DB cache ──────────────────────────────────────────────────────────────────
 export async function ensureRestaurantCacheTable(): Promise<void> {
   await query(`

@@ -178,8 +178,11 @@ import {
   getPendingBookingConfirmation,
   setPendingBookingConfirmation,
   clearPendingBookingConfirmation,
+  getLastBookingAttempt,
+  setLastBookingAttempt,
   type PendingReservation,
   type PendingBookingConfirmation,
+  type LastBookingAttempt,
 } from "../restaurants/restaurantIntelligence.js";
 import {
   bookViaOpenTable,
@@ -2809,7 +2812,7 @@ If the conversation is not about a trip, set destination to null.`,
             phone:     _conf.guestPhone,
           };
 
-          // ── 1. Book via OpenTable first, then Resy fallback ─────────────
+          // ── 1. Book via OpenTable first ──────────────────────────────
           let result: ApifyBookingResult | null = null;
           let bookedVia = "opentable";
 
@@ -2827,15 +2830,15 @@ If the conversation is not about a trip, set destination to null.`,
             bookedVia = "resy";
           }
 
-          // Resy fallback when OpenTable fails with a service error
-          const needsResyFallback =
+          // ── 2a. Resy session fallback (OpenTable failed, user has active session) ──
+          const needsResySessionFallback =
             !result?.success &&
-            _conf.resySessionToken &&
+            !!_conf.resySessionToken &&
             _conf.details.platform === "opentable" &&
             (result?.error === "apify_monthly_limit" || result?.error === "actor_failed" || !result);
 
-          if (needsResyFallback && _conf.resySessionToken) {
-            req.log.info({ restaurantName: _conf.restaurantName }, "[R001-CONFIRM] OpenTable failed — searching Resy");
+          if (needsResySessionFallback && _conf.resySessionToken) {
+            req.log.info({ restaurantName: _conf.restaurantName }, "[R001-CONFIRM] OpenTable failed — searching Resy (session available)");
             const resyInfo = await findBookingPlatformByWebSearch(_conf.restaurantName, _conf.restaurantCity).catch(() => null);
             if (resyInfo?.platform === "resy" && resyInfo.slug && resyInfo.city && _conf.resySessionToken) {
               result = await bookViaResyDirect(
@@ -2846,8 +2849,62 @@ If the conversation is not about a trip, set destination to null.`,
             }
           }
 
+          // ── 2b. Resy OTP pivot (OpenTable monthly limit, no Resy session) ──────
+          // Auto-switch to Resy and email the user an OTP instead of dead-ending.
+          if (
+            !result?.success &&
+            !_conf.resySessionToken &&
+            result?.error === "apify_monthly_limit"
+          ) {
+            req.log.info({ restaurantName: _conf.restaurantName }, "[R001-CONFIRM] OpenTable monthly limit — pivoting to Resy OTP");
+            const resyInfo = await findBookingPlatformByWebSearch(_conf.restaurantName, _conf.restaurantCity).catch(() => null);
+            if (resyInfo?.platform === "resy" && resyInfo.slug && resyInfo.city && _conf.guestEmail) {
+              const otpSent = await requestResyOtp(_conf.guestEmail).catch(() => false);
+              if (otpSent) {
+                setPendingResyOtp(_user, {
+                  email:          _conf.guestEmail,
+                  slug:           resyInfo.slug,
+                  city:           resyInfo.city,
+                  restaurantName: _conf.restaurantName,
+                  date:           _conf.dateISO,
+                  time:           _conf.timeISO,
+                  timeLabel:      _conf.timeLabel,
+                  dateLabel:      _conf.dateLabel,
+                  partySize:      _partySize,
+                  addr:           _conf.details.formattedAddress ?? _conf.restaurantName,
+                  fallbackUrl:    _conf.resySearchUrl ?? _conf.openTableSearchUrl,
+                  companionName:  "Winston",
+                });
+                setLastBookingAttempt({
+                  restaurantName: _conf.restaurantName,
+                  dateLabel:      _conf.dateLabel,
+                  timeLabel:      _conf.timeLabel,
+                  partySize:      _partySize,
+                  status:         "resy_otp_sent",
+                  phone:          _conf.details.phone ?? undefined,
+                  openTableUrl:   _conf.openTableSearchUrl,
+                  resyUrl:        _conf.resySearchUrl,
+                  timestamp:      Date.now(),
+                });
+                await sendPushToAll({
+                  title: `${_conf.restaurantName} — Switching to Resy`,
+                  body:  `OpenTable is unavailable this month. Resy verification sent to ${_conf.guestEmail} — reply with the code to complete your booking.`,
+                  tag:   `resy-otp-${Date.now()}`,
+                  notificationType: "reservation-otp",
+                  requireInteraction: true,
+                }, _user);
+                req.log.info(
+                  { restaurantName: _conf.restaurantName, resySlug: resyInfo.slug },
+                  "[R001-CONFIRM] Resy OTP sent — awaiting user code"
+                );
+                return; // Don't fall through to generic failure handler
+              }
+            }
+            // Resy not found or OTP failed — fall through to generic error below
+          }
+
           if (result?.success) {
-            // ── 2. Create Google Calendar event ──────────────────────────
+            // ── 3. Create Google Calendar event ──────────────────────────
             const guestNote = _guestNames.length ? `. Joining: ${_guestNames.join(", ")}` : "";
             await createCalendarEvent({
               title:       `Reservation at ${_conf.restaurantName}`,
@@ -2859,7 +2916,7 @@ If the conversation is not about a trip, set destination to null.`,
               allDay:      false,
             }, _user).catch(() => {});
 
-            // ── 3. Notify connected guests via Winston Connect ────────────
+            // ── 4. Notify connected guests via Winston Connect ────────────
             const notified: string[] = [];
             if (_guestNames.length > 0) {
               const allPeople = await getPeople(_user).catch((): KeyPerson[] => []);
@@ -2886,12 +2943,23 @@ If the conversation is not about a trip, set destination to null.`,
               }
             }
 
-            // ── 4. Push confirmation summary to the user ─────────────────
-            const confNote  = result.confirmationNumber ? ` Conf #${result.confirmationNumber}.` : "";
-            const winstonNote = notified.length
-              ? ` Notified ${notified.join(" & ")} via Winston.`
-              : "";
-            const viaNote = bookedVia === "resy" ? " (via Resy)" : "";
+            // ── 5. Record result + push confirmation to the user ──────────
+            setLastBookingAttempt({
+              restaurantName:     _conf.restaurantName,
+              dateLabel:          _conf.dateLabel,
+              timeLabel:          _conf.timeLabel,
+              partySize:          _partySize,
+              status:             "confirmed",
+              confirmationNumber: result.confirmationNumber,
+              phone:              _conf.details.phone ?? undefined,
+              openTableUrl:       _conf.openTableSearchUrl,
+              resyUrl:            _conf.resySearchUrl,
+              timestamp:          Date.now(),
+            });
+
+            const confNote    = result.confirmationNumber ? ` Conf #${result.confirmationNumber}.` : "";
+            const winstonNote = notified.length ? ` Notified ${notified.join(" & ")} via Winston.` : "";
+            const viaNote     = bookedVia === "resy" ? " (via Resy)" : "";
             await sendPushToAll({
               title: `Reservation Confirmed ✓${viaNote}`,
               body:  `${_conf.restaurantName} — ${_conf.dateLabel} at ${_conf.timeLabel}, party of ${_partySize}.${confNote}${winstonNote}`,
@@ -2906,31 +2974,48 @@ If the conversation is not about a trip, set destination to null.`,
             );
 
           } else if (result?.alternatives?.length) {
+            setLastBookingAttempt({
+              restaurantName: _conf.restaurantName,
+              dateLabel:      _conf.dateLabel,
+              timeLabel:      _conf.timeLabel,
+              partySize:      _partySize,
+              status:         "no_availability",
+              phone:          _conf.details.phone ?? undefined,
+              openTableUrl:   _conf.openTableSearchUrl,
+              resyUrl:        _conf.resySearchUrl,
+              timestamp:      Date.now(),
+            });
             const alts = result.alternatives.map((a) => a.time).join(", ");
+            const phoneNote = _conf.details.phone ? ` Or call: ${_conf.details.phone}.` : "";
             await sendPushToAll({
-              title: `${_conf.restaurantName} — Check Alternatives`,
-              body:  `${_conf.timeLabel} is taken. Available: ${alts}. Reply to book one.`,
+              title: `${_conf.restaurantName} — No Availability`,
+              body:  `${_conf.timeLabel} is taken. Available: ${alts}.${phoneNote} Reply to book one.`,
               tag:   `reservation-alt-${Date.now()}`,
               notificationType: "reservation-alternatives",
               requireInteraction: true,
             }, _user);
 
           } else {
-            const failReason =
-              result?.error === "apify_monthly_limit" ? "OpenTable booking service hit its monthly limit" :
-              result?.error === "no_availability"     ? `${_conf.timeLabel} isn't available`              :
-                                                        "Auto-booking failed";
-            const phoneNote = _conf.details.phone ? ` Call: ${_conf.details.phone}.` : "";
-            broadcastToUser(_user, "reservation-link", {
-              type:           "search",
+            const isMonthlyLimit = result?.error === "apify_monthly_limit";
+            const status: LastBookingAttempt["status"] = isMonthlyLimit ? "monthly_limit" : "failed";
+            setLastBookingAttempt({
               restaurantName: _conf.restaurantName,
+              dateLabel:      _conf.dateLabel,
+              timeLabel:      _conf.timeLabel,
+              partySize:      _partySize,
+              status,
+              phone:          _conf.details.phone ?? undefined,
               openTableUrl:   _conf.openTableSearchUrl,
               resyUrl:        _conf.resySearchUrl,
-              phone:          _conf.details.phone,
+              timestamp:      Date.now(),
             });
+            const phoneNote = _conf.details.phone ? ` Call: ${_conf.details.phone}.` : "";
+            const resyNote  = _conf.resySearchUrl ? " Or try Resy." : "";
             await sendPushToAll({
-              title: `${_conf.restaurantName} — Manual Booking Needed`,
-              body:  `${failReason}.${phoneNote} Tap to book on OpenTable or Resy.`,
+              title: `${_conf.restaurantName} — Book Manually`,
+              body:  isMonthlyLimit
+                ? `OpenTable quota exhausted this month.${phoneNote}${resyNote}`
+                : `Auto-booking failed.${phoneNote}${resyNote}`,
               tag:   `reservation-fallback-${Date.now()}`,
               notificationType: "reservation-fallback",
             }, _user);
@@ -2956,6 +3041,56 @@ If the conversation is not about a trip, set destination to null.`,
       systemPrompt += `\n\n[Reservation Cancelled]\nAcknowledge briefly and warmly — "No problem, I've dropped it."`;
     } else {
       clearPendingReservation();
+    }
+  }
+
+  // ── Last booking attempt — inject so Claude answers follow-ups correctly ──────
+  // Without this, Claude defaults to "I can't make reservations" on any follow-up
+  // question because it has no memory of the async booking result.
+  if (!isRestaurantIntelRequest && !isBookingConfirmActive) {
+    const lastBooking = getLastBookingAttempt();
+    if (lastBooking) {
+      let bookingStatusNote = "";
+      switch (lastBooking.status) {
+        case "confirmed":
+          bookingStatusNote =
+            `\n\n[Reservation Status — Recent]\n` +
+            `${lastBooking.restaurantName} — ${lastBooking.dateLabel} at ${lastBooking.timeLabel}, ` +
+            `party of ${lastBooking.partySize}. CONFIRMED` +
+            `${lastBooking.confirmationNumber ? ` (Conf #${lastBooking.confirmationNumber})` : ""}. ` +
+            `A Google Calendar event was created automatically.`;
+          break;
+        case "monthly_limit":
+          bookingStatusNote =
+            `\n\n[Reservation Status — Recent]\n` +
+            `Attempted to book ${lastBooking.restaurantName} for ${lastBooking.dateLabel} at ${lastBooking.timeLabel}. ` +
+            `The OpenTable automated booking service hit its monthly usage limit — this is a temporary quota/billing issue with the Apify service, NOT a problem with Winston's ability to book. ` +
+            `You DO have the ability to book reservations — the underlying Apify actor is just quota-limited right now. ` +
+            `Do NOT say you can't book. Instead: acknowledge the quota issue, give the phone number if available, and mention Resy as an alternative.` +
+            `${lastBooking.phone ? ` Phone: ${lastBooking.phone}.` : ""}` +
+            `${lastBooking.resyUrl ? ` Resy: ${lastBooking.resyUrl}.` : ""}`;
+          break;
+        case "resy_otp_sent":
+          bookingStatusNote =
+            `\n\n[Reservation Status — Recent]\n` +
+            `OpenTable was unavailable (monthly quota). Automatically switched to Resy for ${lastBooking.restaurantName}. ` +
+            `A Resy verification code was emailed to the user — they need to reply with that 6-digit code to complete the Resy booking. ` +
+            `Prompt them to check their email and share the code.`;
+          break;
+        case "no_availability":
+          bookingStatusNote =
+            `\n\n[Reservation Status — Recent]\n` +
+            `${lastBooking.restaurantName} had no availability at ${lastBooking.timeLabel} on ${lastBooking.dateLabel}. ` +
+            `Alternative times were sent via push notification.` +
+            `${lastBooking.phone ? ` Phone: ${lastBooking.phone}.` : ""}`;
+          break;
+        default:
+          bookingStatusNote =
+            `\n\n[Reservation Status — Recent]\n` +
+            `Attempted to book ${lastBooking.restaurantName} for ${lastBooking.dateLabel} at ${lastBooking.timeLabel} — automated booking failed. ` +
+            `A push with fallback links was sent.${lastBooking.phone ? ` Phone: ${lastBooking.phone}.` : ""}`;
+      }
+      systemPrompt += bookingStatusNote;
     }
   }
 
