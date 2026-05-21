@@ -3180,34 +3180,70 @@ If the conversation is not about a trip, set destination to null.`,
         req.log.info("[T006-DISAMBIG] Could not resolve — re-asking");
       }
     } else if (pendingText.phase === "awaiting_intent") {
-      // User has told us what they want to say — use it VERBATIM.
-      // Do NOT call Claude to compose/rewrite: the user's exact words are the message.
-      // Adding greetings ("Hey Susan,"), closings ("See you soon!"), or tone shaping
-      // changes content the user never asked for. If they want a rewrite they can
-      // explicitly ask ("make it warmer", "make it more professional") which triggers
-      // the tone-override re-compose path in awaiting_confirmation.
-      const body = sanitizeSmsBody(message);
+      // User has told us what they want to say.
+      // If they included a style/tone request ("make it witty", "keep it professional"),
+      // call Claude to rewrite in that style — but Claude must NOT add greetings or closings.
+      // If no style was requested, use their exact words verbatim.
+      const effectiveTone: MessageTone = toneOverride ?? pendingText.tone;
 
-      setPendingText({
-        ...pendingText,
-        phase: "awaiting_confirmation",
-        composedBody: body,
-      });
+      if (toneOverride !== null) {
+        // Style requested — let Claude rephrase in the requested tone
+        try {
+          const composed = await composeTextMessage({
+            recipientName: pendingText.recipientName,
+            relationship: pendingText.relationship,
+            tone: effectiveTone,
+            userIntent: message,
+            senderName: displayName,
+          });
 
-      systemPrompt +=
-        `\n\n[Text Message Ready for ${pendingText.recipientName}]\n` +
-        `Message body:\n"${body}"\n\n` +
-        `Read this back to ${displayName} WORD FOR WORD — do not change, add, or remove anything. ` +
-        `Then ask: "Does that look right? Say yes and I'll open Messages so you can tap Send." ` +
-        `If they want changes, they can describe edits or request a different tone ` +
-        `(warm, friendly, playful, flirty, professional, formal, or casual) and you will rewrite it. ` +
-        `CRITICAL HONESTY RULES: ` +
-        `(1) You are NOT sending it — you CANNOT send it. ` +
-        `(2) Messages only opens AFTER the user says yes — do NOT say it is opening now. ` +
-        `(3) Never say "sending now", "opening Messages", or anything implying immediate action. ` +
-        `(4) Read the message back VERBATIM — do not paraphrase, expand, or add to it.`;
+          setPendingText({
+            ...pendingText,
+            phase: "awaiting_confirmation",
+            tone: effectiveTone,
+            composedBody: composed.body,
+          });
 
-      req.log.info({ recipient: pendingText.recipientName, body: body.slice(0, 80) }, "[T006] Intent received — using verbatim, skipping Claude compose");
+          systemPrompt +=
+            `\n\n[Text Message Composed for ${pendingText.recipientName} — ${toneLabel(effectiveTone)} tone]\n` +
+            `Message body:\n"${composed.body}"\n\n` +
+            `Read this back to ${displayName} WORD FOR WORD — do not change, add, or remove anything. ` +
+            `Then ask: "Does that work? Say yes and I'll open Messages so you can tap Send." ` +
+            `CRITICAL HONESTY RULES: ` +
+            `(1) You are NOT sending it — you CANNOT send it. ` +
+            `(2) Messages only opens AFTER the user says yes. ` +
+            `(3) Never say "sending now", "opening Messages", or anything implying immediate action.`;
+
+          req.log.info({ recipient: pendingText.recipientName, tone: effectiveTone }, "[T006] Intent with tone — composed via Claude");
+        } catch (err) {
+          req.log.warn({ err }, "[T006] Tone compose failed");
+          setPendingText(null);
+          systemPrompt += `\n\n[Text Message — Composition Error]\nTell ${displayName} you had trouble with that and ask them to try again.`;
+        }
+      } else {
+        // No style request — use the user's exact words verbatim
+        const body = sanitizeSmsBody(message);
+
+        setPendingText({
+          ...pendingText,
+          phase: "awaiting_confirmation",
+          composedBody: body,
+        });
+
+        systemPrompt +=
+          `\n\n[Text Message Ready for ${pendingText.recipientName}]\n` +
+          `Message body:\n"${body}"\n\n` +
+          `Read this back to ${displayName} WORD FOR WORD — do not change, add, or remove anything. ` +
+          `Then ask: "Does that look right? Say yes and I'll open Messages so you can tap Send." ` +
+          `If they want a different style, they can say "make it witty", "make it warmer", etc. ` +
+          `CRITICAL HONESTY RULES: ` +
+          `(1) You are NOT sending it — you CANNOT send it. ` +
+          `(2) Messages only opens AFTER the user says yes. ` +
+          `(3) Never say "sending now", "opening Messages", or anything implying immediate action. ` +
+          `(4) Read the message back VERBATIM — do not paraphrase, expand, or add to it.`;
+
+        req.log.info({ recipient: pendingText.recipientName, body: body.slice(0, 80) }, "[T006] Intent received — using verbatim (no tone requested)");
+      }
     } else if (pendingText.phase === "awaiting_confirmation") {
       if (toneOverride !== null) {
         // User wants to change the tone — re-compose with existing body as base
@@ -3464,33 +3500,74 @@ If the conversation is not about a trip, set destination to null.`,
         const resolvedName = singleCandidate?.name ?? targetName;
 
         if (hasInlineContent) {
-          // User dictated exactly what to say — use it verbatim.
-          // Do NOT rewrite with Claude: the user said "text Susan that I'll be 10 minutes
-          // late" and expects EXACTLY "I'll be 10 minutes late" in the SMS body, not a
-          // Claude-expanded/tone-shaped version of it. Only sanitize for SMS compatibility.
-          const body = sanitizeSmsBody(inlineIntent);
+          // User gave us the content inline ("text Susan that I'll be 10 minutes late").
+          // If they also requested a tone/style ("in a witty tone", "make it romantic"),
+          // call Claude to compose in that style — but no added greetings or closings.
+          // If no style was requested, use their exact words verbatim.
+          if (inlineTone !== null) {
+            // Style requested inline — let Claude rephrase
+            try {
+              const composed = await composeTextMessage({
+                recipientName: resolvedName,
+                relationship,
+                tone: inlineTone,
+                userIntent: inlineIntent,
+                senderName: displayName,
+              });
 
-          setPendingText({
-            phase: "awaiting_confirmation",
-            recipientName: resolvedName,
-            recipientPhone: phone,
-            relationship,
-            tone,
-            composedBody: body,
-          });
+              setPendingText({
+                phase: "awaiting_confirmation",
+                recipientName: resolvedName,
+                recipientPhone: phone,
+                relationship,
+                tone: inlineTone,
+                composedBody: composed.body,
+              });
 
-          systemPrompt +=
-            `\n\n[Text Message Ready for ${resolvedName}]\n` +
-            `Message body:\n"${body}"\n\n` +
-            `Read this message back to ${displayName} WORD FOR WORD — do not change, add, or remove anything. ` +
-            `Then ask: "Does that look right? Say yes and I'll open Messages so you can tap Send." ` +
-            `CRITICAL HONESTY RULES: ` +
-            `(1) You are NOT sending it and you CANNOT send it. ` +
-            `(2) The Messages app only opens AFTER the user says yes — do NOT say it is opening now. ` +
-            `(3) Never say "sending now", "opening Messages", or anything implying immediate action. ` +
-            `(4) The user dictated this exact message — read it back VERBATIM. Do not paraphrase, expand, or add to it.`;
+              systemPrompt +=
+                `\n\n[Text Message Composed for ${resolvedName} — ${toneLabel(inlineTone)} tone]\n` +
+                `Message body:\n"${composed.body}"\n\n` +
+                `Read this back to ${displayName} WORD FOR WORD — do not change, add, or remove anything. ` +
+                `Then ask: "Does that work? Say yes and I'll open Messages so you can tap Send." ` +
+                `CRITICAL HONESTY RULES: ` +
+                `(1) You are NOT sending it — you CANNOT send it. ` +
+                `(2) Messages only opens AFTER the user says yes. ` +
+                `(3) Never say "sending now", "opening Messages", or anything implying immediate action.`;
 
-          req.log.info({ targetName: resolvedName, hasPhone: !!phone, body: body.slice(0, 80) }, "[T006] Inline content — using verbatim, skipping Claude compose");
+              req.log.info({ targetName: resolvedName, hasPhone: !!phone, tone: inlineTone, inlineContent: inlineIntent.slice(0, 60) }, "[T006] Inline content with tone — composed via Claude");
+            } catch (compErr) {
+              req.log.warn({ compErr }, "[T006] Inline tone compose failed — falling back to verbatim");
+              const body = sanitizeSmsBody(inlineIntent);
+              setPendingText({ phase: "awaiting_confirmation", recipientName: resolvedName, recipientPhone: phone, relationship, tone: inlineTone, composedBody: body });
+              systemPrompt += `\n\n[Text Message Ready for ${resolvedName}]\nMessage body:\n"${body}"\n\nRead back verbatim, ask for confirmation.`;
+            }
+          } else {
+            // No style request — use the user's exact words verbatim
+            const body = sanitizeSmsBody(inlineIntent);
+
+            setPendingText({
+              phase: "awaiting_confirmation",
+              recipientName: resolvedName,
+              recipientPhone: phone,
+              relationship,
+              tone,
+              composedBody: body,
+            });
+
+            systemPrompt +=
+              `\n\n[Text Message Ready for ${resolvedName}]\n` +
+              `Message body:\n"${body}"\n\n` +
+              `Read this message back to ${displayName} WORD FOR WORD — do not change, add, or remove anything. ` +
+              `Then ask: "Does that look right? Say yes and I'll open Messages so you can tap Send." ` +
+              `If they want a different style, they can say "make it witty", "make it warmer", etc. ` +
+              `CRITICAL HONESTY RULES: ` +
+              `(1) You are NOT sending it and you CANNOT send it. ` +
+              `(2) The Messages app only opens AFTER the user says yes — do NOT say it is opening now. ` +
+              `(3) Never say "sending now", "opening Messages", or anything implying immediate action. ` +
+              `(4) The user dictated this exact message — read it back VERBATIM. Do not paraphrase, expand, or add to it.`;
+
+            req.log.info({ targetName: resolvedName, hasPhone: !!phone, body: body.slice(0, 80) }, "[T006] Inline content — using verbatim (no tone requested)");
+          }
         } else {
           // No inline content — ask what they want to say
           setPendingText({

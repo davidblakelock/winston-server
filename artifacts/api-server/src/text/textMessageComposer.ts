@@ -243,10 +243,15 @@ export async function composeTextMessage(opts: ComposeTextOptions): Promise<Comp
     `use "I", "me", "my". DO NOT write in third person. ` +
     `DO NOT say "on behalf of" or claim to be an assistant. ` +
     `Write exactly as ${senderName} would text — natural, direct, personal.\n\n` +
-    `PRESERVE ALL CONTENT: If the user's intent mentions any specific names, nicknames, ` +
-    `references, or phrases they explicitly want included, copy them EXACTLY into the message. ` +
-    `Do NOT remove, replace, or paraphrase any proper nouns or specific references the user gave you. ` +
-    `Your only job is to shape the TONE and STRUCTURE — the content is the user's, keep it intact.\n\n` +
+    `TONE ONLY — DO NOT CHANGE STRUCTURE:\n` +
+    `Your ONLY job is to change the word choice, phrasing, and delivery to match the requested tone.\n` +
+    `- DO NOT add a greeting or opener ("Hey [name],", "Hi!", "Hello,") — start with the message content directly.\n` +
+    `- DO NOT add a closing or sign-off ("See you soon!", "Talk later!", "Best,", "Can't wait to see you!") — end when the content ends.\n` +
+    `- DO NOT add any content that was not present in the user's intent.\n` +
+    `- Keep the message roughly the same length as the original intent — do not pad or expand it.\n` +
+    `- Preserve all proper nouns, names, specific details, and references exactly as given.\n` +
+    `CORRECT witty rewrite of "I'll be 10 minutes late": "Running fashionably 10 minutes behind — fashion waits for no one 😅"\n` +
+    `WRONG rewrite: "Hey Susan! Running a bit behind — I'll be there in about 10 minutes. Can't wait to see you! 😘"\n\n` +
     `TONE: ${toneInstruction}\n\n` +
     `WHAT ${senderName.toUpperCase()} WANTS TO SAY:\n${userIntent}\n\n` +
     `Write ONLY the message body. No preamble. No explanation. No quotes around it. ` +
