@@ -126,27 +126,21 @@ export function setPendingReservation(r: PendingReservation | null): void { _pen
 export function clearPendingReservation(): void { _pendingReservation = null; }
 
 // ── Booking confirmation state ─────────────────────────────────────────────
-// Stores everything needed while waiting for the user to provide
-// party size + guest names before the booking is actually submitted.
+// Stores context after we've opened the booking deep link, while waiting for
+// the user to tell us they've confirmed and who's joining them.
 export interface PendingBookingConfirmation {
   restaurantName:     string;
   details:            RestaurantDetails;
   dateISO:            string;
-  timeISO:            string;
+  timeISO:            string | null;
   dateLabel:          string;
-  timeLabel:          string;
+  timeLabel:          string | null;
+  partySize:          number;
   restaurantCity:     string;
   openTableSearchUrl: string;
   resySearchUrl:      string;
   yelpSearchUrl:      string;
-  resySessionToken:   string | null;
-  resyCitySlug:       string | null;
   conflictNote:       string;
-  // Guest contact info for the booking form
-  guestFirstName:     string;
-  guestLastName:      string;
-  guestEmail:         string;
-  guestPhone:         string;
 }
 
 let _pendingBookingConf: PendingBookingConfirmation | null = null;
@@ -165,16 +159,14 @@ export function clearPendingBookingConfirmation(): void {
 // follow-up questions ("Did you book that?") accurately instead of
 // defaulting to "I can't make reservations."
 export interface LastBookingAttempt {
-  restaurantName:     string;
-  dateLabel:          string;
-  timeLabel:          string;
-  partySize:          number;
-  status:             "confirmed" | "monthly_limit" | "resy_otp_sent" | "no_availability" | "failed";
-  confirmationNumber?: string;
-  phone?:             string;
-  openTableUrl:       string;
-  resyUrl:            string;
-  timestamp:          number;
+  restaurantName:  string;
+  dateLabel:       string;
+  timeLabel:       string | null;
+  partySize:       number;
+  status:          "link_opened" | "calendar_created";
+  phone?:          string;
+  bookingUrl?:     string;
+  timestamp:       number;
 }
 
 let _lastBookingAttempt: LastBookingAttempt | null = null;
@@ -451,7 +443,7 @@ export function buildReservationUrl(
   }
 
   if (details.platform === "resy" && details.platformSlug && details.platformCity) {
-    const base = `https://resy.com/cities/${details.platformCity}/venues/${details.platformSlug}?seats=${n}`;
+    const base = `https://resy.com/cities/${details.platformCity}/${details.platformSlug}?seats=${n}`;
     if (dateISO) return `${base}&date=${dateISO}`;
     return base;
   }

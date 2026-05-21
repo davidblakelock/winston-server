@@ -392,6 +392,7 @@ export async function createCalendarEvent(details: {
   location?: string;
   description?: string;
   allDay?: boolean;
+  attendees?: Array<{ name?: string; email?: string }>;
 }, userName?: string): Promise<{ id: string; htmlLink: string } | null> {
   const auth = await resolveAuthClient(userName);
   if (!auth) {
