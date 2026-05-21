@@ -284,7 +284,7 @@ function detectPlatform(text: string | null | undefined): {
 // tool uses real indexed results and reliably returns the restaurant's listing URL.
 // Results are cached in the DB for 30 days so this only fires once per restaurant.
 // Priority order: OpenTable > Resy > Yelp Reservations/Waitlist > phone.
-async function findBookingPlatformByWebSearch(
+export async function findBookingPlatformByWebSearch(
   restaurantName: string,
   city: string
 ): Promise<{ platform: ReservationPlatform; slug: string | null; city: string | null }> {

@@ -174,6 +174,7 @@ import {
   extractCityFromAddress,
   getOpenTableMetroId,
   getResyCitySlug,
+  findBookingPlatformByWebSearch,
   type PendingReservation,
 } from "../restaurants/restaurantIntelligence.js";
 import {
@@ -2562,16 +2563,24 @@ If the conversation is not about a trip, set destination to null.`,
                 (req as any)._hardcodedResponse =
                   `Booking ${details.name} for ${partySize} on ${bookingDateLabel} at ${bookingTimeLabel} — I'll push you a confirmation once it's locked in.${conflictNote}`;
                 const _snap = {
-                  slug:          details.platformSlug!,
-                  name:          details.name,
-                  addr:          details.formattedAddress ?? details.name,
-                  date:          intent.dateISO!,
-                  time:          intent.timeISO!,
-                  timeLabel:     bookingTimeLabel,
-                  dateLabel:     bookingDateLabel,
-                  fallbackUrl:   reservationUrl,
-                  companionName: userProfile?.companionName ?? "your companion",
-                  guest:         guestProfile,
+                  slug:             details.platformSlug!,
+                  name:             details.name,
+                  addr:             details.formattedAddress ?? details.name,
+                  date:             intent.dateISO!,
+                  time:             intent.timeISO!,
+                  timeLabel:        bookingTimeLabel,
+                  dateLabel:        bookingDateLabel,
+                  fallbackUrl:      reservationUrl,
+                  companionName:    userProfile?.companionName ?? "your companion",
+                  guest:            guestProfile,
+                  phone:            details.phone ?? null,
+                  website:          details.website ?? null,
+                  resySearchUrl,
+                  openTableSearchUrl,
+                  yelpSearchUrl,
+                  resySessionToken: resySession?.token ?? null,
+                  resyCitySlug:     resyCitySlug ?? null,
+                  restaurantCity,
                 };
                 const _user = sessionUserName;
                 Promise.resolve().then(async () => {
@@ -2606,21 +2615,112 @@ If the conversation is not about a trip, set destination to null.`,
                         requireInteraction: true,
                       }, _user);
                     } else {
-                      broadcastToUser(_user, "reservation-link", {
-                        type: "opentable", url: _snap.fallbackUrl, restaurantName: _snap.name,
-                      });
-                      await sendPushToAll({
-                        title: `${_snap.name} — Manual Booking Needed`,
-                        body: `Couldn't auto-book — opening OpenTable for you.`,
-                        tag: `reservation-fallback-${Date.now()}`,
-                        notificationType: "reservation-fallback",
-                      }, _user);
+                      // ── OpenTable failed — determine why, try Resy, send specific push ──
+                      req.log.warn(
+                        { restaurantName: _snap.name, error: result.error },
+                        "[R001] OpenTable booking failed — attempting Resy fallback"
+                      );
+
+                      // Specific reason for the failure
+                      const failReason =
+                        result.error === "apify_monthly_limit"
+                          ? "OpenTable booking service hit its monthly limit"
+                          : result.error === "no_availability"
+                          ? `${_snap.timeLabel} isn't available on OpenTable`
+                          : "OpenTable auto-booking failed";
+
+                      // ── Resy fallback attempt ─────────────────────────────────────
+                      let resyBooked = false;
+                      const shouldTryResy =
+                        result.error === "apify_monthly_limit" ||
+                        result.error === "actor_failed"         ||
+                        result.error === "no_availability";
+
+                      if (shouldTryResy && _snap.resySessionToken) {
+                        try {
+                          req.log.info(
+                            { restaurantName: _snap.name, city: _snap.restaurantCity },
+                            "[R001] Searching Resy for fallback booking"
+                          );
+                          const resyInfo = await findBookingPlatformByWebSearch(
+                            _snap.name, _snap.restaurantCity
+                          );
+                          if (resyInfo.platform === "resy" && resyInfo.slug && resyInfo.city) {
+                            req.log.info(
+                              { slug: resyInfo.slug, city: resyInfo.city },
+                              "[R001] Found on Resy — attempting direct booking"
+                            );
+                            const resyResult = await bookViaResyDirect(
+                              resyInfo.slug, resyInfo.city, _snap.name,
+                              _snap.date, _snap.time, partySize, _snap.resySessionToken
+                            );
+                            if (resyResult.success) {
+                              await createCalendarEvent({
+                                title: `Reservation at ${_snap.name}`,
+                                date: _snap.date,
+                                startTime: _snap.timeLabel,
+                                endTime: null,
+                                location: _snap.addr,
+                                description: `Party of ${partySize}${resyResult.confirmationNumber ? `. Confirmation #${resyResult.confirmationNumber}` : ""}`,
+                                allDay: false,
+                              }, _user).catch(() => {});
+                              await sendPushToAll({
+                                title: "Reservation Confirmed ✓ (via Resy)",
+                                body: `${_snap.name} — ${_snap.dateLabel} at ${_snap.timeLabel}, party of ${partySize}${resyResult.confirmationNumber ? `. Conf #${resyResult.confirmationNumber}` : ""}`,
+                                tag: `reservation-confirmed-${Date.now()}`,
+                                notificationType: "reservation-confirmed",
+                                requireInteraction: true,
+                              }, _user);
+                              resyBooked = true;
+                            } else if (resyResult.alternatives?.length) {
+                              const alts = resyResult.alternatives.map((a) => a.time).join(", ");
+                              await sendPushToAll({
+                                title: `${_snap.name} — Check Resy Alternatives`,
+                                body: `${_snap.timeLabel} is taken on Resy. Available: ${alts}. Reply to ${_snap.companionName} to book one.`,
+                                tag: `reservation-alt-${Date.now()}`,
+                                notificationType: "reservation-alternatives",
+                                requireInteraction: true,
+                              }, _user);
+                              resyBooked = true;
+                            }
+                          }
+                        } catch (resyFallbackErr) {
+                          req.log.warn({ resyFallbackErr }, "[R001] Resy fallback attempt failed");
+                        }
+                      }
+
+                      if (!resyBooked) {
+                        // Send specific push with all available fallback options
+                        const phoneNote = _snap.phone ? ` Call: ${_snap.phone}.` : "";
+                        const resyNote  = _snap.resySearchUrl ? " Or try Resy." : "";
+                        broadcastToUser(_user, "reservation-link", {
+                          type:           "opentable",
+                          url:            _snap.fallbackUrl,
+                          restaurantName: _snap.name,
+                          phone:          _snap.phone,
+                          resyUrl:        _snap.resySearchUrl,
+                          yelpUrl:        _snap.yelpSearchUrl,
+                        });
+                        await sendPushToAll({
+                          title: `${_snap.name} — Manual Booking Needed`,
+                          body:  `${failReason}.${phoneNote}${resyNote} Tap to open OpenTable.`,
+                          tag:   `reservation-fallback-${Date.now()}`,
+                          notificationType: "reservation-fallback",
+                        }, _user);
+                      }
                     }
                   } catch (apifyErr) {
                     req.log.warn({ apifyErr }, "[Apify] Async OpenTable booking error — sending fallback URL");
                     broadcastToUser(_user, "reservation-link", {
                       type: "opentable", url: _snap.fallbackUrl, restaurantName: _snap.name,
+                      phone: _snap.phone, resyUrl: _snap.resySearchUrl,
                     });
+                    await sendPushToAll({
+                      title: `${_snap.name} — Manual Booking Needed`,
+                      body:  `OpenTable booking encountered an error.${_snap.phone ? ` Call: ${_snap.phone}.` : ""} Tap to open OpenTable.`,
+                      tag:   `reservation-fallback-${Date.now()}`,
+                      notificationType: "reservation-fallback",
+                    }, _user).catch(() => {});
                   }
                 }).catch(() => {});
               } else {

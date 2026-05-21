@@ -41,17 +41,21 @@ export interface GuestInfo {
 
 // ── Apify actor runner ────────────────────────────────────────────────────────
 
+type ActorRunResult =
+  | { ok: true;  item: Record<string, unknown> }
+  | { ok: false; error: "monthly_limit" | "actor_error" | "no_items" | "exception" };
+
 /**
  * Call an Apify actor using the synchronous run endpoint.
- * Returns the first dataset item, or null on any error.
+ * Returns a typed result so callers can distinguish failure reasons.
  * Timeout is 90 s — safely under Replit proxy limit.
  */
 async function runActor(
   actorId: string,
   input: Record<string, unknown>
-): Promise<Record<string, unknown> | null> {
+): Promise<ActorRunResult> {
   const token = getApiKey();
-  if (!token) return null;
+  if (!token) return { ok: false, error: "actor_error" };
 
   const url =
     `https://api.apify.com/v2/acts/${encodeURIComponent(actorId)}` +
@@ -71,16 +75,21 @@ async function runActor(
         { actorId, status: res.status, body: body.slice(0, 300) },
         "[Apify] Actor run failed"
       );
-      return null;
+      // Distinguish monthly-limit errors from other failures
+      const isMonthlyLimit =
+        res.status === 403 &&
+        (body.includes("Monthly usage hard limit") ||
+         body.includes("platform-feature-disabled"));
+      return { ok: false, error: isMonthlyLimit ? "monthly_limit" : "actor_error" };
     }
 
     const data  = (await res.json()) as unknown;
     const items = Array.isArray(data) ? data : null;
-    if (!items || items.length === 0) return null;
-    return items[0] as Record<string, unknown>;
+    if (!items || items.length === 0) return { ok: false, error: "no_items" };
+    return { ok: true, item: items[0] as Record<string, unknown> };
   } catch (err) {
     logger.warn({ err, actorId }, "[Apify] Actor request threw");
-    return null;
+    return { ok: false, error: "exception" };
   }
 }
 
@@ -115,7 +124,7 @@ export async function bookViaOpenTable(
     "[Apify] Starting OpenTable guest booking"
   );
 
-  const result = await runActor(OPENTABLE_ACTOR_ID, {
+  const run = await runActor(OPENTABLE_ACTOR_ID, {
     restaurantSlug,
     restaurantName,
     restaurantId:  restaurantSlug,
@@ -133,9 +142,15 @@ export async function bookViaOpenTable(
     skipLogin:    true,
   });
 
-  if (!result) {
-    return { success: false, error: "actor_failed" };
+  if (!run.ok) {
+    const error =
+      run.error === "monthly_limit" ? "apify_monthly_limit" :
+      run.error === "no_items"      ? "no_availability"     :
+                                      "actor_failed";
+    return { success: false, error };
   }
+
+  const result = run.item;
 
   const isSuccess =
     result["success"] === true           ||
