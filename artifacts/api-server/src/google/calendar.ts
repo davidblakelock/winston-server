@@ -421,11 +421,20 @@ export async function createCalendarEvent(details: {
     requestBody.end = buildEventDateTime(details.date, endTime);
   }
 
-  console.log(`[CALENDAR CREATE] inserting event — title: "${details.title}", date: ${details.date}, startTime: ${details.startTime}, allDay: ${!!details.allDay}`);
+  const filteredAttendees = (details.attendees ?? []).filter((a) => a.email);
+  if (filteredAttendees.length > 0) {
+    requestBody.attendees = filteredAttendees.map((a) => ({
+      email: a.email,
+      displayName: a.name,
+    }));
+  }
+
+  console.log(`[CALENDAR CREATE] inserting event — title: "${details.title}", date: ${details.date}, startTime: ${details.startTime}, allDay: ${!!details.allDay}, attendees: ${filteredAttendees.length}`);
 
   try {
     const response = await calendar.events.insert({
       calendarId: "primary",
+      sendUpdates: filteredAttendees.length > 0 ? "all" : "none",
       requestBody,
     });
 
