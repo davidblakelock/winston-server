@@ -23,8 +23,10 @@ const NEWS_LEAD_MINUTES = 25;
 const BRIEFING_LEAD_MINUTES = 20;
 
 // How many minutes after wake time we will still attempt to send the push.
-// 30 minutes gives enough buffer for server restarts near the wake window.
-const WAKE_WINDOW_MINUTES = 30;
+// 120 minutes covers deployment-triggered restarts that land after the wake window.
+// For a 6:00 AM wake time this keeps the window open until 8:00 AM — late enough
+// to catch any restart caused by a deployment, DB blip, or container recycle.
+const WAKE_WINDOW_MINUTES = 120;
 
 // ── Local time helpers ─────────────────────────────────────────────────────────
 
