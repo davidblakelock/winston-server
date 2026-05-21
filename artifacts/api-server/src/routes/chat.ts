@@ -3375,7 +3375,34 @@ If the conversation is not about a trip, set destination to null.`,
           source: "key_people" as const,
         }));
 
-        // Only fall back to Google Contacts when key_people has no match
+        // Phone enrichment: a person may be in key_people (with relationship/notes)
+        // but never had their phone saved there. Google Contacts often has it.
+        // Without this, the SMS URI has no recipient and iOS shows a blank compose screen.
+        if (candidates.length > 0 && candidates.some((c) => c.phone === null)) {
+          try {
+            const enrichResult = await searchContacts(targetName, sessionUserName);
+            const enrichFiltered = enrichResult.contacts.filter((c) => {
+              const first = (c.name ?? "").split(" ")[0]?.toLowerCase() ?? "";
+              return first === lowerTarget || (c.name ?? "").toLowerCase().includes(lowerTarget);
+            });
+            for (const candidate of candidates) {
+              if (candidate.phone !== null) continue;
+              const candFirst = candidate.name.split(" ")[0]?.toLowerCase() ?? "";
+              const gcMatch = enrichFiltered.find((c) => {
+                const gcFirst = (c.name ?? "").split(" ")[0]?.toLowerCase() ?? "";
+                return gcFirst === candFirst || (c.name ?? "").toLowerCase().includes(candFirst);
+              });
+              if (gcMatch?.phone) {
+                candidate.phone = gcMatch.phone;
+                req.log.info({ name: candidate.name, phone: gcMatch.phone }, "[T006] Phone enriched from Google Contacts for key_people entry");
+              }
+            }
+          } catch {
+            // Non-fatal — proceed with whatever phones we already have
+          }
+        }
+
+        // Only fall back to Google Contacts when key_people has no match at all
         if (candidates.length === 0) {
           const contactResult = await searchContacts(targetName, sessionUserName);
           // Filter to contacts whose display name starts with the target first name
@@ -3444,45 +3471,33 @@ If the conversation is not about a trip, set destination to null.`,
         const resolvedName = singleCandidate?.name ?? targetName;
 
         if (hasInlineContent) {
-          // User gave us the content in the same message — compose immediately
-          try {
-            const composed = await composeTextMessage({
-              recipientName: resolvedName,
-              relationship,
-              tone,
-              userIntent: inlineIntent,
-              senderName: displayName,
-            });
+          // User dictated exactly what to say — use it verbatim.
+          // Do NOT rewrite with Claude: the user said "text Susan that I'll be 10 minutes
+          // late" and expects EXACTLY "I'll be 10 minutes late" in the SMS body, not a
+          // Claude-expanded/tone-shaped version of it. Only sanitize for SMS compatibility.
+          const body = sanitizeSmsBody(inlineIntent);
 
-            setPendingText({
-              phase: "awaiting_confirmation",
-              recipientName: resolvedName,
-              recipientPhone: phone,
-              relationship,
-              tone,
-              composedBody: composed.body,
-            });
+          setPendingText({
+            phase: "awaiting_confirmation",
+            recipientName: resolvedName,
+            recipientPhone: phone,
+            relationship,
+            tone,
+            composedBody: body,
+          });
 
-            const toneNote = ` (${toneLabel(tone)} tone)`;
-            systemPrompt +=
-              `\n\n[Text Message Composed for ${resolvedName}]\n` +
-              `Message body${toneNote}:\n"${composed.body}"\n\n` +
-              `Read this message back to ${displayName} word for word, then ask if it looks right. ` +
-              `Say something like: "Here's what I've got: [read message verbatim]. ` +
-              `Does that work? Just say yes and I'll hand it off to your Messages app so you can tap Send." ` +
-              `CRITICAL HONESTY RULES: ` +
-              `(1) You are composing the message — you are NOT sending it and you CANNOT send it. ` +
-              `(2) The Messages app will only open AFTER the user says yes — do NOT say it is opening now. ` +
-              `(3) Never say "I'll send that", "sending now", "opening Messages", or any variation that implies immediate action.`;
+          systemPrompt +=
+            `\n\n[Text Message Ready for ${resolvedName}]\n` +
+            `Message body:\n"${body}"\n\n` +
+            `Read this message back to ${displayName} WORD FOR WORD — do not change, add, or remove anything. ` +
+            `Then ask: "Does that look right? Say yes and I'll open Messages so you can tap Send." ` +
+            `CRITICAL HONESTY RULES: ` +
+            `(1) You are NOT sending it and you CANNOT send it. ` +
+            `(2) The Messages app only opens AFTER the user says yes — do NOT say it is opening now. ` +
+            `(3) Never say "sending now", "opening Messages", or anything implying immediate action. ` +
+            `(4) The user dictated this exact message — read it back VERBATIM. Do not paraphrase, expand, or add to it.`;
 
-            req.log.info({ targetName: resolvedName, hasPhone: !!phone, tone, inlineContent: inlineIntent.slice(0, 60) }, "[T006] Inline content detected — composed immediately");
-          } catch (compErr) {
-            req.log.warn({ compErr }, "[T006] Inline composition failed — falling back to awaiting_intent");
-            setPendingText({ phase: "awaiting_intent", recipientName: resolvedName, recipientPhone: phone, relationship, tone });
-            systemPrompt +=
-              `\n\n[Text Message Flow Started — Recipient: ${resolvedName}]\n` +
-              `Ask ${displayName} what they'd like to say.`;
-          }
+          req.log.info({ targetName: resolvedName, hasPhone: !!phone, body: body.slice(0, 80) }, "[T006] Inline content — using verbatim, skipping Claude compose");
         } else {
           // No inline content — ask what they want to say
           setPendingText({
