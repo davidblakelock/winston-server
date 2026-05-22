@@ -142,4 +142,24 @@ router.get("/push/calendar-debug", async (req, res) => {
   res.json(result);
 });
 
+// POST /api/push/test-medication — send a test medication push to the native app
+// Used to verify action buttons ("Done ✓" / "Remind me in 30 min") appear correctly.
+router.post("/push/test-medication", async (req, res) => {
+  const { sendPushToAll } = await import("../push/pushManager.js");
+  try {
+    const result = await sendPushToAll({
+      title: "Time for your medications 💊",
+      body: "Have you taken your medications?",
+      categoryIdentifier: "medication-action",
+      notificationType: "medication",
+      tag: "medication-morning",
+    });
+    logger.info(result, "[Expo Push] Test medication push sent");
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    logger.error({ err }, "[Expo Push] Test medication push failed");
+    res.status(500).json({ error: "Failed to send test push" });
+  }
+});
+
 export default router;

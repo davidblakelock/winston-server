@@ -126,9 +126,10 @@ async function sendExpoNotifications(
     sound: "default",
     priority: "high",
     channelId: "default",
-    // categoryIdentifier maps to a registered Expo notification category on the native app —
-    // enables OS-level action buttons (e.g. "Taken ✓", "Remind in 30 min").
-    ...(payload.categoryIdentifier ? { categoryIdentifier: payload.categoryIdentifier } : {}),
+    // categoryId is the Expo Push API field name (exp.host/--/api/v2/push/send).
+    // The client-side SDK calls it categoryIdentifier; the push API calls it categoryId.
+    // Using the wrong name causes Expo to silently ignore it, showing no action buttons.
+    ...(payload.categoryIdentifier ? { categoryId: payload.categoryIdentifier } : {}),
     data: {
       ...(payload.reminderId != null ? { reminderId: payload.reminderId } : {}),
       ...(payload.tag ? { tag: payload.tag } : {}),
