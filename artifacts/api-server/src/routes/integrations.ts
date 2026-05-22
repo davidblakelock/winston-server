@@ -1,6 +1,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { query } from "../db.js";
 import { authenticate } from "../auth/middleware.js";
+import { logger } from "../lib/logger.js";
 
 const router: IRouter = Router();
 
@@ -104,6 +105,8 @@ router.post("/integrations/:service/connect", async (req: Request, res: Response
 
   const setPreferred = req.body?.preferred === true;
 
+  req.log.info({ userName, service, serviceType: info.type, setPreferred, body: req.body }, "[Integrations] POST /connect");
+
   try {
     if (setPreferred) {
       // Clear preferred from all other services of the same type first
@@ -124,8 +127,10 @@ router.post("/integrations/:service/connect", async (req: Request, res: Response
              updated_at   = now()`,
       [userName, service, info.type, setPreferred]
     );
+    req.log.info({ userName, service, setPreferred }, "[Integrations] /connect saved");
     res.json({ ok: true, service_name: service, is_connected: true, preferred: setPreferred });
   } catch (err) {
+    req.log.error({ err, userName, service }, "[Integrations] /connect error");
     res.status(500).json({ error: "Failed to connect integration" });
   }
 });
