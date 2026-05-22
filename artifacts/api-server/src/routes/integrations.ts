@@ -76,12 +76,12 @@ router.get("/integrations/preferred/:type", async (req: Request, res: Response) 
     );
 
     if (rows.length === 0) {
-      res.json({ serviceName: null, displayName: null });
+      res.json({ service_name: null, display_name: null });
       return;
     }
 
     const svcName = rows[0]!.service_name;
-    res.json({ serviceName: svcName, displayName: KNOWN_SERVICES[svcName]?.displayName ?? svcName });
+    res.json({ service_name: svcName, display_name: KNOWN_SERVICES[svcName]?.displayName ?? svcName });
   } catch (err) {
     res.status(500).json({ error: "Failed to get preferred integration" });
   }
@@ -89,6 +89,8 @@ router.get("/integrations/preferred/:type", async (req: Request, res: Response) 
 
 // ── POST /api/integrations/:service/connect ──────────────────────────────────
 // Marks a service as connected for the user.
+// Accepts optional { preferred: true } in the body — if set, also clears preferred
+// from all other services of the same type and marks this one as preferred.
 router.post("/integrations/:service/connect", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
@@ -100,15 +102,29 @@ router.post("/integrations/:service/connect", async (req: Request, res: Response
     return;
   }
 
+  const setPreferred = req.body?.preferred === true;
+
   try {
+    if (setPreferred) {
+      // Clear preferred from all other services of the same type first
+      await query(
+        `UPDATE user_service_preferences
+           SET preferred = false, updated_at = now()
+         WHERE user_name = $1 AND service_type = $2`,
+        [userName, info.type]
+      );
+    }
+
     await query(
-      `INSERT INTO user_service_preferences (user_name, service_name, service_type, is_connected, updated_at)
-       VALUES ($1, $2, $3, true, now())
+      `INSERT INTO user_service_preferences (user_name, service_name, service_type, is_connected, preferred, updated_at)
+       VALUES ($1, $2, $3, true, $4, now())
        ON CONFLICT (user_name, service_name) DO UPDATE
-         SET is_connected = true, updated_at = now()`,
-      [userName, service, info.type]
+         SET is_connected = true,
+             preferred    = CASE WHEN $4 THEN true ELSE user_service_preferences.preferred END,
+             updated_at   = now()`,
+      [userName, service, info.type, setPreferred]
     );
-    res.json({ ok: true, serviceName: service, isConnected: true });
+    res.json({ ok: true, service_name: service, is_connected: true, preferred: setPreferred });
   } catch (err) {
     res.status(500).json({ error: "Failed to connect integration" });
   }
