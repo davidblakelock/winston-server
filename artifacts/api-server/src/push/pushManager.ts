@@ -3,7 +3,7 @@ import { logger } from "../lib/logger.js";
 import { NATIVE_USER } from "../auth/middleware.js";
 import { getProactiveMode, shouldSendPushForMode } from "../proactiveMode/proactiveModeManager.js";
 
-// ── Ensure expo_push_tokens table exists (idempotent) ────────────────────────
+// ── Ensure expo_push_tokens table exists and has all audit columns ────────────
 query(`
   CREATE TABLE IF NOT EXISTS expo_push_tokens (
     id integer GENERATED ALWAYS AS IDENTITY NOT NULL PRIMARY KEY,
@@ -15,6 +15,43 @@ query(`
     updated_at timestamptz DEFAULT now()
   )
 `).catch((err) => logger.warn({ err }, "[Push] expo_push_tokens table init failed — may already exist"));
+
+// Add audit/failure-tracking columns idempotently so existing rows keep their data.
+Promise.all([
+  query(`ALTER TABLE expo_push_tokens ADD COLUMN IF NOT EXISTS failure_count integer NOT NULL DEFAULT 0`),
+  query(`ALTER TABLE expo_push_tokens ADD COLUMN IF NOT EXISTS last_failure_at timestamptz`),
+  query(`ALTER TABLE expo_push_tokens ADD COLUMN IF NOT EXISTS last_failure_reason text`),
+  query(`ALTER TABLE expo_push_tokens ADD COLUMN IF NOT EXISTS last_save_by text`),
+]).then(async () => {
+  // Log current token state on every server start so disappearances are visible.
+  const { rows } = await query<{
+    id: number; user_name: string; expo_push_token: string;
+    device_id: string | null; failure_count: number;
+    last_failure_at: string | null; last_failure_reason: string | null;
+    last_save_by: string | null; created_at: string; updated_at: string;
+  }>(`SELECT id, user_name, expo_push_token, device_id, failure_count,
+             last_failure_at, last_failure_reason, last_save_by,
+             created_at, updated_at
+        FROM expo_push_tokens ORDER BY updated_at DESC`);
+  logger.info(
+    {
+      count: rows.length,
+      tokens: rows.map(r => ({
+        id: r.id,
+        userName: r.user_name,
+        tokenTail: "…" + r.expo_push_token.slice(-20),
+        deviceId: r.device_id,
+        failureCount: r.failure_count,
+        lastFailureAt: r.last_failure_at,
+        lastFailureReason: r.last_failure_reason,
+        lastSaveBy: r.last_save_by,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+      })),
+    },
+    "[Push] ── SERVER STARTUP: expo_push_tokens current state ──"
+  );
+}).catch((err) => logger.warn({ err }, "[Push] expo_push_tokens audit column migration failed"));
 
 // ── contact_push_links: links a contact name to another Winston user account ─
 // When David says "remind Sarah to call the dentist", the scheduler looks up
@@ -77,26 +114,81 @@ export async function saveExpoToken(
   userName: string,
   expoPushToken: string,
   deviceId?: string,
-  userAgent?: string
+  userAgent?: string,
+  saveBy = "app-registration"
 ): Promise<{ id: number | null; action: "inserted" | "updated" }> {
   const { rows } = await query<{ id: number; xmax: string }>(
-    `INSERT INTO expo_push_tokens (user_name, expo_push_token, device_id, user_agent, updated_at)
-     VALUES ($1, $2, $3, $4, now())
+    `INSERT INTO expo_push_tokens (user_name, expo_push_token, device_id, user_agent, updated_at, failure_count, last_failure_at, last_failure_reason, last_save_by)
+     VALUES ($1, $2, $3, $4, now(), 0, NULL, NULL, $5)
      ON CONFLICT (expo_push_token) DO UPDATE SET
-       user_name   = EXCLUDED.user_name,
-       device_id   = EXCLUDED.device_id,
-       updated_at  = now()
+       user_name           = EXCLUDED.user_name,
+       device_id           = EXCLUDED.device_id,
+       updated_at          = now(),
+       failure_count       = 0,
+       last_failure_at     = NULL,
+       last_failure_reason = NULL,
+       last_save_by        = EXCLUDED.last_save_by
      RETURNING id, xmax::text`,
-    [userName, expoPushToken, deviceId ?? null, userAgent ?? null]
+    [userName, expoPushToken, deviceId ?? null, userAgent ?? null, saveBy]
   );
   const row = rows[0];
-  if (!row) return { id: null, action: "inserted" };
+  if (!row) {
+    logger.error({ userName, tokenTail: "…" + expoPushToken.slice(-20), saveBy }, "[Push] saveExpoToken: INSERT returned no row — token NOT saved");
+    return { id: null, action: "inserted" };
+  }
   const action = row.xmax === "0" ? "inserted" : "updated";
+  logger.info(
+    { id: row.id, userName, tokenTail: "…" + expoPushToken.slice(-20), deviceId: deviceId ?? null, saveBy, action },
+    `[Push] Token ${action === "inserted" ? "SAVED (new)" : "UPDATED (existing)"} — expo_push_tokens id=${row.id}`
+  );
   return { id: row.id, action };
 }
 
-export async function removeExpoToken(expoPushToken: string): Promise<void> {
-  await query(`DELETE FROM expo_push_tokens WHERE expo_push_token = $1 RETURNING id`, [expoPushToken]);
+export async function removeExpoToken(expoPushToken: string, reason = "explicit-delete"): Promise<void> {
+  const { rows } = await query<{ id: number; user_name: string; device_id: string | null }>(
+    `DELETE FROM expo_push_tokens WHERE expo_push_token = $1 RETURNING id, user_name, device_id`,
+    [expoPushToken]
+  );
+  if (rows.length > 0) {
+    const r = rows[0];
+    logger.warn(
+      { id: r.id, userName: r.user_name, deviceId: r.device_id, tokenTail: "…" + expoPushToken.slice(-20), reason },
+      `[Push] Token DELETED from expo_push_tokens — reason: ${reason}`
+    );
+  } else {
+    logger.info({ tokenTail: "…" + expoPushToken.slice(-20), reason }, "[Push] removeExpoToken: token not found (already gone)");
+  }
+}
+
+/**
+ * Mark a token as failed without deleting it.
+ * Only auto-deletes after MAX_TOKEN_FAILURES consecutive failures so a single
+ * transient DeviceNotRegistered from FCM cannot wipe the token permanently.
+ */
+const MAX_TOKEN_FAILURES = 5;
+async function recordTokenFailure(expoPushToken: string, errorCode: string): Promise<void> {
+  const { rows } = await query<{ id: number; failure_count: number; user_name: string; device_id: string | null }>(
+    `UPDATE expo_push_tokens
+        SET failure_count       = failure_count + 1,
+            last_failure_at     = now(),
+            last_failure_reason = $2
+      WHERE expo_push_token = $1
+      RETURNING id, failure_count, user_name, device_id`,
+    [expoPushToken, errorCode]
+  );
+  if (!rows[0]) return;
+  const { id, failure_count, user_name, device_id } = rows[0];
+  logger.warn(
+    { id, userName: user_name, deviceId: device_id, tokenTail: "…" + expoPushToken.slice(-20), errorCode, failureCount: failure_count, maxBeforeDelete: MAX_TOKEN_FAILURES },
+    `[Push] Token failure recorded (${failure_count}/${MAX_TOKEN_FAILURES}) — NOT deleted yet`
+  );
+  if (failure_count >= MAX_TOKEN_FAILURES) {
+    logger.error(
+      { id, tokenTail: "…" + expoPushToken.slice(-20), failureCount: failure_count, errorCode },
+      `[Push] Token reached ${MAX_TOKEN_FAILURES} consecutive failures — DELETING now`
+    );
+    await removeExpoToken(expoPushToken, `auto-delete after ${failure_count} consecutive ${errorCode} failures`);
+  }
 }
 
 export async function getExpoTokens(userName = NATIVE_USER): Promise<string[]> {
@@ -192,8 +284,9 @@ async function sendExpoNotifications(
           const errorCode = ticket.details?.error;
           logger.warn({ token: tokens[i]?.slice(-20), errorCode }, "[Expo Push] Ticket error");
           if ((errorCode === "DeviceNotRegistered" || errorCode === "InvalidCredentials") && tokens[i]) {
-            await removeExpoToken(tokens[i]).catch(() => {});
-            logger.info({ token: tokens[i].slice(-20), errorCode }, "[Expo Push] Removed invalid/unregistered token");
+            await recordTokenFailure(tokens[i], errorCode).catch((e) =>
+              logger.warn({ e }, "[Expo Push] recordTokenFailure threw")
+            );
           }
         }
       })

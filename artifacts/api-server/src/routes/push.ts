@@ -62,8 +62,10 @@ router.delete("/push/expo-token", async (req, res) => {
     return;
   }
   try {
-    await removeExpoToken(expoPushToken);
-    logger.info({ tokenTail: expoPushToken.slice(-20) }, "[Expo Push] Token removed");
+    const userAgent = (req.headers["user-agent"] ?? "unknown").slice(0, 200);
+    const ip = (req.headers["x-forwarded-for"] as string | undefined) ?? req.socket.remoteAddress ?? "unknown";
+    req.log.warn({ tokenTail: expoPushToken.slice(-20), userAgent, ip }, "[Expo Push] DELETE /push/expo-token called — explicit token removal requested");
+    await removeExpoToken(expoPushToken, `DELETE /api/push/expo-token — ua=${userAgent.slice(0, 80)} ip=${ip}`);
     res.json({ success: true });
   } catch (err) {
     logger.error({ err }, "[Expo Push] Failed to remove token");
@@ -71,14 +73,39 @@ router.delete("/push/expo-token", async (req, res) => {
   }
 });
 
-// GET /api/push/expo-status — diagnostic: list registered Expo tokens
+// GET /api/push/expo-status — diagnostic: list registered Expo tokens with full audit data
 router.get("/push/expo-status", async (req, res) => {
   try {
     const authedUser = await tryAuthenticate(req);
     const rawQueryUser = req.query.userName as string | undefined;
     const userName = authedUser ?? (rawQueryUser ? resolveUserAlias(rawQueryUser) : null) ?? NATIVE_USER;
-    const tokens = await getExpoTokens(userName);
-    res.json({ userName, tokenCount: tokens.length, tokens: tokens.map((t) => "…" + t.slice(-20)) });
+    const { query: dbQuery } = await import("../db.js");
+    const { rows } = await dbQuery<{
+      id: number; expo_push_token: string; device_id: string | null;
+      failure_count: number; last_failure_at: string | null;
+      last_failure_reason: string | null; last_save_by: string | null;
+      created_at: string; updated_at: string;
+    }>(`SELECT id, expo_push_token, device_id, failure_count,
+               last_failure_at, last_failure_reason, last_save_by,
+               created_at, updated_at
+          FROM expo_push_tokens
+         WHERE user_name = $1
+         ORDER BY updated_at DESC`, [userName]);
+    res.json({
+      userName,
+      tokenCount: rows.length,
+      tokens: rows.map((r) => ({
+        id: r.id,
+        tokenTail: "…" + r.expo_push_token.slice(-20),
+        deviceId: r.device_id,
+        failureCount: r.failure_count,
+        lastFailureAt: r.last_failure_at,
+        lastFailureReason: r.last_failure_reason,
+        lastSaveBy: r.last_save_by,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+      })),
+    });
   } catch (err) {
     logger.error({ err }, "[Expo Push] Status check error");
     res.status(500).json({ error: "Status check failed" });
@@ -185,17 +212,16 @@ router.post("/push/test-medication", async (req, res) => {
 // Returns the exact Expo message payload alongside the send result.
 router.post("/push/test-bill", async (req, res) => {
   const { sendPushToAll, getExpoTokens } = await import("../push/pushManager.js");
-  const { getBills, computeNextDueDate, buildBillReminderMessage } = await import("../bills/billManager.js");
+  const { getUpcomingBills, computeNextDueDate, buildBillReminderMessage } = await import("../bills/billManager.js");
   const { getProfile } = await import("../onboarding/onboardingManager.js");
   try {
-    const bills = await getBills(NATIVE_USER);
-    const active = bills.filter((b) => b.active !== false);
-    if (!active.length) {
-      res.status(404).json({ error: "No active bills found" });
+    const upcoming = await getUpcomingBills(90, NATIVE_USER);
+    if (!upcoming.length) {
+      res.status(404).json({ error: "No upcoming active bills found" });
       return;
     }
 
-    const bill = active[0];
+    const bill = upcoming[0];
     const nextDueDate = computeNextDueDate(bill);
     const profile = await getProfile(NATIVE_USER);
     const displayName = profile?.name ?? "David";
@@ -209,18 +235,7 @@ router.post("/push/test-bill", async (req, res) => {
 
     const pushPayload = {
       title: "Bill Due Soon",
-      body: buildBillReminderMessage(
-        {
-          id: bill.id,
-          name: bill.name,
-          amount: bill.amount ?? "",
-          daysUntil: Math.round((nextDueDate.getTime() - Date.now()) / 86400000),
-          dueDateLabel: nextDueDate.toLocaleDateString("en-US", { timeZone: "America/Chicago", month: "long", day: "numeric" }),
-          isPaid: false,
-          isOverdue: nextDueDate < new Date(),
-        },
-        displayName
-      ),
+      body: buildBillReminderMessage(bill, displayName),
       tag: `bill-${bill.id}`,
       notificationType: "bill-reminder",
       categoryIdentifier: "bill-action",
