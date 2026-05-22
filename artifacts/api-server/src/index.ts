@@ -411,6 +411,20 @@ app.listen(port, async (err) => {
     logger.warn({ e }, "medication_reminder_log table init warning");
   }
 
+  // Onboarding nudge log — tracks the last date we reminded a user to finish setup
+  try {
+    await query(
+      `CREATE TABLE IF NOT EXISTS onboarding_nudge_log (
+        user_name TEXT PRIMARY KEY,
+        last_mention_date DATE NOT NULL
+      )`,
+      []
+    );
+    logger.info("[startup] onboarding_nudge_log table ready");
+  } catch (e) {
+    logger.warn({ e }, "onboarding_nudge_log table init warning");
+  }
+
   // Repair: ensure the native user's profile is always marked onboarding_completed.
   // If this flag is false, getActiveUsers() returns empty and ALL schedulers silently
   // skip — no medication, bill, date, departure, or digest notifications fire.

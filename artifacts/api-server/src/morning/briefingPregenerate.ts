@@ -415,6 +415,33 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
   return promise;
 }
 
+// ── Onboarding nudge helpers — once per day if profile not yet complete ───────
+async function shouldShowOnboardingNudge(userName: string): Promise<boolean> {
+  try {
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+    const result = await query<{ last_mention_date: string }>(
+      `SELECT last_mention_date::text AS last_mention_date FROM onboarding_nudge_log WHERE user_name = $1`,
+      [userName]
+    );
+    if (result.rows.length === 0) return true;
+    return result.rows[0].last_mention_date !== today;
+  } catch {
+    return false;
+  }
+}
+
+async function markOnboardingNudgeShown(userName: string): Promise<void> {
+  try {
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+    await query(
+      `INSERT INTO onboarding_nudge_log (user_name, last_mention_date)
+       VALUES ($1, $2)
+       ON CONFLICT (user_name) DO UPDATE SET last_mention_date = $2`,
+      [userName, today]
+    );
+  } catch { /* non-fatal */ }
+}
+
 async function _doBriefingPrefetch(userName: string): Promise<void> {
   // Capture the CT date NOW, before any async work. setCachedBriefing receives this
   // key explicitly so a briefing that starts on April 6 and finishes after midnight
@@ -459,6 +486,23 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
       userProfile?.onboardingCompleted && userProfile.name
         ? buildSystemPromptFromProfile(userProfile, userProfile.rawData as CollectedData)
         : buildBaseSystemPrompt(userProfile?.companionName, userProfile?.name);
+
+    // ── Onboarding nudge — inject once per day if profile not yet complete ────
+    let onboardingNudgeBlock = "";
+    if (userProfile && !userProfile.onboardingCompleted) {
+      const nudgeShouldShow = await shouldShowOnboardingNudge(userName);
+      if (nudgeShouldShow) {
+        await markOnboardingNudgeShown(userName);
+        onboardingNudgeBlock =
+          `\n\n[Onboarding Reminder — Weave in naturally near the end of briefing]\n` +
+          `This user has not yet completed their profile setup. Near the end of the briefing, ` +
+          `after the main content, include this as a casual friendly aside — not an announcement:\n` +
+          `"By the way, I notice we haven't finished getting me fully set up yet. Would you like ` +
+          `to schedule some time today to complete your profile so I can do a better job for you?"\n` +
+          `Keep it warm and brief — one sentence. Do NOT lecture or repeat it. If the user responds yes, help them pick a time and create a reminder.`;
+        logger.info({ userName }, "[Briefing] Onboarding nudge injected into today's briefing");
+      }
+    }
 
     const primaryCity = (userProfile?.city ?? "Dallas").trim();
     const primaryLat = userProfile?.latitude ?? 32.7767;
@@ -852,6 +896,7 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
       sundaySummaryBlock + recFollowUpBlock + personalFollowUpsBlock +
       mydayBlock + lifeSuggestionBlock + observationBlock + weeklyGiftBlock + annualLetterBlock + crossDomainBlock + routeAwareBlock +
       dedupedNewsBlock + dallasEventsBlock + apifyEventBlock + dedupedVenueConcertsBlock + motivationContextBlock +
+      onboardingNudgeBlock +
       buildNarrativeBriefingInstruction(primaryCity, userProfile?.companionName ?? null, userProfile?.name ?? undefined, proactiveMode, intentionQuestion) +
       modeInstruction;
 

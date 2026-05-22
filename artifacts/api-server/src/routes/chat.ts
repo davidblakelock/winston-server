@@ -353,6 +353,58 @@ function formatWeatherBlock(w: CachedWeather): string {
   );
 }
 
+/** Detect the forecast scope the user is asking about.
+ *  Returns the days to include and how Claude should respond. */
+function detectWeatherScope(msg: string): {
+  scope: "week" | "weekend" | "fewDays" | "standard";
+  sliceDays: number | null;
+  weekendOnly: boolean;
+  instruction: string;
+} {
+  const m = msg.toLowerCase();
+  if (/\b(next\s+week|this\s+week|week.?s?\s+forecast|7[\s-]day|seven[\s-]day|weekly\s+forecast|all\s+week)\b/.test(m)) {
+    return {
+      scope: "week",
+      sliceDays: 7,
+      weekendOnly: false,
+      instruction:
+        `The user wants a 7-day forecast overview. Give a brief, conversational summary — NOT a day-by-day list. ` +
+        `Highlight any bad weather (heavy rain, storms, severe cold or heat) and mention the general temperature range for the week. ` +
+        `If most days are fine, say so. Keep it to 3-4 sentences max.`,
+    };
+  }
+  if (/\b(this\s+weekend|the\s+weekend|weekend\s+weather|saturday\s+and\s+sunday|sat\.?\s+and\s+sun\.?)\b/.test(m)) {
+    return {
+      scope: "weekend",
+      sliceDays: null,
+      weekendOnly: true,
+      instruction:
+        `The user wants weekend weather. Pull Saturday and Sunday from the forecast. ` +
+        `Give a concise 2-sentence summary — highlight any rain, storms, or temperature extremes. ` +
+        `If the weekend looks great, say so warmly.`,
+    };
+  }
+  if (/\b(next\s+few\s+days|few\s+days|couple\s+(?:of\s+)?days|[34][\s-]day|three[\s-]day|four[\s-]day)\b/.test(m)) {
+    return {
+      scope: "fewDays",
+      sliceDays: 4,
+      weekendOnly: false,
+      instruction:
+        `The user wants the next few days. Give a quick 2-3 sentence conversational overview — not a day-by-day list. ` +
+        `Flag any rain, temperature swings, or anything worth planning around.`,
+    };
+  }
+  return {
+    scope: "standard",
+    sliceDays: 5,
+    weekendOnly: false,
+    instruction:
+      `Answer the user's weather question directly using this data. ` +
+      `If they asked about a specific day, look it up in the forecast above and answer precisely. ` +
+      `Be conversational — don't just read the numbers back.`,
+  };
+}
+
 
 // ── Model routing ─────────────────────────────────────────────────────────
 // Haiku: fast, mechanical intents (reminder CRUD, list ops, navigation, calls).
@@ -1140,6 +1192,14 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const cachedBriefingText = !isMorningGreeting ? getCachedBriefing(sessionUserName) : null;
   const isBriefingFollowUp = !isMorningGreeting && !!cachedBriefingText && BRIEFING_FOLLOWUP_PATTERN.test(message);
 
+  // Onboarding nudge response — user replied yes to the setup reminder in the briefing
+  const _lastMsgForNudge = [...history].reverse().find((m) => m.role === "assistant");
+  const _lastContentForNudge = _lastMsgForNudge?.content ?? "";
+  const ONBOARDING_NUDGE_YES = /^(?:yes|yeah|yep|yup|sure|ok(?:ay)?|go\s+ahead|sounds?\s+good|that\s+works?|let.?s\s+do\s+it|please|absolutely|i\s+would|i'?d\s+like\s+that)(?:[,\s!.]|$)/i;
+  const isOnboardingNudgeResponse = !isMorningGreeting &&
+    _lastContentForNudge.includes("haven't finished getting me fully set up") &&
+    ONBOARDING_NUDGE_YES.test(message.trim());
+
 
   // T005: Headache / body ache — check pressure
   const isHeadacheRequest = !isMorningGreeting && HEADACHE_PATTERN.test(message);
@@ -1739,24 +1799,44 @@ If the conversation is not about a trip, set destination to null.`,
     );
     try {
       const wx = await getCachedWeather(_wxCity, _wxLat, _wxLon);
-      const forecastLines = wx.forecastDays.map((d) =>
+      const wxScope = detectWeatherScope(message);
+
+      // Filter or slice forecast days based on scope
+      let forecastDaysToUse = wx.forecastDays;
+      if (wxScope.weekendOnly) {
+        forecastDaysToUse = wx.forecastDays.filter(
+          (d) => d.dayName === "Saturday" || d.dayName === "Sunday"
+        );
+      } else if (wxScope.sliceDays !== null) {
+        forecastDaysToUse = wx.forecastDays.slice(0, wxScope.sliceDays);
+      }
+
+      const forecastLines = forecastDaysToUse.map((d) =>
         `${d.dayName}${d.date ? ` (${d.date})` : ""}: high ${d.high}°F / low ${d.low}°F, ${d.condition}` +
         (d.precipChance > 20 ? `, ${d.precipChance}% chance of rain` : "")
       ).join("\n");
-      req.log.info({ city: _wxCity }, "[Weather] On-demand fetch for chat query");
+
+      req.log.info({ city: _wxCity, scope: wxScope.scope, days: forecastDaysToUse.length }, "[Weather] On-demand fetch for chat query");
       systemPrompt +=
         `\n\n[Weather — ${_wxCity} — Live Data]\n` +
         `Right now: ${wx.temp}°F (feels like ${wx.feelsLike}°F), ${wx.condition}\n` +
         `Today: high ${wx.high}°F / low ${wx.low}°F` +
         (wx.precipChance > 20 ? `, ${wx.precipChance}% chance of rain` : "") + `\n` +
-        (forecastLines ? `\nUpcoming forecast:\n${forecastLines}\n` : "") +
-        `\nAnswer the user's weather question directly using this data. ` +
-        `If they asked about a specific day, look it up in the forecast above and answer precisely. ` +
-        `Be conversational — don't just read the numbers back.`;
+        (forecastLines ? `\nForecast:\n${forecastLines}\n` : "") +
+        `\n${wxScope.instruction}`;
     } catch (err) {
       req.log.warn({ err, city: _wxCity }, "[Weather] On-demand fetch failed");
       systemPrompt += `\n\n[Weather — Unavailable]\nThe weather API returned an error right now. Let the user know you're having trouble pulling the forecast and suggest they check a weather app for now. Do NOT say you don't have access to weather data — you do, it's just temporarily unavailable.`;
     }
+  }
+
+  // ── Onboarding nudge response — user said yes to scheduling setup time ────────
+  if (isOnboardingNudgeResponse) {
+    systemPrompt +=
+      `\n\n[Onboarding Scheduling — User Said Yes]\n` +
+      `The user has agreed to schedule time to complete their profile setup. ` +
+      `Ask them what time today works best — e.g. "Great! What time works for you? I'll set a reminder so we can take a few minutes to finish getting me set up properly." ` +
+      `Once they give a time, create a reminder called "Complete profile setup" at that time using the standard reminder flow.`;
   }
 
   // ── Bill tracking ────────────────────────────────────────────────────────────
