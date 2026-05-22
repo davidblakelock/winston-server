@@ -192,4 +192,23 @@ router.post("/integrations/:service/set-preferred", async (req: Request, res: Re
   }
 });
 
+// ── DELETE /api/integrations/admin/clear-all ─────────────────────────────────
+// TEMPORARY: Clears all service preferences for the authenticated user.
+// Remove this endpoint after use.
+router.delete("/integrations/admin/clear-all", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  try {
+    const { rowCount } = await query(
+      `DELETE FROM user_service_preferences WHERE user_name = $1`,
+      [userName]
+    );
+    req.log.info({ userName, rowCount }, "[Integrations] admin/clear-all: deleted all rows");
+    res.json({ ok: true, deleted: rowCount });
+  } catch (err) {
+    req.log.error({ err }, "[Integrations] admin/clear-all error");
+    res.status(500).json({ error: "Failed to clear integrations" });
+  }
+});
+
 export default router;
