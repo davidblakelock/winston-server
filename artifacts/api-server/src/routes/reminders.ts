@@ -5,7 +5,7 @@ import { query } from "../db.js";
 import { addClient, removeClient, broadcast, registerClientUser } from "../reminders/sseStore.js";
 import { createReminder, markReminderDone } from "../reminders/reminderManager.js";
 import { validateSession } from "../auth/sessionAuth.js";
-import { authenticate } from "../auth/middleware.js";
+import { authenticate, NATIVE_USER } from "../auth/middleware.js";
 import {
   parseContextReminderIntent,
   createContextReminder,
@@ -275,18 +275,70 @@ router.post("/reminders/done", async (req: Request, res: Response) => {
 });
 
 // ── POST /api/reminders/snooze — body-based snooze from notification action ───
-// Called by the native app when the user taps "Snooze" on a reminder push.
-// This is a body-based variant of /reminders/:id/snooze so the app doesn't
-// need to build a dynamic URL from notification data.
+// Called by the native app when the user taps "Snooze" on a reminder push,
+// or "Remind Tomorrow" on a bill push (which has billId but no reminderId).
 // Body: { reminderId?, id?, minutes?, notificationData? }
-// notificationData mirrors the Expo push data payload and may contain reminderId.
+// Bill case: { minutes: 1440, notificationData: { billId, companionMessage, ... } }
 router.post("/reminders/snooze", async (req: Request, res: Response) => {
   const body = req.body ?? {};
+  const notifData = body.notificationData ?? {};
+
+  // ── Bill case: REMIND_TOMORROW sends billId but no reminderId ────────────────
+  // Parse companionMessage for bill name/amount, then schedule for 8 AM tomorrow CT.
+  const billId =
+    body.billId ??
+    notifData.billId ??
+    (notifData.data as { billId?: number } | undefined)?.billId;
+
+  if (billId) {
+    let billName = `Bill #${billId}`;
+    let amount = "";
+    try {
+      const cm = notifData.companionMessage ?? body.companionMessage;
+      if (cm) {
+        const parsed = JSON.parse(typeof cm === "string" ? cm : JSON.stringify(cm)) as {
+          billName?: string;
+          amount?: string;
+        };
+        if (parsed.billName) billName = parsed.billName;
+        if (parsed.amount) amount = parsed.amount;
+      }
+    } catch { /* ignore parse errors — fall back to Bill #id */ }
+
+    const amtPart = amount ? ` of ${amount}` : "";
+    const tomorrowStr = new Date(Date.now() + 86_400_000)
+      .toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+    // fireAtCT: resolve 8 AM America/Chicago → correct UTC instant (handles DST)
+    const approxUtc = new Date(`${tomorrowStr}T08:00:00.000Z`);
+    const ctHour = parseInt(
+      approxUtc.toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "2-digit", hour12: false }),
+      10
+    );
+    const fireAt = new Date(approxUtc.getTime() + (8 - ctHour) * 3_600_000);
+
+    const reminder = await createReminder({
+      userName: NATIVE_USER,
+      reminderText: `Your ${billName}${amtPart} payment — have you paid it yet?`,
+      fireAt,
+      timezone: "America/Chicago",
+      pushCategoryId: "bill-action",
+      pushData: {
+        billId,
+        companionMessage: JSON.stringify({ billId, billName, amount }),
+        categoryIdentifier: "bill-action",
+      },
+    });
+    req.log?.info?.({ billId, billName, fireAt, reminderId: reminder.id }, "[REMINDERS/SNOOZE] Bill remind-tomorrow created");
+    res.json({ success: true, reminderId: reminder.id, scheduledFor: fireAt });
+    return;
+  }
+
+  // ── Standard reminder snooze ─────────────────────────────────────────────────
   const raw =
     body.reminderId ??
     body.id ??
-    body.notificationData?.reminderId ??
-    body.notificationData?.data?.reminderId;
+    notifData.reminderId ??
+    (notifData.data as { reminderId?: number } | undefined)?.reminderId;
 
   if (!raw) {
     res.status(400).json({ error: "reminderId required" });
@@ -308,7 +360,7 @@ router.post("/reminders/snooze", async (req: Request, res: Response) => {
       RETURNING id`,
     [snoozeUntil, id]
   );
-  console.log(`[REMINDERS/SNOOZE] id=${id} minutes=${minutes} until=${snoozeUntil.toISOString()}`);
+  req.log?.info?.({ id, minutes, snoozeUntil }, "[REMINDERS/SNOOZE] Reminder snoozed");
   res.json({ success: true, snoozedUntil: snoozeUntil });
 });
 
