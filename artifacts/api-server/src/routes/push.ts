@@ -170,58 +170,34 @@ router.get("/push/calendar-debug", async (req, res) => {
 });
 
 // POST /api/push/test-medication — send a test medication push to the native app
-// Accepts optional { token: "ExponentPushToken[...]" } to bypass the DB lookup
-// (useful when testing from production where the token is already registered).
+// Accepts optional { token: "ExponentPushToken[...]" } to bypass the DB lookup.
+// Uses the same payload and message builder as the real medication scheduler.
 router.post("/push/test-medication", async (req, res) => {
-  const { sendPushToAll, getExpoTokens } = await import("../push/pushManager.js");
+  const { sendPushToAll, sendPushToTokens, getExpoTokens, buildExpoMessages } = await import("../push/pushManager.js");
   try {
     const { token: overrideToken } = req.body as { token?: string };
 
     const pushPayload = {
       title: "Time for your medications 💊",
       body: "Have you taken your medications?",
-      categoryIdentifier: "medication-action",
-      notificationType: "medication",
       tag: "medication-morning",
+      notificationType: "medication",
+      categoryIdentifier: "medication-action",
+      requireInteraction: true,
     };
 
-    // Use override token if provided, otherwise pull from DB
     const dbTokens = await getExpoTokens();
-    const tokens = overrideToken ? [overrideToken] : dbTokens;
-
-    // Build the exact Expo message the server will send
-    const expoMessage = tokens.map((to) => ({
-      to,
-      title: pushPayload.title,
-      body: pushPayload.body,
-      sound: "default",
-      priority: "high",
-      channelId: "default",
-      categoryId: pushPayload.categoryIdentifier,
-      data: {
-        tag: pushPayload.tag,
-        notificationType: pushPayload.notificationType,
-        categoryIdentifier: pushPayload.categoryIdentifier,
-      },
-    }));
-
     let result: { sent: number; failed: number };
     if (overrideToken) {
-      // Send directly to the override token without going through sendPushToAll
-      // (which would pull DB tokens and ignore the override)
-      const sendRes = await fetch("https://exp.host/--/api/v2/push/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify(expoMessage),
-      });
-      const data = (await sendRes.json()) as { data: Array<{ status: string }> };
-      const sent = data.data?.filter((t) => t.status === "ok").length ?? 0;
-      result = { sent, failed: (data.data?.length ?? 0) - sent };
+      result = await sendPushToTokens(pushPayload, [overrideToken]);
     } else {
       result = await sendPushToAll(pushPayload);
     }
 
-    logger.info({ result, overrideToken: overrideToken ? "…" + overrideToken.slice(-20) : null, expoMessage }, "[Expo Push] Test medication push sent");
+    const tokens = overrideToken ? [overrideToken] : dbTokens;
+    const expoMessage = buildExpoMessages(pushPayload, tokens);
+
+    logger.info({ result, overrideToken: overrideToken ? "…" + overrideToken.slice(-20) : null }, "[Expo Push] Test medication push sent");
     res.json({ ok: true, ...result, expoMessage, usingOverrideToken: !!overrideToken, dbTokenCount: dbTokens.length });
   } catch (err) {
     logger.error({ err }, "[Expo Push] Test medication push failed");
@@ -231,8 +207,9 @@ router.post("/push/test-medication", async (req, res) => {
 
 // POST /api/push/test-bill — send a test bill-due push using the first upcoming active bill
 // Accepts optional { token: "ExponentPushToken[...]" } to bypass the DB lookup.
+// Uses the same payload and message builder as the real bill scheduler.
 router.post("/push/test-bill", async (req, res) => {
-  const { sendPushToAll, getExpoTokens } = await import("../push/pushManager.js");
+  const { sendPushToAll, sendPushToTokens, getExpoTokens, buildExpoMessages } = await import("../push/pushManager.js");
   const { getUpcomingBills, computeNextDueDate, buildBillReminderMessage } = await import("../bills/billManager.js");
   const { getProfile } = await import("../onboarding/onboardingManager.js");
   try {
@@ -249,13 +226,6 @@ router.post("/push/test-bill", async (req, res) => {
     const profile = await getProfile(NATIVE_USER);
     const displayName = profile?.name ?? "David";
 
-    const companionMessage = JSON.stringify({
-      billId: bill.id,
-      billName: bill.name,
-      amount: bill.amount ?? "",
-      dueDateISO: nextDueDate.toISOString().split("T")[0],
-    });
-
     const pushPayload = {
       title: "Bill Due Soon",
       body: buildBillReminderMessage(bill, displayName),
@@ -265,47 +235,26 @@ router.post("/push/test-bill", async (req, res) => {
       requireInteraction: true,
       billId: bill.id,
       dueDateISO: nextDueDate.toISOString().split("T")[0],
-      companionMessage,
+      companionMessage: JSON.stringify({
+        billId: bill.id,
+        billName: bill.name,
+        amount: bill.amount ?? "",
+        dueDateISO: nextDueDate.toISOString().split("T")[0],
+      }),
     };
 
-    // Use override token if provided, otherwise pull from DB
     const dbTokens = await getExpoTokens();
-    const tokens = overrideToken ? [overrideToken] : dbTokens;
-
-    // Build the exact Expo message the server will send
-    const expoMessage = tokens.map((to) => ({
-      to,
-      title: pushPayload.title,
-      body: pushPayload.body,
-      sound: "default",
-      priority: "high",
-      channelId: "default",
-      categoryId: pushPayload.categoryIdentifier,
-      data: {
-        tag: pushPayload.tag,
-        notificationType: pushPayload.notificationType,
-        categoryIdentifier: pushPayload.categoryIdentifier,
-        billId: pushPayload.billId,
-        dueDateISO: pushPayload.dueDateISO,
-        companionMessage: pushPayload.companionMessage,
-      },
-    }));
-
     let result: { sent: number; failed: number };
     if (overrideToken) {
-      const sendRes = await fetch("https://exp.host/--/api/v2/push/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify(expoMessage),
-      });
-      const data = (await sendRes.json()) as { data: Array<{ status: string }> };
-      const sent = data.data?.filter((t) => t.status === "ok").length ?? 0;
-      result = { sent, failed: (data.data?.length ?? 0) - sent };
+      result = await sendPushToTokens(pushPayload, [overrideToken]);
     } else {
       result = await sendPushToAll(pushPayload);
     }
 
-    logger.info({ result, overrideToken: overrideToken ? "…" + overrideToken.slice(-20) : null, expoMessage }, "[Expo Push] Test bill push sent");
+    const tokens = overrideToken ? [overrideToken] : dbTokens;
+    const expoMessage = buildExpoMessages(pushPayload, tokens);
+
+    logger.info({ result, overrideToken: overrideToken ? "…" + overrideToken.slice(-20) : null }, "[Expo Push] Test bill push sent");
     res.json({ ok: true, ...result, expoMessage, usingOverrideToken: !!overrideToken, dbTokenCount: dbTokens.length });
   } catch (err) {
     logger.error({ err }, "[Expo Push] Test bill push failed");

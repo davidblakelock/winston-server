@@ -199,14 +199,12 @@ export async function getExpoTokens(userName = NATIVE_USER): Promise<string[]> {
   return rows.map((r) => r.expo_push_token);
 }
 
-async function sendExpoNotifications(
-  payload: PushPayload,
-  userName = NATIVE_USER
-): Promise<{ sent: number; failed: number }> {
-  const tokens = await getExpoTokens(userName);
-  if (!tokens.length) return { sent: 0, failed: 0 };
-
-  const messages = tokens.map((to) => ({
+// ── Shared message builder ────────────────────────────────────────────────────
+// Single source of truth for what every Expo push message looks like.
+// Both the normal send path and the test endpoints use this so payloads never
+// diverge from what the real schedulers send.
+export function buildExpoMessages(payload: PushPayload, tokens: string[]) {
+  return tokens.map((to) => ({
     to,
     title: payload.title,
     body: payload.body,
@@ -245,7 +243,18 @@ async function sendExpoNotifications(
       ...(payload.dueDateISO ? { dueDateISO: payload.dueDateISO } : {}),
     },
   }));
+}
 
+// ── Core Expo HTTP send ───────────────────────────────────────────────────────
+// Sends to an explicit list of tokens — no DB lookup. Used by both the normal
+// scheduler path and the test endpoints so payloads are always identical.
+export async function sendPushToTokens(
+  payload: PushPayload,
+  tokens: string[]
+): Promise<{ sent: number; failed: number }> {
+  if (!tokens.length) return { sent: 0, failed: 0 };
+
+  const messages = buildExpoMessages(payload, tokens);
   logger.info({ count: messages.length, title: payload.title }, "[Expo Push] Sending notifications");
 
   let sent = 0;
@@ -254,10 +263,7 @@ async function sendExpoNotifications(
   try {
     const res = await fetch("https://exp.host/--/api/v2/push/send", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify(messages),
     });
 
@@ -291,8 +297,16 @@ async function sendExpoNotifications(
     failed = tokens.length;
   }
 
-  logger.info({ sent, failed }, "[Expo Push] sendExpoNotifications complete");
+  logger.info({ sent, failed }, "[Expo Push] sendPushToTokens complete");
   return { sent, failed };
+}
+
+async function sendExpoNotifications(
+  payload: PushPayload,
+  userName = NATIVE_USER
+): Promise<{ sent: number; failed: number }> {
+  const tokens = await getExpoTokens(userName);
+  return sendPushToTokens(payload, tokens);
 }
 
 /**
