@@ -161,11 +161,13 @@ export async function removeExpoToken(expoPushToken: string, reason = "explicit-
 }
 
 /**
- * Mark a token as failed without deleting it.
- * Only auto-deletes after MAX_TOKEN_FAILURES consecutive failures so a single
- * transient DeviceNotRegistered from FCM cannot wipe the token permanently.
+ * Mark a token as failed — logs the failure and increments the counter but
+ * NEVER auto-deletes the token.  Tokens are only removed when the native app
+ * explicitly calls DELETE /api/push/expo-token.  Re-opening the app always
+ * re-registers and resets failure_count to 0, so stale-token blips (Expo
+ * service issues, app reinstalls, overnight scheduler runs before the app
+ * reconnects) can no longer permanently wipe the token.
  */
-const MAX_TOKEN_FAILURES = 5;
 async function recordTokenFailure(expoPushToken: string, errorCode: string): Promise<void> {
   const { rows } = await query<{ id: number; failure_count: number; user_name: string; device_id: string | null }>(
     `UPDATE expo_push_tokens
@@ -179,16 +181,9 @@ async function recordTokenFailure(expoPushToken: string, errorCode: string): Pro
   if (!rows[0]) return;
   const { id, failure_count, user_name, device_id } = rows[0];
   logger.warn(
-    { id, userName: user_name, deviceId: device_id, tokenTail: "…" + expoPushToken.slice(-20), errorCode, failureCount: failure_count, maxBeforeDelete: MAX_TOKEN_FAILURES },
-    `[Push] Token failure recorded (${failure_count}/${MAX_TOKEN_FAILURES}) — NOT deleted yet`
+    { id, userName: user_name, deviceId: device_id, tokenTail: "…" + expoPushToken.slice(-20), errorCode, failureCount: failure_count },
+    `[Push] Token failure recorded (${failure_count} total) — token retained, will recover when app re-registers`
   );
-  if (failure_count >= MAX_TOKEN_FAILURES) {
-    logger.error(
-      { id, tokenTail: "…" + expoPushToken.slice(-20), failureCount: failure_count, errorCode },
-      `[Push] Token reached ${MAX_TOKEN_FAILURES} consecutive failures — DELETING now`
-    );
-    await removeExpoToken(expoPushToken, `auto-delete after ${failure_count} consecutive ${errorCode} failures`);
-  }
 }
 
 export async function getExpoTokens(userName = NATIVE_USER): Promise<string[]> {
