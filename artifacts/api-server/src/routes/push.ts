@@ -143,22 +143,119 @@ router.get("/push/calendar-debug", async (req, res) => {
 });
 
 // POST /api/push/test-medication — send a test medication push to the native app
-// Used to verify action buttons ("Done ✓" / "Remind me in 30 min") appear correctly.
+// Returns the exact Expo message payload alongside the send result.
 router.post("/push/test-medication", async (req, res) => {
-  const { sendPushToAll } = await import("../push/pushManager.js");
+  const { sendPushToAll, getExpoTokens } = await import("../push/pushManager.js");
   try {
-    const result = await sendPushToAll({
+    const pushPayload = {
       title: "Time for your medications 💊",
       body: "Have you taken your medications?",
       categoryIdentifier: "medication-action",
       notificationType: "medication",
       tag: "medication-morning",
-    });
-    logger.info(result, "[Expo Push] Test medication push sent");
-    res.json({ ok: true, ...result });
+    };
+
+    // Build the exact Expo message the server will send (mirrors sendExpoNotifications logic)
+    const tokens = await getExpoTokens();
+    const expoMessage = tokens.map((to) => ({
+      to,
+      title: pushPayload.title,
+      body: pushPayload.body,
+      sound: "default",
+      priority: "high",
+      channelId: "default",
+      categoryId: pushPayload.categoryIdentifier,
+      data: {
+        tag: pushPayload.tag,
+        notificationType: pushPayload.notificationType,
+        categoryIdentifier: pushPayload.categoryIdentifier,
+      },
+    }));
+
+    const result = await sendPushToAll(pushPayload);
+    logger.info({ result, expoMessage }, "[Expo Push] Test medication push sent");
+    res.json({ ok: true, ...result, expoMessage });
   } catch (err) {
     logger.error({ err }, "[Expo Push] Test medication push failed");
     res.status(500).json({ error: "Failed to send test push" });
+  }
+});
+
+// POST /api/push/test-bill — send a test bill-due push using the first upcoming active bill
+// Returns the exact Expo message payload alongside the send result.
+router.post("/push/test-bill", async (req, res) => {
+  const { sendPushToAll, getExpoTokens } = await import("../push/pushManager.js");
+  const { getBills, computeNextDueDate, buildBillReminderMessage } = await import("../bills/billManager.js");
+  const { getProfile } = await import("../onboarding/onboardingManager.js");
+  try {
+    const bills = await getBills(NATIVE_USER);
+    const active = bills.filter((b) => b.active !== false);
+    if (!active.length) {
+      res.status(404).json({ error: "No active bills found" });
+      return;
+    }
+
+    const bill = active[0];
+    const nextDueDate = computeNextDueDate(bill);
+    const profile = await getProfile(NATIVE_USER);
+    const displayName = profile?.name ?? "David";
+
+    const companionMessage = JSON.stringify({
+      billId: bill.id,
+      billName: bill.name,
+      amount: bill.amount ?? "",
+      dueDateISO: nextDueDate.toISOString().split("T")[0],
+    });
+
+    const pushPayload = {
+      title: "Bill Due Soon",
+      body: buildBillReminderMessage(
+        {
+          id: bill.id,
+          name: bill.name,
+          amount: bill.amount ?? "",
+          daysUntil: Math.round((nextDueDate.getTime() - Date.now()) / 86400000),
+          dueDateLabel: nextDueDate.toLocaleDateString("en-US", { timeZone: "America/Chicago", month: "long", day: "numeric" }),
+          isPaid: false,
+          isOverdue: nextDueDate < new Date(),
+        },
+        displayName
+      ),
+      tag: `bill-${bill.id}`,
+      notificationType: "bill-reminder",
+      categoryIdentifier: "bill-action",
+      requireInteraction: true,
+      billId: bill.id,
+      dueDateISO: nextDueDate.toISOString().split("T")[0],
+      companionMessage,
+    };
+
+    // Build the exact Expo message the server will send (mirrors sendExpoNotifications logic)
+    const tokens = await getExpoTokens();
+    const expoMessage = tokens.map((to) => ({
+      to,
+      title: pushPayload.title,
+      body: pushPayload.body,
+      sound: "default",
+      priority: "high",
+      channelId: "default",
+      categoryId: pushPayload.categoryIdentifier,
+      data: {
+        tag: pushPayload.tag,
+        notificationType: pushPayload.notificationType,
+        categoryIdentifier: pushPayload.categoryIdentifier,
+        billId: pushPayload.billId,
+        dueDateISO: pushPayload.dueDateISO,
+        companionMessage: pushPayload.companionMessage,
+      },
+    }));
+
+    const result = await sendPushToAll(pushPayload);
+    logger.info({ result, expoMessage }, "[Expo Push] Test bill push sent");
+    res.json({ ok: true, ...result, expoMessage });
+  } catch (err) {
+    logger.error({ err }, "[Expo Push] Test bill push failed");
+    res.status(500).json({ error: "Failed to send test bill push" });
   }
 });
 
