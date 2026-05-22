@@ -67,7 +67,10 @@ router.post("/bills/paid", express.json({ limit: "1mb" }), async (req, res) => {
     body.notificationData?.billId ??
     body.notificationData?.data?.billId;
 
-  if (!rawId || typeof rawId !== "number") {
+  // Coerce string → number (notification action data often stringifies numbers)
+  const billId = typeof rawId === "string" ? parseInt(rawId, 10) : rawId;
+
+  if (!billId || typeof billId !== "number" || isNaN(billId)) {
     res.status(400).json({ error: "billId (number) is required" });
     return;
   }
@@ -75,11 +78,11 @@ router.post("/bills/paid", express.json({ limit: "1mb" }), async (req, res) => {
   try {
     // Look up the bill name so we can log it meaningfully
     const bills = await getBills(userName);
-    const bill = bills.find((b) => b.id === rawId);
-    const name = bill?.name ?? `Bill #${rawId}`;
-    await markBillPaid(rawId, name, userName);
-    req.log.info({ userName, billId: rawId, billName: name }, "[BILLS] Paid via /bills/paid notification action");
-    res.json({ ok: true, dismissed: true, dismissTag: `bill-${rawId}` });
+    const bill = bills.find((b) => b.id === billId);
+    const name = bill?.name ?? `Bill #${billId}`;
+    await markBillPaid(billId, name, userName);
+    req.log.info({ userName, billId, billName: name }, "[BILLS] Paid via /bills/paid notification action");
+    res.json({ ok: true, dismissed: true, dismissTag: `bill-${billId}` });
   } catch (err) {
     req.log.error({ err }, "[BILLS] POST /bills/paid error");
     res.status(500).json({ error: "Failed to mark bill as paid" });

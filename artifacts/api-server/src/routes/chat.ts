@@ -386,6 +386,34 @@ const EVENING_PATTERN = /\b(good\s+evening|evening\s+check[\s-]?in|check[\s-]?in
 // Catches direct weather queries at any time of day (not just during wind-down).
 // Matches: "what's the weather", "weather on Friday", "forecast", "will it rain", "how hot", etc.
 const WEATHER_PATTERN = /\b(weather|forecast|temperature|how\s+(hot|cold|warm)|will\s+it\s+(rain|snow|be\s+(hot|cold|warm|sunny|cloudy|rainy|windy))|chance\s+of\s+rain|what('?s|\s+is)\s+(it\s+like\s+)?(outside|today|tomorrow|this\s+week|this\s+weekend|on\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday))|is\s+it\s+(going\s+to|supposed\s+to)\s+(rain|snow|be\s+(hot|cold|warm|sunny|nice))|outdoor\s+(conditions?|weather)|rain\s+(today|tomorrow|this\s+week|this\s+weekend)|degrees?\s+outside|feels?\s+like\s+outside)\b/i;
+
+/** Extract a specific city from a weather message and geocode it with Nominatim.
+ *  Falls back to the user's profile city/coords if no specific location is found. */
+async function resolveWeatherLocation(
+  message: string,
+  profileCity: string,
+  profileLat: number,
+  profileLon: number
+): Promise<{ city: string; lat: number; lon: number }> {
+  // Match "weather in Houston", "forecast for New York", "is it raining in San Diego", etc.
+  const m = /\b(?:in|for|at|near)\s+([A-Za-z][A-Za-z\s\-]{1,30}?)(?:\s+(?:today|tomorrow|right\s+now|this\s+week|this\s+weekend|on\s+\w+|\?)|[?,.]|$)/i.exec(message);
+  if (!m) return { city: profileCity, lat: profileLat, lon: profileLon };
+  const candidate = m[1]!.trim();
+  const NON_CITY = /^(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this|the|a|an|my|your|here|there|it|outside)$/i;
+  if (NON_CITY.test(candidate)) return { city: profileCity, lat: profileLat, lon: profileLon };
+  try {
+    const r = await fetch(
+      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(candidate)}&format=json&limit=1`,
+      { headers: { "User-Agent": "WinstonApp/1.0" }, signal: AbortSignal.timeout(3000) }
+    );
+    const data = await r.json() as Array<{ lat: string; lon: string; display_name: string }>;
+    if (data.length > 0) {
+      const cityName = data[0]!.display_name.split(",")[0]!.trim();
+      return { city: cityName, lat: parseFloat(data[0]!.lat), lon: parseFloat(data[0]!.lon) };
+    }
+  } catch { /* fall through to profile city */ }
+  return { city: profileCity, lat: profileLat, lon: profileLon };
+}
 // LIST_REMINDERS_PATTERN must come before REMINDER_PATTERN in evaluation order so
 // "what are my reminders?" is never mistakenly routed to the reminder-creation path.
 const LIST_REMINDERS_PATTERN = /\b(what\s+(are\s+)?(my\s+)?(active\s+|pending\s+|upcoming\s+|current\s+)?reminders?|show\s+(me\s+)?(my\s+)?(active\s+|pending\s+|upcoming\s+|current\s+)?reminders?|list\s+(my\s+)?(active\s+|pending\s+|upcoming\s+|current\s+)?reminders?|do\s+i\s+have\s+(any\s+)?(active\s+|pending\s+|upcoming\s+)?reminders?|any\s+(active\s+|pending\s+|upcoming\s+)?reminders?|reminders?\s+do\s+i\s+have)\b/i;
@@ -1703,9 +1731,12 @@ If the conversation is not about a trip, set destination to null.`,
   // Fires any time the user asks about weather outside of the wind-down session.
   // The wind-down flow already injects weather separately (lines further below).
   if (isWeatherRequest) {
-    const _wxCity = userProfile?.city ?? "Dallas";
-    const _wxLat = userProfile?.latitude ?? 32.7767;
-    const _wxLon = userProfile?.longitude ?? -96.7970;
+    const _wxProfileCity = userProfile?.city ?? "Dallas";
+    const _wxProfileLat = userProfile?.latitude ?? 32.7767;
+    const _wxProfileLon = userProfile?.longitude ?? -96.7970;
+    const { city: _wxCity, lat: _wxLat, lon: _wxLon } = await resolveWeatherLocation(
+      message, _wxProfileCity, _wxProfileLat, _wxProfileLon
+    );
     try {
       const wx = await getCachedWeather(_wxCity, _wxLat, _wxLon);
       const forecastLines = wx.forecastDays.map((d) =>

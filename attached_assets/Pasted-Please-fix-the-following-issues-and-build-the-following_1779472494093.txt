@@ -1,0 +1,62 @@
+Please fix the following issues and build the following features in one deployment. Read everything before starting.
+1. Fix Expo Push Token Persistence
+The expo_push_tokens table keeps losing tokens. Please:
+
+Check if any migration or startup script is clearing this table on restart
+Add a log every time a token is saved or deleted
+Ensure POST /api/push/expo-token writes to production database not dev
+The token must persist indefinitely until the user logs out
+
+2. Fix Bill Mark as Paid
+The Mark as Paid button in the bills screen is not working. POST /api/bills/paid is not updating the bill correctly. Please verify the endpoint accepts billId and updates paid_through_date in the production database. Test by marking a bill paid and confirming paid_through_date is set.
+3. Fix Weather Location
+Weather is hardcoded to Dallas and Knoxville. When the user asks for weather in any location — Houston, New York, anywhere — Winston should fetch weather for that specific location using the Tomorrow.io API. The location should be geocoded from the user's request not pulled from their profile. Profile location is only the default when no location is specified.
+4. Fix AfterShip Order Tracking
+The order screen pulls initial order confirmations from Gmail correctly but is not updating tracking status using the AfterShip API. The API key exists but is not being called. Please:
+
+Verify the AfterShip API key is configured
+When an order is added to the orders table from Gmail, register it with AfterShip using the tracking number and carrier
+Poll AfterShip for status updates on active orders and update the orders table
+Surface meaningful status changes — shipped, out for delivery, delivered — as push notifications
+
+5. To-Do List Proactive in Morning Briefing
+During morning briefing generation, scan the user's to-do list. Surface any items due today or items with no due date. Winston should mention them naturally: 'You have 3 things on your to-do list worth looking at today — pick up dry cleaning, call the insurance company, and schedule the AC service. Want to tackle any of these today or clear them out?' This should feel like a helpful nudge not a task manager report.
+6. Weather in Morning Briefing — Natural Language
+Remove the structured weather data from the morning briefing. Replace with one natural sentence that tells the user what they need to know about the day's weather and what to do about it. Examples:
+
+'It's going to be 94 and humid with storms rolling in around 3pm — might want to move that afternoon run to the morning.'
+'Perfect day outside, sunny and 78 all day.'
+'Light rain through noon, clearing up by afternoon.'
+Only mention weather details that affect the user's day. Never just list temperature and conditions.
+
+7. Integrations Backend
+Add a user_integrations table: id, user_id, service_name, service_type (grocery/health/shopping), is_connected, auth_data (encrypted), preferred (boolean), created_at.
+Add endpoints:
+
+GET /api/integrations — returns all available integrations with connected status for the user
+POST /api/integrations/:service/connect — marks a service as connected and stores any auth data
+DELETE /api/integrations/:service — disconnects a service
+GET /api/integrations/preferred/grocery — returns the user's preferred grocery service
+
+Available services to register:
+Grocery: instacart, walmart, heb, kroger, shipt, amazon_fresh
+Health: garmin, oura, fitbit, google_fit
+Shopping: amazon
+8. Grocery List Deep Links
+When the user asks Winston to send their shopping list to their preferred grocery app, or taps the send button:
+
+Fetch their preferred grocery service from /api/integrations/preferred/grocery
+Fetch their current shopping list items
+Construct the best possible deep link for that service
+Return the deep link so the native app can open it
+
+Deep link formats:
+
+Instacart: https://www.instacart.com/store/search_v3/term?term=ITEM (one per item, or search page)
+Walmart: https://www.walmart.com/search?q=ITEM
+HEB: https://www.heb.com/search/?q=ITEM
+Kroger: https://www.kroger.com/search?query=ITEM
+Amazon Fresh: https://www.amazon.com/s?k=ITEM&i=amazonfresh
+
+Return all item links as an array so the native app can open them sequentially or show them as a list.
+Deploy when complete and confirm each fix with a test result

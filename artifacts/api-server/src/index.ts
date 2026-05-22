@@ -490,6 +490,26 @@ app.listen(port, async (err) => {
     logger.warn({ e }, "Music preference seeding warning");
   }
 
+  // Create user_service_preferences table for managing preferred grocery/health/shopping services.
+  try {
+    await query(`
+      CREATE TABLE IF NOT EXISTS user_service_preferences (
+        id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        user_name text NOT NULL,
+        service_name text NOT NULL,
+        service_type text NOT NULL,
+        is_connected boolean NOT NULL DEFAULT false,
+        preferred boolean NOT NULL DEFAULT false,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        UNIQUE(user_name, service_name)
+      )
+    `);
+    logger.info("Startup migration: user_service_preferences table ready");
+  } catch (e) {
+    logger.warn({ e }, "Startup migration warning: user_service_preferences table");
+  }
+
   // Add device_id column to push_subscriptions for multi-device notification routing.
   try {
     await query(`ALTER TABLE push_subscriptions ADD COLUMN IF NOT EXISTS device_id text`);

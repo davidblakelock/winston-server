@@ -40,6 +40,8 @@ import {
 } from "../lifeCaptures/lifeCapturesManager.js";
 import { buildRouteAwareSuggestions, buildRouteAwareBlock } from "../routeAware/routeAwareManager.js";
 import { getOrdersForBriefing } from "../orders/ordersManager.js";
+import { getCachedWeather } from "../weather/weatherCache.js";
+import { query } from "../db.js";
 
 // ── Smart calendar block with integrated departure times ──────────────────────
 // Builds a TODAY / TOMORROW / LATER THIS WEEK block where each event with a
@@ -555,6 +557,34 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
       ? await getStoredFitData(userName).catch(() => null)
       : null;
 
+    // ── Weather context + To-Do list (fetched at pre-gen time) ───────────────
+    const [weatherData, todoItems] = await Promise.all([
+      getCachedWeather(primaryCity, primaryLat, primaryLon).catch(() => null),
+      query<{ item_text: string }>(
+        `SELECT item_text FROM list_items WHERE user_name = $1 AND list_name = 'to do' ORDER BY created_at ASC`,
+        [userName]
+      ).then((r) => r.rows).catch((): Array<{ item_text: string }> => []),
+    ]);
+
+    const weatherContextBlock = weatherData
+      ? `\n\n[VERIFIED — Weather — ${primaryCity}]\n` +
+        `Right now: ${weatherData.temp}°F (feels like ${weatherData.feelsLike}°F), ${weatherData.condition}\n` +
+        `Today: high ${weatherData.high}°F / low ${weatherData.low}°F` +
+        (weatherData.precipChance > 20 ? `, ${weatherData.precipChance}% chance of rain` : "") + `\n` +
+        (weatherData.forecastDays[0]
+          ? `Tomorrow: high ${weatherData.forecastDays[0].high}°F / low ${weatherData.forecastDays[0].low}°F, ${weatherData.forecastDays[0].condition}` +
+            (weatherData.forecastDays[0].precipChance > 20 ? `, ${weatherData.forecastDays[0].precipChance}% chance of rain` : "") + `\n`
+          : "")
+      : "";
+
+    const todoBlock = todoItems.length > 0
+      ? `\n\n[VERIFIED — To-Do List — ${todoItems.length} item${todoItems.length === 1 ? "" : "s"}]\n` +
+        todoItems.map((i) => `• ${i.item_text}`).join("\n") +
+        `\n\nTO-DO INSTRUCTION: Briefly mention the to-do list if items look actionable today — one natural sentence at most. ` +
+        `Example: "You've got ${todoItems.length > 2 ? `${todoItems.length} things on your list` : `a couple of things on your to-do list`}${todoItems[0] ? `, including ${todoItems[0].item_text}` : ""}." ` +
+        `Skip entirely if the list feels irrelevant to the rest of the briefing.`
+      : "";
+
     // ── Story dedup — filter seen headlines from news, Dallas, venue concerts ──
     // News: strip **bold headline** + sentence pairs that appeared in the last 3 days
     const { filtered: dedupedNewsBlock, removed: removedNewsHeadlines } = filterNewsBlock(newsBlock, seenHeadlines);
@@ -818,7 +848,7 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
     const todayTrip = await getTodayTripDay(userName).catch(() => null);
     const tripDayBlock = todayTrip ? buildTripDayBlock(todayTrip) : "";
 
-    const suffix = garminBlock + fitBlock + tripDayBlock + ordersBlock + tvMorningBlock + billsMorningBlock + datesBlock +
+    const suffix = weatherContextBlock + garminBlock + fitBlock + tripDayBlock + ordersBlock + todoBlock + tvMorningBlock + billsMorningBlock + datesBlock +
       sundaySummaryBlock + recFollowUpBlock + personalFollowUpsBlock +
       mydayBlock + lifeSuggestionBlock + observationBlock + weeklyGiftBlock + annualLetterBlock + crossDomainBlock + routeAwareBlock +
       dedupedNewsBlock + dallasEventsBlock + apifyEventBlock + dedupedVenueConcertsBlock + motivationContextBlock +
@@ -827,7 +857,8 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
 
     // Log which static sections have data
     const sectionLog: Record<string, boolean | string> = {
-      "weather": "visual-card-only",
+      "weather": weatherContextBlock.length > 0 ? "context-included" : "unavailable",
+      "todo": todoItems.length > 0 ? `${todoItems.length} items` : false,
       "email": "live-at-delivery",
       "calendar": "live-at-delivery",
 

@@ -22,6 +22,7 @@ import {
   getOrders,
   getLastOrderScanAt,
   updateLastOrderScanAt,
+  updateOrderTracking,
 } from "../orders/ordersManager.js";
 import { trackOrder, isAfterShipEnabled } from "../orders/aftershipTracker.js";
 import { setPendingMeetingRequests, getPendingMeetingRequests } from "../email/emailMeetingManager.js";
@@ -263,6 +264,16 @@ async function handleOrder(userName: string, msgId: string, result: ClassifiedEm
             { orderId: saved.id, trackingNumber: result.trackingNumber, status: trackResult.status },
             "[BgEmailScanner] Aftership registration + initial track successful"
           );
+          // Persist the initial tracking result immediately so the order shows real status
+          updateOrderTracking(saved.id, {
+            status: trackResult.status,
+            expected_date: trackResult.expected_date ?? undefined,
+            tracking_events: trackResult.events,
+            aftership_slug: trackResult.aftership_slug,
+            carrier: trackResult.carrier ?? undefined,
+          }).catch((e) => {
+            logger.warn({ e, orderId: saved.id }, "[BgEmailScanner] updateOrderTracking after initial track failed");
+          });
         }
       })
       .catch((err) => {

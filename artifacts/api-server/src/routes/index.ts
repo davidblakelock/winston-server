@@ -34,6 +34,7 @@ import ttsRouter from "./tts";
 import locationRouter from "./location";
 import providersRouter from "./providers";
 import peopleRouter from "./people";
+import integrationsRouter from "./integrations";
 
 const router: IRouter = Router();
 
@@ -72,5 +73,6 @@ router.use(ttsRouter);
 router.use(locationRouter);
 router.use(providersRouter);
 router.use(peopleRouter);
+router.use(integrationsRouter);
 
 export default router;
