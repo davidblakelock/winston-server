@@ -351,6 +351,29 @@ router.get("/onboarding/suggested-people", async (req, res) => {
   }
 });
 
+// ── POST /api/onboarding/save-step ───────────────────────────────────────────
+// Incremental save from structured multi-screen onboarding. Requires session.
+router.post("/onboarding/save-step", async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith("Bearer ")) {
+    res.status(401).json({ error: "authentication_required" });
+    return;
+  }
+  const session = await validateSession(authHeader.slice(7));
+  if (!session) {
+    res.status(401).json({ error: "session_expired" });
+    return;
+  }
+  const { data } = req.body as { data: Partial<CollectedData> };
+  try {
+    if (data) await upsertProfile(data, session.userName);
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error({ err }, "save-step failed");
+    res.status(500).json({ error: "save_failed" });
+  }
+});
+
 router.post("/onboarding/complete", async (req, res) => {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith("Bearer ")) {
