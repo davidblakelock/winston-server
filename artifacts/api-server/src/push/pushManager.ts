@@ -185,6 +185,9 @@ async function sendWebPushNotifications(
     reminderText: payload.body,
     reminderId: payload.reminderId ?? null,
     companionMessage: payload.companionMessage ?? null,
+    // sw.js reads payload.categoryId to decide which action buttons to show.
+    // Also include categoryIdentifier for forward-compat with any future SW changes.
+    categoryId: payload.categoryIdentifier ?? null,
     categoryIdentifier: payload.categoryIdentifier ?? null,
   });
 
