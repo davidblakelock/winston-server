@@ -27,7 +27,7 @@ const KNOWN_SERVICES: Record<string, ServiceInfo> = {
 };
 
 // ── GET /api/integrations ────────────────────────────────────────────────────
-// Returns all known services with their connected/preferred status for this user.
+// Returns only services the user has explicitly connected (is_connected = true).
 router.get("/integrations", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
@@ -36,22 +36,19 @@ router.get("/integrations", async (req: Request, res: Response) => {
     const { rows } = await query<{
       service_name: string;
       service_type: string;
-      is_connected: boolean;
       preferred: boolean;
     }>(
-      `SELECT service_name, service_type, is_connected, preferred
-       FROM user_service_preferences WHERE user_name = $1`,
+      `SELECT service_name, service_type, preferred
+       FROM user_service_preferences
+       WHERE user_name = $1 AND is_connected = true`,
       [userName]
     );
 
-    const connected = new Map(rows.map((r) => [r.service_name, r]));
-
-    const integrations = Object.entries(KNOWN_SERVICES).map(([name, info]) => ({
-      serviceName: name,
-      serviceType: info.type,
-      displayName: info.displayName,
-      isConnected: connected.get(name)?.is_connected ?? false,
-      preferred:   connected.get(name)?.preferred   ?? false,
+    const integrations = rows.map((r) => ({
+      service_name: r.service_name,
+      service_type: r.service_type,
+      display_name: KNOWN_SERVICES[r.service_name]?.displayName ?? r.service_name,
+      preferred:    r.preferred,
     }));
 
     res.json({ integrations });
