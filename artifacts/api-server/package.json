@@ -11,7 +11,6 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",
-    "@types/web-push": "^3.6.4",
     "@workspace/api-zod": "workspace:*",
     "@workspace/db": "workspace:*",
     "apple-signin-auth": "^2.0.0",
@@ -27,8 +26,7 @@
     "nodemailer": "^8.0.7",
     "pg": "^8.20.0",
     "pino": "^9",
-    "pino-http": "^10",
-    "web-push": "^3.6.7"
+    "pino-http": "^10"
   },
   "devDependencies": {
     "@types/bcryptjs": "^3.0.0",
