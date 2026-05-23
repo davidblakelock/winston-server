@@ -447,16 +447,23 @@ async function resolveWeatherLocation(
   profileLat: number,
   profileLon: number
 ): Promise<{ city: string; lat: number; lon: number }> {
-  // Match "weather in Houston", "forecast for New York", "is it raining in San Diego", etc.
-  const m = /\b(?:in|for|at|near)\s+([A-Za-z][A-Za-z\s\-]{1,30}?)(?:\s+(?:today|tomorrow|right\s+now|this\s+week|this\s+weekend|on\s+\w+|\?)|[?,.]|$)/i.exec(message);
+  // Pattern 1: preposition — "weather in Houston", "forecast for New York", "raining in San Diego", etc.
+  const m1 = /\b(?:in|for|at|near)\s+([A-Za-z][A-Za-z\s\-]{1,30}?)(?:\s+(?:today|tomorrow|right\s+now|this\s+week|this\s+weekend|on\s+\w+|\?)|[?,.]|$)/i.exec(message);
+  // Pattern 2: "weather Houston" / "forecast London" — city directly after keyword (case-sensitive: city must start uppercase)
+  const m2 = !m1 ? /\b[Ww]eather\s+([A-Z][a-zA-Z\-]+(?:\s+[A-Z][a-zA-Z\-]+)?)(?:\s+(?:today|tomorrow|this|next|on)|[?,.]|$)/.exec(message) : null;
+  // Pattern 3: "Houston weather" / "New York forecast" — city before keyword
+  const m3 = (!m1 && !m2) ? /\b([A-Z][a-zA-Z\-]+(?:\s+[A-Z][a-zA-Z\-]+)?)\s+(?:[Ww]eather|[Ff]orecast|[Tt]emperature)\b/.exec(message) : null;
+
+  const m = m1 ?? m2 ?? m3;
   if (!m) return { city: profileCity, lat: profileLat, lon: profileLon };
+
   const candidate = m[1]!.trim();
-  const NON_CITY = /^(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this|the|a|an|my|your|here|there|it|outside)$/i;
+  const NON_CITY = /^(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this|the|a|an|my|your|here|there|it|outside|like|right|now|going|be|for|at|in|near|will|is|are|was|were|how|what|when|where|that|just|so|any|which|tonight|soon|later|next|week|weekend|currently|forecast|temperature|weather|good|nice|bad|hot|cold|warm|cool|rainy|sunny|cloudy|windy|i|you|we|they|he|she)$/i;
   if (NON_CITY.test(candidate)) return { city: profileCity, lat: profileLat, lon: profileLon };
   try {
     const r = await fetch(
       `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(candidate)}&format=json&limit=1`,
-      { headers: { "User-Agent": "WinstonApp/1.0" }, signal: AbortSignal.timeout(3000) }
+      { headers: { "User-Agent": "WinstonApp/1.0" }, signal: AbortSignal.timeout(5000) }
     );
     const data = await r.json() as Array<{ lat: string; lon: string; display_name: string }>;
     if (data.length > 0) {
@@ -1817,8 +1824,11 @@ If the conversation is not about a trip, set destination to null.`,
       ).join("\n");
 
       req.log.info({ city: _wxCity, scope: wxScope.scope, days: forecastDaysToUse.length }, "[Weather] On-demand fetch for chat query");
+      const cityOverrideNote = _wxCity.toLowerCase() !== _wxProfileCity.toLowerCase()
+        ? `\nIMPORTANT: The user asked about ${_wxCity}, not ${_wxProfileCity}. Use the ${_wxCity} data below — do NOT default to ${_wxProfileCity} weather.\n`
+        : "";
       systemPrompt +=
-        `\n\n[Weather — ${_wxCity} — Live Data]\n` +
+        `\n\n[Weather — ${_wxCity} — Live Data]${cityOverrideNote}\n` +
         `Right now: ${wx.temp}°F (feels like ${wx.feelsLike}°F), ${wx.condition}\n` +
         `Today: high ${wx.high}°F / low ${wx.low}°F` +
         (wx.precipChance > 20 ? `, ${wx.precipChance}% chance of rain` : "") + `\n` +
@@ -5286,19 +5296,27 @@ router.post("/chat", chatHandlerCore);
 router.get("/chat/history", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
-  const limit = Math.min(100, Math.max(1, parseInt((req.query as Record<string, string>).limit ?? "40", 10) || 40));
+  const limit = Math.min(200, Math.max(1, parseInt((req.query as Record<string, string>).limit ?? "100", 10) || 100));
   try {
     const aliasNames = [userName, "David", "david"];
-    const { rows } = await query<{ role: string; content: string; created_at: string }>(
-      `SELECT role, content, created_at
+    const { rows } = await query<{ id: number; role: string; content: string; created_at: string }>(
+      `SELECT id, role, content, created_at
        FROM chat_messages
        WHERE user_name = ANY($1)
        ORDER BY created_at DESC, id DESC
        LIMIT $2`,
       [aliasNames, limit]
     );
-    // Return chronological order (oldest first) so clients can render top-to-bottom
-    res.json({ messages: rows.reverse() });
+    // Return chronological order (oldest first) so clients can render top-to-bottom.
+    // Format matches GET /api/messages: { id: "db-N", role, content, createdAt }.
+    res.json({
+      messages: rows.reverse().map((r) => ({
+        id: `db-${r.id}`,
+        role: r.role,
+        content: r.content,
+        createdAt: r.created_at,
+      })),
+    });
   } catch (err) {
     req.log.error({ err }, "[CHAT/HISTORY] Query failed");
     res.status(500).json({ error: "Failed to load history" });

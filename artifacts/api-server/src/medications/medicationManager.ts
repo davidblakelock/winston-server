@@ -356,7 +356,7 @@ function buildMedEmailHtml(meds: Medication[], exportDate: string): string {
 </html>`;
 }
 
-function buildMedEmailText(meds: Medication[], exportDate: string): string {
+export function buildMedEmailText(meds: Medication[], exportDate: string): string {
   const lines = meds.map((m) => [
     `Medication:  ${m.name}`,
     `Dose:        ${m.dosage ?? "—"}`,

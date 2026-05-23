@@ -13,6 +13,7 @@ import {
   getTodayDoseLog,
   getMedicationInteractions,
   exportMedicationsEmail,
+  buildMedEmailText,
 } from "../medications/medicationManager.js";
 import { createReminder } from "../reminders/reminderManager.js";
 
@@ -31,6 +32,28 @@ router.get("/medications", async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "[MEDS] GET /medications error");
     res.status(500).json({ error: "Failed to fetch medications" });
+  }
+});
+
+// ── GET /api/medications/export/data ──────────────────────────────────────────
+// Returns the medication list as formatted text — no SMTP required.
+// The native app can display, copy, or share this text via the OS share sheet.
+// Response: { ok, exportText, exportDate, medications }
+router.get("/medications/export/data", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  try {
+    const meds = await getMedications(userName, true);
+    const active = meds.filter((m) => m.active);
+    const exportDate = new Date().toLocaleDateString("en-US", {
+      year: "numeric", month: "long", day: "numeric",
+    });
+    const exportText = buildMedEmailText(active, exportDate);
+    req.log.info({ count: active.length }, "[MEDS] GET /medications/export/data");
+    res.json({ ok: true, exportText, exportDate, medications: active });
+  } catch (err) {
+    req.log.error({ err }, "[MEDS] GET /medications/export/data error");
+    res.status(500).json({ error: "Failed to build medication export" });
   }
 });
 
@@ -112,7 +135,26 @@ router.post("/medications/add", express.json({ limit: "1mb" }), async (req, res)
       userName
     );
     req.log.info({ name: name.trim(), alreadyExists: result.alreadyExists }, "[MEDS] POST /medications/add");
-    res.json({ ok: true, alreadyExists: result.alreadyExists, medication: result.medication ?? null });
+
+    // Auto-check drug interactions after adding — run against all active meds including the new one.
+    // Included in the response so the native app can surface warnings immediately.
+    const interactionResult = await getMedicationInteractions(userName).catch(() => ({
+      interactions: [] as Array<{ severity: string; description: string; drugs: string[] }>,
+      checkedDrugs: [] as string[],
+      failedLookups: [] as string[],
+    }));
+    req.log.info(
+      { interactions: interactionResult.interactions.length, checked: interactionResult.checkedDrugs.length },
+      "[MEDS] Interaction check after add"
+    );
+    res.json({
+      ok: true,
+      alreadyExists: result.alreadyExists,
+      medication: result.medication ?? null,
+      interactions: interactionResult.interactions,
+      checkedDrugs: interactionResult.checkedDrugs,
+      failedLookups: interactionResult.failedLookups,
+    });
   } catch (err) {
     // Unique constraint violation — medication already exists (e.g. inactive record
     // not caught by the pre-check due to a race condition). Treat as alreadyExists.
