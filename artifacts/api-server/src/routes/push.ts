@@ -174,12 +174,19 @@ router.get("/push/calendar-debug", async (req, res) => {
 // Uses the same payload and message builder as the real medication scheduler.
 router.post("/push/test-medication", async (req, res) => {
   const { sendPushToAll, sendPushToTokens, getExpoTokens, buildExpoMessages } = await import("../push/pushManager.js");
+  const { getMedications, buildMedReminderText } = await import("../medications/medicationManager.js");
   try {
     const { token: overrideToken } = req.body as { token?: string };
 
+    const meds = await getMedications(NATIVE_USER);
+    const medText = buildMedReminderText(meds);
+    const body = medText
+      ? `Have you taken your ${medText} yet?`
+      : "Have you taken your medications?";
+
     const pushPayload = {
       title: "Time for your medications 💊",
-      body: "Have you taken your medications?",
+      body,
       tag: "medication-morning",
       notificationType: "medication",
       categoryIdentifier: "medication-action",
