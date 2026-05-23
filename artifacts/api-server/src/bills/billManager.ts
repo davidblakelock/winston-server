@@ -130,8 +130,9 @@ export async function getBills(userName = NATIVE_STORED_NAME): Promise<Bill[]> {
     auto_pay: boolean;
   }>(
     `SELECT id, name, category, amount, frequency, due_day, due_months,
-            reminder_lead_days, notes, last_reminded_date,
-            paid_through_date,
+            reminder_lead_days, notes,
+            last_reminded_date::text AS last_reminded_date,
+            paid_through_date::text AS paid_through_date,
             COALESCE(auto_pay, false) AS auto_pay
      FROM financial_obligations
      WHERE user_name = $1 AND active = true
