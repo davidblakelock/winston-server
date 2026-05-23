@@ -1,13 +1,16 @@
 import { Router, type IRouter } from "express";
-import { NATIVE_STORED_NAME } from "../auth/middleware.js";
+import { NATIVE_STORED_NAME, authenticate } from "../auth/middleware.js";
 import Anthropic from "@anthropic-ai/sdk";
 import {
   getProfile,
   upsertProfile,
   completeOnboarding,
+  upsertNativeOnboardingData,
+  getOnboardingKeyPeople,
   VOICE_OPTIONS,
   VOICE_PREVIEW_TEXT,
   type CollectedData,
+  type NativeOnboardingData,
 } from "../onboarding/onboardingManager.js";
 import { addProfileItem } from "../profile/profileManager.js";
 import { validateSession } from "../auth/sessionAuth.js";
@@ -87,58 +90,68 @@ const EL_KEY = () =>
   (process.env.EL_API_KEY ?? process.env.ELEVENLABS_API_KEY ?? "").trim();
 
 // ── GET /api/onboarding/status ────────────────────────────────────────────────
+// Supports both x-api-key (native app) and Bearer token (web app).
+// Returns new structured fields for the native app plus legacy fields for the web.
 router.get("/onboarding/status", async (req, res) => {
-  // Never cache — response is user-specific and must always reflect current DB state
   res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
   res.setHeader("Pragma", "no-cache");
 
   try {
-    const authHeader = req.headers.authorization;
-    const tokenPrefix = authHeader?.startsWith("Bearer ") ? authHeader.slice(7, 15) + "…" : null;
+    // Support x-api-key (native app) — fall back to Bearer session for web
+    const isNative = req.headers["x-api-key"] === "winston-native-2026";
+    let userName: string | null = null;
 
-    req.log.info({ hasAuthHeader: !!authHeader, tokenPrefix }, "[AUTH] /onboarding/status — request received");
-
-    if (!authHeader?.startsWith("Bearer ")) {
-      req.log.warn("[AUTH] /onboarding/status — no Bearer token, returning isNewUser=true");
-      res.json({ isNewUser: true, profile: null });
-      return;
+    if (isNative) {
+      userName = (req.headers["x-user-name"] as string | undefined)?.trim() || NATIVE_STORED_NAME;
+    } else {
+      const authHeader = req.headers.authorization;
+      if (!authHeader?.startsWith("Bearer ")) {
+        req.log.warn("[AUTH] /onboarding/status — no valid auth, returning isNewUser=true");
+        res.json({ isNewUser: true, isComplete: false, profile: null });
+        return;
+      }
+      const session = await validateSession(authHeader.slice(7));
+      if (!session) {
+        res.status(401).json({ isNewUser: true, isComplete: false, profile: null, error: "session_expired" });
+        return;
+      }
+      userName = session.userName;
     }
 
-    req.log.info({ tokenPrefix }, "[AUTH] /onboarding/status — validating session");
-    const session = await validateSession(authHeader.slice(7));
+    const [profile, keyPeople] = await Promise.all([
+      getProfile(userName),
+      getOnboardingKeyPeople(userName),
+    ]);
 
-    if (!session) {
-      req.log.warn({ tokenPrefix }, "[AUTH] /onboarding/status — session invalid/expired, returning 401");
-      res.status(401).json({ isNewUser: true, profile: null, error: "session_expired" });
-      return;
-    }
-
-    req.log.info(
-      { tokenPrefix, userName: session.userName, email: session.email },
-      "[AUTH] /onboarding/status — session valid, resolved user"
-    );
-
-    const { userName } = session;
-    req.log.info({ userName }, "[AUTH] /onboarding/status — loading profile from DB");
-    const profile = await getProfile(userName);
     const complete = profile?.onboardingCompleted ?? false;
 
     req.log.info(
-      {
-        userName,
-        onboardingCompleted: complete,
-        hasProfile: !!profile,
-        companionName: profile?.companionName ?? null,
-        voiceId: profile?.voiceId ?? null,
-        isNewUser: !complete,
-      },
-      "[AUTH] /onboarding/status — profile loaded, sending response"
+      { userName, onboardingCompleted: complete, isNative },
+      "[AUTH] /onboarding/status — profile loaded"
     );
 
-    res.json({ isNewUser: !complete, profile: complete ? profile : null });
+    // New structured response for native app (plus legacy fields for web compat)
+    res.json({
+      // Legacy web fields
+      isNewUser: !complete,
+      profile: complete ? profile : null,
+      // Native app fields
+      isComplete: complete,
+      firstName: profile?.firstName ?? null,
+      lastName: profile?.lastName ?? null,
+      wakeTime: profile?.wakeTime ?? null,
+      city: profile?.city ?? null,
+      hobbies: profile?.hobbies ?? [],
+      musicGenres: profile?.musicGenres ?? [],
+      tvGenres: profile?.tvGenres ?? [],
+      sportsTeams: profile?.sportsTeams ?? null,
+      keyPeople,
+      favoriteRestaurants: profile?.favoriteRestaurants ?? null,
+      favoritePodcasts: profile?.favoritePodcasts ?? null,
+    });
   } catch (err) {
     req.log.error({ err }, "[AUTH] /onboarding/status — unexpected error");
-    res.json({ isNewUser: true, profile: null });
+    res.json({ isNewUser: true, isComplete: false, profile: null });
   }
 });
 
@@ -375,27 +388,32 @@ router.post("/onboarding/save-step", async (req, res) => {
 });
 
 router.post("/onboarding/complete", async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith("Bearer ")) {
-    res.status(401).json({ error: "authentication_required" });
-    return;
-  }
-  const session = await validateSession(authHeader.slice(7));
-  if (!session) {
-    res.status(401).json({ error: "session_expired" });
-    return;
-  }
-  const userName = session.userName;
+  const userName = await authenticate(req, res);
+  if (!userName) return;
 
-  const { collectedData } = req.body as { collectedData: CollectedData };
   try {
-    if (collectedData) await upsertProfile(collectedData, userName);
-    await completeOnboarding(userName);
-    await Promise.all([
-      saveProfileItemsFromOnboarding(collectedData ?? {}, userName),
-      seedListsFromOnboarding(collectedData ?? {}, userName),
-    ]);
-    res.json({ success: true });
+    // Native app sends flat fields (firstName, lastName, hobbies, …)
+    // Web onboarding sends { collectedData: CollectedData }
+    const body = req.body as Record<string, unknown>;
+    const isNativeFormat = "firstName" in body || "lastName" in body || "hobbies" in body;
+
+    if (isNativeFormat) {
+      const data = body as NativeOnboardingData;
+      await upsertNativeOnboardingData(data, userName);
+      req.log.info({ userName }, "[ONBOARDING] Completed via native format");
+      res.json({ success: true });
+    } else {
+      // Legacy web format
+      const { collectedData } = body as { collectedData: CollectedData };
+      if (collectedData) await upsertProfile(collectedData, userName);
+      await completeOnboarding(userName);
+      await Promise.all([
+        saveProfileItemsFromOnboarding(collectedData ?? {}, userName),
+        seedListsFromOnboarding(collectedData ?? {}, userName),
+      ]);
+      req.log.info({ userName }, "[ONBOARDING] Completed via web format");
+      res.json({ success: true });
+    }
   } catch (err) {
     req.log.error({ err }, "Failed to complete onboarding");
     res.status(500).json({ error: "Failed to complete onboarding" });

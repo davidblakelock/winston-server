@@ -4,6 +4,8 @@ import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 export interface UserProfile {
   id: number;
   name: string | null;
+  firstName: string | null;
+  lastName: string | null;
   city: string | null;
   latitude: number | null;
   longitude: number | null;
@@ -26,6 +28,28 @@ export interface UserProfile {
   homeLatitude: number | null;
   homeLongitude: number | null;
   personalityStyle: string | null;
+  // Native onboarding preference columns
+  hobbies: string[];
+  musicGenres: string[];
+  tvGenres: string[];
+  sportsTeams: string | null;
+  favoriteRestaurants: string | null;
+  favoritePodcasts: string | null;
+}
+
+// ── Data shape accepted by POST /api/onboarding/complete (native app) ─────────
+export interface NativeOnboardingData {
+  firstName?: string;
+  lastName?: string;
+  wakeTime?: string;
+  city?: string;
+  hobbies?: string[];
+  musicGenres?: string[];
+  tvGenres?: string[];
+  sportsTeams?: string;
+  keyPeople?: Array<{ name: string; relationship: string }>;
+  favoriteRestaurants?: string;
+  favoritePodcasts?: string;
 }
 
 export interface CollectedData {
@@ -90,12 +114,23 @@ export async function ensureOnboardingTable(): Promise<void> {
   await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS home_latitude numeric(10,7)`);
   await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS home_longitude numeric(10,7)`);
   await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS personality_style text DEFAULT 'witty'`);
+  // Native onboarding preference columns
+  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS first_name text`);
+  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS last_name text`);
+  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS hobbies jsonb DEFAULT '[]'::jsonb`);
+  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS music_genres jsonb DEFAULT '[]'::jsonb`);
+  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS tv_genres jsonb DEFAULT '[]'::jsonb`);
+  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS sports_teams text`);
+  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS favorite_restaurants text`);
+  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS favorite_podcasts text`);
 }
 
 type ProfileRow = {
   id: number;
   user_name: string;
   name: string | null;
+  first_name: string | null;
+  last_name: string | null;
   city: string | null;
   latitude: number | null;
   longitude: number | null;
@@ -117,6 +152,12 @@ type ProfileRow = {
   home_latitude: number | null;
   home_longitude: number | null;
   personality_style: string | null;
+  hobbies: string[] | null;
+  music_genres: string[] | null;
+  tv_genres: string[] | null;
+  sports_teams: string | null;
+  favorite_restaurants: string | null;
+  favorite_podcasts: string | null;
 };
 
 function rowToProfile(r: ProfileRow): UserProfile {
@@ -124,6 +165,8 @@ function rowToProfile(r: ProfileRow): UserProfile {
   return {
     id: r.id,
     name: r.name,
+    firstName: r.first_name ?? null,
+    lastName: r.last_name ?? null,
     city: r.city,
     latitude: r.latitude,
     longitude: r.longitude,
@@ -146,6 +189,12 @@ function rowToProfile(r: ProfileRow): UserProfile {
     homeLatitude: r.home_latitude ?? null,
     homeLongitude: r.home_longitude ?? null,
     personalityStyle: r.personality_style ?? null,
+    hobbies: r.hobbies ?? [],
+    musicGenres: r.music_genres ?? [],
+    tvGenres: r.tv_genres ?? [],
+    sportsTeams: r.sports_teams ?? null,
+    favoriteRestaurants: r.favorite_restaurants ?? null,
+    favoritePodcasts: r.favorite_podcasts ?? null,
   };
 }
 
@@ -273,6 +322,104 @@ export async function completeOnboarding(userName = NATIVE_STORED_NAME): Promise
 export async function isOnboardingComplete(userName = NATIVE_STORED_NAME): Promise<boolean> {
   const profile = await getProfile(userName);
   return profile?.onboardingCompleted ?? false;
+}
+
+// ── Native onboarding: save structured form data ──────────────────────────────
+// Saves the flat body submitted by the native app's onboarding/profile screen.
+// Writes scalar fields to dedicated columns so they are queryable and indexable.
+export async function upsertNativeOnboardingData(
+  data: NativeOnboardingData,
+  userName: string
+): Promise<void> {
+  const fullName = [data.firstName, data.lastName].filter(Boolean).join(" ") || null;
+
+  const existing = await getProfile(userName);
+  if (!existing) {
+    await query(
+      `INSERT INTO user_profiles
+         (user_name, name, first_name, last_name, city, wake_time,
+          hobbies, music_genres, tv_genres, sports_teams,
+          favorite_restaurants, favorite_podcasts, onboarding_completed, raw_data)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10,$11,$12,true,'{}')`,
+      [
+        userName,
+        fullName,
+        data.firstName ?? null,
+        data.lastName ?? null,
+        data.city ?? null,
+        data.wakeTime ?? null,
+        JSON.stringify(data.hobbies ?? []),
+        JSON.stringify(data.musicGenres ?? []),
+        JSON.stringify(data.tvGenres ?? []),
+        data.sportsTeams ?? null,
+        data.favoriteRestaurants ?? null,
+        data.favoritePodcasts ?? null,
+      ]
+    );
+  } else {
+    await query(
+      `UPDATE user_profiles SET
+        name                = COALESCE($1,  name),
+        first_name          = COALESCE($2,  first_name),
+        last_name           = COALESCE($3,  last_name),
+        city                = COALESCE($4,  city),
+        wake_time           = COALESCE($5,  wake_time),
+        hobbies             = COALESCE($6::jsonb, hobbies),
+        music_genres        = COALESCE($7::jsonb, music_genres),
+        tv_genres           = COALESCE($8::jsonb, tv_genres),
+        sports_teams        = COALESCE($9,  sports_teams),
+        favorite_restaurants= COALESCE($10, favorite_restaurants),
+        favorite_podcasts   = COALESCE($11, favorite_podcasts),
+        onboarding_completed= true
+       WHERE user_name = $12`,
+      [
+        fullName,
+        data.firstName ?? null,
+        data.lastName ?? null,
+        data.city ?? null,
+        data.wakeTime ?? null,
+        data.hobbies ? JSON.stringify(data.hobbies) : null,
+        data.musicGenres ? JSON.stringify(data.musicGenres) : null,
+        data.tvGenres ? JSON.stringify(data.tvGenres) : null,
+        data.sportsTeams ?? null,
+        data.favoriteRestaurants ?? null,
+        data.favoritePodcasts ?? null,
+        userName,
+      ]
+    );
+  }
+
+  // Save key people — insert if not already present (match by lowercase name)
+  for (const person of data.keyPeople ?? []) {
+    if (!person.name?.trim()) continue;
+    await query(
+      `INSERT INTO key_people (user_name, name, relationship)
+       SELECT $1, $2, $3
+       WHERE NOT EXISTS (
+         SELECT 1 FROM key_people
+         WHERE user_name = $1 AND lower(name) = lower($2)
+       )`,
+      [userName, person.name.trim(), person.relationship?.trim() ?? null]
+    ).catch(() => {});
+    // If they already exist, update the relationship
+    await query(
+      `UPDATE key_people SET relationship = $3
+       WHERE user_name = $1 AND lower(name) = lower($2) AND ($3 IS NOT NULL)`,
+      [userName, person.name.trim(), person.relationship?.trim() ?? null]
+    ).catch(() => {});
+  }
+}
+
+// ── Fetch key people for onboarding status response ───────────────────────────
+export async function getOnboardingKeyPeople(
+  userName: string
+): Promise<Array<{ name: string; relationship: string }>> {
+  type Row = { name: string; relationship: string | null };
+  const { rows } = await query<Row>(
+    `SELECT name, relationship FROM key_people WHERE user_name = $1 ORDER BY id ASC`,
+    [userName]
+  );
+  return rows.map((r) => ({ name: r.name, relationship: r.relationship ?? "" }));
 }
 
 // ── Active users (Phase 6: per-user runtime) ───────────────────────────────────
