@@ -24,6 +24,24 @@ function fireAtCT(dateStr: string, hourCT: number): Date {
   return new Date(approxUtc.getTime() + (hourCT - ctHour) * 3_600_000);
 }
 
+// ── Shared bill enrichment ────────────────────────────────────────────────────
+// Adds computed display fields to a raw Bill. Used by GET /bills and all paid
+// endpoints so the native app can update local state without a re-fetch.
+function enrichBill(b: Awaited<ReturnType<typeof getBills>>[number], now = new Date()) {
+  const TZ = "America/Chicago";
+  const nextDueDate = computeNextDueDate(b, now);
+  const nextDueDateISO = nextDueDate.toLocaleDateString("en-CA", { timeZone: TZ });
+  const nextDueDateLabel = nextDueDate.toLocaleDateString("en-US", { timeZone: TZ, month: "long", day: "numeric" });
+  const todayStr = now.toLocaleDateString("en-CA", { timeZone: TZ });
+  const [tY, tM, tD] = todayStr.split("-").map(Number);
+  const [nY, nM, nD] = nextDueDateISO.split("-").map(Number);
+  const daysUntilDue = Math.round((Date.UTC(nY, nM - 1, nD) - Date.UTC(tY, tM - 1, tD)) / 86400000);
+  const cycleStart = computeCycleStartDate(b, now);
+  const isPaid = b.paidThroughDate != null && b.paidThroughDate >= cycleStart;
+  const isOverdue = !isPaid && daysUntilDue < 0;
+  return { ...b, nextDueDateISO, nextDueDateLabel, daysUntilDue, isPaid, isOverdue };
+}
+
 // ── POST /api/bills/mark-paid ─────────────────────────────────────────────────
 // Called by the native app when the user taps "Mark Paid ✓" on the bill
 // notification action button. Logs the bill as paid and suppresses further
@@ -82,8 +100,11 @@ router.post("/bills/paid", express.json({ limit: "1mb" }), async (req, res) => {
     const bill = bills.find((b) => b.id === billId);
     const name = bill?.name ?? `Bill #${billId}`;
     await markBillPaid(billId, name, userName);
+    const updatedBills = await getBills(userName);
+    const updatedBill = updatedBills.find((b) => b.id === billId);
+    const enriched = updatedBill ? enrichBill(updatedBill) : null;
     req.log.info({ userName, billId, billName: name }, "[BILLS] Paid via /bills/paid notification action");
-    res.json({ ok: true, dismissed: true, dismissTag: `bill-${billId}` });
+    res.json({ ok: true, dismissed: true, dismissTag: `bill-${billId}`, bill: enriched });
   } catch (err) {
     req.log.error({ err }, "[BILLS] POST /bills/paid error");
     res.status(500).json({ error: "Failed to mark bill as paid" });
@@ -156,8 +177,11 @@ router.post("/bills/:id/paid", async (req, res) => {
     const bill = bills.find((b) => b.id === id);
     const name = bill?.name ?? `Bill #${id}`;
     await markBillPaid(id, name, userName);
+    const updatedBills = await getBills(userName);
+    const updatedBill = updatedBills.find((b) => b.id === id);
+    const enriched = updatedBill ? enrichBill(updatedBill) : null;
     req.log.info({ userName, billId: id, billName: name }, "[BILLS] Marked paid via REST action button");
-    res.json({ ok: true, dismissed: true, dismissTag: `bill-${id}` });
+    res.json({ ok: true, dismissed: true, dismissTag: `bill-${id}`, bill: enriched });
   } catch (err) {
     req.log.error({ err }, "[BILLS] POST /bills/:id/paid error");
     res.status(500).json({ error: "Failed to mark bill as paid" });
@@ -293,33 +317,7 @@ router.get("/bills", express.json({ limit: "1mb" }), async (req, res) => {
   try {
     const bills = await getBills(userName);
     const now = new Date();
-    const TZ = "America/Chicago";
-
-    const enriched = bills.map((b) => {
-      const nextDueDate = computeNextDueDate(b, now);
-      const nextDueDateISO = nextDueDate.toLocaleDateString("en-CA", { timeZone: TZ });
-      const nextDueDateLabel = nextDueDate.toLocaleDateString("en-US", {
-        timeZone: TZ, month: "long", day: "numeric",
-      });
-      const todayStr = now.toLocaleDateString("en-CA", { timeZone: TZ });
-      const [tY, tM, tD] = todayStr.split("-").map(Number);
-      const [nY, nM, nD] = nextDueDateISO.split("-").map(Number);
-      const daysUntilDue = Math.round(
-        (Date.UTC(nY, nM - 1, nD) - Date.UTC(tY, tM - 1, tD)) / 86400000
-      );
-      const cycleStart = computeCycleStartDate(b, now);
-      const isPaid = b.paidThroughDate != null && b.paidThroughDate >= cycleStart;
-      const isOverdue = !isPaid && daysUntilDue < 0;
-      return {
-        ...b,
-        nextDueDateISO,
-        nextDueDateLabel,
-        daysUntilDue,
-        isPaid,
-        isOverdue,
-      };
-    });
-
+    const enriched = bills.map((b) => enrichBill(b, now));
     res.json({ bills: enriched });
   } catch (err) {
     res.status(500).json({ error: String(err) });
