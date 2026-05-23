@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import express from "express";
 import { authenticate } from "../auth/middleware.js";
 import { markBillPaid, getBills, addBill, computeNextDueDate, computeCycleStartDate, type Category, type Frequency } from "../bills/billManager.js";
-import { query } from "../db.js";
+
 import { createReminder } from "../reminders/reminderManager.js";
 import { scanForBillAnomalies } from "../bills/billAnomalyScanner.js";
 
@@ -367,18 +367,5 @@ router.get("/bills/anomalies", async (req, res) => {
   }
 });
 
-// TEMP: one-shot reset paid status for testing artifacts — remove after use
-router.post("/bills/reset-paid-temp", express.json({ limit: "1mb" }), async (req, res) => {
-  const userName = await authenticate(req, res);
-  if (!userName) return;
-  const { ids } = req.body as { ids: number[] };
-  if (!ids?.length) { res.status(400).json({ error: "ids required" }); return; }
-  const result = await query(
-    `UPDATE financial_obligations SET paid_through_date = NULL, last_reminded_date = NULL
-     WHERE user_name = $1 AND id = ANY($2::int[]) RETURNING id, name`,
-    [userName, ids]
-  );
-  res.json({ cleared: result.rows });
-});
 
 export default router;
