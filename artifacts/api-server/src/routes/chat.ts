@@ -5296,27 +5296,19 @@ router.post("/chat", chatHandlerCore);
 router.get("/chat/history", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
-  const limit = Math.min(200, Math.max(1, parseInt((req.query as Record<string, string>).limit ?? "100", 10) || 100));
+  const limit = Math.min(100, Math.max(1, parseInt((req.query as Record<string, string>).limit ?? "40", 10) || 40));
   try {
     const aliasNames = [userName, "David", "david"];
-    const { rows } = await query<{ id: number; role: string; content: string; created_at: string }>(
-      `SELECT id, role, content, created_at
+    const { rows } = await query<{ role: string; content: string; created_at: string }>(
+      `SELECT role, content, created_at
        FROM chat_messages
        WHERE user_name = ANY($1)
        ORDER BY created_at DESC, id DESC
        LIMIT $2`,
       [aliasNames, limit]
     );
-    // Return chronological order (oldest first) so clients can render top-to-bottom.
-    // Format matches GET /api/messages: { id: "db-N", role, content, createdAt }.
-    res.json({
-      messages: rows.reverse().map((r) => ({
-        id: `db-${r.id}`,
-        role: r.role,
-        content: r.content,
-        createdAt: r.created_at,
-      })),
-    });
+    // Return chronological order (oldest first) so clients can render top-to-bottom
+    res.json({ messages: rows.reverse() });
   } catch (err) {
     req.log.error({ err }, "[CHAT/HISTORY] Query failed");
     res.status(500).json({ error: "Failed to load history" });
