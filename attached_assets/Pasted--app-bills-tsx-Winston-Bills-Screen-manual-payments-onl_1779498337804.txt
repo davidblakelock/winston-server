@@ -1,0 +1,653 @@
+// app/bills.tsx
+// Winston — Bills Screen (manual payments only)
+import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect, useRouter } from 'expo-router';
+import React, { useCallback, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  SafeAreaView,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+
+const SERVER = 'https://winston-companion--davidblakelock.replit.app';
+const API_KEY = 'winston-native-2026';
+
+const COLORS = {
+  background: '#0A0A0F',
+  surface: '#12121A',
+  surfaceRaised: '#1A1A26',
+  gold: '#C9A84C',
+  cream: '#F5F0E8',
+  muted: '#8888AA',
+  border: '#2A2A3A',
+  danger: '#FF6B6B',
+  green: '#4CAF50',
+  yellow: '#FFC107',
+};
+
+// ─── Types ────────────────────────────────────────────────────────────────
+interface Bill {
+  id: string;
+  name: string;
+  dueDay: number;
+  amount?: string;
+  category?: string;
+  frequency?: string;
+  notes?: string;
+  isPaid: boolean;
+  isOverdue: boolean;
+  daysUntilDue: number;
+  nextDueDateLabel: string;
+  paidThroughDate?: string;
+  lastRemindedDate?: string;
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────
+const getDaysUntilDue = (dueDay: number): number => {
+  const today = new Date();
+  const currentDay = today.getDate();
+  const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+
+  if (dueDay >= currentDay) {
+    return dueDay - currentDay;
+  } else {
+    return (daysInMonth - currentDay) + dueDay;
+  }
+};
+
+const getDueStatus = (bill: Bill): { label: string; color: string } => {
+  if (bill.isPaid) return { label: 'Paid ✓', color: COLORS.green };
+  if (bill.isOverdue) return { label: 'Overdue', color: COLORS.danger };
+  if (bill.daysUntilDue <= 3) return { label: `Due in ${bill.daysUntilDue} day${bill.daysUntilDue === 1 ? '' : 's'}`, color: COLORS.danger };
+  if (bill.daysUntilDue <= 7) return { label: `Due in ${bill.daysUntilDue} days`, color: COLORS.yellow };
+  return { label: `Due ${bill.nextDueDateLabel}`, color: COLORS.muted };
+};
+
+const getOrdinal = (n: number): string => {
+  const s = ['th', 'st', 'nd', 'rd'];
+  const v = n % 100;
+  return s[(v - 20) % 10] || s[v] || s[0];
+};
+
+const formatAmount = (amount?: number): string => {
+  if (!amount) return '';
+  return `$${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
+
+const formatLastPaid = (date?: string): string => {
+  if (!date) return 'Never paid';
+  return `Last paid ${new Date(date).toLocaleDateString([], { month: 'short', day: 'numeric' })}`;
+};
+
+// ─── Bill Row ─────────────────────────────────────────────────────────────
+const BillRow = ({ bill, onPress, onMarkPaid }: {
+  bill: Bill;
+  onPress: () => void;
+  onMarkPaid: () => void;
+}) => {
+ const status = getDueStatus(bill);
+  const days = bill.daysUntilDue;
+
+  return (
+    <TouchableOpacity style={styles.billRow} onPress={onPress} activeOpacity={0.7}>
+      <View style={[styles.dueBadge, { backgroundColor: status.color + '22', borderColor: status.color + '44' }]}>
+        <Text style={[styles.dueBadgeText, { color: status.color }]}>{days}</Text>
+        <Text style={[styles.dueBadgeLabel, { color: status.color }]}>days</Text>
+      </View>
+      <View style={styles.billInfo}>
+
+    
+        <Text style={styles.billerName}>{bill.name}</Text>
+
+        <Text style={styles.billStatus}>{status.label}</Text>
+        {bill.notes && <Text style={styles.billNotes} numberOfLines={1}>{bill.notes}</Text>}
+      </View>
+      <View style={styles.billRight}>
+
+        {bill.amount && (
+          <Text style={styles.billAmount}>{bill.amount}</Text>
+        )}
+
+        <TouchableOpacity
+          style={styles.paidBtn}
+          onPress={onMarkPaid}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Ionicons 
+            name={bill.isPaid ? "checkmark-circle" : "checkmark-circle-outline"} 
+            size={22} 
+            color={bill.isPaid ? COLORS.green : COLORS.muted} 
+          />
+        </TouchableOpacity>
+
+      </View>
+    </TouchableOpacity>
+  );
+};
+
+// ─── Bill Detail Modal ────────────────────────────────────────────────────
+const BillDetailModal = ({ bill, visible, onClose, onEdit, onDelete, onMarkPaid }: {
+  bill: Bill | null;
+  visible: boolean;
+  onClose: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  onMarkPaid: () => void;
+}) => {
+  if (!bill) return null;
+    const status = getDueStatus(bill);
+
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
+      <SafeAreaView style={styles.safe}>
+        <View style={{ height: 40 }} />
+        <View style={styles.modalHeader}>
+          <TouchableOpacity onPress={onClose}>
+            <Text style={styles.modalCancel}>Close</Text>
+          </TouchableOpacity>
+          <Text style={styles.modalTitle}>{bill.name}</Text>
+          <TouchableOpacity onPress={onEdit}>
+            <Text style={styles.modalSave}>Edit</Text>
+          </TouchableOpacity>
+        </View>
+
+        <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
+          {/* Status card */}
+          <View style={[styles.statusCard, { borderColor: status.color }]}>
+            <View style={[styles.statusDot, { backgroundColor: status.color }]} />
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.statusCardLabel, { color: status.color }]}>{status.label}</Text>
+              <Text style={styles.statusCardSub}>{bill.paidThroughDate ? `Last paid ${new Date(bill.paidThroughDate).toLocaleDateString([], { month: 'short', day: 'numeric' })}` : 'Not yet paid'}</Text>
+            </View>
+          </View>
+
+          {/* Details */}
+          <View style={styles.detailCard}>
+
+            <View style={styles.detailRow}>
+              <Text style={styles.detailLabel}>Due Date</Text>
+              <Text style={styles.detailValue}>{bill.nextDueDateLabel}</Text>
+            </View>
+            {bill.amount && (
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>Amount</Text>
+                <Text style={styles.detailValue}>{bill.amount}</Text>
+              </View>
+            )}
+
+
+            {bill.notes && (
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>Notes</Text>
+                <Text style={styles.detailValue}>{bill.notes}</Text>
+              </View>
+            )}
+          </View>
+
+          {/* Actions */}
+          <TouchableOpacity style={styles.markPaidBtn} onPress={onMarkPaid}>
+            <Ionicons name="checkmark-circle" size={20} color={COLORS.background} />
+            <Text style={styles.markPaidText}>Mark as Paid</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.deleteBtn} onPress={onDelete}>
+            <Ionicons name="trash-outline" size={18} color={COLORS.danger} />
+            <Text style={styles.deleteBtnText}>Remove Bill</Text>
+          </TouchableOpacity>
+
+          <View style={{ height: 40 }} />
+        </ScrollView>
+      </SafeAreaView>
+    </Modal>
+  );
+};
+
+// ─── Add/Edit Modal ───────────────────────────────────────────────────────
+const BillFormModal = ({ visible, bill, onSave, onClose }: {
+  visible: boolean;
+  bill?: Bill;
+  onSave: (data: Partial<Bill>) => void;
+  onClose: () => void;
+}) => {
+
+  const [billerName, setBillerName] = useState(bill?.name || '');
+  const [duéDay, setDueDay] = useState(bill?.dueDay?.toString() || '');
+  const [amount, setAmount] = useState(bill?.amount || '');
+  const [notes, setNotes] = useState(bill?.notes || '');
+
+  React.useEffect(() => {
+    if (visible && bill) {
+      setBillerName(bill.name || '');
+      setDueDay(bill.dueDay?.toString() || '');
+      setAmount(bill.amount || '');
+      setNotes(bill.notes || '');
+    } else if (visible && !bill) {
+      setBillerName('');
+      setDueDay('');
+      setAmount('');
+      setNotes('');
+    }
+  }, [visible]);
+
+  const handleSave = () => {
+    if (!billerName.trim() || !duéDay.trim()) return;
+    const day = parseInt(duéDay);
+    if (isNaN(day) || day < 1 || day > 31) return;
+
+      onSave({
+      name: billerName.trim(),
+      dueDay: day,
+      amount: amount ? amount : undefined,
+      category: 'other',
+      frequency: 'monthly',
+      notes: notes.trim() || undefined,
+    });
+
+
+  };
+
+  const isValid = billerName.trim() && duéDay.trim() &&
+    !isNaN(parseInt(duéDay)) && parseInt(duéDay) >= 1 && parseInt(duéDay) <= 31;
+
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
+      <SafeAreaView style={styles.safe}>
+        <View style={{ height: 40 }} />
+        <View style={styles.modalHeader}>
+          <TouchableOpacity onPress={onClose}>
+            <Text style={styles.modalCancel}>Cancel</Text>
+          </TouchableOpacity>
+          <Text style={styles.modalTitle}>{bill ? 'Edit Bill' : 'Add Bill'}</Text>
+          <TouchableOpacity onPress={handleSave} disabled={!isValid}>
+            <Text style={[styles.modalSave, !isValid && { opacity: 0.4 }]}>Save</Text>
+          </TouchableOpacity>
+        </View>
+
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
+
+            <View style={styles.formSection}>
+              <Text style={styles.formLabel}>PAYEE NAME</Text>
+              <TextInput
+                style={styles.formInput}
+                value={billerName}
+                onChangeText={setBillerName}
+                placeholder="e.g. Visa Credit Card, Water Bill"
+                placeholderTextColor={COLORS.muted}
+                autoFocus
+              />
+            </View>
+
+            <View style={styles.formSection}>
+              <Text style={styles.formLabel}>DUE DAY OF MONTH</Text>
+              <TextInput
+                style={styles.formInput}
+                value={duéDay}
+                onChangeText={setDueDay}
+                placeholder="e.g. 15"
+                placeholderTextColor={COLORS.muted}
+                keyboardType="number-pad"
+                maxLength={2}
+              />
+              <Text style={styles.formHint}>Enter the day of month this bill is typically due (1-31)</Text>
+            </View>
+
+            <View style={styles.formSection}>
+              <Text style={styles.formLabel}>TYPICAL AMOUNT (OPTIONAL)</Text>
+              <TextInput
+                style={styles.formInput}
+                value={amount}
+                onChangeText={setAmount}
+                placeholder="e.g. 125.00"
+                placeholderTextColor={COLORS.muted}
+                keyboardType="decimal-pad"
+              />
+            </View>
+
+            <View style={styles.formSection}>
+              <Text style={styles.formLabel}>NOTES (OPTIONAL)</Text>
+              <TextInput
+                style={[styles.formInput, styles.formInputMulti]}
+                value={notes}
+                onChangeText={setNotes}
+                placeholder="e.g. Pay via Venmo to John Smith, login at chase.com"
+                placeholderTextColor={COLORS.muted}
+                multiline
+                numberOfLines={3}
+              />
+            </View>
+
+            <View style={{ height: 40 }} />
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    </Modal>
+  );
+};
+
+// ─── Main Screen ──────────────────────────────────────────────────────────
+export default function BillsScreen() {
+  const router = useRouter();
+  const [bills, setBills] = useState<Bill[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [selectedBill, setSelectedBill] = useState<Bill | null>(null);
+  const [showDetail, setShowDetail] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [editingBill, setEditingBill] = useState<Bill | undefined>(undefined);
+
+  const fetchBills = useCallback(async () => {
+    try {
+      const res = await fetch(`${SERVER}/api/bills`, {
+        headers: { 'x-api-key': API_KEY },
+      });
+      const data = await res.json();
+      const billList = Array.isArray(data.bills) ? data.bills : Array.isArray(data) ? data : [];
+      // Sort by days until due
+
+      billList.sort((a: Bill, b: Bill) => a.daysUntilDue - b.daysUntilDue);
+      setBills(billList);
+
+    } catch (err) {
+      console.error('Failed to fetch bills:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useFocusEffect(useCallback(() => { fetchBills(); }, [fetchBills]));
+
+  const handleSave = async (data: Partial<Bill>) => {
+    try {
+      if (editingBill) {
+        await fetch(`${SERVER}/api/bills/${editingBill.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': API_KEY },
+          body: JSON.stringify(data),
+        });
+      } else {
+        await fetch(`${SERVER}/api/bills`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': API_KEY },
+          body: JSON.stringify(data),
+        });
+      }
+      setShowForm(false);
+      setShowDetail(false);
+      setEditingBill(undefined);
+      setSelectedBill(null);
+      await fetchBills();
+    } catch (err) {
+      console.error('Save failed:', err);
+    }
+  };
+
+  const handleMarkPaid = async (bill: Bill) => {
+    try {
+      await fetch(`${SERVER}/api/bills/${bill.id}/paid`, {
+        method: 'POST',
+        headers: { 'x-api-key': API_KEY },
+      });
+      setShowDetail(false);
+      setSelectedBill(null);
+      await fetchBills();
+    } catch (err) {
+      console.error('Mark paid failed:', err);
+    }
+  };
+
+  const handleDelete = (bill: Bill) => {
+    Alert.alert('Remove Bill', `Remove ${bill.name}?`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Remove', style: 'destructive',
+        onPress: async () => {
+          await fetch(`${SERVER}/api/bills/${bill.id}`, {
+            method: 'DELETE',
+            headers: { 'x-api-key': API_KEY },
+          });
+          setShowDetail(false);
+          setSelectedBill(null);
+          await fetchBills();
+        },
+      },
+    ]);
+  };
+
+  // Separate into due soon and upcoming
+
+    const dueSoon = bills.filter(b => b.daysUntilDue <= 7 && !b.isPaid);
+  const upcoming = bills.filter(b => b.daysUntilDue > 7 && !b.isPaid);
+
+  return (
+    <SafeAreaView style={styles.safe}>
+      <StatusBar barStyle="light-content" backgroundColor={COLORS.background} />
+
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => router.back()} style={styles.headerBtn}>
+          <Ionicons name="arrow-back" size={22} color={COLORS.gold} />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Bills</Text>
+        <TouchableOpacity
+          style={styles.headerBtn}
+          onPress={() => { setEditingBill(undefined); setShowForm(true); }}
+        >
+          <Ionicons name="add" size={24} color={COLORS.gold} />
+        </TouchableOpacity>
+      </View>
+      <View style={styles.divider} />
+
+      {isLoading ? (
+        <View style={styles.centered}>
+          <ActivityIndicator size="large" color={COLORS.gold} />
+        </View>
+      ) : bills.length === 0 ? (
+        <View style={styles.centered}>
+          <Ionicons name="receipt-outline" size={52} color={COLORS.muted} />
+          <Text style={styles.emptyTitle}>No Bills Tracked</Text>
+          <Text style={styles.emptySubtitle}>
+            Add bills that require manual payment. Winston will remind you 3 days before each one is due.
+          </Text>
+          <TouchableOpacity
+            style={styles.addButton}
+            onPress={() => { setEditingBill(undefined); setShowForm(true); }}
+          >
+            <Text style={styles.addButtonText}>Add First Bill</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
+          {dueSoon.length > 0 && (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>DUE SOON</Text>
+              <View style={styles.billsCard}>
+                {dueSoon.map((bill, i) => (
+                  <View key={bill.id}>
+                    <BillRow
+                      bill={bill}
+                      onPress={() => { setSelectedBill(bill); setShowDetail(true); }}
+                      onMarkPaid={() => handleMarkPaid(bill)}
+                    />
+                    {i < dueSoon.length - 1 && <View style={styles.rowDivider} />}
+                  </View>
+                ))}
+              </View>
+            </View>
+          )}
+
+          {upcoming.length > 0 && (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>UPCOMING</Text>
+              <View style={styles.billsCard}>
+                {upcoming.map((bill, i) => (
+                  <View key={bill.id}>
+                    <BillRow
+                      bill={bill}
+                      onPress={() => { setSelectedBill(bill); setShowDetail(true); }}
+                      onMarkPaid={() => handleMarkPaid(bill)}
+                    />
+                    {i < upcoming.length - 1 && <View style={styles.rowDivider} />}
+                  </View>
+                ))}
+              </View>
+            </View>
+          )}
+
+          <Text style={styles.reminderNote}>
+            Winston will remind you 3 days before each bill is due.
+          </Text>
+
+          <View style={{ height: 40 }} />
+        </ScrollView>
+      )}
+
+      {/* Detail modal */}
+      <BillDetailModal
+        bill={selectedBill}
+        visible={showDetail}
+        onClose={() => { setShowDetail(false); setSelectedBill(null); }}
+        onEdit={() => { setShowDetail(false); setEditingBill(selectedBill!); setShowForm(true); }}
+        onDelete={() => handleDelete(selectedBill!)}
+        onMarkPaid={() => handleMarkPaid(selectedBill!)}
+      />
+
+      {/* Add/Edit form */}
+      <BillFormModal
+        visible={showForm}
+        bill={editingBill}
+        onSave={handleSave}
+        onClose={() => { setShowForm(false); setEditingBill(undefined); }}
+      />
+    </SafeAreaView>
+  );
+}
+
+// ─── Styles ───────────────────────────────────────────────────────────────
+const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: COLORS.background },
+  divider: { height: 1, backgroundColor: COLORS.border },
+  scroll: { flex: 1 },
+  centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
+
+  header: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, paddingVertical: 12, paddingTop: 50,
+  },
+  headerBtn: { padding: 6, width: 34 },
+  headerTitle: { color: COLORS.cream, fontSize: 18, fontWeight: '600' },
+
+  emptyTitle: { color: COLORS.cream, fontSize: 18, fontWeight: '600', marginTop: 16, marginBottom: 8 },
+  emptySubtitle: { color: COLORS.muted, fontSize: 14, textAlign: 'center', lineHeight: 20, marginBottom: 24 },
+  addButton: {
+    backgroundColor: COLORS.gold, borderRadius: 24,
+    paddingHorizontal: 28, paddingVertical: 12,
+  },
+  addButtonText: { color: COLORS.background, fontWeight: '700', fontSize: 15 },
+
+  section: { paddingHorizontal: 16, marginTop: 24 },
+  sectionTitle: {
+    color: COLORS.muted, fontSize: 11, fontWeight: '700',
+    letterSpacing: 1.2, marginBottom: 10,
+  },
+  billsCard: {
+    backgroundColor: COLORS.surface, borderRadius: 12,
+    borderWidth: 1, borderColor: COLORS.border, overflow: 'hidden',
+  },
+
+  billRow: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 14, paddingVertical: 14, gap: 12,
+  },
+  dueBadge: {
+    width: 44, height: 44, borderRadius: 10,
+    borderWidth: 1, alignItems: 'center', justifyContent: 'center',
+    flexShrink: 0,
+  },
+  dueBadgeText: { fontSize: 16, fontWeight: '700', lineHeight: 18 },
+  dueBadgeLabel: { fontSize: 9, fontWeight: '600', letterSpacing: 0.5 },
+  billInfo: { flex: 1 },
+  billerName: { color: COLORS.cream, fontSize: 15, fontWeight: '500' },
+  billStatus: { color: COLORS.muted, fontSize: 12, marginTop: 2 },
+  billNotes: { color: COLORS.muted, fontSize: 11, marginTop: 3, fontStyle: 'italic' },
+  billRight: { alignItems: 'flex-end', gap: 4 },
+  billAmount: { color: COLORS.cream, fontSize: 14, fontWeight: '600' },
+  paidBtn: { padding: 2 },
+  rowDivider: { height: 1, backgroundColor: COLORS.border, marginLeft: 70 },
+
+  reminderNote: {
+    color: COLORS.muted, fontSize: 12, textAlign: 'center',
+    marginTop: 20, marginHorizontal: 32, fontStyle: 'italic',
+  },
+
+  // Detail modal
+  statusCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    margin: 16, padding: 14,
+    backgroundColor: COLORS.surface, borderRadius: 12, borderWidth: 1,
+  },
+  statusDot: { width: 10, height: 10, borderRadius: 5, flexShrink: 0 },
+  statusCardLabel: { fontSize: 14, fontWeight: '600' },
+  statusCardSub: { color: COLORS.muted, fontSize: 12, marginTop: 2 },
+
+  detailCard: {
+    marginHorizontal: 16, marginBottom: 16,
+    backgroundColor: COLORS.surface, borderRadius: 12,
+    borderWidth: 1, borderColor: COLORS.border, overflow: 'hidden',
+  },
+  detailRow: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start',
+    paddingHorizontal: 14, paddingVertical: 12,
+    borderBottomWidth: 1, borderBottomColor: COLORS.border,
+  },
+  detailLabel: { color: COLORS.muted, fontSize: 13 },
+  detailValue: { color: COLORS.cream, fontSize: 13, fontWeight: '500', flex: 1, textAlign: 'right', marginLeft: 16 },
+
+  markPaidBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    marginHorizontal: 16, marginBottom: 12,
+    backgroundColor: COLORS.green, borderRadius: 12, padding: 14,
+  },
+  markPaidText: { color: COLORS.background, fontSize: 15, fontWeight: '700' },
+
+  deleteBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    marginHorizontal: 16,
+    borderWidth: 1, borderColor: COLORS.danger, borderRadius: 12, padding: 14,
+  },
+  deleteBtnText: { color: COLORS.danger, fontSize: 15, fontWeight: '500' },
+
+  // Form modal
+  modalHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, paddingVertical: 14,
+    borderBottomWidth: 1, borderBottomColor: COLORS.border,
+  },
+  modalTitle: { color: COLORS.cream, fontSize: 16, fontWeight: '600' },
+  modalCancel: { color: COLORS.muted, fontSize: 15 },
+  modalSave: { color: COLORS.gold, fontSize: 15, fontWeight: '600' },
+
+  formSection: { paddingHorizontal: 16, marginTop: 20 },
+  formLabel: {
+    color: COLORS.muted, fontSize: 11, fontWeight: '700',
+    letterSpacing: 1.2, marginBottom: 8,
+  },
+  formInput: {
+    backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border,
+    borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12,
+    color: COLORS.cream, fontSize: 15,
+  },
+  formInputMulti: { minHeight: 90, textAlignVertical: 'top' },
+  formHint: { color: COLORS.muted, fontSize: 11, marginTop: 6 },
+});
