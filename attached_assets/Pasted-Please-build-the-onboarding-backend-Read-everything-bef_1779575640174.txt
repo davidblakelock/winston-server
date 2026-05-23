@@ -1,0 +1,59 @@
+Please build the onboarding backend. Read everything before starting.
+1. POST /api/onboarding/complete
+Accepts the following body and saves to the appropriate tables:
+{
+  firstName: string,
+  lastName: string,
+  wakeTime: string,
+  city: string,
+  hobbies: string[],
+  musicGenres: string[],
+  tvGenres: string[],
+  sportsTeams: string,
+  keyPeople: [{ name: string, relationship: string }],
+  favoriteRestaurants: string,
+  favoritePodcasts: string
+}
+Save to:
+
+firstName, lastName, city, favoriteRestaurants, favoritePodcasts → user_profiles table
+wakeTime → user_settings table (existing wake_time field)
+hobbies, musicGenres, tvGenres, sportsTeams → user_profiles table as JSON columns (add if they don't exist)
+keyPeople → key_people table (already exists) — create a record for each person
+Set onboarding_complete = true in user_settings table
+
+2. GET /api/onboarding/status
+Returns current onboarding data for the user so the native app can pre-fill fields:
+{
+  isComplete: boolean,
+  firstName: string,
+  lastName: string,
+  wakeTime: string,
+  city: string,
+  hobbies: string[],
+  musicGenres: string[],
+  tvGenres: string[],
+  sportsTeams: string,
+  keyPeople: [{ name: string, relationship: string }],
+  favoriteRestaurants: string,
+  favoritePodcasts: string
+}
+Deploy when complete and confirm both endpoints work with a test."
+
+Now the Settings change. Find in app/settings.tsx the User Guide section:
+typescript  {/* User Guide */}
+<View style={styles.section}>
+Add before it:
+typescript        {/* Complete Your Profile */}
+        <TouchableOpacity
+          style={styles.section}
+          onPress={() => router.push('/onboarding' as any)}
+        >
+          <View style={styles.sectionHeader}>
+            <Ionicons name="person-circle-outline" size={20} color={COLORS.gold} />
+            <Text style={styles.sectionTitle}>Complete Your Profile</Text>
+            <Ionicons name="chevron-forward" size={16} color={COLORS.muted} style={{ marginLeft: 'auto' }} />
+          </View>
+          <Text style={styles.sectionDesc}>Update your preferences, interests, and key people.</Text>
+        </TouchableOpacity>
+Tell me when done
