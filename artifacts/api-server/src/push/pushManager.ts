@@ -341,7 +341,7 @@ export async function sendPushToAll(
 
   const result = await sendExpoNotifications(payload, userName).catch((err) => {
     logger.warn({ err }, "[Push] Expo notification send failed");
-    return { sent: 0, failed: 0 };
+    return { sent: 0, failed: 1 };
   });
 
   logger.info(

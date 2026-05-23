@@ -9,6 +9,7 @@ import {
   getStaticBriefingContext,
   loadStaticContextFromDb,
   claimMorningPushSlot,
+  releaseMorningPushSlot,
   wasPushSentToday,
 } from "../morning/briefingCache.js";
 import { wasApifyDailyFlagSet, setApifyDailyFlag } from "../lib/apifyCache.js";
@@ -115,7 +116,7 @@ async function sendMorningPush(user: ActiveUser, wakeTime: string): Promise<void
   try {
     const body = await buildMorningBody(user);
     const displayName = user.name ?? userName;
-    await sendPushToAll({
+    const result = await sendPushToAll({
       title: `Good morning, ${displayName} ☀️`,
       body,
       tag: "morning-briefing",
@@ -123,12 +124,25 @@ async function sendMorningPush(user: ActiveUser, wakeTime: string): Promise<void
       autoSendMessage: "good morning",
       requireInteraction: true,
     }, userName);
+
+    if (result.sent === 0) {
+      // Push failed (network error, no valid tokens, etc.) — release the slot
+      // so the next scheduler tick retries rather than silently giving up.
+      logger.warn(
+        { userName, wakeTime, sent: result.sent, failed: result.failed },
+        "[MorningPush] Push delivery failed — releasing slot for retry next tick"
+      );
+      await releaseMorningPushSlot(userName).catch(() => {});
+      return;
+    }
+
     logger.info(
       { userName, wakeTime, briefingReady: !!staticCtx },
       "[MorningPush] Morning push sent"
     );
   } catch (err) {
     logger.error({ err, userName }, "[MorningPush] Failed to send morning push");
+    await releaseMorningPushSlot(userName).catch(() => {});
     return;
   }
 

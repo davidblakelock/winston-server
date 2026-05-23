@@ -180,6 +180,27 @@ export async function claimMorningPushSlot(userName: string): Promise<boolean> {
   }
 }
 
+/**
+ * Release a previously claimed morning push slot so the scheduler can retry.
+ * Called when the push send fails (network error, TLS drop, etc.) so the next
+ * scheduler tick will attempt to send again instead of silently giving up.
+ */
+export async function releaseMorningPushSlot(userName: string): Promise<void> {
+  const dateKey = ctDateKey();
+  _pushSentDone.delete(userName);
+  try {
+    await query(
+      `UPDATE morning_static_context
+          SET push_sent_at = NULL
+        WHERE user_name = $1 AND date_key = $2`,
+      [userName, dateKey]
+    );
+  } catch {
+    // Best-effort — if DB update fails the in-memory flag is already cleared
+    // so the next tick will try again (may double-send on multi-process, acceptable)
+  }
+}
+
 // ── Retrieve persisted briefing text from DB (for "already loaded" endpoint) ──
 
 export async function getPersistedBriefingText(userName: string): Promise<string | null> {
