@@ -62,7 +62,7 @@ router.post("/bills/mark-paid", express.json({ limit: "1mb" }), async (req, res)
     const name = billName?.trim() || `Bill #${billId}`;
     await markBillPaid(billId, name, userName);
     req.log.info({ userName, billId, billName: name }, "[BILLS] Marked paid via notification action");
-    res.json({ ok: true, dismissed: true, dismissTag: `bill-${billId}` });
+    res.json({ ok: true });
   } catch (err) {
     req.log.error({ err }, "[BILLS] POST /bills/mark-paid error");
     res.status(500).json({ error: "Failed to mark bill as paid" });
@@ -104,7 +104,7 @@ router.post("/bills/paid", express.json({ limit: "1mb" }), async (req, res) => {
     const updatedBill = updatedBills.find((b) => b.id === billId);
     const enriched = updatedBill ? enrichBill(updatedBill) : null;
     req.log.info({ userName, billId, billName: name }, "[BILLS] Paid via /bills/paid notification action");
-    res.json({ ok: true, dismissed: true, dismissTag: `bill-${billId}`, bill: enriched });
+    res.json({ ok: true, bill: enriched });
   } catch (err) {
     req.log.error({ err }, "[BILLS] POST /bills/paid error");
     res.status(500).json({ error: "Failed to mark bill as paid" });

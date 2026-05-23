@@ -345,11 +345,13 @@ export async function markBillPaid(
      RETURNING id`,
     [userName, billId, billName, today]
   );
-  // Set paid_through_date (user-explicit paid signal) and also advance
-  // last_reminded_date so the scheduler won't fire again this cycle.
+  // Suppress the reminder for this cycle by advancing last_reminded_date.
+  // We intentionally do NOT set paid_through_date — doing so causes the native
+  // app to hide the bill from the list. The bill should stay visible with its
+  // checkmark; only the push reminder is silenced.
   await query(
     `UPDATE financial_obligations
-        SET paid_through_date = $1, last_reminded_date = $1
+        SET last_reminded_date = $1
       WHERE id = $2 RETURNING id`,
     [today, billId]
   );
