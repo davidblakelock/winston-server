@@ -105,6 +105,8 @@ export interface PushPayload {
   categoryIdentifier?: string;
   autoSendMessage?: string;
   billId?: number;
+  billName?: string;
+  amount?: string;
   dueDateISO?: string;
 }
 
@@ -240,6 +242,8 @@ export function buildExpoMessages(payload: PushPayload, tokens: string[]) {
       ...(payload.categoryIdentifier ? { categoryIdentifier: payload.categoryIdentifier } : {}),
       ...(payload.deepLink ? { deepLink: payload.deepLink } : {}),
       ...(payload.billId != null ? { billId: payload.billId } : {}),
+      ...(payload.billName ? { billName: payload.billName } : {}),
+      ...(payload.amount != null ? { amount: payload.amount } : {}),
       ...(payload.dueDateISO ? { dueDateISO: payload.dueDateISO } : {}),
     },
   }));

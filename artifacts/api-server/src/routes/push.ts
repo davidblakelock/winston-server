@@ -234,6 +234,8 @@ router.post("/push/test-bill", async (req, res) => {
       categoryIdentifier: "bill-action",
       requireInteraction: true,
       billId: bill.id,
+      billName: bill.name,
+      amount: bill.amount ?? "",
       dueDateISO: nextDueDate.toISOString().split("T")[0],
       companionMessage: JSON.stringify({
         billId: bill.id,

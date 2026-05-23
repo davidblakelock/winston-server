@@ -131,6 +131,8 @@ async function checkBillReminders(): Promise<void> {
           // parsing companionMessage: POST /api/bills/:billId/paid
           // and POST /api/bills/:billId/remind-due-date
           billId: bill.id,
+          billName: bill.name,
+          amount: bill.amount ?? "",
           dueDateISO: nextDueDate.toISOString().split("T")[0],
           companionMessage: JSON.stringify({
             billId: bill.id,

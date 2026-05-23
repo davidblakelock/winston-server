@@ -1,0 +1,1105 @@
+// app/index.tsx
+// Winston — Main Chat Screen
+import { Ionicons } from '@expo/vector-icons';
+import { useAudioPlayer } from 'expo-audio';
+import { Audio } from 'expo-av';
+import * as Linking from 'expo-linking';
+import WeatherCard from '../components/WeatherCard';
+//import * as Location from 'expo-location';
+import * as Notifications from 'expo-notifications';
+import { useFocusEffect, useRouter } from 'expo-router';
+import * as SecureStore from 'expo-secure-store';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Animated,
+  FlatList,
+  Image,
+  KeyboardAvoidingView,
+  Platform,
+  SafeAreaView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+import Markdown from 'react-native-markdown-display';
+import { useAuth } from '../context/AuthContext';
+import { Message, MorningAction, useChat } from '../hooks/useChat';
+import { registerForPushNotifications, saveExpoPushToken } from '../hooks/useNotifications';
+
+const SERVER = 'https://winston-companion--davidblakelock.replit.app';
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+    shouldShowBanner: true,
+    shouldShowList: true,
+  }),
+});
+
+// ─── Colours ────────────────────────────────────────────────────────────────
+const COLORS = {
+  background: '#0A0A0F',       // near-black
+  surface: '#12121A',          // card background
+  surfaceRaised: '#1A1A26',    // slightly lifted
+  gold: '#C9A84C',             // Bond gold
+  goldLight: '#E8C96A',        // highlight gold
+  cream: '#F5F0E8',            // message text
+  muted: '#8888AA',            // timestamps, placeholders
+  userBubble: '#1E2A4A',       // user message — deep navy
+  assistantBubble: '#1A1A26',  // assistant message — dark surface
+  border: '#2A2A3A',           // subtle borders
+  inputBg: '#1A1A26',
+  danger: '#FF6B6B',
+};
+
+// ─── Morning Action Buttons ─────────────────────────────────────────────
+const MorningActionButtons = ({ actions }: { actions: MorningAction[] }) => {
+  const router = useRouter();
+
+  const handleAction = useCallback(async (action: MorningAction) => {
+    switch (action.type) {
+      case 'email_draft':
+        Alert.alert(
+          `Reply to ${action.payload.sender}`,
+          action.payload.suggestedReply,
+          [
+            { text: 'Dismiss', style: 'cancel' },
+            {
+              text: 'Send Reply',
+              onPress: async () => {
+                try {
+                  await fetch(`${SERVER}/api/email/drafts/send`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'x-api-key': 'winston-native-2026' },
+                    body: JSON.stringify({ emailId: action.payload.emailId, reply: action.payload.suggestedReply }),
+                  });
+                  Alert.alert('Sent', 'Reply sent successfully.');
+                } catch (err) {
+                  Alert.alert('Error', 'Could not send reply.');
+                }
+              },
+            },
+          ]
+        );
+        break;
+
+      case 'meeting_request':
+        Alert.alert(
+          `Meeting: ${action.payload.eventTitle}`,
+          `${action.payload.organizer}\n${action.payload.proposedDate} at ${action.payload.proposedStartTime}${action.payload.hasConflict ? '\n⚠️ You have a conflict' : '\n✓ You are free'}`,
+          [
+            { text: 'Dismiss', style: 'cancel' },
+            {
+              text: 'Decline',
+              style: 'destructive',
+              onPress: async () => {
+                await fetch(`${SERVER}/api/calendar/smart/decline`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', 'x-api-key': 'winston-native-2026' },
+                  body: JSON.stringify({ emailId: action.payload.emailId }),
+                });
+              },
+            },
+            {
+              text: 'Accept',
+              onPress: async () => {
+                await fetch(`${SERVER}/api/calendar/smart/accept`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', 'x-api-key': 'winston-native-2026' },
+                  body: JSON.stringify({ emailId: action.payload.emailId }),
+                });
+                Alert.alert('Accepted', 'Meeting added to your calendar.');
+              },
+            },
+          ]
+        );
+        break;
+
+      case 'bill_anomaly':
+        Alert.alert(
+          `Bill Alert: ${action.payload.retailer}`,
+          `Current charge: ${action.payload.amount}\nUsual amount: ${action.payload.previousAmount}\nThat's ${action.payload.percentChange}% higher than usual.`,
+          [
+            { text: 'Dismiss', style: 'cancel' },
+            { text: 'View Email', onPress: () => {} },
+          ]
+        );
+        break;
+
+      case 'order_delivery':
+        router.push('/orders' as any);
+        break;
+
+      case 'travel_today':
+        router.push('/travel' as any);
+        break;
+
+      case 'weather_suggestion':
+        Alert.alert(
+          action.payload.title || 'Weather Advisory',
+          action.payload.detail || action.payload.suggestion || '',
+          [{ text: 'Got it' }]
+        );
+        break;
+
+      case 'relationship_nudge':
+        Alert.alert(
+          `Check in with ${action.payload.contactName}`,
+          action.payload.message,
+          [
+            { text: 'Dismiss', style: 'cancel' },
+            {
+              text: 'Send Message',
+              onPress: () => {
+                Linking.openURL(`sms:${action.payload.contactPhone || ''}`);
+              },
+            },
+          ]
+        );
+        break;
+
+      case 'important_date':
+        Alert.alert(
+          action.payload.title,
+          action.payload.message,
+          [
+            { text: 'Dismiss', style: 'cancel' },
+            { text: 'Add Reminder', onPress: () => {} },
+          ]
+        );
+        break;
+
+      case 'schedule_risk':
+        Alert.alert(
+          '⚠️ Schedule Risk',
+          action.payload.message,
+          [{ text: 'Got it' }]
+        );
+        break;
+    }
+  }, [router]);
+
+  const getActionLabel = (action: MorningAction): string => {
+    switch (action.type) {
+      case 'email_draft': return `Reply to ${action.payload.sender}`;
+      case 'meeting_request': return `Meeting: ${action.payload.eventTitle}`;
+      case 'bill_anomaly': return `Bill Alert: ${action.payload.retailer}`;
+      case 'order_delivery': return `📦 ${action.payload.itemName} arriving today`;
+      case 'travel_today': return `✈️ ${action.payload.airline} ${action.payload.flightNumber}`;
+      case 'weather_suggestion': return `🌤 Weather Advisory`;
+      case 'relationship_nudge': return `👤 Check in with ${action.payload.contactName}`;
+      case 'important_date': return `📅 ${action.payload.title}`;
+      case 'schedule_risk': return `⚠️ Schedule Risk`;
+      default: return 'Action';
+    }
+  };
+
+  const getActionColor = (action: MorningAction): string => {
+    switch (action.type) {
+      case 'email_draft': return COLORS.gold;
+      case 'meeting_request': return '#4A90D9';
+      case 'bill_anomaly': return COLORS.danger;
+      case 'order_delivery': return '#4CAF50';
+      case 'travel_today': return '#9B59B6';
+      case 'weather_suggestion': return '#4A90D9';
+      case 'relationship_nudge': return COLORS.gold;
+      case 'important_date': return '#4CAF50';
+      case 'schedule_risk': return '#FFC107';
+      default: return COLORS.muted;
+    }
+  };
+
+  return (
+    <View style={actionStyles.container}>
+      {actions.map((action, index) => (
+        <TouchableOpacity
+          key={index}
+          style={[actionStyles.button, { borderColor: getActionColor(action) }]}
+          onPress={() => handleAction(action)}
+          activeOpacity={0.8}
+        >
+          <Text style={[actionStyles.buttonText, { color: getActionColor(action) }]}>
+            {getActionLabel(action)}
+          </Text>
+          <Ionicons name="chevron-forward" size={14} color={getActionColor(action)} />
+        </TouchableOpacity>
+      ))}
+    </View>
+  );
+};
+
+const actionStyles = StyleSheet.create({
+  container: {
+    marginTop: 10,
+    gap: 6,
+  },
+  button: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: COLORS.surfaceRaised,
+  },
+  buttonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    flex: 1,
+  },
+});
+
+
+
+// ─── Single message bubble ───────────────────────────────────────────────
+const ChatBubble = React.memo(({ message, companionName }: { message: Message; companionName: string }) => {
+  const isUser = message.role === 'user';
+
+  const timeStr = message.timestamp.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+
+  return (
+    <View style={[styles.bubbleRow, isUser ? styles.bubbleRowUser : styles.bubbleRowAssistant]}>
+      {/* Avatar — only for assistant */}
+      {!isUser && (
+        <View style={styles.avatar}>
+          <Text style={styles.avatarText}>JB</Text>
+        </View>
+      )}
+
+      <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAssistant]}>
+  {!isUser && (
+    <Text style={styles.senderLabel}>{companionName}</Text>
+  )}
+  {!isUser && message.text.toLowerCase().includes('good morning') && message.text.length > 100 && (
+    <WeatherCard />
+  )}
+  <Markdown
+
+
+  style={{
+    body: { color: COLORS.cream, fontSize: 15, lineHeight: 22, letterSpacing: 0.2 },
+    strong: { color: COLORS.goldLight, fontWeight: 'bold' },
+    paragraph: { marginTop: 0, marginBottom: 0 },
+    bullet_list: { color: COLORS.cream },
+    ordered_list: { color: COLORS.cream },
+  }}
+>
+  {message.text}
+</Markdown>
+<Text style={styles.timestamp}>{timeStr}</Text>
+        {!isUser && message.morningActions && message.morningActions.length > 0 && (
+          <MorningActionButtons actions={message.morningActions} />
+        )}
+      </View>
+    </View>
+  );
+});
+
+
+// ─── Typing indicator ────────────────────────────────────────────────────
+const TypingIndicator = () => {
+  const dot1 = useRef(new Animated.Value(0)).current;
+  const dot2 = useRef(new Animated.Value(0)).current;
+  const dot3 = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const animate = (dot: Animated.Value, delay: number) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(delay),
+          Animated.timing(dot, { toValue: 1, duration: 300, useNativeDriver: true }),
+          Animated.timing(dot, { toValue: 0, duration: 300, useNativeDriver: true }),
+          Animated.delay(600 - delay),
+        ])
+      ).start();
+
+    animate(dot1, 0);
+    animate(dot2, 200);
+    animate(dot3, 400);
+  }, []);
+
+  const dotStyle = (anim: Animated.Value) => ({
+    ...styles.typingDot,
+    opacity: anim,
+    transform: [{ translateY: anim.interpolate({ inputRange: [0, 1], outputRange: [0, -4] }) }],
+  });
+
+  return (
+    <View style={styles.bubbleRow}>
+      <View style={styles.avatar}>
+        <Text style={styles.avatarText}>JB</Text>
+      </View>
+      <View style={[styles.bubble, styles.bubbleAssistant, styles.typingBubble]}>
+        <Animated.View style={dotStyle(dot1)} />
+        <Animated.View style={dotStyle(dot2)} />
+        <Animated.View style={dotStyle(dot3)} />
+      </View>
+    </View>
+  );
+};
+
+// ─── Main screen ─────────────────────────────────────────────────────────
+export default function ChatScreen() {
+  const { messages, sendMessage, isLoading } = useChat();
+  const router = useRouter();
+  const [inputText, setInputText] = useState('');
+  const [isRecording, setIsRecording] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
+  const isMutedRef = useRef(false);
+  useEffect(() => {
+    SecureStore.getItemAsync('isMuted').then(val => {
+      if (val === 'true') {
+        setIsMuted(true);
+        isMutedRef.current = true;
+      }
+    });
+  }, []);
+
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [companionName, setCompanionName] = useState('James Bond');
+  const flatListRef = useRef<FlatList>(null);
+  const [recording, setRecording] = useState<Audio.Recording | null>(null);
+  const player = useAudioPlayer('');
+  const isProcessingRef = useRef(false);
+  const [avatarUri, setAvatarUri] = useState<string | null>(null);
+  const recordingRef = useRef<Audio.Recording | null>(null);
+  const { signOut } = useAuth();
+  const { sessionToken } = useAuth();
+  // Scroll to bottom when new messages arrive
+  useEffect(() => {
+    if (messages.length > 0) {
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 100);
+    }
+  }, [messages, isLoading]);
+
+  useFocusEffect(
+  useCallback(() => {
+    const fetchPhoto = async () => {
+      try {
+        const response = await fetch(`${SERVER}/api/profile/photo`);
+        const data = await response.json();
+        setAvatarUri(data.avatarBase64 ?? data.photoUrl ?? null);
+      } catch (err) {
+        console.error('Failed to fetch photo', err);
+      }
+    };
+    fetchPhoto();
+  }, [])
+);
+useEffect(() => {
+  registerForPushNotifications().then(token => {
+    if (token) saveExpoPushToken(token);
+  });
+
+  // Register notification action categories
+ Notifications.setNotificationCategoryAsync('medication-action', [
+    { identifier: 'taken', buttonTitle: 'Done ✓', options: { opensAppToForeground: false } },
+    { identifier: 'snooze', buttonTitle: 'Remind me in 30 min', options: { opensAppToForeground: false } },
+  ]);
+
+  Notifications.setNotificationCategoryAsync('bill-action', [
+    { identifier: 'PAID', buttonTitle: 'Mark Paid ✓', options: { opensAppToForeground: false } },
+    { identifier: 'REMIND_TOMORROW', buttonTitle: 'Remind Tomorrow', options: { opensAppToForeground: false } },
+  ]);
+
+  Notifications.setNotificationCategoryAsync('reminder-action', [
+    { identifier: 'DONE', buttonTitle: 'Done ✓', options: { opensAppToForeground: false } },
+  ]);
+}, []);
+ 
+ useEffect(() => {
+  const subscription = Notifications.addNotificationResponseReceivedListener(async (response) => {
+    const data = response.notification.request.content.data;
+    const url = data?.url;
+    
+    // Handle weather alert with current location
+    //if (data?.useCurrentLocation && data?.notificationType === 'weather-alert') {
+    //  try {
+      //  const { status } = await Location.requestForegroundPermissionsAsync();
+    //    if (status === 'granted') {
+    //      const location = await Location.getCurrentPositionAsync({});
+    //      const { latitude, longitude } = location.coords;
+    //      const token = await SecureStore.getItemAsync('sessionToken');
+    //      const weatherResponse = await fetch(
+    //        `${SERVER}/api/weather/morning?lat=${latitude}&lon=${longitude}`,
+    //        { headers: { 'Authorization': `Bearer ${token}` } }
+    //      );
+    //      const weatherData = await weatherResponse.json();
+    //      console.log('Current location weather:', JSON.stringify(weatherData));
+    //    }
+    //  } catch (err) {
+    //    console.error('Location weather failed:', err);
+    //  }
+    //
+// Handle notification tap by type
+// Handle notification action buttons
+
+const actionIdentifier = response.actionIdentifier;
+const notifId = response.notification.request.identifier;
+
+if (actionIdentifier === 'taken') {
+  await fetch(`${SERVER}/api/medications/confirm-taken`, {
+    method: 'POST',
+    headers: { 'x-api-key': 'winston-native-2026' },
+  });
+  await Notifications.dismissNotificationAsync(notifId);
+  return;
+} else if (actionIdentifier === 'snooze') {
+  await fetch(`${SERVER}/api/medications/snooze-reminder`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': 'winston-native-2026' },
+    body: JSON.stringify({ notificationData: data }),
+  });
+  await Notifications.dismissNotificationAsync(notifId);
+  return;
+} else if (actionIdentifier === 'PAID') {
+  await fetch(`${SERVER}/api/bills/paid`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': 'winston-native-2026' },
+    body: JSON.stringify({ billId: data?.billId }),
+  });
+  await Notifications.dismissNotificationAsync(notifId);
+  return;
+} else if (actionIdentifier === 'REMIND_TOMORROW') {
+  await fetch(`${SERVER}/api/bills/remind-tomorrow`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': 'winston-native-2026' },
+    body: JSON.stringify({ billId: data?.billId, billName: data?.billName, amount: data?.amount }),
+  });
+  await Notifications.dismissNotificationAsync(notifId);
+  return;
+} else if (actionIdentifier === 'DONE') {
+  await fetch(`${SERVER}/api/reminders/done`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': 'winston-native-2026' },
+    body: JSON.stringify({ notificationData: data }),
+  });
+  await Notifications.dismissNotificationAsync(notifId);
+  return;
+}
+
+const notificationType = data?.notificationType;
+
+if (notificationType === 'morning-briefing') {
+const autoMessage = (data?.autoSendMessage as string) || `Good morning ${companionName}`;
+  handleSend(autoMessage);
+} else if (notificationType === 'weather-alert') {
+  const headline = data?.alertHeadline as string;
+  const description = data?.alertDescription as string;
+  const instruction = data?.alertInstruction as string;
+  const alertContext = headline 
+    ? `Tell me about this weather alert: ${headline}` 
+    : (data?.autoSendMessage as string) || 'Tell me about the weather alert';
+  handleSend(alertContext);
+
+} else if (notificationType === 'winddown' || notificationType === 'evening-checkin') {
+  handleSend('Evening Check In');
+} else if (notificationType === 'medication') {
+  handleSend('medication reminder');
+} else if (notificationType === 'bill-reminder') {
+  handleSend('bill reminder');
+} else if (notificationType === 'date-reminder') {
+  handleSend('date reminder');
+
+} else if (notificationType === 'departure') {
+  const mapsUrl = data?.mapsUrl || data?.mapsDeepLink;
+  if (mapsUrl) {
+    Linking.openURL(mapsUrl as string);
+  }
+
+
+
+  
+} else if (url && typeof url === 'string') {
+  Linking.openURL(url);
+}   
+  });
+  return () => subscription.remove();
+}, []);
+
+  useFocusEffect(
+  useCallback(() => {
+    const fetchProfile = async () => {
+      try {
+        const response = await fetch(`${SERVER}/api/settings/profile`, {
+          headers: { 'x-api-key': 'winston-native-2026' },
+        });
+        const data = await response.json();
+        if (data.companionName) setCompanionName(data.companionName);
+      } catch (err) {
+        console.error('Failed to fetch profile', err);
+      }
+    };
+    fetchProfile();
+  }, [])
+);
+ const speakResponse = useCallback(async (text: string) => {
+    if (isMutedRef.current) return;
+    try {
+      const response = await fetch(`${SERVER}/api/tts/stream`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-api-key': 'winston-native-2026',
+        },    
+        body: JSON.stringify({ text }),
+      });
+      if (!response.ok) throw new Error(`TTS error: ${response.status}`);
+      const arrayBuffer = await response.arrayBuffer();
+      const bytes = new Uint8Array(arrayBuffer);
+      let binary = '';
+      for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      const audioBase64 = btoa(binary);
+      const uri = `data:audio/mpeg;base64,${audioBase64}`;
+      player.replace({ uri });
+      player.play();
+    } catch (err) {
+      console.error('TTS failed', err);
+    }
+  }, [player]);
+
+  const openGoogleMaps = useCallback((destination: string) => {
+    const url = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(destination)}`;
+    Linking.openURL(url);
+  }, []);
+const handleEmergencyIntent = useCallback((text: string): boolean => {
+  const emergencyMatch = text.match(/^(emergency|call 911|help me|i need help|this is an emergency)/i);
+  if (emergencyMatch) {
+    router.push('/emergency' as any);
+    return true;
+  }
+  return false;
+}, []);
+
+const handleCallIntent = useCallback((text: string): boolean => {
+  const callMatch = text.match(/^call\s+(.+)$/i);
+  if (callMatch) {
+    const nameOrNumber = callMatch[1].trim();
+    // If it's a phone number, dial directly
+    const digitsOnly = nameOrNumber.replace(/\D/g, '');
+    if (digitsOnly.length >= 7) {
+      Linking.openURL(`tel:${digitsOnly}`);
+      return true;
+    }
+    // If it's a name, let the server handle it via chat
+    return false;
+  }
+  return false;
+}, []);
+const handleTextIntent = useCallback((text: string): boolean => {
+  const textMatch = text.match(/^(text|message|send.*to)\s+(.+)$/i);
+  if (textMatch) {
+    const nameOrNumber = textMatch[2].trim();
+    const digitsOnly = nameOrNumber.replace(/\D/g, '');
+    if (digitsOnly.length >= 7) {
+      // It's a phone number — open SMS directly
+      Linking.openURL(`sms:${digitsOnly}`);
+      return true;
+    }
+    // It's a name — let the server handle composition
+    return false;
+  }
+  return false;
+}, []);
+
+const handleSend = useCallback(async (overrideText?: string) => {
+  const text = (overrideText || inputText).trim();
+  console.log('handleSend called with:', text);
+  if (!text || isLoading) return;
+  if (!overrideText) setInputText('');
+  if (handleEmergencyIntent(text)) return;
+  if (handleCallIntent(text)) return;
+  if (handleTextIntent(text)) return;
+
+  const response = await sendMessage(text);
+  if (response) {
+    // Handle reservationPayload
+    const payload = response.reservationPayload;
+    if (payload) {
+      if (payload.openTableUrl) {
+        console.log('Opening URL:', payload.openTableUrl);
+        Linking.openURL(payload.openTableUrl);
+      } else if (payload.resyUrl) {
+        Linking.openURL(payload.resyUrl);
+      } else if (payload.type === 'phone') {
+        Linking.openURL(`tel:${payload.phone.replace(/\D/g, '')}`);
+      }
+    }
+
+    // Check if response contains a phone number for call intent
+    const phoneMatch = response.text.match(/(\+?1?\s?[-.]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4})/);
+    if (phoneMatch && text.toLowerCase().match(/^(call|phone|dial|ring)/i)) {
+      const phoneNumber = phoneMatch[1].replace(/\D/g, '');
+      Linking.openURL(`tel:${phoneNumber}`);
+    }
+    await speakResponse(response.text);
+  }
+
+
+}, [inputText, isLoading, sendMessage, speakResponse, handleEmergencyIntent, handleCallIntent, handleTextIntent]);
+
+
+
+  const handleVoicePress = useCallback(async () => {
+  if (!isRecording) {
+    // Stop any playing audio before recording
+    try {
+      await player.pause();
+    } catch (e) {}
+  }
+
+
+  if (isProcessingRef.current) return;
+  isProcessingRef.current = true;
+  
+  if (isRecording) {
+    setIsRecording(false);
+    try {
+      
+      await recording?.stopAndUnloadAsync();
+      const uri = recording?.getURI();
+      console.log('Recording URI after stop:', uri);
+      recordingRef.current = null;
+      setRecording(null);
+      if (uri) {
+
+       const response = await fetch(uri);
+          const blob = await response.blob();
+          const audioBase64 = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve((reader.result as string).split(',')[1]);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+          });
+
+
+          const transcribeResponse = await fetch(`${SERVER}/api/transcribe`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-api-key': 'winston-native-2026' },
+            body: JSON.stringify({ audioBase64, mimeType: 'audio/m4a' }),
+          });
+
+console.log('Transcribe response status:', transcribeResponse.status);
+
+const responseText = await transcribeResponse.text();
+console.log('Transcribe raw response:', responseText);
+let transcript = '';
+try {
+  const responseData = JSON.parse(responseText);
+  transcript = responseData.text || '';
+} catch (err) {
+  console.error('Transcribe JSON parse error:', responseText);
+}
+
+
+if (transcript) {
+  const reply = await sendMessage(transcript);
+  if (reply) await speakResponse(reply.text);
+}
+      }
+    } catch (err) {
+      console.error('Stop recording failed', err);
+    }
+  } else {
+    try {
+      await Audio.requestPermissionsAsync();
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+      });
+      const { recording: newRecording } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY as any
+      );
+      recordingRef.current = newRecording;
+      setRecording(newRecording);
+      setIsRecording(true);
+    } catch (err) {
+      console.error('Start recording failed', err);
+    }
+  }
+  
+  isProcessingRef.current = false;
+}, [isRecording, recording, sendMessage, speakResponse]);
+
+  const renderMessage = useCallback(
+    ({ item }: { item: Message }) => <ChatBubble message={item} companionName={companionName} />,
+    []
+  );
+
+  const keyExtractor = useCallback((item: Message) => item.id, []);
+
+  return (
+    <SafeAreaView style={styles.safe}>
+      <StatusBar barStyle="light-content" backgroundColor={COLORS.background} />
+
+    {/* ── Header ── */}
+<View style={styles.header}>
+  <View style={styles.headerLeft}>
+  <View style={styles.headerAvatar}>
+  {avatarUri ? (
+    <Image source={{ uri: avatarUri }} style={styles.headerAvatarImage} />
+  ) : (
+    <Text style={styles.headerAvatarText}>JB</Text>
+  )}
+
+</View>
+    <View>
+      <Text style={styles.headerName}>{companionName}</Text>
+    </View>
+  </View>
+  <View style={styles.headerIcons}>
+ 
+<TouchableOpacity style={styles.headerIcon} onPress={() => {
+  const newVal = !isMuted;
+  setIsMuted(newVal);
+  isMutedRef.current = newVal;
+  SecureStore.setItemAsync('isMuted', newVal.toString());
+}}>
+  <Ionicons name={isMuted ? "volume-mute-outline" : "volume-high-outline"} size={22} color={isMuted ? COLORS.danger : COLORS.muted} />
+</TouchableOpacity>
+<TouchableOpacity style={styles.headerIcon} onPress={() => router.push('/connect' as any)}>
+  <Ionicons name="people-outline" size={22} color={COLORS.muted} />
+</TouchableOpacity>
+
+<TouchableOpacity style={styles.headerIcon} onPress={() => router.push('/mylife' as any)}>
+  <Ionicons name="planet-outline" size={22} color={COLORS.muted} />
+</TouchableOpacity>
+    
+    <TouchableOpacity style={styles.headerIcon} onPress={() => router.push('/settings')}>
+      <Ionicons name="settings-outline" size={22} color={COLORS.muted} />
+    </TouchableOpacity>
+  </View>
+</View>  
+  
+
+      <View style={styles.divider} />
+
+      {/* ── Messages ── */}
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+      >
+        <FlatList
+          ref={flatListRef}
+          data={messages}
+          renderItem={renderMessage}
+          keyExtractor={keyExtractor}
+          contentContainerStyle={styles.messageList}
+          showsVerticalScrollIndicator={false}
+          ListFooterComponent={isLoading ? <TypingIndicator /> : null}
+          onContentSizeChange={() =>
+            flatListRef.current?.scrollToEnd({ animated: true })
+          }
+        />
+  
+        {/* ── Input bar ── */}
+        <View style={styles.inputBar}>
+          {/* Voice button */}
+        <TouchableOpacity
+  style={[styles.iconButton, isRecording && styles.iconButtonActive]}
+  onPress={handleVoicePress}
+  activeOpacity={0.7}
+  disabled={isProcessing}
+>
+  <Ionicons
+    name={isRecording ? 'stop-circle' : 'mic'}
+    size={22}
+    color={isRecording ? COLORS.danger : COLORS.gold}
+  />
+</TouchableOpacity>
+
+          {/* Text input */}
+          <TextInput
+            style={styles.input}
+            value={inputText}
+            onChangeText={setInputText}
+            placeholder={`Message ${companionName}…`}
+            placeholderTextColor={COLORS.muted}
+            multiline
+            maxLength={1000}
+            returnKeyType="send"
+            onSubmitEditing={() => handleSend()}
+            blurOnSubmit={false}
+          />
+
+          {/* Send button */}
+          <TouchableOpacity
+            style={[
+              styles.sendButton,
+              (!inputText.trim() || isLoading) && styles.sendButtonDisabled,
+            ]}
+            onPress={() => handleSend()}
+            disabled={!inputText.trim() || isLoading}
+            activeOpacity={0.8}
+          >
+            {isLoading ? (
+              <ActivityIndicator size="small" color={COLORS.background} />
+            ) : (
+              <Ionicons name="send" size={18} color={COLORS.background} />
+            )}
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
+  );
+}
+
+// ─── Styles ──────────────────────────────────────────────────────────────
+const styles = StyleSheet.create({
+  safe: {
+    flex: 1,
+    backgroundColor: COLORS.background,
+  },
+  flex: {
+    flex: 1,
+  },
+
+  // Header
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    paddingTop: 80,
+    backgroundColor: COLORS.background,
+  },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  headerAvatar: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: COLORS.surfaceRaised,
+    borderWidth: 2,
+    borderColor: COLORS.gold,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerAvatarImage: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+  },
+  headerAvatarText: {
+    color: COLORS.gold,
+    fontWeight: '700',
+    fontSize: 14,
+    letterSpacing: 1,
+  },
+  headerName: {
+    color: COLORS.cream,
+    fontSize: 16,
+    fontWeight: '600',
+    letterSpacing: 0.5,
+  },
+  headerSub: {
+    color: COLORS.muted,
+    fontSize: 12,
+    letterSpacing: 0.3,
+  },
+  onlineDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#4CAF50',
+    marginRight: 4,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: COLORS.border,
+    marginHorizontal: 0,
+  },
+  headerIcons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  headerIcon: {
+    padding: 6,
+  },
+quickActions: {
+  flexDirection: 'row',
+  paddingHorizontal: 12,
+  paddingVertical: 8,
+  gap: 8,
+  backgroundColor: COLORS.surface,
+},
+quickActionButton: {
+  backgroundColor: COLORS.surfaceRaised,
+  borderWidth: 1,
+  borderColor: COLORS.gold,
+  borderRadius: 20,
+  paddingHorizontal: 11,
+  paddingVertical: 6,
+},
+quickActionText: {
+  color: COLORS.gold,
+  fontSize: 13,
+  fontWeight: '500',
+},
+
+  // Messages
+  messageList: {
+    paddingHorizontal: 12,
+    paddingVertical: 16,
+    gap: 12,
+  },
+  bubbleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 8,
+    marginVertical: 4,
+  },
+  bubbleRowUser: {
+    justifyContent: 'flex-end',
+  },
+  bubbleRowAssistant: {
+    justifyContent: 'flex-start',
+  },
+
+  // Avatar (assistant only)
+  avatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: COLORS.surfaceRaised,
+    borderWidth: 1.5,
+    borderColor: COLORS.gold,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 2,
+  },
+  avatarText: {
+    color: COLORS.gold,
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+
+  // Bubble
+  bubble: {
+    maxWidth: '78%',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 16,
+  },
+  bubbleUser: {
+    backgroundColor: COLORS.userBubble,
+    borderBottomRightRadius: 4,
+    borderWidth: 1,
+    borderColor: '#2A3A5E',
+  },
+  bubbleAssistant: {
+    backgroundColor: COLORS.assistantBubble,
+    borderBottomLeftRadius: 4,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  senderLabel: {
+    color: COLORS.gold,
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 0.8,
+    marginBottom: 4,
+    textTransform: 'uppercase',
+  },
+  bubbleText: {
+    color: COLORS.cream,
+    fontSize: 15,
+    lineHeight: 22,
+    letterSpacing: 0.2,
+  },
+  timestamp: {
+    color: COLORS.muted,
+    fontSize: 11,
+    marginTop: 6,
+    textAlign: 'right',
+  },
+
+  // Typing indicator
+  typingBubble: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+  },
+  typingDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: COLORS.gold,
+  },
+
+  // Input bar
+  inputBar: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    paddingBottom: Platform.OS === 'android' ? 24 : 10,
+    backgroundColor: COLORS.surface,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
+    gap: 8,
+  },
+  iconButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: COLORS.surfaceRaised,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  iconButtonActive: {
+    borderColor: COLORS.danger,
+    backgroundColor: '#2A1A1A',
+  },
+  input: {
+    flex: 1,
+    backgroundColor: COLORS.inputBg,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 10,
+    color: COLORS.cream,
+    fontSize: 15,
+    maxHeight: 120,
+    lineHeight: 20,
+  },
+  sendButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: COLORS.gold,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sendButtonDisabled: {
+    backgroundColor: COLORS.border,
+  },
+});
