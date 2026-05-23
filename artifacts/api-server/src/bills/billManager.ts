@@ -355,6 +355,18 @@ export async function markBillPaid(
   );
 }
 
+export async function clearBillPaid(
+  billId: number,
+  userName = NATIVE_STORED_NAME
+): Promise<void> {
+  await query(
+    `UPDATE financial_obligations
+        SET paid_through_date = NULL
+      WHERE id = $1 AND user_name = $2`,
+    [billId, userName]
+  );
+}
+
 // ── Claude extraction ─────────────────────────────────────────────────────────
 export interface ExtractedBill {
   name: string;

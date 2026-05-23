@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import express from "express";
 import { authenticate } from "../auth/middleware.js";
-import { markBillPaid, getBills, addBill, computeNextDueDate, computeCycleStartDate, type Category, type Frequency } from "../bills/billManager.js";
+import { markBillPaid, clearBillPaid, getBills, addBill, computeNextDueDate, computeCycleStartDate, type Category, type Frequency } from "../bills/billManager.js";
 
 import { createReminder } from "../reminders/reminderManager.js";
 import { scanForBillAnomalies } from "../bills/billAnomalyScanner.js";
@@ -301,6 +301,27 @@ router.post("/bills/:id/remind-due-date", async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "[BILLS] POST /bills/:id/remind-due-date error");
     res.status(500).json({ error: "Failed to schedule due-date reminder" });
+  }
+});
+
+// ── POST /api/bills/:id/clear-paid — unmark a bill as paid this cycle ────────
+// Clears paid_through_date so the bill reappears as unpaid.
+// Response: { ok: true, bill: enrichedBill }
+router.post("/bills/:id/clear-paid", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const billId = parseInt(req.params.id, 10);
+  if (isNaN(billId)) { res.status(400).json({ error: "Invalid bill id" }); return; }
+  try {
+    await clearBillPaid(billId, userName);
+    const bills = await getBills(userName);
+    const bill = bills.find((b) => b.id === billId);
+    const enriched = bill ? enrichBill(bill) : null;
+    req.log.info({ userName, billId }, "[BILLS] Cleared paid_through_date");
+    res.json({ ok: true, bill: enriched });
+  } catch (err) {
+    req.log.error({ err }, "[BILLS] POST /bills/:id/clear-paid error");
+    res.status(500).json({ error: "Failed to clear bill paid status" });
   }
 });
 
