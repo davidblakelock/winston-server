@@ -59,6 +59,7 @@ import { startProviderScheduler } from "./providers/providerScheduler";
 import { startConnectBirthdayScheduler } from "./connect/connectBirthdayScheduler";
 import { startContactBirthdayScheduler } from "./google/contactBirthdayScheduler";
 import { startTvEpisodeScheduler } from "./tv/tvEpisodeScheduler";
+import { ensureStoicTables } from "./stoic/stoicManager";
 
 const rawPort = process.env["PORT"];
 
@@ -198,6 +199,13 @@ app.listen(port, async (err) => {
     logger.info("[startup] users table ready");
   } catch (e) {
     logger.warn({ e }, "users table initialization warning");
+  }
+
+  try {
+    await ensureStoicTables();
+    logger.info("[startup] stoic_curriculum + user_settings tables ready");
+  } catch (e) {
+    logger.warn({ e }, "Stoic tables initialization warning");
   }
 
   try {

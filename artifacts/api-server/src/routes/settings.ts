@@ -20,6 +20,7 @@ import {
   getTrustedSenders, addTrustedSender, removeTrustedSender,
   type WinstonMode,
 } from "../proactiveMode/proactiveModeManager.js";
+import { getUserSettings, upsertUserSettings } from "../stoic/stoicManager.js";
 import { getVipContacts, addVipContact, removeVipContact, isVipSender } from "../push/notificationVips.js";
 
 const router: IRouter = Router();
@@ -748,6 +749,59 @@ router.post("/settings/companion", express.json({ limit: "1mb" }), async (req, r
     personalityStyle: profile?.personalityStyle ?? "witty",
     voiceId: profile?.voiceId ?? null,
   });
+});
+
+// ── GET /api/settings/briefing-toggles ───────────────────────────────────────
+router.get("/settings/briefing-toggles", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const s = await getUserSettings(userName);
+  res.json({
+    weather: s.briefingWeather,
+    calendar: s.briefingCalendar,
+    todos: s.briefingTodos,
+    email: s.briefingEmail,
+    news: s.briefingNews,
+    funny: s.briefingFunny,
+    events: s.briefingEvents,
+    stoic: s.briefingStoic,
+    stoicDay: s.stoicDay,
+  });
+});
+
+// ── PATCH /api/settings/briefing-toggles ─────────────────────────────────────
+router.patch("/settings/briefing-toggles", express.json({ limit: "16kb" }), async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const allowed = ["weather", "calendar", "todos", "email", "news", "funny", "events", "stoic"] as const;
+  type Key = typeof allowed[number];
+  const keyMap: Record<Key, keyof import("../stoic/stoicManager.js").UserSettings> = {
+    weather: "briefingWeather",
+    calendar: "briefingCalendar",
+    todos: "briefingTodos",
+    email: "briefingEmail",
+    news: "briefingNews",
+    funny: "briefingFunny",
+    events: "briefingEvents",
+    stoic: "briefingStoic",
+  };
+
+  const updates: Partial<Omit<import("../stoic/stoicManager.js").UserSettings, "stoicDay">> = {};
+  for (const key of allowed) {
+    const val = (req.body as Record<string, unknown>)[key];
+    if (typeof val === "boolean") {
+      (updates as Record<string, boolean>)[keyMap[key]] = val;
+    }
+  }
+
+  if (Object.keys(updates).length === 0) {
+    res.status(400).json({ error: "No valid boolean toggle fields provided" });
+    return;
+  }
+
+  await upsertUserSettings(userName, updates);
+  res.json({ ok: true });
 });
 
 export default router;

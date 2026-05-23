@@ -1,0 +1,38 @@
+Please rebuild the morning briefing with the following structure and content. Read everything before starting.
+Morning Briefing — New Structure
+The briefing should flow in this exact order:
+
+Weather — One sentence only, actionable. Tell the user what they need to know and what to do about it. Example: 'It's going to be 94 and humid with storms rolling in around 3pm — might want to move that afternoon run to the morning.' Never just list temperature and conditions.
+Calendar — What's on today. Flag any conflicts. If a meeting has related email context, mention it. Example: 'You have a call with John at 10am — he emailed yesterday about the Henderson project, might be worth a quick review before.'
+To-Do List — Scan the user's to-do list. Surface anything due today or undated. Ask naturally if they want to tackle any of them or schedule them. Never just list them robotically.
+Email Scan — Only what matters. Meeting requests, follow-ups, anything urgent. Skip routine emails entirely.
+News — Top 3-5 stories people will be talking about today. 2-3 sentences each. Factual only, no commentary or opinion.
+One Funny Story — Something light the user can repeat later in the day. Man bites dog style.
+Local Events — What's happening nearby that might interest this user based on their profile. Brief description and a link to more information. New restaurants worth knowing about.
+
+The Stoic Moment
+After the briefing, shift into the Stoic moment. This is not random — it follows a progressive 365-day curriculum stored in the database.
+The format is:
+
+A real quote from Marcus Aurelius, Epictetus, or Seneca. Attributed correctly. Exact words.
+One sentence from Winston connecting it specifically to something in the user's actual day — a meeting, a challenge, a goal, something from their calendar or to-do list.
+An invitation to reflect: 'Take a moment with this today. If something comes to you, just tell me and I'll save it to your journal.'
+
+The Stoic Curriculum
+Add a new table stoic_curriculum with columns: id, day_number (1-365), quote, author, source, theme, phase (1-6).
+Populate it with the 365 quotes organized into 6 phases:
+
+Phase 1 (Days 1-60): Foundation — What Is In Your Control
+Phase 2 (Days 61-120): Perception — How You See Determines What You Feel
+Phase 3 (Days 121-200): Action — The Discipline of Doing
+Phase 4 (Days 201-270): Will — Amor Fati, Loving What Is
+Phase 5 (Days 271-330): Virtue and Legacy
+Phase 6 (Days 331-365): The View From Above
+
+Add a column stoic_day to user_settings to track which day of the curriculum each user is on. Increment by 1 each morning. After day 365, reset to 1.
+The first 7 days of the curriculum should introduce the Stoics gently before the main curriculum begins — brief context on who Marcus Aurelius, Epictetus, and Seneca were, woven naturally into the briefing.
+Onboarding Mention
+If the user has not completed onboarding, mention it once naturally at the end of the briefing: 'By the way, I notice we have not finished getting me fully set up yet. Would you like to schedule some time today to complete your profile so I can do a better job for you?' Only once per day maximum. Never repeat it.
+Configuration
+Each section of the briefing should be individually toggleable via user settings. Store preferences in user_settings as boolean columns: briefing_weather, briefing_calendar, briefing_todos, briefing_email, briefing_news, briefing_funny, briefing_events, briefing_stoic. All default to true.
+Deploy when complete and confirm with a test briefing.

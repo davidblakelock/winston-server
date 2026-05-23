@@ -42,6 +42,7 @@ import { buildRouteAwareSuggestions, buildRouteAwareBlock } from "../routeAware/
 import { getOrdersForBriefing } from "../orders/ordersManager.js";
 import { getCachedWeather } from "../weather/weatherCache.js";
 import { query } from "../db.js";
+import { getUserSettings, getStoicForUser, incrementStoicDay, buildStoicBlock, type UserSettings } from "../stoic/stoicManager.js";
 
 // ── Smart calendar block with integrated departure times ──────────────────────
 // Builds a TODAY / TOMORROW / LATER THIS WEEK block where each event with a
@@ -297,7 +298,7 @@ function buildPeopleContextBlock(rawData: CollectedData, displayName?: string): 
   );
 }
 
-function buildNarrativeBriefingInstruction(city: string, companionName: string | null, displayName?: string, mode: import("../proactiveMode/proactiveModeManager.js").WinstonMode = "supervised", intentionQuestion?: string): string {
+function buildNarrativeBriefingInstruction(city: string, companionName: string | null, displayName?: string, mode: import("../proactiveMode/proactiveModeManager.js").WinstonMode = "supervised", intentionQuestion?: string, settings?: UserSettings): string {
   const companion = companionName ?? "your companion";
   const firstName = displayName?.split(" ")[0] ?? "there";
   const closingQuestion = intentionQuestion ?? `What's the one thing that would make today feel worthwhile?`;
@@ -330,39 +331,31 @@ DELIVERY FORMAT: One coherent flowing narrative. No section headers. No bullet p
 
 OPENING: Start with "Good morning, ${firstName}" and then go directly into whatever you have decided leads this morning — no preamble, no "here is your briefing."
 
-STRUCTURE — YOU DECIDE EVERY MORNING: Look at ALL the verified data blocks in this system prompt and determine what matters most to ${firstName} on this specific day. Lead with that. Some mornings a breaking news story demands to go first. Some mornings an urgent calendar item leads. Some mornings the feel-good story earns the opening. The structure must feel different every morning — never the same opening twice.
+STRUCTURE — FOLLOW THIS ORDER EVERY MORNING: Cover each section below in the sequence listed. Transition naturally between sections without announcing what you're doing ("Moving on to," "Next up," "Now for," "Turning to," "Speaking of" — all banned). Lead with the most urgent or important item from whichever first section applies.
 
-WHAT TO COVER (weave naturally into the narrative — skip what has no relevance today):
+SECTION 1 — WEATHER: ${settings?.briefingWeather === false ? "⚠ WEATHER TOGGLED OFF — Skip entirely, do not mention weather." : "Cover ONLY if the [VERIFIED — Weather] block exists AND conditions are genuinely actionable (severe weather, dangerous heat, high rain chance with outdoor plans). One sentence maximum. Skip entirely if conditions are unremarkable. Never list temperature, humidity, UV, AQI, pollen, or wind speed in isolation — one actionable sentence or nothing."}
 
-• Weather — ONE sentence only if genuinely actionable: severe weather incoming, dangerous heat, high rain chance on a day with outdoor plans. Skip entirely if conditions are unremarkable. Never list temperature, humidity, UV index, AQI, pollen, or wind speed — one actionable sentence or nothing.
+SECTION 2 — CALENDAR: ${settings?.briefingCalendar === false ? "⚠ CALENDAR TOGGLED OFF — Skip calendar entirely." : "Cover TODAY's events from the [VERIFIED — Google Calendar API] block. Quote event titles letter-for-letter exactly as written — no paraphrasing or enriching with profile context. Where a departure time is shown, state it directly. If calendar is NOT CONNECTED, say exactly: \"I can't pull your calendar right now — Google may need to be reconnected in the app settings.\" If there are no events today, say so briefly in one sentence. Never mention events on dates other than today."}
 
-• News — CORE REQUIREMENT: Every briefing MUST include exactly 2 significant national or international news stories from the [VERIFIED — Web Search News] block. For each, cover two beats naturally woven together: what happened (specific, factual) and why it matters (the real consequence). Pick the stories people will actually be talking about today. Never invent headlines — only use what is in the verified block. If the block is absent or empty, say exactly: "I'm not seeing any news this morning — I'll check back in." Do not silently omit news. Local ${city} news is in a separate section — do NOT repeat it here.
+SECTION 3 — TO-DO: ${settings?.briefingTodos === false ? "⚠ TO-DO TOGGLED OFF — Skip entirely." : "If the [VERIFIED — To-Do List] block has items, mention the most actionable ones naturally. One sentence maximum. Skip if empty or irrelevant."}
 
-• Calendar — cover TODAY events ONLY. Never mention tomorrow, this week, or upcoming events unless they appear on today's calendar. Where a location is known, a departure time is already woven into each event line — quote it verbatim. If calendar is NOT CONNECTED, say exactly: "I can't pull your calendar right now — Google may need to be reconnected in the app settings." Do NOT say the day looks clear if the calendar is disconnected. CRITICAL: Never infer or assume an event is happening because of something in the user's profile — only what is on the calendar is real.
+SECTION 4 — EMAIL: ${settings?.briefingEmail === false ? "⚠ EMAIL TOGGLED OFF — Skip entirely." : "Surface only what needs attention or action from the [VERIFIED — Gmail] block. Skip promotions, shipping notifications, auto-confirmations. If inbox is clear, one warm sentence. If Google is not connected, one brief sentence. Offer to help act on anything that matters."}
 
-• Proactive alert — ONLY if something real warrants it: an expected package arriving, upcoming flight, bill due today or tomorrow, or a genuinely notable personal event. Skip entirely — say nothing — if there is no real alert.
+SECTION 5 — NEWS: ${settings?.briefingNews === false ? "⚠ NEWS TOGGLED OFF — Skip entirely, do not mention any news." : "CORE REQUIREMENT — cover exactly 2–3 significant national or international news stories from the [VERIFIED — Web Search News] block. For each: what happened (specific, factual) and why it matters. Never invent headlines — only use what is in the verified block. If the block is absent or empty, say exactly: \"I'm not seeing any news this morning — I'll check back in.\" Do not silently omit news. Local " + city + " news is Section 7 — do NOT repeat stories here."}
 
-• Email — surface only what needs attention or action. Skip promotions, shipping notifications, auto-confirmations. If inbox is clear, one warm sentence. If Google is not connected, one sentence. Offer to help act on anything that matters.
+SECTION 6 — FEEL-GOOD STORY: ${settings?.briefingFunny === false ? "⚠ FEEL-GOOD STORY TOGGLED OFF — Skip the Watercooler Story." : "MANDATORY, NON-NEGOTIABLE — The [Watercooler Story] block MUST appear in every briefing. No exceptions, regardless of length. Two beats: what happened, then what makes it remarkable. Genuine delight — not a throwaway line. If you are running long, cut from other sections — never this one."}
 
-• Entertainment — from [Entertainment & Pop Culture] block if present. One item, brief.
+SECTION 7 — LOCAL EVENTS: ${settings?.briefingEvents === false ? "⚠ LOCAL EVENTS TOGGLED OFF — Skip entirely." : "From the [What's Happening in " + city + "] block only. If the block has real items, deliver them naturally. If it says no items found, say exactly: \"Nothing new on the " + city + " front this morning.\" Never use training data to supplement."}
 
-• Health — Garmin/Fit data is YESTERDAY's data (the block is labeled "Yesterday's Health Data"). ALWAYS say "yesterday" when referencing any Garmin activity. NEVER say "this morning," "today," or "earlier" for Garmin data. Skip health entirely if data is unremarkable (nothing unusual about sleep, HR, or activity).
-
-• Local ${city} — from [What's Happening in ${city}] block only. If the block has real items, deliver them. If it says no items found, say exactly one sentence: "Nothing new on the ${city} front this morning." Never supplement from training data.
-
-• Concerts and venue events — from venue concerts block if present. Skip if nothing upcoming.
-
-• Birthdays and dates — if any birthday or anniversary is within 7 days, mention it specifically. Skip if none.
-
+AFTER SECTIONS 1–7 — ADDITIONAL CONTEXT (weave in naturally where relevant, before the closing):
 • Bills — if [VERIFIED — Bills Database — Due in Next 3 Days] block has items, name them. Skip entirely if absent.
-
+• Birthdays and dates — if any birthday or anniversary is within 7 days, mention it specifically. Skip if none.
 • TV shows — ONLY if [TV Shows — New Episodes] block is present. Never reference any show from memory or profile if that block is absent.
-
-• ${firstName}'s Life — if [${firstName}'s Life — Recent Entries] has entries, reference them naturally when they connect to something in today's news, calendar, or conversation.
-
-• Sunday summary — if [Sunday Summary] block is present, weave in a brief weekly recap naturally — exercise, highlights, something to look forward to.
-
-• Feel-good story — MANDATORY, NON-NEGOTIABLE: The [Watercooler Story] block MUST appear in every briefing. No exceptions, regardless of length. It is not optional. Two beats: what happened, then what makes it remarkable. Genuine delight — not a throwaway line. If you are running long, cut something else — never the feel-good story.
+• ${firstName}'s Life — if [${firstName}'s Life — Recent Entries] has entries, reference them naturally when they connect to something in today's briefing.
+• Health — Garmin/Fit data is YESTERDAY's data. ALWAYS say "yesterday." Skip if unremarkable (nothing unusual about sleep, HR, or activity).
+• Concerts and venue events — from venue concerts block if present. Skip if nothing upcoming.
+• Sunday summary — if [Sunday Summary] block is present, weave in briefly.
+• Packages/orders — mention any out-for-delivery items from the [VERIFIED — Orders Out for Delivery Today] block.
 
 DATA ACCURACY RULES — NO EXCEPTIONS:
 • VERIFIED blocks are ground truth. State their content as fact without softening or hedging.
@@ -373,9 +366,7 @@ DATA ACCURACY RULES — NO EXCEPTIONS:
 
 TARGET LENGTH: 60–90 seconds spoken at a natural conversational pace. Be ruthless — every sentence must either inform, connect, or land. Cut anything that does not earn its place.
 
-CLOSING — TWO ELEMENTS, IN THIS ORDER:
-1. Thought of the day: Say exactly "Here is your thought of the day." Then deliver 1–2 sentences drawn exclusively from philosophy, literature, science, music, or history — timeless wisdom only. Warm and slightly wry. Never "seize the day." Do NOT interpret, explain, or comment on the thought. Do NOT connect it to pickleball, workshops, sports, or anything from the profile. STRICT PROHIBITION: Never reference current events, news headlines, politics, world conflicts, protests, legislation, government, or anything anxiety-inducing. The thought must always be grounding and timeless.
-2. Intention question: Immediately after the thought of the day, ask exactly this — word for word, nothing else: "${closingQuestion}" Do NOT add any other question. Do NOT add commentary. Stop after this question.
+CLOSING — THE STOIC MOMENT: ${settings?.briefingStoic === false ? "⚠ STOIC MOMENT TOGGLED OFF — End the briefing after the additional context with one warm, brief closing sentence. No thought of the day. No question." : "After covering all sections and additional context above, close the briefing using the [VERIFIED — Stoic Moment] block. Follow that block's delivery instructions exactly. Do not add any other closing element, question, or commentary after the Stoic Moment instruction has been completed."}
 
 FORBIDDEN — NEVER USE:
 • Section headers or labels of any kind
@@ -388,11 +379,12 @@ FORBIDDEN — NEVER USE:
 • Any calendar event not on today's date — no tomorrow, no this week, no upcoming
 • Inferring or assuming something will happen because it appears in the user's profile — only verified calendar events count
 • Repeating any restaurant, event, or local item that has already been mentioned earlier in the same briefing
-• Skipping the feel-good story from [Watercooler Story] — it is mandatory in every single briefing
+• Skipping the feel-good story from [Watercooler Story] unless the briefingFunny toggle is explicitly OFF
 • "Something worth sitting with today" — this phrase is permanently banned. Never use it under any circumstances.
-• Any interpretation, explanation, or commentary after the thought of the day — deliver the thought, then ask the intention question, and stop
-• A third closing element — ONLY the thought of the day followed by the intention question
-• Thought of the day that references current events, politics, world conflicts, protests, legislation, government, sports, pickleball, or any anxiety-inducing news — it must be purely timeless wisdom
+• "Here is your thought of the day" — permanently banned. The Stoic Moment handles the closing.
+• Adding a second question or any commentary after the Stoic Moment's closing question — deliver the Stoic content per its instructions, then stop.
+• Mentioning the Stoic curriculum's phase number, day number, or that it is "Day X of 365" — that internal metadata is for context only, never for delivery.
+• Interpreting or explaining the Stoic quote beyond the one allowed connection sentence.
 
   `;
 }
@@ -471,7 +463,7 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
     ];
     const intentionQuestion = INTENTION_QUESTIONS[dayOfYear % 3]!;
 
-    const [recentMemories, allProfileItems, userProfile, seenHeadlines, seenVenueHeadlines, briefingPrefs, proactiveMode] = await Promise.all([
+    const [recentMemories, allProfileItems, userProfile, seenHeadlines, seenVenueHeadlines, briefingPrefs, proactiveMode, userSettings, stoicEntry] = await Promise.all([
       getRecentMemories(7).catch(() => []),
       getProfileItems(undefined, userName).catch(() => []),
       getProfile(userName).catch(() => null),
@@ -479,6 +471,8 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
       getSeenHeadlines(userName, 14).catch(() => new Set<string>()),  // venue concerts: 14-day window (events repeat until show date)
       getBriefingPreferences(userName).catch(() => []),
       getProactiveMode(userName).catch(() => "supervised" as const),
+      getUserSettings(userName).catch(() => null as UserSettings | null),
+      getStoicForUser(userName).catch(() => null),
     ]);
     const memoryBlock = formatMemoriesForContext(recentMemories);
     const dynamicProfileBlock = formatProfileForContext(allProfileItems);
@@ -892,12 +886,21 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
     const todayTrip = await getTodayTripDay(userName).catch(() => null);
     const tripDayBlock = todayTrip ? buildTripDayBlock(todayTrip) : "";
 
-    const suffix = weatherContextBlock + garminBlock + fitBlock + tripDayBlock + ordersBlock + todoBlock + tvMorningBlock + billsMorningBlock + datesBlock +
+    // ── Apply briefing toggle preferences ─────────────────────────────────────
+    const _bWeather = userSettings?.briefingWeather !== false ? weatherContextBlock : "";
+    const _bTodos   = userSettings?.briefingTodos   !== false ? todoBlock : "";
+    const _bNews    = userSettings?.briefingNews    !== false ? dedupedNewsBlock : "";
+    const _bEvents  = userSettings?.briefingEvents  !== false ? dallasEventsBlock : "";
+    const stoicBlock = userSettings?.briefingStoic !== false && stoicEntry
+      ? buildStoicBlock(stoicEntry, intentionQuestion ?? `What's the one thing that would make today feel worthwhile?`)
+      : "";
+
+    const suffix = _bWeather + garminBlock + fitBlock + tripDayBlock + ordersBlock + _bTodos + tvMorningBlock + billsMorningBlock + datesBlock +
       sundaySummaryBlock + recFollowUpBlock + personalFollowUpsBlock +
       mydayBlock + lifeSuggestionBlock + observationBlock + weeklyGiftBlock + annualLetterBlock + crossDomainBlock + routeAwareBlock +
-      dedupedNewsBlock + dallasEventsBlock + apifyEventBlock + dedupedVenueConcertsBlock + motivationContextBlock +
-      onboardingNudgeBlock +
-      buildNarrativeBriefingInstruction(primaryCity, userProfile?.companionName ?? null, userProfile?.name ?? undefined, proactiveMode, intentionQuestion) +
+      _bNews + _bEvents + apifyEventBlock + dedupedVenueConcertsBlock + motivationContextBlock +
+      onboardingNudgeBlock + stoicBlock +
+      buildNarrativeBriefingInstruction(primaryCity, userProfile?.companionName ?? null, userProfile?.name ?? undefined, proactiveMode, intentionQuestion, userSettings ?? undefined) +
       modeInstruction;
 
     // Log which static sections have data
@@ -1011,6 +1014,7 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
       if (pregenResult && pregenResult.content[0]?.type === "text") {
         const briefingText = pregenResult.content[0].text;
         setCachedBriefing(userName, briefingText, generationDateKey);
+        incrementStoicDay(userName).catch((e) => logger.warn({ e }, "[Stoic] Failed to increment stoic day"));
         logger.info(
           { userName, chars: briefingText.length, totalMs: Date.now() - t0pregen },
           "[MorningPush] Full briefing pre-generated and cached — native delivery will be instant"
