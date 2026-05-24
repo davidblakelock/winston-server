@@ -200,6 +200,145 @@ export function matchHotelToResults(
   return { matched: null, bestAlternative: top.hotel };
 }
 
+// ── High-level availability check (used by chat + API endpoint) ──────────────
+
+export interface HotelAvailabilityResult {
+  queried: {
+    hotelName?: string;
+    destination: string;
+    checkIn: string;
+    checkOut: string;
+    adults: number;
+    nights: number;
+  };
+  specific: BookingHotel | null;        // the named hotel, if found
+  namedHotelNotFound: boolean;          // true when a name was given but not found
+  alternatives: BookingHotel[];         // top available options (up to 5)
+  totalFound: number;
+  ready: boolean;                       // false when APIFY_API_KEY is absent
+}
+
+/**
+ * Check hotel availability for a destination + date range.
+ * If `hotelName` is supplied, tries to find that specific property and
+ * falls back to alternatives if it isn't found on Booking.com.
+ */
+export async function checkHotelAvailability(params: {
+  hotelName?: string;
+  destination: string;
+  checkIn: string;   // YYYY-MM-DD
+  checkOut: string;  // YYYY-MM-DD
+  adults: number;
+}): Promise<HotelAvailabilityResult> {
+  const { hotelName, destination, checkIn, checkOut, adults } = params;
+
+  const checkInMs  = new Date(`${checkIn}T12:00:00Z`).getTime();
+  const checkOutMs = new Date(`${checkOut}T12:00:00Z`).getTime();
+  const nights     = Math.max(1, Math.round((checkOutMs - checkInMs) / 86_400_000));
+
+  const base: HotelAvailabilityResult = {
+    queried: { hotelName, destination, checkIn, checkOut, adults, nights },
+    specific: null,
+    namedHotelNotFound: false,
+    alternatives: [],
+    totalFound: 0,
+    ready: isBookingAvailabilityReady(),
+  };
+
+  if (!base.ready) return base;
+
+  const results = await searchBookingAvailability(destination, checkIn, checkOut, adults);
+  base.totalFound = results.length;
+
+  if (!results.length) return base;
+
+  if (hotelName) {
+    const match = matchHotelToResults(hotelName, results);
+    if (match.matched) {
+      base.specific     = match.matched;
+      base.alternatives = results.filter((h) => h !== match.matched).slice(0, 4);
+    } else {
+      base.namedHotelNotFound = true;
+      const alts = match.bestAlternative
+        ? [match.bestAlternative, ...results.filter((h) => h !== match.bestAlternative).slice(0, 3)]
+        : results.slice(0, 4);
+      base.alternatives = alts;
+    }
+  } else {
+    base.alternatives = results.slice(0, 5);
+  }
+
+  return base;
+}
+
+/**
+ * Formats a `HotelAvailabilityResult` into a context block for Claude injection.
+ */
+export function buildHotelAvailabilityBlock(r: HotelAvailabilityResult): string {
+  const { queried, specific, namedHotelNotFound, alternatives, totalFound, ready } = r;
+  const nights = queried.nights;
+  const datesLabel = `${queried.checkIn} → ${queried.checkOut} (${nights} night${nights !== 1 ? "s" : ""})`;
+
+  if (!ready) {
+    return `\n\n[Hotel Availability — Not Configured]\nThe Booking.com availability checker isn't active right now. Let the user know you can't check live rates at the moment, and suggest they visit Booking.com or Hotels.com directly.`;
+  }
+
+  if (totalFound === 0) {
+    return (
+      `\n\n[Hotel Availability — No Results]\n` +
+      `Searched Booking.com for: ${queried.destination} | ${datesLabel} | ${queried.adults} adult(s).\n` +
+      `No available properties were returned. Let the user know and suggest they try Booking.com directly or adjust their dates.`
+    );
+  }
+
+  const lines: string[] = [
+    `\n\n[VERIFIED — Hotel Availability via Booking.com]`,
+    `Destination: ${queried.destination} | Dates: ${datesLabel} | Guests: ${queried.adults}`,
+    `Total results: ${totalFound} properties found`,
+  ];
+
+  if (specific) {
+    lines.push(`\n✓ FOUND — ${queried.hotelName} IS available for these dates:`);
+    lines.push(`  Name:  ${specific.name}`);
+    if (specific.pricePerNight) lines.push(`  Price: ${specific.pricePerNight}`);
+    if (specific.rating)        lines.push(`  Rating: ${specific.rating}/10${specific.reviewCount ? ` (${specific.reviewCount.toLocaleString()} reviews)` : ""}`);
+    if (specific.address)       lines.push(`  Address: ${specific.address}`);
+    lines.push(`  Book:  ${specific.bookingUrl}`);
+  } else if (namedHotelNotFound) {
+    lines.push(`\n✗ NOT FOUND — "${queried.hotelName}" was not found on Booking.com for these dates.`);
+    lines.push(`  It may be sold out, listed under a different name, or not on Booking.com.`);
+  }
+
+  if (alternatives.length) {
+    const label = specific
+      ? "\nAlternative options available for these dates:"
+      : namedHotelNotFound
+        ? "\nAvailable alternatives at a similar price point:"
+        : "\nAvailable hotels for these dates:";
+    lines.push(label);
+    for (const h of alternatives) {
+      const price  = h.pricePerNight ? ` — ${h.pricePerNight}` : "";
+      const rating = h.rating        ? ` | ${h.rating}/10` : "";
+      lines.push(`  • ${h.name}${price}${rating}`);
+      lines.push(`    ${h.bookingUrl}`);
+    }
+  }
+
+  lines.push(
+    `\nINSTRUCTIONS: Report these VERIFIED results directly and conversationally. ` +
+    (specific
+      ? `Lead with confirming the hotel is available and state the price. Provide the booking link. ` +
+        `Then briefly mention 1–2 alternatives.`
+      : namedHotelNotFound
+        ? `Let the user know that specific hotel wasn't found on Booking.com for those dates. ` +
+          `Present the top 2–3 alternatives warmly with prices and booking links.`
+        : `Present the top 2–3 available hotels with prices and direct booking links. Be concise and conversational.`) +
+    ` Do NOT say you can't check — you have live data above. Always include the booking URL.`
+  );
+
+  return lines.join("\n");
+}
+
 // ── Public search (with cache) ────────────────────────────────────────────────
 
 export async function searchBookingAvailability(

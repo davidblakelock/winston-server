@@ -246,6 +246,10 @@ import {
   saveTripPlan,
   buildTravelProfileContext,
 } from "../travel/tripPlanningManager.js";
+import {
+  checkHotelAvailability,
+  buildHotelAvailabilityBlock,
+} from "../travel/hotelAvailability.js";
 import { nextOccurrenceForPattern, humanReadableRecurring } from "../reminders/recurringUtils.js";
 import { broadcastToUser } from "../reminders/sseStore.js";
 import { saveMoodCheckin } from "../mood/moodManager.js";
@@ -508,6 +512,8 @@ const NAVIGATION_PATTERN = /\b(take\s+me\s+to|directions?\s+to|navigate\s+to|get
 // Matches explicit save/build requests for a trip itinerary in main chat.
 // Intentionally broad — false positives bail gracefully when Haiku finds no trip destination.
 const TRIP_SAVE_INTENT = /\b(?:save\s+(?:this|my|the|our|it)\b|build\s+(?:(?:me|us)\s+)?(?:(?:the|a|an?)\s+)?(?:full\s+)?itinerary|build\s+it(?:\s+out)?\b|create\s+(?:(?:me|us)\s+)?(?:(?:the|a|an?)\s+)?(?:full\s+)?itinerary|make\s+(?:(?:the|a|an?)\s+)?(?:full\s+)?itinerary|generate\s+(?:(?:the|a|an?)\s+)?(?:full\s+)?itinerary|yes[,\s]+(?:please[,\s]+)?(?:build|make|create|save|do\s+it|go\s+ahead)|go\s+ahead(?:\s+and\s+(?:build|make|create|save))?|let'?s\s+(?:build|save|do|go\s+ahead)\b|yes[,\s]+let'?s\s+(?:do|build|save)\s+it|add\s+(?:it\s+)?to\s+my\s+(?:trips?|travel)|save\s+to\s+(?:my\s+)?(?:trips?|travel\s+screen)|book\s+it\b)\b/i;
+// Detects hotel/room availability queries. Intentionally broad — Haiku will validate dates/destination.
+const HOTEL_AVAIL_INTENT = /\b(?:hotel|resort|inn|suites?)\b.{0,100}\b(?:available|availability)\b|\b(?:available|availability)\b.{0,60}\b(?:hotel|resort|inn)\b|\bcheck\s+(?:hotel|room)\s+availability\b|\bhotel\s+availability\b|\bavailable\s+hotels?\b|\bhotels?\s+available\b|\bany\s+(?:hotels?|rooms?)\s+available\b/i;
 const GOAL_PATTERN = /\b(?:i\s+(?:want|need|should|have)\s+to\s+(?:(?:start\s+|be\s+)?(?:read(?:ing)?|call(?:ing)?|see(?:ing)?|visit(?:ing)?|spend(?:ing)?\s+(?:more\s+)?time|work(?:ing)?\s+(?:more\s+)?on|get\s+(?:back\s+)?(?:into|to)|focus(?:ing)?\s+(?:more\s+)?on|reconnect(?:ing)?|exercise|write|journal|meditat|paint|cook|learn|practice|travel|save|organiz|clean|reach\s+out)|more\s+\w+|less\s+\w+)|i'?(?:ve\s+been\s+meaning\s+to|d\s+love\s+to\s+(?:start|get))|my\s+goal\s+is\s+to|i'?m\s+trying\s+to\s+(?:be\s+better\s+at|get\s+(?:more\s+)?into|start))\b/i;
 const STORY_READ_PATTERN = /\b(read\s+(me\s+)?(my\s+)?stor(y|ies)|show\s+(me\s+)?(my\s+)?stor(y|ies)|what\s+stor(y|ies)\s+have\s+i|tell\s+me\s+(my|the)\s+stor(y|ies)|ms\.?\s*peel\s+read\s+(me\s+)?(my\s+)?stor(y|ies)|olivia\s+stor(y|ies))\b/i;
 const STORY_COUNT_PATTERN = /\b(how\s+many\s+stor(y|ies)|stor(y|ies)\s+count|how\s+many\s+memories|number\s+of\s+stor(y|ies)|how\s+many\s+have\s+i\s+(captured|saved|told))\b/i;
@@ -1099,6 +1105,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isStoryRead = STORY_READ_PATTERN.test(message);
   const isStoryCount = STORY_COUNT_PATTERN.test(message);
   const isTripSaveIntent = !isMorningGreeting && TRIP_SAVE_INTENT.test(message);
+  const isHotelAvailabilityQuery = !isMorningGreeting && !isTripSaveIntent && HOTEL_AVAIL_INTENT.test(message);
   // Guard: don't run profile handler when a trip save is being detected — they conflict
   const isProfileRequest = !isTripSaveIntent && PROFILE_PATTERN.test(message);
   // IMPORTANT: Reminder requests (REMINDER_PATTERN) must NEVER route to Google Calendar.
@@ -1771,6 +1778,65 @@ If the conversation is not about a trip, set destination to null.`,
     }
   }
 
+
+  // ── Hotel availability check (on-demand, conversational) ─────────────────────
+  // Fires when the user asks "Is [hotel] available June 12–15?" or "hotel availability in Dallas".
+  // Uses Haiku to extract params, then calls Booking.com via Apify (cached 2 h).
+  if (isHotelAvailabilityQuery) {
+    try {
+      const todayISO = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+      const extractResp = await anthropic.messages.create({
+        model: MODEL_HAIKU,
+        max_tokens: 200,
+        system: `Extract hotel availability search parameters from this message. Respond ONLY with valid JSON — no explanation, no markdown.
+Format: {"hotelName":"string or null","destination":"string","checkIn":"YYYY-MM-DD or null","checkOut":"YYYY-MM-DD or null","adults":number}
+Today is ${todayISO}. Resolve relative phrases like "this weekend", "next Friday", "June 12-15" to specific YYYY-MM-DD dates.
+If no specific hotel is named, set hotelName to null. If destination is unclear, infer from hotel name (e.g. "Omni Dallas" → "Dallas").
+If dates cannot be resolved to specific days, set them to null.`,
+        messages: [{ role: "user", content: message }],
+      });
+
+      const extractedText = extractResp.content[0].type === "text"
+        ? extractResp.content[0].text.trim()
+        : "{}";
+
+      let hotelParams: {
+        hotelName?: string | null;
+        destination?: string;
+        checkIn?: string | null;
+        checkOut?: string | null;
+        adults?: number;
+      } = {};
+      try {
+        hotelParams = JSON.parse(extractedText.replace(/^```json\s*/i, "").replace(/```$/i, "").trim());
+      } catch { /* ignore */ }
+
+      req.log.info({ hotelParams }, "[HotelAvail] Extracted params from message");
+
+      if (hotelParams.destination && hotelParams.checkIn && hotelParams.checkOut) {
+        const result = await checkHotelAvailability({
+          hotelName:   hotelParams.hotelName ?? undefined,
+          destination: hotelParams.destination,
+          checkIn:     hotelParams.checkIn,
+          checkOut:    hotelParams.checkOut,
+          adults:      hotelParams.adults ?? 2,
+        });
+        req.log.info(
+          { dest: hotelParams.destination, checkIn: hotelParams.checkIn, checkOut: hotelParams.checkOut, totalFound: result.totalFound, foundSpecific: !!result.specific },
+          "[HotelAvail] Booking.com check complete"
+        );
+        systemPrompt += buildHotelAvailabilityBlock(result);
+      } else {
+        req.log.info({ hotelParams }, "[HotelAvail] Missing params — asking user to clarify");
+        systemPrompt +=
+          `\n\n[Hotel Availability — Incomplete Request]\n` +
+          `The user seems to be asking about hotel availability, but I couldn't parse specific dates or destination. ` +
+          `Ask them to confirm: (1) destination or hotel name, (2) check-in date, (3) check-out date, (4) number of guests.`;
+      }
+    } catch (hotelErr) {
+      req.log.warn({ err: hotelErr }, "[HotelAvail] Check failed — letting Claude handle naturally");
+    }
+  }
 
   if (isSportsRequest) {
     try {

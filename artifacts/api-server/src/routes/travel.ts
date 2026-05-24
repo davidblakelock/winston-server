@@ -13,6 +13,10 @@ import {
   buildTravelProfileContext,
   type NativeTripPlan,
 } from "../travel/tripPlanningManager.js";
+import {
+  checkHotelAvailability,
+  isBookingAvailabilityReady,
+} from "../travel/hotelAvailability.js";
 import { getProfile, type CollectedData } from "../onboarding/onboardingManager.js";
 import { MODEL_SONNET } from "../lib/models.js";
 import { logger } from "../lib/logger.js";
@@ -267,6 +271,68 @@ router.put("/trips/:id", express.json({ limit: "2mb" }), async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "[Trips] PUT /trips/:id error");
     res.status(500).json({ error: "Failed to update trip plan" });
+  }
+});
+
+// ── POST /api/hotels/check-availability ───────────────────────────────────────
+// Direct hotel availability check via Booking.com (Apify).
+// Body: { destination, checkIn, checkOut, hotelName?, adults? }
+// Returns: { queried, specific, namedHotelNotFound, alternatives, totalFound, ready }
+router.post("/hotels/check-availability", express.json(), async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const body = req.body as {
+    destination?: string;
+    checkIn?: string;
+    checkOut?: string;
+    hotelName?: string;
+    adults?: number;
+  };
+
+  if (!body.destination || !body.checkIn || !body.checkOut) {
+    res.status(400).json({ error: "destination, checkIn, and checkOut are required" });
+    return;
+  }
+
+  // Validate date format
+  const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+  if (!dateRe.test(body.checkIn) || !dateRe.test(body.checkOut)) {
+    res.status(400).json({ error: "checkIn and checkOut must be YYYY-MM-DD" });
+    return;
+  }
+
+  if (!isBookingAvailabilityReady()) {
+    res.status(503).json({
+      error: "Hotel availability checker is not configured (APIFY_API_KEY missing)",
+      ready: false,
+    });
+    return;
+  }
+
+  try {
+    req.log.info(
+      { destination: body.destination, checkIn: body.checkIn, checkOut: body.checkOut, hotelName: body.hotelName },
+      "[HotelAvail] POST /hotels/check-availability"
+    );
+
+    const result = await checkHotelAvailability({
+      destination: body.destination,
+      checkIn:     body.checkIn,
+      checkOut:    body.checkOut,
+      hotelName:   body.hotelName,
+      adults:      body.adults ?? 2,
+    });
+
+    req.log.info(
+      { totalFound: result.totalFound, foundSpecific: !!result.specific, namedNotFound: result.namedHotelNotFound },
+      "[HotelAvail] Check complete"
+    );
+
+    res.json(result);
+  } catch (err) {
+    req.log.error({ err }, "[HotelAvail] POST /hotels/check-availability error");
+    res.status(500).json({ error: "Hotel availability check failed" });
   }
 });
 
