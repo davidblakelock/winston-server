@@ -257,6 +257,7 @@ import { findConnectionByLabel, saveConnectMessage, markMessageDelivered } from 
 import { getAllProviders, touchLastContactDate } from "../providers/providerManager.js";
 import { getPeople, type KeyPerson } from "../people/peopleManager.js";
 import { sendPushToAll } from "../push/pushManager.js";
+import { getRecentAlertContext } from "../push/weatherAlertScheduler.js";
 import { extractAndSaveFollowups } from "../followups/followupManager.js";
 import {
   saveMydayEntry,
@@ -5078,6 +5079,15 @@ If you cannot extract both, return null.`,
     | { recipientName: string; body: string }
     | undefined;
 
+  // Weather alert context: when the user taps a push notification and asks about
+  // a recent NWS alert, look up the stored full text and inject it so Claude can
+  // give a real answer instead of "I don't have the details."
+  const WEATHER_ALERT_RE =
+    /weather\s+alert|air\s+quality\s*(alert)?|severe\s+thunderstorm|tornado\s+warning|flood\s+warning|winter\s+storm|fire\s+weather|heat\s+advisory|freeze\s+warning|dust\s+storm|dense\s+fog|NWS\s+Fort\s+Worth|issued.*CDT|issued.*CST|issued.*EDT|issued.*EST/i;
+  const weatherAlertCtx = WEATHER_ALERT_RE.test(message)
+    ? await getRecentAlertContext(sessionUserName).catch(() => null)
+    : null;
+
   const messages: Anthropic.MessageParam[] = [
     ...filteredHistory.map((msg: { role: string; content: string }) => ({
       role: msg.role as "user" | "assistant",
@@ -5088,6 +5098,16 @@ If you cannot extract both, return null.`,
           {
             role: "assistant" as const,
             content: `Here's what I've drafted for ${smsDraftContext.recipientName}:\n\n"${smsDraftContext.body}"\n\nDoes that work, or would you like to change the tone or wording?`,
+          },
+        ]
+      : []),
+    ...(weatherAlertCtx
+      ? [
+          {
+            role: "assistant" as const,
+            content:
+              `[WEATHER ALERT — Full NWS details for the ${weatherAlertCtx.event}` +
+              ` affecting ${weatherAlertCtx.area}]\n\n${weatherAlertCtx.fullText}`,
           },
         ]
       : []),

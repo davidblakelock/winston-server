@@ -100,6 +100,9 @@ async function initAlertLogTable(): Promise<void> {
       UNIQUE (user_name, alert_id)
     )
   `);
+  // Add full_text and area columns so the chat handler can inject NWS details
+  await query(`ALTER TABLE weather_alert_log ADD COLUMN IF NOT EXISTS full_text text`);
+  await query(`ALTER TABLE weather_alert_log ADD COLUMN IF NOT EXISTS area text`);
 }
 
 async function wasAlreadySent(userName: string, alertId: string): Promise<boolean> {
@@ -113,16 +116,47 @@ async function wasAlreadySent(userName: string, alertId: string): Promise<boolea
   return rows.length > 0;
 }
 
-async function markSent(userName: string, alertId: string, event: string): Promise<void> {
+async function markSent(
+  userName: string,
+  alertId: string,
+  event: string,
+  fullText?: string,
+  area?: string
+): Promise<void> {
   await query(
-    `INSERT INTO weather_alert_log (user_name, alert_id, event)
-     VALUES ($1, $2, $3)
+    `INSERT INTO weather_alert_log (user_name, alert_id, event, full_text, area)
+     VALUES ($1, $2, $3, $4, $5)
      ON CONFLICT (user_name, alert_id) DO NOTHING
      RETURNING user_name`,
-    [userName, alertId, event]
+    [userName, alertId, event, fullText ?? null, area ?? null]
   );
   if (!_memCache.has(userName)) _memCache.set(userName, new Set());
   _memCache.get(userName)!.add(alertId);
+}
+
+// ── Export: fetch most recent alert details for chat context injection ─────────
+// Called by chatHandlerCore when a weather-alert message is detected.
+// Returns the full NWS text + event name from the most recent alert sent within
+// the last 24 hours, or null if none exists.
+export async function getRecentAlertContext(
+  userName: string
+): Promise<{ event: string; fullText: string; area: string } | null> {
+  const { rows } = await query<{ event: string; full_text: string; area: string }>(
+    `SELECT event, full_text, area
+     FROM weather_alert_log
+     WHERE user_name = $1
+       AND full_text IS NOT NULL
+       AND sent_at > NOW() - INTERVAL '24 hours'
+     ORDER BY sent_at DESC
+     LIMIT 1`,
+    [userName]
+  );
+  if (!rows.length || !rows[0].full_text) return null;
+  return {
+    event:    rows[0].event   ?? "Weather Alert",
+    fullText: rows[0].full_text,
+    area:     rows[0].area    ?? "your area",
+  };
 }
 
 // ── NWS API fetch ─────────────────────────────────────────────────────────────
@@ -174,11 +208,6 @@ async function checkWeatherAlertsForUser(userName: string): Promise<void> {
     const alreadySent = await wasAlreadySent(userName, alertId).catch(() => false);
     if (alreadySent) continue;
 
-    // Mark sent BEFORE pushing to avoid duplicates if push is slow or retried
-    await markSent(userName, alertId, props.event).catch((err) => {
-      logger.warn({ err, alertId }, "[WeatherAlerts] Failed to mark alert as sent — may duplicate");
-    });
-
     const areaLabel = props.areaDesc ?? city;
     const headline = props.headline ?? `${props.event} in effect for ${areaLabel}`;
 
@@ -188,6 +217,11 @@ async function checkWeatherAlertsForUser(userName: string): Promise<void> {
       props.description ? `\n${props.description.trim()}` : "",
       props.instruction ? `\nINSTRUCTIONS: ${props.instruction.trim()}` : "",
     ].filter(Boolean).join("");
+
+    // Mark sent BEFORE pushing to avoid duplicates if push is slow or retried
+    await markSent(userName, alertId, props.event, fullAlertText, areaLabel).catch((err) => {
+      logger.warn({ err, alertId }, "[WeatherAlerts] Failed to mark alert as sent — may duplicate");
+    });
 
     // Short body for the notification banner (push char limit ~110 chars)
     const notifBody = headline.length > 110 ? `${headline.slice(0, 107)}…` : headline;
