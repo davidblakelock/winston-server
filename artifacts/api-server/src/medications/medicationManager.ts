@@ -255,12 +255,21 @@ export interface MedicationSideEffect {
   sideEffects: string[];
 }
 
+export interface MedicationAvoid {
+  drug: string;
+  items: string[];
+}
+
 interface ClaudeInteractionResponse {
   interactions: Array<{
     drugs: string[];
     severity: "low" | "moderate" | "high" | "critical";
     description: string;
     watchFor: string;
+  }>;
+  avoid: Array<{
+    drug: string;
+    items: string[];
   }>;
   sideEffects: Array<{
     drug: string;
@@ -272,6 +281,7 @@ export async function getMedicationInteractions(
   userName = NATIVE_STORED_NAME
 ): Promise<{
   interactions: DrugInteraction[];
+  avoid: MedicationAvoid[];
   sideEffects: MedicationSideEffect[];
   checkedDrugs: string[];
   failedLookups: string[];
@@ -280,7 +290,7 @@ export async function getMedicationInteractions(
   const checkedDrugs = meds.map((m) => m.name);
 
   if (meds.length === 0) {
-    return { interactions: [], sideEffects: [], checkedDrugs, failedLookups: [] };
+    return { interactions: [], avoid: [], sideEffects: [], checkedDrugs, failedLookups: [] };
   }
 
   const medList = meds
@@ -292,25 +302,33 @@ export async function getMedicationInteractions(
 MEDICATION LIST:
 ${medList}
 
-Your task has two parts. Write everything in plain, everyday English — as if you're explaining to a friend, not writing a medical document. No jargon, no Latin, no clinical terminology. The goal is awareness, not medical advice.
+Write everything in plain, everyday English — as if explaining to a friend, not writing a medical document. No jargon, no Latin, no clinical terms. The goal is awareness, not medical advice.
 
-PART 1 — DRUG INTERACTIONS
-Identify ALL meaningful interactions between any two or more drugs in this list. Be thorough — do not omit real ones, but do not fabricate ones that don't exist.
+PART 1 — INTERACTIONS BETWEEN LISTED DRUGS
+Check every combination of drugs in the list for meaningful interactions. Be thorough — do not omit real ones, but do not fabricate ones that don't exist.
 
 For each interaction provide:
-- drugs: the exact drug names from the list that interact
-- severity: one of "low", "moderate", "high", or "critical"
-  - critical = these drugs should not be taken together without a doctor's supervision
-  - high = real risk that needs a doctor's awareness
-  - moderate = worth knowing about and monitoring
+- drugs: the exact names of the two (or more) drugs from the list
+- severity: "low", "moderate", "high", or "critical"
+  - critical = should not be taken together without direct doctor supervision
+  - high = real risk needing doctor awareness
+  - moderate = worth knowing and monitoring
   - low = minor, just good to be aware of
-- description: ONE plain English sentence that tells the user what to avoid and why in simple terms. Use everyday words. Name common brand names in parentheses where helpful (e.g. "ibuprofen (Advil)"). End the sentence with: "Talk to your doctor or pharmacist if you have questions."
-  Good example: "Avoid taking ibuprofen (Advil) or aspirin while on Meloxicam — it raises the risk of stomach bleeding. Talk to your doctor or pharmacist if you have questions."
-  Bad example: "Concurrent use of NSAIDs may potentiate gastrointestinal hemorrhagic risk via COX-1 inhibition."
-- watchFor: one plain English sentence describing a simple, concrete symptom the person should watch for — something they'd actually notice at home (e.g. "Watch for unusual stomach pain, dark stools, or feeling dizzy.")
+- description: ONE plain English sentence saying what the problem is and why it matters. Use everyday words and common brand names in parentheses where helpful. End with: "Talk to your doctor or pharmacist if you have questions."
+  GOOD: "Taking Meloxicam and Pravastatin together can occasionally put extra strain on your liver — your doctor should know you're taking both. Talk to your doctor or pharmacist if you have questions."
+  BAD: "Concurrent use may potentiate hepatotoxic risk via CYP2C9 inhibition."
+- watchFor: one short plain English sentence naming a concrete symptom they'd notice at home.
 
-PART 2 — NOTABLE SIDE EFFECTS
-For each individual medication, list 3–6 side effects in plain everyday language. Write each one as a short phrase a non-medical person would immediately understand (e.g. "stomach upset or nausea", "muscle aches", "dizziness when standing up"). No clinical terms.
+PART 2 — THINGS TO AVOID WITH EACH DRUG
+This is critical: for each drug, list the most important common medications, supplements, or foods that a person should avoid or be careful with — even if those things are NOT in the medication list above. Think about what someone might grab off the shelf at a pharmacy or take without thinking.
+
+For example, for Meloxicam this MUST include: ibuprofen (Advil, Motrin), aspirin (unless prescribed), naproxen (Aleve), other anti-inflammatory painkillers, and blood thinners.
+For Pravastatin this MUST include: grapefruit juice, large amounts of alcohol, niacin supplements, and certain antibiotics like clarithromycin.
+
+Write each avoidance as one short plain English sentence. Keep it practical and specific — name the actual product or food. 3–5 items per drug.
+
+PART 3 — NOTABLE SIDE EFFECTS
+For each drug, list 3–6 side effects in plain everyday language as short phrases (e.g. "stomach pain or nausea", "muscle aches", "dizziness when standing up").
 
 Respond ONLY with valid JSON matching this exact schema (no markdown, no extra text):
 {
@@ -322,6 +340,12 @@ Respond ONLY with valid JSON matching this exact schema (no markdown, no extra t
       "watchFor": "..."
     }
   ],
+  "avoid": [
+    {
+      "drug": "Drug Name",
+      "items": ["Avoid ibuprofen (Advil, Motrin) — it raises the risk of stomach bleeding.", "Avoid aspirin unless your doctor prescribed it for your heart."]
+    }
+  ],
   "sideEffects": [
     {
       "drug": "Drug Name",
@@ -330,7 +354,7 @@ Respond ONLY with valid JSON matching this exact schema (no markdown, no extra t
   ]
 }
 
-If there are genuinely no interactions between the drugs, return an empty interactions array.`;
+If there are genuinely no interactions between the listed drugs, return an empty interactions array. Still complete the avoid and sideEffects sections regardless.`;
 
   try {
     const response = await anthropic.messages.create({
@@ -342,19 +366,20 @@ If there are genuinely no interactions between the drugs, return an empty intera
     const raw = response.content[0].type === "text" ? response.content[0].text.trim() : "";
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
-      return { interactions: [], sideEffects: [], checkedDrugs, failedLookups: [] };
+      return { interactions: [], avoid: [], sideEffects: [], checkedDrugs, failedLookups: [] };
     }
 
     const parsed = JSON.parse(jsonMatch[0]) as ClaudeInteractionResponse;
 
     return {
       interactions: parsed.interactions ?? [],
+      avoid: parsed.avoid ?? [],
       sideEffects: parsed.sideEffects ?? [],
       checkedDrugs,
       failedLookups: [],
     };
   } catch {
-    return { interactions: [], sideEffects: [], checkedDrugs, failedLookups: [] };
+    return { interactions: [], avoid: [], sideEffects: [], checkedDrugs, failedLookups: [] };
   }
 }
 
