@@ -1,5 +1,4 @@
 import { logger } from "../lib/logger.js";
-import { query } from "../db.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { MODEL_HAIKU } from "../lib/models.js";
 
@@ -20,47 +19,6 @@ export interface GoogleMapsPlace {
   weeklyHours: string[] | null;
   lat: number | null;
   lng: number | null;
-}
-
-// ── DB cache ──────────────────────────────────────────────────────────────────
-
-export async function ensureGoogleMapsCacheTable(): Promise<void> {
-  await query(`
-    CREATE TABLE IF NOT EXISTS google_maps_place_cache (
-      id         serial      PRIMARY KEY,
-      cache_key  text        NOT NULL UNIQUE,
-      data       jsonb       NOT NULL,
-      cached_at  timestamptz NOT NULL DEFAULT NOW()
-    )
-  `);
-}
-
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-
-async function getCached(key: string): Promise<GoogleMapsPlace[] | null> {
-  try {
-    const { rows } = await query<{ data: GoogleMapsPlace[]; cached_at: string }>(
-      `SELECT data, cached_at FROM google_maps_place_cache WHERE cache_key = $1`,
-      [key]
-    );
-    if (!rows.length) return null;
-    const ageMs = Date.now() - new Date(rows[0]!.cached_at).getTime();
-    if (ageMs > CACHE_TTL_MS) return null;
-    return rows[0]!.data as GoogleMapsPlace[];
-  } catch {
-    return null;
-  }
-}
-
-async function setCached(key: string, data: GoogleMapsPlace[]): Promise<void> {
-  try {
-    await query(
-      `INSERT INTO google_maps_place_cache (cache_key, data)
-       VALUES ($1, $2::jsonb)
-       ON CONFLICT (cache_key) DO UPDATE SET data = $2::jsonb, cached_at = NOW()`,
-      [key, JSON.stringify(data)]
-    );
-  } catch { /* non-fatal */ }
 }
 
 // ── Apify actor runner ────────────────────────────────────────────────────────
@@ -172,7 +130,6 @@ async function runApifyActor(
 
 /**
  * Search Google Maps via Apify for businesses matching a query.
- * Results are cached for 24 hours.
  *
  * @param searchQuery  Full search string, e.g. "steakhouse Dallas TX"
  * @param maxResults   Max places to return (keep ≤5 for fast responses)
@@ -183,18 +140,8 @@ export async function searchGoogleMapsPlaces(
   maxResults = 4,
   timeoutSecs = 8
 ): Promise<GoogleMapsPlace[]> {
-  const cacheKey = searchQuery.toLowerCase().replace(/\s+/g, " ").trim();
-
-  const cached = await getCached(cacheKey);
-  if (cached) {
-    logger.info({ cacheKey, count: cached.length }, "[GoogleMapsIntel] Cache hit");
-    return cached;
-  }
-
-  logger.info({ cacheKey, maxResults, timeoutSecs }, "[GoogleMapsIntel] Running Apify Maps actor");
-  const places = await runApifyActor([searchQuery], maxResults, timeoutSecs);
-  if (places.length > 0) await setCached(cacheKey, places);
-  return places;
+  logger.info({ searchQuery, maxResults, timeoutSecs }, "[GoogleMapsIntel] Running Apify Maps actor");
+  return runApifyActor([searchQuery], maxResults, timeoutSecs);
 }
 
 /**
@@ -215,17 +162,7 @@ export async function searchNearbyVenueTypes(
 
   await Promise.allSettled(
     venueTypes.map(async (type) => {
-      const q = `${type} near ${destination}`;
-      const cacheKey = q.toLowerCase().replace(/\s+/g, " ").trim();
-
-      const cached = await getCached(cacheKey);
-      if (cached) {
-        results.set(type, cached);
-        return;
-      }
-
-      const places = await runApifyActor([q], maxPerType, 20);
-      if (places.length > 0) await setCached(cacheKey, places);
+      const places = await runApifyActor([`${type} near ${destination}`], maxPerType, 20);
       results.set(type, places);
     })
   );
