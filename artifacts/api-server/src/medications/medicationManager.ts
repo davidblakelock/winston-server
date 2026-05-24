@@ -292,29 +292,25 @@ export async function getMedicationInteractions(
 MEDICATION LIST:
 ${medList}
 
-Your task has two parts:
+Your task has two parts. Write everything in plain, everyday English — as if you're explaining to a friend, not writing a medical document. No jargon, no Latin, no clinical terminology. The goal is awareness, not medical advice.
 
 PART 1 — DRUG INTERACTIONS
-Identify ALL clinically significant interactions between any two or more drugs in this list. Include interactions even if they are moderate or require monitoring. Do NOT omit known interactions. Consider:
-- Pharmacodynamic interactions (additive effects, antagonism)
-- Pharmacokinetic interactions (absorption, metabolism via CYP enzymes, elimination)
-- Increased bleeding risk combinations
-- Nephrotoxicity risk combinations
-- Cardiovascular risk combinations
-- Any other clinically relevant interactions
+Identify ALL meaningful interactions between any two or more drugs in this list. Be thorough — do not omit real ones, but do not fabricate ones that don't exist.
 
 For each interaction provide:
-- drugs: the two (or more) drug names involved (use the exact names from the list)
+- drugs: the exact drug names from the list that interact
 - severity: one of "low", "moderate", "high", or "critical"
-  - critical = contraindicated or requires immediate medical attention
-  - high = significant risk, requires medical monitoring or dose adjustment
-  - moderate = clinically meaningful, patient should be aware and monitored
-  - low = minor, informational only
-- description: a clear clinical explanation of why these drugs interact and what the mechanism is (2-4 sentences)
-- watchFor: specific symptoms, signs, or lab values the patient should monitor for (1-3 sentences, practical)
+  - critical = these drugs should not be taken together without a doctor's supervision
+  - high = real risk that needs a doctor's awareness
+  - moderate = worth knowing about and monitoring
+  - low = minor, just good to be aware of
+- description: ONE plain English sentence that tells the user what to avoid and why in simple terms. Use everyday words. Name common brand names in parentheses where helpful (e.g. "ibuprofen (Advil)"). End the sentence with: "Talk to your doctor or pharmacist if you have questions."
+  Good example: "Avoid taking ibuprofen (Advil) or aspirin while on Meloxicam — it raises the risk of stomach bleeding. Talk to your doctor or pharmacist if you have questions."
+  Bad example: "Concurrent use of NSAIDs may potentiate gastrointestinal hemorrhagic risk via COX-1 inhibition."
+- watchFor: one plain English sentence describing a simple, concrete symptom the person should watch for — something they'd actually notice at home (e.g. "Watch for unusual stomach pain, dark stools, or feeling dizzy.")
 
 PART 2 — NOTABLE SIDE EFFECTS
-For each individual medication, list the most important side effects the patient should be aware of (focus on common ones AND serious ones worth knowing, 3-6 bullet points per drug).
+For each individual medication, list 3–6 side effects in plain everyday language. Write each one as a short phrase a non-medical person would immediately understand (e.g. "stomach upset or nausea", "muscle aches", "dizziness when standing up"). No clinical terms.
 
 Respond ONLY with valid JSON matching this exact schema (no markdown, no extra text):
 {
@@ -334,7 +330,7 @@ Respond ONLY with valid JSON matching this exact schema (no markdown, no extra t
   ]
 }
 
-If there are genuinely no interactions between the drugs, return an empty interactions array. Do not fabricate interactions that do not exist. But be thorough — do not omit real ones.`;
+If there are genuinely no interactions between the drugs, return an empty interactions array.`;
 
   try {
     const response = await anthropic.messages.create({
