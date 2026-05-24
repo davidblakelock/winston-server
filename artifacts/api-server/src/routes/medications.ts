@@ -139,7 +139,8 @@ router.post("/medications/add", express.json({ limit: "1mb" }), async (req, res)
     // Auto-check drug interactions after adding — run against all active meds including the new one.
     // Included in the response so the native app can surface warnings immediately.
     const interactionResult = await getMedicationInteractions(userName).catch(() => ({
-      interactions: [] as Array<{ severity: string; description: string; drugs: string[] }>,
+      interactions: [] as import("../medications/medicationManager.js").DrugInteraction[],
+      sideEffects: [] as import("../medications/medicationManager.js").MedicationSideEffect[],
       checkedDrugs: [] as string[],
       failedLookups: [] as string[],
     }));
@@ -152,6 +153,7 @@ router.post("/medications/add", express.json({ limit: "1mb" }), async (req, res)
       alreadyExists: result.alreadyExists,
       medication: result.medication ?? null,
       interactions: interactionResult.interactions,
+      sideEffects: interactionResult.sideEffects,
       checkedDrugs: interactionResult.checkedDrugs,
       failedLookups: interactionResult.failedLookups,
     });

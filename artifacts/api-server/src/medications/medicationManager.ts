@@ -1,6 +1,10 @@
+import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
+import { MODEL_SONNET } from "../lib/models.js";
 import nodemailer from "nodemailer";
+
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 export interface Medication {
   id: number;
@@ -237,87 +241,125 @@ export async function removeMedicationById(id: number, userName = NATIVE_STORED_
   return rows.length > 0;
 }
 
-// ── Drug interaction lookup via RxNorm (no API key required) ──────────────────
+// ── Drug interaction + side effect check via Claude Sonnet ────────────────────
 
 export interface DrugInteraction {
-  severity: string;
-  description: string;
   drugs: string[];
+  severity: "low" | "moderate" | "high" | "critical";
+  description: string;
+  watchFor: string;
 }
 
-async function getRxCui(drugName: string): Promise<string | null> {
-  try {
-    const url = `https://rxnav.nlm.nih.gov/REST/rxcui.json?name=${encodeURIComponent(drugName)}&search=1`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
-    if (!res.ok) return null;
-    const data = await res.json() as { idGroup?: { rxnormId?: string[] } };
-    return data.idGroup?.rxnormId?.[0] ?? null;
-  } catch {
-    return null;
-  }
+export interface MedicationSideEffect {
+  drug: string;
+  sideEffects: string[];
+}
+
+interface ClaudeInteractionResponse {
+  interactions: Array<{
+    drugs: string[];
+    severity: "low" | "moderate" | "high" | "critical";
+    description: string;
+    watchFor: string;
+  }>;
+  sideEffects: Array<{
+    drug: string;
+    sideEffects: string[];
+  }>;
 }
 
 export async function getMedicationInteractions(
   userName = NATIVE_STORED_NAME
-): Promise<{ interactions: DrugInteraction[]; checkedDrugs: string[]; failedLookups: string[] }> {
+): Promise<{
+  interactions: DrugInteraction[];
+  sideEffects: MedicationSideEffect[];
+  checkedDrugs: string[];
+  failedLookups: string[];
+}> {
   const meds = await getMedications(userName);
-  if (meds.length < 2) {
-    return { interactions: [], checkedDrugs: meds.map((m) => m.name), failedLookups: [] };
+  const checkedDrugs = meds.map((m) => m.name);
+
+  if (meds.length === 0) {
+    return { interactions: [], sideEffects: [], checkedDrugs, failedLookups: [] };
   }
 
-  const rxcuiResults = await Promise.all(
-    meds.map(async (m) => ({ name: m.name, rxcui: await getRxCui(m.name) }))
-  );
+  const medList = meds
+    .map((m) => `- ${m.name}${m.dosage ? ` (${m.dosage})` : ""}${m.frequency ? `, ${m.frequency}` : ""}`)
+    .join("\n");
 
-  const found = rxcuiResults.filter((r) => r.rxcui !== null);
-  const failedLookups = rxcuiResults.filter((r) => r.rxcui === null).map((r) => r.name);
+  const prompt = `You are a clinical pharmacist reviewing a patient's medication list for drug interactions and notable side effects.
 
-  if (found.length < 2) {
-    return { interactions: [], checkedDrugs: found.map((r) => r.name), failedLookups };
-  }
+MEDICATION LIST:
+${medList}
 
-  const rxcuiList = found.map((r) => r.rxcui!).join("+");
-  const interactionUrl = `https://rxnav.nlm.nih.gov/REST/interaction/list.json?rxcuis=${rxcuiList}`;
+Your task has two parts:
 
-  let interactions: DrugInteraction[] = [];
-  try {
-    const res = await fetch(interactionUrl, { signal: AbortSignal.timeout(12000) });
-    if (res.ok) {
-      const data = await res.json() as {
-        fullInteractionTypeGroup?: Array<{
-          fullInteractionType?: Array<{
-            interactionPair?: Array<{
-              severity?: string;
-              description?: string;
-              interactionConcept?: Array<{ minConceptItem?: { name?: string } }>;
-            }>;
-          }>;
-        }>;
-      };
-      for (const group of data.fullInteractionTypeGroup ?? []) {
-        for (const type of group.fullInteractionType ?? []) {
-          for (const pair of type.interactionPair ?? []) {
-            const drugs = (pair.interactionConcept ?? [])
-              .map((c) => c.minConceptItem?.name ?? "Unknown")
-              .filter(Boolean);
-            interactions.push({
-              severity: pair.severity ?? "unknown",
-              description: pair.description ?? "",
-              drugs,
-            });
-          }
-        }
-      }
+PART 1 — DRUG INTERACTIONS
+Identify ALL clinically significant interactions between any two or more drugs in this list. Include interactions even if they are moderate or require monitoring. Do NOT omit known interactions. Consider:
+- Pharmacodynamic interactions (additive effects, antagonism)
+- Pharmacokinetic interactions (absorption, metabolism via CYP enzymes, elimination)
+- Increased bleeding risk combinations
+- Nephrotoxicity risk combinations
+- Cardiovascular risk combinations
+- Any other clinically relevant interactions
+
+For each interaction provide:
+- drugs: the two (or more) drug names involved (use the exact names from the list)
+- severity: one of "low", "moderate", "high", or "critical"
+  - critical = contraindicated or requires immediate medical attention
+  - high = significant risk, requires medical monitoring or dose adjustment
+  - moderate = clinically meaningful, patient should be aware and monitored
+  - low = minor, informational only
+- description: a clear clinical explanation of why these drugs interact and what the mechanism is (2-4 sentences)
+- watchFor: specific symptoms, signs, or lab values the patient should monitor for (1-3 sentences, practical)
+
+PART 2 — NOTABLE SIDE EFFECTS
+For each individual medication, list the most important side effects the patient should be aware of (focus on common ones AND serious ones worth knowing, 3-6 bullet points per drug).
+
+Respond ONLY with valid JSON matching this exact schema (no markdown, no extra text):
+{
+  "interactions": [
+    {
+      "drugs": ["Drug A", "Drug B"],
+      "severity": "moderate",
+      "description": "...",
+      "watchFor": "..."
     }
-  } catch {
-    // RxNorm timeout — return what we have
-  }
+  ],
+  "sideEffects": [
+    {
+      "drug": "Drug Name",
+      "sideEffects": ["Side effect 1", "Side effect 2"]
+    }
+  ]
+}
 
-  return {
-    interactions,
-    checkedDrugs: found.map((r) => r.name),
-    failedLookups,
-  };
+If there are genuinely no interactions between the drugs, return an empty interactions array. Do not fabricate interactions that do not exist. But be thorough — do not omit real ones.`;
+
+  try {
+    const response = await anthropic.messages.create({
+      model: MODEL_SONNET,
+      max_tokens: 2048,
+      messages: [{ role: "user", content: prompt }],
+    });
+
+    const raw = response.content[0].type === "text" ? response.content[0].text.trim() : "";
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      return { interactions: [], sideEffects: [], checkedDrugs, failedLookups: [] };
+    }
+
+    const parsed = JSON.parse(jsonMatch[0]) as ClaudeInteractionResponse;
+
+    return {
+      interactions: parsed.interactions ?? [],
+      sideEffects: parsed.sideEffects ?? [],
+      checkedDrugs,
+      failedLookups: [],
+    };
+  } catch {
+    return { interactions: [], sideEffects: [], checkedDrugs, failedLookups: [] };
+  }
 }
 
 // ── Medication export via email ───────────────────────────────────────────────
