@@ -60,6 +60,14 @@ const ALWAYS_NOTIFY_EVENTS = new Set([
   "Tropical Storm Warning",
   "Tsunami Warning",
   "Tsunami Watch",
+  // Air quality — NWS reports these with Severity: Unknown / Urgency: Unknown
+  // so they are never caught by the severity filter; must be explicit.
+  "Air Quality Alert",
+  "Air Quality Advisory",
+  "Smoke Advisory",
+  "Dense Smoke Advisory",
+  "Ozone Action Day Statement",
+  "Hazardous Weather Outlook",
 ]);
 
 function isSevereAlert(props: NWSAlertProperties): boolean {

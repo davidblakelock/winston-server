@@ -297,64 +297,47 @@ export async function getMedicationInteractions(
     .map((m) => `- ${m.name}${m.dosage ? ` (${m.dosage})` : ""}${m.frequency ? `, ${m.frequency}` : ""}`)
     .join("\n");
 
-  const prompt = `You are a clinical pharmacist reviewing a patient's medication list for drug interactions and notable side effects.
+  const prompt = `You are helping someone understand their medications in plain, everyday language — like a knowledgeable friend, not a doctor writing a report. Be SHORT. Be SIMPLE. No medical jargon. No Latin. No long paragraphs.
 
-MEDICATION LIST:
+MEDICATIONS:
 ${medList}
 
-Write everything in plain, everyday English — as if explaining to a friend, not writing a medical document. No jargon, no Latin, no clinical terms. The goal is awareness, not medical advice.
+RULES — READ CAREFULLY:
+- Every sentence must be something a non-medical person immediately understands.
+- If you catch yourself using words like "hepatotoxic", "CYP450", "potentiate", "concurrent", "contraindicated" — rewrite it in plain English.
+- Keep descriptions SHORT: one sentence max, under 20 words.
+- Limit per drug: max 3 avoid items, max 3 side effects.
+- Only include interactions that are genuinely meaningful (moderate or higher). Skip trivial ones.
 
-PART 1 — INTERACTIONS BETWEEN LISTED DRUGS
-Check every combination of drugs in the list for meaningful interactions. Be thorough — do not omit real ones, but do not fabricate ones that don't exist.
+PART 1 — DRUG INTERACTIONS
+For each real interaction:
+- drugs: exact names from the list
+- severity: "low" | "moderate" | "high" | "critical"
+- description: ONE sentence, plain English, under 20 words. Example: "Both can strain your liver — your doctor should know you take them together."
+- watchFor: ONE phrase naming a symptom to watch for. Example: "Unusual muscle pain or dark urine."
 
-For each interaction provide:
-- drugs: the exact names of the two (or more) drugs from the list
-- severity: "low", "moderate", "high", or "critical"
-  - critical = should not be taken together without direct doctor supervision
-  - high = real risk needing doctor awareness
-  - moderate = worth knowing and monitoring
-  - low = minor, just good to be aware of
-- description: ONE plain English sentence saying what the problem is and why it matters. Use everyday words and common brand names in parentheses where helpful. End with: "Talk to your doctor or pharmacist if you have questions."
-  GOOD: "Taking Meloxicam and Pravastatin together can occasionally put extra strain on your liver — your doctor should know you're taking both. Talk to your doctor or pharmacist if you have questions."
-  BAD: "Concurrent use may potentiate hepatotoxic risk via CYP2C9 inhibition."
-- watchFor: one short plain English sentence naming a concrete symptom they'd notice at home.
+PART 2 — THINGS TO AVOID (per drug)
+The 3 most important things to avoid with each drug — over-the-counter products, foods, or supplements. One short phrase each.
+Example: "Ibuprofen or Advil", "Grapefruit juice", "Alcohol in large amounts"
 
-PART 2 — THINGS TO AVOID WITH EACH DRUG
-This is critical: for each drug, list the most important common medications, supplements, or foods that a person should avoid or be careful with — even if those things are NOT in the medication list above. Think about what someone might grab off the shelf at a pharmacy or take without thinking.
+PART 3 — SIDE EFFECTS (per drug)
+The 3 most common side effects as short plain phrases.
+Example: "Upset stomach", "Muscle aches", "Dizziness when standing"
 
-For example, for Meloxicam this MUST include: ibuprofen (Advil, Motrin), aspirin (unless prescribed), naproxen (Aleve), other anti-inflammatory painkillers, and blood thinners.
-For Pravastatin this MUST include: grapefruit juice, large amounts of alcohol, niacin supplements, and certain antibiotics like clarithromycin.
-
-Write each avoidance as one short plain English sentence. Keep it practical and specific — name the actual product or food. 3–5 items per drug.
-
-PART 3 — NOTABLE SIDE EFFECTS
-For each drug, list 3–6 side effects in plain everyday language as short phrases (e.g. "stomach pain or nausea", "muscle aches", "dizziness when standing up").
-
-Respond ONLY with valid JSON matching this exact schema (no markdown, no extra text):
+Respond ONLY with valid JSON (no markdown, no extra text):
 {
   "interactions": [
-    {
-      "drugs": ["Drug A", "Drug B"],
-      "severity": "moderate",
-      "description": "...",
-      "watchFor": "..."
-    }
+    { "drugs": ["Drug A", "Drug B"], "severity": "moderate", "description": "...", "watchFor": "..." }
   ],
   "avoid": [
-    {
-      "drug": "Drug Name",
-      "items": ["Avoid ibuprofen (Advil, Motrin) — it raises the risk of stomach bleeding.", "Avoid aspirin unless your doctor prescribed it for your heart."]
-    }
+    { "drug": "Drug Name", "items": ["Ibuprofen or Advil", "Grapefruit juice", "Alcohol in large amounts"] }
   ],
   "sideEffects": [
-    {
-      "drug": "Drug Name",
-      "sideEffects": ["Side effect 1", "Side effect 2"]
-    }
+    { "drug": "Drug Name", "sideEffects": ["Upset stomach", "Muscle aches", "Dizziness when standing"] }
   ]
 }
 
-If there are genuinely no interactions between the listed drugs, return an empty interactions array. Still complete the avoid and sideEffects sections regardless.`;
+If no real interactions exist, return an empty interactions array. Always include avoid and sideEffects for every drug.`;
 
   try {
     const response = await anthropic.messages.create({

@@ -459,7 +459,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
   const [messages, setMessages] = useState<Message[]>([]);
   const [messagesLoaded, setMessagesLoaded] = useState(false);
   const [pendingNotification, setPendingNotification] = useState<{
-    type: "morning" | "reminder" | "concert-alert" | "auto-send" | "medication-reminder" | "winddown" | "connect-reminder" | "connect-message";
+    type: "morning" | "reminder" | "concert-alert" | "auto-send" | "medication-reminder" | "winddown" | "connect-reminder" | "connect-message" | "weather-alert";
     text?: string;
     id?: number;
     companionMessage?: string;
@@ -1176,8 +1176,18 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         { id: msgId, role: "assistant" as const, content: notif.companionMessage! },
       ]);
       speakReply(msgId, notif.companionMessage!);
+    } else if (notif.type === "weather-alert" && notif.companionMessage) {
+      // Weather alert tap: show the full NWS alert as an assistant message and speak the headline
+      const msgId = `weather-alert-${Date.now()}`;
+      setMessages((prev) => [
+        ...prev,
+        { id: msgId, role: "assistant" as const, content: notif.companionMessage! },
+      ]);
+      // Speak only the first sentence (the headline) to avoid reading a wall of text
+      const headline = notif.companionMessage!.split(/\n|\.(?:\s|$)/)[0].trim();
+      if (headline) speakReply(msgId, headline);
     } else if (notif.type === "auto-send" && notif.text) {
-      // Generic auto-send (weather alerts, etc.)
+      // Generic auto-send (fallback)
       setTimeout(() => submitText(notif.text!), 600);
     } else if (notif.type === "concert-alert" && notif.companionMessage) {
       // Display the companion's concert message and speak it
@@ -1302,7 +1312,14 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
               return;
             }
 
-            // Auto-send: any notification with an autoSendMessage (weather alerts, etc.)
+            // Weather alert: show NWS details as a chat card (companionMessage = full NWS text)
+            if (notifType === "weather-alert" && compMsg) {
+              console.log("[CHAT] NOTIFICATION_TAP: weather-alert — showing NWS detail card");
+              setPendingNotification((prev) => prev ?? { type: "weather-alert", companionMessage: compMsg });
+              return;
+            }
+
+            // Auto-send: any notification with an autoSendMessage (fallback for other alert types)
             if (pending.autoSendMessage) {
               console.log("[CHAT] NOTIFICATION_TAP: autoSendMessage —", pending.autoSendMessage);
               setPendingNotification((prev) => prev ?? { type: "auto-send", text: pending.autoSendMessage });
@@ -1377,7 +1394,12 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
             setPendingNotification((prev) => prev ?? { type: "winddown" });
             return;
           }
-          // Auto-send: any notification with an autoSendMessage
+          // Weather alert: show NWS details as a chat card
+          if (pending.notificationType === "weather-alert" && pending.companionMessage) {
+            setPendingNotification((prev) => prev ?? { type: "weather-alert", companionMessage: pending.companionMessage });
+            return;
+          }
+          // Auto-send: any notification with an autoSendMessage (fallback)
           if (pending.autoSendMessage) {
             setPendingNotification((prev) => prev ?? { type: "auto-send", text: pending.autoSendMessage });
             return;

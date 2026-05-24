@@ -52,10 +52,10 @@ async function createTracking(
   trackingNumber: string,
   slug?: string | null
 ): Promise<{ slug: string } | null> {
+  // v4 API: fields must be nested under "tracking"
   const body: Record<string, unknown> = {
-    tracking: { tracking_number: trackingNumber },
+    tracking: { tracking_number: trackingNumber, ...(slug ? { slug } : {}) },
   };
-  if (slug) body.tracking = { ...body.tracking as object, slug };
 
   try {
     const res = await fetch(`${AFTERSHIP_BASE}/trackings`, {
@@ -68,15 +68,14 @@ async function createTracking(
       signal: AbortSignal.timeout(10_000),
     });
 
-    const data = (await res.json()) as {
-      meta: { code: number; message: string };
-      data?: { tracking?: { slug?: string } };
-    };
+    const rawBody = await res.text();
+    let data: { meta?: { message?: string }; data?: { tracking?: { slug?: string } } } = {};
+    try { data = JSON.parse(rawBody); } catch { /* ignore */ }
 
     if (res.status === 409) {
-      // Already registered — slug might be in error message or we need to detect
+      // Already registered — echo back the slug from the response if available
       logger.info({ trackingNumber }, "[AfterShip] Tracking already exists");
-      return { slug: slug ?? "unknown" };
+      return { slug: data.data?.tracking?.slug ?? slug ?? "unknown" };
     }
 
     if (!res.ok) {
@@ -87,6 +86,7 @@ async function createTracking(
       return null;
     }
 
+    // v4: slug is nested at data.data.tracking.slug
     const returnedSlug = data.data?.tracking?.slug;
     return returnedSlug ? { slug: returnedSlug } : null;
   } catch (err) {
@@ -115,6 +115,7 @@ async function getTrackingBySlug(
       return null;
     }
 
+    // v4 API: tracking data is nested at data.data.tracking
     const data = (await res.json()) as {
       data?: {
         tracking?: {
