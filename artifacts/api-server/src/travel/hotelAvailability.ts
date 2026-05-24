@@ -117,7 +117,7 @@ async function runBookingSearch(
         rooms:     1,
         adults:    Math.max(1, adults),
         maxItems:  15,
-        sortBy:    "popularity",
+        sortBy:    "bayesian_review_score",
       }),
       signal: AbortSignal.timeout(95_000),
     });
@@ -144,7 +144,16 @@ async function runBookingSearch(
           reviewCount: item["reviewCount"] ?? item["reviews"]
             ? Number(item["reviewCount"] ?? item["reviews"])
             : undefined,
-          address:     item["address"] ? String(item["address"]) : undefined,
+          address:     (() => {
+            const a = item["address"];
+            if (!a) return undefined;
+            if (typeof a === "string") return a;
+            if (typeof a === "object") {
+              const o = a as Record<string, unknown>;
+              return String(o["full"] ?? o["street"] ?? o["postalAddress"] ?? o["addressLine1"] ?? Object.values(o).find(v => typeof v === "string") ?? "");
+            }
+            return String(a);
+          })(),
           stars:       item["stars"] ? Number(item["stars"]) : undefined,
         } satisfies BookingHotel;
       })
@@ -327,13 +336,13 @@ export function buildHotelAvailabilityBlock(r: HotelAvailabilityResult): string 
   lines.push(
     `\nINSTRUCTIONS: Report these VERIFIED results directly and conversationally. ` +
     (specific
-      ? `Lead with confirming the hotel is available and state the price. Provide the booking link. ` +
-        `Then briefly mention 1–2 alternatives.`
+      ? `Lead with confirming the hotel is available for those dates. Include the address, rating, and booking link. ` +
+        `Then briefly mention 1–2 alternatives with their ratings and links.`
       : namedHotelNotFound
         ? `Let the user know that specific hotel wasn't found on Booking.com for those dates. ` +
-          `Present the top 2–3 alternatives warmly with prices and booking links.`
-        : `Present the top 2–3 available hotels with prices and direct booking links. Be concise and conversational.`) +
-    ` Do NOT say you can't check — you have live data above. Always include the booking URL.`
+          `Present the top 2–3 alternatives warmly with ratings and booking links.`
+        : `Present the top 2–3 available hotels with their ratings, addresses, and direct booking links. Be concise and conversational.`) +
+    ` Pricing is not available from the search — do not mention price or say it's unknown; just omit it. Do NOT say you can't check — you have live data above. Always include the booking URL.`
   );
 
   return lines.join("\n");
