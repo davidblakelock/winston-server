@@ -46,14 +46,15 @@ router.post("/orders/sync", express.json({ limit: "1mb" }), async (req, res) => 
     // ── Step 1: Gmail scan ──────────────────────────────────────────────────
     const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
     const existingOrders = await getOrders(userName);
-    // Only treat as "has real orders" if at least one has a tracking number.
-    // Orders without tracking are likely digital purchases or bad parses.
-    const hasTrackedOrders = existingOrders.some((o) => !!o.tracking_number);
-    // Force flag OR no tracked orders → ignore last_scan_at, look back 90 days
-    const lastScan = (force || !hasTrackedOrders) ? null : await getLastOrderScanAt(userName);
+    // Use last_scan_at if we have ANY existing orders — even ones without tracking numbers.
+    // Previously this checked hasTrackedOrders which caused every sync to do a full 90-day
+    // re-scan (and re-insert the same emails) whenever Amazon emails lacked tracking numbers.
+    const hasAnyOrders = existingOrders.length > 0;
+    // Force flag OR truly first-time (no orders at all) → ignore last_scan_at, look back 90 days
+    const lastScan = (force || !hasAnyOrders) ? null : await getLastOrderScanAt(userName);
     const since = lastScan ?? ninetyDaysAgo;
     if (force) req.log.info({ userName, since }, "[Orders] Force sync — using 90-day lookback");
-    else if (!hasTrackedOrders) req.log.info({ userName, since }, "[Orders] No tracked orders on record — using 90-day lookback");
+    else if (!hasAnyOrders) req.log.info({ userName, since }, "[Orders] No orders on record — using 90-day lookback");
 
     const scanned = await scanOrderEmails(userName, since);
     let newCount = 0;

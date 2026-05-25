@@ -7,6 +7,7 @@ import { upsertProfile } from "../onboarding/onboardingManager.js";
 import { isApifyApiKeyConfigured } from "../restaurants/apifyBooking.js";
 import { getResySession } from "../restaurants/bookingCredentialsManager.js";
 import { estimateDriveTime } from "../departure/departureManager.js";
+import { sendPushToAll } from "../push/pushManager.js";
 
 const router = Router();
 
@@ -426,6 +427,60 @@ router.delete("/admin/delete-profile-item/:id", async (req: Request, res: Respon
   } catch (e) {
     res.status(500).json({ error: String(e) });
   }
+});
+
+/**
+ * POST /api/admin/test-push
+ * Sends a test push notification to the authenticated user.
+ * Body: { type: "medication" | "bill-reminder" }
+ * For bill-reminder, also accepts: { billId?, billName?, amount?, dueDateISO? }
+ */
+router.post("/admin/test-push", express.json({ limit: "256kb" }), async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const { type, billId, billName, amount, dueDateISO } = req.body as {
+    type?: string;
+    billId?: number;
+    billName?: string;
+    amount?: string;
+    dueDateISO?: string;
+  };
+
+  if (type === "medication") {
+    const result = await sendPushToAll({
+      title: "Medication Reminder",
+      body: "Time to take your medications.",
+      tag: `test-medication-${Date.now()}`,
+      notificationType: "medication",
+      requireInteraction: true,
+    }, userName);
+    req.log.info({ userName, sent: result.sent }, "[AdminTestPush] Medication test push sent");
+    res.json({ ok: true, type: "medication", sent: result.sent });
+    return;
+  }
+
+  if (type === "bill-reminder") {
+    const name = billName ?? "Test Bill";
+    const amt = amount ?? "$99.00";
+    const due = dueDateISO ?? new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const result = await sendPushToAll({
+      title: "Bill Reminder",
+      body: `${name} (${amt}) is due soon.`,
+      tag: `test-bill-${Date.now()}`,
+      notificationType: "bill-reminder",
+      requireInteraction: true,
+      billId: billId ?? 0,
+      billName: name,
+      amount: amt,
+      dueDateISO: due,
+    } as Parameters<typeof sendPushToAll>[0], userName);
+    req.log.info({ userName, sent: result.sent }, "[AdminTestPush] Bill-reminder test push sent");
+    res.json({ ok: true, type: "bill-reminder", sent: result.sent });
+    return;
+  }
+
+  res.status(400).json({ error: "type must be 'medication' or 'bill-reminder'" });
 });
 
 export default router;

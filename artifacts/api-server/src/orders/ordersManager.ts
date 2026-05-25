@@ -319,6 +319,39 @@ export async function consolidateOrders(userName: string): Promise<number> {
     );
   }
 
+  // Step 3: deduplicate by email_id — same email parsed multiple times creates ghost rows.
+  // Keep the most complete row (has tracking_number > has order_number > most recent).
+  const { rows: emailDups } = await query<{ email_id: string; keep_id: number }>(
+    `SELECT email_id,
+            (array_agg(id ORDER BY
+              CASE WHEN tracking_number IS NOT NULL THEN 2
+                   WHEN order_number    IS NOT NULL THEN 1
+                   ELSE 0
+              END DESC, updated_at DESC
+            ))[1] AS keep_id
+     FROM orders
+     WHERE user_name = $1 AND email_id IS NOT NULL
+     GROUP BY email_id
+     HAVING COUNT(*) > 1`,
+    [userName]
+  );
+
+  for (const { email_id, keep_id } of emailDups) {
+    const { rows: gone } = await query<{ id: number }>(
+      `DELETE FROM orders
+       WHERE user_name = $1 AND email_id = $2 AND id != $3
+       RETURNING id`,
+      [userName, email_id, keep_id]
+    );
+    deleted += gone.length;
+    if (gone.length > 0) {
+      logger.info(
+        { userName, email_id, kept: keep_id, removed: gone.map((r) => r.id) },
+        "[Orders] Consolidated duplicate email_id rows"
+      );
+    }
+  }
+
   return deleted;
 }
 
