@@ -297,47 +297,55 @@ export async function getMedicationInteractions(
     .map((m) => `- ${m.name}${m.dosage ? ` (${m.dosage})` : ""}${m.frequency ? `, ${m.frequency}` : ""}`)
     .join("\n");
 
-  const prompt = `You are helping someone understand their medications in plain, everyday language — like a knowledgeable friend, not a doctor writing a report. Be SHORT. Be SIMPLE. No medical jargon. No Latin. No long paragraphs.
+  const prompt = `You are summarizing medications for a regular person, not a doctor. Write like you're texting a friend — short, plain, zero jargon.
 
 MEDICATIONS:
 ${medList}
 
-RULES — READ CAREFULLY:
-- Every sentence must be something a non-medical person immediately understands.
-- If you catch yourself using words like "hepatotoxic", "CYP450", "potentiate", "concurrent", "contraindicated" — rewrite it in plain English.
-- Keep descriptions SHORT: one sentence max, under 20 words.
-- Limit per drug: max 3 avoid items, max 3 side effects.
-- Only include interactions that are genuinely meaningful (moderate or higher). Skip trivial ones.
+BANNED WORDS — never use these (rewrite them if you want to say them):
+hepatotoxic, nephrotoxic, cardiotoxic, CYP450, CYP3A4, potentiate, concurrent, contraindicated, metabolism, metabolized, renal, hepatic, myopathy, rhabdomyolysis, pharmacokinetic, synergistic, agonist, antagonist, inhibitor, substrate, bioavailability, half-life, prophylaxis, titrate, concomitant
+
+STRICT RULES:
+1. Every description: ONE sentence, plain English, 20 words or fewer.
+2. Every watchFor: ONE short symptom phrase — no sentences.
+3. Every avoid item: ONE short phrase — no explanation, no sentence.
+4. Every side effect: ONE short phrase — no explanation, no sentence.
+5. Max 3 avoid items per drug. Max 3 side effects per drug.
+6. Only list interactions that are moderate, high, or critical. Skip minor ones.
+
+CRITICAL NSAID RULE — must always apply:
+Meloxicam, ibuprofen, Advil, Motrin, naproxen, Aleve, aspirin (high dose), and celecoxib are all NSAIDs.
+If ANY two NSAIDs appear in the medication list, flag it as a HIGH interaction:
+  description: "Taking two NSAIDs together raises your risk of stomach bleeding and kidney damage."
+  watchFor: "Stomach pain, black stools, or swelling"
 
 PART 1 — DRUG INTERACTIONS
-For each real interaction:
-- drugs: exact names from the list
-- severity: "low" | "moderate" | "high" | "critical"
-- description: ONE sentence, plain English, under 20 words. Example: "Both can strain your liver — your doctor should know you take them together."
-- watchFor: ONE phrase naming a symptom to watch for. Example: "Unusual muscle pain or dark urine."
+For each real interaction between drugs in the list:
+- drugs: exact drug names from the list above
+- severity: "moderate" | "high" | "critical"
+- description: ONE plain sentence, ≤20 words
+- watchFor: ONE short symptom phrase
 
 PART 2 — THINGS TO AVOID (per drug)
-The 3 most important things to avoid with each drug — over-the-counter products, foods, or supplements. One short phrase each.
-Example: "Ibuprofen or Advil", "Grapefruit juice", "Alcohol in large amounts"
+Top 3 things to avoid per drug: OTC products, foods, or supplements. One short phrase each — no sentences.
 
 PART 3 — SIDE EFFECTS (per drug)
-The 3 most common side effects as short plain phrases.
-Example: "Upset stomach", "Muscle aches", "Dizziness when standing"
+Top 3 most common side effects per drug. One short phrase each — no sentences.
 
-Respond ONLY with valid JSON (no markdown, no extra text):
+Respond ONLY with valid JSON, no markdown, no extra text:
 {
   "interactions": [
-    { "drugs": ["Drug A", "Drug B"], "severity": "moderate", "description": "...", "watchFor": "..." }
+    { "drugs": ["Drug A", "Drug B"], "severity": "high", "description": "...", "watchFor": "..." }
   ],
   "avoid": [
-    { "drug": "Drug Name", "items": ["Ibuprofen or Advil", "Grapefruit juice", "Alcohol in large amounts"] }
+    { "drug": "Drug Name", "items": ["Ibuprofen or Advil", "Grapefruit juice", "Alcohol"] }
   ],
   "sideEffects": [
-    { "drug": "Drug Name", "sideEffects": ["Upset stomach", "Muscle aches", "Dizziness when standing"] }
+    { "drug": "Drug Name", "sideEffects": ["Upset stomach", "Muscle aches", "Dizziness"] }
   ]
 }
 
-If no real interactions exist, return an empty interactions array. Always include avoid and sideEffects for every drug.`;
+If no meaningful interactions exist, return an empty interactions array. Always include avoid and sideEffects for every drug.`;
 
   try {
     const response = await anthropic.messages.create({

@@ -244,15 +244,15 @@ async function startupPrefetch(): Promise<void> {
 
   for (const user of users) {
     const { userName } = user;
-    // Mark pre-fetch as done so the cron doesn't double-fire on the same calendar day
     const today = new Date().toLocaleDateString("en-CA", { timeZone: DEFAULT_TZ });
-    prefetchDone.set(userName, today);
-    newsPrefetchDone.set(userName, today);
 
     // CRITICAL: Check DB for today's static context before spending tokens on regeneration.
     // loadStaticContextFromDb also restores push_sent_at so we don't re-send.
     const alreadyCached = await loadStaticContextFromDb(userName).catch(() => false);
     if (alreadyCached) {
+      // Briefing already generated today — mark pre-fetch flags to suppress cron re-run.
+      prefetchDone.set(userName, today);
+      newsPrefetchDone.set(userName, today);
       logger.info({ userName }, "[MorningPush] Startup — static context restored from DB, skipping pre-generation");
 
       // If we're inside the wake window AND the push hasn't been sent yet (restart
@@ -295,12 +295,47 @@ async function startupPrefetch(): Promise<void> {
 
     if (!inMorningWindow) {
       logger.info({ userName, startupLocalTime }, "[MorningPush] Startup — outside morning window, skipping pre-gen (cron will handle it at 5:40 AM CT)");
+      // Do NOT set prefetchDone here — let the cron handle it at 5:40 AM.
     } else {
       logger.info({ userName }, "[MorningPush] Startup — in morning window, no DB cache found, pre-generating briefing");
+      prefetchDone.set(userName, today);
+      newsPrefetchDone.set(userName, today);
       preFetchMorningBriefing(userName).catch((err) =>
         logger.warn({ err, userName }, "[MorningPush] Startup briefing error")
       );
     }
+  }
+}
+
+// ── On-demand push: called when a push token is freshly registered ─────────────
+// If the user opens the app during the wake window and the morning push was never
+// delivered (because no token was registered at 6 AM), send it now immediately.
+
+export async function maybeSendMorningPushOnTokenRegistration(userName: string): Promise<void> {
+  if (wasPushSentToday(userName)) return;
+
+  let users: ActiveUser[];
+  try {
+    users = await getActiveUsers();
+  } catch {
+    return;
+  }
+
+  const user = users.find((u) => u.userName === userName);
+  if (!user) return;
+
+  const wakeTime = user.wakeTime ?? DEFAULT_WAKE_TIME;
+  const localTime = getCurrentTimeForUser(user);
+  const minsSince = minutesSinceWake(localTime, wakeTime);
+
+  if (minsSince >= 0 && minsSince <= WAKE_WINDOW_MINUTES) {
+    logger.info(
+      { userName, minsSince },
+      "[MorningPush] Token registered during wake window — sending missed morning push"
+    );
+    sendMorningPush(user, wakeTime).catch((err) =>
+      logger.warn({ err, userName }, "[MorningPush] Token-triggered push failed")
+    );
   }
 }
 

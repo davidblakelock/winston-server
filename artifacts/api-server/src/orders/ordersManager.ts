@@ -78,6 +78,12 @@ export async function ensureOrdersTable(): Promise<void> {
       CREATE UNIQUE INDEX IF NOT EXISTS orders_email_id_idx
       ON orders (user_name, email_id) WHERE email_id IS NOT NULL
     `).catch(() => {});
+    // Prevent duplicate rows when multiple emails reference the same tracking number
+    // (e.g. "order confirmed" email + "your item shipped" email for the same package).
+    await query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS orders_tracking_number_idx
+      ON orders (user_name, tracking_number) WHERE tracking_number IS NOT NULL
+    `).catch(() => {});
     await query(`
       CREATE TABLE IF NOT EXISTS order_sync_state (
         user_name text PRIMARY KEY,
@@ -135,6 +141,49 @@ export async function upsertOrder(
   order: NewOrder
 ): Promise<Order | null> {
   try {
+    // If a tracking number is present, check if we already have a row for it.
+    // This merges the "order confirmed" email row with the later "shipped" email row
+    // so the same physical package never appears twice in the list.
+    if (order.tracking_number) {
+      const { rows: existing } = await query<Order>(
+        `SELECT * FROM orders WHERE user_name = $1 AND tracking_number = $2 LIMIT 1`,
+        [userName, order.tracking_number]
+      );
+      if (existing.length > 0) {
+        const row = existing[0]!;
+        const { rows: updated } = await query<Order>(
+          `UPDATE orders SET
+             retailer        = $3,
+             item_name       = $4,
+             order_number    = COALESCE($5, order_number),
+             carrier         = COALESCE($6, carrier),
+             status          = CASE WHEN $7 > status THEN $7 ELSE status END,
+             expected_date   = COALESCE($8::date, expected_date),
+             order_total     = COALESCE($9, order_total),
+             email_id        = COALESCE(email_id, $10),
+             order_url       = COALESCE($11, order_url),
+             updated_at      = now()
+           WHERE id = $1 AND user_name = $2
+           RETURNING *`,
+          [
+            row.id,
+            userName,
+            order.retailer,
+            order.item_name,
+            order.order_number ?? null,
+            order.carrier ?? null,
+            order.status ?? "ordered",
+            order.expected_date ?? null,
+            order.order_total ?? null,
+            order.email_id ?? null,
+            order.order_url ?? null,
+          ]
+        );
+        return updated[0] ?? null;
+      }
+    }
+
+    // No existing row with this tracking number — insert fresh (dedup by email_id).
     const { rows } = await query<Order>(
       `INSERT INTO orders
          (user_name, retailer, item_name, order_number, tracking_number, carrier, status, expected_date, order_total, email_id, order_url)
@@ -142,14 +191,14 @@ export async function upsertOrder(
        ON CONFLICT (user_name, email_id)
        WHERE email_id IS NOT NULL
        DO UPDATE SET
-         retailer = EXCLUDED.retailer,
-         item_name = EXCLUDED.item_name,
-         order_number = COALESCE(EXCLUDED.order_number, orders.order_number),
+         retailer        = EXCLUDED.retailer,
+         item_name       = EXCLUDED.item_name,
+         order_number    = COALESCE(EXCLUDED.order_number, orders.order_number),
          tracking_number = COALESCE(EXCLUDED.tracking_number, orders.tracking_number),
-         carrier = COALESCE(EXCLUDED.carrier, orders.carrier),
-         order_total = COALESCE(EXCLUDED.order_total, orders.order_total),
-         order_url = COALESCE(EXCLUDED.order_url, orders.order_url),
-         updated_at = now()
+         carrier         = COALESCE(EXCLUDED.carrier, orders.carrier),
+         order_total     = COALESCE(EXCLUDED.order_total, orders.order_total),
+         order_url       = COALESCE(EXCLUDED.order_url, orders.order_url),
+         updated_at      = now()
        RETURNING *`,
       [
         userName,

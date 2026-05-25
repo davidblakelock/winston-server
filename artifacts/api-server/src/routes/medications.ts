@@ -412,7 +412,30 @@ router.delete("/medications/:idOrName", async (req, res) => {
       removed = await removeMedication(param, userName);
       req.log.info({ name: param, removed }, "[MEDS] DELETE /medications/:name");
     }
-    res.json({ ok: true, removed });
+
+    // Re-check interactions now that the medication list has changed.
+    const interactionResult = await getMedicationInteractions(userName).catch(() => ({
+      interactions: [] as import("../medications/medicationManager.js").DrugInteraction[],
+      avoid: [] as import("../medications/medicationManager.js").MedicationAvoid[],
+      sideEffects: [] as import("../medications/medicationManager.js").MedicationSideEffect[],
+      checkedDrugs: [] as string[],
+      failedLookups: [] as string[],
+    }));
+
+    req.log.info(
+      { interactions: interactionResult.interactions.length, checked: interactionResult.checkedDrugs.length },
+      "[MEDS] DELETE — interactions refreshed"
+    );
+
+    res.json({
+      ok: true,
+      removed,
+      interactions: interactionResult.interactions,
+      avoid: interactionResult.avoid,
+      sideEffects: interactionResult.sideEffects,
+      checkedDrugs: interactionResult.checkedDrugs,
+      failedLookups: interactionResult.failedLookups,
+    });
   } catch (err) {
     req.log.error({ err }, "[MEDS] DELETE /medications error");
     res.status(500).json({ error: "Failed to remove medication" });

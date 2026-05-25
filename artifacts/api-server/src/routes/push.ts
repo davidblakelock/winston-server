@@ -12,6 +12,7 @@
  */
 
 import { Router } from "express";
+import { maybeSendMorningPushOnTokenRegistration } from "../push/morningPushScheduler.js";
 import {
   saveExpoToken,
   removeExpoToken,
@@ -48,6 +49,9 @@ router.post("/push/expo-token", async (req, res) => {
     const { id, action } = await saveExpoToken(userName, expoPushToken, deviceId, userAgent);
     logger.info({ userName, deviceId, tokenTail: expoPushToken.slice(-20), id, action }, "[Expo Push] Token registered");
     res.json({ success: true, id, action });
+    // If it's still within the morning wake window and the push hasn't fired yet
+    // (because the server had no token at 6 AM), send it now immediately.
+    maybeSendMorningPushOnTokenRegistration(userName).catch(() => {});
   } catch (err) {
     logger.error({ err }, "[Expo Push] Failed to save token");
     res.status(500).json({ error: "Failed to save Expo push token" });
