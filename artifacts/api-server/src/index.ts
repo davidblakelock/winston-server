@@ -59,6 +59,7 @@ import { startProviderScheduler } from "./providers/providerScheduler";
 import { startConnectBirthdayScheduler } from "./connect/connectBirthdayScheduler";
 import { startContactBirthdayScheduler } from "./google/contactBirthdayScheduler";
 import { startTvEpisodeScheduler } from "./tv/tvEpisodeScheduler";
+import { startCalendarEmailScheduler } from "./push/calendarEmailScheduler";
 import { ensureStoicTables } from "./stoic/stoicManager";
 
 const rawPort = process.env["PORT"];
@@ -471,6 +472,7 @@ app.listen(port, async (err) => {
   startConnectBirthdayScheduler();
   startContactBirthdayScheduler();
   void startTvEpisodeScheduler();
+  startCalendarEmailScheduler();
 
   // Seed David's music preferences into profile_items so they persist and
   // can be referenced in any conversation naturally.
