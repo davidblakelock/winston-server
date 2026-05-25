@@ -352,6 +352,45 @@ export async function consolidateOrders(userName: string): Promise<number> {
     }
   }
 
+  // Step 4: deduplicate by order_number — same package across multiple emails
+  // (e.g. order confirmation + shipping update + delivery notice) creates one row
+  // per email even though it's the same physical order.
+  // Keep the row with the highest status, then the most recently updated.
+  const { rows: orderNumDups } = await query<{ order_number: string; keep_id: number }>(
+    `SELECT order_number,
+            (array_agg(id ORDER BY
+              CASE status
+                WHEN 'out_for_delivery' THEN 5
+                WHEN 'delivered'        THEN 4
+                WHEN 'in_transit'       THEN 3
+                WHEN 'shipped'          THEN 2
+                WHEN 'ordered'          THEN 1
+                ELSE 0
+              END DESC, updated_at DESC
+            ))[1] AS keep_id
+     FROM orders
+     WHERE user_name = $1 AND order_number IS NOT NULL
+     GROUP BY order_number
+     HAVING COUNT(*) > 1`,
+    [userName]
+  );
+
+  for (const { order_number, keep_id } of orderNumDups) {
+    const { rows: gone } = await query<{ id: number }>(
+      `DELETE FROM orders
+       WHERE user_name = $1 AND order_number = $2 AND id != $3
+       RETURNING id`,
+      [userName, order_number, keep_id]
+    );
+    deleted += gone.length;
+    if (gone.length > 0) {
+      logger.info(
+        { userName, order_number, kept: keep_id, removed: gone.map((r) => r.id) },
+        "[Orders] Consolidated duplicate order_number rows"
+      );
+    }
+  }
+
   return deleted;
 }
 
