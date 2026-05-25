@@ -40,6 +40,7 @@ import {
   getWeeklyGift, generateAndStoreAnnualLetter, getStoredAnnualLetter,
 } from "../lifeCaptures/lifeCapturesManager.js";
 import { buildRouteAwareSuggestions, buildRouteAwareBlock } from "../routeAware/routeAwareManager.js";
+import { buildCalendarEmailCorrelations, formatCorrelationNote, type CalendarEmailCorrelation } from "./calendarEmailIntelligence.js";
 import { getOrdersForBriefing } from "../orders/ordersManager.js";
 import { getCachedWeather } from "../weather/weatherCache.js";
 import { query } from "../db.js";
@@ -55,6 +56,7 @@ export async function buildSmartCalendarBlock(
   homeAddress: string,
   homeLat: number,
   homeLon: number,
+  emailCorrelations?: Map<string, CalendarEmailCorrelation>,
 ): Promise<string> {
   if (!allEvents || allEvents.length === 0) return "";
 
@@ -108,9 +110,11 @@ export async function buildSmartCalendarBlock(
       : `${event.start}${event.end && event.end !== event.start ? ` – ${event.end}` : ""}`;
     const loc = event.location ? ` · ${event.location}` : "";
     const dep = depMap.get(event.id);
+    const correlation = emailCorrelations?.get(event.id);
+    const emailNote = correlation ? `\n${formatCorrelationNote(correlation)}` : "";
     return dep
-      ? `• ${event.summary} — ${time}${loc}\n  → ${dep}`
-      : `• ${event.summary} — ${time}${loc}`;
+      ? `• ${event.summary} — ${time}${loc}\n  → ${dep}${emailNote}`
+      : `• ${event.summary} — ${time}${loc}${emailNote}`;
   }
 
   const todayLabel    = `TODAY (${new Date(todayStr    + "T12:00:00").toLocaleDateString("en-US", { timeZone: TZ_LOCAL, weekday: "long", month: "long", day: "numeric" })})`;
@@ -956,11 +960,25 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
         return new Date(ev.startIso) > preNow;
       }) ?? null;
 
+      // Identify today's events for the email-to-calendar correlation search
+      const todayStr = chicagoDateStr(preNow);
+      const preTodayEvents = (preLiveEvents ?? []).filter((e) => e.isoDate === todayStr);
+
+      // Launch email correlation search in parallel — capped at 10 s internally
+      // Only runs when there are today events with attendees; otherwise resolves immediately
+      const emailCorrelationsPromise: Promise<Map<string, CalendarEmailCorrelation>> =
+        preTodayEvents.some((e) => !e.allDay && (e.attendees?.length ?? 0) > 0)
+          ? buildCalendarEmailCorrelations(preTodayEvents, userName).catch(() => new Map())
+          : Promise.resolve(new Map());
+
       // Smart calendar block (today+tomorrow w/ departure times) — capped at 8 s, runs while Gmail is still in-flight
+      // Email correlations are also awaited before building so the notes are embedded
       const preSmartCalPromise: Promise<string> = preLiveEvents !== null
         ? Promise.race([
-            buildSmartCalendarBlock(preLiveEvents, homeAddress, primaryLat, primaryLon),
-            new Promise<string>((resolve) => setTimeout(() => resolve(""), 8000)),
+            emailCorrelationsPromise.then((correlations) =>
+              buildSmartCalendarBlock(preLiveEvents, homeAddress, primaryLat, primaryLon, correlations),
+            ),
+            new Promise<string>((resolve) => setTimeout(() => resolve(""), 10_000)),
           ])
         : Promise.resolve("");
 
@@ -994,7 +1012,12 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
         preCalendarBlock =
           `\n\n[VERIFIED — Google Calendar API — Today & Tomorrow with pre-calculated departure times, plus rest of week]\n` +
           `${calContent}\n\n` +
-          `⚠ CALENDAR RULE — NO EXCEPTIONS: Use ONLY the exact event title shown above. NEVER substitute, infer, or enrich event titles with names or context from memory. Report every event title letter-for-letter as written. Departure times in the block are pre-calculated facts — state them directly ("Leave by 6:30 PM"). If you want to add any context beyond what's shown, frame it as a question (INFERRED tier), never a statement.`;
+          `⚠ CALENDAR RULE — NO EXCEPTIONS: Use ONLY the exact event title shown above. NEVER substitute, infer, or enrich event titles with names or context from memory. Report every event title letter-for-letter as written. Departure times in the block are pre-calculated facts — state them directly ("Leave by 6:30 PM"). If you want to add any context beyond what's shown, frame it as a question (INFERRED tier), never a statement.\n\n` +
+          `EMAIL-TO-CALENDAR INTELLIGENCE: Some events above have an [EMAIL NOTE] line beneath them. These are real Gmail messages from that attendee found in the last 7 days. When present:\n` +
+          `• Surface the connection naturally and conversationally — e.g. "You have a call with Sarah at 10 — she emailed yesterday about the Henderson project, might be worth a quick look before you hop on."\n` +
+          `• This is INFERRED tier: frame it as an observation or question, never a stated fact about the meeting's agenda.\n` +
+          `• Only mention it when it genuinely adds useful context. If the email subject is vague or unrelated, skip the mention.\n` +
+          `• NEVER invent email content not shown in the [EMAIL NOTE]. Use only the subject line shown.`;
       } else {
         preCalendarBlock = `\n\n[VERIFIED — Google Calendar API — status: NOT CONNECTED]\nGoogle Calendar authentication failed — no refresh token. This means zero calendar data is available.\nCRITICAL RULES — NO EXCEPTIONS:\n• Say EXACTLY this one sentence: "I can't pull your calendar right now — Google may need to be reconnected in the app settings."\n• Do NOT say his calendar is clear, open, or free.\n• Do NOT say he has nothing scheduled or no events.\n• Do NOT mention any specific event, appointment, or meeting.\n• Do NOT use any qualifier about calendar status (e.g. "looks like a clear day", "you seem free", "nothing on the agenda").\n• The calendar is DISCONNECTED — you have NO information about it. Silence on calendar status is the only acceptable alternative to the one sentence above.`;
       }
