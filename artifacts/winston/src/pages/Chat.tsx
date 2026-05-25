@@ -66,6 +66,11 @@ interface Message {
   mimeType?: string;
   isReminder?: boolean;
   isMedication?: boolean;
+  isBill?: boolean;
+  billId?: number;
+  billName?: string;
+  billAmount?: string;
+  billDueDateISO?: string;
   reminderId?: number;
   navigationUrl?: string;
   navigationDestination?: string;
@@ -459,10 +464,14 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
   const [messages, setMessages] = useState<Message[]>([]);
   const [messagesLoaded, setMessagesLoaded] = useState(false);
   const [pendingNotification, setPendingNotification] = useState<{
-    type: "morning" | "reminder" | "concert-alert" | "auto-send" | "medication-reminder" | "winddown" | "connect-reminder" | "connect-message" | "weather-alert";
+    type: "morning" | "reminder" | "concert-alert" | "auto-send" | "medication-reminder" | "bill-reminder" | "winddown" | "connect-reminder" | "connect-message" | "weather-alert";
     text?: string;
     id?: number;
     companionMessage?: string;
+    billId?: number;
+    billName?: string;
+    billAmount?: string;
+    billDueDateISO?: string;
   } | null>(() => {
     const params = new URLSearchParams(window.location.search);
     const type = params.get("notification");
@@ -1210,10 +1219,34 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
           id: msgId,
           role: "assistant" as const,
           content: "Time to take your medications. Have you taken them yet?",
+          isReminder: true,
           isMedication: true,
         },
       ]);
       speakReply(msgId, "Time to take your medications. Have you taken them yet?");
+    } else if (notif.type === "bill-reminder") {
+      // Bill reminder tap — show action card with Mark Paid / Remind Tomorrow buttons
+      const billLabel = notif.billName ?? "your bill";
+      const amountStr = notif.billAmount ? ` (${notif.billAmount})` : "";
+      const dueStr = notif.billDueDateISO
+        ? ` due ${new Date(notif.billDueDateISO + "T12:00:00").toLocaleDateString("en-US", { month: "long", day: "numeric" })}`
+        : "";
+      const msgId = `bill-tap-${Date.now()}`;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: msgId,
+          role: "assistant" as const,
+          content: `${billLabel}${amountStr} is${dueStr}. Would you like to mark it as paid?`,
+          isReminder: true,
+          isBill: true,
+          billId: notif.billId,
+          billName: notif.billName,
+          billAmount: notif.billAmount,
+          billDueDateISO: notif.billDueDateISO,
+        },
+      ]);
+      speakReply(msgId, `${billLabel}${amountStr} is${dueStr}. Would you like to mark it as paid?`);
     } else if (notif.type === "reminder" && notif.text) {
       // Dedup: if SSE or push already fired this reminder, don't show it twice
       if (notif.id != null && spokenReminderIds.current.has(notif.id)) {
@@ -1263,7 +1296,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
           const store = tx.objectStore("pending");
           const getReq = store.get("reminder");
           getReq.onsuccess = () => {
-            const pending = getReq.result as { reminderText?: string; reminderId?: number; notificationType?: string; companionMessage?: string; autoSendMessage?: string } | undefined;
+            const pending = getReq.result as { reminderText?: string; reminderId?: number; notificationType?: string; companionMessage?: string; autoSendMessage?: string; billId?: number; billName?: string; amount?: string; dueDateISO?: string } | undefined;
             if (!pending) return;
             store.delete("reminder"); // consume so it never fires twice
 
@@ -1302,6 +1335,17 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
             if (notifType === "medication") {
               console.log("[CHAT] NOTIFICATION_TAP: medication — showing action card");
               setPendingNotification((prev) => prev ?? { type: "medication-reminder" });
+              return;
+            }
+
+            // Bill reminder: show action card with Mark Paid / Remind Tomorrow buttons
+            if (notifType === "bill-reminder") {
+              console.log("[CHAT] NOTIFICATION_TAP: bill-reminder — showing bill action card");
+              const billId = typeof pending.billId === "number" ? pending.billId : undefined;
+              const billName = typeof pending.billName === "string" ? pending.billName : undefined;
+              const amount = typeof pending.amount === "string" ? pending.amount : undefined;
+              const dueDateISO = typeof pending.dueDateISO === "string" ? pending.dueDateISO : undefined;
+              setPendingNotification((prev) => prev ?? { type: "bill-reminder", billId, billName, billAmount: amount, billDueDateISO: dueDateISO });
               return;
             }
 
@@ -1387,6 +1431,15 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
           // Medication reminder: show action card with Taken/Remind buttons immediately
           if (pending.notificationType === "medication") {
             setPendingNotification((prev) => prev ?? { type: "medication-reminder" });
+            return;
+          }
+          // Bill reminder: show action card with Mark Paid / Remind Tomorrow buttons
+          if (pending.notificationType === "bill-reminder") {
+            const billId = typeof (pending as Record<string, unknown>).billId === "number" ? (pending as Record<string, unknown>).billId as number : undefined;
+            const billName = typeof (pending as Record<string, unknown>).billName === "string" ? (pending as Record<string, unknown>).billName as string : undefined;
+            const amount = typeof (pending as Record<string, unknown>).amount === "string" ? (pending as Record<string, unknown>).amount as string : undefined;
+            const dueDateISO = typeof (pending as Record<string, unknown>).dueDateISO === "string" ? (pending as Record<string, unknown>).dueDateISO as string : undefined;
+            setPendingNotification((prev) => prev ?? { type: "bill-reminder", billId, billName, billAmount: amount, billDueDateISO: dueDateISO });
             return;
           }
           // Winddown: fetch tonight's pre-generated message and display it
@@ -2488,6 +2541,37 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
                       >
                         <Clock className="h-3.5 w-3.5" />
                         Remind in 1 hour
+                      </button>
+                    </>
+                  ) : msg.isBill && msg.billId != null ? (
+                    <>
+                      <button
+                        onClick={() => {
+                          setMessages((prev) => prev.filter((m) => m.id !== msg.id));
+                          fetch(`${CHAT_BASE}/api/bills/${msg.billId}/paid`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({}),
+                          }).catch(() => {});
+                        }}
+                        className="inline-flex items-center gap-1.5 text-[13px] font-medium text-primary/80 hover:text-primary transition-colors"
+                      >
+                        <Check className="h-3.5 w-3.5" />
+                        Mark Paid
+                      </button>
+                      <button
+                        onClick={() => {
+                          setMessages((prev) => prev.filter((m) => m.id !== msg.id));
+                          fetch(`${CHAT_BASE}/api/bills/${msg.billId}/remind-due-date`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({}),
+                          }).catch(() => {});
+                        }}
+                        className="inline-flex items-center gap-1.5 text-[13px] font-medium text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        <Clock className="h-3.5 w-3.5" />
+                        Remind Tomorrow
                       </button>
                     </>
                   ) : (
