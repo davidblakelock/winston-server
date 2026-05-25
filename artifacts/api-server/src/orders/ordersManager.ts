@@ -141,16 +141,16 @@ export async function upsertOrder(
   order: NewOrder
 ): Promise<Order | null> {
   try {
-    // If a tracking number is present, check if we already have a row for it.
-    // This merges the "order confirmed" email row with the later "shipped" email row
-    // so the same physical package never appears twice in the list.
+    // ── Priority 1: match by tracking_number ────────────────────────────────
+    // "Order shipped" email arrives with same TN as an earlier "order confirmed"
+    // email that already stored the TN — just update the existing row.
     if (order.tracking_number) {
-      const { rows: existing } = await query<Order>(
+      const { rows: byTN } = await query<Order>(
         `SELECT * FROM orders WHERE user_name = $1 AND tracking_number = $2 LIMIT 1`,
         [userName, order.tracking_number]
       );
-      if (existing.length > 0) {
-        const row = existing[0]!;
+      if (byTN.length > 0) {
+        const row = byTN[0]!;
         const { rows: updated } = await query<Order>(
           `UPDATE orders SET
              retailer        = $3,
@@ -166,24 +166,60 @@ export async function upsertOrder(
            WHERE id = $1 AND user_name = $2
            RETURNING *`,
           [
-            row.id,
-            userName,
-            order.retailer,
-            order.item_name,
-            order.order_number ?? null,
-            order.carrier ?? null,
-            order.status ?? "ordered",
-            order.expected_date ?? null,
-            order.order_total ?? null,
-            order.email_id ?? null,
+            row.id, userName,
+            order.retailer, order.item_name,
+            order.order_number ?? null, order.carrier ?? null,
+            order.status ?? "ordered", order.expected_date ?? null,
+            order.order_total ?? null, order.email_id ?? null,
             order.order_url ?? null,
           ]
         );
         return updated[0] ?? null;
       }
+
+      // ── Priority 2: match by order_number when we now have a tracking number ──
+      // "Order confirmed" email created a row with order_number but no tracking.
+      // The later "shipped" email has both — update the existing row rather than
+      // creating a second row for the same physical package.
+      if (order.order_number) {
+        const { rows: byON } = await query<Order>(
+          `SELECT * FROM orders
+           WHERE user_name = $1 AND order_number = $2 AND tracking_number IS NULL
+           LIMIT 1`,
+          [userName, order.order_number]
+        );
+        if (byON.length > 0) {
+          const row = byON[0]!;
+          const { rows: updated } = await query<Order>(
+            `UPDATE orders SET
+               tracking_number = $3,
+               carrier         = COALESCE($4, carrier),
+               status          = CASE WHEN $5 > status THEN $5 ELSE status END,
+               expected_date   = COALESCE($6::date, expected_date),
+               order_total     = COALESCE($7, order_total),
+               order_url       = COALESCE($8, order_url),
+               updated_at      = now()
+             WHERE id = $1 AND user_name = $2
+             RETURNING *`,
+            [
+              row.id, userName,
+              order.tracking_number, order.carrier ?? null,
+              order.status ?? "ordered", order.expected_date ?? null,
+              order.order_total ?? null, order.order_url ?? null,
+            ]
+          );
+          logger.info(
+            { orderId: row.id, orderNumber: order.order_number, trackingNumber: order.tracking_number },
+            "[Orders] Merged tracking number into existing order-number row"
+          );
+          return updated[0] ?? null;
+        }
+      }
     }
 
-    // No existing row with this tracking number — insert fresh (dedup by email_id).
+    // ── Priority 3: insert fresh, dedup by email_id ──────────────────────────
+    // No existing row matched — insert. ON CONFLICT on email_id handles the case
+    // where we see the same email again (e.g. on a force-sync).
     const { rows } = await query<Order>(
       `INSERT INTO orders
          (user_name, retailer, item_name, order_number, tracking_number, carrier, status, expected_date, order_total, email_id, order_url)
@@ -202,16 +238,11 @@ export async function upsertOrder(
        RETURNING *`,
       [
         userName,
-        order.retailer,
-        order.item_name,
-        order.order_number ?? null,
-        order.tracking_number ?? null,
-        order.carrier ?? null,
-        order.status ?? "ordered",
-        order.expected_date ?? null,
-        order.order_total ?? null,
-        order.email_id ?? null,
-        order.order_url ?? null,
+        order.retailer, order.item_name,
+        order.order_number ?? null, order.tracking_number ?? null,
+        order.carrier ?? null, order.status ?? "ordered",
+        order.expected_date ?? null, order.order_total ?? null,
+        order.email_id ?? null, order.order_url ?? null,
       ]
     );
     return rows[0] ?? null;
@@ -219,6 +250,76 @@ export async function upsertOrder(
     logger.warn({ err, order }, "[Orders] upsertOrder failed");
     return null;
   }
+}
+
+// ── Post-scan consolidation ───────────────────────────────────────────────────
+// After a Gmail scan, multiple emails for the same package may have produced
+// duplicate rows (one per email_id).  This function merges them:
+//   1. If two rows share a tracking_number, keep the highest-status one, delete the rest.
+//   2. If a row has a tracking_number AND another row has the same order_number but
+//      no tracking_number, delete the no-tracking orphan (it was already merged via
+//      upsertOrder for new syncs, but old rows from previous syncs need cleanup too).
+export async function consolidateOrders(userName: string): Promise<number> {
+  let deleted = 0;
+
+  // Step 1: deduplicate by tracking_number — keep the row with the highest status.
+  const { rows: tnDups } = await query<{ tracking_number: string; keep_id: number }>(
+    `SELECT tracking_number,
+            (array_agg(id ORDER BY
+              CASE status
+                WHEN 'out_for_delivery' THEN 5
+                WHEN 'delivered'        THEN 4
+                WHEN 'in_transit'       THEN 3
+                WHEN 'shipped'          THEN 2
+                WHEN 'ordered'          THEN 1
+                ELSE 0
+              END DESC, updated_at DESC
+            ))[1] AS keep_id
+     FROM orders
+     WHERE user_name = $1 AND tracking_number IS NOT NULL
+     GROUP BY tracking_number
+     HAVING COUNT(*) > 1`,
+    [userName]
+  );
+
+  for (const { tracking_number, keep_id } of tnDups) {
+    const { rows: gone } = await query<{ id: number }>(
+      `DELETE FROM orders
+       WHERE user_name = $1 AND tracking_number = $2 AND id != $3
+       RETURNING id`,
+      [userName, tracking_number, keep_id]
+    );
+    deleted += gone.length;
+    if (gone.length > 0) {
+      logger.info(
+        { userName, tracking_number, kept: keep_id, removed: gone.map((r) => r.id) },
+        "[Orders] Consolidated duplicate tracking-number rows"
+      );
+    }
+  }
+
+  // Step 2: remove orphan no-tracking rows where a tracking row exists for the same order_number.
+  const { rows: orphans } = await query<{ id: number }>(
+    `DELETE FROM orders orphan
+     USING orders tracked
+     WHERE orphan.user_name    = $1
+       AND orphan.tracking_number IS NULL
+       AND orphan.order_number IS NOT NULL
+       AND tracked.user_name   = $1
+       AND tracked.tracking_number IS NOT NULL
+       AND tracked.order_number = orphan.order_number
+     RETURNING orphan.id`,
+    [userName]
+  );
+  deleted += orphans.length;
+  if (orphans.length > 0) {
+    logger.info(
+      { userName, removed: orphans.map((r) => r.id) },
+      "[Orders] Removed orphan no-tracking rows that have a tracked sibling"
+    );
+  }
+
+  return deleted;
 }
 
 export async function updateOrderTracking(

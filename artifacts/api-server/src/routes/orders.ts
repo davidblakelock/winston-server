@@ -7,6 +7,7 @@ import {
   deleteOrder,
   getLastOrderScanAt,
   updateLastOrderScanAt,
+  consolidateOrders,
 } from "../orders/ordersManager.js";
 import { scanOrderEmails } from "../orders/gmailOrderScanner.js";
 import { pollActiveOrderTracking } from "../orders/orderTrackingScheduler.js";
@@ -65,7 +66,15 @@ router.post("/orders/sync", express.json({ limit: "1mb" }), async (req, res) => 
     await updateLastOrderScanAt(userName);
     req.log.info({ userName, scanned: scanned.length, newOrUpdated: newCount }, "[Orders] Gmail scan complete");
 
-    // ── Step 2: Update live tracking via AfterShip (throttled — 30 min cooldown per order)
+    // ── Step 2: Consolidate duplicates from this scan and any previous scans ─
+    // Merges rows that share the same tracking_number or order_number so the
+    // user never sees the same package listed more than once.
+    const consolidated = await consolidateOrders(userName);
+    if (consolidated > 0) {
+      req.log.info({ userName, consolidated }, "[Orders] Duplicate rows removed by consolidation");
+    }
+
+    // ── Step 3: Update live tracking via AfterShip (throttled — 30 min cooldown per order)
     const { updated: trackingUpdated } = await pollActiveOrderTracking(userName);
     req.log.info({ userName, trackingUpdated }, "[Orders] Tracking updates complete");
 

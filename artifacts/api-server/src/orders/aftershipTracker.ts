@@ -61,7 +61,7 @@ async function createTracking(
     const res = await fetch(`${AFTERSHIP_BASE}/trackings`, {
       method: "POST",
       headers: {
-        "as-api-key": AFTERSHIP_API_KEY,
+        "aftership-api-key": AFTERSHIP_API_KEY,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
@@ -105,7 +105,7 @@ async function getTrackingBySlug(
     const res = await fetch(
       `${AFTERSHIP_BASE}/trackings/${encodeURIComponent(slug)}/${encodeURIComponent(trackingNumber)}`,
       {
-        headers: { "as-api-key": AFTERSHIP_API_KEY },
+        headers: { "aftership-api-key": AFTERSHIP_API_KEY },
         signal: AbortSignal.timeout(10_000),
       }
     );
