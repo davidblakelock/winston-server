@@ -17,12 +17,21 @@ import type {
 } from "@tanstack/react-query";
 
 import type {
+  AddGoalStepRequest,
+  BreakdownGoalRequest,
+  BreakdownGoalResponse,
   ChatRequest,
   ChatResponse,
+  CreateGoalRequest,
+  DeleteGoal200,
   ErrorResponse,
+  GetGoals200,
+  Goal,
+  GoalStep,
   HealthStatus,
   SpeakRequest,
   SpeakResponse,
+  UpdateGoalStepRequest,
 } from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
@@ -282,4 +291,502 @@ export const useTextToSpeech = <
   TContext
 > => {
   return useMutation(getTextToSpeechMutationOptions(options));
+};
+
+/**
+ * Returns all active goals for the user with their steps and completion status
+ * @summary Get all goals
+ */
+export const getGetGoalsUrl = () => {
+  return `/api/goals`;
+};
+
+export const getGoals = async (options?: RequestInit): Promise<GetGoals200> => {
+  return customFetch<GetGoals200>(getGetGoalsUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetGoalsQueryKey = () => {
+  return [`/api/goals`] as const;
+};
+
+export const getGetGoalsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getGoals>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<Awaited<ReturnType<typeof getGoals>>, TError, TData>;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetGoalsQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getGoals>>> = ({
+    signal,
+  }) => getGoals({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getGoals>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetGoalsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getGoals>>
+>;
+export type GetGoalsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get all goals
+ */
+
+export function useGetGoals<
+  TData = Awaited<ReturnType<typeof getGoals>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<Awaited<ReturnType<typeof getGoals>>, TError, TData>;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetGoalsQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Create a new goal
+ */
+export const getCreateGoalUrl = () => {
+  return `/api/goals`;
+};
+
+export const createGoal = async (
+  createGoalRequest: CreateGoalRequest,
+  options?: RequestInit,
+): Promise<Goal> => {
+  return customFetch<Goal>(getCreateGoalUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(createGoalRequest),
+  });
+};
+
+export const getCreateGoalMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createGoal>>,
+    TError,
+    { data: BodyType<CreateGoalRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createGoal>>,
+  TError,
+  { data: BodyType<CreateGoalRequest> },
+  TContext
+> => {
+  const mutationKey = ["createGoal"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createGoal>>,
+    { data: BodyType<CreateGoalRequest> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return createGoal(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreateGoalMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createGoal>>
+>;
+export type CreateGoalMutationBody = BodyType<CreateGoalRequest>;
+export type CreateGoalMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Create a new goal
+ */
+export const useCreateGoal = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createGoal>>,
+    TError,
+    { data: BodyType<CreateGoalRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createGoal>>,
+  TError,
+  { data: BodyType<CreateGoalRequest> },
+  TContext
+> => {
+  return useMutation(getCreateGoalMutationOptions(options));
+};
+
+/**
+ * Uses Claude to ask a clarifying question or return 3-7 Stoic action steps
+ * @summary AI goal breakdown
+ */
+export const getBreakdownGoalUrl = () => {
+  return `/api/goals/breakdown`;
+};
+
+export const breakdownGoal = async (
+  breakdownGoalRequest: BreakdownGoalRequest,
+  options?: RequestInit,
+): Promise<BreakdownGoalResponse> => {
+  return customFetch<BreakdownGoalResponse>(getBreakdownGoalUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(breakdownGoalRequest),
+  });
+};
+
+export const getBreakdownGoalMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof breakdownGoal>>,
+    TError,
+    { data: BodyType<BreakdownGoalRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof breakdownGoal>>,
+  TError,
+  { data: BodyType<BreakdownGoalRequest> },
+  TContext
+> => {
+  const mutationKey = ["breakdownGoal"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof breakdownGoal>>,
+    { data: BodyType<BreakdownGoalRequest> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return breakdownGoal(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type BreakdownGoalMutationResult = NonNullable<
+  Awaited<ReturnType<typeof breakdownGoal>>
+>;
+export type BreakdownGoalMutationBody = BodyType<BreakdownGoalRequest>;
+export type BreakdownGoalMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary AI goal breakdown
+ */
+export const useBreakdownGoal = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof breakdownGoal>>,
+    TError,
+    { data: BodyType<BreakdownGoalRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof breakdownGoal>>,
+  TError,
+  { data: BodyType<BreakdownGoalRequest> },
+  TContext
+> => {
+  return useMutation(getBreakdownGoalMutationOptions(options));
+};
+
+/**
+ * @summary Delete a goal and all its steps
+ */
+export const getDeleteGoalUrl = (id: number) => {
+  return `/api/goals/${id}`;
+};
+
+export const deleteGoal = async (
+  id: number,
+  options?: RequestInit,
+): Promise<DeleteGoal200> => {
+  return customFetch<DeleteGoal200>(getDeleteGoalUrl(id), {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const getDeleteGoalMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteGoal>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof deleteGoal>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["deleteGoal"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof deleteGoal>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return deleteGoal(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DeleteGoalMutationResult = NonNullable<
+  Awaited<ReturnType<typeof deleteGoal>>
+>;
+
+export type DeleteGoalMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Delete a goal and all its steps
+ */
+export const useDeleteGoal = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteGoal>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof deleteGoal>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(getDeleteGoalMutationOptions(options));
+};
+
+/**
+ * @summary Add a step to a goal
+ */
+export const getAddGoalStepUrl = (id: number) => {
+  return `/api/goals/${id}/steps`;
+};
+
+export const addGoalStep = async (
+  id: number,
+  addGoalStepRequest: AddGoalStepRequest,
+  options?: RequestInit,
+): Promise<GoalStep> => {
+  return customFetch<GoalStep>(getAddGoalStepUrl(id), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(addGoalStepRequest),
+  });
+};
+
+export const getAddGoalStepMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof addGoalStep>>,
+    TError,
+    { id: number; data: BodyType<AddGoalStepRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof addGoalStep>>,
+  TError,
+  { id: number; data: BodyType<AddGoalStepRequest> },
+  TContext
+> => {
+  const mutationKey = ["addGoalStep"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof addGoalStep>>,
+    { id: number; data: BodyType<AddGoalStepRequest> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return addGoalStep(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type AddGoalStepMutationResult = NonNullable<
+  Awaited<ReturnType<typeof addGoalStep>>
+>;
+export type AddGoalStepMutationBody = BodyType<AddGoalStepRequest>;
+export type AddGoalStepMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Add a step to a goal
+ */
+export const useAddGoalStep = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof addGoalStep>>,
+    TError,
+    { id: number; data: BodyType<AddGoalStepRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof addGoalStep>>,
+  TError,
+  { id: number; data: BodyType<AddGoalStepRequest> },
+  TContext
+> => {
+  return useMutation(getAddGoalStepMutationOptions(options));
+};
+
+/**
+ * @summary Mark a step complete or incomplete
+ */
+export const getUpdateGoalStepUrl = (id: number, stepId: number) => {
+  return `/api/goals/${id}/steps/${stepId}`;
+};
+
+export const updateGoalStep = async (
+  id: number,
+  stepId: number,
+  updateGoalStepRequest: UpdateGoalStepRequest,
+  options?: RequestInit,
+): Promise<GoalStep> => {
+  return customFetch<GoalStep>(getUpdateGoalStepUrl(id, stepId), {
+    ...options,
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(updateGoalStepRequest),
+  });
+};
+
+export const getUpdateGoalStepMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateGoalStep>>,
+    TError,
+    { id: number; stepId: number; data: BodyType<UpdateGoalStepRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updateGoalStep>>,
+  TError,
+  { id: number; stepId: number; data: BodyType<UpdateGoalStepRequest> },
+  TContext
+> => {
+  const mutationKey = ["updateGoalStep"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updateGoalStep>>,
+    { id: number; stepId: number; data: BodyType<UpdateGoalStepRequest> }
+  > = (props) => {
+    const { id, stepId, data } = props ?? {};
+
+    return updateGoalStep(id, stepId, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateGoalStepMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updateGoalStep>>
+>;
+export type UpdateGoalStepMutationBody = BodyType<UpdateGoalStepRequest>;
+export type UpdateGoalStepMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Mark a step complete or incomplete
+ */
+export const useUpdateGoalStep = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateGoalStep>>,
+    TError,
+    { id: number; stepId: number; data: BodyType<UpdateGoalStepRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof updateGoalStep>>,
+  TError,
+  { id: number; stepId: number; data: BodyType<UpdateGoalStepRequest> },
+  TContext
+> => {
+  return useMutation(getUpdateGoalStepMutationOptions(options));
 };

@@ -6,11 +6,21 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from "./addGoalStepRequest";
+export * from "./breakdownGoalRequest";
+export * from "./breakdownGoalResponse";
+export * from "./breakdownGoalResponseType";
 export * from "./chatRequest";
 export * from "./chatResponse";
 export * from "./conversationMessage";
 export * from "./conversationMessageRole";
+export * from "./createGoalRequest";
+export * from "./deleteGoal200";
 export * from "./errorResponse";
+export * from "./getGoals200";
+export * from "./goal";
+export * from "./goalStep";
 export * from "./healthStatus";
 export * from "./speakRequest";
 export * from "./speakResponse";
+export * from "./updateGoalStepRequest";

@@ -35,6 +35,7 @@ import locationRouter from "./location";
 import providersRouter from "./providers";
 import peopleRouter from "./people";
 import integrationsRouter from "./integrations";
+import goalsRouter from "./goals";
 
 const router: IRouter = Router();
 
@@ -74,5 +75,6 @@ router.use(locationRouter);
 router.use(providersRouter);
 router.use(peopleRouter);
 router.use(integrationsRouter);
+router.use(goalsRouter);
 
 export default router;

@@ -75,6 +75,169 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /goals:
+    get:
+      operationId: getGoals
+      tags: [goals]
+      summary: Get all goals
+      description: Returns all active goals for the user with their steps and completion status
+      responses:
+        "200":
+          description: List of goals
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  goals:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Goal"
+                required:
+                  - goals
+    post:
+      operationId: createGoal
+      tags: [goals]
+      summary: Create a new goal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateGoalRequest"
+      responses:
+        "201":
+          description: Created goal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Goal"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /goals/breakdown:
+    post:
+      operationId: breakdownGoal
+      tags: [goals]
+      summary: AI goal breakdown
+      description: Uses Claude to ask a clarifying question or return 3-7 Stoic action steps
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BreakdownGoalRequest"
+      responses:
+        "200":
+          description: Question or structured steps
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BreakdownGoalResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /goals/{id}:
+    delete:
+      operationId: deleteGoal
+      tags: [goals]
+      summary: Delete a goal and all its steps
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Goal deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  deleted:
+                    type: boolean
+                required: [ok, deleted]
+        "404":
+          description: Goal not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /goals/{id}/steps:
+    post:
+      operationId: addGoalStep
+      tags: [goals]
+      summary: Add a step to a goal
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddGoalStepRequest"
+      responses:
+        "201":
+          description: Created step
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GoalStep"
+        "404":
+          description: Goal not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /goals/{id}/steps/{stepId}:
+    patch:
+      operationId: updateGoalStep
+      tags: [goals]
+      summary: Mark a step complete or incomplete
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: stepId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateGoalStepRequest"
+      responses:
+        "200":
+          description: Updated step
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GoalStep"
+        "404":
+          description: Step not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 components:
   schemas:
     HealthStatus:
@@ -146,3 +309,104 @@ components:
           type: string
       required:
         - error
+    GoalStep:
+      type: object
+      properties:
+        id:
+          type: integer
+        goal_id:
+          type: integer
+        step_text:
+          type: string
+        order:
+          type: integer
+        completed:
+          type: boolean
+        completed_at:
+          type: string
+          nullable: true
+      required:
+        - id
+        - goal_id
+        - step_text
+        - order
+        - completed
+    Goal:
+      type: object
+      properties:
+        id:
+          type: integer
+        user_name:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+        completed_at:
+          type: string
+          nullable: true
+        steps:
+          type: array
+          items:
+            $ref: "#/components/schemas/GoalStep"
+      required:
+        - id
+        - user_name
+        - title
+        - created_at
+        - steps
+    CreateGoalRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+      required:
+        - title
+    AddGoalStepRequest:
+      type: object
+      properties:
+        step_text:
+          type: string
+        order:
+          type: integer
+      required:
+        - step_text
+    UpdateGoalStepRequest:
+      type: object
+      properties:
+        completed:
+          type: boolean
+      required:
+        - completed
+    BreakdownGoalRequest:
+      type: object
+      properties:
+        goal:
+          type: string
+        conversation_history:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConversationMessage"
+      required:
+        - goal
+    BreakdownGoalResponse:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [question, steps]
+        content:
+          type: string
+        steps:
+          type: array
+          items:
+            type: string
+          nullable: true
+      required:
+        - type
+        - content

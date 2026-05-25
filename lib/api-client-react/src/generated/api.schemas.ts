@@ -51,3 +51,64 @@ export interface SpeakResponse {
 export interface ErrorResponse {
   error: string;
 }
+
+export interface GoalStep {
+  id: number;
+  goal_id: number;
+  step_text: string;
+  order: number;
+  completed: boolean;
+  completed_at?: string | null;
+}
+
+export interface Goal {
+  id: number;
+  user_name: string;
+  title: string;
+  description?: string | null;
+  created_at: string;
+  completed_at?: string | null;
+  steps: GoalStep[];
+}
+
+export interface CreateGoalRequest {
+  title: string;
+  description?: string;
+}
+
+export interface AddGoalStepRequest {
+  step_text: string;
+  order?: number;
+}
+
+export interface UpdateGoalStepRequest {
+  completed: boolean;
+}
+
+export interface BreakdownGoalRequest {
+  goal: string;
+  conversation_history?: ConversationMessage[];
+}
+
+export type BreakdownGoalResponseType =
+  (typeof BreakdownGoalResponseType)[keyof typeof BreakdownGoalResponseType];
+
+export const BreakdownGoalResponseType = {
+  question: "question",
+  steps: "steps",
+} as const;
+
+export interface BreakdownGoalResponse {
+  type: BreakdownGoalResponseType;
+  content: string;
+  steps?: string[] | null;
+}
+
+export type GetGoals200 = {
+  goals: Goal[];
+};
+
+export type DeleteGoal200 = {
+  ok: boolean;
+  deleted: boolean;
+};

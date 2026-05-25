@@ -34,6 +34,12 @@ export const SendMessageBody = zod.object({
 
 export const SendMessageResponse = zod.object({
   reply: zod.string().describe("Winston's text response"),
+  navigationUrl: zod
+    .string()
+    .optional()
+    .describe(
+      "Google Maps URL to open if the response includes navigation directions",
+    ),
 });
 
 /**
@@ -47,4 +53,106 @@ export const TextToSpeechBody = zod.object({
 export const TextToSpeechResponse = zod.object({
   audioBase64: zod.string().describe("Base64-encoded MP3 audio data"),
   mimeType: zod.string().describe("MIME type of the audio (audio\/mpeg)"),
+});
+
+/**
+ * Returns all active goals for the user with their steps and completion status
+ * @summary Get all goals
+ */
+export const GetGoalsResponse = zod.object({
+  goals: zod.array(
+    zod.object({
+      id: zod.number(),
+      user_name: zod.string(),
+      title: zod.string(),
+      description: zod.string().nullish(),
+      created_at: zod.string(),
+      completed_at: zod.string().nullish(),
+      steps: zod.array(
+        zod.object({
+          id: zod.number(),
+          goal_id: zod.number(),
+          step_text: zod.string(),
+          order: zod.number(),
+          completed: zod.boolean(),
+          completed_at: zod.string().nullish(),
+        }),
+      ),
+    }),
+  ),
+});
+
+/**
+ * @summary Create a new goal
+ */
+export const CreateGoalBody = zod.object({
+  title: zod.string(),
+  description: zod.string().optional(),
+});
+
+/**
+ * Uses Claude to ask a clarifying question or return 3-7 Stoic action steps
+ * @summary AI goal breakdown
+ */
+export const BreakdownGoalBody = zod.object({
+  goal: zod.string(),
+  conversation_history: zod
+    .array(
+      zod.object({
+        role: zod.enum(["user", "assistant"]),
+        content: zod.string(),
+      }),
+    )
+    .optional(),
+});
+
+export const BreakdownGoalResponse = zod.object({
+  type: zod.enum(["question", "steps"]),
+  content: zod.string(),
+  steps: zod.array(zod.string()).nullish(),
+});
+
+/**
+ * @summary Delete a goal and all its steps
+ */
+export const DeleteGoalParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const DeleteGoalResponse = zod.object({
+  ok: zod.boolean(),
+  deleted: zod.boolean(),
+});
+
+/**
+ * @summary Add a step to a goal
+ */
+export const AddGoalStepParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const AddGoalStepBody = zod.object({
+  step_text: zod.string(),
+  order: zod.number().optional(),
+});
+
+/**
+ * @summary Mark a step complete or incomplete
+ */
+export const UpdateGoalStepParams = zod.object({
+  id: zod.coerce.number(),
+  stepId: zod.coerce.number(),
+});
+
+export const UpdateGoalStepBody = zod.object({
+  completed: zod.boolean(),
+});
+
+export const UpdateGoalStepResponse = zod.object({
+  id: zod.number(),
+  goal_id: zod.number(),
+  step_text: zod.string(),
+  order: zod.number(),
+  completed: zod.boolean(),
+  completed_at: zod.string().nullish(),
 });
