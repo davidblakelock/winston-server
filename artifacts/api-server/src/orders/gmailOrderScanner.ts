@@ -130,6 +130,18 @@ function extractBodyFromPayload(payload: GmailPart): string {
   return "";
 }
 
+// Returns raw HTML before stripping — used to pre-extract tracking numbers
+// from href attributes that get removed by stripHtml.
+function extractRawHtmlFromPayload(payload: GmailPart): string {
+  if (payload.parts && payload.parts.length > 0) {
+    return extractTextFromParts(payload.parts, true);
+  }
+  if (payload.body?.data) {
+    return decodeBase64Url(payload.body.data);
+  }
+  return "";
+}
+
 // ── Claude Haiku extraction ───────────────────────────────────────────────────
 
 interface ParsedOrder {
@@ -144,21 +156,49 @@ interface ParsedOrder {
   status: "ordered" | "shipped" | "in_transit" | "out_for_delivery" | "delivered" | null;
 }
 
+// ── Pre-extraction: pull tracking numbers from URLs before Claude sees the body ─
+// Amazon embeds TBA numbers in URLs (track.amazon.com/tracking/TBAxxxxxxxxx).
+// Claude may miss these if they're only in href attributes after HTML stripping.
+function preExtractTrackingNumber(body: string): string | null {
+  // Amazon TBA: appears in URLs like track.amazon.com/tracking/TBA123456789000
+  const tbaMatch = body.match(/\bTBA\d{12,}\b/i);
+  if (tbaMatch) return tbaMatch[0].toUpperCase();
+
+  // UPS 1Z tracking in URLs
+  const upsMatch = body.match(/\b1Z[A-Z0-9]{16}\b/i);
+  if (upsMatch) return upsMatch[0].toUpperCase();
+
+  // FedEx 12- or 15-digit in URLs
+  const fedexMatch = body.match(/tracking[_\-/=](\d{12}|\d{15})\b/i);
+  if (fedexMatch) return fedexMatch[1]!;
+
+  // USPS 22-digit starting with 9
+  const uspsMatch = body.match(/\b(9\d{21})\b/);
+  if (uspsMatch) return uspsMatch[1]!;
+
+  return null;
+}
+
 async function parseOrderFromEmail(
   subject: string,
   from: string,
   body: string,
-  emailDate: string
+  emailDate: string,
+  preExtractedTracking?: string | null
 ): Promise<ParsedOrder | null> {
   const truncatedBody = body.slice(0, 6000);
   const today = new Date().toISOString().split("T")[0];
+
+  // Use the caller-provided pre-extracted value (from raw HTML) or fall back to
+  // scanning the already-stripped body as a secondary attempt.
+  const preExtracted = preExtractedTracking ?? preExtractTrackingNumber(body);
 
   const prompt = `Extract order/shipping information from this email. Return ONLY valid JSON or the literal null if this is NOT a real order/shipping email.
 
 Email subject: ${subject}
 Email from: ${from}
 Email date: ${emailDate}
-Today's date: ${today}
+Today's date: ${today}${preExtracted ? `\nPre-extracted tracking number found in email URLs: ${preExtracted} — use this as tracking_number` : ""}
 
 Email body:
 ${truncatedBody}
@@ -167,9 +207,9 @@ Return JSON with exactly these fields (null for any not found):
 {
   "retailer": retailer/sender name — for carrier notification emails (FedEx, UPS, USPS, DHL) use the shipper name from the email or the carrier name itself,
   "item_name": product name if listed, otherwise use "Package" for carrier shipping notifications,
-  "order_number": order/confirmation number as string,
-  "tracking_number": carrier tracking number (NOT order number),
-  "carrier": "UPS" | "FedEx" | "USPS" | "DHL" | null,
+  "order_number": order/confirmation number as string (Amazon order numbers look like 111-1234567-1234567),
+  "tracking_number": carrier tracking number (NOT order number). For Amazon: TBA numbers like TBA123456789000 found in track.amazon.com URLs. For UPS: starts with 1Z. For FedEx: 12 or 15 digits. For USPS: 22 digits starting with 9.
+  "carrier": "UPS" | "FedEx" | "USPS" | "DHL" | "Amazon" | null,
   "expected_date": "YYYY-MM-DD" delivery date or null,
   "order_total": dollar amount as string e.g. "$149.99" or null,
   "order_url": URL to track order on retailer site or null,
@@ -177,8 +217,9 @@ Return JSON with exactly these fields (null for any not found):
 }
 
 Rules:
+- tracking_number: CRITICAL — scan the full email body including any URLs for tracking numbers. Amazon TBA tracking numbers appear in URLs like track.amazon.com/tracking/TBA123456789000 — extract just the TBA number (e.g. "TBA123456789000"). Never confuse the order number (111-xxxxxxx-xxxxxxx) with the tracking number.
 - item_name: use the exact product name if listed. For carrier shipping notifications without a product name, use "Package" — never return null for carrier emails.
-- retailer: for FedEx/UPS/USPS/DHL shipping notifications, use the shipper name if shown, otherwise use the carrier name (e.g. "FedEx").
+- retailer: for FedEx/UPS/USPS/DHL/Amazon shipping notifications, use the shipper name if shown, otherwise use the carrier name.
 - If this is a shipping notification → status is "shipped" or "in_transit"
 - If "out for delivery" → status is "out_for_delivery"
 - If delivered confirmation → status is "delivered"
@@ -274,11 +315,16 @@ export async function scanOrderEmails(
       const subject = getHeader("Subject");
       const from = getHeader("From");
       const date = getHeader("Date");
-      const body = extractBodyFromPayload((detail.data.payload ?? {}) as GmailPart);
+      const rawPayload = (detail.data.payload ?? {}) as GmailPart;
+      // Pre-extract from raw HTML BEFORE stripping so TBA numbers in href
+      // attributes (track.amazon.com/tracking/TBAxxxxxxx) are captured.
+      const rawHtml = extractRawHtmlFromPayload(rawPayload);
+      const preExtractedTracking = preExtractTrackingNumber(rawHtml) ?? preExtractTrackingNumber(rawHtml.replace(/<[^>]+>/g, " "));
+      const body = extractBodyFromPayload(rawPayload);
 
       if (!body || body.length < 50) continue;
 
-      const parsed = await parseOrderFromEmail(subject, from, body, date);
+      const parsed = await parseOrderFromEmail(subject, from, body, date, preExtractedTracking);
       if (!parsed) continue;
 
       results.push({
