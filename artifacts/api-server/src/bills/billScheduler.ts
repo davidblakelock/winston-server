@@ -119,27 +119,34 @@ async function checkBillReminders(): Promise<void> {
 
       const body = buildBillReminderMessage(upcomingBill, displayName);
 
+      const dueDateISO = nextDueDate.toISOString().split("T")[0];
+      const amountLabel = bill.amount ? ` · $${bill.amount}` : "";
+
       await sendPushToAll(
         {
-          title: `Bill Due Soon`,
+          title: `${bill.name}${amountLabel} due ${daysUntil === 0 ? "today" : `in ${daysUntil} day${daysUntil === 1 ? "" : "s"}`}`,
           body,
           tag: `bill-${bill.id}`,
           notificationType: "bill-reminder",
+          // "bill-action" → native app shows: "Paid ✓" and "Dismiss"
+          // Paid ✓  → POST /api/bills/paid       { billId }  — marks paid this cycle
+          // Dismiss → POST /api/reminders/snooze  { billId, minutes: 1440 } — reminds tomorrow at 8 AM
           categoryIdentifier: "bill-action",
           requireInteraction: true,
-          // Top-level fields so native action buttons can build REST URLs without
-          // parsing companionMessage: POST /api/bills/:billId/paid
-          // and POST /api/bills/:billId/remind-due-date
+          // Top-level data fields — forwarded in the Expo push data envelope so the
+          // native action handler can fire the correct endpoint in the background.
           billId: bill.id,
           billName: bill.name,
           amount: bill.amount ?? "",
-          dueDateISO: nextDueDate.toISOString().split("T")[0],
-          companionMessage: JSON.stringify({
+          dueDateISO,
+          // companionMessage as a plain object (NOT a stringified string) — some
+          // native action handlers JSON.parse it, others read it directly.
+          companionMessage: {
             billId: bill.id,
             billName: bill.name,
             amount: bill.amount ?? "",
-            dueDateISO: nextDueDate.toISOString().split("T")[0],
-          }),
+            dueDateISO,
+          },
         },
         userName
       );

@@ -88,7 +88,7 @@ export interface PushPayload {
   requireInteraction?: boolean;
   silent?: boolean;
   notificationType?: string;
-  companionMessage?: string;
+  companionMessage?: string | Record<string, unknown>;
   eventDetails?: EventDetail[];
   useCurrentLocation?: boolean;
   alertLat?: number;
@@ -108,6 +108,10 @@ export interface PushPayload {
   billName?: string;
   amount?: string;
   dueDateISO?: string;
+  // Medication action button endpoints (forwarded in data envelope)
+  actionTaken?: string;
+  actionSnooze?: string;
+  snoozeMinutes?: number;
 }
 
 // ── Expo Push Token management ────────────────────────────────────────────────
@@ -245,6 +249,9 @@ export function buildExpoMessages(payload: PushPayload, tokens: string[]) {
       ...(payload.billName ? { billName: payload.billName } : {}),
       ...(payload.amount != null ? { amount: payload.amount } : {}),
       ...(payload.dueDateISO ? { dueDateISO: payload.dueDateISO } : {}),
+      ...(payload.actionTaken ? { actionTaken: payload.actionTaken } : {}),
+      ...(payload.actionSnooze ? { actionSnooze: payload.actionSnooze } : {}),
+      ...(payload.snoozeMinutes != null ? { snoozeMinutes: payload.snoozeMinutes } : {}),
     },
   }));
 }

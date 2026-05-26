@@ -195,6 +195,9 @@ router.post("/push/test-medication", async (req, res) => {
       notificationType: "medication",
       categoryIdentifier: "medication-action",
       requireInteraction: true,
+      actionTaken: "/api/medications/taken",
+      actionSnooze: "/api/medications/snooze-reminder",
+      snoozeMinutes: 30,
     };
 
     const dbTokens = await getExpoTokens();
@@ -237,8 +240,12 @@ router.post("/push/test-bill", async (req, res) => {
     const profile = await getProfile(NATIVE_USER);
     const displayName = profile?.name ?? "David";
 
+    const dueDateISO = nextDueDate.toISOString().split("T")[0];
+    const daysUntil = bill.daysUntilDue ?? 0;
+    const amountLabel = bill.amount ? ` · $${bill.amount}` : "";
+
     const pushPayload = {
-      title: "Bill Due Soon",
+      title: `${bill.name}${amountLabel} due ${daysUntil === 0 ? "today" : `in ${daysUntil} day${daysUntil === 1 ? "" : "s"}`}`,
       body: buildBillReminderMessage(bill, displayName),
       tag: `bill-${bill.id}`,
       notificationType: "bill-reminder",
@@ -247,13 +254,13 @@ router.post("/push/test-bill", async (req, res) => {
       billId: bill.id,
       billName: bill.name,
       amount: bill.amount ?? "",
-      dueDateISO: nextDueDate.toISOString().split("T")[0],
-      companionMessage: JSON.stringify({
+      dueDateISO,
+      companionMessage: {
         billId: bill.id,
         billName: bill.name,
         amount: bill.amount ?? "",
-        dueDateISO: nextDueDate.toISOString().split("T")[0],
-      }),
+        dueDateISO,
+      },
     };
 
     const dbTokens = await getExpoTokens();
