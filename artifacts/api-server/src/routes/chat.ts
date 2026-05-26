@@ -5082,8 +5082,10 @@ If you cannot extract both, return null.`,
   // Weather alert context: when the user taps a push notification and asks about
   // a recent NWS alert, look up the stored full text and inject it so Claude can
   // give a real answer instead of "I don't have the details."
+  // "in effect for" matches every autoSendMessage from the weather alert scheduler
+  // (they all say "There's a X in effect for Y") — catches event types not listed explicitly.
   const WEATHER_ALERT_RE =
-    /weather\s+alert|air\s+quality\s*(alert)?|severe\s+thunderstorm|tornado\s+warning|flood\s+warning|winter\s+storm|fire\s+weather|heat\s+advisory|freeze\s+warning|dust\s+storm|dense\s+fog|NWS\s+Fort\s+Worth|issued.*CDT|issued.*CST|issued.*EDT|issued.*EST/i;
+    /weather\s+alert|in\s+effect\s+for|air\s+quality\s*(alert|advisory)?|smoke\s+advisory|ozone\s+action|severe\s+thunderstorm|tornado\s+(warning|emergency)|flash\s+flood|flood\s+warning|winter\s+storm|ice\s+storm|blizzard|fire\s+weather|excessive\s+heat|heat\s+(warning|advisory)|extreme\s+cold|freeze\s+warning|dust\s+storm|dense\s+(fog|smoke)|hurricane\s+(warning|watch)|tropical\s+storm|tsunami\s+(warning|watch)|hazardous\s+weather|NWS|issued.*C[DS]T|issued.*E[DS]T/i;
   const weatherAlertCtx = WEATHER_ALERT_RE.test(message)
     ? await getRecentAlertContext(sessionUserName).catch(() => null)
     : null;
