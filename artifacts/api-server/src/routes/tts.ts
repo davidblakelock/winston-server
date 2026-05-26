@@ -85,7 +85,14 @@ router.post(
     }
 
     if (!EL_API_KEY || !voiceId) {
-      res.status(503).json({ error: "TTS not configured — missing API key or voice ID" });
+      logger.error(
+        { hasApiKey: !!EL_API_KEY, hasVoiceId: !!voiceId },
+        "[TTS/stream] MISCONFIGURED — ELEVENLABS_API_KEY or ELEVENLABS_VOICE_ID not set in environment"
+      );
+      res.status(503).json({
+        error: "TTS not configured",
+        missing: [...(!EL_API_KEY ? ["ELEVENLABS_API_KEY"] : []), ...(!voiceId ? ["ELEVENLABS_VOICE_ID"] : [])],
+      });
       return;
     }
 

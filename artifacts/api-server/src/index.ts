@@ -84,6 +84,23 @@ app.listen(port, async (err) => {
 
   logger.info({ port }, "Server listening");
 
+  // ── Startup env diagnostics (helps debug Railway deployments) ──────────────
+  const envCheck = {
+    ANTHROPIC_API_KEY: !!process.env.ANTHROPIC_API_KEY,
+    ELEVENLABS_API_KEY: !!(process.env.ELEVENLABS_API_KEY || process.env.EL_API_KEY),
+    ELEVENLABS_VOICE_ID: !!(process.env.ELEVENLABS_VOICE_ID || process.env.EL_VOICE_ID),
+    SUPABASE_URL: !!process.env.SUPABASE_URL,
+    SUPABASE_SERVICE_KEY: !!process.env.SUPABASE_SERVICE_KEY,
+    SESSION_SECRET: !!process.env.SESSION_SECRET,
+    DATABASE_URL: !!process.env.DATABASE_URL,
+  };
+  const missing = Object.entries(envCheck).filter(([, v]) => !v).map(([k]) => k);
+  if (missing.length > 0) {
+    logger.warn({ missing }, "[ENV] Missing environment variables — some features will be disabled");
+  } else {
+    logger.info({ envCheck }, "[ENV] All critical environment variables present");
+  }
+
   // ── One-time: migrate any rows still stored under legacy user_name 'David' ──
   // The session may have been created before the canonical name was set to
   // 'davidblakelock'. We sweep every user-data table on startup so stale rows
