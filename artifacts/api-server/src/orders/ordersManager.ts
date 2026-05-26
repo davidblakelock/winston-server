@@ -8,6 +8,7 @@ export type OrderStatus =
   | "in_transit"
   | "out_for_delivery"
   | "delivered"
+  | "delayed"
   | "exception";
 
 export interface TrackingEvent {
@@ -25,8 +26,9 @@ export interface Order {
   order_number: string | null;
   tracking_number: string | null;
   carrier: string | null;
-  aftership_slug: string | null;
   status: OrderStatus;
+  status_color: string | null;
+  status_detail: string | null;
   expected_date: string | null;
   order_total: string | null;
   email_id: string | null;
@@ -90,6 +92,9 @@ export async function ensureOrdersTable(): Promise<void> {
         last_scan_at timestamptz
       )
     `);
+    // Add direct-carrier tracking columns (idempotent)
+    await query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS status_color text`).catch(() => {});
+    await query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS status_detail text`).catch(() => {});
     logger.info("[Orders] Table and sync state ready");
   } catch (err) {
     logger.warn({ err }, "[Orders] Startup migration warning");
@@ -400,8 +405,9 @@ export async function updateOrderTracking(
     status?: OrderStatus;
     expected_date?: string | null;
     tracking_events?: TrackingEvent[];
-    aftership_slug?: string | null;
     carrier?: string | null;
+    status_color?: string | null;
+    status_detail?: string | null;
   }
 ): Promise<void> {
   await query(
@@ -409,8 +415,9 @@ export async function updateOrderTracking(
        status = COALESCE($2, status),
        expected_date = CASE WHEN $3::text IS NOT NULL THEN $3::date ELSE expected_date END,
        tracking_events = COALESCE($4::jsonb, tracking_events),
-       aftership_slug = COALESCE($5, aftership_slug),
-       carrier = COALESCE($6, carrier),
+       carrier = COALESCE($5, carrier),
+       status_color = COALESCE($6, status_color),
+       status_detail = COALESCE($7, status_detail),
        last_tracked_at = now(),
        updated_at = now()
      WHERE id = $1
@@ -420,8 +427,9 @@ export async function updateOrderTracking(
       update.status ?? null,
       update.expected_date ?? null,
       update.tracking_events ? JSON.stringify(update.tracking_events) : null,
-      update.aftership_slug ?? null,
       update.carrier ?? null,
+      update.status_color ?? null,
+      update.status_detail ?? null,
     ]
   );
 }

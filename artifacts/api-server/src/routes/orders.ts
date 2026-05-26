@@ -33,7 +33,7 @@ router.get("/orders", async (req, res) => {
 // ── POST /api/orders/sync ─────────────────────────────────────────────────────
 // 1. Scans Gmail for new order/shipping emails since last sync (90 days on first run).
 // 2. Parses each email with Claude Haiku.
-// 3. Updates live tracking status via AfterShip for all orders with tracking numbers.
+// 3. Updates live tracking status via direct carrier scraping for all active orders.
 // Body: { force?: boolean } — when true, ignores last_scan_at and looks back 90 days.
 router.post("/orders/sync", express.json({ limit: "1mb" }), async (req, res) => {
   const userName = await authenticate(req, res);

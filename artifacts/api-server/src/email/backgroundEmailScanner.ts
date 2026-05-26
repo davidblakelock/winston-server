@@ -24,7 +24,6 @@ import {
   updateLastOrderScanAt,
   updateOrderTracking,
 } from "../orders/ordersManager.js";
-import { trackOrder, isAfterShipEnabled } from "../orders/aftershipTracker.js";
 import { setPendingMeetingRequests, getPendingMeetingRequests } from "../email/emailMeetingManager.js";
 import { sendPushToAll } from "../push/pushManager.js";
 import { MODEL_HAIKU } from "../lib/models.js";
@@ -254,32 +253,6 @@ async function handleOrder(userName: string, msgId: string, result: ClassifiedEm
     { retailer: result.retailer, item: itemName, status: result.status ?? "ordered", msgId },
     "[BgEmailScanner] Order upserted"
   );
-
-  // Register with Aftership immediately so the tracking scheduler can start polling
-  if (saved && result.trackingNumber && isAfterShipEnabled()) {
-    trackOrder(result.trackingNumber, null, result.carrier)
-      .then((trackResult) => {
-        if (trackResult) {
-          logger.info(
-            { orderId: saved.id, trackingNumber: result.trackingNumber, status: trackResult.status },
-            "[BgEmailScanner] Aftership registration + initial track successful"
-          );
-          // Persist the initial tracking result immediately so the order shows real status
-          updateOrderTracking(saved.id, {
-            status: trackResult.status,
-            expected_date: trackResult.expected_date ?? undefined,
-            tracking_events: trackResult.events,
-            aftership_slug: trackResult.aftership_slug,
-            carrier: trackResult.carrier ?? undefined,
-          }).catch((e) => {
-            logger.warn({ e, orderId: saved.id }, "[BgEmailScanner] updateOrderTracking after initial track failed");
-          });
-        }
-      })
-      .catch((err) => {
-        logger.warn({ err, trackingNumber: result.trackingNumber }, "[BgEmailScanner] Aftership registration failed");
-      });
-  }
 
   const newStatus = result.status ?? "ordered";
   const statusChanged = prevStatus !== null && prevStatus !== newStatus;
