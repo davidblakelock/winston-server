@@ -37,6 +37,7 @@ export async function authenticate(
   req: Request,
   res: Response
 ): Promise<string | null> {
+  logger.info({ headers: req.headers }, "AUTH DEBUG");
   if (req.headers["x-api-key"] === NATIVE_API_KEY) {
     return resolveNativeUser(req);
   }
