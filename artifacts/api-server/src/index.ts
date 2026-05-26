@@ -448,31 +448,33 @@ app.listen(port, async (err) => {
     logger.warn({ e }, "[startup] onboarding_completed repair failed — notifications may not fire");
   }
 
-  startScheduler();
-  startWinddownScheduler();
-  startMedicationScheduler();
-  startMorningPushScheduler();
-  startWeatherAlertScheduler();
-  startBillScheduler();
-  await startDatesScheduler().catch((err: unknown) => {
-    logger.warn({ err }, "Dates scheduler startup failed — server continues normally");
-  });
-  startDepartureScheduler();
-  startCalendarSyncScheduler();
-  startPickleballScheduler();
-  startDallasProactiveScheduler();
-  startVenueMonitorScheduler();
-  startGarminScheduler();
-  startJournalPatternScheduler();
-  startPressureScheduler();
-  startOrderTrackingScheduler();
-  startTodoReminderScheduler();
-  startBackgroundEmailScanner();
-  startProviderScheduler();
-  startConnectBirthdayScheduler();
-  startContactBirthdayScheduler();
-  void startTvEpisodeScheduler();
-  startCalendarEmailScheduler();
+  // SCHEDULERS DISABLED — Railway is now the production server and runs all
+  // background jobs. Do not re-enable these on the Replit deployment.
+  // startScheduler();
+  // startWinddownScheduler();
+  // startMedicationScheduler();
+  // startMorningPushScheduler();
+  // startWeatherAlertScheduler();
+  // startBillScheduler();
+  // await startDatesScheduler().catch((err: unknown) => {
+  //   logger.warn({ err }, "Dates scheduler startup failed — server continues normally");
+  // });
+  // startDepartureScheduler();
+  // startCalendarSyncScheduler();
+  // startPickleballScheduler();
+  // startDallasProactiveScheduler();
+  // startVenueMonitorScheduler();
+  // startGarminScheduler();
+  // startJournalPatternScheduler();
+  // startPressureScheduler();
+  // startOrderTrackingScheduler();
+  // startTodoReminderScheduler();
+  // startBackgroundEmailScanner();
+  // startProviderScheduler();
+  // startConnectBirthdayScheduler();
+  // startContactBirthdayScheduler();
+  // void startTvEpisodeScheduler();
+  // startCalendarEmailScheduler();
 
   // Seed David's music preferences into profile_items so they persist and
   // can be referenced in any conversation naturally.
