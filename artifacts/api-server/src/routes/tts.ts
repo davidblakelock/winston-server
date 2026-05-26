@@ -190,4 +190,84 @@ router.post(
   }
 );
 
+// ── GET /api/tts/diagnose — returns ElevenLabs connectivity info as JSON ──────
+// No auth required so it can be called from curl without a session.
+router.get("/tts/diagnose", async (_req, res) => {
+  const EL_API_KEY = (
+    process.env.EL_API_KEY ??
+    process.env.ELEVENLABS_API_KEY ??
+    process.env.elevenlabs_api_key ??
+    ""
+  ).trim();
+
+  const envVoiceId = (
+    process.env.EL_VOICE_ID?.trim() ||
+    process.env.ELEVENLABS_VOICE_ID?.trim() ||
+    ""
+  );
+
+  const maskedKey = EL_API_KEY.length > 8
+    ? `${EL_API_KEY.slice(0, 4)}...${EL_API_KEY.slice(-4)}`
+    : EL_API_KEY ? "[set-but-short]" : "[MISSING]";
+
+  if (!EL_API_KEY || !envVoiceId) {
+    res.json({
+      ok: false,
+      reason: "missing_env",
+      EL_API_KEY: maskedKey,
+      ELEVENLABS_VOICE_ID: envVoiceId || "[MISSING]",
+    });
+    return;
+  }
+
+  try {
+    const testRes = await fetch(
+      `https://api.elevenlabs.io/v1/text-to-speech/${envVoiceId}/stream`,
+      {
+        method: "POST",
+        headers: {
+          "xi-api-key": EL_API_KEY,
+          "Content-Type": "application/json",
+          Accept: "audio/mpeg",
+        },
+        body: JSON.stringify({
+          text: "Test",
+          model_id: "eleven_turbo_v2_5",
+          voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+        }),
+      }
+    );
+
+    const status = testRes.status;
+    if (testRes.ok) {
+      const buf = await testRes.arrayBuffer();
+      res.json({
+        ok: true,
+        elevenlabs_status: status,
+        audio_bytes: buf.byteLength,
+        EL_API_KEY: maskedKey,
+        ELEVENLABS_VOICE_ID: envVoiceId,
+      });
+    } else {
+      const errText = await testRes.text().catch(() => "");
+      res.json({
+        ok: false,
+        reason: "elevenlabs_error",
+        elevenlabs_status: status,
+        elevenlabs_body: errText.slice(0, 500),
+        EL_API_KEY: maskedKey,
+        ELEVENLABS_VOICE_ID: envVoiceId,
+      });
+    }
+  } catch (err) {
+    res.json({
+      ok: false,
+      reason: "network_error",
+      error: String(err),
+      EL_API_KEY: maskedKey,
+      ELEVENLABS_VOICE_ID: envVoiceId,
+    });
+  }
+});
+
 export default router;
