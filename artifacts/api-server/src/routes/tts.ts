@@ -104,15 +104,14 @@ router.post(
       return;
     }
 
-    res.setHeader("Content-Type", "audio/mpeg");
-    res.setHeader("Transfer-Encoding", "chunked");
-    res.setHeader("X-Accel-Buffering", "no");
-    res.setHeader("Cache-Control", "no-cache");
-
     logger.info(
-      { userName, sentences: sentences.length, chars: normalized.length },
+      { userName, sentences: sentences.length, chars: normalized.length, voiceId },
       "[TTS/stream] Starting sentence-level stream"
     );
+
+    let headersSent = false;
+    let bytesWritten = 0;
+    let lastElError = "";
 
     try {
       for (const sentence of sentences) {
@@ -137,11 +136,21 @@ router.post(
 
         if (!ttsRes.ok || !ttsRes.body) {
           const errText = await ttsRes.text().catch(() => "");
-          logger.warn(
-            { status: ttsRes.status, errText, sentence: sentence.slice(0, 60) },
+          lastElError = errText;
+          logger.error(
+            { status: ttsRes.status, errText, voiceId, sentence: sentence.slice(0, 60) },
             "[TTS/stream] ElevenLabs error — skipping sentence"
           );
           continue;
+        }
+
+        // Delay sending headers until we know ElevenLabs succeeded
+        if (!headersSent) {
+          res.setHeader("Content-Type", "audio/mpeg");
+          res.setHeader("Transfer-Encoding", "chunked");
+          res.setHeader("X-Accel-Buffering", "no");
+          res.setHeader("Cache-Control", "no-cache");
+          headersSent = true;
         }
 
         const reader = ttsRes.body.getReader();
@@ -149,18 +158,35 @@ router.post(
           const { done, value } = await reader.read();
           if (done) break;
           res.write(Buffer.from(value));
+          bytesWritten += value.byteLength;
         }
 
         logger.info(
-          { sentence: sentence.slice(0, 60) },
+          { sentence: sentence.slice(0, 60), bytesWritten },
           "[TTS/stream] Sentence streamed"
         );
       }
     } catch (err) {
       logger.error({ err }, "[TTS/stream] Fatal streaming error");
-    } finally {
-      if (!res.writableEnded) res.end();
     }
+
+    if (!headersSent) {
+      // Every ElevenLabs call failed — return a real error instead of 0 bytes
+      logger.error(
+        { voiceId, apiKeyPresent: !!EL_API_KEY, lastElError },
+        "[TTS/stream] All sentences failed — returning 502"
+      );
+      res.status(502).json({
+        error: "TTS upstream failed — ElevenLabs rejected all requests",
+        detail: lastElError.slice(0, 300),
+        voiceId,
+      });
+      return;
+    }
+
+    if (!res.writableEnded) res.end();
+
+    logger.info({ bytesWritten, sentences: sentences.length }, "[TTS/stream] Stream complete");
   }
 );
 
