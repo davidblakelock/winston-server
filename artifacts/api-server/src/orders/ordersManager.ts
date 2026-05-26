@@ -381,6 +381,40 @@ export async function consolidateOrders(userName: string): Promise<number> {
   );
 
   for (const { order_number, keep_id } of orderNumDups) {
+    // ── Merge before delete ──────────────────────────────────────────────────
+    // The kept row may be missing tracking_number/carrier/expected_date that
+    // live on one of the rows being deleted (e.g. the kept row is
+    // out_for_delivery from an "OFD" email with no TBA, while the deleted row
+    // is in_transit from a shipping email that has the TBA tracking number).
+    // Copy those fields into the kept row BEFORE the delete so they aren't lost.
+    await query(
+      `UPDATE orders kept
+       SET
+         tracking_number = COALESCE(kept.tracking_number,
+           (SELECT tracking_number FROM orders
+            WHERE user_name = $1 AND order_number = $2 AND id != $3
+              AND tracking_number IS NOT NULL
+            ORDER BY updated_at DESC LIMIT 1)),
+         carrier = COALESCE(kept.carrier,
+           (SELECT carrier FROM orders
+            WHERE user_name = $1 AND order_number = $2 AND id != $3
+              AND carrier IS NOT NULL
+            ORDER BY updated_at DESC LIMIT 1)),
+         expected_date = COALESCE(kept.expected_date,
+           (SELECT expected_date FROM orders
+            WHERE user_name = $1 AND order_number = $2 AND id != $3
+              AND expected_date IS NOT NULL
+            ORDER BY updated_at DESC LIMIT 1)),
+         order_total = COALESCE(kept.order_total,
+           (SELECT order_total FROM orders
+            WHERE user_name = $1 AND order_number = $2 AND id != $3
+              AND order_total IS NOT NULL
+            ORDER BY updated_at DESC LIMIT 1)),
+         updated_at = now()
+       WHERE kept.id = $3 AND kept.user_name = $1`,
+      [userName, order_number, keep_id]
+    );
+
     const { rows: gone } = await query<{ id: number }>(
       `DELETE FROM orders
        WHERE user_name = $1 AND order_number = $2 AND id != $3
