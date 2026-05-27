@@ -5502,6 +5502,7 @@ router.get("/chat-native", (_req: Request, res: Response) => {
   res.json({ ok: true, status: "ready" });
 });
 router.post("/chat-native", async (req: Request, res: Response) => {
+  logger.info({ path: "/api/chat-native", ts: new Date().toISOString() }, "🔴 CHAT-NATIVE HIT on Railway");
   // Fast path: voice activation trigger — skip the full pipeline, return a brief personalized greeting
   if ((req.body as { message?: string })?.message === "__voice_trigger__") {
     const userName = await authenticate(req, res);
