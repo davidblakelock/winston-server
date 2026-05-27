@@ -75,7 +75,8 @@ export interface NativeMeal {
   time: string;        // "Breakfast" | "Lunch" | "Dinner"
   title: string;       // Restaurant name
   description: string; // Cuisine, vibe, why it fits
-  bookingUrl: string;  // OpenTable / Resy / website URL, or "" if unknown
+  websiteUrl: string;  // Restaurant's own website, or ""
+  bookingUrl: string;  // OpenTable / Resy link, or same as websiteUrl, or ""
 }
 
 export interface NativeItineraryDay {
@@ -243,6 +244,10 @@ export function buildTravelProfileContext(
 ): string {
   const lines: string[] = [];
 
+  // Home base — useful for "feels like home" restaurant/neighborhood comparisons
+  if (rawData.city) lines.push(`Home city: ${rawData.city}`);
+  if (rawData.neighborhood) lines.push(`Home neighborhood: ${rawData.neighborhood}`);
+
   // Travel companion — derive from people list
   const partner = rawData.people?.find((p) => isPartnerRelationship(p.relationship ?? ""));
   if (partner) {
@@ -257,7 +262,22 @@ export function buildTravelProfileContext(
   if (active.length)  lines.push(`Active interests: ${active.join(", ")}`);
   if (culture.length) lines.push(`Cultural/leisure interests: ${culture.join(", ")}`);
   if (!active.length && !culture.length && interests.length) {
-    lines.push(`Interests: ${interests.slice(0, 5).join(", ")}`);
+    lines.push(`Interests: ${interests.slice(0, 6).join(", ")}`);
+  }
+
+  // Music — important for live-music cities (Nashville, New Orleans, Austin, etc.)
+  if (rawData.music?.length) {
+    lines.push(`Music taste: ${rawData.music.slice(0, 6).join(", ")}`);
+  }
+
+  // Shows / TV — signals style preferences (e.g. Yellowstone fan → ranch/western experiences)
+  if (rawData.shows?.length) {
+    lines.push(`Favorite shows: ${rawData.shows.slice(0, 4).join(", ")}`);
+  }
+
+  // Sports teams — useful for scheduling around games or stadium visits
+  if (rawData.sportsTeams?.length) {
+    lines.push(`Sports teams: ${rawData.sportsTeams.slice(0, 4).join(", ")}`);
   }
 
   // Food
@@ -265,7 +285,13 @@ export function buildTravelProfileContext(
     lines.push(`Food preferences: ${rawData.foodPreferences.join(", ")}`);
   }
   if (rawData.restaurants?.length) {
-    lines.push(`Favorite restaurants (style reference): ${rawData.restaurants.slice(0, 4).join(", ")}`);
+    lines.push(`Favorite restaurants at home (style reference): ${rawData.restaurants.slice(0, 5).join(", ")}`);
+  }
+
+  // Saved places — hints at venue style/taste
+  if (rawData.places?.length) {
+    const placeNames = rawData.places.slice(0, 5).map((p) => p.name);
+    lines.push(`Saved places they love: ${placeNames.join(", ")}`);
   }
 
   // Health / dietary
@@ -317,22 +343,23 @@ export async function generateTripItinerary(
       "label": "Evocative day title, e.g. 'Delta Blues and First Bites'",
       "location": "City or neighborhood name",
       "hotel": {
-        "name": "Real hotel name",
-        "websiteUrl": "https://... (hotel's own website)",
-        "notes": "Why this specific hotel fits this traveler, vibe, and budget"
+        "name": "Specific real hotel name — never generic",
+        "websiteUrl": "https://... (hotel's own official website — NOT booking.com or expedia)",
+        "bookingUrl": "https://... (hotel's direct booking page, e.g. https://[hotel].com/reservations, or a Booking.com/Expedia direct link — REQUIRED, never empty)",
+        "notes": "2–3 sentences: what makes this hotel special, its personality and vibe, why it's the right fit for this traveler's style, budget, and trip — not just 'great location'"
       },
       "activities": [
-        { "time": "Morning",   "title": "Activity name", "description": "What to do and why it's great here — specific trails, galleries, streets, views", "notes": "Timing, parking, reservations, insider tip" },
-        { "time": "Afternoon", "title": "Activity name", "description": "Specific afternoon plan", "notes": "Practical tip" },
-        { "time": "Evening",   "title": "Activity name", "description": "Evening wind-down or experience", "notes": "Practical tip" }
+        { "time": "Morning",   "title": "Specific activity name", "description": "What to do, where exactly, why it's unmissable here — name specific streets, trails, galleries, viewpoints, or experiences", "notes": "Timing, parking, reservations needed, insider tip, what to order or wear" },
+        { "time": "Afternoon", "title": "Specific activity name", "description": "Specific afternoon plan with real place names", "notes": "Practical tip" },
+        { "time": "Evening",   "title": "Specific activity name", "description": "Evening wind-down, live music, sunset spot, or neighborhood stroll — specific and real", "notes": "Practical tip" }
       ],
       "meals": [
-        { "time": "Lunch",  "title": "Restaurant name", "description": "Cuisine style and why it fits this traveler", "bookingUrl": "https://www.opentable.com/... or https://resy.com/... or restaurant website, or empty string" },
-        { "time": "Dinner", "title": "Restaurant name", "description": "Cuisine style and why it fits this traveler", "bookingUrl": "https://... or empty string" }
+        { "time": "Lunch",  "title": "Specific restaurant name", "description": "What they're known for, the dish to order, why this place fits this traveler's palate and style — be specific and opinionated", "websiteUrl": "https://... (restaurant's own website — required, never empty)", "bookingUrl": "https://www.opentable.com/... or https://resy.com/... or same as websiteUrl if no reservation platform" },
+        { "time": "Dinner", "title": "Specific restaurant name", "description": "Why this dinner spot, what makes it the right call tonight, signature dish or experience", "websiteUrl": "https://... (restaurant website — required)", "bookingUrl": "https://www.opentable.com/... or https://resy.com/... or same as websiteUrl" }
       ]
     }`;
 
-  const prompt = `You are creating a highly personalized, complete travel itinerary.
+  const prompt = `You are building a personalized travel itinerary for a real person. Be specific, opinionated, and genuinely helpful — this is not a generic travel guide.
 
 TRIP DETAILS:
 • Destination: ${dest}
@@ -344,28 +371,43 @@ TRIP DETAILS:
 • ${startDateNote}
 ${travelCtx}
 
-RULES — read carefully:
-• Use REAL named places: specific hotels, restaurants, trails, museums, streets, neighborhoods
-• Never use generic descriptions ("a nice restaurant", "local hotel") — be opinionated and specific
-• hotel.websiteUrl: the hotel's own website (not booking.com) — required on every day
-• hotel.notes: explain WHY this property fits this traveler's vibe and budget
-• activities: 2–3 per day (Morning / Afternoon / Evening); rich descriptions with specific place names
-• meals: 1–2 per day; real restaurants with genuine reasons they fit this traveler
-• bookingUrl: OpenTable or Resy link if you know it, otherwise restaurant website, otherwise ""
-• Day 1: arrival day — lighter activities, settle-in feel
+HOTELS — read carefully:
+• Pick a specific, named, real hotel that genuinely fits this traveler's vibe and budget
+• hotel.websiteUrl: the hotel's own official website (e.g. https://[hotelname].com) — NEVER booking.com or expedia
+• hotel.bookingUrl: the hotel's direct booking/reservations page (e.g. https://[hotelname].com/book or https://www.booking.com/hotel/...) — REQUIRED on every day, never leave empty
+• hotel.notes: write with personality — describe what makes this property special (the rooftop bar, the neighborhood feel, the historic building, the breakfast included), explain specifically why it's right for this traveler
+• If the same hotel covers multiple days, repeat it on each day with the same URLs
+
+RESTAURANTS — read carefully:
+• Pick specific, named, real restaurants — never "a local café" or "a steakhouse downtown"
+• meals[].description: be opinionated — name the dish to order, describe the atmosphere, explain why this place fits this traveler's taste (reference their food preferences and home restaurants if known)
+• meals[].websiteUrl: the restaurant's own website — REQUIRED on every meal, use your best knowledge of the real URL
+• meals[].bookingUrl: OpenTable or Resy link if the restaurant uses one; otherwise same as websiteUrl
+• 1–2 meals per day is fine; include breakfast only if it's a notable spot worth visiting
+
+ACTIVITIES:
+• 2–3 per day (Morning / Afternoon / Evening)
+• Use real place names: specific trails, galleries, streets, markets, venues, parks, stadiums, music halls
+• activities[].description: say exactly what to do there and why it's worth it — not just "visit the museum"
+• activities[].notes: include timing, reservations, parking, what to order/wear, or a local tip that makes the difference
+
+STRUCTURE:
+• Day 1: arrival day — lighter pace, settle in, one iconic first meal
 • Day ${totalDays}: departure morning — one activity max, then checkout
-• For road trips: vary the location per day as the route progresses; include driving times in notes
-• practicalNotes: 4–6 genuinely useful tips (best time to visit, reservations needed, what to pack, local transit)
-• trip_name: creative and evocative, NOT just "${dest} Trip" — capture the spirit (e.g. "Ozark Slow Burn", "Delta Blues and Crater Dust")
-• start_date / end_date: YYYY-MM-DD only — output null if the date cannot be resolved to a specific calendar date
+• For road trips: move the location each day as the route progresses; add driving times in notes
+• practicalNotes: 4–6 genuinely useful tips (best season, what to book in advance, local transport, what to pack)
+• trip_name: creative and evocative — capture the spirit of this specific trip, NOT just "${dest} Trip" (e.g. "Ozark Slow Burn", "Delta Blues and Crater Dust", "Neon and Honky-Tonk")
+• start_date / end_date: YYYY-MM-DD only — output null if the date is vague or unknown
 
-Personalization:
-• Tailor restaurants to any food preferences stated in the traveler profile
-• Match activity intensity to stated interests (outdoor/active vs cultural/relaxed)
-• If traveling with a partner, make it feel designed for two, not generic tourism
-• Reference the traveler's interests naturally in descriptions and notes
+PERSONALIZATION — this is the most important section:
+• Music: if the destination has a live music scene (Nashville, New Orleans, Austin, Memphis) AND the traveler has music interests, build at least one evening around a specific venue or music experience
+• Food: cross-reference every restaurant pick with the traveler's known food preferences and home restaurant style — if they love BBQ at home, find the local equivalent; if they prefer lighter fare, skip the heavy spots
+• Activity intensity: match to their interests — a golfer gets a tee time suggestion, a hiker gets a specific trail with distance and views, a pickleball player might find a local court
+• Partner travel: if traveling with a partner, every day should feel intentionally romantic or designed for two — shared experiences, dinner-for-two spots, sunset moments
+• Shows/sports: if the traveler follows sports teams or live music and there's a game or show during the trip timing, mention it in practicalNotes
+• Reference their interests naturally in descriptions — don't just list facts, write as if you know what they'd love
 
-Return ONLY valid JSON — no markdown fences, no explanation:
+Return ONLY valid JSON — no markdown fences, no explanation, no commentary:
 {
   "trip_name": "Creative evocative name",
   "destination": "${dest}",
