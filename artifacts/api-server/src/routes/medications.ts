@@ -291,8 +291,12 @@ router.post("/medications/snooze-reminder", express.json({ limit: "1mb" }), asyn
   try {
     const meds = await getMedications(userName);
     const medText = meds.length > 0 ? meds.map((m) => m.name).join(", ") : "your medications";
-    const snoozeMinutes = typeof req.body?.snoozeMinutes === "number"
-      ? Math.max(1, Math.min(req.body.snoozeMinutes, 480))
+    // Native app sends { notificationData: data } — snoozeMinutes is nested inside.
+    const rawSnooze =
+      req.body?.snoozeMinutes ??
+      req.body?.notificationData?.snoozeMinutes;
+    const snoozeMinutes = typeof rawSnooze === "number"
+      ? Math.max(1, Math.min(rawSnooze, 480))
       : 30;
     const fireAt = new Date(Date.now() + snoozeMinutes * 60 * 1000);
     // Pass pushCategoryId so the re-fired reminder retains the medication action buttons

@@ -83,15 +83,9 @@ export function startMedicationScheduler(): void {
               tag: "medication-morning",
               notificationType: "medication",
               // "medication-action" → native app shows: "Taken ✓" and "Remind in 30 min"
-              // Taken ✓      → POST /api/medications/taken
-              // Remind in 30 → POST /api/medications/snooze-reminder { snoozeMinutes: 30 }
+              // Taken ✓          → POST /api/medications/confirm-taken  (no body)
+              // Remind in 30 min → POST /api/medications/snooze-reminder { notificationData: data }
               categoryIdentifier: "medication-action",
-              requireInteraction: true,
-              // These top-level data fields are forwarded in the Expo push data envelope
-              // so the native action handler can call the correct endpoint without opening the app.
-              actionTaken: "/api/medications/taken",
-              actionSnooze: "/api/medications/snooze-reminder",
-              snoozeMinutes: 30,
             }, userName).catch((err: unknown) => {
               logger.error({ err, userName }, "[MED] Push delivery failed");
             });
