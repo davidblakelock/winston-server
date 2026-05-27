@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 import { toChicagoTime, fetchEventsForDate, chicagoDateStr } from "../google/calendar.js";
+import { MODEL_HAIKU } from "../lib/models.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -444,6 +445,7 @@ export function buildReservationUrl(
 
   if (details.platform === "resy" && details.platformSlug && details.platformCity) {
     const base = `https://resy.com/cities/${details.platformCity}/${details.platformSlug}?seats=${n}`;
+    if (dateISO && timeISO) return `${base}&date=${dateISO}&time=${timeISO}:00`;
     if (dateISO) return `${base}&date=${dateISO}`;
     return base;
   }
@@ -578,7 +580,7 @@ export async function parseReservationIntent(
 ): Promise<RestaurantIntent | null> {
   try {
     const resp = await anthropic.messages.create({
-      model: "claude-haiku-4-5",
+      model: MODEL_HAIKU,
       max_tokens: 300,
       system: `Extract restaurant reservation/directions intent from a user message.
 Today's date: ${currentDateISO}
@@ -601,6 +603,8 @@ Rules:
 - "can we get in at Bullion" → action="reservation"
 - "check Resy for Establishment tonight" → action="reservation"
 - Resolve relative dates: "tonight"=today, "tomorrow"=today+1, "Friday"=next Friday if it hasn't passed
+- TIME INFERENCE: restaurant reservations are almost always in the evening. If the user says "at 7" or "at 8" with no AM/PM, assume PM (19:00, 20:00). Only use AM if they explicitly say "breakfast" or "lunch" or "AM".
+- Always output timeISO in 24-hour HH:MM format
 - If restaurant name is not identifiable, return null
 - If this is NOT a reservation/directions/info request, return null (the literal word null, not JSON)`,
       messages: [{ role: "user", content: message }],
