@@ -5500,7 +5500,10 @@ If you cannot extract both, return null.`,
   }
 };
 
-router.post("/chat", chatHandlerCore);
+router.post("/chat", (req: Request, res: Response) => {
+  req.log.info({ path: "/api/chat" }, "ROUTE HIT: /api/chat");
+  return chatHandlerCore(req, res);
+});
 
 // ── GET /api/chat/history ─────────────────────────────────────────────────────
 // Returns recent chat messages for the authenticated user so the native app can
@@ -5537,7 +5540,7 @@ router.get("/chat-native", (_req: Request, res: Response) => {
   res.json({ ok: true, status: "ready" });
 });
 router.post("/chat-native", async (req: Request, res: Response) => {
-  req.log.info({ path: "/api/chat-native", ts: new Date().toISOString() }, "🔴 CHAT-NATIVE HIT on Railway");
+  req.log.info({ path: "/api/chat-native", ts: new Date().toISOString() }, "ROUTE HIT: /api/chat-native");
   // Fast path: voice activation trigger — skip the full pipeline, return a brief personalized greeting
   if ((req.body as { message?: string })?.message === "__voice_trigger__") {
     const userName = await authenticate(req, res);
