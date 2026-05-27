@@ -135,6 +135,8 @@ export async function lookupItemUrl(itemText: string, type: AutoLookupType): Pro
 
   switch (type) {
     case "restaurant":
+    case "place":
+      // Both restaurants and "places to check out" style lists use venue URL lookup
       return lookupRestaurantUrl(itemText);
 
     case "movie":

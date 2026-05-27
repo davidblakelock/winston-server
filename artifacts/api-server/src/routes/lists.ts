@@ -52,16 +52,17 @@ router.get("/lists", async (req: Request, res: Response) => {
   if (!userName) return;
   res.setHeader("Cache-Control", "no-store");
 
-  // Fixed list names that are handled by dedicated routes/tables.
-  const SYSTEM_LISTS = new Set(["shopping", "to do", "tv-shows"]);
+  // Fixed list names that are handled by dedicated routes/tables or profile_items.
+  const SYSTEM_LISTS = new Set(["shopping", "to do", "tv-shows", "restaurants"]);
 
   try {
-    // Shopping and To Do — from list_items
+    // All lists from list_items, grouped case-insensitively to avoid duplicates
+    // when the same list was created with different capitalisations.
     const { rows: listRows } = await query<{ list_name: string; item_count: string }>(
-      `SELECT list_name, COUNT(*) AS item_count
+      `SELECT lower(list_name) AS list_name, COUNT(*) AS item_count
        FROM list_items
        WHERE user_name = $1
-       GROUP BY list_name`,
+       GROUP BY lower(list_name)`,
       [userName]
     );
     const listCounts: Record<string, number> = {};
@@ -781,7 +782,7 @@ router.get("/lists/:listName", async (req: Request, res: Response) => {
     const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string; reminder_time: string | null }>(
       `SELECT id, item_text, added_by, url, created_at, reminder_time
        FROM list_items
-       WHERE user_name = $1 AND list_name = $2
+       WHERE user_name = $1 AND lower(list_name) = lower($2)
        ORDER BY created_at ASC`,
       [userName, listName]
     );
@@ -946,7 +947,7 @@ router.delete("/lists/:listName/:id", async (req: Request, res: Response) => {
   const { listName, id } = req.params;
   try {
     await query(
-      `DELETE FROM list_items WHERE id = $1 AND user_name = $2 AND list_name = $3 RETURNING id`,
+      `DELETE FROM list_items WHERE id = $1 AND user_name = $2 AND lower(list_name) = lower($3) RETURNING id`,
       [id, userName, listName]
     );
     res.json({ deleted: true });
