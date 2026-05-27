@@ -1,4 +1,5 @@
 import { Router, type IRouter } from "express";
+import OpenAI from "openai";
 import { query } from "../db.js";
 
 // Injected by esbuild at compile time — reflects the moment the binary was built.
@@ -66,5 +67,31 @@ router.get("/healthz", (_req, res) =>
     railway: !!process.env.RAILWAY_ENVIRONMENT,
   })
 );
+
+// GET /api/diag/openai — tests OpenAI key presence and GPT-4o reachability.
+// Hit this in a browser to confirm the key is set and the model responds.
+router.get("/diag/openai", async (_req, res) => {
+  const keySet = !!process.env.OPENAI_API_KEY;
+  if (!keySet) {
+    res.status(500).json({ ok: false, error: "OPENAI_API_KEY is not set in environment" });
+    return;
+  }
+  try {
+    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const resp = await client.chat.completions.create({
+      model: "gpt-4o",
+      max_tokens: 10,
+      messages: [{ role: "user", content: "Say OK" }],
+    });
+    const text = resp.choices[0]?.message?.content ?? "(empty)";
+    res.json({ ok: true, keySet: true, model: "gpt-4o", response: text });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      keySet: true,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
 
 export default router;
