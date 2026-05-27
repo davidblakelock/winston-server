@@ -3142,15 +3142,19 @@ If dates cannot be resolved to specific days, set them to null.`,
         };
         const cleanPhone = phone ? sanitizePhone(phone) : "";
 
-        // Build an sms: URI that iOS will resolve to the right conversation thread.
-        // iOS requires & (not ?) to separate the phone from the body when both are
-        // present — using ? causes some iOS versions to open then fall back to the
-        // conversation list rather than staying in the correct thread.
-        // sms:<phone>&body=<encoded> — iOS opens directly to that contact's thread.
-        // sms:?body=<encoded>        — iOS shows inbox/new-compose (no recipient known).
+        // Build an sms: URI appropriate for the device platform.
+        // iOS requires & (not ?) to separate the phone from the body — using ?
+        // causes some iOS versions to fall back to the conversation list.
+        // Android requires ? (not &) — & is treated as part of the phone number
+        // string, so the URI is malformed and Linking.openURL does nothing.
+        // sms:<phone>&body=<encoded> — iOS: opens directly to that contact's thread.
+        // sms:<phone>?body=<encoded> — Android: opens to that contact's thread.
+        // sms:?body=<encoded>        — fallback (no phone): new-compose with body.
+        const isAndroid = typeof deviceId === "string" && /android/i.test(deviceId);
+        const bodySep = isAndroid ? "?" : "&";
         const encodedBody = encodeURIComponent(body);
         const smsUri = cleanPhone
-          ? `sms:${cleanPhone}&body=${encodedBody}`
+          ? `sms:${cleanPhone}${bodySep}body=${encodedBody}`
           : `sms:?body=${encodedBody}`;
 
         const smsPayload = {
