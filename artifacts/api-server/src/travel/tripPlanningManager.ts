@@ -12,10 +12,12 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { NATIVE_USER } from "../auth/middleware.js";
 import { MODEL_SONNET } from "../lib/models.js";
+
 import {
   isPartnerRelationship,
   type CollectedData,
@@ -30,7 +32,9 @@ import {
   type BookingHotel,
 } from "./hotelAvailability.js";
 
+const MODEL_GPT4O = "gpt-4o" as const;
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const openai    = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // ── Pending conversation state ────────────────────────────────────────────────
 
@@ -423,34 +427,31 @@ Return ONLY valid JSON — no markdown fences, no explanation, no commentary:
 }`;
 
   logger.info(
-    { model: MODEL_SONNET, dest, nights, promptLen: prompt.length, promptPreview: prompt.slice(0, 300) },
-    "[TripPlan] 🚀 Calling Sonnet — full prompt follows"
+    { model: MODEL_GPT4O, dest, nights, promptLen: prompt.length, promptPreview: prompt.slice(0, 300) },
+    "[TripPlan] 🚀 Calling GPT-4o — full prompt follows"
   );
-  logger.info({ fullPrompt: prompt }, "[TripPlan] 📋 FULL SONNET PROMPT");
+  logger.info({ fullPrompt: prompt }, "[TripPlan] 📋 FULL GPT-4o PROMPT");
 
-  const response = await anthropic.messages.create({
-    model:      MODEL_SONNET,
+  const response = await openai.chat.completions.create({
+    model:      MODEL_GPT4O,
     max_tokens: 8000,
     messages:   [{ role: "user", content: prompt }],
   });
 
-  const text = response.content
-    .filter((b) => b.type === "text")
-    .map((b) => (b as { type: "text"; text: string }).text)
-    .join("").trim();
+  const text = (response.choices[0]?.message?.content ?? "").trim();
 
   logger.info(
     { rawResponseLen: text.length, rawResponsePreview: text.slice(0, 500) },
-    "[TripPlan] 📥 RAW SONNET RESPONSE (first 500 chars)"
+    "[TripPlan] 📥 RAW GPT-4o RESPONSE (first 500 chars)"
   );
 
-  // Strip markdown fences if Claude wrapped the JSON
+  // Strip markdown fences if GPT-4o wrapped the JSON
   const stripped = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
 
   const jsonMatch = stripped.match(/\{[\s\S]*\}/);
   if (!jsonMatch) {
-    logger.error({ rawText: text.slice(0, 1000) }, "[TripPlan] ❌ No JSON found in Claude response");
-    throw new Error("[TripPlan] No JSON found in Claude response");
+    logger.error({ rawText: text.slice(0, 1000) }, "[TripPlan] ❌ No JSON found in GPT-4o response");
+    throw new Error("[TripPlan] No JSON found in GPT-4o response");
   }
 
   const plan = JSON.parse(repairJson(jsonMatch[0])) as NativeTripPlan;
