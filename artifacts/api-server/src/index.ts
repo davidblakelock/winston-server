@@ -465,33 +465,38 @@ app.listen(port, async (err) => {
     logger.warn({ e }, "[startup] onboarding_completed repair failed — notifications may not fire");
   }
 
-  // SCHEDULERS DISABLED — Railway is now the production server and runs all
-  // background jobs. Do not re-enable these on the Replit deployment.
-  // startScheduler();
-  // startWinddownScheduler();
-  // startMedicationScheduler();
-  // startMorningPushScheduler();
-  // startWeatherAlertScheduler();
-  // startBillScheduler();
-  // await startDatesScheduler().catch((err: unknown) => {
-  //   logger.warn({ err }, "Dates scheduler startup failed — server continues normally");
-  // });
-  // startDepartureScheduler();
-  // startCalendarSyncScheduler();
-  // startPickleballScheduler();
-  // startDallasProactiveScheduler();
-  // startVenueMonitorScheduler();
-  // startGarminScheduler();
-  // startJournalPatternScheduler();
-  // startPressureScheduler();
-  // startOrderTrackingScheduler();
-  // startTodoReminderScheduler();
-  // startBackgroundEmailScanner();
-  // startProviderScheduler();
-  // startConnectBirthdayScheduler();
-  // startContactBirthdayScheduler();
-  // void startTvEpisodeScheduler();
-  // startCalendarEmailScheduler();
+  // Schedulers run only on Railway (production). Replit is dev-only.
+  // RAILWAY_ENVIRONMENT is set automatically by Railway on all deployments.
+  if (process.env.RAILWAY_ENVIRONMENT) {
+    logger.info("[startup] Railway environment detected — starting all schedulers");
+    startScheduler();
+    startWinddownScheduler();
+    startMedicationScheduler();
+    startMorningPushScheduler();
+    startWeatherAlertScheduler();
+    startBillScheduler();
+    await startDatesScheduler().catch((err: unknown) => {
+      logger.warn({ err }, "Dates scheduler startup failed — server continues normally");
+    });
+    startDepartureScheduler();
+    startCalendarSyncScheduler();
+    startPickleballScheduler();
+    startDallasProactiveScheduler();
+    startVenueMonitorScheduler();
+    startGarminScheduler();
+    startJournalPatternScheduler();
+    startPressureScheduler();
+    startOrderTrackingScheduler();
+    startTodoReminderScheduler();
+    startBackgroundEmailScanner();
+    startProviderScheduler();
+    startConnectBirthdayScheduler();
+    startContactBirthdayScheduler();
+    void startTvEpisodeScheduler();
+    startCalendarEmailScheduler();
+  } else {
+    logger.info("[startup] Non-Railway environment — schedulers disabled (dev mode)");
+  }
 
   // Seed David's music preferences into profile_items so they persist and
   // can be referenced in any conversation naturally.
