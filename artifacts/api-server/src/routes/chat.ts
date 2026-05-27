@@ -5513,6 +5513,7 @@ router.get("/chat-native", (_req: Request, res: Response) => {
   res.json({ ok: true, status: "ready" });
 });
 router.post("/chat-native", async (req: Request, res: Response) => {
+  process.stdout.write(`[STDOUT] CHAT-NATIVE HIT ${new Date().toISOString()}\n`);
   req.log.info({ path: "/api/chat-native", ts: new Date().toISOString() }, "ROUTE HIT: /api/chat-native");
   // Fast path: voice activation trigger — skip the full pipeline, return a brief personalized greeting
   if ((req.body as { message?: string })?.message === "__voice_trigger__") {
