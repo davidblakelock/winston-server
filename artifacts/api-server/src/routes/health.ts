@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
 import OpenAI from "openai";
+import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 
 // Injected by esbuild at compile time — reflects the moment the binary was built.
@@ -67,6 +68,31 @@ router.get("/healthz", (_req, res) =>
     railway: !!process.env.RAILWAY_ENVIRONMENT,
   })
 );
+
+// GET /api/diag/claude — tests Anthropic key and both model names.
+router.get("/diag/claude", async (_req, res) => {
+  const keySet = !!process.env.ANTHROPIC_API_KEY;
+  if (!keySet) {
+    res.status(500).json({ ok: false, error: "ANTHROPIC_API_KEY is not set" });
+    return;
+  }
+  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const results: Record<string, unknown> = { keySet: true };
+  for (const model of ["claude-haiku-4-5-20251001", "claude-sonnet-4-6"] as const) {
+    try {
+      const r = await client.messages.create({
+        model,
+        max_tokens: 10,
+        messages: [{ role: "user", content: "Say OK" }],
+      });
+      results[model] = { ok: true, response: r.content[0]?.type === "text" ? r.content[0].text : "(empty)" };
+    } catch (err) {
+      results[model] = { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+  const allOk = Object.values(results).every((v) => typeof v !== "object" || (v as Record<string,unknown>).ok !== false);
+  res.status(allOk ? 200 : 500).json({ ok: allOk, ...results });
+});
 
 // GET /api/diag/openai — tests OpenAI key presence and GPT-4o reachability.
 // Hit this in a browser to confirm the key is set and the model responds.

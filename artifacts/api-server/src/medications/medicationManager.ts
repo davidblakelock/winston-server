@@ -357,6 +357,7 @@ If no meaningful interactions exist, return an empty interactions array. Always 
     const raw = response.content[0].type === "text" ? response.content[0].text.trim() : "";
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
+      process.stdout.write(`[STDOUT] MEDS-INTERACTIONS no JSON in Claude response. raw=${raw.slice(0, 300)}\n`);
       return { interactions: [], avoid: [], sideEffects: [], checkedDrugs, failedLookups: [] };
     }
 
@@ -369,8 +370,10 @@ If no meaningful interactions exist, return an empty interactions array. Always 
       checkedDrugs,
       failedLookups: [],
     };
-  } catch {
-    return { interactions: [], avoid: [], sideEffects: [], checkedDrugs, failedLookups: [] };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stdout.write(`[STDOUT] MEDS-INTERACTIONS CATCH ERROR: ${msg}\n`);
+    throw err;
   }
 }
 

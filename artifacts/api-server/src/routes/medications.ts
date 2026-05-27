@@ -71,8 +71,9 @@ router.get("/medications/interactions", async (req, res) => {
     );
     res.json(result);
   } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
     req.log.error({ err }, "[MEDS] GET /medications/interactions error");
-    res.status(500).json({ error: "Failed to check drug interactions" });
+    res.status(500).json({ error: "Failed to check drug interactions", detail: msg });
   }
 });
 
