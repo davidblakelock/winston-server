@@ -4,7 +4,7 @@ import { logger } from "../lib/logger.js";
 
 // ── List type detection ───────────────────────────────────────────────────────
 
-export type AutoLookupType = "restaurant" | "movie" | "tvshow" | "book" | "recipe";
+export type AutoLookupType = "restaurant" | "movie" | "tvshow" | "book" | "recipe" | "place";
 
 export function detectAutoLookupType(listName: string): AutoLookupType | null {
   const n = listName.toLowerCase().trim();
@@ -13,6 +13,8 @@ export function detectAutoLookupType(listName: string): AutoLookupType | null {
   if (/tv\s*shows?|television(\s+shows?)?|series(\s+to\s+watch)?/i.test(n)) return "tvshow";
   if (/books?(\s+to\s+read)?|reading(\s+list)?/i.test(n)) return "book";
   if (/recipes?(\s+to\s+try)?|cooking(\s+ideas?)?/i.test(n)) return "recipe";
+  // Places, venues, bars, clubs — use restaurant-style venue URL lookup
+  if (/places?(\s+to\s+(check\s+out|visit|try|go))?|venues?|bars?(\s+to\s+(try|visit))?|clubs?|spots?(\s+to\s+(try|visit|check\s+out))?/i.test(n)) return "place";
   return null;
 }
 

@@ -51,12 +51,16 @@ router.get("/lists", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
   res.setHeader("Cache-Control", "no-store");
+
+  // Fixed list names that are handled by dedicated routes/tables.
+  const SYSTEM_LISTS = new Set(["shopping", "to do", "tv-shows"]);
+
   try {
     // Shopping and To Do — from list_items
     const { rows: listRows } = await query<{ list_name: string; item_count: string }>(
       `SELECT list_name, COUNT(*) AS item_count
        FROM list_items
-       WHERE user_name = $1 AND list_name IN ('shopping', 'to do')
+       WHERE user_name = $1
        GROUP BY list_name`,
       [userName]
     );
@@ -92,12 +96,26 @@ router.get("/lists", async (req: Request, res: Response) => {
     );
     const restCount = parseInt(restRows[0]?.cnt ?? "0", 10);
 
+    // Custom lists — any list_name in list_items that isn't a system list or restaurants
+    const customLists = Object.entries(listCounts)
+      .filter(([name]) => !SYSTEM_LISTS.has(name))
+      .map(([name, count]) => ({
+        listName: name,
+        displayName: name
+          .split(" ")
+          .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+          .join(" "),
+        itemCount: count,
+        isCustom: true,
+      }));
+
     res.json({
       lists: [
         { listName: "shopping",    displayName: "Shopping",     itemCount: listCounts["shopping"] ?? 0 },
         { listName: "to do",       displayName: "To Do",        itemCount: listCounts["to do"] ?? 0 },
         { listName: "tv-shows",    displayName: "TV Shows",     itemCount: tvCount },
         { listName: "restaurants", displayName: "Restaurants",  itemCount: restCount },
+        ...customLists,
       ],
     });
   } catch (err) {
