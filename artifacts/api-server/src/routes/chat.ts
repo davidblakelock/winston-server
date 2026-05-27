@@ -1864,6 +1864,7 @@ If the conversation is not about a trip, set destination to null.`,
           `End by asking if they want to adjust anything. Write conversationally, under 220 words, no bullet points.`;
       }
     } catch (planErr) {
+      process.stdout.write(`[STDOUT] TRIP-PLAN CATCH ERROR: ${String(planErr instanceof Error ? planErr.message : planErr)}\n`);
       req.log.warn({ err: planErr }, "[TripPlan] Plan intent handler failed — letting Claude respond naturally");
       systemPrompt +=
         `\n\n[Trip Itinerary — Generation Error]\n` +

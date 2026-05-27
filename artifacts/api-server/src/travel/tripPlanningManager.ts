@@ -426,7 +426,7 @@ Return ONLY valid JSON — no markdown fences, no explanation, no commentary:
   }
 }`;
 
-  process.stdout.write(`[STDOUT] TRIP-PLAN generateTripItinerary CALLED dest=${dest} nights=${nights} ${new Date().toISOString()}\n`);
+  process.stdout.write(`[STDOUT] TRIP-PLAN generateTripItinerary CALLED dest=${dest} nights=${nights} OPENAI_KEY_SET=${!!process.env.OPENAI_API_KEY} ${new Date().toISOString()}\n`);
   logger.info(
     { model: MODEL_GPT4O, dest, nights, promptLen: prompt.length, promptPreview: prompt.slice(0, 300) },
     "[TripPlan] 🚀 Calling GPT-4o — full prompt follows"
