@@ -1779,7 +1779,7 @@ If the conversation is not about a trip, set destination to null.`,
       req.log.info({ message: message.slice(0, 80) }, "[TripPlan] Plan intent detected — extracting context");
 
       const intentRaw = await anthropic.messages.create({
-        model: HAIKU_MODEL,
+        model: MODEL_HAIKU,
         max_tokens: 300,
         system:
           "Extract trip intent from the user's message. Return ONLY valid JSON with these fields: " +
