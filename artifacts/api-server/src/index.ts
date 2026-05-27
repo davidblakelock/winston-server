@@ -1,5 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
+import { setSchedulersEnabled } from "./routes/health";
 import { query } from "./db";
 import { startScheduler } from "./reminders/scheduler";
 import { startWinddownScheduler } from "./winddown/winddownScheduler";
@@ -494,6 +495,8 @@ app.listen(port, async (err) => {
     startContactBirthdayScheduler();
     void startTvEpisodeScheduler();
     startCalendarEmailScheduler();
+    setSchedulersEnabled();
+    logger.info("[startup] ✅ All schedulers started");
   } else {
     logger.info("[startup] Non-Railway environment — schedulers disabled (dev mode)");
   }

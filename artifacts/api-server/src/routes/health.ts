@@ -9,6 +9,11 @@ const BUILD_TIME: string =
 
 const PROCESS_START = new Date().toISOString();
 
+let _schedulersEnabled = false;
+export function setSchedulersEnabled(): void {
+  _schedulersEnabled = true;
+}
+
 const router: IRouter = Router();
 
 // GET /api/version — returns build timestamp, process start time, and pid.
@@ -54,7 +59,12 @@ router.get("/health", async (_req, res) => {
 
 // Lightweight liveness probe — used by the deployment health check.
 router.get("/healthz", (_req, res) =>
-  res.json({ status: "ok", buildTime: BUILD_TIME })
+  res.json({
+    status: "ok",
+    buildTime: BUILD_TIME,
+    schedulers: _schedulersEnabled ? "running" : "disabled",
+    railway: !!process.env.RAILWAY_ENVIRONMENT,
+  })
 );
 
 export default router;
