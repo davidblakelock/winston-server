@@ -513,6 +513,11 @@ const NAVIGATION_PATTERN = /\b(take\s+me\s+to|directions?\s+to|navigate\s+to|get
 // Matches explicit save/build requests for a trip itinerary in main chat.
 // Intentionally broad — false positives bail gracefully when Haiku finds no trip destination.
 const TRIP_SAVE_INTENT = /\b(?:save\s+(?:this|my|the|our|it)\b|build\s+(?:(?:me|us)\s+)?(?:(?:the|a|an?)\s+)?(?:full\s+)?itinerary|build\s+it(?:\s+out)?\b|create\s+(?:(?:me|us)\s+)?(?:(?:the|a|an?)\s+)?(?:full\s+)?itinerary|make\s+(?:(?:the|a|an?)\s+)?(?:full\s+)?itinerary|generate\s+(?:(?:the|a|an?)\s+)?(?:full\s+)?itinerary|yes[,\s]+(?:please[,\s]+)?(?:build|make|create|save|do\s+it|go\s+ahead)|go\s+ahead(?:\s+and\s+(?:build|make|create|save))?|let'?s\s+(?:build|save|do|go\s+ahead)\b|yes[,\s]+let'?s\s+(?:do|build|save)\s+it|add\s+(?:it\s+)?to\s+my\s+(?:trips?|travel)|save\s+to\s+(?:my\s+)?(?:trips?|travel\s+screen)|book\s+it\b)\b/i;
+// Matches direct trip-generation requests where the user wants a plan built right now.
+// When triggered, the server generates + auto-saves the itinerary and returns tripSaved:true
+// in the JSON response so the native app can refresh its trip list immediately.
+// Guarded by !isTripSaveIntent at the flag level to avoid double-firing.
+const TRIP_PLAN_INTENT = /\b(?:(?:help\s+me\s+|can\s+you\s+|please\s+)?plan\s+(?:(?:me|us|out)\s+)?(?:a|an?|our|my)\s+(?:\d+[-\s]night\s+|long\s+)?(?:trip|vacation|getaway|holiday|road\s+trip|weekend(?:\s+trip)?)|(?:put\s+together|plan\s+me|plan\s+us)\s+(?:a|an?)\s+(?:trip|vacation|getaway)|i\s+(?:want|need|would\s+like)\s+(?:you\s+)?to\s+plan\s+(?:a|my|our)\s+trip)\b/i;
 // Detects hotel/room search queries. Intentionally broad — Haiku validates dates/destination.
 // Covers: "find me a hotel", "book a room", "hotels in Dallas", "where to stay", "check the Omni for June 12", etc.
 const HOTEL_AVAIL_INTENT = /\b(?:find|search|look\s+(?:for|up)|get|show|check|book|reserve|need|want|any|are\s+there|what(?:'s|\s+are)?)\b.{0,60}\b(?:hotels?|motel|resort|inn|suites?|rooms?)\b|\b(?:hotels?|motel|resort|inn|suites?|rooms?)\b.{0,80}\b(?:available|availability|open|in|near|around|for|at|book|reserve|check|price|rate|cost)\b|\bhotel\s+(?:search|lookup|availability|booking|reservation|options?|deals?|rates?|prices?)\b|\broom\s+(?:availability|booking|reservation|for)\b|\bwhere\s+(?:to\s+stay|can\s+(?:i|we)\s+stay)\b|\bplace\s+to\s+stay\b|\bstay(?:ing)?\s+(?:at|in|near|the)\b.{0,60}\b(?:hotel|resort|inn|motel|suites?)\b|\bcheck\b.{0,60}\b(?:availability|available|rooms?)\b|\bcheck.{0,40}\b(?:hotel|resort|inn|motel)\b|\bIs\s+the\s+\w.{0,50}(?:hotel|resort|inn|available)\b/i;
@@ -1107,7 +1112,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isStoryRead = STORY_READ_PATTERN.test(message);
   const isStoryCount = STORY_COUNT_PATTERN.test(message);
   const isTripSaveIntent = !isMorningGreeting && TRIP_SAVE_INTENT.test(message);
-  const isHotelAvailabilityQuery = !isMorningGreeting && !isTripSaveIntent && HOTEL_AVAIL_INTENT.test(message);
+  const isTripPlanIntent = !isMorningGreeting && !isTripSaveIntent && TRIP_PLAN_INTENT.test(message);
+  const isHotelAvailabilityQuery = !isMorningGreeting && !isTripSaveIntent && !isTripPlanIntent && HOTEL_AVAIL_INTENT.test(message);
   // Guard: don't run profile handler when a trip save is being detected — they conflict
   const isProfileRequest = !isTripSaveIntent && PROFILE_PATTERN.test(message);
   // IMPORTANT: Reminder requests (REMINDER_PATTERN) must NEVER route to Google Calendar.
@@ -1748,10 +1754,11 @@ If the conversation is not about a trip, set destination to null.`,
           intent,
           userProfile as Record<string, unknown> | null
         );
-        await saveTripPlan(sessionUserName, itinerary);
+        const savedTripId = await saveTripPlan(sessionUserName, itinerary);
+        (req as any)._tripSaved = { tripSaved: true, tripId: savedTripId, tripName: itinerary.trip_name };
 
         req.log.info(
-          { dest: itinerary.destination, days: itinerary.itinerary.days.length, tripName: itinerary.trip_name },
+          { dest: itinerary.destination, days: itinerary.itinerary.days.length, tripName: itinerary.trip_name, tripId: savedTripId },
           "[TripPlan] Itinerary saved to DB"
         );
 
@@ -1773,6 +1780,83 @@ If the conversation is not about a trip, set destination to null.`,
       }
     } catch (tripErr) {
       req.log.warn({ err: tripErr }, "[TripPlan] Save intent handler failed — letting Claude respond naturally");
+      systemPrompt +=
+        `\n\n[Trip Itinerary — Generation Error]\n` +
+        `You tried to build an itinerary but hit an error. Apologize briefly and warmly, ` +
+        `say you ran into a hiccup and ask them to try again in a moment.`;
+    }
+  }
+
+  // ── Auto trip-plan generation (no save phrase needed) ────────────────────────
+  // Fires when the user asks "plan me a trip to X" or similar without saying "save".
+  // Extracts destination/nights from the current message via Haiku, generates a full
+  // itinerary via generateTripItinerary, saves to DB, and returns tripSaved:true + tripId
+  // in the JSON response so the native app can refresh its trip list automatically.
+  if (isTripPlanIntent) {
+    try {
+      req.log.info({ message: message.slice(0, 80) }, "[TripPlan] Plan intent detected — extracting context");
+
+      const intentRaw = await anthropic.messages.create({
+        model: HAIKU_MODEL,
+        max_tokens: 300,
+        system:
+          "Extract trip intent from the user's message. Return ONLY valid JSON with these fields: " +
+          '{"destination":"city/region string or null","nights":number or null,"partyDesc":"description like \'solo\' or \'me and Susan\' or null","vibe":"travel style or null","startDate":"YYYY-MM-DD or loose phrase like \'June\' or null","budget":"budget|mid-range|luxury or null"}. ' +
+          "Return null for any field not mentioned. No prose, no markdown, no code fences.",
+        messages: [{ role: "user", content: message }],
+      });
+
+      const intentText =
+        intentRaw.content[0]?.type === "text" ? intentRaw.content[0].text.trim() : "{}";
+      let intentParsed: { destination?: string | null; nights?: number | null; partyDesc?: string | null; vibe?: string | null; startDate?: string | null; budget?: string | null } = {};
+      try { intentParsed = JSON.parse(intentText); } catch { /* fall through */ }
+
+      if (!intentParsed.destination) {
+        req.log.info({ message: message.slice(0, 60) }, "[TripPlan] Plan intent matched but no destination found — letting Claude handle naturally");
+      } else {
+        req.log.info(
+          { dest: intentParsed.destination, nights: intentParsed.nights, vibe: intentParsed.vibe },
+          "[TripPlan] Generating itinerary from plan intent"
+        );
+
+        const tripIntent: import("../travel/tripPlanningManager.js").ParsedTripIntent = {
+          destination: intentParsed.destination,
+          nights: intentParsed.nights ?? 3,
+          partyDesc: intentParsed.partyDesc ?? undefined,
+          vibe: intentParsed.vibe ?? undefined,
+          startDate: intentParsed.startDate ?? undefined,
+          budget: intentParsed.budget ?? undefined,
+          rawMessage: message,
+        };
+
+        const itinerary = await generateTripItinerary(
+          tripIntent,
+          userProfile as Record<string, unknown> | null
+        );
+        const savedTripId = await saveTripPlan(sessionUserName, itinerary);
+        (req as any)._tripSaved = { tripSaved: true, tripId: savedTripId, tripName: itinerary.trip_name };
+
+        req.log.info(
+          { dest: itinerary.destination, days: itinerary.itinerary.days.length, tripName: itinerary.trip_name, tripId: savedTripId },
+          "[TripPlan] Auto-generated itinerary saved to DB"
+        );
+
+        const daysPreview = itinerary.itinerary.days
+          .map((d) => `Day ${d.dayNumber} — ${d.label}: ${d.activities?.[0]?.description ?? d.activities?.[0]?.title ?? d.location}`)
+          .join("; ");
+
+        systemPrompt +=
+          `\n\n[Trip Itinerary Auto-Generated & Saved — "${itinerary.trip_name}"]\n` +
+          `You just built and saved a day-by-day itinerary called "${itinerary.trip_name}" ` +
+          `(${itinerary.nights} nights in ${itinerary.destination}) to ${sessionUserName}'s travel screen.\n` +
+          `Day previews: ${daysPreview}\n\n` +
+          `TASK: Present this trip plan enthusiastically. Mention the trip name. Give a warm 1-sentence ` +
+          `teaser for each day (e.g. "Day 1 kicks off in the French Quarter with a slow morning and a legendary beignet stop"). ` +
+          `Tell them it's been saved to their travel screen so they can access it anytime. ` +
+          `End by asking if they want to adjust anything. Write conversationally, under 220 words, no bullet points.`;
+      }
+    } catch (planErr) {
+      req.log.warn({ err: planErr }, "[TripPlan] Plan intent handler failed — letting Claude respond naturally");
       systemPrompt +=
         `\n\n[Trip Itinerary — Generation Error]\n` +
         `You tried to build an itinerary but hit an error. Apologize briefly and warmly, ` +
@@ -5130,6 +5214,7 @@ If you cannot extract both, return null.`,
       const hardcodedBody: Record<string, unknown> = { response: hardcoded };
       if ((req as any)._smsPayload) hardcodedBody.smsPayload = (req as any)._smsPayload;
       if ((req as any)._reservationPayload) hardcodedBody.reservationPayload = (req as any)._reservationPayload;
+      if ((req as any)._tripSaved) Object.assign(hardcodedBody, (req as any)._tripSaved);
       // Expose the booking URL as navigationUrl so the Android app opens it
       // using the same mechanism it uses for Google Maps (directions).
       const rp = (req as any)._reservationPayload as { type?: string; url?: string } | undefined;
@@ -5154,6 +5239,7 @@ If you cannot extract both, return null.`,
       if (navigationUrl) nativeResponseBody.navigationUrl = navigationUrl;
       if ((req as any)._smsPayload) nativeResponseBody.smsPayload = (req as any)._smsPayload;
       if ((req as any)._reservationPayload) nativeResponseBody.reservationPayload = (req as any)._reservationPayload;
+      if ((req as any)._tripSaved) Object.assign(nativeResponseBody, (req as any)._tripSaved);
       // Expose the booking URL as navigationUrl so the Android app opens it
       // using the same mechanism it uses for Google Maps (directions).
       const rp2 = (req as any)._reservationPayload as { type?: string; url?: string } | undefined;
