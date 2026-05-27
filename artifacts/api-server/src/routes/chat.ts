@@ -1794,6 +1794,15 @@ If the conversation is not about a trip, set destination to null.`,
   // in the JSON response so the native app can refresh its trip list automatically.
   if (isTripPlanIntent) {
     try {
+      req.log.info(
+        {
+          message: message.slice(0, 120),
+          regexSource: TRIP_PLAN_INTENT.source,
+          regexMatched: TRIP_PLAN_INTENT.exec(message)?.[0] ?? "(no match token)",
+          path: "isTripPlanIntent → generateTripItinerary() → Sonnet",
+        },
+        "[TripPlan] ✅ TRIP_PLAN_INTENT matched — entering generation path"
+      );
       req.log.info({ message: message.slice(0, 80) }, "[TripPlan] Plan intent detected — extracting context");
 
       const intentRaw = await anthropic.messages.create({
@@ -1833,6 +1842,32 @@ If the conversation is not about a trip, set destination to null.`,
           tripIntent,
           userProfile as Record<string, unknown> | null
         );
+
+        // ── Raw-field inspection — confirms hotel/meal URL population ─────────
+        const day0 = itinerary.itinerary?.days?.[0];
+        const meal0 = day0?.meals?.[0];
+        req.log.info(
+          {
+            tripName: itinerary.trip_name,
+            destination: itinerary.destination,
+            nights: itinerary.nights,
+            dayCount: itinerary.itinerary?.days?.length,
+            day1_hotel_name:       day0?.hotel?.name        ?? "(missing)",
+            day1_hotel_websiteUrl: day0?.hotel?.websiteUrl  ?? "(missing)",
+            day1_hotel_bookingUrl: day0?.hotel?.bookingUrl  ?? "(missing)",
+            day1_meal0_title:      meal0?.title             ?? "(missing)",
+            day1_meal0_websiteUrl: (meal0 as any)?.websiteUrl ?? "(missing)",
+            day1_meal0_bookingUrl: meal0?.bookingUrl        ?? "(missing)",
+            rawDays: JSON.stringify(itinerary.itinerary?.days?.map((d) => ({
+              day: d.dayNumber,
+              hotel: { name: d.hotel?.name, websiteUrl: d.hotel?.websiteUrl, bookingUrl: d.hotel?.bookingUrl },
+              meals: d.meals?.map((m) => ({ title: m.title, websiteUrl: (m as any).websiteUrl, bookingUrl: m.bookingUrl })),
+            }))),
+          },
+          "[TripPlan] 🔍 RAW ITINERARY FIELDS — hotel & meal URL inspection"
+        );
+        // ─────────────────────────────────────────────────────────────────────
+
         const savedTripId = await saveTripPlan(sessionUserName, itinerary);
         (req as any)._tripSaved = { tripSaved: true, tripId: savedTripId, tripName: itinerary.trip_name };
 

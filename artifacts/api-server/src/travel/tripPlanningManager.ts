@@ -422,6 +422,12 @@ Return ONLY valid JSON — no markdown fences, no explanation, no commentary:
   }
 }`;
 
+  logger.info(
+    { model: MODEL_SONNET, dest, nights, promptLen: prompt.length, promptPreview: prompt.slice(0, 300) },
+    "[TripPlan] 🚀 Calling Sonnet — full prompt follows"
+  );
+  logger.info({ fullPrompt: prompt }, "[TripPlan] 📋 FULL SONNET PROMPT");
+
   const response = await anthropic.messages.create({
     model:      MODEL_SONNET,
     max_tokens: 8000,
@@ -433,11 +439,19 @@ Return ONLY valid JSON — no markdown fences, no explanation, no commentary:
     .map((b) => (b as { type: "text"; text: string }).text)
     .join("").trim();
 
+  logger.info(
+    { rawResponseLen: text.length, rawResponsePreview: text.slice(0, 500) },
+    "[TripPlan] 📥 RAW SONNET RESPONSE (first 500 chars)"
+  );
+
   // Strip markdown fences if Claude wrapped the JSON
   const stripped = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
 
   const jsonMatch = stripped.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error("[TripPlan] No JSON found in Claude response");
+  if (!jsonMatch) {
+    logger.error({ rawText: text.slice(0, 1000) }, "[TripPlan] ❌ No JSON found in Claude response");
+    throw new Error("[TripPlan] No JSON found in Claude response");
+  }
 
   const plan = JSON.parse(repairJson(jsonMatch[0])) as NativeTripPlan;
 
