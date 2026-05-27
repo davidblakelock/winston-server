@@ -152,9 +152,11 @@ async function checkDepartureAlertsForUser(userName: string): Promise<void> {
 
     // Universal Google Maps navigation URL — opens native Maps app on iOS/Android
     // when tapped via Linking.openURL; falls back to browser on web.
+    // No &origin= — omitting it tells Google Maps to use the device's current
+    // GPS location as the starting point, which is correct for a departure alert
+    // (the user may not be at home when they tap it).
     const mapsUrl =
       `https://www.google.com/maps/dir/?api=1` +
-      `&origin=${encodeURIComponent(effectiveHomeAddress)}` +
       `&destination=${encodeURIComponent(location)}` +
       `&travelmode=driving`;
 
