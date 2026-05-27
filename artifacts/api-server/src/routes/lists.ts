@@ -28,6 +28,11 @@ const router: IRouter = Router();
 query(`ALTER TABLE list_items ADD COLUMN IF NOT EXISTS reminder_time TIMESTAMPTZ`).catch(() => {});
 query(`ALTER TABLE list_items ADD COLUMN IF NOT EXISTS reminder_fired BOOLEAN NOT NULL DEFAULT FALSE`).catch(() => {});
 
+// ── Idempotent column migration for profile_items (restaurants) ─────────────
+// The url column was added after initial schema creation — ensure it exists in
+// Supabase before any restaurant SELECT/INSERT/UPDATE referencing it runs.
+query(`ALTER TABLE profile_items ADD COLUMN IF NOT EXISTS url TEXT`).catch(() => {});
+
 // ── Disable 304 caching for all list routes ────────────────────────────────
 // Express generates a stable ETag from the response body and returns 304 when
 // the client's If-None-Match matches — even when Cache-Control: no-store is set.
