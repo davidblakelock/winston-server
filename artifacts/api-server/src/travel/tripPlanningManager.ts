@@ -337,6 +337,9 @@ export async function generateTripItinerary(
   const vibe      = intent.vibe ?? "mix of relaxed and adventurous";
   const mustHaves = intent.mustHaves || "None specified";
   const budget    = intent.budget ?? "mid-range";
+  const stopsNote = intent.stops?.length
+    ? `• Specific stops (in order if possible): ${intent.stops.join(" → ")}`
+    : "";
 
   const startDateNote = intent.startDate
     ? `Start date / approximate timing: ${intent.startDate} — if this resolves to a specific calendar date, output it as start_date (YYYY-MM-DD); otherwise output null`
@@ -373,6 +376,7 @@ TRIP DETAILS:
 • Must-haves: ${mustHaves}
 • Budget: ${budget}
 • ${startDateNote}
+${stopsNote ? stopsNote + "\n  — Structure the itinerary so each named stop gets at least one full day. Assign hotels, activities, and meals that are actually located in or near that stop." : ""}
 ${travelCtx}
 
 HOTELS — read carefully:

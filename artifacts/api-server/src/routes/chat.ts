@@ -1783,11 +1783,11 @@ If the conversation is not about a trip, set destination to null.`,
 
       const intentRaw = await anthropic.messages.create({
         model: MODEL_HAIKU,
-        max_tokens: 300,
+        max_tokens: 400,
         system:
           "Extract trip intent from the user's message. Return ONLY valid JSON with these fields: " +
-          '{"destination":"city/region string or null","nights":number or null,"partyDesc":"description like \'solo\' or \'me and Susan\' or null","vibe":"travel style or null","startDate":"YYYY-MM-DD or loose phrase like \'June\' or null","budget":"budget|mid-range|luxury or null"}. ' +
-          "Return null for any field not mentioned. No prose, no markdown, no code fences.",
+          '{"destination":"primary destination — state or region (e.g. \\"Arkansas\\") or null","stops":["array of specific cities/towns mentioned as stops, e.g. [\\"Hot Springs\\",\\"Eureka Springs\\",\\"Bentonville\\"] — empty array [] if none named"],"nights":number or null,"partyDesc":"description like \'solo\' or \'me and Susan\' or null","vibe":"travel style or null","startDate":"YYYY-MM-DD or loose phrase like \'June 12th\' or null","budget":"budget|mid-range|luxury or null"}. ' +
+          "Always extract every named city or town into stops[]. Return null for scalar fields not mentioned. No prose, no markdown, no code fences.",
         messages: [{ role: "user", content: message }],
       });
 
@@ -1799,10 +1799,10 @@ If the conversation is not about a trip, set destination to null.`,
         .replace(/\s*```$/, "")
         .trim();
       console.log(`[TRIP-INTENT-HAIKU] raw="${intentRaw0.slice(0, 200)}" stripped="${intentText.slice(0, 200)}"`);
-      let intentParsed: { destination?: string | null; nights?: number | null; partyDesc?: string | null; vibe?: string | null; startDate?: string | null; budget?: string | null } = {};
+      let intentParsed: { destination?: string | null; stops?: string[] | null; nights?: number | null; partyDesc?: string | null; vibe?: string | null; startDate?: string | null; budget?: string | null } = {};
       try {
         intentParsed = JSON.parse(intentText);
-        console.log(`[TRIP-INTENT-PARSED] destination="${intentParsed.destination}" nights=${intentParsed.nights}`);
+        console.log(`[TRIP-INTENT-PARSED] destination="${intentParsed.destination}" stops=${JSON.stringify(intentParsed.stops)} nights=${intentParsed.nights}`);
       } catch (parseErr) {
         console.log(`[TRIP-INTENT-PARSE-FAIL] err="${String(parseErr)}" raw="${intentText.slice(0, 100)}"`);
       }
@@ -1823,6 +1823,7 @@ If the conversation is not about a trip, set destination to null.`,
           vibe: intentParsed.vibe ?? undefined,
           startDate: intentParsed.startDate ?? undefined,
           budget: intentParsed.budget ?? undefined,
+          stops: intentParsed.stops?.length ? intentParsed.stops : undefined,
           rawMessage: message,
         };
 
