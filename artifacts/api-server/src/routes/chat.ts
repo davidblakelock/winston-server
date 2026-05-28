@@ -518,6 +518,18 @@ const TRIP_SAVE_INTENT = /\b(?:save\s+(?:this|my|the|our|it)\b|build\s+(?:(?:me|
 // in the JSON response so the native app can refresh its trip list immediately.
 // Guarded by !isTripSaveIntent at the flag level to avoid double-firing.
 const TRIP_PLAN_INTENT = /\b(?:(?:help\s+me\s+|can\s+you\s+|please\s+)?plan\s+(?:(?:me|us|out)\s+)?(?:a|an?|our|my)\s+(?:\d+[-\s](?:day|night)(?:\s+\d+[-\s]night)?\s+|long\s+)?(?:trip|vacation|getaway|holiday|road\s+trip|weekend(?:\s+trip)?)|(?:put\s+together|plan\s+me|plan\s+us)\s+(?:a|an?)\s+(?:trip|vacation|getaway)|i\s+(?:want|need|would\s+like)\s+(?:you\s+)?to\s+plan\s+(?:a|my|our)\s+trip)\b/i;
+
+// ── Per-user short-lived trip intent cache ────────────────────────────────────
+// Isolated contexts (e.g. 'trip-planning') don't write to chat_messages, so
+// isTripSaveIntent can't hydrate the conversation from DB. This cache stores
+// the last generated ParsedTripIntent per user for up to 30 minutes, giving
+// the save handler something to work with even when history is empty.
+type CachedTripIntent = {
+  intent: import("../travel/tripPlanningManager.js").ParsedTripIntent;
+  timestamp: number;
+};
+const lastTripIntentByUser = new Map<string, CachedTripIntent>();
+const TRIP_INTENT_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
 // Detects hotel/room search queries. Intentionally broad — Haiku validates dates/destination.
 // Covers: "find me a hotel", "book a room", "hotels in Dallas", "where to stay", "check the Omni for June 12", etc.
 const HOTEL_AVAIL_INTENT = /\b(?:find|search|look\s+(?:for|up)|get|show|check|book|reserve|need|want|any|are\s+there|what(?:'s|\s+are)?)\b.{0,60}\b(?:hotels?|motel|resort|inn|suites?|rooms?)\b|\b(?:hotels?|motel|resort|inn|suites?|rooms?)\b.{0,80}\b(?:available|availability|open|in|near|around|for|at|book|reserve|check|price|rate|cost)\b|\bhotel\s+(?:search|lookup|availability|booking|reservation|options?|deals?|rates?|prices?)\b|\broom\s+(?:availability|booking|reservation|for)\b|\bwhere\s+(?:to\s+stay|can\s+(?:i|we)\s+stay)\b|\bplace\s+to\s+stay\b|\bstay(?:ing)?\s+(?:at|in|near|the)\b.{0,60}\b(?:hotel|resort|inn|motel|suites?)\b|\bcheck\b.{0,60}\b(?:availability|available|rooms?)\b|\bcheck.{0,40}\b(?:hotel|resort|inn|motel)\b|\bIs\s+the\s+\w.{0,50}(?:hotel|resort|inn|available)\b/i;
@@ -1716,6 +1728,20 @@ If the conversation is not about a trip, set destination to null.`,
         // Malformed JSON — treat as no trip context
       }
 
+      // Fallback: if Haiku couldn't extract a destination from (possibly empty) history,
+      // check the in-memory cache for the last trip this user generated.
+      // This covers isolated contexts (e.g. trip-planning screen) that don't write to chat_messages.
+      if (!extracted.destination) {
+        const cached = lastTripIntentByUser.get(sessionUserName);
+        if (cached && Date.now() - cached.timestamp < TRIP_INTENT_CACHE_TTL_MS) {
+          req.log.info({ dest: cached.intent.destination, age: Math.round((Date.now() - cached.timestamp) / 1000) }, "[TripPlan] Save intent — using cached trip intent (isolated context, empty history)");
+          extracted.destination = cached.intent.destination;
+          extracted.nights = cached.intent.nights ?? extracted.nights;
+          extracted.vibe = cached.intent.vibe ?? extracted.vibe;
+          extracted.startDate = cached.intent.startDate ?? extracted.startDate;
+        }
+      }
+
       if (extracted.destination) {
         const intent = parseTripIntent(`${extracted.nights ?? 3} nights in ${extracted.destination}${extracted.vibe ? `, ${extracted.vibe}` : ""}`);
         intent.destination = extracted.destination;
@@ -1858,6 +1884,10 @@ If the conversation is not about a trip, set destination to null.`,
           "[TripPlan] 🔍 RAW ITINERARY FIELDS — hotel & meal URL inspection"
         );
         // ─────────────────────────────────────────────────────────────────────
+
+        // Cache the intent so isTripSaveIntent can use it even when history is empty
+        // (isolated contexts don't write to chat_messages, so DB hydration won't find it)
+        lastTripIntentByUser.set(sessionUserName, { intent: tripIntent, timestamp: Date.now() });
 
         const savedTripId = await saveTripPlan(sessionUserName, itinerary);
         (req as any)._tripSaved = { tripSaved: true, tripId: savedTripId, tripName: itinerary.trip_name };
