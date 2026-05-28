@@ -978,7 +978,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   if (!sessionUserName) return;
 
   // ── Auto-greeting: derive time-appropriate message ────────────────────────
-  const { message: rawMessage, history: rawHistory = [], isAutoGreeting = false, deviceId = null, winddownRequest = false } = req.body;
+  const { message: rawMessage, history: rawHistory = [], isAutoGreeting = false, deviceId = null, winddownRequest = false, context: requestContext = null } = req.body;
+  // Isolated contexts (e.g. 'trip-planning') must not bleed into the main chat history.
+  const isIsolatedContext = typeof requestContext === "string" && requestContext.length > 0;
 
   // ── Layer 1: Active context window ────────────────────────────────────────
   // Claude only sees the last 20 messages. The full transcript is persisted in
@@ -5275,8 +5277,8 @@ If you cannot extract both, return null.`,
 
       // ── Persist messages (fire-and-forget, must not block response) ────────
       const nativeMsgId = randomUUID();
-      req.log.info({ user: sessionUserName, isAutoGreeting, hasReply: !!nativeReply }, "[CHAT] Native save triggered");
-      if (!isAutoGreeting) {
+      req.log.info({ user: sessionUserName, isAutoGreeting, hasReply: !!nativeReply, isIsolatedContext, requestContext }, "[CHAT] Native save triggered");
+      if (!isAutoGreeting && !isIsolatedContext) {
         query(
           `INSERT INTO chat_messages (user_name, role, content, message_id)
            VALUES ($1, 'user', $2, $3)
@@ -5284,8 +5286,10 @@ If you cannot extract both, return null.`,
           [sessionUserName, message.slice(0, 8000), `${nativeMsgId}:user`]
         ).then(() => req.log.info("[CHAT] Native user message saved"))
          .catch((e) => req.log.warn({ e }, "[CHAT] Native user message save failed"));
+      } else if (isIsolatedContext) {
+        req.log.info({ requestContext }, "[CHAT] Skipping user message save — isolated context");
       }
-      if (nativeReply) {
+      if (nativeReply && !isIsolatedContext) {
         query(
           `INSERT INTO chat_messages (user_name, role, content, message_id)
            VALUES ($1, 'assistant', $2, $3)
@@ -5293,6 +5297,8 @@ If you cannot extract both, return null.`,
           [sessionUserName, nativeReply.slice(0, 8000), `${nativeMsgId}:assistant`]
         ).then(() => req.log.info("[CHAT] Native assistant message saved"))
          .catch((e) => req.log.warn({ e }, "[CHAT] Native assistant message save failed"));
+      } else if (nativeReply && isIsolatedContext) {
+        req.log.info({ requestContext }, "[CHAT] Skipping assistant message save — isolated context");
       }
     } catch (err: unknown) {
       const errStatus = (err as Record<string, unknown>)?.status as number | undefined;
@@ -5387,7 +5393,9 @@ If you cannot extract both, return null.`,
   // Save the user message and assistant reply directly in the chat handler so
   // history survives server restarts regardless of whether the client calls
   // POST /api/messages. message_id deduplicates if the client also saves.
-  if (!isAutoGreeting) {
+  // Isolated contexts (e.g. 'trip-planning') are excluded — they must not
+  // appear in the main chat history.
+  if (!isAutoGreeting && !isIsolatedContext) {
     query(
       `INSERT INTO chat_messages (user_name, role, content, message_id)
        VALUES ($1, 'user', $2, $3)
@@ -5395,7 +5403,7 @@ If you cannot extract both, return null.`,
       [sessionUserName, message.slice(0, 8000), `${messageId}:user`]
     ).catch(() => {});
   }
-  if (reply && !streamError) {
+  if (reply && !streamError && !isIsolatedContext) {
     query(
       `INSERT INTO chat_messages (user_name, role, content, message_id)
        VALUES ($1, 'assistant', $2, $3)
