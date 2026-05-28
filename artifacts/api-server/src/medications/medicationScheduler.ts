@@ -3,7 +3,6 @@ import { sendPushToAll } from "../push/pushManager.js";
 import {
   getMedications,
   hasTakenMedicationsToday,
-  buildMedReminderText,
   getMedicationRemindersEnabled,
   hasMedicationReminderSentToday,
   logMedicationReminderSent,
@@ -73,23 +72,19 @@ export function startMedicationScheduler(): void {
           }
 
           if (!taken) {
-            const medText = buildMedReminderText(meds);
-            const body = medText
-              ? `Have you taken your ${medText} yet?`
-              : "Have you taken your medications?";
             sendPushToAll({
               title: "Time for your medications 💊",
-              body,
+              body: "Good morning — have you taken your medications?",
               tag: "medication-morning",
               notificationType: "medication",
-              // "medication-action" → native app shows: "Taken ✓" and "Remind in 30 min"
-              // Taken ✓          → POST /api/medications/confirm-taken  (no body)
-              // Remind in 30 min → POST /api/medications/snooze-reminder { notificationData: data }
               categoryIdentifier: "medication-action",
+              actionTaken: "/api/medications/confirm-taken",
+              actionSnooze: "/api/medications/snooze-reminder",
+              snoozeMinutes: 30,
             }, userName).catch((err: unknown) => {
               logger.error({ err, userName }, "[MED] Push delivery failed");
             });
-            logger.info({ time: rt, userName, medText }, "[MED] Morning reminder fired");
+            logger.info({ time: rt, userName }, "[MED] Morning reminder fired");
           } else {
             logger.info({ userName, rt }, "[MED] Skipping push — medications already taken today");
           }
