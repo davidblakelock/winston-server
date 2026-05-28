@@ -1032,6 +1032,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     return;
   }
 
+  process.stdout.write(`[STDOUT] CHAT-HANDLER message="${message.slice(0, 100)}" len=${message.length}\n`);
+
   // Fetch recent memories, dynamic profile, and user profile concurrently
   const [recentMemories, allProfileItems, profilePlaces, userProfile, briefingPrefs] = await Promise.all([
     getRecentMemories(7).catch(() => []),
@@ -1086,6 +1088,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isStoryCount = STORY_COUNT_PATTERN.test(message);
   const isTripSaveIntent = !isMorningGreeting && TRIP_SAVE_INTENT.test(message);
   const isTripPlanIntent = !isMorningGreeting && !isTripSaveIntent && TRIP_PLAN_INTENT.test(message);
+  process.stdout.write(`[STDOUT] INTENT-FLAGS isMorning=${isMorningGreeting} isTripSave=${isTripSaveIntent} isTripPlan=${isTripPlanIntent} msg="${message.slice(0, 80)}"\n`);
   const isHotelAvailabilityQuery = !isMorningGreeting && !isTripSaveIntent && !isTripPlanIntent && HOTEL_AVAIL_INTENT.test(message);
   // Guard: don't run profile handler when a trip save is being detected — they conflict
   const isProfileRequest = !isTripSaveIntent && PROFILE_PATTERN.test(message);
