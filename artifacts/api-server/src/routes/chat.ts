@@ -1791,12 +1791,24 @@ If the conversation is not about a trip, set destination to null.`,
         messages: [{ role: "user", content: message }],
       });
 
-      const intentText =
+      const intentRaw0 =
         intentRaw.content[0]?.type === "text" ? intentRaw.content[0].text.trim() : "{}";
+      // Strip markdown code fences that Haiku occasionally wraps around JSON
+      const intentText = intentRaw0
+        .replace(/^```(?:json)?\s*/i, "")
+        .replace(/\s*```$/, "")
+        .trim();
+      process.stdout.write(`[STDOUT] TRIP-INTENT-HAIKU raw="${intentRaw0.slice(0, 200)}" stripped="${intentText.slice(0, 200)}"\n`);
       let intentParsed: { destination?: string | null; nights?: number | null; partyDesc?: string | null; vibe?: string | null; startDate?: string | null; budget?: string | null } = {};
-      try { intentParsed = JSON.parse(intentText); } catch { /* fall through */ }
+      try {
+        intentParsed = JSON.parse(intentText);
+        process.stdout.write(`[STDOUT] TRIP-INTENT-PARSED destination="${intentParsed.destination}" nights=${intentParsed.nights}\n`);
+      } catch (parseErr) {
+        process.stdout.write(`[STDOUT] TRIP-INTENT-PARSE-FAIL err="${String(parseErr)}" raw="${intentText.slice(0, 100)}"\n`);
+      }
 
       if (!intentParsed.destination) {
+        process.stdout.write(`[STDOUT] TRIP-INTENT-NO-DEST — falling back to Claude\n`);
         req.log.info({ message: message.slice(0, 60) }, "[TripPlan] Plan intent matched but no destination found — letting Claude handle naturally");
       } else {
         req.log.info(
