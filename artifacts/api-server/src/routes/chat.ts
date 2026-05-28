@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 import { query } from "../db.js";
 import { extractListOp, executeListOp, buildListContext, getItems } from "../lists/listManager.js";
 import { fetchAndSummarizeEmails, formatEmailsForPrompt, buildImportantEmailInstruction, getEmailLastChecked, updateEmailLastChecked } from "../google/gmail.js";
@@ -349,6 +350,71 @@ const router: IRouter = Router();
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const MODEL_GPT4O_TRIP = "gpt-4o" as const;
+
+/**
+ * Calls GPT-4o to generate 3–4 specific, itinerary-aware next step suggestions
+ * (live music, dinner reservations, scenic detours, hotel tips, etc.).
+ * Returns [] on any failure so the caller can degrade gracefully.
+ */
+async function generateTripEnhancements(itinerary: {
+  trip_name: string;
+  destination: string;
+  nights: number;
+  itinerary: {
+    days: Array<{
+      dayNumber: number;
+      label: string;
+      location: string;
+      activities?: Array<{ title?: string; description?: string }>;
+      hotel?: { name?: string };
+    }>;
+  };
+}): Promise<string[]> {
+  try {
+    const daysJson = JSON.stringify(
+      itinerary.itinerary.days.map((d) => ({
+        day: d.dayNumber,
+        label: d.label,
+        location: d.location,
+        activities: d.activities?.slice(0, 2).map((a) => a.title ?? a.description),
+        hotel: d.hotel?.name,
+      }))
+    );
+    const resp = await openai.chat.completions.create({
+      model: MODEL_GPT4O_TRIP,
+      max_tokens: 400,
+      messages: [
+        {
+          role: "system",
+          content:
+            `You are a well-traveled concierge who knows this destination deeply. ` +
+            `Given this specific itinerary, suggest exactly 3–4 concrete next steps ` +
+            `that would genuinely enhance the trip — things like a live music venue ` +
+            `on a specific night, a dinner reservation worth booking in advance, a ` +
+            `scenic drive or detour, a hidden-gem activity, a hotel room-view or ` +
+            `upgrade tip, or a timing tip for a busy attraction. Be specific to this ` +
+            `trip and destination — no generic travel advice. ` +
+            `Respond ONLY with valid JSON: {"suggestions":["suggestion 1","suggestion 2","suggestion 3"]}`,
+        },
+        {
+          role: "user",
+          content:
+            `Trip: "${itinerary.trip_name}" — ${itinerary.nights} nights in ${itinerary.destination}.\n` +
+            `Itinerary: ${daysJson}`,
+        },
+      ],
+    });
+    const raw = resp.choices[0]?.message?.content?.trim() ?? "";
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (!match) return [];
+    const parsed = JSON.parse(match[0]) as { suggestions?: string[] };
+    return Array.isArray(parsed.suggestions) ? parsed.suggestions.slice(0, 4) : [];
+  } catch {
+    return [];
+  }
+}
 
 function formatWeatherBlock(w: CachedWeather): string {
   return (
@@ -1770,15 +1836,21 @@ If the conversation is not about a trip, set destination to null.`,
           .map((d) => `Day ${d.dayNumber} — ${d.label}: ${d.activities?.[0]?.description ?? d.activities?.[0]?.title ?? d.location}`)
           .join("; ");
 
+        const saveEnhancements = await generateTripEnhancements(itinerary);
+        const saveEnhancementsBlock = saveEnhancements.length
+          ? `\nNext-step suggestions from trip concierge:\n${saveEnhancements.map((s, i) => `${i + 1}. ${s}`).join("\n")}`
+          : "";
+
         systemPrompt +=
           `\n\n[Trip Itinerary Saved — "${itinerary.trip_name}"]\n` +
           `You just built and saved a day-by-day itinerary called "${itinerary.trip_name}" ` +
           `(${itinerary.nights} nights in ${itinerary.destination}) to ${sessionUserName}'s travel screen.\n` +
-          `Day previews: ${daysPreview}\n\n` +
-          `TASK: Tell them it's saved — mention the trip name specifically — and give a warm, enthusiastic ` +
-          `1-sentence teaser for each day (e.g. "Day 1 kicks off in the French Quarter with a slow morning ` +
-          `and a legendary beignet stop"). End by asking if they want to tweak anything. ` +
-          `Write conversationally, under 200 words, no bullet points.`;
+          `Day previews: ${daysPreview}\n` +
+          `${saveEnhancementsBlock}\n\n` +
+          `TASK: Tell them it's saved — mention the trip name — and give a warm 1-sentence teaser for each day. ` +
+          `Then naturally weave in the 3–4 next-step suggestions above as specific things they should do ` +
+          `before the trip (e.g. "You'll want to grab a table at Galatoire's early — it books out fast"). ` +
+          `Write conversationally, under 280 words, no bullet points.`;
       } else {
         req.log.info({ message: message.slice(0, 60) }, "[TripPlan] Save intent matched but no trip context found — letting Claude handle naturally");
       }
@@ -1901,15 +1973,21 @@ If the conversation is not about a trip, set destination to null.`,
           .map((d) => `Day ${d.dayNumber} — ${d.label}: ${d.activities?.[0]?.description ?? d.activities?.[0]?.title ?? d.location}`)
           .join("; ");
 
+        const planEnhancements = await generateTripEnhancements(itinerary);
+        const planEnhancementsBlock = planEnhancements.length
+          ? `\nNext-step suggestions from trip concierge:\n${planEnhancements.map((s, i) => `${i + 1}. ${s}`).join("\n")}`
+          : "";
+
         systemPrompt +=
           `\n\n[Trip Itinerary Auto-Generated & Saved — "${itinerary.trip_name}"]\n` +
           `You just built and saved a day-by-day itinerary called "${itinerary.trip_name}" ` +
           `(${itinerary.nights} nights in ${itinerary.destination}) to ${sessionUserName}'s travel screen.\n` +
-          `Day previews: ${daysPreview}\n\n` +
+          `Day previews: ${daysPreview}\n` +
+          `${planEnhancementsBlock}\n\n` +
           `TASK: Present this trip plan enthusiastically. Mention the trip name. Give a warm 1-sentence ` +
-          `teaser for each day (e.g. "Day 1 kicks off in the French Quarter with a slow morning and a legendary beignet stop"). ` +
-          `Tell them it's been saved to their travel screen so they can access it anytime. ` +
-          `End by asking if they want to adjust anything. Write conversationally, under 220 words, no bullet points.`;
+          `teaser for each day. Then naturally offer the 3–4 specific next steps above as things they ` +
+          `should do to make the trip even better — keep it conversational, like you thought of it yourself. ` +
+          `Tell them it's saved to their travel screen. Write conversationally, under 280 words, no bullet points.`;
       }
     } catch (planErr) {
       process.stdout.write(`[STDOUT] TRIP-PLAN CATCH ERROR: ${String(planErr instanceof Error ? planErr.message : planErr)}\n`);
