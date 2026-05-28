@@ -1,10 +1,10 @@
-import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
-import { MODEL_SONNET } from "../lib/models.js";
 
-const anthropic = new Anthropic();
+const MODEL_GPT4O = "gpt-4o" as const;
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -179,45 +179,48 @@ export async function breakdownGoal(
   goal: string,
   conversationHistory: Array<{ role: "user" | "assistant"; content: string }>
 ): Promise<BreakdownResult> {
-  const systemPrompt = `You help people break ambitious goals into concrete, achievable action steps. Apply Stoic principles: focus only on what is within the person's control, make steps concrete and observable, and build progressively from foundation to outcome.
+  const systemPrompt = `You are an opinionated, direct goal coach. You ask smart questions to understand someone's real life context — their schedule, constraints, current habits, and what's actually held them back before — then give specific, no-fluff action steps tailored to them.
 
-You operate in two modes — decide which to use based on the conversation so far:
+You are NOT generic. You don't suggest things like "research this topic" or "set a goal". You give the actual first move.
 
-MODE 1 — CLARIFY: If you don't yet have enough information to generate truly useful, specific steps, ask exactly ONE short clarifying question. Do not list multiple questions. Do not explain why you're asking.
+You operate in two modes. Choose based on what you know so far:
 
-MODE 2 — STEPS: When you have enough context, return 3–7 ordered action steps. Each step must be:
-- Something the person can DO, not something that will happen to them
-- Concrete enough that they'd know when it's done
-- In plain everyday language — no jargon
-- Progressive: earlier steps build the foundation for later ones
+MODE 1 — CLARIFY: If you lack the context needed to give genuinely specific steps (e.g. you don't know their timeline, current starting point, lifestyle constraints, or what they've already tried), ask ONE sharp, focused question. Pick the single most important unknown. Don't explain why you're asking. Don't ask multiple things at once.
 
-Respond ONLY with valid JSON — no markdown, no extra text:
+MODE 2 — STEPS: When you know enough, return 4–7 concrete, ordered steps. Each step must:
+- Start with a verb (Do, Call, Set up, Block, Write, Buy, Cancel, etc.)
+- Be specific enough that the person knows exactly what "done" looks like
+- Reflect what you know about their lifestyle and situation
+- Build progressively — each step moves them closer in a logical order
+- Feel like advice from a smart friend who knows their life, not a self-help book
+
+Respond ONLY with valid JSON — no markdown, no code fences, no extra text.
 
 For a clarifying question:
 {"type":"question","content":"Your single question here"}
 
 For action steps:
-{"type":"steps","content":"One encouraging sentence about their goal","steps":["Step 1 text","Step 2 text","Step 3 text"]}`;
+{"type":"steps","content":"One direct, specific sentence affirming their goal and what these steps will accomplish","steps":["Step 1","Step 2","Step 3"]}`;
 
-  const messages: Anthropic.MessageParam[] = conversationHistory.length === 0
-    ? [{ role: "user", content: `My goal: ${goal}` }]
-    : [
-        { role: "user", content: `My goal: ${goal}` },
-        ...conversationHistory,
-      ];
+  const messages: Array<{ role: "user" | "assistant"; content: string }> =
+    conversationHistory.length === 0
+      ? [{ role: "user", content: `My goal: ${goal}` }]
+      : [{ role: "user", content: `My goal: ${goal}` }, ...conversationHistory];
 
-  const response = await anthropic.messages.create({
-    model: MODEL_SONNET,
-    max_tokens: 1024,
-    system: systemPrompt,
-    messages,
+  const response = await openai.chat.completions.create({
+    model: MODEL_GPT4O,
+    max_tokens: 2000,
+    messages: [
+      { role: "system", content: systemPrompt },
+      ...messages,
+    ],
   });
 
-  const raw = response.content[0]?.type === "text" ? response.content[0].text.trim() : "";
+  const raw = response.choices[0]?.message?.content?.trim() ?? "";
   const jsonMatch = raw.match(/\{[\s\S]*\}/);
   if (!jsonMatch) {
-    logger.warn({ raw }, "[Goals] breakdown: failed to parse Claude JSON");
-    return { type: "question", content: "What's the main obstacle you expect to face with this goal?" };
+    logger.warn({ raw }, "[Goals] breakdown: failed to parse GPT-4o JSON");
+    return { type: "question", content: "What's the single biggest obstacle you've hit on this before?" };
   }
 
   const parsed = JSON.parse(jsonMatch[0]) as { type: string; content: string; steps?: string[] };
