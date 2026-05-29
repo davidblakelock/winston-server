@@ -1,55 +1,49 @@
 /**
- * Hotel Availability — Booking.com via Apify
+ * Hotel Search — Google Places API
  *
- * Runs ONE search per destination+date combo (cached 2 h) then name-matches
- * the hotels Claude recommended against what Booking.com actually shows as
- * available. Falls back silently when APIFY_API_KEY is absent.
+ * Searches for hotels at a destination using Google Places (fast, reliable, <2 s).
+ * Returns hotel names, ratings, addresses, and website links.
+ * Does not provide date-specific availability or nightly pricing — a Google Hotels
+ * search link is injected so the user can check specific dates directly.
+ *
+ * Falls back silently when GOOGLE_PLACES_API_KEY is absent.
  */
 
 import { logger } from "../lib/logger.js";
 import { getCachedApify, setCachedApify } from "../lib/apifyCache.js";
 
-const BOOKING_ACTOR_ID = "voyager/booking-scraper";
-const CACHE_TTL_MS = 2 * 60 * 60 * 1000; // 2 h — availability changes, but not minute-to-minute
+const CACHE_TTL_MS = 4 * 60 * 60 * 1000; // 4 h
 
-function getApifyKey(): string { return (process.env.APIFY_API_KEY ?? "").trim(); }
-export function isBookingAvailabilityReady(): boolean { return !!getApifyKey(); }
+function getPlacesKey(): string { return (process.env.GOOGLE_PLACES_API_KEY ?? "").trim(); }
+export function isBookingAvailabilityReady(): boolean { return !!getPlacesKey(); }
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// ── Types (interface kept compatible with existing callers) ───────────────────
 
 export interface BookingHotel {
   name: string;
-  bookingUrl: string;
-  pricePerNight?: string;   // formatted, e.g. "$189/night"
-  rating?: number;          // out of 10
+  bookingUrl: string;       // hotel website or Google Hotels search URL
+  pricePerNight?: string;   // not available from Places — always undefined
+  rating?: number;          // Google scale: 0–5
   reviewCount?: number;
   address?: string;
   stars?: number;
 }
 
 export interface HotelAvailabilityMatch {
-  matched: BookingHotel | null;       // exact/near match for the recommended hotel
-  bestAlternative: BookingHotel | null; // next-best when recommended is unavailable
+  matched: BookingHotel | null;
+  bestAlternative: BookingHotel | null;
 }
 
-// ── Date helpers ──────────────────────────────────────────────────────────────
+// ── Date helpers (unchanged — still used by tripPlanningManager) ──────────────
 
-/** Returns today's year (CT). */
 function currentYear(): number {
   return parseInt(new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago", year: "numeric" }), 10);
 }
 
-/**
- * Try to parse a user-supplied date string into YYYY-MM-DD.
- * Returns null if the string is too vague (e.g. "in June" with no day).
- */
 export function parseToISODate(raw: string | undefined): string | null {
   if (!raw) return null;
-
-  // Already ISO
   if (/^\d{4}-\d{2}-\d{2}$/.test(raw.trim())) return raw.trim();
 
-  // MM/DD or MM/DD/YYYY
   const slashM = raw.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/);
   if (slashM) {
     const m = slashM[1]!.padStart(2, "0");
@@ -60,7 +54,6 @@ export function parseToISODate(raw: string | undefined): string | null {
     return `${y}-${m}-${d}`;
   }
 
-  // "June 15" or "June 15, 2026" or "15 June 2026"
   const months: Record<string, string> = {
     january: "01", february: "02", march: "03", april: "04",
     may: "05", june: "06", july: "07", august: "08",
@@ -80,91 +73,76 @@ export function parseToISODate(raw: string | undefined): string | null {
     if (mo) return `${yearStr}-${mo}-${dayStr.padStart(2, "0")}`;
   }
 
-  // "June" only — no day → can't build an exact date
   return null;
 }
 
-/** Add `n` nights to a YYYY-MM-DD string. */
 export function addNightsToISO(isoDate: string, nights: number): string {
   const d = new Date(`${isoDate}T12:00:00Z`);
   d.setUTCDate(d.getUTCDate() + nights);
   return d.toISOString().slice(0, 10);
 }
 
-// ── Apify actor call ──────────────────────────────────────────────────────────
+// ── Google Places hotel search ────────────────────────────────────────────────
 
-async function runBookingSearch(
-  destination: string,
-  checkIn: string,   // YYYY-MM-DD
-  checkOut: string,  // YYYY-MM-DD
-  adults: number,
-): Promise<BookingHotel[]> {
-  const token = getApifyKey();
-  if (!token) return [];
+interface PlacesResult {
+  displayName?: { text?: string };
+  rating?: number;
+  userRatingCount?: number;
+  formattedAddress?: string;
+  websiteUri?: string;
+}
 
-  const url =
-    `https://api.apify.com/v2/acts/${encodeURIComponent(BOOKING_ACTOR_ID)}` +
-    `/run-sync-get-dataset-items?token=${token}&timeout=90`;
+async function runPlacesSearch(destination: string, maxResults = 8): Promise<BookingHotel[]> {
+  const key = getPlacesKey();
+  if (!key) return [];
 
   try {
-    const res = await fetch(url, {
+    const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": key,
+        "X-Goog-FieldMask": "places.displayName,places.rating,places.formattedAddress,places.websiteUri,places.userRatingCount",
+      },
       body: JSON.stringify({
-        search:    destination,
-        startDate: checkIn,
-        endDate:   checkOut,
-        rooms:     1,
-        adults:    Math.max(1, adults),
-        maxItems:  15,
-        sortBy:    "bayesian_review_score",
+        textQuery: `hotels in ${destination}`,
+        includedType: "lodging",
+        maxResultCount: Math.min(maxResults, 10),
       }),
-      signal: AbortSignal.timeout(95_000),
+      signal: AbortSignal.timeout(10_000),
     });
 
     if (!res.ok) {
       const body = await res.text().catch(() => "");
-      logger.warn({ status: res.status, destination, body: body.slice(0, 200) }, "[HotelAvail] Booking.com search failed");
+      logger.warn({ status: res.status, destination, body: body.slice(0, 200) }, "[HotelSearch] Google Places request failed");
       return [];
     }
 
-    const data  = await res.json() as unknown;
-    const items = Array.isArray(data) ? (data as Array<Record<string, unknown>>) : [];
-    logger.info({ destination, checkIn, checkOut, count: items.length }, "[HotelAvail] Booking.com results");
+    const data = await res.json() as { places?: PlacesResult[] };
+    const places = data.places ?? [];
+    logger.info({ destination, count: places.length }, "[HotelSearch] Google Places results");
 
-    return items
-      .map((item) => {
-        const rawPrice = item["price"] ?? item["pricePerNight"] ?? item["avgPrice"];
-        const price = rawPrice ? `$${Math.round(Number(rawPrice))}/night` : undefined;
-        return {
-          name:        String(item["name"] ?? item["hotelName"] ?? item["title"] ?? ""),
-          bookingUrl:  String(item["url"] ?? item["link"] ?? item["bookingUrl"] ?? ""),
-          pricePerNight: price,
-          rating:      item["rating"] ? Number(item["rating"]) : undefined,
-          reviewCount: item["reviewCount"] ?? item["reviews"]
-            ? Number(item["reviewCount"] ?? item["reviews"])
-            : undefined,
-          address:     (() => {
-            const a = item["address"];
-            if (!a) return undefined;
-            if (typeof a === "string") return a;
-            if (typeof a === "object") {
-              const o = a as Record<string, unknown>;
-              return String(o["full"] ?? o["street"] ?? o["postalAddress"] ?? o["addressLine1"] ?? Object.values(o).find(v => typeof v === "string") ?? "");
-            }
-            return String(a);
-          })(),
-          stars:       item["stars"] ? Number(item["stars"]) : undefined,
-        } satisfies BookingHotel;
-      })
-      .filter((h) => h.name && h.bookingUrl);
+    const hotels: BookingHotel[] = [];
+    for (const p of places) {
+      const name = p.displayName?.text ?? "";
+      if (!name) continue;
+      const googleHotelsUrl = `https://www.google.com/travel/search?q=${encodeURIComponent(name + " " + destination)}`;
+      hotels.push({
+        name,
+        bookingUrl:  p.websiteUri ?? googleHotelsUrl,
+        rating:      p.rating,
+        reviewCount: p.userRatingCount,
+        address:     p.formattedAddress,
+      });
+    }
+    return hotels;
   } catch (err) {
-    logger.warn({ err, destination }, "[HotelAvail] Booking.com search threw");
+    logger.warn({ err, destination }, "[HotelSearch] Google Places search threw");
     return [];
   }
 }
 
-// ── Name matching ─────────────────────────────────────────────────────────────
+// ── Name matching (unchanged) ─────────────────────────────────────────────────
 
 function normalizeHotelName(raw: string): string {
   return raw
@@ -200,16 +178,14 @@ export function matchHotelToResults(
 
   const top = scored[0]!;
   if (top.score >= 50) {
-    // Good match — return it and offer the next result as a fallback option
     const alt = searchResults.find((h) => h !== top.hotel) ?? null;
     return { matched: top.hotel, bestAlternative: alt };
   }
 
-  // No match — hotel not found on Booking.com for these dates
   return { matched: null, bestAlternative: top.hotel };
 }
 
-// ── High-level availability check (used by chat + API endpoint) ──────────────
+// ── High-level availability check ────────────────────────────────────────────
 
 export interface HotelAvailabilityResult {
   queried: {
@@ -220,23 +196,18 @@ export interface HotelAvailabilityResult {
     adults: number;
     nights: number;
   };
-  specific: BookingHotel | null;        // the named hotel, if found
-  namedHotelNotFound: boolean;          // true when a name was given but not found
-  alternatives: BookingHotel[];         // top available options (up to 5)
+  specific: BookingHotel | null;
+  namedHotelNotFound: boolean;
+  alternatives: BookingHotel[];
   totalFound: number;
-  ready: boolean;                       // false when APIFY_API_KEY is absent
+  ready: boolean;
 }
 
-/**
- * Check hotel availability for a destination + date range.
- * If `hotelName` is supplied, tries to find that specific property and
- * falls back to alternatives if it isn't found on Booking.com.
- */
 export async function checkHotelAvailability(params: {
   hotelName?: string;
   destination: string;
-  checkIn: string;   // YYYY-MM-DD
-  checkOut: string;  // YYYY-MM-DD
+  checkIn: string;
+  checkOut: string;
   adults: number;
 }): Promise<HotelAvailabilityResult> {
   const { hotelName, destination, checkIn, checkOut, adults } = params;
@@ -280,95 +251,103 @@ export async function checkHotelAvailability(params: {
   return base;
 }
 
-/**
- * Formats a `HotelAvailabilityResult` into a context block for Claude injection.
- */
+// ── Context block for Claude ──────────────────────────────────────────────────
+
 export function buildHotelAvailabilityBlock(r: HotelAvailabilityResult): string {
   const { queried, specific, namedHotelNotFound, alternatives, totalFound, ready } = r;
   const nights = queried.nights;
   const datesLabel = `${queried.checkIn} → ${queried.checkOut} (${nights} night${nights !== 1 ? "s" : ""})`;
 
   if (!ready) {
-    return `\n\n[Hotel Availability — Not Configured]\nThe Booking.com availability checker isn't active right now. Let the user know you can't check live rates at the moment, and suggest they visit Booking.com or Hotels.com directly.`;
+    return `\n\n[Hotel Search — Not Configured]\nHotel search isn't available right now. Suggest the user check Google Hotels or Booking.com directly.`;
   }
 
   if (totalFound === 0) {
     return (
-      `\n\n[Hotel Availability — No Results]\n` +
-      `Searched Booking.com for: ${queried.destination} | ${datesLabel} | ${queried.adults} adult(s).\n` +
-      `No available properties were returned. Let the user know and suggest they try Booking.com directly or adjust their dates.`
+      `\n\n[Hotel Search — No Results]\n` +
+      `Searched for hotels in: ${queried.destination}.\n` +
+      `No results returned. Suggest the user try Google Hotels directly for ${queried.destination} on ${datesLabel}.`
     );
   }
 
+  const googleHotelsSearchUrl =
+    `https://www.google.com/travel/hotels/${encodeURIComponent(queried.destination)}` +
+    `?checkin=${queried.checkIn}&checkout=${queried.checkOut}&adults=${queried.adults}`;
+
   const lines: string[] = [
-    `\n\n[VERIFIED — Hotel Availability via Booking.com]`,
+    `\n\n[VERIFIED — Hotel Search via Google Places]`,
     `Destination: ${queried.destination} | Dates: ${datesLabel} | Guests: ${queried.adults}`,
-    `Total results: ${totalFound} properties found`,
+    `Total hotels found: ${totalFound}`,
+    `NOTE: These are top-rated hotels at this destination. Pricing and exact availability for the chosen dates must be confirmed on the hotel's website or Google Hotels.`,
+    `Google Hotels search for these exact dates: ${googleHotelsSearchUrl}`,
   ];
 
   if (specific) {
-    lines.push(`\n✓ FOUND — ${queried.hotelName} IS available for these dates:`);
-    lines.push(`  Name:  ${specific.name}`);
-    if (specific.pricePerNight) lines.push(`  Price: ${specific.pricePerNight}`);
-    if (specific.rating)        lines.push(`  Rating: ${specific.rating}/10${specific.reviewCount ? ` (${specific.reviewCount.toLocaleString()} reviews)` : ""}`);
-    if (specific.address)       lines.push(`  Address: ${specific.address}`);
-    lines.push(`  Book:  ${specific.bookingUrl}`);
+    lines.push(`\n✓ FOUND — ${queried.hotelName} is in the area:`);
+    lines.push(`  Name:    ${specific.name}`);
+    if (specific.rating)      lines.push(`  Rating:  ${specific.rating}/5${specific.reviewCount ? ` (${specific.reviewCount.toLocaleString()} reviews)` : ""}`);
+    if (specific.address)     lines.push(`  Address: ${specific.address}`);
+    lines.push(`  Website: ${specific.bookingUrl}`);
   } else if (namedHotelNotFound) {
-    lines.push(`\n✗ NOT FOUND — "${queried.hotelName}" was not found on Booking.com for these dates.`);
-    lines.push(`  It may be sold out, listed under a different name, or not on Booking.com.`);
+    lines.push(`\n✗ "${queried.hotelName}" was not found in Google Places for ${queried.destination}.`);
+    lines.push(`  It may be under a different name or listed elsewhere.`);
   }
 
   if (alternatives.length) {
     const label = specific
-      ? "\nAlternative options available for these dates:"
+      ? "\nOther top-rated hotels nearby:"
       : namedHotelNotFound
-        ? "\nAvailable alternatives at a similar price point:"
-        : "\nAvailable hotels for these dates:";
+        ? "\nTop-rated alternatives in the area:"
+        : "\nTop-rated hotels in this area:";
     lines.push(label);
     for (const h of alternatives) {
-      const price  = h.pricePerNight ? ` — ${h.pricePerNight}` : "";
-      const rating = h.rating        ? ` | ${h.rating}/10` : "";
-      lines.push(`  • ${h.name}${price}${rating}`);
+      const rating = h.rating ? ` — ${h.rating}/5` : "";
+      const reviews = h.reviewCount ? ` (${h.reviewCount.toLocaleString()} reviews)` : "";
+      lines.push(`  • ${h.name}${rating}${reviews}`);
+      if (h.address) lines.push(`    ${h.address}`);
       lines.push(`    ${h.bookingUrl}`);
     }
   }
 
   lines.push(
-    `\nINSTRUCTIONS: Report these VERIFIED results directly and conversationally. ` +
+    `\nINSTRUCTIONS: Report these results conversationally. ` +
     (specific
-      ? `Lead with confirming the hotel is available for those dates. Include the address, rating, and booking link. ` +
-        `Then briefly mention 1–2 alternatives with their ratings and links.`
+      ? `Let the user know you found ${queried.hotelName} in the area — share its rating, address, and website. ` +
+        `Mention 1–2 alternatives with their ratings. ` +
+        `Always give the Google Hotels link for checking pricing on those exact dates.`
       : namedHotelNotFound
-        ? `Let the user know that specific hotel wasn't found on Booking.com for those dates. ` +
-          `Present the top 2–3 alternatives warmly with ratings and booking links.`
-        : `Present the top 2–3 available hotels with their ratings, addresses, and direct booking links. Be concise and conversational.`) +
-    ` Pricing is not available from the search — do not mention price or say it's unknown; just omit it. Do NOT say you can't check — you have live data above. Always include the booking URL.`
+        ? `Let the user know ${queried.hotelName ?? "that hotel"} wasn't found in Google's listings for ${queried.destination}. ` +
+          `Present the top 2–3 alternatives warmly with ratings and websites. ` +
+          `Give the Google Hotels link for those exact dates.`
+        : `Present the top 2–3 hotels with their ratings and websites. ` +
+          `Give the Google Hotels link for checking pricing on those exact dates.`) +
+    ` Do NOT say you can't check hotels — you have results above. Always include the Google Hotels link.`
   );
 
   return lines.join("\n");
 }
 
-// ── Public search (with cache) ────────────────────────────────────────────────
+// ── Public search with cache (kept for tripPlanningManager compatibility) ─────
 
 export async function searchBookingAvailability(
   destination: string,
-  checkIn: string,
-  checkOut: string,
-  partySize: number,
+  _checkIn: string,
+  _checkOut: string,
+  _partySize: number,
 ): Promise<BookingHotel[]> {
   const slug = destination.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
-  const cacheKey = `booking:${slug}:${checkIn}:${checkOut}`;
+  const cacheKey = `places:${slug}`;
 
   const cached = await getCachedApify(cacheKey, CACHE_TTL_MS);
   if (cached) {
     try {
       const hotels = JSON.parse(cached) as BookingHotel[];
-      logger.info({ destination, checkIn, checkOut, count: hotels.length }, "[HotelAvail] Cache hit");
+      logger.info({ destination, count: hotels.length }, "[HotelSearch] Cache hit");
       return hotels;
     } catch { /* fall through to live fetch */ }
   }
 
-  const hotels = await runBookingSearch(destination, checkIn, checkOut, partySize);
+  const hotels = await runPlacesSearch(destination);
   if (hotels.length) {
     await setCachedApify(cacheKey, JSON.stringify(hotels));
   }
