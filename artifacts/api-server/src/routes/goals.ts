@@ -63,7 +63,7 @@ router.post("/goals/breakdown", async (req, res) => {
     return;
   }
   try {
-    const result = await breakdownGoal(goal.trim(), conversation_history ?? []);
+    const result = await breakdownGoal(goal.trim(), conversation_history ?? [], userName);
     req.log.info({ type: result.type }, "[Goals] Breakdown generated");
     res.json(result);
   } catch (err) {

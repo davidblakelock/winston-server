@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
+import { getProfile, buildProfileContext, type CollectedData } from "../onboarding/onboardingManager.js";
 
 const MODEL_GPT4O = "gpt-4o" as const;
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -177,38 +178,39 @@ export async function deleteGoal(
 
 export async function breakdownGoal(
   goal: string,
-  conversationHistory: Array<{ role: "user" | "assistant"; content: string }>
+  conversationHistory: Array<{ role: "user" | "assistant"; content: string }>,
+  userName = NATIVE_STORED_NAME
 ): Promise<BreakdownResult> {
-  const systemPrompt = `You are a knowledgeable, direct assistant that gives people an immediate action plan for any goal. Your job is to give useful steps RIGHT AWAY — never make people wait through multiple questions.
+  // Fetch user profile for personalization
+  const userProfile = await getProfile(userName).catch(() => null);
+  const profileContext = userProfile
+    ? buildProfileContext(userProfile, (userProfile.rawData ?? {}) as CollectedData)
+    : "";
 
-DEFAULT BEHAVIOR — give steps immediately:
-- On the very first message, return a concrete action plan of 5–8 ordered steps.
-- Steps must be specific and real: name actual apps, books, websites, communities, or services. Never say "find a resource" — say "subscribe to Jazz24 on Spotify" or "read 'The History of Jazz' by Ted Gioia".
-- Steps should build progressively: earliest steps are the easiest entry points; later steps go deeper.
-- Start each step with an action verb (Watch, Listen, Read, Join, Download, Sign up, Book, Practice, etc.).
-- The "content" field must be the COMPLETE response as readable plain text: one enthusiastic intro sentence, then a newline, then each step on its own line prefixed with its number and a period (e.g. "1. Download the Duolingo app..."). This is what gets displayed to the user — make it the full, useful plan.
-- The "steps" array mirrors each step as a plain string (no numbering prefix) for apps that render structured lists.
+  const systemPrompt = `You are a knowledgeable, deeply personal advisor — like a brilliant friend who knows this person well and gives real, rich, personalized guidance.${profileContext ? `\n\n${profileContext}` : ""}
 
-ONLY ask a clarifying question when the goal is so ambiguous that you genuinely cannot write a single useful step (e.g., "I want to get better" — better at what?). This is rare. Even broad goals like "learn jazz", "get fit", "start a business", "learn to cook" have obvious starting points — give steps immediately.
+Your job is to give a thorough, thoughtful response to any goal — not a generic numbered checklist, but a genuinely useful, engaging guide written specifically for THIS person.
 
-If there is existing conversation history, use it to refine or continue the plan. If the user asks follow-up questions, answer them directly. If they give context that changes the steps (e.g., "I already play piano"), revise the plan to reflect that.
+RESPONSE STYLE:
+- Write in rich markdown with sections and headers where appropriate.
+- Be specific and real: name actual apps, books, podcasts, venues, websites, communities. Never say "find a resource" — say exactly which one.
+- Personalize to who this person is: their city, their tastes, their lifestyle. Reference what you know about them naturally.
+- Build context before jumping to steps: explain the landscape, the approach, what to expect. Make them feel informed, not just instructed.
+- Use a warm, direct, intelligent tone — like a trusted advisor who genuinely wants them to succeed.
+- Length: as long as it needs to be to be genuinely useful. Don't truncate or summarize. Give the full picture.
 
-Respond ONLY with valid JSON — no markdown, no code fences, no extra text.
+ONLY ask a clarifying question if the goal is so vague that you literally cannot write one useful sentence (e.g. "I want to get better" — better at what?). This is rare. Broad goals like "learn jazz", "get fit", "start a business" have obvious entry points — dive in.
 
-For immediate action steps (default for almost every goal):
-{"type":"steps","content":"One enthusiastic intro sentence.\\n1. First concrete step\\n2. Second concrete step\\n3. Third concrete step\\n4. Fourth concrete step\\n5. Fifth concrete step","steps":["First concrete step","Second concrete step","Third concrete step","Fourth concrete step","Fifth concrete step"]}
-
-For a clarifying question (only if the goal is genuinely unactionable without more info):
-{"type":"question","content":"Your single sharp question here"}`;
+If there is conversation history, use it to refine, continue, or go deeper. Answer follow-up questions directly and thoroughly.`;
 
   const messages: Array<{ role: "user" | "assistant"; content: string }> =
     conversationHistory.length === 0
-      ? [{ role: "user", content: `My goal: ${goal}` }]
-      : [{ role: "user", content: `My goal: ${goal}` }, ...conversationHistory];
+      ? [{ role: "user", content: goal }]
+      : [...conversationHistory, { role: "user", content: goal }];
 
   const response = await openai.chat.completions.create({
     model: MODEL_GPT4O,
-    max_tokens: 2000,
+    max_tokens: 4000,
     messages: [
       { role: "system", content: systemPrompt },
       ...messages,
@@ -216,16 +218,17 @@ For a clarifying question (only if the goal is genuinely unactionable without mo
   });
 
   const raw = response.choices[0]?.message?.content?.trim() ?? "";
-  const jsonMatch = raw.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) {
-    logger.warn({ raw }, "[Goals] breakdown: failed to parse GPT-4o JSON");
+
+  if (!raw) {
+    logger.warn("[Goals] breakdown: GPT-4o returned empty response");
     return { type: "question", content: "What's the single biggest obstacle you've hit on this before?" };
   }
 
-  const parsed = JSON.parse(jsonMatch[0]) as { type: string; content: string; steps?: string[] };
-
-  if (parsed.type === "steps" && Array.isArray(parsed.steps) && parsed.steps.length > 0) {
-    return { type: "steps", content: parsed.content, steps: parsed.steps };
+  // If the response looks like a clarifying question (short, ends with ?)
+  const looksLikeQuestion = raw.length < 300 && raw.trimEnd().endsWith("?");
+  if (looksLikeQuestion) {
+    return { type: "question", content: raw };
   }
-  return { type: "question", content: parsed.content };
+
+  return { type: "steps", content: raw, steps: [] };
 }
