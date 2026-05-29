@@ -243,6 +243,7 @@ import { getPendingRouteReminder, setPendingRouteReminder } from "../routeAware/
 import {
   parseTripIntent,
   generateTripItinerary,
+  enrichItineraryWithHotelAvailability,
   saveTripPlan,
   buildTravelProfileContext,
 } from "../travel/tripPlanningManager.js";
@@ -1815,6 +1816,10 @@ If the conversation is not about a trip, set destination to null.`,
           intent,
           userProfile as Record<string, unknown> | null
         );
+
+        // Enrich each hotel with SerpAPI rates + booking URLs (requires start date)
+        await enrichItineraryWithHotelAvailability(itinerary, intent);
+
         const savedTripId = await saveTripPlan(sessionUserName, itinerary);
         (req as any)._tripSaved = { tripSaved: true, tripId: savedTripId, tripName: itinerary.trip_name };
 
@@ -1878,7 +1883,8 @@ If the conversation is not about a trip, set destination to null.`,
         system:
           "Extract trip intent from the user's message. Return ONLY valid JSON with these fields: " +
           '{"destination":"primary destination — state or region (e.g. \\"Arkansas\\") or null","stops":["array of specific cities/towns mentioned as stops, e.g. [\\"Hot Springs\\",\\"Eureka Springs\\",\\"Bentonville\\"] — empty array [] if none named"],"nights":number or null,"partyDesc":"description like \'solo\' or \'me and Susan\' or null","vibe":"travel style or null","startDate":"YYYY-MM-DD or loose phrase like \'June 12th\' or null","budget":"budget|mid-range|luxury or null"}. ' +
-          "IMPORTANT: stops[] must include every city or town mentioned, even when they are NOT separated by commas — e.g. 'stops in Hot Springs Eureka Springs and Bentonville' → [\"Hot Springs\",\"Eureka Springs\",\"Bentonville\"]. Split on 'and', spaces between known place names, or any separator. Always extract every named city or town into stops[]. Return null for scalar fields not mentioned. No prose, no markdown, no code fences.",
+          "NIGHTS RULE — critical: 'nights' means overnight stays, NOT calendar days. Examples: '4 days 3 nights' → nights=3. '3-night trip' → nights=3. '4-day trip' → nights=3 (days minus 1). '5 days' → nights=4. Always prefer the explicit night count when both days and nights are stated. " +
+          "STOPS RULE: stops[] must include every city or town mentioned, even when they are NOT separated by commas — e.g. 'stops in Hot Springs Eureka Springs and Bentonville' → [\"Hot Springs\",\"Eureka Springs\",\"Bentonville\"]. Split on 'and', spaces between known place names, or any separator. Always extract every named city or town into stops[]. Return null for scalar fields not mentioned. No prose, no markdown, no code fences.",
         messages: [{ role: "user", content: message }],
       });
 
@@ -1922,6 +1928,9 @@ If the conversation is not about a trip, set destination to null.`,
           tripIntent,
           userProfile as Record<string, unknown> | null
         );
+
+        // Enrich each hotel with SerpAPI rates + booking URLs (requires start date)
+        await enrichItineraryWithHotelAvailability(itinerary, tripIntent);
 
         // ── Raw-field inspection — confirms hotel/meal URL population ─────────
         const day0 = itinerary.itinerary?.days?.[0];
