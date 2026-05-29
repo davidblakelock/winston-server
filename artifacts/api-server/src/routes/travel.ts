@@ -10,8 +10,10 @@ import {
   deleteTripPlan,
   parseTripIntent,
   generateTripItinerary,
+  enrichItineraryWithHotelAvailability,
   buildTravelProfileContext,
   type NativeTripPlan,
+  type ParsedTripIntent,
 } from "../travel/tripPlanningManager.js";
 import {
   checkHotelAvailability,
@@ -163,6 +165,18 @@ Return ONLY valid JSON — no markdown, no explanation:
 
     const nativePlan = JSON.parse(jsonMatch[0]) as NativeTripPlan;
 
+    // Enrich with hotel pricing before saving
+    const saveIntent: ParsedTripIntent = {
+      destination: nativePlan.destination,
+      nights: nativePlan.nights ?? body.nights,
+      startDate: nativePlan.start_date ?? body.startDate,
+      partySize: 2,
+      rawMessage: body.description ?? body.destination ?? "",
+    };
+    await enrichItineraryWithHotelAvailability(nativePlan, saveIntent).catch((err: unknown) =>
+      req.log.warn({ err }, "[TripPlan] /trips/save — hotel enrichment failed, saving without pricing")
+    );
+
     const id = await saveTripPlan(userName, nativePlan);
     const plan = await getTripPlanById(id, userName);
 
@@ -235,6 +249,12 @@ router.post("/trips", express.json({ limit: "2mb" }), async (req, res) => {
 
     req.log.info({ destination: intent.destination, nights: intent.nights }, "[Trips] Generating itinerary");
     const generatedPlan = await generateTripItinerary(intent, null);
+
+    // Enrich with hotel pricing before saving — mutates hotel objects in-place
+    await enrichItineraryWithHotelAvailability(generatedPlan, intent).catch((err: unknown) =>
+      req.log.warn({ err }, "[Trips] Hotel enrichment failed — saving without pricing")
+    );
+
     const id = await saveTripPlan(userName, generatedPlan);
     const plan = await getTripPlanById(id, userName);
     res.status(201).json({ plan });
@@ -333,6 +353,53 @@ router.post("/hotels/check-availability", express.json(), async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "[HotelAvail] POST /hotels/check-availability error");
     res.status(500).json({ error: "Hotel availability check failed" });
+  }
+});
+
+// ── POST /api/trips/:id/enrich ─────────────────────────────────────────────────
+// Re-runs hotel enrichment (SerpAPI pricing + Places URLs) on an existing trip.
+// Call this for trips saved before enrichment was wired up, or to refresh pricing.
+router.post("/trips/:id/enrich", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid trip plan id" }); return; }
+
+  try {
+    const row = await getTripPlanById(id, userName);
+    if (!row) { res.status(404).json({ error: "Trip plan not found" }); return; }
+    if (!row.itinerary) { res.status(400).json({ error: "Trip has no itinerary to enrich" }); return; }
+
+    // Reconstruct a NativeTripPlan shape that enrichment expects
+    const nativePlan: NativeTripPlan = {
+      trip_name:  row.trip_name ?? row.destination,
+      destination: row.destination,
+      nights:      row.nights ?? 3,
+      start_date:  row.start_date ?? null,
+      end_date:    row.end_date ?? null,
+      status:      "planning",
+      itinerary:   row.itinerary as NativeTripPlan["itinerary"],
+    };
+
+    const intent: ParsedTripIntent = {
+      destination: row.destination,
+      nights:      row.nights ?? 3,
+      startDate:   row.start_date ?? undefined,
+      partySize:   2,
+      rawMessage:  row.destination,
+    };
+
+    req.log.info({ id, destination: row.destination }, "[Trips] Re-enriching hotel data");
+    await enrichItineraryWithHotelAvailability(nativePlan, intent);
+
+    // Persist the enriched itinerary back to the DB
+    const updated = await updateTripPlan(id, userName, { itinerary: nativePlan.itinerary as never });
+    req.log.info({ id }, "[Trips] Enrichment complete — itinerary saved");
+    res.json({ ok: true, plan: updated });
+  } catch (err) {
+    req.log.error({ err }, "[Trips] POST /trips/:id/enrich error");
+    res.status(500).json({ error: "Hotel enrichment failed" });
   }
 });
 

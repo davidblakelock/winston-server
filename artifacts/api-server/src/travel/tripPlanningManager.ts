@@ -600,15 +600,16 @@ export async function enrichItineraryWithHotelAvailability(
     day.hotel.availabilityChecked = true;
 
     if (result?.source === "serpapi") {
-      day.hotel.available     = true;
-      day.hotel.bookingUrl    = result.bookingUrl;
+      day.hotel.available = true;
+      // Only overwrite URLs if SerpAPI returned a non-empty value — never wipe existing ones
+      if (result.bookingUrl) day.hotel.bookingUrl = result.bookingUrl;
+      if (result.websiteUrl && (!day.hotel.websiteUrl || day.hotel.websiteUrl === "")) {
+        day.hotel.websiteUrl = result.websiteUrl;
+      }
       // If we used a proxy date (no real dates provided), mark price as approximate
       day.hotel.pricePerNight = result.pricePerNight
         ? (hasRealDates ? result.pricePerNight : `~${result.pricePerNight}`)
         : undefined;
-      if (!day.hotel.websiteUrl || day.hotel.websiteUrl === "") {
-        day.hotel.websiteUrl = result.websiteUrl ?? day.hotel.websiteUrl;
-      }
       logger.info(
         { hotel: name, price: day.hotel.pricePerNight, bookingUrl: result.bookingUrl.substring(0, 60), hasRealDates },
         "[HotelAvail] ✓ SerpAPI — rate and booking URL populated",
