@@ -245,7 +245,9 @@ import {
   generateTripItinerary,
   enrichItineraryWithHotelAvailability,
   saveTripPlan,
+  getTripPlanById,
   buildTravelProfileContext,
+  type TripPlanRow,
 } from "../travel/tripPlanningManager.js";
 import {
   checkHotelAvailability,
@@ -1048,9 +1050,18 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   if (!sessionUserName) return;
 
   // ── Auto-greeting: derive time-appropriate message ────────────────────────
-  const { message: rawMessage, history: rawHistory = [], isAutoGreeting = false, deviceId = null, winddownRequest = false, context: requestContext = null } = req.body;
+  const { message: rawMessage, history: rawHistory = [], isAutoGreeting = false, deviceId = null, winddownRequest = false, context: requestContext = null, tripId: rawTripId = null } = req.body;
   // Isolated contexts (e.g. 'trip-planning') must not bleed into the main chat history.
   const isIsolatedContext = typeof requestContext === "string" && requestContext.length > 0;
+
+  // ── Active trip context (Trip screen) ─────────────────────────────────────
+  // When the native app sends context:"trip-planning" + tripId, load the stored
+  // trip so we can inject hotel pricing and itinerary details into the prompt.
+  const tripId = typeof rawTripId === "number" ? rawTripId : (typeof rawTripId === "string" && rawTripId ? parseInt(rawTripId, 10) || null : null);
+  let activeTripPlan: TripPlanRow | null = null;
+  if (requestContext === "trip-planning" && tripId) {
+    try { activeTripPlan = await getTripPlanById(tripId, sessionUserName); } catch { /* ignore */ }
+  }
 
   // ── Layer 1: Active context window ────────────────────────────────────────
   // Claude only sees the last 20 messages. The full transcript is persisted in
@@ -1757,7 +1768,11 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   // save a formal day-by-day itinerary, we detect the intent, extract context from
   // recent conversation history, generate the structured plan, and inject a confirmation
   // so Claude acknowledges the save naturally in its response.
-  if (isTripSaveIntent) {
+  // Guard: only run from the Trip screen context. Main chat redirects to the Trip screen.
+  if (isTripSaveIntent && requestContext !== "trip-planning") {
+    systemPrompt += `\n\n[Trip Planning — Use Trip Screen]\nDavid wants to save or build a trip itinerary. This must happen in the Trips screen, not here. Warmly tell him to head to his Trips screen (the suitcase icon) where he can plan and save trips with you. Keep it brief — one or two sentences, no bullet points.`;
+  }
+  if (isTripSaveIntent && requestContext === "trip-planning") {
     try {
       // Build a readable summary of recent conversation for context extraction
       const recentHistory = history.slice(-12);
@@ -1864,7 +1879,11 @@ If the conversation is not about a trip, set destination to null.`,
   // Extracts destination/nights from the current message via Haiku, generates a full
   // itinerary via generateTripItinerary, saves to DB, and returns tripSaved:true + tripId
   // in the JSON response so the native app can refresh its trip list automatically.
-  if (isTripPlanIntent) {
+  // Guard: trip planning only happens in the Trip screen. Redirect from main chat.
+  if (isTripPlanIntent && requestContext !== "trip-planning") {
+    systemPrompt += `\n\n[Trip Planning — Use Trip Screen]\nDavid wants to plan a trip. Do NOT plan, generate, or outline any itinerary here in the main chat. Warmly redirect him to his Trips screen (the suitcase icon at the bottom of the app) where he can plan and save full trips with you. One or two sentences max — friendly and brief.`;
+  }
+  if (isTripPlanIntent && requestContext === "trip-planning") {
     try {
       req.log.info(
         {
@@ -2002,57 +2021,92 @@ If the conversation is not about a trip, set destination to null.`,
 
   // ── Hotel availability check (on-demand, conversational) ─────────────────────
   // Fires when the user asks "Is [hotel] available June 12–15?" or "hotel availability in Dallas".
-  // Uses Haiku to extract params, then calls Booking.com via Apify (cached 2 h).
+  // When in Trip screen context with a loaded trip, uses the stored SerpAPI pricing from
+  // the trip's itinerary instead of making a live Places search (which has no pricing).
   if (isHotelAvailabilityQuery) {
     try {
-      const todayISO = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
-      const extractResp = await anthropic.messages.create({
-        model: MODEL_HAIKU,
-        max_tokens: 200,
-        system: `Extract hotel availability search parameters from this message. Respond ONLY with valid JSON — no explanation, no markdown.
+      // ── Trip screen: inject stored hotel pricing from the trip's itinerary ──
+      if (activeTripPlan?.itinerary) {
+        type ItinDay = { hotel?: { name?: string; pricePerNight?: string; bookingUrl?: string; websiteUrl?: string; alternativeBookingUrl?: string } };
+        const itinDays: ItinDay[] = (activeTripPlan.itinerary as { days?: ItinDay[] }).days ?? [];
+        const hotelLines: string[] = [];
+        const seen = new Set<string>();
+        for (const day of itinDays) {
+          const h = day.hotel;
+          if (!h?.name || seen.has(h.name)) continue;
+          seen.add(h.name);
+          let line = `  • ${h.name}`;
+          if (h.pricePerNight) line += ` — ${h.pricePerNight}`;
+          const bookUrl = h.bookingUrl || h.websiteUrl || h.alternativeBookingUrl;
+          if (bookUrl) line += `\n    Book: ${bookUrl}`;
+          hotelLines.push(line);
+        }
+        if (hotelLines.length > 0) {
+          systemPrompt +=
+            `\n\n[VERIFIED — Stored Trip Hotel Data — "${activeTripPlan.trip_name ?? activeTripPlan.destination}"]\n` +
+            `Pricing below is from a recent SerpAPI / Google Hotels search for this trip.\n` +
+            hotelLines.join("\n") + "\n" +
+            `NOTE: Prices marked with ~ are approximate (trip has no fixed dates set). ` +
+            `Share these prices directly and confidently. Provide the booking URL so David can check live availability. ` +
+            `Do NOT say you can't check pricing — you have the data above.`;
+          req.log.info({ tripId, hotels: hotelLines.length }, "[HotelAvail] Injected stored trip hotel pricing");
+        } else {
+          systemPrompt +=
+            `\n\n[Hotel Pricing — Not Yet Enriched]\n` +
+            `This trip's hotels haven't been priced yet. Let David know pricing wasn't pulled for this trip ` +
+            `and suggest tapping the refresh/enrich button or checking Google Hotels directly for ${activeTripPlan.destination}.`;
+        }
+      } else {
+        // ── Main chat: live Google Places search (no pricing, gives website links) ──
+        const todayISO = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+        const extractResp = await anthropic.messages.create({
+          model: MODEL_HAIKU,
+          max_tokens: 200,
+          system: `Extract hotel availability search parameters from this message. Respond ONLY with valid JSON — no explanation, no markdown.
 Format: {"hotelName":"string or null","destination":"string","checkIn":"YYYY-MM-DD or null","checkOut":"YYYY-MM-DD or null","adults":number}
 Today is ${todayISO}. Resolve relative phrases like "this weekend", "next Friday", "June 12-15" to specific YYYY-MM-DD dates.
 If no specific hotel is named, set hotelName to null. If destination is unclear, infer from hotel name (e.g. "Omni Dallas" → "Dallas").
 If dates cannot be resolved to specific days, set them to null.`,
-        messages: [{ role: "user", content: message }],
-      });
-
-      const extractedText = extractResp.content[0].type === "text"
-        ? extractResp.content[0].text.trim()
-        : "{}";
-
-      let hotelParams: {
-        hotelName?: string | null;
-        destination?: string;
-        checkIn?: string | null;
-        checkOut?: string | null;
-        adults?: number;
-      } = {};
-      try {
-        hotelParams = JSON.parse(extractedText.replace(/^```json\s*/i, "").replace(/```$/i, "").trim());
-      } catch { /* ignore */ }
-
-      req.log.info({ hotelParams }, "[HotelAvail] Extracted params from message");
-
-      if (hotelParams.destination && hotelParams.checkIn && hotelParams.checkOut) {
-        const result = await checkHotelAvailability({
-          hotelName:   hotelParams.hotelName ?? undefined,
-          destination: hotelParams.destination,
-          checkIn:     hotelParams.checkIn,
-          checkOut:    hotelParams.checkOut,
-          adults:      hotelParams.adults ?? 2,
+          messages: [{ role: "user", content: message }],
         });
-        req.log.info(
-          { dest: hotelParams.destination, checkIn: hotelParams.checkIn, checkOut: hotelParams.checkOut, totalFound: result.totalFound, foundSpecific: !!result.specific },
-          "[HotelAvail] Booking.com check complete"
-        );
-        systemPrompt += buildHotelAvailabilityBlock(result);
-      } else {
-        req.log.info({ hotelParams }, "[HotelAvail] Missing params — asking user to clarify");
-        systemPrompt +=
-          `\n\n[Hotel Availability — Incomplete Request]\n` +
-          `The user seems to be asking about hotel availability, but I couldn't parse specific dates or destination. ` +
-          `Ask them to confirm: (1) destination or hotel name, (2) check-in date, (3) check-out date, (4) number of guests.`;
+
+        const extractedText = extractResp.content[0].type === "text"
+          ? extractResp.content[0].text.trim()
+          : "{}";
+
+        let hotelParams: {
+          hotelName?: string | null;
+          destination?: string;
+          checkIn?: string | null;
+          checkOut?: string | null;
+          adults?: number;
+        } = {};
+        try {
+          hotelParams = JSON.parse(extractedText.replace(/^```json\s*/i, "").replace(/```$/i, "").trim());
+        } catch { /* ignore */ }
+
+        req.log.info({ hotelParams }, "[HotelAvail] Extracted params from message");
+
+        if (hotelParams.destination && hotelParams.checkIn && hotelParams.checkOut) {
+          const result = await checkHotelAvailability({
+            hotelName:   hotelParams.hotelName ?? undefined,
+            destination: hotelParams.destination,
+            checkIn:     hotelParams.checkIn,
+            checkOut:    hotelParams.checkOut,
+            adults:      hotelParams.adults ?? 2,
+          });
+          req.log.info(
+            { dest: hotelParams.destination, checkIn: hotelParams.checkIn, checkOut: hotelParams.checkOut, totalFound: result.totalFound, foundSpecific: !!result.specific },
+            "[HotelAvail] Places search complete"
+          );
+          systemPrompt += buildHotelAvailabilityBlock(result);
+        } else {
+          req.log.info({ hotelParams }, "[HotelAvail] Missing params — asking user to clarify");
+          systemPrompt +=
+            `\n\n[Hotel Availability — Incomplete Request]\n` +
+            `The user seems to be asking about hotel availability, but I couldn't parse specific dates or destination. ` +
+            `Ask them to confirm: (1) destination or hotel name, (2) check-in date, (3) check-out date, (4) number of guests.`;
+        }
       }
     } catch (hotelErr) {
       req.log.warn({ err: hotelErr }, "[HotelAvail] Check failed — letting Claude handle naturally");
