@@ -115,7 +115,7 @@ export function detectInlineTone(message: string): MessageTone | null {
   return null;
 }
 
-// Human-readable label for each tone (used in James Bond's read-back)
+// Human-readable label for each tone (used in the composer's read-back)
 export function toneLabel(tone: MessageTone): string {
   switch (tone) {
     case "casual":       return "casual and natural";

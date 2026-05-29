@@ -109,13 +109,7 @@ router.patch("/settings/name", express.json({ limit: "1mb" }), async (req, res) 
   const envVoiceId = (process.env.EL_VOICE_ID ?? process.env.ELEVENLABS_VOICE_ID ?? "").trim();
   const voiceId = profile?.voiceId ?? envVoiceId;
 
-  const lowerName = name.toLowerCase();
-  let confirmText: string;
-  if (lowerName.includes("bond") || lowerName.includes("james")) {
-    confirmText = `The name is Bond. James Bond. How can I help you?`;
-  } else {
-    confirmText = `Hello — I'm ${name} now. I love it. What can I do for you?`;
-  }
+  const confirmText = `Got it — I'm ${name} now. What can I do for you?`;
 
   const audio = await generateTTS(voiceId, confirmText);
   res.json({ ok: true, companionName: name, audio });

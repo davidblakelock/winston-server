@@ -603,21 +603,15 @@ app.listen(port, async (err) => {
     logger.warn({ e }, "Startup migration warning: push_subscriptions unique index");
   }
 
-  // Restore companion_name and voice_id for davidblakelock if they've been wiped.
-  // Idempotent — companion_name only touched when it's still the old default or NULL;
-  // voice_id only touched when NULL so a user-chosen voice is never overwritten.
+  // Restore voice_id for davidblakelock if it has been wiped.
+  // Idempotent — only touched when NULL so a user-chosen voice is never overwritten.
   try {
-    await query(
-      `UPDATE user_profiles SET companion_name = 'James Bond'
-       WHERE user_name = 'davidblakelock'
-         AND (companion_name = 'Emma Peel' OR companion_name IS NULL)`
-    );
     await query(
       `UPDATE user_profiles SET voice_id = 'Fahco4VZzobUeiPqni1S'
        WHERE user_name = 'davidblakelock'
          AND voice_id IS NULL`
     );
-    logger.info("Startup migration: davidblakelock profile defaults ensured (companion_name + voice_id)");
+    logger.info("Startup migration: davidblakelock voice_id default ensured");
   } catch (e) {
     logger.warn({ e }, "Startup migration warning: profile defaults fix");
   }

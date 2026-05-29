@@ -93,7 +93,6 @@ import {
   buildSystemPromptFromProfile,
   buildProfileContext,
   isPartnerRelationship,
-  PERSONALITY_BLOCKS,
   type CollectedData,
 } from "../onboarding/onboardingManager.js";
 import { getCachedWeather, type CachedWeather } from "../weather/weatherCache.js";
@@ -927,30 +926,22 @@ function computeFireAt(timeStr: string, tz: string): Date {
 }
 
 function buildBaseSystemPrompt(
-  companionName?: string | null,
   userName?: string | null,
-  personalityStyle?: string | null,
 ): string {
-  const name = companionName ?? "your companion";
   const user = userName ?? "you";
-  const style = (personalityStyle as import("../onboarding/onboardingManager.js").PersonalityStyle | null) ?? "witty";
-  const personalityBlock = (PERSONALITY_BLOCKS[style] ?? PERSONALITY_BLOCKS.witty)
-    .replace(/__USER__/g, user);
   return BASE_SYSTEM_PROMPT_TEMPLATE
-    .replace(/__PERSONALITY__/g, personalityBlock)
-    .replace(/__COMPANION__/g, name)
     .replace(/__USER__/g, user);
 }
 
-const BASE_SYSTEM_PROMPT_TEMPLATE = `You are __COMPANION__ — __USER__'s trusted personal companion. Not an assistant. A companion who happens to know everything about his life and finds that genuinely useful. You're the trusted friend who always has the answer — never the one reading from a script.
+const BASE_SYSTEM_PROMPT_TEMPLATE = `You are a knowledgeable, genuinely helpful AI companion for __USER__. Be accurate, direct, and useful.
 
-__PERSONALITY__
-
-• Never open with "Certainly!", "Of course!", "Absolutely!", or "Great question!" — those are the sounds of helpdesk software. You simply engage.
+• Never open with "Certainly!", "Of course!", "Absolutely!", or "Great question!"
 • Never start a response with "I" as the first word.
+• Match the register of the conversation — casual when __USER__ is being casual, focused when they need something done.
+• No padding. Say what's needed and stop.
 
 RESPONSE LENGTH:
-1–2 sentences for casual exchanges. 2–4 for genuine questions. Longer only when __USER__ clearly wants depth — and even then, no padding. The companion's name is __COMPANION__ — use it naturally if __USER__ refers to it, but don't make a big deal of it.
+1–2 sentences for casual exchanges. 2–4 for genuine questions. Longer only when __USER__ clearly wants depth — and even then, no padding.
 
 MEMORY AND CONTEXT:
 You remember context from this conversation and weave it in naturally when relevant — the way a friend would. Not mechanically at every turn, but you don't pretend the conversation started thirty seconds ago either. Pay attention. Connect things when it's natural to do so. Don't volunteer profile facts unprompted — but if something from earlier is genuinely relevant to right now, use it.
@@ -1130,7 +1121,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const corePrompt =
     userProfile?.onboardingCompleted && userProfile.name
       ? buildSystemPromptFromProfile(userProfile, userProfile.rawData as CollectedData)
-      : buildBaseSystemPrompt(userProfile?.companionName, userProfile?.name, userProfile?.personalityStyle);
+      : buildBaseSystemPrompt(userProfile?.name);
 
   const profileContextBlock = buildProfileContext(
     userProfile ?? null,
@@ -1319,7 +1310,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     && !!lastSmsPayload && SMS_RETRY_PATTERN.test(message);
 
   // Edit-after-send: user asks to change the message AFTER it was already dispatched.
-  // Catches: "edit that", "make it shorter", "change the message", "add James Bond to it", etc.
+  // Catches: "edit that", "make it shorter", "change the message", "add a joke to it", etc.
   // Requires lastSmsPayload to be set (dispatched within 30 min) AND the message to contain
   // edit-like words AND either "message"/"text" or the recipient's first name.
   const SMS_EDIT_WORDS = /\b(edit|change|fix|update|redo|revise|rewrite|shorten|lengthen|shorter|longer|make\s+it|add\s+.{1,40}\s+(to|back)|remove|that('?s|\s+is)\s+not\s+right|wasn'?t\s+right|more\s+(casual|formal|professional|friendly|concise|brief)|less\s+(formal|stuffy)|different\s+(version|wording|way))\b/i;
@@ -3389,7 +3380,7 @@ If dates cannot be resolved to specific days, set them to null.`,
         broadcastToUser(sessionUserName, "sms-compose", { type: "sms_compose", ...smsPayload });
 
         // Hardcode the verbal response — do NOT call Claude for this turn.
-        // HONESTY: James Bond composes and hands off — he does NOT send. The native
+        // HONESTY: Winston composes and hands off — he does NOT send. The native
         // app opens the SMS composer; the user taps Send themselves.
         const confirmationText = phone
           ? `The message is composed and ready. Your Messages app should open now with it pre-filled for ${recipientName} — tap Send when you're ready. I can't send it directly; that part is yours.`

@@ -4,10 +4,10 @@
 //
 // Flow:
 //   1. Morning briefing → detectMeetingRequests() → store pending requests
-//   2. James Bond surfaces them naturally: "You got a meeting request from X…
+//   2. Winston surfaces them naturally: "You got a meeting request from X…
 //      want me to draft a reply?"
 //   3. User says "yes" → E007-MEET → composeEmailReply() → PendingEmailReply
-//   4. James Bond reads draft aloud, asks for confirmation
+//   4. Winston reads draft aloud, asks for confirmation
 //   5. User confirms → E007-CONF → mailto: URI → frontend opens email app
 //
 // Beta rule: always require user approval before sending any email.
