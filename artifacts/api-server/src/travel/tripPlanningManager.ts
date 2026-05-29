@@ -526,20 +526,27 @@ export async function enrichItineraryWithHotelAvailability(
   plan:   NativeTripPlan,
   intent: ParsedTripIntent,
 ): Promise<void> {
-  const checkIn = parseToISODate(intent.startDate ?? plan.start_date ?? undefined);
-  if (!checkIn) {
-    logger.info({ startDate: intent.startDate }, "[HotelAvail] Skipping — no parseable start date");
-    return;
-  }
-
   const nights   = intent.nights ?? plan.nights ?? 3;
-  const checkOut = addNightsToISO(checkIn, nights);
   const adults   = intent.partySize ?? 2;
+
+  // Resolve check-in date. If not provided, fall through to Places-only enrichment
+  // (website URLs + alternatives) without SerpAPI pricing — never skip entirely.
+  const rawCheckIn = parseToISODate(intent.startDate ?? plan.start_date ?? undefined);
+
+  // If no real date, use a proxy 30 days out so SerpAPI still returns representative
+  // pricing (displayed as "approx." to the user). Better than no data at all.
+  const checkIn  = rawCheckIn ?? (() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 30);
+    return d.toISOString().slice(0, 10);
+  })();
+  const checkOut = addNightsToISO(checkIn, nights);
+  const hasRealDates = !!rawCheckIn;
 
   const serpReady = isSerpApiReady();
   logger.info(
-    { dest: plan.destination, checkIn, checkOut, adults, serpReady },
-    "[HotelAvail] Starting SerpAPI hotel enrichment",
+    { dest: plan.destination, checkIn, checkOut, adults, serpReady, hasRealDates },
+    "[HotelAvail] Starting hotel enrichment",
   );
 
   // Collect unique hotel names in itinerary order, capped at max searches
@@ -595,12 +602,15 @@ export async function enrichItineraryWithHotelAvailability(
     if (result?.source === "serpapi") {
       day.hotel.available     = true;
       day.hotel.bookingUrl    = result.bookingUrl;
-      day.hotel.pricePerNight = result.pricePerNight;
+      // If we used a proxy date (no real dates provided), mark price as approximate
+      day.hotel.pricePerNight = result.pricePerNight
+        ? (hasRealDates ? result.pricePerNight : `~${result.pricePerNight}`)
+        : undefined;
       if (!day.hotel.websiteUrl || day.hotel.websiteUrl === "") {
         day.hotel.websiteUrl = result.websiteUrl ?? day.hotel.websiteUrl;
       }
       logger.info(
-        { hotel: name, price: result.pricePerNight, bookingUrl: result.bookingUrl.substring(0, 60) },
+        { hotel: name, price: day.hotel.pricePerNight, bookingUrl: result.bookingUrl.substring(0, 60), hasRealDates },
         "[HotelAvail] ✓ SerpAPI — rate and booking URL populated",
       );
     } else if (result?.source === "places" && result.websiteUrl) {

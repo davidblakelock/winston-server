@@ -182,17 +182,19 @@ export async function searchHotelViaSerpApi(
   }
 
   // ── Live SerpAPI call ─────────────────────────────────────────────────────
-  const query = `${hotelName} ${city} availability ${checkIn}`;
-  const url   = new URL("https://serpapi.com/search.json");
+  // q should be just the destination for google_hotels engine — the hotel name
+  // is matched from results after fetching. Dates are passed as separate params.
+  const searchQuery = city;
+  const url = new URL("https://serpapi.com/search.json");
   url.searchParams.set("engine",          "google_hotels");
-  url.searchParams.set("q",               query);
+  url.searchParams.set("q",               searchQuery);
   url.searchParams.set("check_in_date",   checkIn);
   url.searchParams.set("check_out_date",  checkOut);
   url.searchParams.set("adults",          String(adults));
   url.searchParams.set("currency",        "USD");
   url.searchParams.set("api_key",         serpKey);
 
-  logger.info({ hotelName, city, checkIn, checkOut, adults, query }, "[SerpAPI] Searching Google Hotels");
+  logger.info({ hotelName, city, checkIn, checkOut, adults, searchQuery }, "[SerpAPI] Searching Google Hotels");
 
   try {
     const res = await fetch(url.toString(), { signal: AbortSignal.timeout(15_000) });

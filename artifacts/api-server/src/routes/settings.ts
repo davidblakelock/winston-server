@@ -798,4 +798,46 @@ router.patch("/settings/briefing-toggles", express.json({ limit: "16kb" }), asyn
   res.json({ ok: true });
 });
 
+// ── GET /api/settings/tts ─────────────────────────────────────────────────────
+// Returns the global TTS mute preference. Persists across all screens and sessions.
+router.get("/settings/tts", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const { rows } = await query<{ detail: string | null }>(
+    `SELECT detail FROM profile_items
+     WHERE user_name = $1 AND category = 'preferences' AND name = 'tts_muted'
+     LIMIT 1`,
+    [userName]
+  );
+  const muted = rows.length > 0;
+  res.json({ muted });
+});
+
+// ── PATCH /api/settings/tts ───────────────────────────────────────────────────
+// Sets the global TTS mute preference. { muted: true } silences voice on all screens.
+router.patch("/settings/tts", express.json(), async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const { muted } = req.body as { muted?: boolean };
+  if (typeof muted !== "boolean") {
+    res.status(400).json({ error: "muted (boolean) required" });
+    return;
+  }
+  // Delete any existing record first (upsert pattern)
+  await query(
+    `DELETE FROM profile_items
+     WHERE user_name = $1 AND category = 'preferences' AND name = 'tts_muted'`,
+    [userName]
+  );
+  if (muted) {
+    await query(
+      `INSERT INTO profile_items (user_name, category, name, detail)
+       VALUES ($1, 'preferences', 'tts_muted', 'true')`,
+      [userName]
+    );
+  }
+  logger.info({ userName, muted }, "[TTS] Global mute preference updated");
+  res.json({ ok: true, muted });
+});
+
 export default router;
