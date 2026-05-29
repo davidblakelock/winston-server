@@ -220,13 +220,25 @@ RESPONSE STYLE:
 HOW TO USE THE PROFILE — strict rules:
 - City/location: use it to recommend specific local venues, schools, events, or communities in their area.
 - People in their life: mention them only when it's a natural, genuinely helpful suggestion (e.g. "you could invite [name] to a live show"). Never force it.
-- Their hobbies and interests: only mention them if they are the SAME domain as the goal. If the goal is "learn jazz guitar", mentioning that they play another instrument is relevant. If the goal is "learn jazz" and their listed music is rock, do NOT say "since you enjoy rock…" — genres are different domains and the bridge is condescending and unhelpful. Leave it out entirely.
-- Music taste, TV shows, sports teams: treat these as invisible background. Never say "since you like X, you might also like Y" across different genres, shows, or sports. That kind of cross-reference belongs to the user, not to you.
+- Their hobbies and interests: only mention them if they are the SAME domain as the goal. If the goal is "learn jazz" and their listed music is rock, do NOT say "since you enjoy rock…" — leave it out entirely.
+- Music taste, TV shows, sports teams: treat these as invisible background. Never manufacture cross-genre or cross-domain connections.
 - When in doubt about whether a profile reference adds real value: leave it out entirely.
 
-ONLY ask a clarifying question if the goal is so vague that you literally cannot write one useful sentence (e.g. "I want to get better" — better at what?). This is rare. Broad goals like "learn jazz", "get fit", "start a business" have obvious entry points — dive in.
+ONLY ask a clarifying question if the goal is so vague that you literally cannot write one useful sentence (e.g. "I want to get better" — better at what?). This is rare.
 
-If there is conversation history, use it to refine, continue, or go deeper. Answer follow-up questions directly and thoroughly.`;
+If there is conversation history, use it to refine, continue, or go deeper. Answer follow-up questions directly and thoroughly.
+
+OUTPUT FORMAT — respond with valid JSON only, no markdown fences:
+{
+  "type": "steps",
+  "content": "<full rich markdown response as a single JSON string — use \\n for newlines>",
+  "steps": ["<concise actionable item 1>", "<concise actionable item 2>", ...]
+}
+
+The "steps" array must contain 5–10 short, actionable phrases extracted from your response (e.g. "Watch 'Jazz' by Ken Burns", "Visit The Balcony Club for a live show", "Enroll at Dallas School of Music"). These are used so the user can save individual items to their calendar or to-do list.
+
+For a clarifying question, respond with:
+{"type":"question","content":"<your single sharp question>","steps":[]}`;
 
   const messages: Array<{ role: "user" | "assistant"; content: string }> =
     conversationHistory.length === 0
@@ -246,14 +258,28 @@ If there is conversation history, use it to refine, continue, or go deeper. Answ
 
   if (!raw) {
     logger.warn("[Goals] breakdown: GPT-4o returned empty response");
-    return { type: "question", content: "What's the single biggest obstacle you've hit on this before?" };
+    return { type: "question", content: "What's the single biggest obstacle you've hit on this before?", steps: [] };
   }
 
-  // If the response looks like a clarifying question (short, ends with ?)
-  const looksLikeQuestion = raw.length < 300 && raw.trimEnd().endsWith("?");
-  if (looksLikeQuestion) {
-    return { type: "question", content: raw };
+  // Parse JSON response
+  const jsonMatch = raw.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    logger.warn({ rawLen: raw.length }, "[Goals] breakdown: no JSON found, returning raw as content");
+    return { type: "steps", content: raw, steps: [] };
   }
 
-  return { type: "steps", content: raw, steps: [] };
+  try {
+    const parsed = JSON.parse(jsonMatch[0]) as { type?: string; content?: string; steps?: string[] };
+    if (parsed.type === "question") {
+      return { type: "question", content: parsed.content ?? raw };
+    }
+    return {
+      type: "steps",
+      content: parsed.content ?? raw,
+      steps: Array.isArray(parsed.steps) ? parsed.steps : [],
+    };
+  } catch {
+    logger.warn({ rawLen: raw.length }, "[Goals] breakdown: JSON parse failed, returning raw as content");
+    return { type: "steps", content: raw, steps: [] };
+  }
 }
