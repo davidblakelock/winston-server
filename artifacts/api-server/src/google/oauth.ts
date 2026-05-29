@@ -116,15 +116,30 @@ export async function hasContactsWriteScope(userName?: string): Promise<boolean>
 }
 
 export async function hasFitnessScope(userName: string): Promise<boolean> {
-  const { rows } = await query<{ scope: string | null }>(
-    `SELECT scope FROM google_auth WHERE user_name = $1 LIMIT 1`,
-    [userName]
-  );
-  if (!rows.length || !rows[0].scope) return false;
-  const scopes = rows[0].scope.split(" ");
-  return (
-    scopes.some((s) => s === "https://www.googleapis.com/auth/fitness.sleep.read") ||
-    scopes.some((s) => s === "https://www.googleapis.com/auth/fitness.activity.read")
+  // Check both tables — user_integrations is the canonical store written by the
+  // connect flow; google_auth is the legacy fallback. Either one having the scope
+  // is sufficient.
+  const [gaResult, uiResult] = await Promise.all([
+    query<{ scope: string | null }>(
+      `SELECT scope FROM google_auth WHERE user_name = $1 LIMIT 1`,
+      [userName]
+    ).catch(() => ({ rows: [] as Array<{ scope: string | null }> })),
+    query<{ scopes: string | null }>(
+      `SELECT scopes FROM user_integrations WHERE user_name = $1 AND provider = 'google' LIMIT 1`,
+      [userName]
+    ).catch(() => ({ rows: [] as Array<{ scopes: string | null }> })),
+  ]);
+
+  const fitnessScopeIds = [
+    "https://www.googleapis.com/auth/fitness.sleep.read",
+    "https://www.googleapis.com/auth/fitness.activity.read",
+  ];
+
+  const gaScope   = gaResult.rows[0]?.scope   ?? "";
+  const uiScopes  = uiResult.rows[0]?.scopes  ?? "";
+
+  return fitnessScopeIds.some(
+    (s) => gaScope.split(" ").includes(s) || uiScopes.split(" ").includes(s)
   );
 }
 

@@ -32,7 +32,6 @@ import { getProactiveMode, buildModeInstruction } from "../proactiveMode/proacti
 import { runCrossDomainEngine, buildCrossDomainBlock } from "../intelligence/crossDomainEngine.js";
 import { getStoredGarminData, formatGarminForBriefing } from "../garmin/garminService.js";
 import { getStoredFitData, formatFitForBriefing } from "../google/fit.js";
-import { hasFitnessScope } from "../google/oauth.js";
 import { getMydayEntries, type MydayEntry } from "../myday/mydayManager.js";
 import {
   getPendingSuggestion, markSuggestionSurfaced,
@@ -574,8 +573,10 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
     // Fetch Garmin health data (yesterday's stored data — no live API call needed)
     const garminData = await getStoredGarminData(userName).catch(() => null);
 
-    // Google Fit: sleep + activity — used only when Garmin is not available and fitness scopes were granted
-    const fitData = !garminData && await hasFitnessScope(userName).catch(() => false)
+    // Google Fit: sleep + activity — used only when Garmin is not available.
+    // Scope check is handled upstream (5 AM sync + fetchYesterdayFitData guard).
+    // If data exists in the DB for yesterday, use it regardless of scope state.
+    const fitData = !garminData
       ? await getStoredFitData(userName).catch(() => null)
       : null;
 
