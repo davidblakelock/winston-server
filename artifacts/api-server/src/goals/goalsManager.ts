@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
-import { getProfile, buildProfileContext, type CollectedData } from "../onboarding/onboardingManager.js";
+import { getProfile, type CollectedData } from "../onboarding/onboardingManager.js";
 
 const MODEL_GPT4O = "gpt-4o" as const;
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -181,11 +181,30 @@ export async function breakdownGoal(
   conversationHistory: Array<{ role: "user" | "assistant"; content: string }>,
   userName = NATIVE_STORED_NAME
 ): Promise<BreakdownResult> {
-  // Fetch user profile for personalization
+  // Fetch user profile — build a SLIM context with only name, city, and people.
+  // Music taste, TV shows, hobbies, sports are intentionally excluded so GPT-4o
+  // cannot make cross-domain connections that aren't relevant to the goal.
   const userProfile = await getProfile(userName).catch(() => null);
-  const profileContext = userProfile
-    ? buildProfileContext(userProfile, (userProfile.rawData ?? {}) as CollectedData)
-    : "";
+  let profileContext = "";
+  if (userProfile) {
+    const raw = (userProfile.rawData ?? {}) as CollectedData;
+    const displayName = userProfile.name ?? userName;
+    const city = userProfile.city ?? (raw.city as string | undefined) ?? "";
+    const people = (raw.people ?? []) as Array<{ name: string; relationship: string; city?: string; details?: string }>;
+
+    const lines: string[] = [`The user's name is ${displayName}.`];
+    if (city) lines.push(`They live in ${city}.`);
+    if (people.length > 0) {
+      lines.push("Key people in their life:");
+      for (const p of people) {
+        let entry = `- ${p.name} (${p.relationship})`;
+        if (p.city) entry += `, lives in ${p.city}`;
+        if (p.details) entry += ` — ${p.details}`;
+        lines.push(entry);
+      }
+    }
+    profileContext = lines.join("\n");
+  }
 
   const systemPrompt = `You are a knowledgeable, deeply personal advisor — like a brilliant friend who knows this person well and gives real, rich, personalized guidance.${profileContext ? `\n\n${profileContext}` : ""}
 
