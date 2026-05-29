@@ -246,6 +246,7 @@ import {
   enrichItineraryWithHotelAvailability,
   saveTripPlan,
   getTripPlanById,
+  getActiveTripPlans,
   buildTravelProfileContext,
   type TripPlanRow,
 } from "../travel/tripPlanningManager.js";
@@ -1059,8 +1060,16 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   // trip so we can inject hotel pricing and itinerary details into the prompt.
   const tripId = typeof rawTripId === "number" ? rawTripId : (typeof rawTripId === "string" && rawTripId ? parseInt(rawTripId, 10) || null : null);
   let activeTripPlan: TripPlanRow | null = null;
-  if (requestContext === "trip-planning" && tripId) {
-    try { activeTripPlan = await getTripPlanById(tripId, sessionUserName); } catch { /* ignore */ }
+  if (requestContext === "trip-planning") {
+    try {
+      if (tripId) {
+        activeTripPlan = await getTripPlanById(tripId, sessionUserName);
+      } else {
+        // No tripId sent — fall back to most recently updated trip
+        const allTrips = await getActiveTripPlans(sessionUserName);
+        activeTripPlan = allTrips[0] ?? null;
+      }
+    } catch { /* ignore */ }
   }
 
   // ── Layer 1: Active context window ────────────────────────────────────────
@@ -1144,6 +1153,52 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const stableSystem = corePrompt + profileContextBlock;
   // Dynamic: current time, recent memories, preference blocks — changes each request.
   let systemPrompt = getCurrentDateTimeBlock() + "\n" + memoryBlock + dynamicProfileBlock + prefsBlock;
+
+  // ── Trip screen: inject hotel pricing unconditionally ─────────────────────
+  // When in trip-planning context, always give Claude the stored hotel data so it
+  // can answer ANY pricing/availability question without needing a specific regex match.
+  if (activeTripPlan) {
+    type ItinDay = { hotel?: { name?: string; pricePerNight?: string; priceRange?: string; bookingUrl?: string; websiteUrl?: string; alternativeBookingUrl?: string } };
+    const itinDays: ItinDay[] = ((activeTripPlan.itinerary as Record<string, unknown>)?.days as ItinDay[] | undefined) ?? [];
+    const hotelLines: string[] = [];
+    const seen = new Set<string>();
+    for (const day of itinDays) {
+      const h = day.hotel;
+      if (!h?.name || seen.has(h.name)) continue;
+      seen.add(h.name);
+      let line = `  • ${h.name}`;
+      if (h.pricePerNight) {
+        line += ` — ${h.pricePerNight}`;
+      } else if (h.priceRange) {
+        line += ` — approx. ${h.priceRange} price tier`;
+      } else {
+        line += ` — price not yet fetched`;
+      }
+      const bookUrl = h.bookingUrl || h.websiteUrl || h.alternativeBookingUrl;
+      if (bookUrl) line += `\n    Book/Info: ${bookUrl}`;
+      hotelLines.push(line);
+    }
+    if (hotelLines.length > 0) {
+      systemPrompt +=
+        `\n\n[Trip Hotel Data — "${activeTripPlan.trip_name ?? activeTripPlan.destination}"` +
+        `${activeTripPlan.start_date ? ` | ${activeTripPlan.start_date} – ${activeTripPlan.end_date ?? "?"}` : " | dates TBD"}]\n` +
+        `Destination: ${activeTripPlan.destination} | ${activeTripPlan.nights ?? "?"} nights\n` +
+        hotelLines.join("\n") + "\n" +
+        `NOTE: Prices marked ~ are approximate (no fixed dates set). Prices shown as "$$$" are tier estimates only.\n` +
+        `INSTRUCTIONS: You have this hotel data. Answer pricing and availability questions directly using it. ` +
+        `Provide the booking URL so David can check live rates. ` +
+        `Do NOT say you cannot check pricing or availability — the data is above.`;
+      req.log.info({ tripId: activeTripPlan.id, tripName: activeTripPlan.trip_name, hotels: hotelLines.length }, "[TripContext] Hotel data injected into prompt");
+    } else {
+      systemPrompt +=
+        `\n\n[Trip Context — "${activeTripPlan.trip_name ?? activeTripPlan.destination}"]\n` +
+        `Destination: ${activeTripPlan.destination} | ${activeTripPlan.nights ?? "?"} nights` +
+        `${activeTripPlan.start_date ? ` | ${activeTripPlan.start_date} – ${activeTripPlan.end_date ?? "?"}` : " | dates TBD"}\n` +
+        `Hotel pricing has not been fetched for this trip yet. If asked about prices, let David know and suggest ` +
+        `he tap the refresh button on the trip card, or check Google Hotels for ${activeTripPlan.destination} directly.`;
+    }
+  }
+
   let reminderConfirmation = "";
 
   const isMorningGreeting = MORNING_PATTERN.test(message);
