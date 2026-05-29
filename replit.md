@@ -16,6 +16,7 @@ Winston is a personal AI companion app with a dark-themed chat interface that pr
 - `ELEVENLABS_VOICE_ID`
 - `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_EMAIL` (for Web Push)
 - `OLIVIA_PASSWORD` (default: `ForOlivia`)
+- `SERPAPI_KEY` — SerpAPI key for Google Hotels hotel pricing in trip itineraries (max 3 searches/itinerary, cached 6 h). Free tier: 100/month. Key at https://serpapi.com/manage-api-key
 - `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET` (if Microsoft auth enabled)
 - `APPLE_CLIENT_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY` (if Apple auth enabled)
 - `SMTP_HOST`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`, `SMTP_PORT` (optional, for medication email export)

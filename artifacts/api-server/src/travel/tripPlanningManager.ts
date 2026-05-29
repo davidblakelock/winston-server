@@ -24,13 +24,13 @@ import {
   type UserProfile,
 } from "../onboarding/onboardingManager.js";
 import {
-  searchBookingAvailability,
-  matchHotelToResults,
   parseToISODate,
   addNightsToISO,
-  isBookingAvailabilityReady,
-  type BookingHotel,
 } from "./hotelAvailability.js";
+import {
+  isSerpApiReady,
+  searchHotelViaSerpApi,
+} from "./serpApiHotels.js";
 
 const MODEL_GPT4O = "gpt-4o" as const;
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -91,8 +91,9 @@ export interface NativeItineraryDay {
     name: string;
     websiteUrl: string;
     notes: string;
-    // enriched by Booking.com post-generation:
+    // enriched by SerpAPI post-generation:
     bookingUrl?: string;
+    pricePerNight?: string;
     available?: boolean;
     availabilityChecked?: boolean;
     alternativeName?: string;
@@ -503,28 +504,27 @@ Return ONLY valid JSON — no markdown fences, no explanation, no commentary:
   return plan;
 }
 
-// ── Hotel availability enrichment ─────────────────────────────────────────────
+// ── Hotel availability enrichment (SerpAPI) ───────────────────────────────────
+
+const SERP_MAX_SEARCHES_PER_ITINERARY = 3;
 
 /**
- * Post-processes a generated itinerary by checking Booking.com availability
- * for each unique hotel recommended by Claude. Mutates hotel objects in-place.
+ * Post-processes a generated itinerary by looking up each unique hotel via
+ * SerpAPI Google Hotels to get real nightly rates and booking URLs for the
+ * exact check-in/check-out dates.
  *
- * Only runs when:
- *   1. APIFY_API_KEY is configured
- *   2. A specific (parseable) start date is known from the intent
- *
- * Falls back silently on any error so the core itinerary is never blocked.
+ * Rules:
+ *   - Only fires inside generateTripItinerary — never from chat or other routes
+ *   - Max 3 SerpAPI searches per itinerary (free tier: 100/month)
+ *   - Results cached in apify_cache (6 h) — same hotel+date never searched twice
+ *   - Fallback chain: SerpAPI → Google Places (website only) → plain name, no link
+ *   - Mutates hotel objects in-place; never throws — core itinerary is never blocked
  */
 export async function enrichItineraryWithHotelAvailability(
   plan:   NativeTripPlan,
   intent: ParsedTripIntent,
 ): Promise<void> {
-  if (!isBookingAvailabilityReady()) {
-    logger.info("[HotelAvail] Skipping hotel enrichment — APIFY_API_KEY not set");
-    return;
-  }
-
-  const checkIn = parseToISODate(intent.startDate ?? plan.start_date ?? null);
+  const checkIn = parseToISODate(intent.startDate ?? plan.start_date ?? undefined);
   if (!checkIn) {
     logger.info({ startDate: intent.startDate }, "[HotelAvail] Skipping — no parseable start date");
     return;
@@ -534,51 +534,76 @@ export async function enrichItineraryWithHotelAvailability(
   const checkOut = addNightsToISO(checkIn, nights);
   const adults   = intent.partySize ?? 2;
 
+  const serpReady = isSerpApiReady();
   logger.info(
-    { dest: plan.destination, checkIn, checkOut, adults },
-    "[HotelAvail] Running Booking.com availability check"
+    { dest: plan.destination, checkIn, checkOut, adults, serpReady },
+    "[HotelAvail] Starting SerpAPI hotel enrichment",
   );
 
-  let searchResults: BookingHotel[];
-  try {
-    searchResults = await searchBookingAvailability(plan.destination, checkIn, checkOut, adults);
-  } catch (err) {
-    logger.warn({ err }, "[HotelAvail] Search threw — skipping enrichment");
-    return;
-  }
-
-  if (!searchResults.length) {
-    logger.info({ dest: plan.destination }, "[HotelAvail] No results from Booking.com");
-    return;
-  }
-
-  // Match each unique hotel name once, then apply to all days using that hotel
-  const cache = new Map<string, ReturnType<typeof matchHotelToResults>>();
-
+  // Collect unique hotel names in itinerary order, capped at max searches
+  const uniqueHotels: string[] = [];
   for (const day of plan.itinerary.days) {
-    if (!day.hotel?.name) continue;
-    const name = day.hotel.name;
-
-    if (!cache.has(name)) {
-      cache.set(name, matchHotelToResults(name, searchResults));
+    const name = day.hotel?.name;
+    if (name && !uniqueHotels.includes(name)) {
+      uniqueHotels.push(name);
+      if (uniqueHotels.length >= SERP_MAX_SEARCHES_PER_ITINERARY) break;
     }
-    const match = cache.get(name)!;
+  }
+
+  logger.info(
+    { uniqueHotels, limit: SERP_MAX_SEARCHES_PER_ITINERARY },
+    "[HotelAvail] Unique hotels to enrich",
+  );
+
+  // Search each unique hotel once, cache results by name
+  const resultCache = new Map<string, Awaited<ReturnType<typeof searchHotelViaSerpApi>>>();
+
+  for (const hotelName of uniqueHotels) {
+    try {
+      const result = await searchHotelViaSerpApi(
+        hotelName,
+        plan.destination,
+        checkIn,
+        checkOut,
+        adults,
+      );
+      resultCache.set(hotelName, result);
+    } catch (err) {
+      logger.warn({ err, hotelName }, "[HotelAvail] SerpAPI search threw — skipping this hotel");
+    }
+  }
+
+  // Apply results to all days — hotels beyond the search cap get no enrichment
+  for (const day of plan.itinerary.days) {
+    const name = day.hotel?.name;
+    if (!name) continue;
+
+    const result = resultCache.get(name);
+    if (!result) continue; // beyond cap or errored — leave GPT-4o values intact
 
     day.hotel.availabilityChecked = true;
-    if (match.matched) {
-      day.hotel.available  = true;
-      day.hotel.bookingUrl = match.matched.bookingUrl;
-      logger.info({ hotel: name, url: match.matched.bookingUrl }, "[HotelAvail] ✓ Available");
+
+    if (result.source === "serpapi") {
+      day.hotel.available     = true;
+      day.hotel.bookingUrl    = result.bookingUrl;
+      day.hotel.pricePerNight = result.pricePerNight;
+      // Preserve GPT-4o websiteUrl; only override if it looks empty/placeholder
+      if (!day.hotel.websiteUrl || day.hotel.websiteUrl === "") {
+        day.hotel.websiteUrl = result.websiteUrl ?? day.hotel.websiteUrl;
+      }
+      logger.info(
+        { hotel: name, price: result.pricePerNight, bookingUrl: result.bookingUrl.substring(0, 60) },
+        "[HotelAvail] ✓ SerpAPI — rate and booking URL populated",
+      );
+    } else if (result.source === "places" && result.websiteUrl) {
+      day.hotel.available  = false;
+      // Fill bookingUrl and websiteUrl from Places if GPT-4o left them empty
+      if (!day.hotel.bookingUrl) day.hotel.bookingUrl = result.websiteUrl;
+      if (!day.hotel.websiteUrl) day.hotel.websiteUrl = result.websiteUrl;
+      logger.info({ hotel: name, websiteUrl: result.websiteUrl }, "[HotelAvail] ~ Places fallback — website URL set");
     } else {
       day.hotel.available = false;
-      if (match.bestAlternative) {
-        day.hotel.alternativeName          = match.bestAlternative.name;
-        day.hotel.alternativeBookingUrl    = match.bestAlternative.bookingUrl;
-        day.hotel.alternativePricePerNight = match.bestAlternative.pricePerNight;
-        logger.info({ hotel: name, alt: match.bestAlternative.name }, "[HotelAvail] ✗ Not found — alt suggested");
-      } else {
-        logger.info({ hotel: name }, "[HotelAvail] ✗ Not found — no alternative available");
-      }
+      logger.info({ hotel: name }, "[HotelAvail] ✗ No result from SerpAPI or Places");
     }
   }
 }
