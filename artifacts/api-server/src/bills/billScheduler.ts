@@ -128,9 +128,9 @@ async function checkBillReminders(): Promise<void> {
           body,
           tag: `bill-${bill.id}`,
           notificationType: "bill-reminder",
-          // "bill-action" → native app shows: "Paid ✓" and "Dismiss"
-          // Paid ✓  → POST /api/bills/paid       { billId }  — marks paid this cycle
-          // Dismiss → POST /api/reminders/snooze  { billId, minutes: 1440 } — reminds tomorrow at 8 AM
+          // "bill-action" → native app shows: "Paid ✓" and "Remind me tomorrow"
+          // Paid ✓         → POST /api/bills/paid              { billId }
+          // Remind me tmrw → POST /api/bills/remind-tomorrow   { billId }
           categoryIdentifier: "bill-action",
           requireInteraction: true,
           // Top-level data fields — forwarded in the Expo push data envelope so the
@@ -139,6 +139,10 @@ async function checkBillReminders(): Promise<void> {
           billName: bill.name,
           amount: bill.amount ?? "",
           dueDateISO,
+          // Explicit action endpoint hints — native handler reads these from data
+          // so the correct API path is never hardcoded in the app.
+          actionTaken: "/api/bills/paid",
+          actionSnooze: "/api/bills/remind-tomorrow",
           // companionMessage as a plain object (NOT a stringified string) — some
           // native action handlers JSON.parse it, others read it directly.
           companionMessage: {
@@ -146,6 +150,8 @@ async function checkBillReminders(): Promise<void> {
             billName: bill.name,
             amount: bill.amount ?? "",
             dueDateISO,
+            actionTaken: "/api/bills/paid",
+            actionSnooze: "/api/bills/remind-tomorrow",
           },
         },
         userName
