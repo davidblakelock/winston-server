@@ -1887,7 +1887,7 @@ If the conversation is not about a trip, set destination to null.`,
         system:
           "Extract trip intent from the user's message. Return ONLY valid JSON with these fields: " +
           '{"destination":"primary destination — state or region (e.g. \\"Arkansas\\") or null","stops":["array of specific cities/towns mentioned as stops, e.g. [\\"Hot Springs\\",\\"Eureka Springs\\",\\"Bentonville\\"] — empty array [] if none named"],"nights":number or null,"partyDesc":"description like \'solo\' or \'me and Susan\' or null","vibe":"travel style or null","startDate":"YYYY-MM-DD or loose phrase like \'June 12th\' or null","budget":"budget|mid-range|luxury or null"}. ' +
-          "Always extract every named city or town into stops[]. Return null for scalar fields not mentioned. No prose, no markdown, no code fences.",
+          "IMPORTANT: stops[] must include every city or town mentioned, even when they are NOT separated by commas — e.g. 'stops in Hot Springs Eureka Springs and Bentonville' → [\"Hot Springs\",\"Eureka Springs\",\"Bentonville\"]. Split on 'and', spaces between known place names, or any separator. Always extract every named city or town into stops[]. Return null for scalar fields not mentioned. No prose, no markdown, no code fences.",
         messages: [{ role: "user", content: message }],
       });
 

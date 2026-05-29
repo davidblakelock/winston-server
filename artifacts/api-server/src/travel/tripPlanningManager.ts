@@ -341,6 +341,35 @@ export async function generateTripItinerary(
     ? `• Specific stops (in order if possible): ${intent.stops.join(" → ")}`
     : "";
 
+  // Build an explicit day-by-day routing table when stops are provided.
+  // This replaces the vague "each stop gets a full day" hint with a hard assignment
+  // that GPT-4o must follow exactly.
+  let routingTable = "";
+  if (intent.stops?.length && intent.stops.length > 1) {
+    const stops = intent.stops;
+    const daysPerStop = Math.floor(totalDays / stops.length);
+    const extraDays   = totalDays % stops.length;
+    const routing: string[] = [];
+    let dayNum = 1;
+    stops.forEach((stop, idx) => {
+      const count = daysPerStop + (idx < extraDays ? 1 : 0);
+      for (let d = 0; d < count; d++) {
+        const label =
+          dayNum === 1           ? " (arrival day)"
+          : dayNum === totalDays ? " (departure day)"
+          : d === 0 && idx > 0   ? " (drive in from previous stop + explore)"
+          : " (full day)";
+        routing.push(`  Day ${dayNum}: ${stop}${label}`);
+        dayNum++;
+      }
+    });
+    routingTable = `
+ROAD TRIP ROUTING — MANDATORY:
+This is a multi-stop road trip. You MUST assign days exactly as follows:
+${routing.join("\n")}
+Each day's "location" field MUST match the city listed above. Do NOT place all days in the first stop.`;
+  }
+
   const startDateNote = intent.startDate
     ? `Start date / approximate timing: ${intent.startDate} — if this resolves to a specific calendar date, output it as start_date (YYYY-MM-DD); otherwise output null`
     : "Start date not specified — output null for start_date and end_date";
@@ -377,6 +406,7 @@ TRIP DETAILS:
 • Budget: ${budget}
 • ${startDateNote}
 ${stopsNote ? stopsNote + "\n  — Structure the itinerary so each named stop gets at least one full day. Assign hotels, activities, and meals that are actually located in or near that stop." : ""}
+${routingTable}
 ${travelCtx}
 
 HOTELS — read carefully:
@@ -415,6 +445,7 @@ PERSONALIZATION — this is the most important section:
 • Shows/sports: if the traveler follows sports teams or live music and there's a game or show during the trip timing, mention it in practicalNotes
 • Reference their interests naturally in descriptions — don't just list facts, write as if you know what they'd love
 
+${routingTable ? routingTable + "\n\nRemember: the day routing above is MANDATORY. Each day's location field must exactly match the city assigned to that day." : ""}
 Return ONLY valid JSON — no markdown fences, no explanation, no commentary:
 {
   "trip_name": "Creative evocative name",
@@ -439,7 +470,7 @@ Return ONLY valid JSON — no markdown fences, no explanation, no commentary:
 
   const response = await openai.chat.completions.create({
     model:      MODEL_GPT4O,
-    max_tokens: 8000,
+    max_tokens: 8192,
     messages:   [{ role: "user", content: prompt }],
   });
 
