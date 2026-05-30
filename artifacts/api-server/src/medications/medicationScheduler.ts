@@ -77,8 +77,12 @@ export function startMedicationScheduler(): void {
               body: "Good morning — have you taken your medications?",
               tag: "medication-morning",
               notificationType: "medication",
+              // "medication-action" → native app shows: "Taken ✓" and "Remind in 30 min"
+              // Taken ✓      → POST /api/medications/taken
+              // Remind in 30 → POST /api/medications/snooze-reminder { snoozeMinutes: 30 }
               categoryIdentifier: "medication-action",
-              actionTaken: "/api/medications/confirm-taken",
+              requireInteraction: true,
+              actionTaken: "/api/medications/taken",
               actionSnooze: "/api/medications/snooze-reminder",
               snoozeMinutes: 30,
             }, userName).catch((err: unknown) => {

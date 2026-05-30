@@ -1,0 +1,73 @@
+everything should happen in Railway. What is the production database that you are using? Please review the entire architecture along with the databases you are using and make sure that you are only using the native app and not the web app. It appears that things are getting put in the wrong database or the wrong code is being updated
+
+2 minutes ago
+
+Analyzing database connection requirements (24 seconds)
+Let me read the DB connection logic to understand exactly which database is used for what, and check the environment setup:
+
+
+5 actions
+Now I can give you a definitive, accurate answer. Let me also query the actual database the API server uses to confirm what's really in it:
+
+
+2 actions
+That's the key data point. Now I have the complete, accurate picture. Let me give you the full architecture breakdown.
+
+What's actually happening
+Your production stack — nothing else matters:
+
+Native App (Expo/Android)
+        ↓ HTTPS
+Railway Server (winston-server-production.up.railway.app)
+        ↓ auto-deploys from
+GitHub (davidblakelock/winston-server) main branch
+        ↓
+Supabase — THE ONLY DATABASE
+
+Replit's role: Code editor + git push point only. Nothing runs in production from here.
+
+The database situation — where I misled you
+There are two completely separate PostgreSQL instances in this environment:
+
+What it is	Who uses it
+Supabase	Your real database	Railway server, Replit dev API server
+Replit local PG (DATABASE_URL)	Replit's built-in throwaway DB	My executeSql tool only
+What I got wrong: When I ran executeSql to "check" trip data earlier and saw trips 9–13, I was querying the Replit local PostgreSQL — which the API server never touches. That data is completely irrelevant. The API server always uses Supabase (confirmed in startup logs: [db] Using Supabase REST via exec_sql).
+
+Your actual Supabase trips — only 2 exist:
+
+ID:7  | Santa Fe  | Santa Fe Serenade: Rockin' Roads & Adobe Sunsets
+ID:21 | Arkansas  | Ozark Adventures and Enlightenment
+
+Trip 7 was enriched (has ~$258/night for Inn of the Five Graces). Trip 21 has not been enriched yet. Let me do that now and also verify trip 7's current state:
+
+
+2 actions
+Both trips now enriched with real dollar prices from SerpAPI. Here's the complete, accurate picture:
+
+Architecture — confirmed
+One database. One server. One app.
+
+Native App (Expo/Android)
+        ↓ HTTPS
+Railway Server  ←── auto-deploys from GitHub main
+        ↓
+Supabase  ←── THE only database (both Railway and Replit dev server connect here)
+
+The web app (artifacts/winston) is irrelevant — it only runs in Replit's preview pane and has nothing to do with your native app or Railway.
+
+Replit's only job is editing code and pushing to GitHub. Code edits → git push → Railway deploys. That pipeline is working correctly.
+
+Where I caused confusion
+When I ran executeSql to "check" trip data, I was querying Replit's throwaway local PostgreSQL — a completely separate DB that the API server never uses. The trips I saw (IDs 9–13) don't exist in Supabase at all. That analysis was wrong from the start.
+
+The API server (both Replit dev and Railway) always uses Supabase via the exec_sql RPC, confirmed every startup: [db] Using Supabase REST via exec_sql.
+
+Your actual Supabase trips — now enriched
+ID	Destination	Hotels & Pricing
+7	Santa Fe	Inn of the Five Graces — ~$258/night
+21	Arkansas (Ozarks)	The Waters — $106/night · 1886 Crescent Hotel — $328/night · 21c Museum Hotel Bentonville — $295/night
+Trip 21 just got real dollar pricing written to Supabase. Both trips are ready.
+
+What the "can't check pricing" fix does now
+The code changes (already on GitHub → Railway deploying) mean: when the native app opens any trip and the user asks anything about price, Winston reads the stored pricePerNight from Supabase and answers directly — no special phrasing, no regex required. The injection happens unconditionally on every Trip screen chat request, even without a tripId being passed (it falls back to your most recently updated trip).
