@@ -253,6 +253,7 @@ import {
 import {
   checkHotelAvailability,
   buildHotelAvailabilityBlock,
+  parseToISODate,
 } from "../travel/hotelAvailability.js";
 import { nextOccurrenceForPattern, humanReadableRecurring } from "../reminders/recurringUtils.js";
 import { broadcastToUser } from "../reminders/sseStore.js";
@@ -1157,12 +1158,14 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   // ── Trip screen: inject FULL itinerary + hotel pricing ───────────────────
   // Inject the complete stored plan so Claude can answer ANY question about the
   // trip — activities, meals, hotels, pricing — without truncating to one day.
-  if (activeTripPlan) {
+  // Skip when the user is about to generate a NEW trip — injecting the old plan
+  // would confuse Claude (it would see two different trips in context).
+  if (activeTripPlan && !TRIP_PLAN_INTENT.test(message)) {
     type ItinActivity = { time?: string; title?: string; description?: string; notes?: string };
     type ItinMeal = { time?: string; title?: string; description?: string; bookingUrl?: string; websiteUrl?: string };
     type ItinHotel = { name?: string; pricePerNight?: string; priceRange?: string; bookingUrl?: string; websiteUrl?: string; alternativeBookingUrl?: string; notes?: string };
     type ItinDay = { dayNumber?: number; label?: string; location?: string; hotel?: ItinHotel; activities?: ItinActivity[]; meals?: ItinMeal[] };
-    const itinDays: ItinDay[] = ((activeTripPlan.itinerary as Record<string, unknown>)?.days as ItinDay[] | undefined) ?? [];
+    const itinDays: ItinDay[] = ((activeTripPlan.itinerary as unknown as Record<string, unknown>)?.days as ItinDay[] | undefined) ?? [];
 
     const dayBlocks: string[] = [];
     for (const day of itinDays) {
@@ -1981,12 +1984,13 @@ If the conversation is not about a trip, set destination to null.`,
       );
       req.log.info({ message: message.slice(0, 80) }, "[TripPlan] Plan intent detected — extracting context");
 
+      const todayForTrip = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
       const intentRaw = await anthropic.messages.create({
         model: MODEL_HAIKU,
         max_tokens: 400,
         system:
-          "Extract trip intent from the user's message. Return ONLY valid JSON with these fields: " +
-          '{"destination":"primary destination — state or region (e.g. \\"Arkansas\\") or null","stops":["array of specific cities/towns mentioned as stops, e.g. [\\"Hot Springs\\",\\"Eureka Springs\\",\\"Bentonville\\"] — empty array [] if none named"],"nights":number or null,"partyDesc":"description like \'solo\' or \'me and Susan\' or null","vibe":"travel style or null","startDate":"YYYY-MM-DD or loose phrase like \'June 12th\' or null","budget":"budget|mid-range|luxury or null"}. ' +
+          `Today's date is ${todayForTrip}. Extract trip intent from the user's message. Return ONLY valid JSON with these fields: ` +
+          '{"destination":"primary destination — state or region (e.g. \\"Arkansas\\") or null","stops":["array of specific cities/towns mentioned as stops, e.g. [\\"Hot Springs\\",\\"Eureka Springs\\",\\"Bentonville\\"] — empty array [] if none named"],"nights":number or null,"partyDesc":"description like \'solo\' or \'me and Susan\' or null","vibe":"travel style or null","startDate":"YYYY-MM-DD — resolve ALL date phrases to a specific YYYY-MM-DD using today\'s date as the reference year, e.g. \'June 12\' → \\"2026-06-12\\", \'next month\' → the 1st of next month; output null only if no date can be inferred","budget":"budget|mid-range|luxury or null"}. ' +
           "NIGHTS RULE — critical: 'nights' means overnight stays, NOT calendar days. Examples: '4 days 3 nights' → nights=3. '3-night trip' → nights=3. '4-day trip' → nights=3 (days minus 1). '5 days' → nights=4. Always prefer the explicit night count when both days and nights are stated. " +
           "STOPS RULE: stops[] must include every city or town mentioned, even when they are NOT separated by commas — e.g. 'stops in Hot Springs Eureka Springs and Bentonville' → [\"Hot Springs\",\"Eureka Springs\",\"Bentonville\"]. Split on 'and', spaces between known place names, or any separator. Always extract every named city or town into stops[]. Return null for scalar fields not mentioned. No prose, no markdown, no code fences.",
         messages: [{ role: "user", content: message }],
@@ -2003,9 +2007,18 @@ If the conversation is not about a trip, set destination to null.`,
       let intentParsed: { destination?: string | null; stops?: string[] | null; nights?: number | null; partyDesc?: string | null; vibe?: string | null; startDate?: string | null; budget?: string | null } = {};
       try {
         intentParsed = JSON.parse(intentText);
-        console.log(`[TRIP-INTENT-PARSED] destination="${intentParsed.destination}" stops=${JSON.stringify(intentParsed.stops)} nights=${intentParsed.nights}`);
+        console.log(`[TRIP-INTENT-PARSED] destination="${intentParsed.destination}" stops=${JSON.stringify(intentParsed.stops)} nights=${intentParsed.nights} startDate="${intentParsed.startDate}"`);
       } catch (parseErr) {
         console.log(`[TRIP-INTENT-PARSE-FAIL] err="${String(parseErr)}" raw="${intentText.slice(0, 100)}"`);
+      }
+      // Pre-resolve startDate to strict YYYY-MM-DD so GPT-4o stores it correctly.
+      // Haiku may return "June 12th" or a partial phrase; parseToISODate normalises it.
+      if (intentParsed.startDate && !/^\d{4}-\d{2}-\d{2}$/.test(intentParsed.startDate)) {
+        const resolved = parseToISODate(intentParsed.startDate);
+        if (resolved) {
+          console.log(`[TRIP-DATE-RESOLVE] "${intentParsed.startDate}" → "${resolved}"`);
+          intentParsed.startDate = resolved;
+        }
       }
 
       if (!intentParsed.destination) {
@@ -2073,9 +2086,39 @@ If the conversation is not about a trip, set destination to null.`,
           "[TripPlan] Auto-generated itinerary saved to DB"
         );
 
-        const daysPreview = itinerary.itinerary.days
-          .map((d) => `Day ${d.dayNumber} — ${d.label}: ${d.activities?.[0]?.description ?? d.activities?.[0]?.title ?? d.location}`)
-          .join("; ");
+        // Build full itinerary block — same structure as the stored-plan injection so
+        // Claude can answer immediate follow-up questions about any day, hotel, or meal.
+        const newTripDayBlocks: string[] = [];
+        for (const day of itinerary.itinerary.days) {
+          const dayLines: string[] = [];
+          const loc2 = day.location ? ` (${day.location})` : "";
+          dayLines.push(`Day ${day.dayNumber}${day.label ? ` — ${day.label}` : ""}${loc2}`);
+          const h2 = day.hotel;
+          if (h2?.name) {
+            let hl = `  Hotel: ${h2.name}`;
+            if (h2.pricePerNight) hl += ` — ${h2.pricePerNight}`;
+            const bu = h2.bookingUrl || h2.websiteUrl;
+            if (bu) hl += `\n    Book: ${bu}`;
+            dayLines.push(hl);
+          }
+          if (day.activities?.length) {
+            dayLines.push("  Activities:");
+            for (const a2 of day.activities) {
+              dayLines.push(`    ${a2.time ? `${a2.time}: ` : ""}${a2.title ?? ""}${a2.description ? ` — ${a2.description}` : ""}`);
+            }
+          }
+          if (day.meals?.length) {
+            dayLines.push("  Meals:");
+            for (const m2 of day.meals) {
+              const mu = m2.bookingUrl || m2.websiteUrl;
+              dayLines.push(`    ${m2.time ? `${m2.time}: ` : ""}${m2.title ?? ""}${m2.description ? ` — ${m2.description}` : ""}${mu ? ` (${mu})` : ""}`);
+            }
+          }
+          newTripDayBlocks.push(dayLines.join("\n"));
+        }
+        const newTripDates = itinerary.start_date
+          ? ` | ${itinerary.start_date} – ${itinerary.end_date ?? "?"}`
+          : " | dates TBD";
 
         const planEnhancements = await generateTripEnhancements(itinerary);
         const planEnhancementsBlock = planEnhancements.length
@@ -2083,15 +2126,15 @@ If the conversation is not about a trip, set destination to null.`,
           : "";
 
         systemPrompt +=
-          `\n\n[Trip Itinerary Auto-Generated & Saved — "${itinerary.trip_name}"]\n` +
+          `\n\n[Trip Itinerary Auto-Generated & Saved — "${itinerary.trip_name}"${newTripDates}]\n` +
           `You just built and saved a day-by-day itinerary called "${itinerary.trip_name}" ` +
           `(${itinerary.nights} nights in ${itinerary.destination}) to ${sessionUserName}'s travel screen.\n` +
-          `Day previews: ${daysPreview}\n` +
+          `COMPLETE ITINERARY:\n${newTripDayBlocks.join("\n\n")}\n` +
           `${planEnhancementsBlock}\n\n` +
           `TASK: Present this trip plan enthusiastically. Mention the trip name. Give a warm 1-sentence ` +
-          `teaser for each day. Then naturally offer the 3–4 specific next steps above as things they ` +
-          `should do to make the trip even better — keep it conversational, like you thought of it yourself. ` +
-          `Tell them it's saved to their travel screen. Write conversationally, under 280 words, no bullet points.`;
+          `teaser for each day (reference the specific activities above). Then naturally offer the 3–4 ` +
+          `specific next steps above — keep it conversational, like you thought of it yourself. ` +
+          `Tell them it's saved to their travel screen. Write conversationally, under 300 words, no bullet points.`;
       }
     } catch (planErr) {
       process.stdout.write(`[STDOUT] TRIP-PLAN CATCH ERROR: ${String(planErr instanceof Error ? planErr.message : planErr)}\n`);
@@ -2127,14 +2170,20 @@ If the conversation is not about a trip, set destination to null.`,
           hotelLines.push(line);
         }
         if (hotelLines.length > 0) {
+          const storedDatesNote = activeTripPlan.start_date && activeTripPlan.end_date
+            ? `Check-in: ${activeTripPlan.start_date} → Check-out: ${activeTripPlan.end_date} (${activeTripPlan.nights ?? "?"} nights)`
+            : activeTripPlan.start_date
+              ? `Check-in: ${activeTripPlan.start_date} (${activeTripPlan.nights ?? "?"} nights — no end date stored)`
+              : `No check-in/check-out dates stored for this trip (prices are approximate).`;
           systemPrompt +=
             `\n\n[VERIFIED — Stored Trip Hotel Data — "${activeTripPlan.trip_name ?? activeTripPlan.destination}"]\n` +
+            `${storedDatesNote}\n` +
             `Pricing below is from a recent SerpAPI / Google Hotels search for this trip.\n` +
             hotelLines.join("\n") + "\n" +
-            `NOTE: Prices marked with ~ are approximate (trip has no fixed dates set). ` +
-            `Share these prices directly and confidently. Provide the booking URL so David can check live availability. ` +
-            `Do NOT say you can't check pricing — you have the data above.`;
-          req.log.info({ tripId, hotels: hotelLines.length }, "[HotelAvail] Injected stored trip hotel pricing");
+            `NOTE: Prices marked with ~ are approximate (no fixed dates). ` +
+            `Share these prices and dates directly and confidently. Provide booking URLs so David can check live availability. ` +
+            `Do NOT say you can't check pricing or that you have no dates — the data is above.`;
+          req.log.info({ tripId, hotels: hotelLines.length, start_date: activeTripPlan.start_date }, "[HotelAvail] Injected stored trip hotel pricing + dates");
         } else {
           systemPrompt +=
             `\n\n[Hotel Pricing — Not Yet Enriched]\n` +
