@@ -1,0 +1,3 @@
+- [Notification payload stability](notification-payload-stability.md) — agent churn keeps breaking bill/medication payloads; lock endpoints in comments, never touch without explicit user request.
+- [Trip context injection](trip-context-injection.md) — must inject full itinerary (days/activities/meals/hotels), not just hotels; hotel-only causes single-day truncation.
+- [Git push pattern](git-push-pattern.md) — main agent cannot git add/commit; subagent can push but not commit; Replit checkpoint auto-commits, then push via subagent.
