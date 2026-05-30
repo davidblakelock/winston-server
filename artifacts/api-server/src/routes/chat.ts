@@ -1154,48 +1154,78 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   // Dynamic: current time, recent memories, preference blocks — changes each request.
   let systemPrompt = getCurrentDateTimeBlock() + "\n" + memoryBlock + dynamicProfileBlock + prefsBlock;
 
-  // ── Trip screen: inject hotel pricing unconditionally ─────────────────────
-  // When in trip-planning context, always give Claude the stored hotel data so it
-  // can answer ANY pricing/availability question without needing a specific regex match.
+  // ── Trip screen: inject FULL itinerary + hotel pricing ───────────────────
+  // Inject the complete stored plan so Claude can answer ANY question about the
+  // trip — activities, meals, hotels, pricing — without truncating to one day.
   if (activeTripPlan) {
-    type ItinDay = { hotel?: { name?: string; pricePerNight?: string; priceRange?: string; bookingUrl?: string; websiteUrl?: string; alternativeBookingUrl?: string } };
+    type ItinActivity = { time?: string; title?: string; description?: string; notes?: string };
+    type ItinMeal = { time?: string; title?: string; description?: string; bookingUrl?: string; websiteUrl?: string };
+    type ItinHotel = { name?: string; pricePerNight?: string; priceRange?: string; bookingUrl?: string; websiteUrl?: string; alternativeBookingUrl?: string; notes?: string };
+    type ItinDay = { dayNumber?: number; label?: string; location?: string; hotel?: ItinHotel; activities?: ItinActivity[]; meals?: ItinMeal[] };
     const itinDays: ItinDay[] = ((activeTripPlan.itinerary as Record<string, unknown>)?.days as ItinDay[] | undefined) ?? [];
-    const hotelLines: string[] = [];
-    const seen = new Set<string>();
+
+    const dayBlocks: string[] = [];
     for (const day of itinDays) {
+      const lines: string[] = [];
+      const dayNum = day.dayNumber ?? (itinDays.indexOf(day) + 1);
+      const loc = day.location ? ` (${day.location})` : "";
+      lines.push(`Day ${dayNum}${day.label ? ` — ${day.label}` : ""}${loc}`);
+
+      // Hotel
       const h = day.hotel;
-      if (!h?.name || seen.has(h.name)) continue;
-      seen.add(h.name);
-      let line = `  • ${h.name}`;
-      if (h.pricePerNight) {
-        line += ` — ${h.pricePerNight}`;
-      } else if (h.priceRange) {
-        line += ` — approx. ${h.priceRange} price tier`;
-      } else {
-        line += ` — price not yet fetched`;
+      if (h?.name) {
+        let hotelLine = `  Hotel: ${h.name}`;
+        if (h.pricePerNight) hotelLine += ` — ${h.pricePerNight}`;
+        else if (h.priceRange) hotelLine += ` — approx. ${h.priceRange}`;
+        const bookUrl = h.bookingUrl || h.websiteUrl || h.alternativeBookingUrl;
+        if (bookUrl) hotelLine += `\n    Book: ${bookUrl}`;
+        lines.push(hotelLine);
       }
-      const bookUrl = h.bookingUrl || h.websiteUrl || h.alternativeBookingUrl;
-      if (bookUrl) line += `\n    Book/Info: ${bookUrl}`;
-      hotelLines.push(line);
+
+      // Activities
+      if (day.activities?.length) {
+        lines.push("  Activities:");
+        for (const a of day.activities) {
+          const timeLabel = a.time ? `${a.time}: ` : "";
+          const desc = a.description ?? a.notes ?? "";
+          lines.push(`    ${timeLabel}${a.title ?? ""}${desc ? ` — ${desc}` : ""}`);
+        }
+      }
+
+      // Meals
+      if (day.meals?.length) {
+        lines.push("  Meals:");
+        for (const m of day.meals) {
+          const timeLabel = m.time ? `${m.time}: ` : "";
+          const url = m.bookingUrl || m.websiteUrl;
+          const urlSuffix = url ? ` (${url})` : "";
+          lines.push(`    ${timeLabel}${m.title ?? ""}${m.description ? ` — ${m.description}` : ""}${urlSuffix}`);
+        }
+      }
+
+      dayBlocks.push(lines.join("\n"));
     }
-    if (hotelLines.length > 0) {
+
+    const tripHeader =
+      `[Full Trip Plan — "${activeTripPlan.trip_name ?? activeTripPlan.destination}"` +
+      `${activeTripPlan.start_date ? ` | ${activeTripPlan.start_date} – ${activeTripPlan.end_date ?? "?"}` : " | dates TBD"}]\n` +
+      `Destination: ${activeTripPlan.destination} | ${activeTripPlan.nights ?? itinDays.length} nights`;
+
+    if (dayBlocks.length > 0) {
       systemPrompt +=
-        `\n\n[Trip Hotel Data — "${activeTripPlan.trip_name ?? activeTripPlan.destination}"` +
-        `${activeTripPlan.start_date ? ` | ${activeTripPlan.start_date} – ${activeTripPlan.end_date ?? "?"}` : " | dates TBD"}]\n` +
-        `Destination: ${activeTripPlan.destination} | ${activeTripPlan.nights ?? "?"} nights\n` +
-        hotelLines.join("\n") + "\n" +
-        `NOTE: Prices marked ~ are approximate (no fixed dates set). Prices shown as "$$$" are tier estimates only.\n` +
-        `INSTRUCTIONS: You have this hotel data. Answer pricing and availability questions directly using it. ` +
-        `Provide the booking URL so David can check live rates. ` +
-        `Do NOT say you cannot check pricing or availability — the data is above.`;
-      req.log.info({ tripId: activeTripPlan.id, tripName: activeTripPlan.trip_name, hotels: hotelLines.length }, "[TripContext] Hotel data injected into prompt");
+        `\n\n${tripHeader}\n` +
+        dayBlocks.join("\n\n") + "\n" +
+        `\nINSTRUCTIONS: You have the complete trip itinerary above. ` +
+        `When David asks about the trip, describe it fully — all days, all stops, activities, meals, and hotels. ` +
+        `Do NOT truncate or summarize to a single day. ` +
+        `For hotel pricing questions, answer directly using the prices above and provide booking URLs. ` +
+        `Do NOT say you cannot check pricing or availability.`;
+      req.log.info({ tripId: activeTripPlan.id, tripName: activeTripPlan.trip_name, days: dayBlocks.length }, "[TripContext] Full itinerary injected into prompt");
     } else {
       systemPrompt +=
-        `\n\n[Trip Context — "${activeTripPlan.trip_name ?? activeTripPlan.destination}"]\n` +
-        `Destination: ${activeTripPlan.destination} | ${activeTripPlan.nights ?? "?"} nights` +
-        `${activeTripPlan.start_date ? ` | ${activeTripPlan.start_date} – ${activeTripPlan.end_date ?? "?"}` : " | dates TBD"}\n` +
-        `Hotel pricing has not been fetched for this trip yet. If asked about prices, let David know and suggest ` +
-        `he tap the refresh button on the trip card, or check Google Hotels for ${activeTripPlan.destination} directly.`;
+        `\n\n${tripHeader}\n` +
+        `No itinerary days found yet. If David asks about pricing or the plan, let him know the trip hasn't been generated yet ` +
+        `and suggest tapping the refresh button on the trip card.`;
     }
   }
 
