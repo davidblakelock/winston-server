@@ -515,7 +515,10 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
   } | null>(null);
   const [briefingExpanded, setBriefingExpanded] = useState(false);
   const [briefingFullText, setBriefingFullText] = useState<string | null>(null);
-  const [briefingCardDismissed, setBriefingCardDismissed] = useState(false);
+  const briefingDismissalKey = `briefing-card-dismissed-${new Date().toISOString().slice(0, 10)}`;
+  const [briefingCardDismissed, setBriefingCardDismissed] = useState(
+    () => localStorage.getItem(briefingDismissalKey) === "true"
+  );
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -2513,7 +2516,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
                   <p className="text-[11px] font-semibold tracking-widest uppercase text-indigo-300/80">Today's Briefing</p>
                 </div>
                 <button
-                  onClick={() => setBriefingCardDismissed(true)}
+                  onClick={() => { localStorage.setItem(briefingDismissalKey, "true"); setBriefingCardDismissed(true); }}
                   className="text-indigo-400/50 hover:text-indigo-300 transition-colors text-lg leading-none"
                   aria-label="Dismiss briefing card"
                 >
