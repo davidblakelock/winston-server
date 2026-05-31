@@ -1141,6 +1141,19 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
     window.history.replaceState({}, "", window.location.pathname);
 
     if (notif.type === "morning") {
+      // Re-fetch the briefing summary card so it appears if the page was opened before
+      // the briefing was generated (no polling — triggered only by this notification).
+      const summaryToken = localStorage.getItem("winston_session_token");
+      if (summaryToken) {
+        fetch(`${CHAT_BASE}/api/morning-briefing/summary`, {
+          headers: { Authorization: `Bearer ${summaryToken}` },
+        })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((data) => {
+            if (data && data.generated) setBriefingSummary(data);
+          })
+          .catch(() => {});
+      }
       // Try to fetch the pre-generated briefing text instantly (no streaming delay).
       // If the server has it cached from the native pre-gen, it displays immediately.
       // Fall back to the streaming flow only if the cache is cold.
