@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, KeyboardEvent, ChangeEvent } from "react";
-import { Send, Play, Loader2, Disc3, Mic, MicOff, MapPin, Mail, LogOut, Settings, X, Moon, Bell, BellOff, Clock, ChevronDown, ChevronUp, HelpCircle, Check, List, Package } from "lucide-react";
+import { Send, Play, Loader2, Disc3, Mic, MicOff, MapPin, Mail, LogOut, Settings, X, Moon, Bell, BellOff, Clock, ChevronDown, ChevronUp, HelpCircle, Check, List, Package, Sun } from "lucide-react";
 import { useLocation } from "wouter";
 import { useTextToSpeech } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
@@ -2395,6 +2395,20 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
               </>
             )}
           </div>
+        )}
+
+        {/* Show briefing — appears only after user has dismissed today's briefing card */}
+        {briefingSummary?.generated && briefingCardDismissed && (
+          <button
+            onClick={() => {
+              localStorage.removeItem(briefingDismissalKey);
+              setBriefingCardDismissed(false);
+            }}
+            className="text-indigo-400/70 hover:text-indigo-300 transition-colors p-1.5 rounded-full hover:bg-indigo-950/40 border border-indigo-500/20 hover:border-indigo-500/40"
+            title="Show today's briefing"
+          >
+            <Sun className="h-4 w-4" />
+          </button>
         )}
 
         {/* Lists */}
