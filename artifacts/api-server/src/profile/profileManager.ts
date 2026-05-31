@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
-import { autoUpdateRestaurantUrl } from "../lists/autoUrlLookup.js";
+import { autoUpdateRestaurantUrl, yelpFallbackUrl } from "../lists/autoUrlLookup.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -171,6 +171,12 @@ export async function addProfileItem(
     return mapRow(updated.rows[0]);
   }
 
+  // For restaurants, pre-populate with a guaranteed Yelp search URL so the link
+  // is available immediately (before the background lookup resolves).
+  const initialUrl = category === "restaurants"
+    ? yelpFallbackUrl(cleanName)
+    : null;
+
   // Insert new row
   const { rows } = await query<{
     id: number;
@@ -179,14 +185,14 @@ export async function addProfileItem(
     detail: string | null;
     created_at: Date;
   }>(
-    `INSERT INTO profile_items (user_name, category, name, detail)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO profile_items (user_name, category, name, detail, url)
+     VALUES ($1, $2, $3, $4, $5)
      RETURNING id, category, name, detail, created_at`,
-    [userName, category, cleanName, cleanDetail]
+    [userName, category, cleanName, cleanDetail, initialUrl]
   );
 
-  // For restaurants added via chat/profile, auto-lookup the booking URL in the background
-  // so the Restaurants tab can open a reservation link when the user taps the name.
+  // For restaurants: kick off background lookup to find a direct OpenTable / Resy / Yelp
+  // listing URL and replace the Yelp search fallback with a better link if one exists.
   if (category === "restaurants") {
     autoUpdateRestaurantUrl(rows[0].id, cleanName).catch(() => {});
   }

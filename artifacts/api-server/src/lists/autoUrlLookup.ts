@@ -20,11 +20,26 @@ export function detectAutoLookupType(listName: string): AutoLookupType | null {
 
 // ── Per-type URL builders ─────────────────────────────────────────────────────
 
-// Returns true when a stored URL is already a recognised reservation platform.
-// Used by backfill logic to skip restaurants that already have the right kind of link.
+// Constructs a Yelp search URL for a restaurant — used as a guaranteed fallback
+// when no direct OpenTable / Resy / Yelp listing can be found via web search.
+// The URL opens Yelp filtered to the restaurant name + city so the user can
+// browse reviews and book via Yelp Waitlist even without a direct listing.
+export function yelpFallbackUrl(restaurantName: string, city = "Dallas, TX"): string {
+  return `https://www.yelp.com/search?find_desc=${encodeURIComponent(restaurantName)}&find_loc=${encodeURIComponent(city)}`;
+}
+
+// Returns true when a stored URL is a DIRECT reservation/listing page on a known
+// booking platform (not a generic search page). Used by backfill logic — Yelp search
+// URLs are intentionally excluded so those rows are retried for a direct listing.
 export function isBookingPlatformUrl(url: string | null | undefined): boolean {
   if (!url) return false;
-  return /opentable\.com|resy\.com|yelp\.com/i.test(url);
+  // Direct OpenTable listing
+  if (/opentable\.com\/(r|restaurant)\//i.test(url)) return true;
+  // Direct Resy venue page
+  if (/resy\.com\/cities\/.+\/venues\//i.test(url)) return true;
+  // Direct Yelp business listing (yelp.com/biz/...) — NOT yelp.com/search
+  if (/yelp\.com\/biz\//i.test(url)) return true;
+  return false;
 }
 
 // Step 1: Use Claude web_search to find a direct OpenTable, Resy, or Yelp booking page.
@@ -130,12 +145,16 @@ async function lookupRestaurantWebsite(name: string, city = "Dallas"): Promise<s
   }
 }
 
-// Orchestrator: booking URL only (OpenTable or Resy).
-// We intentionally do NOT fall back to the restaurant's own website — a generic
-// homepage doesn't open a reservation form, which is the only reason to store a URL
-// in the restaurants tab. Return null if no booking platform listing is found.
-async function lookupRestaurantUrl(name: string, city = "Dallas"): Promise<string | null> {
-  return lookupRestaurantBookingUrl(name, city);
+// Orchestrator: always returns a URL — direct booking page if found, Yelp search as fallback.
+// Priority: OpenTable → Resy → Yelp direct listing → Yelp search (guaranteed non-null).
+async function lookupRestaurantUrl(name: string, city = "Dallas"): Promise<string> {
+  const bookingUrl = await lookupRestaurantBookingUrl(name, city);
+  if (bookingUrl) return bookingUrl;
+  // Guaranteed fallback: Yelp search filtered to this restaurant + city.
+  // Better than returning null — opens Yelp where the user can find reviews,
+  // the menu, and use Yelp Waitlist. The backfill will still retry this row
+  // later because yelp.com/search is not treated as a "direct" booking URL.
+  return yelpFallbackUrl(name, `${city}, TX`);
 }
 
 export { lookupRestaurantUrl };
@@ -201,8 +220,9 @@ export async function autoUpdateRestaurantUrl(
   restaurantName: string
 ): Promise<void> {
   try {
+    // lookupRestaurantUrl always returns a string (never null):
+    // OpenTable → Resy → Yelp direct → Yelp search fallback.
     const url = await lookupRestaurantUrl(restaurantName);
-    if (!url) return; // no booking link found — leave existing value untouched
 
     await query(
       `UPDATE profile_items SET url = $1 WHERE id = $2`,
