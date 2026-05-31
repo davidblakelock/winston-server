@@ -4,6 +4,28 @@ import { useLocation } from "wouter";
 
 const API = import.meta.env.BASE_URL.replace(/\/$/, "");
 
+const BOOKING_PLATFORMS: { match: string; name: string }[] = [
+  { match: "opentable.com",   name: "OpenTable" },
+  { match: "resy.com",        name: "Resy" },
+  { match: "yelp.com",        name: "Yelp" },
+  { match: "tock.com",        name: "Tock" },
+  { match: "sevenrooms.com",  name: "SevenRooms" },
+  { match: "exploretock.com", name: "Tock" },
+  { match: "tableagent.com",  name: "Table Agent" },
+  { match: "bookatable.com",  name: "Bookatable" },
+  { match: "quandoo.com",     name: "Quandoo" },
+];
+
+function getBookingPlatform(url: string): string {
+  try {
+    const hostname = new URL(url).hostname.replace(/^www\./, "");
+    const match = BOOKING_PLATFORMS.find((p) => hostname.includes(p.match));
+    return match ? match.name : "Reserve";
+  } catch {
+    return "Reserve";
+  }
+}
+
 interface ListItem {
   id: number;
   item_text: string;
@@ -354,7 +376,7 @@ export default function Lists() {
                             title={`Reserve at ${item.item_text}`}
                           >
                             <ExternalLink className="h-3 w-3" />
-                            Reserve
+                            {getBookingPlatform(item.url)}
                           </a>
                         ) : null}
                         <button
