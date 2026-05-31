@@ -123,12 +123,17 @@ export default function Lists() {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json() as { queued: number };
-      setBackfillMsg(
-        data.queued === 0
-          ? "All restaurants already have booking links."
-          : `Looking up booking links for ${data.queued} restaurant${data.queued === 1 ? "" : "s"}…`
-      );
-      setTimeout(() => setBackfillMsg(null), 6000);
+      if (data.queued === 0) {
+        setBackfillMsg("All restaurants already have booking links.");
+        setTimeout(() => setBackfillMsg(null), 6000);
+      } else {
+        setBackfillMsg(`Looking up booking links for ${data.queued} restaurant${data.queued === 1 ? "" : "s"}…`);
+        // Re-fetch after 10 s to surface any newly resolved URLs
+        setTimeout(() => {
+          void fetchItems("restaurants");
+          setBackfillMsg(null);
+        }, 10000);
+      }
     } catch {
       setBackfillMsg("Failed to start refresh.");
       setTimeout(() => setBackfillMsg(null), 4000);
