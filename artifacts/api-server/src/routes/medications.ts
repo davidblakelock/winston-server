@@ -16,6 +16,42 @@ import {
   buildMedEmailText,
 } from "../medications/medicationManager.js";
 import { createReminder } from "../reminders/reminderManager.js";
+import { broadcastToUser } from "../reminders/sseStore.js";
+
+// Helper: run interaction check and broadcast "medications-changed" SSE event to the user.
+// Called after every mutation (add, update, delete) so the native app's SSE listener
+// always gets a fresh panel update regardless of whether it reads the mutation response body.
+type InteractionResult = {
+  interactions: import("../medications/medicationManager.js").DrugInteraction[];
+  avoid: import("../medications/medicationManager.js").MedicationAvoid[];
+  sideEffects: import("../medications/medicationManager.js").MedicationSideEffect[];
+  checkedDrugs: string[];
+  failedLookups: string[];
+};
+
+const EMPTY_INTERACTIONS: InteractionResult = {
+  interactions: [],
+  avoid: [],
+  sideEffects: [],
+  checkedDrugs: [],
+  failedLookups: [],
+};
+
+// Helper: run interaction check and broadcast "medications-changed" SSE event to the user.
+// Called after every mutation (add, update, delete) so the native app's SSE listener
+// always gets a fresh panel update regardless of whether it reads the mutation response body.
+async function broadcastMedicationInteractions(userName: string): Promise<InteractionResult> {
+  const result = await getMedicationInteractions(userName).catch(() => EMPTY_INTERACTIONS);
+  broadcastToUser(userName, "medications-changed", {
+    type: "medications-changed",
+    interactions: result.interactions,
+    avoid: result.avoid,
+    sideEffects: result.sideEffects,
+    checkedDrugs: result.checkedDrugs,
+    failedLookups: result.failedLookups,
+  });
+  return result;
+}
 
 const router: IRouter = Router();
 
@@ -138,14 +174,8 @@ router.post("/medications/add", express.json({ limit: "1mb" }), async (req, res)
     req.log.info({ name: name.trim(), alreadyExists: result.alreadyExists }, "[MEDS] POST /medications/add");
 
     // Auto-check drug interactions after adding — run against all active meds including the new one.
-    // Included in the response so the native app can surface warnings immediately.
-    const interactionResult = await getMedicationInteractions(userName).catch(() => ({
-      interactions: [] as import("../medications/medicationManager.js").DrugInteraction[],
-      avoid: [] as import("../medications/medicationManager.js").MedicationAvoid[],
-      sideEffects: [] as import("../medications/medicationManager.js").MedicationSideEffect[],
-      checkedDrugs: [] as string[],
-      failedLookups: [] as string[],
-    }));
+    // Included in the response AND broadcast via SSE so the native app panel always refreshes.
+    const interactionResult = await broadcastMedicationInteractions(userName);
     req.log.info(
       { interactions: interactionResult.interactions.length, checked: interactionResult.checkedDrugs.length },
       "[MEDS] Interaction check after add"
@@ -391,7 +421,24 @@ router.put("/medications/:id", express.json({ limit: "1mb" }), async (req, res) 
       return;
     }
     req.log.info({ id, userName }, "[MEDS] PUT /medications/:id");
-    res.json({ ok: true, medication });
+
+    // Re-check interactions and broadcast SSE after any update (name change, deactivation, etc.)
+    // so the native app panel stays in sync without a manual refresh.
+    const interactionResult = await broadcastMedicationInteractions(userName);
+    req.log.info(
+      { interactions: interactionResult.interactions.length, checked: interactionResult.checkedDrugs.length },
+      "[MEDS] PUT — interactions refreshed + SSE broadcast"
+    );
+
+    res.json({
+      ok: true,
+      medication,
+      interactions: interactionResult.interactions,
+      avoid: interactionResult.avoid,
+      sideEffects: interactionResult.sideEffects,
+      checkedDrugs: interactionResult.checkedDrugs,
+      failedLookups: interactionResult.failedLookups,
+    });
   } catch (err) {
     req.log.error({ err }, "[MEDS] PUT /medications/:id error");
     res.status(500).json({ error: "Failed to update medication" });
@@ -419,17 +466,13 @@ router.delete("/medications/:idOrName", async (req, res) => {
     }
 
     // Re-check interactions now that the medication list has changed.
-    const interactionResult = await getMedicationInteractions(userName).catch(() => ({
-      interactions: [] as import("../medications/medicationManager.js").DrugInteraction[],
-      avoid: [] as import("../medications/medicationManager.js").MedicationAvoid[],
-      sideEffects: [] as import("../medications/medicationManager.js").MedicationSideEffect[],
-      checkedDrugs: [] as string[],
-      failedLookups: [] as string[],
-    }));
+    // broadcastMedicationInteractions also fires an SSE "medications-changed" event so
+    // the native app panel updates even if it doesn't read the DELETE response body.
+    const interactionResult = await broadcastMedicationInteractions(userName);
 
     req.log.info(
       { interactions: interactionResult.interactions.length, checked: interactionResult.checkedDrugs.length },
-      "[MEDS] DELETE — interactions refreshed"
+      "[MEDS] DELETE — interactions refreshed + SSE broadcast"
     );
 
     res.json({
