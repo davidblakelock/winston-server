@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
+import { autoUpdateRestaurantUrl } from "../lists/autoUrlLookup.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -183,6 +184,13 @@ export async function addProfileItem(
      RETURNING id, category, name, detail, created_at`,
     [userName, category, cleanName, cleanDetail]
   );
+
+  // For restaurants added via chat/profile, auto-lookup the booking URL in the background
+  // so the Restaurants tab can open a reservation link when the user taps the name.
+  if (category === "restaurants") {
+    autoUpdateRestaurantUrl(rows[0].id, cleanName).catch(() => {});
+  }
+
   return mapRow(rows[0]);
 }
 

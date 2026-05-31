@@ -332,6 +332,11 @@ Top 3 things to avoid per drug: OTC products, foods, or supplements. One short p
 PART 3 — SIDE EFFECTS (per drug)
 Top 3 most common side effects per drug. One short phrase each — no sentences.
 
+MANDATORY: You MUST include a sideEffects entry for EVERY drug in the list above — no exceptions.
+Even if side effects are minor or well-known, list the top 3 for each drug. Never skip a drug.
+MANDATORY: You MUST include an avoid entry for EVERY drug in the list above — no exceptions.
+List the top 3 things to avoid (foods, OTC products, supplements) for each drug. Never skip a drug.
+
 Respond ONLY with valid JSON, no markdown, no extra text:
 {
   "interactions": [

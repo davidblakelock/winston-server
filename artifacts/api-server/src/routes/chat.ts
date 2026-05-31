@@ -1753,6 +1753,25 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         );
       }
       res.json({ response: nativeBriefingText });
+
+      // Persist to chat_messages so the briefing appears in chat history / main screen
+      // after the user navigates away and returns. Fire-and-forget — must not block the response.
+      if (nativeBriefingText) {
+        const morningMsgId = randomUUID();
+        query(
+          `INSERT INTO chat_messages (user_name, role, content, message_id)
+           VALUES ($1, 'user', $2, $3)
+           ON CONFLICT (message_id) WHERE message_id IS NOT NULL DO NOTHING`,
+          [sessionUserName, message.slice(0, 8000), `${morningMsgId}:user`]
+        ).catch((e) => req.log.warn({ e }, "[MORNING] User message save failed"));
+        query(
+          `INSERT INTO chat_messages (user_name, role, content, message_id)
+           VALUES ($1, 'assistant', $2, $3)
+           ON CONFLICT (message_id) WHERE message_id IS NOT NULL DO NOTHING`,
+          [sessionUserName, nativeBriefingText.slice(0, 8000), `${morningMsgId}:assistant`]
+        ).catch((e) => req.log.warn({ e }, "[MORNING] Briefing message save failed"));
+      }
+
       return;
     }
 

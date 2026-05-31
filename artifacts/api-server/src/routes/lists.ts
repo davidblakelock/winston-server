@@ -234,6 +234,16 @@ router.get("/lists/restaurants", async (req: Request, res: Response) => {
         created_at: r.created_at,
       })),
     });
+
+    // Lazy URL backfill: for restaurants that have no URL (typically added via chat/profile
+    // manager before auto-lookup was wired up), trigger background lookups capped at 5 at a time.
+    const nullUrlRows = rows.filter((r) => !r.url);
+    if (nullUrlRows.length > 0) {
+      const batch = nullUrlRows.slice(0, 5);
+      Promise.allSettled(
+        batch.map((r) => autoUpdateRestaurantUrl(r.id, r.name))
+      ).catch(() => {});
+    }
   } catch (err) {
     req.log.warn({ err }, "Restaurants list GET error");
     res.status(500).json({ error: "Failed to fetch restaurants" });

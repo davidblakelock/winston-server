@@ -433,8 +433,10 @@ export function buildReservationUrl(
       // /restaurant/profile/<id> format
       base = `https://www.opentable.com/${details.platformSlug}?covers=${n}`;
     } else if (details.platformSlug.startsWith("direct:")) {
-      // Direct slug format: opentable.com/<slug> (no /r/ prefix)
-      base = `https://www.opentable.com/${details.platformSlug.slice(7)}?covers=${n}`;
+      // Direct slug format: opentable.com/<slug> detected without /r/ prefix.
+      // Use the canonical /r/<slug> form so dateTime and covers params are honoured
+      // by the booking widget (the bare slug redirect strips query params).
+      base = `https://www.opentable.com/r/${details.platformSlug.slice(7)}?covers=${n}`;
     } else {
       // Standard /r/<slug> format
       base = `https://www.opentable.com/r/${details.platformSlug}?covers=${n}`;
