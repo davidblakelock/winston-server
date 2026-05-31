@@ -75,7 +75,7 @@ router.post("/orders/sync", express.json({ limit: "1mb" }), async (req, res) => 
       req.log.info({ userName, consolidated }, "[Orders] Duplicate rows removed by consolidation");
     }
 
-    // ── Step 3: Update live tracking via AfterShip (throttled — 30 min cooldown per order)
+    // ── Step 3: Update live tracking via direct carrier scraping (throttled — 30 min cooldown per order)
     const { updated: trackingUpdated } = await pollActiveOrderTracking(userName);
     req.log.info({ userName, trackingUpdated }, "[Orders] Tracking updates complete");
 

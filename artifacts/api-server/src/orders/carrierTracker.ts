@@ -1,5 +1,5 @@
 /**
- * Direct carrier tracking — replaces AfterShip entirely.
+ * Direct carrier tracking (UPS, USPS, FedEx, Amazon, DHL).
  *
  * 1. Detect carrier from tracking number format.
  * 2. Build the carrier's public tracking URL.

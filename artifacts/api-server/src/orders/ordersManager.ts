@@ -64,7 +64,6 @@ export async function ensureOrdersTable(): Promise<void> {
         order_number text,
         tracking_number text,
         carrier text,
-        aftership_slug text,
         status text NOT NULL DEFAULT 'ordered',
         expected_date date,
         order_total text,
