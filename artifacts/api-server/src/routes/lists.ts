@@ -17,7 +17,7 @@ import {
   getSharedWithUser,
   getRequesterLabel,
 } from "../lists/listShareManager.js";
-import { autoUpdateItemUrl, autoUpdateRestaurantUrl, detectAutoLookupType, lookupRestaurantUrl } from "../lists/autoUrlLookup.js";
+import { autoUpdateItemUrl, autoUpdateRestaurantUrl, detectAutoLookupType, lookupRestaurantUrl, isBookingPlatformUrl } from "../lists/autoUrlLookup.js";
 import { sendPushToAll } from "../push/pushManager.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -235,11 +235,12 @@ router.get("/lists/restaurants", async (req: Request, res: Response) => {
       })),
     });
 
-    // Lazy URL backfill: for restaurants that have no URL (typically added via chat/profile
-    // manager before auto-lookup was wired up), trigger background lookups capped at 5 at a time.
-    const nullUrlRows = rows.filter((r) => !r.url);
-    if (nullUrlRows.length > 0) {
-      const batch = nullUrlRows.slice(0, 5);
+    // Lazy URL backfill: trigger background lookups for restaurants that either have no URL
+    // or have a non-booking-platform URL (e.g. the restaurant's own website stored before
+    // the OpenTable/Resy/Yelp-only policy was enforced). Cap at 5 per load to stay gentle.
+    const needsLookup = rows.filter((r) => !isBookingPlatformUrl(r.url));
+    if (needsLookup.length > 0) {
+      const batch = needsLookup.slice(0, 5);
       Promise.allSettled(
         batch.map((r) => autoUpdateRestaurantUrl(r.id, r.name))
       ).catch(() => {});
@@ -349,25 +350,32 @@ router.put("/lists/restaurants/:id", async (req: Request, res: Response) => {
 });
 
 // POST /api/lists/restaurants/backfill-urls
-// Queues background URL lookups for all restaurants that still have url = NULL.
-// Returns { queued: N } immediately; lookups run sequentially with 500 ms gaps.
+// Queues background URL lookups for restaurants that either:
+//   • have no URL (url IS NULL), OR
+//   • have a non-booking-platform URL (e.g. the restaurant's own website)
+// Both cases need to be re-looked up against OpenTable / Resy / Yelp.
+// Returns { queued: N } immediately; lookups run sequentially with 600 ms gaps.
 router.post("/lists/restaurants/backfill-urls", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
   try {
-    const { rows } = await query<{ id: number; name: string }>(
-      `SELECT id, name FROM profile_items
-       WHERE user_name = $1 AND category = 'restaurants' AND url IS NULL
+    const { rows } = await query<{ id: number; name: string; url: string | null }>(
+      `SELECT id, name, url FROM profile_items
+       WHERE user_name = $1 AND category = 'restaurants'
        ORDER BY created_at ASC`,
       [userName]
     );
-    res.json({ queued: rows.length });
 
-    // Run sequentially with 500 ms delay to avoid flooding the Anthropic API.
+    // Only queue restaurants that don't already have a booking platform URL
+    const toProcess = rows.filter((r) => !isBookingPlatformUrl(r.url));
+
+    res.json({ queued: toProcess.length, total: rows.length });
+
+    // Run sequentially with 600 ms delay to stay gentle on the Anthropic API.
     (async () => {
-      for (const row of rows) {
+      for (const row of toProcess) {
         await autoUpdateRestaurantUrl(row.id, row.name);
-        await new Promise<void>((resolve) => setTimeout(resolve, 500));
+        await new Promise<void>((resolve) => setTimeout(resolve, 600));
       }
     })().catch(() => {});
   } catch (err) {

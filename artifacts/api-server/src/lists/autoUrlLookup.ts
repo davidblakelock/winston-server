@@ -20,23 +20,32 @@ export function detectAutoLookupType(listName: string): AutoLookupType | null {
 
 // ── Per-type URL builders ─────────────────────────────────────────────────────
 
-// Step 1: Use Claude web_search to find a direct OpenTable or Resy booking page.
-// Returns the booking URL if found, or null if neither platform has a listing.
+// Returns true when a stored URL is already a recognised reservation platform.
+// Used by backfill logic to skip restaurants that already have the right kind of link.
+export function isBookingPlatformUrl(url: string | null | undefined): boolean {
+  if (!url) return false;
+  return /opentable\.com|resy\.com|yelp\.com/i.test(url);
+}
+
+// Step 1: Use Claude web_search to find a direct OpenTable, Resy, or Yelp booking page.
+// Returns the booking URL if found, or null if no platform has a listing.
 async function lookupRestaurantBookingUrl(name: string, city = "Dallas"): Promise<string | null> {
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
   if (!anthropicKey) return null;
 
   const anthropic = new Anthropic({ apiKey: anthropicKey });
   const prompt =
-    `Find the direct booking page URL for the restaurant "${name}"${city ? ` in ${city}` : ""}.\n\n` +
-    `Search for:\n` +
-    `  1. "${name} opentable" — look for a URL matching opentable.com/r/... or opentable.com/restaurant/...\n` +
-    `  2. "${name} resy" — look for a URL matching resy.com/cities/.../venues/...\n\n` +
+    `Find the direct reservation/booking page URL for the restaurant "${name}"${city ? ` in ${city}` : ""}.\n\n` +
+    `Search in this order of preference:\n` +
+    `  1. "${name} opentable" — look for opentable.com/r/... or opentable.com/restaurant/...\n` +
+    `  2. "${name} resy" — look for resy.com/cities/.../venues/...\n` +
+    `  3. "${name} yelp reservations" — look for yelp.com/reservations/... or the restaurant's yelp.com listing page\n\n` +
     `Rules:\n` +
-    `• Return ONLY the single direct booking page URL (not a search results page).\n` +
-    `• Prefer OpenTable over Resy if both exist.\n` +
-    `• The URL must contain "opentable.com" or "resy.com" — reject anything else.\n` +
-    `• If no direct booking page is found on either platform, return exactly: NONE\n` +
+    `• Return ONLY the single direct booking/listing page URL (not a search results page, not google.com).\n` +
+    `• Prefer OpenTable first, then Resy, then Yelp.\n` +
+    `• The URL MUST contain "opentable.com", "resy.com", or "yelp.com" — reject anything else.\n` +
+    `• For Yelp: the restaurant's own Yelp listing page (e.g. yelp.com/biz/restaurant-name-city) is acceptable.\n` +
+    `• If no listing is found on any of these three platforms, return exactly: NONE\n` +
     `• No explanation, no extra text — just the URL or NONE.`;
 
   try {
@@ -56,9 +65,9 @@ async function lookupRestaurantBookingUrl(name: string, city = "Dallas"): Promis
 
     // Validate it's actually a booking platform URL
     const url = text.trim().split(/\s/)[0]; // take first word in case Claude adds commentary
-    if (/opentable\.com|resy\.com/i.test(url)) {
+    if (/opentable\.com|resy\.com|yelp\.com/i.test(url ?? "")) {
       logger.info({ name, url }, "[AutoURL] Booking URL found via web search");
-      return url;
+      return url ?? null;
     }
     return null;
   } catch (err) {
@@ -182,6 +191,10 @@ export async function autoUpdateItemUrl(
 }
 
 // ── Fire-and-forget: lookup restaurant URL and update profile_items ──────────
+// Always tries to find a booking platform URL.
+// Updates the row whether or not it already has a URL — the goal is to replace
+// any stored restaurant website with an OpenTable / Resy / Yelp booking link.
+// If no booking link is found, the existing URL (if any) is left unchanged.
 
 export async function autoUpdateRestaurantUrl(
   profileItemId: number,
@@ -189,13 +202,13 @@ export async function autoUpdateRestaurantUrl(
 ): Promise<void> {
   try {
     const url = await lookupRestaurantUrl(restaurantName);
-    if (!url) return;
+    if (!url) return; // no booking link found — leave existing value untouched
 
     await query(
-      `UPDATE profile_items SET url = $1 WHERE id = $2 AND url IS NULL`,
+      `UPDATE profile_items SET url = $1 WHERE id = $2`,
       [url, profileItemId]
     );
-    logger.info({ profileItemId, restaurantName, url }, "[AutoURL] Restaurant URL saved");
+    logger.info({ profileItemId, restaurantName, url }, "[AutoURL] Restaurant booking URL saved");
   } catch (err) {
     logger.warn({ err, profileItemId, restaurantName }, "[AutoURL] Failed to auto-update restaurant URL");
   }
