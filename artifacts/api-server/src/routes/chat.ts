@@ -1751,6 +1751,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           { chars: nativeBriefingText.length, totalMs: Date.now() - t0 },
           "Morning briefing fetched (native) and cached"
         );
+        broadcastToUser(sessionUserName, "briefing_updated", {});
       }
       res.json({ response: nativeBriefingText });
 
@@ -1811,6 +1812,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       setCachedBriefing(sessionUserName, fullBriefingText, staticCtx.dateKey);
       void logBriefingStories(sessionUserName, staticCtx.candidateStoryKeys);
       req.log.info({ chars: fullBriefingText.length }, "Morning briefing streamed and cached for follow-up context");
+      broadcastToUser(sessionUserName, "briefing_updated", {});
     }
 
     return; // Morning greeting fully handled — skip generic handler below
@@ -5755,6 +5757,7 @@ If you cannot extract both, return null.`,
     if (isMorningGreeting) {
       setCachedBriefing(sessionUserName, reply);
       req.log.info({ chars: reply.length }, "Morning briefing generated and cached for next request");
+      broadcastToUser(sessionUserName, "briefing_updated", {});
     }
 
     // ── Post-response: extract and save recommendations (fire-and-forget) ──

@@ -1784,6 +1784,24 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         } catch {}
       });
 
+      // Briefing updated — re-fetch summary card so it reflects the latest content
+      source.addEventListener("briefing_updated", () => {
+        const token = localStorage.getItem("winston_session_token");
+        if (!token) return;
+        fetch(`${CHAT_BASE}/api/morning-briefing/summary`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((data) => {
+            if (data && data.generated) {
+              setBriefingSummary(data);
+              setBriefingCardDismissed(false);
+              localStorage.removeItem(briefingDismissalKey);
+            }
+          })
+          .catch(() => {});
+      });
+
       // Chat message sync — another device sent a message; add it locally
       // so both screens show the same conversation without a page refresh.
       source.addEventListener("chat_sync", (e) => {
