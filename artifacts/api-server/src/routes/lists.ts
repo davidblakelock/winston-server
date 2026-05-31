@@ -17,7 +17,7 @@ import {
   getSharedWithUser,
   getRequesterLabel,
 } from "../lists/listShareManager.js";
-import { autoUpdateItemUrl, autoUpdateRestaurantUrl, detectAutoLookupType, lookupRestaurantUrl, isBookingPlatformUrl } from "../lists/autoUrlLookup.js";
+import { autoUpdateItemUrl, autoUpdateRestaurantUrl, detectAutoLookupType, lookupRestaurantUrl, isBookingPlatformUrl, detectBookingPlatform } from "../lists/autoUrlLookup.js";
 import { sendPushToAll } from "../push/pushManager.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -28,10 +28,11 @@ const router: IRouter = Router();
 query(`ALTER TABLE list_items ADD COLUMN IF NOT EXISTS reminder_time TIMESTAMPTZ`).catch(() => {});
 query(`ALTER TABLE list_items ADD COLUMN IF NOT EXISTS reminder_fired BOOLEAN NOT NULL DEFAULT FALSE`).catch(() => {});
 
-// ── Idempotent column migration for profile_items (restaurants) ─────────────
-// The url column was added after initial schema creation — ensure it exists in
-// Supabase before any restaurant SELECT/INSERT/UPDATE referencing it runs.
+// ── Idempotent column migrations for profile_items (restaurants) ────────────
+// These columns were added after initial schema creation — ensure they exist in
+// Supabase before any restaurant SELECT/INSERT/UPDATE referencing them runs.
 query(`ALTER TABLE profile_items ADD COLUMN IF NOT EXISTS url TEXT`).catch(() => {});
+query(`ALTER TABLE profile_items ADD COLUMN IF NOT EXISTS booking_platform TEXT`).catch(() => {});
 
 // ── Disable 304 caching for all list routes ────────────────────────────────
 // Express generates a stable ETag from the response body and returns 304 when
@@ -218,8 +219,8 @@ router.get("/lists/restaurants", async (req: Request, res: Response) => {
   if (!userName) return;
   res.setHeader("Cache-Control", "no-store");
   try {
-    const { rows } = await query<{ id: number; name: string; detail: string | null; url: string | null; created_at: string }>(
-      `SELECT id, name, detail, url, created_at
+    const { rows } = await query<{ id: number; name: string; detail: string | null; url: string | null; booking_platform: string | null; created_at: string }>(
+      `SELECT id, name, detail, url, booking_platform, created_at
        FROM profile_items
        WHERE user_name = $1 AND category = 'restaurants'
        ORDER BY created_at DESC`,
@@ -231,6 +232,7 @@ router.get("/lists/restaurants", async (req: Request, res: Response) => {
         item_text: r.name,
         detail: r.detail ?? null,
         url: r.url ?? null,
+        booking_platform: r.booking_platform ?? null,
         created_at: r.created_at,
       })),
     });
@@ -261,16 +263,18 @@ router.post("/lists/restaurants", async (req: Request, res: Response) => {
   const item = (rawItem ?? "").trim();
   if (!item) return res.status(400).json({ error: "item required" });
   const manualUrl = rawUrl?.trim() || null;
+  // Detect platform from a manually-provided URL upfront so it can be stored in the INSERT.
+  const manualPlatform = manualUrl ? detectBookingPlatform(manualUrl) : null;
   try {
     const { rows } = await query<{ id: number; name: string }>(
-      `INSERT INTO profile_items (user_name, category, name, detail, url)
-       SELECT $1, 'restaurants', $2, NULL, $3
+      `INSERT INTO profile_items (user_name, category, name, detail, url, booking_platform)
+       SELECT $1, 'restaurants', $2, NULL, $3, $4
        WHERE NOT EXISTS (
          SELECT 1 FROM profile_items
          WHERE user_name = $1 AND category = 'restaurants' AND lower(name) = lower($2)
        )
        RETURNING id, name`,
-      [userName, item, manualUrl]
+      [userName, item, manualUrl, manualPlatform]
     );
     if (rows.length === 0) {
       return res.status(409).json({ error: "Restaurant already in list" });
@@ -284,18 +288,20 @@ router.post("/lists/restaurants", async (req: Request, res: Response) => {
       try {
         resolvedUrl = await lookupRestaurantUrl(newItem.name);
         if (resolvedUrl) {
+          const platform = detectBookingPlatform(resolvedUrl);
           await query(
-            `UPDATE profile_items SET url = $1 WHERE id = $2`,
-            [resolvedUrl, newItem.id]
+            `UPDATE profile_items SET url = $1, booking_platform = $2 WHERE id = $3`,
+            [resolvedUrl, platform, newItem.id]
           );
-          req.log.info({ id: newItem.id, name: newItem.name, url: resolvedUrl }, "[Restaurants] URL auto-resolved");
+          req.log.info({ id: newItem.id, name: newItem.name, url: resolvedUrl, platform }, "[Restaurants] URL auto-resolved");
         }
       } catch (lookupErr) {
         req.log.warn({ lookupErr, name: newItem.name }, "[Restaurants] URL lookup failed — restaurant saved without URL");
       }
     }
 
-    res.json({ item: { id: newItem.id, item_text: newItem.name, url: resolvedUrl ?? null, created_at: new Date().toISOString() } });
+    const resolvedPlatform = detectBookingPlatform(resolvedUrl);
+    res.json({ item: { id: newItem.id, item_text: newItem.name, url: resolvedUrl ?? null, booking_platform: resolvedPlatform, created_at: new Date().toISOString() } });
   } catch (err) {
     req.log.warn({ err }, "Restaurants list POST error");
     res.status(500).json({ error: "Failed to add restaurant" });
@@ -330,19 +336,22 @@ router.put("/lists/restaurants/:id", async (req: Request, res: Response) => {
     return;
   }
   const manualUrl = rawUrl?.trim() || null;
+  const manualPlatform = manualUrl ? detectBookingPlatform(manualUrl) : null;
   try {
-    const { rows } = await query<{ id: number; name: string; url: string | null }>(
+    const { rows } = await query<{ id: number; name: string; url: string | null; booking_platform: string | null }>(
       `UPDATE profile_items
-       SET name = $1, url = COALESCE($2, url)
-       WHERE id = $3 AND user_name = $4 AND category = 'restaurants'
-       RETURNING id, name, url`,
-      [item.trim(), manualUrl, id, userName]
+       SET name = $1,
+           url = COALESCE($2, url),
+           booking_platform = CASE WHEN $2 IS NOT NULL THEN $3 ELSE booking_platform END
+       WHERE id = $4 AND user_name = $5 AND category = 'restaurants'
+       RETURNING id, name, url, booking_platform`,
+      [item.trim(), manualUrl, manualPlatform, id, userName]
     );
     if (rows.length === 0) {
       res.status(404).json({ error: "Restaurant not found" });
       return;
     }
-    res.json({ item: { id: rows[0].id, item_text: rows[0].name, url: rows[0].url } });
+    res.json({ item: { id: rows[0].id, item_text: rows[0].name, url: rows[0].url, booking_platform: rows[0].booking_platform } });
   } catch (err) {
     req.log.warn({ err }, "Restaurants list PUT error");
     res.status(500).json({ error: "Failed to update restaurant" });

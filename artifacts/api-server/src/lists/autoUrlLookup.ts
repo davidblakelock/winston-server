@@ -43,6 +43,26 @@ export function isBookingPlatformUrl(url: string | null | undefined): boolean {
   return false;
 }
 
+// Maps a booking URL to a human-readable platform name.
+// Returns null when the URL doesn't match any recognized platform.
+export function detectBookingPlatform(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const hostname = new URL(url.startsWith("http") ? url : `https://${url}`).hostname.replace(/^www\./, "");
+    if (hostname.includes("opentable.com")) return "OpenTable";
+    if (hostname.includes("resy.com")) return "Resy";
+    if (hostname.includes("yelp.com")) return "Yelp";
+    if (hostname.includes("tock.com") || hostname.includes("exploretock.com")) return "Tock";
+    if (hostname.includes("sevenrooms.com")) return "SevenRooms";
+    if (hostname.includes("tableagent.com")) return "Table Agent";
+    if (hostname.includes("bookatable.com")) return "Bookatable";
+    if (hostname.includes("quandoo.com")) return "Quandoo";
+  } catch {
+    // ignore malformed URLs
+  }
+  return null;
+}
+
 // Step 1: Use Claude web_search to find a direct OpenTable, Resy, or Yelp booking page.
 // Returns the booking URL with a restaurant-specific path, or null if not found.
 async function lookupRestaurantBookingUrl(name: string, city = ""): Promise<string | null> {
@@ -257,12 +277,13 @@ export async function autoUpdateRestaurantUrl(
     // lookupRestaurantUrl always returns a string (never null):
     // OpenTable → Resy → Yelp direct → Yelp search fallback.
     const url = await lookupRestaurantUrl(restaurantName, city);
+    const platform = detectBookingPlatform(url);
 
     await query(
-      `UPDATE profile_items SET url = $1 WHERE id = $2`,
-      [url, profileItemId]
+      `UPDATE profile_items SET url = $1, booking_platform = $2 WHERE id = $3`,
+      [url, platform, profileItemId]
     );
-    logger.info({ profileItemId, restaurantName, url }, "[AutoURL] Restaurant booking URL saved");
+    logger.info({ profileItemId, restaurantName, url, platform }, "[AutoURL] Restaurant booking URL saved");
   } catch (err) {
     logger.warn({ err, profileItemId, restaurantName }, "[AutoURL] Failed to auto-update restaurant URL");
   }

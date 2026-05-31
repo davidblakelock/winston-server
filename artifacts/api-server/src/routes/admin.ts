@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from "express";
 import express from "express";
 import { authenticate } from "../auth/middleware.js";
 import { query } from "../db.js";
-import { lookupRestaurantUrl, isBookingPlatformUrl } from "../lists/autoUrlLookup.js";
+import { lookupRestaurantUrl, isBookingPlatformUrl, detectBookingPlatform } from "../lists/autoUrlLookup.js";
 import { upsertProfile } from "../onboarding/onboardingManager.js";
 import { isApifyApiKeyConfigured } from "../restaurants/apifyBooking.js";
 import { getResySession } from "../restaurants/bookingCredentialsManager.js";
@@ -124,10 +124,11 @@ router.post("/admin/backfill-restaurant-urls", async (req: Request, res: Respons
 
       req.log.info({ id: row.id, name: row.name, city, force }, "[ADMIN] backfill-restaurant-urls — looking up");
       const url = await lookupRestaurantUrl(row.name, city);
+      const platform = detectBookingPlatform(url);
 
       await query(
-        `UPDATE profile_items SET url = $1 WHERE id = $2`,
-        [url, row.id]
+        `UPDATE profile_items SET url = $1, booking_platform = $2 WHERE id = $3`,
+        [url, platform, row.id]
       );
       results.push({ id: row.id, name: row.name, before: row.url, after: url, status: "updated" });
 

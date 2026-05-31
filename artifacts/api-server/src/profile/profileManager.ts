@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
-import { autoUpdateRestaurantUrl, yelpFallbackUrl } from "../lists/autoUrlLookup.js";
+import { autoUpdateRestaurantUrl, yelpFallbackUrl, lookupRestaurantUrl, detectBookingPlatform } from "../lists/autoUrlLookup.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -21,6 +21,8 @@ export interface ProfileItem {
   name: string;
   detail: string | null;
   createdAt: Date;
+  url?: string | null;
+  bookingPlatform?: string | null;
 }
 
 export interface ProfileOperation {
@@ -179,7 +181,8 @@ export async function addProfileItem(
   const userCity = userCityRow.rows[0]?.city ?? "";
 
   // For restaurants, pre-populate with a guaranteed Yelp search URL so the link
-  // is available immediately (before the background lookup resolves).
+  // is available immediately, then race a real lookup (OpenTable/Resy/Yelp direct)
+  // against an 8-second timeout so the chat confirmation can name the platform.
   const initialUrl = category === "restaurants"
     ? yelpFallbackUrl(cleanName, userCity)
     : null;
@@ -198,13 +201,32 @@ export async function addProfileItem(
     [userName, category, cleanName, cleanDetail, initialUrl]
   );
 
-  // For restaurants: kick off background lookup to find a direct OpenTable / Resy / Yelp
-  // listing URL and replace the Yelp search fallback with a better link if one exists.
+  let resolvedUrl: string | null = initialUrl;
+  let resolvedPlatform: string | null = detectBookingPlatform(initialUrl);
+
   if (category === "restaurants") {
-    autoUpdateRestaurantUrl(rows[0].id, cleanName, userCity).catch(() => {});
+    try {
+      // Race the lookup against an 8-second timeout so the chat response can confirm
+      // the actual booking platform (OpenTable / Resy / Yelp) without excessive latency.
+      const LOOKUP_TIMEOUT = 8000;
+      const result = await Promise.race([
+        lookupRestaurantUrl(cleanName, userCity),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), LOOKUP_TIMEOUT)),
+      ]);
+      if (result) {
+        resolvedUrl = result;
+        resolvedPlatform = detectBookingPlatform(result);
+        await query(
+          `UPDATE profile_items SET url = $1, booking_platform = $2 WHERE id = $3`,
+          [resolvedUrl, resolvedPlatform, rows[0].id]
+        ).catch(() => {});
+      }
+    } catch {
+      // Best effort — restaurant is saved with Yelp fallback
+    }
   }
 
-  return mapRow(rows[0]);
+  return { ...mapRow(rows[0]), url: resolvedUrl, bookingPlatform: resolvedPlatform };
 }
 
 export async function removeProfileItem(
@@ -317,9 +339,22 @@ export function buildProfileResultContext(
   if (op.operation === "add" && added) {
     const detail = added.detail ? ` at ${added.detail}` : "";
     const catLabel = getCategoryLabel(op.category);
+    let bookingNote = "";
+    if (op.category === "restaurants") {
+      if (added.bookingPlatform && added.bookingPlatform !== "Yelp") {
+        // A direct booking platform (OpenTable, Resy, etc.) was found synchronously
+        bookingNote = ` I found a ${added.bookingPlatform} link for them — it's saved in your Restaurants list.`;
+      } else if (added.bookingPlatform === "Yelp" && added.url && added.url.includes("/biz/")) {
+        // Direct Yelp business listing
+        bookingNote = ` I found them on Yelp — the link is saved in your Restaurants list.`;
+      } else {
+        // Only a Yelp search fallback or no URL yet — a better link will load shortly
+        bookingNote = ` I'm still looking for a direct reservation link — it'll appear in your Restaurants list shortly.`;
+      }
+    }
     return (
-      `\n\n[Profile Updated]\nAdded "${added.name}"${detail} to ${catLabel}. ` +
-      `Confirm warmly and specifically, e.g. "Got it — I've added ${added.name} to your ${catLabel.toLowerCase()}." ` +
+      `\n\n[Profile Updated]\nAdded "${added.name}"${detail} to ${catLabel}.${bookingNote} ` +
+      `Confirm warmly and specifically, e.g. "Got it — I've added ${added.name} to your ${catLabel.toLowerCase()}${added.bookingPlatform && added.bookingPlatform !== "Yelp" ? ` — I found a ${added.bookingPlatform} link for them` : ""}." ` +
       `Keep it brief and natural.`
     );
   }

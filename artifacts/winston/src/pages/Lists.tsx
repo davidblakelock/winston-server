@@ -39,6 +39,7 @@ interface ListItem {
   item_text: string;
   detail?: string | null;
   url?: string | null;
+  booking_platform?: string | null;
   status?: string | null;
   created_at: string;
 }
@@ -466,7 +467,11 @@ export default function Lists() {
                     {activeTab === "restaurants" && (
                       <>
                         {item.url ? (() => {
-                          const platform = getBookingPlatform(item.url!);
+                          // Prefer the stored booking_platform (set at save time by the server)
+                          // and fall back to URL-parsing only when it isn't present yet.
+                          const platform = item.booking_platform
+                            ? (BOOKING_PLATFORMS.find((p) => p.name === item.booking_platform) ?? getBookingPlatform(item.url!))
+                            : getBookingPlatform(item.url!);
                           return platform ? (
                             <a
                               href={item.url}
