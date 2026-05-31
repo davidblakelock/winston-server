@@ -30,6 +30,8 @@ import type {
   Goal,
   GoalStep,
   HealthStatus,
+  MorningBriefingCachedResponse,
+  MorningBriefingSummaryResponse,
   SpeakRequest,
   SpeakResponse,
   UpdateGoalStepRequest,
@@ -293,6 +295,166 @@ export const useTextToSpeech = <
 > => {
   return useMutation(getTextToSpeechMutationOptions(options));
 };
+
+/**
+ * Returns whether today's briefing has been generated, a 200-character preview snippet, and the ISO-8601 timestamp when it was generated. Intended for the native home screen card.
+ * @summary Get today's morning briefing summary
+ */
+export const getGetMorningBriefingSummaryUrl = () => {
+  return `/api/morning-briefing/summary`;
+};
+
+export const getMorningBriefingSummary = async (
+  options?: RequestInit,
+): Promise<MorningBriefingSummaryResponse> => {
+  return customFetch<MorningBriefingSummaryResponse>(
+    getGetMorningBriefingSummaryUrl(),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetMorningBriefingSummaryQueryKey = () => {
+  return [`/api/morning-briefing/summary`] as const;
+};
+
+export const getGetMorningBriefingSummaryQueryOptions = <
+  TData = Awaited<ReturnType<typeof getMorningBriefingSummary>>,
+  TError = ErrorType<ErrorResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getMorningBriefingSummary>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetMorningBriefingSummaryQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getMorningBriefingSummary>>
+  > = ({ signal }) => getMorningBriefingSummary({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getMorningBriefingSummary>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetMorningBriefingSummaryQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getMorningBriefingSummary>>
+>;
+export type GetMorningBriefingSummaryQueryError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Get today's morning briefing summary
+ */
+
+export function useGetMorningBriefingSummary<
+  TData = Awaited<ReturnType<typeof getMorningBriefingSummary>>,
+  TError = ErrorType<ErrorResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getMorningBriefingSummary>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetMorningBriefingSummaryQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Returns the full pre-generated briefing text for today if it exists in cache or DB. Used by the web app on notification tap and by the native app when expanding the home screen card.
+ * @summary Get today's full cached briefing text
+ */
+export const getGetMorningBriefingCachedUrl = () => {
+  return `/api/morning-briefing/cached`;
+};
+
+export const getMorningBriefingCached = async (
+  options?: RequestInit,
+): Promise<MorningBriefingCachedResponse> => {
+  return customFetch<MorningBriefingCachedResponse>(
+    getGetMorningBriefingCachedUrl(),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetMorningBriefingCachedQueryKey = () => {
+  return [`/api/morning-briefing/cached`] as const;
+};
+
+export const getGetMorningBriefingCachedQueryOptions = <
+  TData = Awaited<ReturnType<typeof getMorningBriefingCached>>,
+  TError = ErrorType<ErrorResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getMorningBriefingCached>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetMorningBriefingCachedQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getMorningBriefingCached>>
+  > = ({ signal }) => getMorningBriefingCached({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getMorningBriefingCached>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetMorningBriefingCachedQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getMorningBriefingCached>>
+>;
+export type GetMorningBriefingCachedQueryError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Get today's full cached briefing text
+ */
+
+export function useGetMorningBriefingCached<
+  TData = Awaited<ReturnType<typeof getMorningBriefingCached>>,
+  TError = ErrorType<ErrorResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getMorningBriefingCached>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetMorningBriefingCachedQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
 
 /**
  * Queues background URL lookups for all restaurants with no URL. Returns immediately with the count of restaurants queued.

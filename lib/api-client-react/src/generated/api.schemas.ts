@@ -90,6 +90,20 @@ export interface BreakdownGoalRequest {
   conversation_history?: ConversationMessage[];
 }
 
+export interface MorningBriefingSummaryResponse {
+  /** Whether today's briefing has been generated */
+  generated: boolean;
+  /** First 200 characters of the briefing text (empty string when generated is false) */
+  preview: string;
+  /** ISO-8601 timestamp when the briefing was generated (null when generated is false) */
+  generatedAt: string | null;
+}
+
+export interface MorningBriefingCachedResponse {
+  /** Full pre-generated briefing text for today, or null if not yet generated */
+  text: string | null;
+}
+
 export type BreakdownGoalResponseType =
   (typeof BreakdownGoalResponseType)[keyof typeof BreakdownGoalResponseType];
 

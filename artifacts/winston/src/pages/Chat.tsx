@@ -508,6 +508,14 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
   const [connectionStatus, setConnectionStatus] = useState<"online" | "reconnecting" | "offline">("online");
   const [navBannerVisible, setNavBannerVisible] = useState(false);
   const navBannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [briefingSummary, setBriefingSummary] = useState<{
+    generated: boolean;
+    preview: string;
+    generatedAt: string | null;
+  } | null>(null);
+  const [briefingExpanded, setBriefingExpanded] = useState(false);
+  const [briefingFullText, setBriefingFullText] = useState<string | null>(null);
+  const [briefingCardDismissed, setBriefingCardDismissed] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -538,6 +546,20 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
       scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
     }
   }, [messages, isStreaming]);
+
+  // ── Fetch today's briefing summary for the home screen card ───────────────
+  useEffect(() => {
+    const token = localStorage.getItem("winston_session_token");
+    if (!token) return;
+    fetch(`${CHAT_BASE}/api/morning-briefing/summary`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data && data.generated) setBriefingSummary(data);
+      })
+      .catch(() => {});
+  }, []);
 
   // ── Streaming chat — reads SSE from /api/chat and streams text into a message bubble ──
   const streamChat = useCallback(async (
@@ -2481,6 +2503,67 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
 
       {/* Chat Area */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 sm:p-6 pb-24 sm:pb-32 space-y-8">
+        {/* Today's Briefing Card — shown when today's briefing has been generated */}
+        {briefingSummary?.generated && !briefingCardDismissed && (
+          <div className="animate-in fade-in slide-in-from-top-2 duration-300">
+            <div className="rounded-2xl bg-indigo-950/60 border border-indigo-500/30 p-4 sm:p-5 shadow-sm">
+              <div className="flex items-start justify-between gap-3 mb-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-base">🌅</span>
+                  <p className="text-[11px] font-semibold tracking-widest uppercase text-indigo-300/80">Today's Briefing</p>
+                </div>
+                <button
+                  onClick={() => setBriefingCardDismissed(true)}
+                  className="text-indigo-400/50 hover:text-indigo-300 transition-colors text-lg leading-none"
+                  aria-label="Dismiss briefing card"
+                >
+                  ×
+                </button>
+              </div>
+              {!briefingExpanded ? (
+                <>
+                  <p className="text-[14px] text-zinc-300 leading-relaxed line-clamp-3">
+                    {briefingSummary.preview}{briefingSummary.preview.length >= 200 ? "…" : ""}
+                  </p>
+                  <button
+                    onClick={() => {
+                      setBriefingExpanded(true);
+                      if (!briefingFullText) {
+                        const token = localStorage.getItem("winston_session_token");
+                        fetch(`${CHAT_BASE}/api/morning-briefing/cached`, {
+                          headers: token ? { Authorization: `Bearer ${token}` } : {},
+                        })
+                          .then((r) => (r.ok ? r.json() : null))
+                          .then((data) => { if (data?.text) setBriefingFullText(data.text); })
+                          .catch(() => {});
+                      }
+                    }}
+                    className="mt-3 text-[13px] font-medium text-indigo-400 hover:text-indigo-300 transition-colors"
+                  >
+                    Read full briefing →
+                  </button>
+                </>
+              ) : (
+                <>
+                  <p className="text-[14px] text-zinc-300 leading-relaxed whitespace-pre-wrap">
+                    {briefingFullText ?? briefingSummary.preview}
+                  </p>
+                  <button
+                    onClick={() => setBriefingExpanded(false)}
+                    className="mt-3 text-[13px] font-medium text-indigo-400 hover:text-indigo-300 transition-colors"
+                  >
+                    Collapse ↑
+                  </button>
+                </>
+              )}
+              {briefingSummary.generatedAt && (
+                <p className="mt-2 text-[11px] text-indigo-400/50">
+                  Generated at {new Date(briefingSummary.generatedAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })}
+                </p>
+              )}
+            </div>
+          </div>
+        )}
         {messages.map((msg) => (
           <div
             key={msg.id}

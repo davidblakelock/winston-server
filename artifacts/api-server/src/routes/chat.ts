@@ -200,7 +200,7 @@ import {
   clearPendingEmailReply,
   type EmailInput,
 } from "../email/emailMeetingManager.js";
-import { getCachedBriefing, setCachedBriefing, getCachedBriefingIfRecent, getStaticBriefingContext, loadStaticContextFromDb, getPersistedBriefingText } from "../morning/briefingCache.js";
+import { getCachedBriefing, setCachedBriefing, getCachedBriefingIfRecent, getStaticBriefingContext, loadStaticContextFromDb, getPersistedBriefingText, getPersistedBriefingSummary } from "../morning/briefingCache.js";
 import { assembleMorningActions, type MorningAction } from "../morning/morningActions.js";
 import { updateSettings as updateWinddownSettings } from "../winddown/winddownManager.js";
 import { analyzePressureDelta, formatPressureContext, formatPressureContextNoChange } from "../weather/pressureScheduler.js";
@@ -5959,6 +5959,26 @@ router.get("/morning-briefing/cached", authenticate, async (req: Request, res: R
     return;
   }
   res.json({ text });
+});
+
+// ── GET /api/morning-briefing/summary ─────────────────────────────────────────
+// Lightweight endpoint for the native home screen card. Returns whether today's
+// briefing has been generated and a 200-char preview snippet so the card can
+// render without fetching the full text. generatedAt is an ISO-8601 timestamp.
+
+router.get("/morning-briefing/summary", authenticate, async (req: Request, res: Response) => {
+  const userName = (req as any).userName as string;
+  const result = await getPersistedBriefingSummary(userName).catch(() => null);
+  if (!result) {
+    res.json({ generated: false, preview: "", generatedAt: null });
+    return;
+  }
+  const preview = result.text.slice(0, 200);
+  res.json({
+    generated: true,
+    preview,
+    generatedAt: result.generatedAt.toISOString(),
+  });
 });
 
 export default router;

@@ -56,6 +56,40 @@ export const TextToSpeechResponse = zod.object({
 });
 
 /**
+ * Returns whether today's briefing has been generated, a 200-character preview snippet, and the ISO-8601 timestamp when it was generated. Intended for the native home screen card.
+ * @summary Get today's morning briefing summary
+ */
+export const GetMorningBriefingSummaryResponse = zod.object({
+  generated: zod
+    .boolean()
+    .describe("Whether today's briefing has been generated"),
+  preview: zod
+    .string()
+    .describe(
+      "First 200 characters of the briefing text (empty string when generated is false)",
+    ),
+  generatedAt: zod
+    .string()
+    .nullable()
+    .describe(
+      "ISO-8601 timestamp when the briefing was generated (null when generated is false)",
+    ),
+});
+
+/**
+ * Returns the full pre-generated briefing text for today if it exists in cache or DB. Used by the web app on notification tap and by the native app when expanding the home screen card.
+ * @summary Get today's full cached briefing text
+ */
+export const GetMorningBriefingCachedResponse = zod.object({
+  text: zod
+    .string()
+    .nullable()
+    .describe(
+      "Full pre-generated briefing text for today, or null if not yet generated",
+    ),
+});
+
+/**
  * Queues background URL lookups for all restaurants with no URL. Returns immediately with the count of restaurants queued.
  * @summary Backfill missing restaurant URLs
  */

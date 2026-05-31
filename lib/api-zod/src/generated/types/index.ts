@@ -22,6 +22,8 @@ export * from "./getGoals200";
 export * from "./goal";
 export * from "./goalStep";
 export * from "./healthStatus";
+export * from "./morningBriefingCachedResponse";
+export * from "./morningBriefingSummaryResponse";
 export * from "./speakRequest";
 export * from "./speakResponse";
 export * from "./updateGoalStepRequest";

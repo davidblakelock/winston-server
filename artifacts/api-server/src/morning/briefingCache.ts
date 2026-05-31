@@ -204,9 +204,26 @@ export async function releaseMorningPushSlot(userName: string): Promise<void> {
 // ── Retrieve persisted briefing text from DB (for "already loaded" endpoint) ──
 
 export async function getPersistedBriefingText(userName: string): Promise<string | null> {
+  const summary = await getPersistedBriefingSummary(userName);
+  return summary?.text ?? null;
+}
+
+/**
+ * Returns { text, generatedAt } for today's briefing, pulling from in-memory
+ * cache first and falling back to DB. Returns null if no briefing exists today.
+ */
+export async function getPersistedBriefingSummary(
+  userName: string
+): Promise<{ text: string; generatedAt: Date } | null> {
   // Check in-memory first
-  const mem = getCachedBriefing(userName);
-  if (mem) return mem;
+  const entry = _textCache.get(userName);
+  if (entry && entry.dateKey === ctDateKey()) {
+    const ageMs = Date.now() - entry.generatedAt;
+    if (ageMs <= TEXT_MAX_AGE_MS) {
+      return { text: entry.text, generatedAt: new Date(entry.generatedAt) };
+    }
+    _textCache.delete(userName);
+  }
 
   // Fall back to DB
   const today = ctDateKey();
@@ -223,7 +240,7 @@ export async function getPersistedBriefingText(userName: string): Promise<string
     // Restore to in-memory cache
     const builtAt = new Date(row.built_at).getTime();
     _textCache.set(userName, { text: row.briefing_text, generatedAt: builtAt, dateKey: today });
-    return row.briefing_text;
+    return { text: row.briefing_text, generatedAt: new Date(row.built_at) };
   } catch {
     return null;
   }

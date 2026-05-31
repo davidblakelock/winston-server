@@ -75,6 +75,44 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /morning-briefing/summary:
+    get:
+      operationId: getMorningBriefingSummary
+      tags: [morning]
+      summary: Get today's morning briefing summary
+      description: Returns whether today's briefing has been generated, a 200-character preview snippet, and the ISO-8601 timestamp when it was generated. Intended for the native home screen card.
+      responses:
+        "200":
+          description: Briefing summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MorningBriefingSummaryResponse"
+        "500":
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /morning-briefing/cached:
+    get:
+      operationId: getMorningBriefingCached
+      tags: [morning]
+      summary: Get today's full cached briefing text
+      description: Returns the full pre-generated briefing text for today if it exists in cache or DB. Used by the web app on notification tap and by the native app when expanding the home screen card.
+      responses:
+        "200":
+          description: Cached briefing text
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MorningBriefingCachedResponse"
+        "500":
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /lists/restaurants/backfill-urls:
     post:
       operationId: backfillRestaurantUrls
@@ -419,6 +457,32 @@ components:
             $ref: "#/components/schemas/ConversationMessage"
       required:
         - goal
+    MorningBriefingSummaryResponse:
+      type: object
+      properties:
+        generated:
+          type: boolean
+          description: Whether today's briefing has been generated
+        preview:
+          type: string
+          description: First 200 characters of the briefing text (empty string when generated is false)
+        generatedAt:
+          type: string
+          nullable: true
+          description: ISO-8601 timestamp when the briefing was generated (null when generated is false)
+      required:
+        - generated
+        - preview
+        - generatedAt
+    MorningBriefingCachedResponse:
+      type: object
+      properties:
+        text:
+          type: string
+          nullable: true
+          description: Full pre-generated briefing text for today, or null if not yet generated
+      required:
+        - text
     BreakdownGoalResponse:
       type: object
       properties:
