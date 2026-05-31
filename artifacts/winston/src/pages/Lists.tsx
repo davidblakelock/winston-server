@@ -4,25 +4,33 @@ import { useLocation } from "wouter";
 
 const API = import.meta.env.BASE_URL.replace(/\/$/, "");
 
-const BOOKING_PLATFORMS: { match: string; name: string }[] = [
-  { match: "opentable.com",   name: "OpenTable" },
-  { match: "resy.com",        name: "Resy" },
-  { match: "yelp.com",        name: "Yelp" },
-  { match: "tock.com",        name: "Tock" },
-  { match: "sevenrooms.com",  name: "SevenRooms" },
-  { match: "exploretock.com", name: "Tock" },
-  { match: "tableagent.com",  name: "Table Agent" },
-  { match: "bookatable.com",  name: "Bookatable" },
-  { match: "quandoo.com",     name: "Quandoo" },
+interface BookingPlatform {
+  match: string;
+  name: string;
+  color: string;
+  bg: string;
+  border: string;
+  dot: string;
+}
+
+const BOOKING_PLATFORMS: BookingPlatform[] = [
+  { match: "opentable.com",   name: "OpenTable",   color: "#f87171", bg: "rgba(220,38,38,0.12)",  border: "rgba(220,38,38,0.35)",  dot: "#ef4444" },
+  { match: "resy.com",        name: "Resy",         color: "#fb923c", bg: "rgba(234,88,12,0.12)",  border: "rgba(234,88,12,0.35)",  dot: "#f97316" },
+  { match: "yelp.com",        name: "Yelp",         color: "#f87171", bg: "rgba(185,28,28,0.12)",  border: "rgba(185,28,28,0.35)",  dot: "#dc2626" },
+  { match: "tock.com",        name: "Tock",         color: "#34d399", bg: "rgba(5,150,105,0.12)",  border: "rgba(5,150,105,0.35)",  dot: "#10b981" },
+  { match: "exploretock.com", name: "Tock",         color: "#34d399", bg: "rgba(5,150,105,0.12)",  border: "rgba(5,150,105,0.35)",  dot: "#10b981" },
+  { match: "sevenrooms.com",  name: "SevenRooms",   color: "#a78bfa", bg: "rgba(109,40,217,0.12)", border: "rgba(109,40,217,0.35)", dot: "#8b5cf6" },
+  { match: "tableagent.com",  name: "Table Agent",  color: "#60a5fa", bg: "rgba(37,99,235,0.12)",  border: "rgba(37,99,235,0.35)",  dot: "#3b82f6" },
+  { match: "bookatable.com",  name: "Bookatable",   color: "#4ade80", bg: "rgba(22,163,74,0.12)",  border: "rgba(22,163,74,0.35)",  dot: "#22c55e" },
+  { match: "quandoo.com",     name: "Quandoo",      color: "#4ade80", bg: "rgba(21,128,61,0.12)",  border: "rgba(21,128,61,0.35)",  dot: "#16a34a" },
 ];
 
-function getBookingPlatform(url: string): string {
+function getBookingPlatform(url: string): BookingPlatform | null {
   try {
     const hostname = new URL(url).hostname.replace(/^www\./, "");
-    const match = BOOKING_PLATFORMS.find((p) => hostname.includes(p.match));
-    return match ? match.name : "Reserve";
+    return BOOKING_PLATFORMS.find((p) => hostname.includes(p.match)) ?? null;
   } catch {
-    return "Reserve";
+    return null;
   }
 }
 
@@ -457,18 +465,40 @@ export default function Lists() {
                     {/* Restaurant: reservation link + edit + delete */}
                     {activeTab === "restaurants" && (
                       <>
-                        {item.url ? (
-                          <a
-                            href={item.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex items-center gap-1 text-xs text-amber-400/80 hover:text-amber-300 transition-colors flex-shrink-0 border border-amber-500/20 hover:border-amber-500/40 px-2 py-1 rounded-lg"
-                            title={`Reserve at ${item.item_text}`}
-                          >
-                            <ExternalLink className="h-3 w-3" />
-                            {getBookingPlatform(item.url)}
-                          </a>
-                        ) : null}
+                        {item.url ? (() => {
+                          const platform = getBookingPlatform(item.url!);
+                          return platform ? (
+                            <a
+                              href={item.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{
+                                color: platform.color,
+                                background: platform.bg,
+                                borderColor: platform.border,
+                              }}
+                              className="flex items-center gap-1.5 text-xs transition-opacity flex-shrink-0 border px-2 py-1 rounded-lg hover:opacity-80"
+                              title={`Reserve at ${item.item_text}`}
+                            >
+                              <span
+                                style={{ background: platform.dot }}
+                                className="h-1.5 w-1.5 rounded-full flex-shrink-0"
+                              />
+                              {platform.name}
+                            </a>
+                          ) : (
+                            <a
+                              href={item.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center gap-1 text-xs text-amber-400/80 hover:text-amber-300 transition-colors flex-shrink-0 border border-amber-500/20 hover:border-amber-500/40 px-2 py-1 rounded-lg"
+                              title={`Reserve at ${item.item_text}`}
+                            >
+                              <ExternalLink className="h-3 w-3" />
+                              Reserve
+                            </a>
+                          );
+                        })() : null}
                         <button
                           onClick={() => startEdit(item)}
                           className="opacity-0 group-hover:opacity-100 text-muted-foreground/40 hover:text-amber-400 transition-all p-1 rounded flex-shrink-0"
