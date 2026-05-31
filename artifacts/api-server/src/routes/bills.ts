@@ -146,7 +146,20 @@ router.post("/bills/remind-tomorrow", express.json({ limit: "1mb" }), async (req
       fireAt,
       timezone: "America/Chicago",
       pushCategoryId: "bill-action",
-      pushData: { companionMessage: JSON.stringify({ billId, billName: name, amount: amount ?? "" }) },
+      pushData: {
+        billId,
+        billName: name,
+        amount: amount ?? "",
+        actionTaken: "/api/bills/paid",
+        actionSnooze: "/api/bills/remind-tomorrow",
+        companionMessage: {
+          billId,
+          billName: name,
+          amount: amount ?? "",
+          actionTaken: "/api/bills/paid",
+          actionSnooze: "/api/bills/remind-tomorrow",
+        },
+      },
     });
 
     req.log.info({ userName, billId, reminderId: reminder.id }, "[BILLS] Remind-tomorrow reminder created via notification action");

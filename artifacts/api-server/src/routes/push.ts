@@ -255,11 +255,15 @@ router.post("/push/test-bill", async (req, res) => {
       billName: bill.name,
       amount: bill.amount ?? "",
       dueDateISO,
+      actionTaken: "/api/bills/paid",
+      actionSnooze: "/api/bills/remind-tomorrow",
       companionMessage: {
         billId: bill.id,
         billName: bill.name,
         amount: bill.amount ?? "",
         dueDateISO,
+        actionTaken: "/api/bills/paid",
+        actionSnooze: "/api/bills/remind-tomorrow",
       },
     };
 

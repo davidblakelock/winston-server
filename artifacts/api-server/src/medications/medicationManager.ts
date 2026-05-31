@@ -366,12 +366,19 @@ If no meaningful interactions exist, return an empty interactions array. Always 
       return { interactions: [], avoid: [], sideEffects: [], checkedDrugs, failedLookups: [] };
     }
 
-    const parsed = JSON.parse(jsonMatch[0]) as ClaudeInteractionResponse;
+    let parsed: ClaudeInteractionResponse;
+    try {
+      parsed = JSON.parse(jsonMatch[0]) as ClaudeInteractionResponse;
+    } catch (parseErr) {
+      const msg = parseErr instanceof Error ? parseErr.message : String(parseErr);
+      process.stdout.write(`[STDOUT] MEDS-INTERACTIONS JSON parse failed: ${msg}\nraw snippet: ${jsonMatch[0].slice(0, 400)}\n`);
+      return { interactions: [], avoid: [], sideEffects: [], checkedDrugs, failedLookups: [] };
+    }
 
     return {
-      interactions: parsed.interactions ?? [],
-      avoid: parsed.avoid ?? [],
-      sideEffects: parsed.sideEffects ?? [],
+      interactions: Array.isArray(parsed.interactions) ? parsed.interactions : [],
+      avoid: Array.isArray(parsed.avoid) ? parsed.avoid : [],
+      sideEffects: Array.isArray(parsed.sideEffects) ? parsed.sideEffects : [],
       checkedDrugs,
       failedLookups: [],
     };

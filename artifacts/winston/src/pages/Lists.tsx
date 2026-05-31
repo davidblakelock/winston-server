@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { ArrowLeft, Plus, X, Tv, UtensilsCrossed, RefreshCw } from "lucide-react";
+import { ArrowLeft, Plus, X, Tv, UtensilsCrossed, RefreshCw, ExternalLink, Pencil, Check } from "lucide-react";
 import { useLocation } from "wouter";
 
 const API = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -8,6 +8,7 @@ interface ListItem {
   id: number;
   item_text: string;
   detail?: string | null;
+  url?: string | null;
   status?: string | null;
   created_at: string;
 }
@@ -18,7 +19,7 @@ const TAB_CONFIG: { key: Tab; label: string; readOnly: boolean; emptyText: strin
   { key: "shopping",    label: "Shopping",    readOnly: false, emptyText: "Shopping list is empty." },
   { key: "to do",      label: "To Do",       readOnly: false, emptyText: "No to-dos yet." },
   { key: "tv-shows",   label: "TV Shows",    readOnly: false, emptyText: "No shows on your watch list." },
-  { key: "restaurants",label: "Restaurants", readOnly: false, emptyText: "No restaurants saved yet." },
+  { key: "restaurants",label: "Restaurants", readOnly: true,  emptyText: "No restaurants saved yet." },
 ];
 
 function apiPath(tab: Tab): string {
@@ -49,6 +50,13 @@ export default function Lists() {
   const [adding, setAdding] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
   const [backfillMsg, setBackfillMsg] = useState<string | null>(null);
+
+  // Inline edit state for restaurants
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editUrl, setEditUrl] = useState("");
+  const [saving, setSaving] = useState(false);
+
   const inputRef = useRef<HTMLInputElement>(null);
 
   const token = localStorage.getItem("winston_session_token") ?? "";
@@ -71,9 +79,9 @@ export default function Lists() {
   }
 
   useEffect(() => {
-    // Always re-fetch on tab change — ensures fresh data after any server-side update.
     void fetchItems(activeTab);
     setInputValue("");
+    setEditingId(null);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
 
@@ -117,10 +125,10 @@ export default function Lists() {
       const data = await res.json() as { queued: number };
       setBackfillMsg(
         data.queued === 0
-          ? "All restaurants already have links."
-          : `Refreshing links for ${data.queued} restaurant${data.queued === 1 ? "" : "s"}…`
+          ? "All restaurants already have booking links."
+          : `Looking up booking links for ${data.queued} restaurant${data.queued === 1 ? "" : "s"}…`
       );
-      setTimeout(() => setBackfillMsg(null), 5000);
+      setTimeout(() => setBackfillMsg(null), 6000);
     } catch {
       setBackfillMsg("Failed to start refresh.");
       setTimeout(() => setBackfillMsg(null), 4000);
@@ -141,6 +149,46 @@ export default function Lists() {
       });
     } catch {
       void fetchItems(tab);
+    }
+  }
+
+  function startEdit(item: ListItem) {
+    setEditingId(item.id);
+    setEditName(item.item_text);
+    setEditUrl(item.url ?? "");
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setEditName("");
+    setEditUrl("");
+  }
+
+  async function saveEdit(id: number) {
+    if (!editName.trim() || saving) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`${API}/api/lists/restaurants/${id}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ item: editName.trim(), url: editUrl.trim() || undefined }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json() as { item: ListItem };
+      setItemsByTab((prev) => ({
+        ...prev,
+        restaurants: (prev.restaurants ?? []).map((r) =>
+          r.id === id ? { ...r, item_text: data.item.item_text, url: data.item.url ?? null } : r
+        ),
+      }));
+      cancelEdit();
+    } catch (err) {
+      console.error("Restaurant edit failed:", err);
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -188,48 +236,122 @@ export default function Lists() {
             {items.map((item) => (
               <li
                 key={item.id}
-                className="flex items-center gap-3 px-4 py-3 rounded-xl border border-white/5 bg-white/[0.03] hover:bg-white/[0.06] transition-colors group"
+                className="flex flex-col px-4 py-3 rounded-xl border border-white/5 bg-white/[0.03] hover:bg-white/[0.06] transition-colors group"
               >
-                {/* Checkbox — only on editable lists; checking removes the item */}
-                {!tabCfg.readOnly && (
-                  <input
-                    type="checkbox"
-                    className="h-4 w-4 rounded border border-white/20 bg-transparent accent-amber-500 cursor-pointer flex-shrink-0"
-                    onChange={() => void handleDelete(activeTab, item.id)}
-                  />
+                {editingId === item.id ? (
+                  /* ── Inline edit form for restaurants ── */
+                  <div className="flex flex-col gap-2">
+                    <input
+                      autoFocus
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      placeholder="Restaurant name"
+                      className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-amber-500/40 transition-colors"
+                    />
+                    <input
+                      value={editUrl}
+                      onChange={(e) => setEditUrl(e.target.value)}
+                      placeholder="Booking URL (OpenTable / Resy)"
+                      className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-amber-500/40 transition-colors"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => void saveEdit(item.id)}
+                        disabled={saving || !editName.trim()}
+                        className="flex items-center gap-1 px-3 py-1 rounded-lg text-xs bg-amber-500/20 text-amber-400 border border-amber-500/30 hover:bg-amber-500/30 transition-colors disabled:opacity-40"
+                      >
+                        <Check className="h-3 w-3" />
+                        {saving ? "Saving…" : "Save"}
+                      </button>
+                      <button
+                        onClick={cancelEdit}
+                        className="px-3 py-1 rounded-lg text-xs text-muted-foreground/60 border border-white/10 hover:text-foreground hover:bg-white/5 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  /* ── Normal row ── */
+                  <div className="flex items-center gap-3">
+                    {/* Checkbox — only on editable lists (Shopping, To Do) */}
+                    {!tabCfg.readOnly && (
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border border-white/20 bg-transparent accent-amber-500 cursor-pointer flex-shrink-0"
+                        onChange={() => void handleDelete(activeTab, item.id)}
+                      />
+                    )}
+
+                    {/* Text + optional subtitle */}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-foreground/90 truncate">{item.item_text}</p>
+                      {item.detail && !/^favorite\s+restaurant/i.test(item.detail) && (
+                        <p className="text-xs text-muted-foreground/60 truncate mt-0.5">{item.detail}</p>
+                      )}
+                    </div>
+
+                    {/* Status badge for TV shows (Ended / Running) */}
+                    {item.status && item.status !== "Running" && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-white/10 text-muted-foreground/50 flex-shrink-0">
+                        {item.status}
+                      </span>
+                    )}
+
+                    {/* Restaurant: reservation link + edit + delete */}
+                    {activeTab === "restaurants" && (
+                      <>
+                        {item.url ? (
+                          <a
+                            href={item.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1 text-xs text-amber-400/80 hover:text-amber-300 transition-colors flex-shrink-0 border border-amber-500/20 hover:border-amber-500/40 px-2 py-1 rounded-lg"
+                            title={`Reserve at ${item.item_text}`}
+                          >
+                            <ExternalLink className="h-3 w-3" />
+                            Reserve
+                          </a>
+                        ) : (
+                          <span className="text-[10px] text-muted-foreground/30 flex-shrink-0">No booking link</span>
+                        )}
+                        <button
+                          onClick={() => startEdit(item)}
+                          className="opacity-0 group-hover:opacity-100 text-muted-foreground/40 hover:text-amber-400 transition-all p-1 rounded flex-shrink-0"
+                          title="Edit"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          onClick={() => void handleDelete(activeTab, item.id)}
+                          className="opacity-0 group-hover:opacity-100 text-muted-foreground/40 hover:text-red-400 transition-all p-1 rounded flex-shrink-0"
+                          title="Remove"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </>
+                    )}
+
+                    {/* Non-restaurant delete button */}
+                    {activeTab !== "restaurants" && (
+                      <button
+                        onClick={() => void handleDelete(activeTab, item.id)}
+                        className="opacity-0 group-hover:opacity-100 text-muted-foreground/40 hover:text-red-400 transition-all p-1 rounded flex-shrink-0"
+                        title="Remove"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
                 )}
-
-                {/* Text + optional subtitle */}
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm text-foreground/90 truncate">{item.item_text}</p>
-                  {item.detail && !/^favorite\s+restaurant/i.test(item.detail) && (
-                    <p className="text-xs text-muted-foreground/60 truncate mt-0.5">{item.detail}</p>
-                  )}
-                </div>
-
-                {/* Status badge for TV shows (Ended / Running) */}
-                {item.status && item.status !== "Running" && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-white/10 text-muted-foreground/50 flex-shrink-0">
-                    {item.status}
-                  </span>
-                )}
-
-                {/* Delete button */}
-                <button
-                  onClick={() => void handleDelete(activeTab, item.id)}
-                  className="opacity-0 group-hover:opacity-100 text-muted-foreground/40 hover:text-red-400 transition-all p-1 rounded flex-shrink-0"
-                  title="Remove"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
               </li>
             ))}
           </ul>
         )}
       </div>
 
-      {/* Add input — only for editable lists (Shopping, To Do) */}
-      {!tabCfg.readOnly && (
+      {/* Add input — Shopping and To Do only (not TV Shows or Restaurants) */}
+      {!tabCfg.readOnly && activeTab !== "restaurants" && (
         <div className="flex-shrink-0 border-t border-white/5 px-4 sm:px-6 py-4">
           <form
             onSubmit={(e) => { e.preventDefault(); void handleAdd(); }}
@@ -255,8 +377,8 @@ export default function Lists() {
         </div>
       )}
 
-      {/* Footer note for read-only tabs (TV Shows) */}
-      {tabCfg.readOnly && (
+      {/* Footer note for read-only tabs (TV Shows, Restaurants) */}
+      {tabCfg.readOnly && activeTab !== "restaurants" && (
         <div className="flex-shrink-0 border-t border-white/5 px-4 sm:px-6 py-3">
           <p className="text-xs text-muted-foreground/40 text-center">
             Ask Winston to add or remove shows
@@ -264,9 +386,12 @@ export default function Lists() {
         </div>
       )}
 
-      {/* Restaurants — refresh links button (always visible when on restaurants tab) */}
+      {/* Restaurants footer — add via chat note + refresh booking links */}
       {activeTab === "restaurants" && (
         <div className="flex-shrink-0 border-t border-white/5 px-4 sm:px-6 py-3 flex flex-col items-center gap-1.5">
+          <p className="text-xs text-muted-foreground/30 text-center">
+            Ask Winston to add or remove restaurants
+          </p>
           <button
             onClick={() => void handleBackfillUrls()}
             disabled={backfilling}
@@ -274,7 +399,7 @@ export default function Lists() {
             title="Look up booking links for restaurants that don't have one yet"
           >
             <RefreshCw className={`h-3 w-3 ${backfilling ? "animate-spin" : ""}`} />
-            {backfilling ? "Refreshing links…" : "Refresh restaurant links"}
+            {backfilling ? "Looking up booking links…" : "Refresh booking links"}
           </button>
           {backfillMsg && (
             <p className="text-xs text-amber-400/70 text-center">{backfillMsg}</p>

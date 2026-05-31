@@ -324,8 +324,18 @@ router.post("/reminders/snooze", async (req: Request, res: Response) => {
       pushCategoryId: "bill-action",
       pushData: {
         billId,
-        companionMessage: JSON.stringify({ billId, billName, amount }),
+        billName,
+        amount,
+        actionTaken: "/api/bills/paid",
+        actionSnooze: "/api/bills/remind-tomorrow",
         categoryIdentifier: "bill-action",
+        companionMessage: {
+          billId,
+          billName,
+          amount,
+          actionTaken: "/api/bills/paid",
+          actionSnooze: "/api/bills/remind-tomorrow",
+        },
       },
     });
     req.log?.info?.({ billId, billName, fireAt, reminderId: reminder.id }, "[REMINDERS/SNOOZE] Bill remind-tomorrow created");

@@ -121,11 +121,12 @@ async function lookupRestaurantWebsite(name: string, city = "Dallas"): Promise<s
   }
 }
 
-// Orchestrator: booking URL first, then restaurant website fallback.
+// Orchestrator: booking URL only (OpenTable or Resy).
+// We intentionally do NOT fall back to the restaurant's own website — a generic
+// homepage doesn't open a reservation form, which is the only reason to store a URL
+// in the restaurants tab. Return null if no booking platform listing is found.
 async function lookupRestaurantUrl(name: string, city = "Dallas"): Promise<string | null> {
-  const bookingUrl = await lookupRestaurantBookingUrl(name, city);
-  if (bookingUrl) return bookingUrl;
-  return lookupRestaurantWebsite(name, city);
+  return lookupRestaurantBookingUrl(name, city);
 }
 
 export { lookupRestaurantUrl };
