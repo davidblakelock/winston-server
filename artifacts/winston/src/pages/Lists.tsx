@@ -51,6 +51,12 @@ export default function Lists() {
   const [backfilling, setBackfilling] = useState(false);
   const [backfillMsg, setBackfillMsg] = useState<string | null>(null);
 
+  // Add-restaurant form state
+  const [restName, setRestName] = useState("");
+  const [restUrl, setRestUrl] = useState("");
+  const [addingRest, setAddingRest] = useState(false);
+  const restNameRef = useRef<HTMLInputElement>(null);
+
   // Inline edit state for restaurants
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editName, setEditName] = useState("");
@@ -109,6 +115,39 @@ export default function Lists() {
       console.error("List add failed:", err);
     } finally {
       setAdding(false);
+    }
+  }
+
+  async function handleAddRestaurant() {
+    const name = restName.trim();
+    if (!name || addingRest) return;
+    setAddingRest(true);
+    try {
+      const res = await fetch(`${API}/api/lists/restaurants`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ item: name, url: restUrl.trim() || undefined }),
+      });
+      if (!res.ok) {
+        const err = await res.json() as { error?: string };
+        console.error("Add restaurant failed:", err.error);
+        return;
+      }
+      const data = await res.json() as { item: ListItem };
+      setItemsByTab((prev) => ({
+        ...prev,
+        restaurants: [...(prev.restaurants ?? []), data.item],
+      }));
+      setRestName("");
+      setRestUrl("");
+      restNameRef.current?.focus();
+    } catch (err) {
+      console.error("Add restaurant failed:", err);
+    } finally {
+      setAddingRest(false);
     }
   }
 
@@ -389,21 +428,50 @@ export default function Lists() {
         </div>
       )}
 
-      {/* Restaurants footer — add via chat note + refresh booking links */}
+      {/* Restaurants footer — add form + refresh booking links */}
       {activeTab === "restaurants" && (
-        <div className="flex-shrink-0 border-t border-white/5 px-4 sm:px-6 py-3 flex flex-col items-center gap-1.5">
-          <p className="text-xs text-muted-foreground/30 text-center">
-            Ask Winston to add or remove restaurants
-          </p>
-          <button
-            onClick={() => void handleBackfillUrls()}
-            disabled={backfilling}
-            className="flex items-center gap-1.5 text-xs text-muted-foreground/50 hover:text-amber-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            title="Look up booking links for restaurants that don't have one yet"
+        <div className="flex-shrink-0 border-t border-white/5 px-4 sm:px-6 py-4 flex flex-col gap-3">
+          <form
+            onSubmit={(e) => { e.preventDefault(); void handleAddRestaurant(); }}
+            className="flex flex-col gap-2"
           >
-            <RefreshCw className={`h-3 w-3 ${backfilling ? "animate-spin" : ""}`} />
-            {backfilling ? "Looking up booking links…" : "Refresh booking links"}
-          </button>
+            <div className="flex gap-2">
+              <input
+                ref={restNameRef}
+                type="text"
+                value={restName}
+                onChange={(e) => setRestName(e.target.value)}
+                placeholder="Add a restaurant…"
+                className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-amber-500/40 focus:bg-white/[0.07] transition-colors"
+              />
+              <button
+                type="submit"
+                disabled={!restName.trim() || addingRest}
+                className="p-2.5 rounded-xl border border-white/10 bg-white/5 hover:bg-amber-950/40 hover:border-amber-500/30 text-muted-foreground hover:text-amber-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Add restaurant"
+              >
+                <Plus className="h-4 w-4" />
+              </button>
+            </div>
+            <input
+              type="url"
+              value={restUrl}
+              onChange={(e) => setRestUrl(e.target.value)}
+              placeholder="Booking link (optional)"
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-amber-500/40 focus:bg-white/[0.07] transition-colors"
+            />
+          </form>
+          <div className="flex items-center justify-center">
+            <button
+              onClick={() => void handleBackfillUrls()}
+              disabled={backfilling}
+              className="flex items-center gap-1.5 text-xs text-muted-foreground/50 hover:text-amber-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Look up booking links for restaurants that don't have one yet"
+            >
+              <RefreshCw className={`h-3 w-3 ${backfilling ? "animate-spin" : ""}`} />
+              {backfilling ? "Looking up booking links…" : "Refresh booking links"}
+            </button>
+          </div>
           {backfillMsg && (
             <p className="text-xs text-amber-400/70 text-center">{backfillMsg}</p>
           )}
