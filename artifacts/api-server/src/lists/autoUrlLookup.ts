@@ -24,8 +24,9 @@ export function detectAutoLookupType(listName: string): AutoLookupType | null {
 // when no direct OpenTable / Resy / Yelp listing can be found via web search.
 // The URL opens Yelp filtered to the restaurant name + city so the user can
 // browse reviews and book via Yelp Waitlist even without a direct listing.
-export function yelpFallbackUrl(restaurantName: string, city = "Dallas, TX"): string {
-  return `https://www.yelp.com/search?find_desc=${encodeURIComponent(restaurantName)}&find_loc=${encodeURIComponent(city)}`;
+export function yelpFallbackUrl(restaurantName: string, city = ""): string {
+  const base = `https://www.yelp.com/search?find_desc=${encodeURIComponent(restaurantName)}`;
+  return city.trim() ? `${base}&find_loc=${encodeURIComponent(city.trim())}` : base;
 }
 
 // Returns true when a stored URL is a DIRECT reservation/listing page on a known
@@ -44,34 +45,35 @@ export function isBookingPlatformUrl(url: string | null | undefined): boolean {
 
 // Step 1: Use Claude web_search to find a direct OpenTable, Resy, or Yelp booking page.
 // Returns the booking URL with a restaurant-specific path, or null if not found.
-async function lookupRestaurantBookingUrl(name: string, city = "Dallas"): Promise<string | null> {
+async function lookupRestaurantBookingUrl(name: string, city = ""): Promise<string | null> {
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
   if (!anthropicKey) return null;
 
   const anthropic = new Anthropic({ apiKey: anthropicKey });
+  const locationHint = city.trim() ? ` in ${city.trim()}` : "";
   const prompt =
-    `I need the SPECIFIC restaurant page URL for "${name}"${city ? ` in ${city}` : ""} on a booking platform.\n\n` +
+    `I need the SPECIFIC restaurant page URL for "${name}"${locationHint} on a booking platform.\n\n` +
     `Search the web and find the restaurant's own listing page on one of these platforms:\n\n` +
-    `OPENTABLE examples (what to look for):\n` +
-    `  https://www.opentable.com/r/nobu-dallas\n` +
-    `  https://www.opentable.com/r/pappas-bros-steakhouse-dallas\n` +
+    `OPENTABLE — URL format examples (the slug after /r/ is the restaurant's unique identifier):\n` +
+    `  https://www.opentable.com/r/nobu-malibu\n` +
+    `  https://www.opentable.com/r/eleven-madison-park-new-york\n` +
     `  https://www.opentable.com/restaurant/profile/12345\n\n` +
-    `RESY examples:\n` +
-    `  https://resy.com/cities/dal/venues/knife-dallas\n` +
-    `  https://resy.com/cities/nyc/venues/eleven-madison-park\n\n` +
-    `YELP examples (restaurant's own business page — NOT a search page):\n` +
-    `  https://www.yelp.com/biz/kellers-drive-in-dallas\n` +
-    `  https://www.yelp.com/biz/pappas-bros-steakhouse-dallas-2\n\n` +
+    `RESY — URL format examples:\n` +
+    `  https://resy.com/cities/nyc/venues/eleven-madison-park\n` +
+    `  https://resy.com/cities/mia/venues/nobu-miami\n\n` +
+    `YELP — the restaurant's own business listing page (NOT a search results page):\n` +
+    `  https://www.yelp.com/biz/nobu-malibu\n` +
+    `  https://www.yelp.com/biz/the-mercury-dallas-2\n\n` +
     `RULES — read carefully:\n` +
     `• The URL MUST include the restaurant's name or ID in the path (not just the domain).\n` +
-    `• REJECT these — they are homepages, not restaurant pages:\n` +
+    `• REJECT these — they are homepages or search pages, not the restaurant's page:\n` +
     `    opentable.com  (no path)\n` +
     `    resy.com  (no path)\n` +
     `    yelp.com  (no path)\n` +
-    `    yelp.com/search?...  (search page, not the restaurant's page)\n` +
+    `    yelp.com/search?...  (search results page — not valid)\n` +
     `• Return ONLY the single URL — no explanation, no extra text.\n` +
     `• If you cannot find a listing with the restaurant's name/ID in the path, return exactly: NONE\n\n` +
-    `Search for: "${name} opentable reservation" OR "${name} resy reservation" OR "${name} yelp ${city}"`;
+    `Search for: "${name} opentable" OR "${name} resy" OR "${name} yelp${city.trim() ? ` ${city.trim()}` : ""}"`;
 
   try {
     const response = await anthropic.messages.create({
@@ -125,7 +127,7 @@ async function lookupRestaurantBookingUrl(name: string, city = "Dallas"): Promis
 }
 
 // Step 2 fallback: Google Places API websiteUri (the restaurant's own website).
-async function lookupRestaurantWebsite(name: string, city = "Dallas"): Promise<string | null> {
+async function lookupRestaurantWebsite(name: string, city = ""): Promise<string | null> {
   const apiKey = process.env.GOOGLE_PLACES_API_KEY;
   if (!apiKey) return null;
 
@@ -180,14 +182,12 @@ async function lookupRestaurantWebsite(name: string, city = "Dallas"): Promise<s
 
 // Orchestrator: always returns a URL — direct booking page if found, Yelp search as fallback.
 // Priority: OpenTable → Resy → Yelp direct listing → Yelp search (guaranteed non-null).
-async function lookupRestaurantUrl(name: string, city = "Dallas"): Promise<string> {
+async function lookupRestaurantUrl(name: string, city = ""): Promise<string> {
   const bookingUrl = await lookupRestaurantBookingUrl(name, city);
   if (bookingUrl) return bookingUrl;
-  // Guaranteed fallback: Yelp search filtered to this restaurant + city.
-  // Better than returning null — opens Yelp where the user can find reviews,
-  // the menu, and use Yelp Waitlist. The backfill will still retry this row
-  // later because yelp.com/search is not treated as a "direct" booking URL.
-  return yelpFallbackUrl(name, `${city}, TX`);
+  // Guaranteed fallback: Yelp search for this restaurant, optionally filtered by city.
+  // Retried later by backfill because yelp.com/search is not a "direct" booking URL.
+  return yelpFallbackUrl(name, city);
 }
 
 export { lookupRestaurantUrl };
@@ -250,12 +250,13 @@ export async function autoUpdateItemUrl(
 
 export async function autoUpdateRestaurantUrl(
   profileItemId: number,
-  restaurantName: string
+  restaurantName: string,
+  city = ""
 ): Promise<void> {
   try {
     // lookupRestaurantUrl always returns a string (never null):
     // OpenTable → Resy → Yelp direct → Yelp search fallback.
-    const url = await lookupRestaurantUrl(restaurantName);
+    const url = await lookupRestaurantUrl(restaurantName, city);
 
     await query(
       `UPDATE profile_items SET url = $1 WHERE id = $2`,

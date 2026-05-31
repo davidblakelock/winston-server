@@ -171,10 +171,17 @@ export async function addProfileItem(
     return mapRow(updated.rows[0]);
   }
 
+  // Look up the user's city so URL lookups are location-aware (not hardcoded).
+  const userCityRow = await query<{ city: string | null }>(
+    `SELECT city FROM user_profiles WHERE user_name = $1`,
+    [userName]
+  ).catch(() => ({ rows: [] as Array<{ city: string | null }> }));
+  const userCity = userCityRow.rows[0]?.city ?? "";
+
   // For restaurants, pre-populate with a guaranteed Yelp search URL so the link
   // is available immediately (before the background lookup resolves).
   const initialUrl = category === "restaurants"
-    ? yelpFallbackUrl(cleanName)
+    ? yelpFallbackUrl(cleanName, userCity)
     : null;
 
   // Insert new row
@@ -194,7 +201,7 @@ export async function addProfileItem(
   // For restaurants: kick off background lookup to find a direct OpenTable / Resy / Yelp
   // listing URL and replace the Yelp search fallback with a better link if one exists.
   if (category === "restaurants") {
-    autoUpdateRestaurantUrl(rows[0].id, cleanName).catch(() => {});
+    autoUpdateRestaurantUrl(rows[0].id, cleanName, userCity).catch(() => {});
   }
 
   return mapRow(rows[0]);

@@ -98,7 +98,16 @@ router.post("/admin/backfill-restaurant-urls", async (req: Request, res: Respons
     );
 
     const body = req.body as { city?: string; force?: boolean };
-    const city = body.city ?? "Dallas";
+    // If caller doesn't supply a city, look it up from the user's profile so
+    // the booking URL search is always location-aware (never hardcoded).
+    let city = body.city ?? "";
+    if (!city) {
+      const profileRow = await query<{ city: string | null }>(
+        `SELECT city FROM user_profiles WHERE user_name = $1`,
+        [userName]
+      ).catch(() => ({ rows: [] as Array<{ city: string | null }> }));
+      city = profileRow.rows[0]?.city ?? "";
+    }
     // force=true → re-run lookup for ALL restaurants, even those with a direct booking URL.
     // Default (force=false) → skip any restaurant that already has a confirmed direct listing URL.
     const force = body.force === true;

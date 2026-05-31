@@ -369,12 +369,19 @@ router.post("/lists/restaurants/backfill-urls", async (req: Request, res: Respon
     // Only queue restaurants that don't already have a booking platform URL
     const toProcess = rows.filter((r) => !isBookingPlatformUrl(r.url));
 
+    // Look up the user's city for location-aware booking URL searches.
+    const profileCityRow = await query<{ city: string | null }>(
+      `SELECT city FROM user_profiles WHERE user_name = $1`,
+      [userName]
+    ).catch(() => ({ rows: [] as Array<{ city: string | null }> }));
+    const userCity = profileCityRow.rows[0]?.city ?? "";
+
     res.json({ queued: toProcess.length, total: rows.length });
 
     // Run sequentially with 600 ms delay to stay gentle on the Anthropic API.
     (async () => {
       for (const row of toProcess) {
-        await autoUpdateRestaurantUrl(row.id, row.name);
+        await autoUpdateRestaurantUrl(row.id, row.name, userCity);
         await new Promise<void>((resolve) => setTimeout(resolve, 600));
       }
     })().catch(() => {});

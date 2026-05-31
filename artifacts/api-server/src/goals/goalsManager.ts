@@ -292,7 +292,7 @@ export async function breakdownGoal(
 ): Promise<BreakdownResult> {
   const userProfile = await getProfile(userName).catch(() => null);
   let profileContext = "";
-  let userCity = "Dallas";
+  let userCity = "";
 
   if (userProfile) {
     const raw = (userProfile.rawData ?? {}) as CollectedData;
