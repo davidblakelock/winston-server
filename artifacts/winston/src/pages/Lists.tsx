@@ -312,9 +312,7 @@ export default function Lists() {
                             <ExternalLink className="h-3 w-3" />
                             Reserve
                           </a>
-                        ) : (
-                          <span className="text-[10px] text-muted-foreground/30 flex-shrink-0">No booking link</span>
-                        )}
+                        ) : null}
                         <button
                           onClick={() => startEdit(item)}
                           className="opacity-0 group-hover:opacity-100 text-muted-foreground/40 hover:text-amber-400 transition-all p-1 rounded flex-shrink-0"
