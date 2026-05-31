@@ -520,6 +520,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
   const [briefingCardDismissed, setBriefingCardDismissed] = useState(
     () => localStorage.getItem(briefingDismissalKey) === "true"
   );
+  const [briefingCardShowKey, setBriefingCardShowKey] = useState(0);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -1796,6 +1797,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
             if (data && data.generated) {
               setBriefingSummary(data);
               setBriefingCardDismissed(false);
+              setBriefingCardShowKey((k) => k + 1);
               localStorage.removeItem(briefingDismissalKey);
             }
           })
@@ -2424,6 +2426,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
             onClick={() => {
               localStorage.removeItem(briefingDismissalKey);
               setBriefingCardDismissed(false);
+              setBriefingCardShowKey((k) => k + 1);
             }}
             className="text-indigo-400/70 hover:text-indigo-300 transition-colors p-1.5 rounded-full hover:bg-indigo-950/40 border border-indigo-500/20 hover:border-indigo-500/40"
             title="Show today's briefing"
@@ -2564,7 +2567,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
           const diffMinutes = nowMinutes - wakeMinutes;
           if (diffMinutes < 0 || diffMinutes > 30) return null;
           return (
-            <div className="animate-in fade-in slide-in-from-top-2 duration-300">
+            <div key={briefingCardShowKey} className="animate-in fade-in slide-in-from-top-2 duration-300">
               <div className="rounded-2xl bg-indigo-950/40 border border-indigo-500/20 p-4 sm:p-5 shadow-sm">
                 <div className="flex items-center gap-2 mb-3">
                   <span className="text-base">🌅</span>
@@ -2584,7 +2587,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
 
         {/* Today's Briefing Card — shown when today's briefing has been generated */}
         {briefingSummary?.generated && !briefingCardDismissed && (
-          <div className="animate-in fade-in slide-in-from-top-2 duration-300">
+          <div key={briefingCardShowKey} className="animate-in fade-in slide-in-from-top-2 duration-300">
             <div className="rounded-2xl bg-indigo-950/60 border border-indigo-500/30 p-4 sm:p-5 shadow-sm">
               <div className="flex items-start justify-between gap-3 mb-3">
                 <div className="flex items-center gap-2">
