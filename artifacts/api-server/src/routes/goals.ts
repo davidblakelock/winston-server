@@ -48,23 +48,38 @@ router.post("/goals", async (req, res) => {
 });
 
 // ── POST /api/goals/breakdown ──────────────────────────────────────────────────
-// AI endpoint. Body: { goal, conversation_history? }
-// Returns: { type: 'question' | 'steps', content: string, steps?: string[] }
+// AI endpoint. Body: { goal, conversation_history?, auto_save?, goal_title?, goal_id? }
+// Returns: { type: 'question' | 'steps', content: string, steps?: string[], goalId?: number }
+//
+// auto_save: true  → automatically creates/updates the goal in the DB and saves steps.
+//                    Returns goalId so subsequent calls can pass it back to update steps
+//                    instead of creating a new goal each time.
+// goal_title:      → preferred title when creating the goal. Falls back to the goal text.
+// goal_id:         → pass back the goalId from a previous response to update existing
+//                    goal steps (replaces old steps with the new response's steps).
+//
 // Note: this route must be declared before /goals/:id to avoid param capture.
 router.post("/goals/breakdown", async (req, res) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
-  const { goal, conversation_history } = req.body as {
+  const { goal, conversation_history, auto_save, goal_title, goal_id } = req.body as {
     goal?: string;
     conversation_history?: Array<{ role: "user" | "assistant"; content: string }>;
+    auto_save?: boolean;
+    goal_title?: string;
+    goal_id?: number;
   };
   if (!goal || typeof goal !== "string" || !goal.trim()) {
     res.status(400).json({ error: "goal is required" });
     return;
   }
   try {
-    const result = await breakdownGoal(goal.trim(), conversation_history ?? [], userName);
-    req.log.info({ type: result.type }, "[Goals] Breakdown generated");
+    const result = await breakdownGoal(goal.trim(), conversation_history ?? [], userName, {
+      autoSave: auto_save === true,
+      goalTitle: goal_title,
+      goalId: typeof goal_id === "number" ? goal_id : undefined,
+    });
+    req.log.info({ type: result.type, goalId: result.goalId, autoSave: auto_save }, "[Goals] Breakdown generated");
     res.json(result);
   } catch (err) {
     req.log.error({ err }, "[Goals] POST /goals/breakdown error");
