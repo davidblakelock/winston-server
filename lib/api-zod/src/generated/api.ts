@@ -56,6 +56,14 @@ export const TextToSpeechResponse = zod.object({
 });
 
 /**
+ * Queues background URL lookups for all restaurants with no URL. Returns immediately with the count of restaurants queued.
+ * @summary Backfill missing restaurant URLs
+ */
+export const BackfillRestaurantUrlsResponse = zod.object({
+  queued: zod.number().describe("Number of restaurants queued for URL lookup"),
+});
+
+/**
  * Returns all active goals for the user with their steps and completion status
  * @summary Get all goals
  */

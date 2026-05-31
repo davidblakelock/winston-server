@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { ArrowLeft, Plus, X, Tv, UtensilsCrossed } from "lucide-react";
+import { ArrowLeft, Plus, X, Tv, UtensilsCrossed, RefreshCw } from "lucide-react";
 import { useLocation } from "wouter";
 
 const API = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -47,6 +47,8 @@ export default function Lists() {
   const [loading, setLoading] = useState(true);
   const [inputValue, setInputValue] = useState("");
   const [adding, setAdding] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
+  const [backfillMsg, setBackfillMsg] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const token = localStorage.getItem("winston_session_token") ?? "";
@@ -99,6 +101,31 @@ export default function Lists() {
       console.error("List add failed:", err);
     } finally {
       setAdding(false);
+    }
+  }
+
+  async function handleBackfillUrls() {
+    if (backfilling) return;
+    setBackfilling(true);
+    setBackfillMsg(null);
+    try {
+      const res = await fetch(`${API}/api/lists/restaurants/backfill-urls`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json() as { queued: number };
+      setBackfillMsg(
+        data.queued === 0
+          ? "All restaurants already have links."
+          : `Refreshing links for ${data.queued} restaurant${data.queued === 1 ? "" : "s"}…`
+      );
+      setTimeout(() => setBackfillMsg(null), 5000);
+    } catch {
+      setBackfillMsg("Failed to start refresh.");
+      setTimeout(() => setBackfillMsg(null), 4000);
+    } finally {
+      setBackfilling(false);
     }
   }
 
@@ -228,14 +255,30 @@ export default function Lists() {
         </div>
       )}
 
-      {/* Footer note for read-only tabs */}
+      {/* Footer note for read-only tabs (TV Shows) */}
       {tabCfg.readOnly && (
         <div className="flex-shrink-0 border-t border-white/5 px-4 sm:px-6 py-3">
           <p className="text-xs text-muted-foreground/40 text-center">
-            {activeTab === "tv-shows"
-              ? `Ask Winston to add or remove shows`
-              : `Ask Winston to add or remove restaurants`}
+            Ask Winston to add or remove shows
           </p>
+        </div>
+      )}
+
+      {/* Restaurants — refresh links button (always visible when on restaurants tab) */}
+      {activeTab === "restaurants" && (
+        <div className="flex-shrink-0 border-t border-white/5 px-4 sm:px-6 py-3 flex flex-col items-center gap-1.5">
+          <button
+            onClick={() => void handleBackfillUrls()}
+            disabled={backfilling}
+            className="flex items-center gap-1.5 text-xs text-muted-foreground/50 hover:text-amber-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Look up booking links for restaurants that don't have one yet"
+          >
+            <RefreshCw className={`h-3 w-3 ${backfilling ? "animate-spin" : ""}`} />
+            {backfilling ? "Refreshing links…" : "Refresh restaurant links"}
+          </button>
+          {backfillMsg && (
+            <p className="text-xs text-amber-400/70 text-center">{backfillMsg}</p>
+          )}
         </div>
       )}
     </div>

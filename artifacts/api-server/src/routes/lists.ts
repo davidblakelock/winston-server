@@ -348,6 +348,34 @@ router.put("/lists/restaurants/:id", async (req: Request, res: Response) => {
   }
 });
 
+// POST /api/lists/restaurants/backfill-urls
+// Queues background URL lookups for all restaurants that still have url = NULL.
+// Returns { queued: N } immediately; lookups run sequentially with 500 ms gaps.
+router.post("/lists/restaurants/backfill-urls", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  try {
+    const { rows } = await query<{ id: number; name: string }>(
+      `SELECT id, name FROM profile_items
+       WHERE user_name = $1 AND category = 'restaurants' AND url IS NULL
+       ORDER BY created_at ASC`,
+      [userName]
+    );
+    res.json({ queued: rows.length });
+
+    // Run sequentially with 500 ms delay to avoid flooding the Anthropic API.
+    (async () => {
+      for (const row of rows) {
+        await autoUpdateRestaurantUrl(row.id, row.name);
+        await new Promise<void>((resolve) => setTimeout(resolve, 500));
+      }
+    })().catch(() => {});
+  } catch (err) {
+    req.log.warn({ err }, "Restaurants backfill-urls POST error");
+    res.status(500).json({ error: "Failed to start URL backfill" });
+  }
+});
+
 // ── Shopping — dedicated routes (Feature 2: auto-categorize + Feature 1: sync)
 // MUST be before the /lists/:listName wildcard.
 

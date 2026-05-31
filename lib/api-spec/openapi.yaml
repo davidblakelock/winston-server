@@ -75,6 +75,31 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /lists/restaurants/backfill-urls:
+    post:
+      operationId: backfillRestaurantUrls
+      tags: [lists]
+      summary: Backfill missing restaurant URLs
+      description: Queues background URL lookups for all restaurants with no URL. Returns immediately with the count of restaurants queued.
+      responses:
+        "200":
+          description: Backfill started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  queued:
+                    type: integer
+                    description: Number of restaurants queued for URL lookup
+                required:
+                  - queued
+        "500":
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /goals:
     get:
       operationId: getGoals

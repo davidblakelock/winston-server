@@ -104,6 +104,11 @@ export interface BreakdownGoalResponse {
   steps?: string[] | null;
 }
 
+export type BackfillRestaurantUrls200 = {
+  /** Number of restaurants queued for URL lookup */
+  queued: number;
+};
+
 export type GetGoals200 = {
   goals: Goal[];
 };

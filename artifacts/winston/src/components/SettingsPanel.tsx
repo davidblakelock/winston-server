@@ -184,6 +184,9 @@ export default function SettingsPanel({
   const [mergeError, setMergeError] = useState<string | null>(null);
   const [mergedIds, setMergedIds] = useState<Set<number>>(new Set());
 
+  const [backfillingUrls, setBackfillingUrls] = useState(false);
+  const [backfillUrlsMsg, setBackfillUrlsMsg] = useState<string | null>(null);
+
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -456,6 +459,35 @@ export default function SettingsPanel({
     if (!isOpen) return;
     void loadDuplicates();
   }, [isOpen, loadDuplicates]);
+
+  const handleBackfillUrls = useCallback(async () => {
+    if (backfillingUrls) return;
+    setBackfillingUrls(true);
+    setBackfillUrlsMsg(null);
+    try {
+      const token = localStorage.getItem("winston_session_token") ?? "";
+      const headers: Record<string, string> = token
+        ? { Authorization: `Bearer ${token}` }
+        : { "x-api-key": "winston-native-2026" };
+      const res = await fetch(`${CHAT_BASE}/api/lists/restaurants/backfill-urls`, {
+        method: "POST",
+        headers,
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as { queued: number };
+      setBackfillUrlsMsg(
+        data.queued === 0
+          ? "All restaurants already have links."
+          : `Refreshing links for ${data.queued} restaurant${data.queued === 1 ? "" : "s"}…`
+      );
+      setTimeout(() => setBackfillUrlsMsg(null), 5000);
+    } catch {
+      setBackfillUrlsMsg("Failed to start refresh — please try again.");
+      setTimeout(() => setBackfillUrlsMsg(null), 4000);
+    } finally {
+      setBackfillingUrls(false);
+    }
+  }, [backfillingUrls]);
 
   const onFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -801,6 +833,34 @@ export default function SettingsPanel({
             {mergedIds.size > 0 && duplicates.length === 0 && (
               <p className="text-xs text-green-400/80 mt-2 flex items-center gap-1">
                 <Check className="h-3 w-3" />All duplicates merged
+              </p>
+            )}
+          </section>
+
+          <div className="border-t border-white/8" />
+
+          {/* ── Section 3c: Restaurant Links ─────────────────────────── */}
+          <section>
+            <div className="flex items-center gap-2 mb-3">
+              <div className="p-1.5 rounded-lg bg-primary/15">
+                <RefreshCw className="h-3.5 w-3.5 text-primary" />
+              </div>
+              <h3 className="text-sm font-semibold text-foreground">Restaurant Links</h3>
+            </div>
+            <p className="text-xs text-muted-foreground mb-3 leading-relaxed">
+              Automatically look up OpenTable and Resy booking links for any saved restaurants that don't have one yet.
+            </p>
+            <button
+              onClick={() => void handleBackfillUrls()}
+              disabled={backfillingUrls}
+              className="flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-full border transition-colors border-primary/30 bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <RefreshCw className={`h-3 w-3 ${backfillingUrls ? "animate-spin" : ""}`} />
+              {backfillingUrls ? "Refreshing links…" : "Refresh restaurant links"}
+            </button>
+            {backfillUrlsMsg && (
+              <p className="text-xs text-amber-400/80 mt-2 flex items-center gap-1">
+                <Check className="h-3 w-3" />{backfillUrlsMsg}
               </p>
             )}
           </section>

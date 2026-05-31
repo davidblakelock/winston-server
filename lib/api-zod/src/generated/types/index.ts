@@ -7,6 +7,7 @@
  */
 
 export * from "./addGoalStepRequest";
+export * from "./backfillRestaurantUrls200";
 export * from "./breakdownGoalRequest";
 export * from "./breakdownGoalResponse";
 export * from "./breakdownGoalResponseType";
