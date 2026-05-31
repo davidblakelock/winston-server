@@ -151,9 +151,9 @@ async function geocodeWithGoogle(address: string): Promise<{ lat: number; lon: n
 
 // ── Nominatim geocoding (fallback only — rate-limited public instance) ────────
 async function geocodeWithNominatim(address: string): Promise<{ lat: number; lon: number } | null> {
-  // Only append city hint if the address doesn't already include a state or zip
+  // Only append country hint if the address doesn't already include a state or zip
   const hasState = /\b[A-Z]{2}\b|\b\d{5}\b/.test(address);
-  const query = hasState ? address : address + " Dallas TX";
+  const query = hasState ? address : address + " USA";
   const encoded = encodeURIComponent(query);
   const url = `https://nominatim.openstreetmap.org/search?q=${encoded}&format=json&limit=1`;
 
