@@ -1,0 +1,830 @@
+// app/goals.tsx
+// Winston — Goals Screen
+import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect, useRouter } from 'expo-router';
+import * as SecureStore from 'expo-secure-store';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import {
+    ActivityIndicator,
+    Alert,
+    FlatList,
+    KeyboardAvoidingView,
+    Platform,
+    SafeAreaView,
+    ScrollView,
+    StatusBar,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
+} from 'react-native';
+import Markdown from 'react-native-markdown-display';
+
+const SERVER = 'https://winston-server-production.up.railway.app';
+const API_KEY = 'winston-native-2026';
+
+const COLORS = {
+  background: '#0A0A0F',
+  surface: '#12121A',
+  surfaceRaised: '#1A1A26',
+  gold: '#C9A84C',
+  goldLight: '#E8C96A',
+  cream: '#F5F0E8',
+  muted: '#8888AA',
+  border: '#2A2A3A',
+  green: '#4CAF50',
+  blue: '#4A90D9',
+  danger: '#FF6B6B',
+};
+
+// ─── Markdown styles (dark theme) ─────────────────────────────────────────
+const markdownStyles = {
+  body: { color: COLORS.cream, fontSize: 15, lineHeight: 22 },
+  heading1: { color: COLORS.gold, fontSize: 20, fontWeight: '700' as const, marginBottom: 8, marginTop: 12 },
+  heading2: { color: COLORS.gold, fontSize: 17, fontWeight: '700' as const, marginBottom: 6, marginTop: 10 },
+  heading3: { color: COLORS.goldLight, fontSize: 15, fontWeight: '600' as const, marginBottom: 4, marginTop: 8 },
+  heading4: { color: COLORS.goldLight, fontSize: 14, fontWeight: '600' as const, marginBottom: 4, marginTop: 8 },
+  strong: { color: COLORS.cream, fontWeight: '700' as const },
+  em: { color: COLORS.cream, fontStyle: 'italic' as const },
+  bullet_list: { marginVertical: 4 },
+  ordered_list: { marginVertical: 4 },
+  list_item: { marginVertical: 2, color: COLORS.cream },
+  code_inline: {
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 4,
+    paddingHorizontal: 4,
+    color: COLORS.goldLight,
+    fontSize: 13,
+  },
+  fence: {
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderRadius: 8,
+    padding: 12,
+    marginVertical: 8,
+    color: COLORS.goldLight,
+    fontSize: 13,
+  },
+  blockquote: {
+    borderLeftWidth: 3,
+    borderLeftColor: COLORS.gold,
+    paddingLeft: 12,
+    marginVertical: 8,
+    opacity: 0.85,
+  },
+  hr: { borderBottomWidth: 1, borderBottomColor: COLORS.border, marginVertical: 12 },
+  link: { color: COLORS.blue },
+  paragraph: { marginVertical: 4 },
+};
+
+// ─── Types ────────────────────────────────────────────────────────────────
+interface GoalStep {
+  id: string;
+  step_text: string;
+  order: number;
+  completed: boolean;
+  completed_at?: string;
+  is_schedulable?: boolean;
+}
+
+interface Goal {
+  id: string;
+  title: string;
+  description?: string;
+  steps: GoalStep[];
+  created_at: string;
+  completed_at?: string;
+}
+
+interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+// ─── Step Row ─────────────────────────────────────────────────────────────
+const StepRow = ({ step, onToggle }: { step: GoalStep; onToggle: () => void }) => (
+  <TouchableOpacity style={styles.stepRow} onPress={onToggle} activeOpacity={0.7}>
+    <Ionicons
+      name={step.completed ? 'checkmark-circle' : 'ellipse-outline'}
+      size={22}
+      color={step.completed ? COLORS.green : COLORS.border}
+    />
+    <Text style={[styles.stepText, step.completed && styles.stepTextDone]}>
+      {step.step_text}
+    </Text>
+  </TouchableOpacity>
+);
+
+// ─── Goal Card ────────────────────────────────────────────────────────────
+const GoalCard = ({ goal, onToggleStep, onDelete, onExpand, expanded }: {
+  goal: Goal;
+  onToggleStep: (stepId: string, completed: boolean) => void;
+  onDelete: () => void;
+  onExpand: () => void;
+  expanded: boolean;
+}) => {
+  const completedCount = goal.steps.filter(s => s.completed).length;
+  const totalCount = goal.steps.length;
+  const progress = totalCount > 0 ? completedCount / totalCount : 0;
+
+  return (
+    <View style={styles.goalCard}>
+      <TouchableOpacity onPress={onExpand} activeOpacity={0.8}>
+        <View style={styles.goalHeader}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.goalTitle}>{goal.title}</Text>
+            {totalCount > 0 && (
+              <Text style={styles.goalProgress}>{completedCount} of {totalCount} steps complete</Text>
+            )}
+          </View>
+          <View style={styles.goalHeaderRight}>
+            <TouchableOpacity onPress={onDelete} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} style={{ padding: 4 }}>
+              <Ionicons name="trash-outline" size={16} color={COLORS.muted} />
+            </TouchableOpacity>
+            <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={16} color={COLORS.muted} />
+          </View>
+        </View>
+        {totalCount > 0 && (
+          <View style={styles.progressTrack}>
+            <View style={[styles.progressFill, { width: `${progress * 100}%` as any }]} />
+          </View>
+        )}
+      </TouchableOpacity>
+      {expanded && goal.steps.length > 0 && (
+        <View style={styles.stepsList}>
+          {goal.steps.sort((a, b) => a.order - b.order).map((step, index) => (
+            <View key={step.id}>
+              <StepRow step={step} onToggle={() => onToggleStep(step.id, !step.completed)} />
+              {index < goal.steps.length - 1 && <View style={styles.stepDivider} />}
+            </View>
+          ))}
+        </View>
+      )}
+      {expanded && goal.steps.length === 0 && (
+        <Text style={styles.noStepsText}>No steps yet</Text>
+      )}
+    </View>
+  );
+};
+
+// ─── Chat Bubble ──────────────────────────────────────────────────────────
+// Renders user messages as plain text; assistant messages with full markdown.
+const ChatBubble = ({ msg }: { msg: ChatMessage }) => {
+  const isUser = msg.role === 'user';
+  return (
+    <View style={[styles.chatBubble, isUser ? styles.chatBubbleUser : styles.chatBubbleAssistant]}>
+      {!isUser && <Text style={styles.chatLabel}>Winston</Text>}
+      {isUser ? (
+        <Text style={styles.chatTextUser}>{msg.content}</Text>
+      ) : (
+        <Markdown style={markdownStyles}>{msg.content}</Markdown>
+      )}
+    </View>
+  );
+};
+
+// ─── Main Screen ──────────────────────────────────────────────────────────
+export default function GoalsScreen() {
+  const router = useRouter();
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  // Conversation state
+  const [showConversation, setShowConversation] = useState(false);
+  const [goalText, setGoalText] = useState('');
+  const [conversation, setConversation] = useState<ChatMessage[]>([]);
+  const [isThinking, setIsThinking] = useState(false);
+  const [input, setInput] = useState('');
+  const [pendingSteps, setPendingSteps] = useState<string[]>([]);
+  const [pendingGoalTitle, setPendingGoalTitle] = useState('');
+  const [conversationPhase, setConversationPhase] = useState<'goal_input' | 'conversation' | 'steps_review' | 'step_actions'>('goal_input');
+  const [currentStepIndex, setCurrentStepIndex] = useState(0);
+  const [savingGoal, setSavingGoal] = useState(false);
+  const [savedGoalId, setSavedGoalId] = useState<string | null>(null);
+
+  const inputRef = useRef<TextInput>(null);
+  const scrollRef = useRef<ScrollView>(null);
+
+  const scrollToBottom = () => {
+    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 150);
+  };
+
+  const fetchGoals = useCallback(async () => {
+    try {
+      const res = await fetch(`${SERVER}/api/goals`, { headers: { 'x-api-key': API_KEY } });
+      const data = await res.json();
+      setGoals(data.goals || []);
+    } catch (err) {
+      console.error('Failed to fetch goals:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { fetchGoals(); }, [fetchGoals]);
+
+  // ── Reset conversation state when leaving the screen ─────────────────────
+  // Prevents stale conversations from appearing when navigating back to Goals.
+  useFocusEffect(
+    useCallback(() => {
+      return () => {
+        setShowConversation(false);
+        setConversation([]);
+        setGoalText('');
+        setInput('');
+        setPendingSteps([]);
+        setPendingGoalTitle('');
+        setConversationPhase('goal_input');
+        setCurrentStepIndex(0);
+        setSavedGoalId(null);
+      };
+    }, [])
+  );
+
+  const handleToggleStep = async (goalId: string, stepId: string, completed: boolean) => {
+    setGoals(prev => prev.map(g =>
+      g.id === goalId ? { ...g, steps: g.steps.map(s => s.id === stepId ? { ...s, completed } : s) } : g
+    ));
+    try {
+      await fetch(`${SERVER}/api/goals/${goalId}/steps/${stepId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': API_KEY },
+        body: JSON.stringify({ completed }),
+      });
+      if (completed) {
+        const responses = [
+          "Well done. The Stoics called this discipline — doing what you said you would do.",
+          "One step closer. Marcus Aurelius: 'Confine yourself to the present.' You did that.",
+          "Progress. Not luck, not accident — your effort.",
+          "Done. This is what it looks like to assemble a life, action by action.",
+          "Good. Seneca said the goal of life is to live. You're doing it.",
+        ];
+        Alert.alert('✓', responses[Math.floor(Math.random() * responses.length)], [{ text: 'Good' }]);
+      }
+    } catch {
+      setGoals(prev => prev.map(g =>
+        g.id === goalId ? { ...g, steps: g.steps.map(s => s.id === stepId ? { ...s, completed: !completed } : s) } : g
+      ));
+    }
+  };
+
+  const handleDeleteGoal = (goal: Goal) => {
+    Alert.alert('Delete Goal', `Delete "${goal.title}" and all its steps?`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete', style: 'destructive',
+        onPress: async () => {
+          try {
+            await fetch(`${SERVER}/api/goals/${goal.id}`, { method: 'DELETE', headers: { 'x-api-key': API_KEY } });
+            setGoals(prev => prev.filter(g => g.id !== goal.id));
+          } catch {
+            Alert.alert('Error', 'Could not delete goal.');
+          }
+        },
+      },
+    ]);
+  };
+
+  const startNewGoal = () => {
+    setShowConversation(true);
+    setConversation([]);
+    setGoalText('');
+    setInput('');
+    setPendingSteps([]);
+    setPendingGoalTitle('');
+    setConversationPhase('goal_input');
+    setCurrentStepIndex(0);
+    setSavedGoalId(null);
+  };
+
+  // Call the breakdown API and handle the response
+  const callBreakdown = async (goal: string, history: ChatMessage[]) => {
+    setIsThinking(true);
+    try {
+      const res = await fetch(`${SERVER}/api/goals/breakdown`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': API_KEY },
+        body: JSON.stringify({ goal, conversation_history: history }),
+      });
+      const data = await res.json();
+
+      const assistantMsg: ChatMessage = { role: 'assistant', content: data.content };
+      const newConversation = [...history, assistantMsg];
+      setConversation(newConversation);
+      scrollToBottom();
+
+      if (data.type === 'steps' && data.steps?.length > 0) {
+        setPendingSteps(data.steps);
+        setConversationPhase('steps_review');
+      } else {
+        // Question or follow-up — stay in conversation so the input stays visible
+        setConversationPhase('conversation');
+      }
+    } catch {
+      const errMsg: ChatMessage = { role: 'assistant', content: "I'm having trouble connecting right now. Try again in a moment." };
+      setConversation(prev => [...prev, errMsg]);
+      setConversationPhase('conversation');
+    } finally {
+      setIsThinking(false);
+      scrollToBottom();
+    }
+  };
+
+  // User submits their initial goal
+  const handleSendGoal = async () => {
+    const text = goalText.trim();
+    if (!text) return;
+    setPendingGoalTitle(text);
+    const userMsg: ChatMessage = { role: 'user', content: text };
+    const newConversation = [userMsg];
+    setConversation(newConversation);
+    setGoalText('');
+    setConversationPhase('conversation');
+    await callBreakdown(text, newConversation);
+  };
+
+  // User sends a message during conversation — works in ALL phases
+  const handleSendMessage = async () => {
+    const text = input.trim();
+    if (!text || isThinking) return;
+
+    const userMsg: ChatMessage = { role: 'user', content: text };
+    const newConversation = [...conversation, userMsg];
+    setConversation(newConversation);
+    setInput('');
+    scrollToBottom();
+
+    if (conversationPhase === 'step_actions') {
+      await handleStepActionResponse(text, newConversation);
+    } else {
+      // Works during 'conversation' AND 'steps_review' — user can always ask follow-ups
+      if (conversationPhase === 'steps_review') {
+        setPendingSteps([]);
+      }
+      setConversationPhase('conversation');
+      await callBreakdown(pendingGoalTitle, newConversation);
+    }
+  };
+
+  // Save the goal and all its steps, then start the step-by-step action phase
+  const handleSaveGoal = async () => {
+    if (!pendingGoalTitle || pendingSteps.length === 0) return;
+    setSavingGoal(true);
+    try {
+      const goalRes = await fetch(`${SERVER}/api/goals`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': API_KEY },
+        body: JSON.stringify({ title: pendingGoalTitle }),
+      });
+      const goalData = await goalRes.json();
+      const goalId = goalData.id;
+      setSavedGoalId(goalId);
+
+      for (let i = 0; i < pendingSteps.length; i++) {
+        await fetch(`${SERVER}/api/goals/${goalId}/steps`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': API_KEY },
+          body: JSON.stringify({ step_text: pendingSteps[i], order: i + 1 }),
+        });
+      }
+
+      await fetchGoals();
+
+      setConversationPhase('step_actions');
+      setCurrentStepIndex(0);
+      const savedMsg: ChatMessage = {
+        role: 'assistant',
+        content: `Your goal is saved. Now let me help you actually make it happen. I'll go through each step and we can decide together whether to add it to your to-do list or your calendar.\n\nStep 1: "${pendingSteps[0]}"\n\nDoes this feel more like something to schedule on a specific day, or a general to-do you'll get to when you can?`,
+      };
+      const newConversation = [...conversation, savedMsg];
+      setConversation(newConversation);
+      scrollToBottom();
+    } catch {
+      Alert.alert('Error', 'Could not save goal. Please try again.');
+    } finally {
+      setSavingGoal(false);
+    }
+  };
+
+  // Handle user response during the step action phase
+  const handleStepActionResponse = async (userText: string, currentConversation: ChatMessage[]) => {
+    setIsThinking(true);
+    const lower = userText.toLowerCase();
+    const step = pendingSteps[currentStepIndex];
+    const isLastStep = currentStepIndex >= pendingSteps.length - 1;
+
+    try {
+      const token = await SecureStore.getItemAsync('sessionToken');
+
+      const isCalendar = lower.match(/calendar|schedule|monday|tuesday|wednesday|thursday|friday|saturday|sunday|tonight|tomorrow|next week|specific day|date|evening|morning|afternoon|night/);
+      const isTodo = lower.match(/to.?do|to.?do list|list|reminder|general|whenever|no specific|anytime|not sure/);
+      const isSkip = lower.match(/skip|neither|no|pass|not yet|later/);
+
+      let responseText = '';
+
+      if (isCalendar && !isSkip) {
+        const hasDay = lower.match(/monday|tuesday|wednesday|thursday|friday|saturday|sunday|tonight|tomorrow|next week/);
+        if (!hasDay) {
+          responseText = `Great — let's get "${step}" on your calendar. What day works best? You can say something like "next Saturday" or "this Thursday evening."`;
+          const assistantMsg: ChatMessage = { role: 'assistant', content: responseText };
+          setConversation([...currentConversation, assistantMsg]);
+          scrollToBottom();
+          setIsThinking(false);
+          return;
+        }
+
+        try {
+          const dayMap: Record<string, number> = { monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6, sunday: 0 };
+          let targetDate = new Date();
+
+          if (lower.includes('tomorrow')) {
+            targetDate.setDate(targetDate.getDate() + 1);
+          } else if (lower.includes('tonight')) {
+            // today evening
+          } else if (lower.includes('next week')) {
+            targetDate.setDate(targetDate.getDate() + 7);
+          } else {
+            for (const [day, dayNum] of Object.entries(dayMap)) {
+              if (lower.includes(day)) {
+                const currentDay = targetDate.getDay();
+                let daysAhead = dayNum - currentDay;
+                if (daysAhead <= 0) daysAhead += 7;
+                targetDate.setDate(targetDate.getDate() + daysAhead);
+                break;
+              }
+            }
+          }
+
+          const isEvening = lower.match(/evening|night|tonight/);
+          targetDate.setHours(isEvening ? 19 : 10, 0, 0, 0);
+          const endDate = new Date(targetDate.getTime() + 2 * 60 * 60 * 1000);
+
+          const dateLabel = targetDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+          const timeLabel = targetDate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+
+          await fetch(`${SERVER}/api/calendar/events`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify({
+              summary: step,
+              description: `Goal step: ${pendingGoalTitle}`,
+              startIso: targetDate.toISOString(),
+              endIso: endDate.toISOString(),
+            }),
+          });
+
+          responseText = `Done — "${step}" is on your calendar for ${dateLabel} at ${timeLabel}.`;
+        } catch {
+          responseText = `I'll note that you want to schedule "${step}" — you can add it to your calendar manually when you know the exact time.`;
+        }
+      } else if (isTodo && !isSkip) {
+        try {
+          await fetch(`${SERVER}/api/lists/to do`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify({ item: step }),
+          });
+          responseText = `Added "${step}" to your to-do list.`;
+        } catch {
+          responseText = `I'll note "${step}" as something to add to your to-do list.`;
+        }
+      } else {
+        responseText = `No problem — you can always add "${step}" to your calendar or to-do list later from the Goals screen.`;
+      }
+
+      if (isLastStep) {
+        responseText += `\n\nThat's everything. Your goal "${pendingGoalTitle}" is saved with all ${pendingSteps.length} steps. Winston will mention your progress in your morning briefing. You've got this.`;
+        const assistantMsg: ChatMessage = { role: 'assistant', content: responseText };
+        setConversation([...currentConversation, assistantMsg]);
+        scrollToBottom();
+        setIsThinking(false);
+        setTimeout(() => {
+          setConversationPhase('goal_input');
+        }, 500);
+      } else {
+        const nextIndex = currentStepIndex + 1;
+        setCurrentStepIndex(nextIndex);
+        const nextStep = pendingSteps[nextIndex];
+        responseText += `\n\nStep ${nextIndex + 1}: "${nextStep}"\n\nSchedule it on a specific day, add it to your to-do list, or skip for now?`;
+        const assistantMsg: ChatMessage = { role: 'assistant', content: responseText };
+        setConversation([...currentConversation, assistantMsg]);
+        scrollToBottom();
+      }
+    } catch (err) {
+      console.error('Step action error:', err);
+    } finally {
+      setIsThinking(false);
+    }
+  };
+
+  // ── Conversation View ──────────────────────────────────────────────────
+  if (showConversation) {
+    const isGoalInput = conversationPhase === 'goal_input';
+    const isStepsReview = conversationPhase === 'steps_review';
+    const isDone = conversationPhase === 'goal_input' && conversation.length > 0 && savedGoalId;
+    // Show input bar during ALL conversational phases — user can always ask questions
+    const showInputBar = !isGoalInput && !isDone;
+
+    return (
+      <SafeAreaView style={styles.safe}>
+        <StatusBar barStyle="light-content" backgroundColor={COLORS.background} />
+
+        <View style={styles.header}>
+          <TouchableOpacity
+            onPress={() => {
+              if (conversation.length > 0 && !savedGoalId) {
+                Alert.alert('Leave this goal?', 'Your conversation will be lost.', [
+                  { text: 'Stay', style: 'cancel' },
+                  { text: 'Leave', style: 'destructive', onPress: () => setShowConversation(false) },
+                ]);
+              } else {
+                setShowConversation(false);
+              }
+            }}
+            style={styles.headerBtn}
+          >
+            <Ionicons name="arrow-back" size={22} color={COLORS.gold} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>{pendingGoalTitle || 'New Goal'}</Text>
+          <View style={{ width: 34 }} />
+        </View>
+        <View style={styles.divider} />
+
+        {isGoalInput && conversation.length === 0 ? (
+          // Initial goal input screen
+          <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+            <View style={styles.goalInputContainer}>
+              <Text style={styles.goalPrompt}>What do you want to achieve?</Text>
+              <Text style={styles.goalPromptSub}>
+                Be as specific or as broad as you like. Winston will help you understand what it really means and break it into steps you can actually take.
+              </Text>
+              <TextInput
+                style={styles.goalInput}
+                value={goalText}
+                onChangeText={setGoalText}
+                placeholder="e.g. Learn more about Jazz, Get in better shape, Write a book..."
+                placeholderTextColor={COLORS.muted}
+                multiline
+                autoFocus
+              />
+              <TouchableOpacity
+                style={[styles.startBtn, !goalText.trim() && styles.startBtnDisabled]}
+                onPress={handleSendGoal}
+                disabled={!goalText.trim()}
+              >
+                <Text style={styles.startBtnText}>Let's figure this out</Text>
+                <Ionicons name="arrow-forward" size={18} color={COLORS.background} />
+              </TouchableOpacity>
+            </View>
+          </KeyboardAvoidingView>
+        ) : (
+          // Conversation view
+          <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+            <ScrollView
+              ref={scrollRef}
+              style={styles.conversationScroll}
+              contentContainerStyle={styles.conversationContent}
+              showsVerticalScrollIndicator={false}
+            >
+              {conversation.map((msg, index) => (
+                <ChatBubble key={index} msg={msg} />
+              ))}
+
+              {isThinking && (
+                <View style={styles.chatBubbleAssistant}>
+                  <Text style={styles.chatLabel}>Winston</Text>
+                  <ActivityIndicator size="small" color={COLORS.gold} style={{ alignSelf: 'flex-start' }} />
+                </View>
+              )}
+
+              {/* Steps preview when Winston has proposed steps */}
+              {isStepsReview && pendingSteps.length > 0 && (
+                <View style={styles.stepsPreview}>
+                  <Text style={styles.stepsPreviewTitle}>Here's your plan — {pendingSteps.length} steps</Text>
+                  {pendingSteps.map((step, index) => (
+                    <View key={index} style={styles.stepsPreviewRow}>
+                      <View style={styles.stepsPreviewNum}>
+                        <Text style={styles.stepsPreviewNumText}>{index + 1}</Text>
+                      </View>
+                      <Text style={styles.stepsPreviewText}>{step}</Text>
+                    </View>
+                  ))}
+                  <View style={styles.stepsPreviewActions}>
+                    <TouchableOpacity
+                      style={styles.saveGoalBtn}
+                      onPress={handleSaveGoal}
+                      disabled={savingGoal}
+                    >
+                      {savingGoal ? (
+                        <ActivityIndicator size="small" color={COLORS.background} />
+                      ) : (
+                        <>
+                          <Ionicons name="checkmark-circle" size={20} color={COLORS.background} />
+                          <Text style={styles.saveGoalBtnText}>This looks good</Text>
+                        </>
+                      )}
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.adjustBtn}
+                      onPress={() => {
+                        const refineMsg: ChatMessage = { role: 'user', content: "I want to adjust this plan." };
+                        const newConv = [...conversation, refineMsg];
+                        setPendingSteps([]);
+                        setConversationPhase('conversation');
+                        setConversation(newConv);
+                        callBreakdown(pendingGoalTitle, newConv);
+                      }}
+                    >
+                      <Text style={styles.adjustBtnText}>I want to adjust this</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )}
+
+              {/* Done state */}
+              {isDone && (
+                <TouchableOpacity
+                  style={styles.doneBtn}
+                  onPress={() => setShowConversation(false)}
+                >
+                  <Text style={styles.doneBtnText}>View My Goals</Text>
+                  <Ionicons name="arrow-forward" size={16} color={COLORS.background} />
+                </TouchableOpacity>
+              )}
+            </ScrollView>
+
+            {/* Input bar — visible during ALL conversation phases so you can always ask questions */}
+            {showInputBar && (
+              <View style={styles.conversationInputBar}>
+                <TextInput
+                  ref={inputRef}
+                  style={styles.conversationInput}
+                  value={input}
+                  onChangeText={setInput}
+                  placeholder={
+                    conversationPhase === 'step_actions'
+                      ? "Calendar, to-do list, or skip..."
+                      : isStepsReview
+                      ? "Ask a question or request changes..."
+                      : "Reply to Winston..."
+                  }
+                  placeholderTextColor={COLORS.muted}
+                  multiline
+                  onSubmitEditing={handleSendMessage}
+                  editable={!isThinking}
+                />
+                <TouchableOpacity
+                  style={[styles.sendBtn, (!input.trim() || isThinking) && styles.sendBtnDisabled]}
+                  onPress={handleSendMessage}
+                  disabled={!input.trim() || isThinking}
+                >
+                  {isThinking ? (
+                    <ActivityIndicator size="small" color={COLORS.background} />
+                  ) : (
+                    <Ionicons name="send" size={18} color={COLORS.background} />
+                  )}
+                </TouchableOpacity>
+              </View>
+            )}
+          </KeyboardAvoidingView>
+        )}
+      </SafeAreaView>
+    );
+  }
+
+  // ── Goals List View ────────────────────────────────────────────────────
+  return (
+    <SafeAreaView style={styles.safe}>
+      <StatusBar barStyle="light-content" backgroundColor={COLORS.background} />
+
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => router.back()} style={styles.headerBtn}>
+          <Ionicons name="arrow-back" size={22} color={COLORS.gold} />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>My Goals</Text>
+        <TouchableOpacity onPress={startNewGoal} style={styles.headerBtn}>
+          <Ionicons name="add" size={24} color={COLORS.gold} />
+        </TouchableOpacity>
+      </View>
+      <View style={styles.divider} />
+
+      {isLoading ? (
+        <View style={styles.centered}>
+          <ActivityIndicator size="large" color={COLORS.gold} />
+        </View>
+      ) : goals.length === 0 ? (
+        <View style={styles.centered}>
+          <Ionicons name="compass-outline" size={52} color={COLORS.muted} />
+          <Text style={styles.emptyTitle}>No Goals Yet</Text>
+          <Text style={styles.emptySubtitle}>
+            Tell Winston what you want to achieve. It will help you break it into steps you can actually take.
+          </Text>
+          <TouchableOpacity style={styles.addButton} onPress={startNewGoal}>
+            <Text style={styles.addButtonText}>Set Your First Goal</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <FlatList
+          data={goals}
+          keyExtractor={g => g.id}
+          contentContainerStyle={styles.listContent}
+          renderItem={({ item }) => (
+            <GoalCard
+              goal={item}
+              expanded={expandedId === item.id}
+              onExpand={() => setExpandedId(expandedId === item.id ? null : item.id)}
+              onToggleStep={(stepId, completed) => handleToggleStep(item.id, stepId, completed)}
+              onDelete={() => handleDeleteGoal(item)}
+            />
+          )}
+          ListFooterComponent={
+            <TouchableOpacity style={styles.addMoreBtn} onPress={startNewGoal}>
+              <Ionicons name="add-circle-outline" size={20} color={COLORS.gold} />
+              <Text style={styles.addMoreBtnText}>Add Another Goal</Text>
+            </TouchableOpacity>
+          }
+        />
+      )}
+    </SafeAreaView>
+  );
+}
+
+// ─── Styles ───────────────────────────────────────────────────────────────
+const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: COLORS.background },
+  flex: { flex: 1 },
+  divider: { height: 1, backgroundColor: COLORS.border },
+  centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
+
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, paddingTop: 50 },
+  headerBtn: { padding: 6, width: 34 },
+  headerTitle: { color: COLORS.cream, fontSize: 18, fontWeight: '600' },
+
+  listContent: { padding: 16, gap: 12 },
+
+  goalCard: { backgroundColor: COLORS.surface, borderRadius: 14, borderWidth: 1, borderColor: COLORS.border, overflow: 'hidden' },
+  goalHeader: { flexDirection: 'row', alignItems: 'flex-start', padding: 16, gap: 12 },
+  goalTitle: { color: COLORS.cream, fontSize: 16, fontWeight: '600', marginBottom: 4 },
+  goalProgress: { color: COLORS.muted, fontSize: 12 },
+  goalHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+
+  progressTrack: { height: 3, backgroundColor: COLORS.border, marginHorizontal: 16, marginBottom: 4, borderRadius: 2 },
+  progressFill: { height: 3, backgroundColor: COLORS.green, borderRadius: 2 },
+
+  stepsList: { borderTopWidth: 1, borderTopColor: COLORS.border, paddingHorizontal: 16, paddingVertical: 8 },
+  stepRow: { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 10, gap: 12 },
+  stepText: { flex: 1, color: COLORS.cream, fontSize: 14, lineHeight: 20 },
+  stepTextDone: { color: COLORS.muted, textDecorationLine: 'line-through' },
+  stepDivider: { height: 1, backgroundColor: COLORS.border },
+  noStepsText: { color: COLORS.muted, fontSize: 13, padding: 16, fontStyle: 'italic' },
+
+  emptyTitle: { color: COLORS.cream, fontSize: 18, fontWeight: '600', marginTop: 16, marginBottom: 8 },
+  emptySubtitle: { color: COLORS.muted, fontSize: 14, textAlign: 'center', lineHeight: 20, marginBottom: 24 },
+  addButton: { backgroundColor: COLORS.gold, borderRadius: 24, paddingHorizontal: 28, paddingVertical: 12 },
+  addButtonText: { color: COLORS.background, fontWeight: '700', fontSize: 15 },
+  addMoreBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 20 },
+  addMoreBtnText: { color: COLORS.gold, fontSize: 14, fontWeight: '500' },
+
+  // Goal input
+  goalInputContainer: { flex: 1, padding: 24, justifyContent: 'center' },
+  goalPrompt: { color: COLORS.cream, fontSize: 24, fontWeight: '700', marginBottom: 8, lineHeight: 30 },
+  goalPromptSub: { color: COLORS.muted, fontSize: 14, lineHeight: 20, marginBottom: 24 },
+  goalInput: { backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, borderRadius: 14, padding: 16, color: COLORS.cream, fontSize: 16, lineHeight: 24, minHeight: 100, textAlignVertical: 'top', marginBottom: 20 },
+  startBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: COLORS.gold, borderRadius: 14, padding: 16 },
+  startBtnDisabled: { backgroundColor: COLORS.border },
+  startBtnText: { color: COLORS.background, fontSize: 16, fontWeight: '700' },
+
+  // Conversation
+  conversationScroll: { flex: 1 },
+  conversationContent: { padding: 16, gap: 12, paddingBottom: 24 },
+
+  chatBubble: { maxWidth: '90%', borderRadius: 14, padding: 14 },
+  chatBubbleUser: { alignSelf: 'flex-end', backgroundColor: '#1E2A4A', borderWidth: 1, borderColor: '#2A3A5E' },
+  chatBubbleAssistant: { alignSelf: 'flex-start', backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border },
+  chatLabel: { color: COLORS.gold, fontSize: 10, fontWeight: '700', letterSpacing: 0.5, marginBottom: 6, textTransform: 'uppercase' },
+  chatTextUser: { color: COLORS.cream, fontSize: 15, lineHeight: 22 },
+
+  // Steps preview
+  stepsPreview: { backgroundColor: COLORS.surface, borderRadius: 14, borderWidth: 1, borderColor: 'rgba(201,168,76,0.3)', padding: 16, gap: 10 },
+  stepsPreviewTitle: { color: COLORS.gold, fontSize: 12, fontWeight: '700', letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 4 },
+  stepsPreviewRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  stepsPreviewNum: { width: 24, height: 24, borderRadius: 12, backgroundColor: 'rgba(201,168,76,0.15)', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  stepsPreviewNumText: { color: COLORS.gold, fontSize: 11, fontWeight: '700' },
+  stepsPreviewText: { flex: 1, color: COLORS.cream, fontSize: 14, lineHeight: 20 },
+
+  stepsPreviewActions: { gap: 10, marginTop: 8 },
+  saveGoalBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: COLORS.green, borderRadius: 12, padding: 14 },
+  saveGoalBtnText: { color: COLORS.background, fontSize: 15, fontWeight: '700' },
+  adjustBtn: { alignItems: 'center', paddingVertical: 8 },
+  adjustBtnText: { color: COLORS.muted, fontSize: 13 },
+
+  doneBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: COLORS.gold, borderRadius: 12, padding: 14, marginTop: 8 },
+  doneBtnText: { color: COLORS.background, fontSize: 15, fontWeight: '700' },
+
+  // Input bar
+  conversationInputBar: { flexDirection: 'row', alignItems: 'flex-end', paddingHorizontal: 16, paddingVertical: 12, paddingBottom: 24, backgroundColor: COLORS.surface, borderTopWidth: 1, borderTopColor: COLORS.border, gap: 10 },
+  conversationInput: { flex: 1, backgroundColor: COLORS.surfaceRaised, borderWidth: 1, borderColor: COLORS.border, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 10, color: COLORS.cream, fontSize: 15, maxHeight: 100 },
+  sendBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: COLORS.gold, alignItems: 'center', justifyContent: 'center' },
+  sendBtnDisabled: { backgroundColor: COLORS.border },
+});
