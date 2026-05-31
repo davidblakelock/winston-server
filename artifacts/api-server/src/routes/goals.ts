@@ -1,4 +1,5 @@
 import { Router } from "express";
+import express from "express";
 import { authenticate } from "../auth/middleware.js";
 import {
   createGoal,
@@ -8,6 +9,8 @@ import {
   updateStep,
   deleteGoal,
   breakdownGoal,
+  formatContentForSharing,
+  type ShareFormat,
 } from "../goals/goalsManager.js";
 
 const router = Router();
@@ -143,6 +146,37 @@ router.patch("/goals/:id/steps/:stepId", async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "[Goals] PATCH /goals/:id/steps/:stepId error");
     res.status(500).json({ error: "Failed to update step" });
+  }
+});
+
+// ── POST /api/goals/share ──────────────────────────────────────────────────────
+// Formats AI-generated goal content for clipboard copy or OS share sheet.
+// Body: { content: string, format?: "playlist"|"checklist"|"summary"|"plain", title?: string }
+// Returns: { ok: true, text: string } — clean plain text ready to copy or share
+router.post("/goals/share", express.json({ limit: "2mb" }), async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const { content, format, title } = req.body as {
+    content?: string;
+    format?: string;
+    title?: string;
+  };
+  if (!content || typeof content !== "string" || !content.trim()) {
+    res.status(400).json({ error: "content is required" });
+    return;
+  }
+  const safeFormat = (["playlist", "checklist", "summary", "plain"] as const).includes(
+    format as ShareFormat
+  )
+    ? (format as ShareFormat)
+    : "plain";
+  try {
+    const text = await formatContentForSharing(content.trim(), safeFormat, title ?? "");
+    req.log.info({ format: safeFormat, inputLen: content.length, outputLen: text.length }, "[Goals] POST /goals/share");
+    res.json({ ok: true, text });
+  } catch (err) {
+    req.log.error({ err }, "[Goals] POST /goals/share error");
+    res.status(500).json({ error: "Failed to format content for sharing" });
   }
 });
 

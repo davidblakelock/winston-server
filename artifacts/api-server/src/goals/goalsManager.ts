@@ -1,11 +1,14 @@
 import OpenAI from "openai";
+import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 import { getProfile, type CollectedData } from "../onboarding/onboardingManager.js";
+import { MODEL_HAIKU } from "../lib/models.js";
 
 const MODEL_GPT4O = "gpt-4o" as const;
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -359,29 +362,29 @@ ONLY ask a clarifying question if the goal is so vague that you literally cannot
 
 If there is conversation history, use it to refine, continue, or go deeper. Answer follow-up questions directly and thoroughly — treat this as a continuing conversation, not a fresh start.${webSearchContext ? `\n\nREAL-TIME DATA (use this to answer the question accurately):\n${webSearchContext}` : ""}
 
-OUTPUT FORMAT — respond with valid JSON only, no markdown fences:
-{
-  "type": "steps",
-  "content": "<full rich markdown response as a single JSON string — escape all quotes, use \\n for newlines, do not truncate>",
-  "steps": ["<concise actionable item 1>", "<concise actionable item 2>", ...]
-}
+OUTPUT FORMAT — use this EXACT structure (no JSON wrapping — write plain text):
 
-The "steps" array must contain 5–12 short, actionable phrases extracted from your response. These are used so the user can save individual items to their to-do list or calendar. Examples:
-- "Listen to Kind of Blue by Miles Davis"
-- "Watch 'Jazz' by Ken Burns on PBS"
-- "Visit The Balcony Club on [specific night with event]"
-- "Buy 'The History of Jazz' by Ted Gioia"
-- "Download the Spotify Jazz playlist 'Blue Note Classics'"
+Write your complete markdown response first (use all the space you need — never cut it short).
 
-For event listings: include one step per event (e.g. "See [Artist] at [Venue] on [Date]").
+Then on a new line write exactly: ---STEPS---
+Then on the next line write a JSON array of 5–12 short actionable phrases:
+["Step one", "Step two", ...]
 
-For a clarifying question, respond with:
-{"type":"question","content":"<your single sharp question>","steps":[]}`;
+Example tail of response:
+...that's the full guide.
+
+---STEPS---
+["Listen to Kind of Blue by Miles Davis", "Watch Jazz by Ken Burns on PBS", "Visit The Balcony Club"]
+
+IMPORTANT: The ---STEPS--- delimiter MUST appear. The steps JSON array must be valid. Do not wrap anything in markdown code fences.
+
+For a clarifying question instead write:
+---QUESTION---
+Your single sharp question here.`;
 
   const response = await openai.chat.completions.create({
     model: MODEL_GPT4O,
-    max_tokens: 16000,
-    response_format: { type: "json_object" },
+    max_tokens: 16383,
     messages: [
       { role: "system", content: systemPrompt },
       ...messages,
@@ -396,21 +399,45 @@ For a clarifying question, respond with:
   }
 
   let result: BreakdownResult;
-  try {
-    const parsed = JSON.parse(raw) as { type?: string; content?: string; steps?: string[] };
-    if (parsed.type === "question") {
-      result = { type: "question", content: parsed.content ?? raw };
+
+  // Check for clarifying question first
+  const questionDelimIdx = raw.indexOf("---QUESTION---");
+  if (questionDelimIdx !== -1) {
+    const questionText = raw.slice(questionDelimIdx + "---QUESTION---".length).trim();
+    result = { type: "question", content: questionText || raw };
+  } else {
+    // Split on steps delimiter
+    const stepsDelimIdx = raw.indexOf("---STEPS---");
+    if (stepsDelimIdx !== -1) {
+      const content = raw.slice(0, stepsDelimIdx).trim();
+      const stepsRaw = raw.slice(stepsDelimIdx + "---STEPS---".length).trim();
+      let steps: string[] = [];
+      try {
+        // Extract first JSON array from the steps section
+        const arrayMatch = stepsRaw.match(/\[[\s\S]*?\]/);
+        if (arrayMatch) steps = JSON.parse(arrayMatch[0]) as string[];
+      } catch {
+        logger.warn({ stepsRaw: stepsRaw.slice(0, 200) }, "[Goals] breakdown: steps JSON parse failed");
+      }
+      result = { type: "steps", content, steps };
     } else {
-      result = {
-        type: "steps",
-        content: parsed.content ?? raw,
-        steps: Array.isArray(parsed.steps) ? parsed.steps : [],
-      };
+      // No delimiter found — try legacy JSON parse, then fall back to raw text
+      try {
+        const parsed = JSON.parse(raw) as { type?: string; content?: string; steps?: string[] };
+        if (parsed.type === "question") {
+          result = { type: "question", content: parsed.content ?? raw };
+        } else {
+          result = {
+            type: "steps",
+            content: parsed.content ?? raw,
+            steps: Array.isArray(parsed.steps) ? parsed.steps : [],
+          };
+        }
+      } catch {
+        logger.warn({ rawLen: raw.length }, "[Goals] breakdown: no delimiter or JSON found, using raw content");
+        result = { type: "steps", content: raw, steps: [] };
+      }
     }
-  } catch {
-    // JSON parse failed — return raw text as content
-    logger.warn({ rawLen: raw.length }, "[Goals] breakdown: JSON parse failed, returning raw as content");
-    result = { type: "steps", content: raw, steps: [] };
   }
 
   // ── Auto-save goal and steps to DB ────────────────────────────────────────────
@@ -439,4 +466,60 @@ For a clarifying question, respond with:
   }
 
   return result;
+}
+
+// ── Share / copy formatting ───────────────────────────────────────────────────
+// Takes the AI-generated markdown content and a format hint, then returns a
+// clean plain-text version suitable for clipboard copy or OS share sheet.
+// format options:
+//   "playlist"  — extracts song/album/artist lines as a numbered list
+//   "checklist" — extracts action items / steps as a plain checklist
+//   "summary"   — short paragraph summary of the key points
+//   "plain"     — strips markdown formatting, returns clean prose
+
+export type ShareFormat = "playlist" | "checklist" | "summary" | "plain";
+
+export async function formatContentForSharing(
+  content: string,
+  format: ShareFormat = "plain",
+  title = ""
+): Promise<string> {
+  const formatInstructions: Record<ShareFormat, string> = {
+    playlist: `Extract every song, album, or artist recommendation from the text and format them as a clean numbered playlist. Each line: "1. Song Title — Artist Name". Include the album name in parentheses if mentioned. No markdown. Return ONLY the numbered list, nothing else. Start with the title "${title || "Playlist"}" on the first line.`,
+    checklist: `Extract every actionable item or step from the text and format as a plain checklist. Each line: "☐ Action item". No markdown. Return ONLY the checklist lines, nothing else.`,
+    summary: `Write a concise 3–5 sentence plain-text summary of the key points and recommendations. No markdown, no bullet points, no headers. Just clear prose.`,
+    plain: `Convert the following markdown text to clean plain text. Remove all markdown formatting (**, *, #, -, etc.) but preserve the content and structure. Use plain paragraph breaks.`,
+  };
+
+  const prompt = formatInstructions[format];
+
+  try {
+    const response = await anthropic.messages.create({
+      model: MODEL_HAIKU,
+      max_tokens: 2048,
+      messages: [
+        {
+          role: "user",
+          content: `${prompt}\n\n---\n${content.slice(0, 12000)}`,
+        },
+      ],
+    });
+
+    const text = response.content
+      .filter((b) => b.type === "text")
+      .map((b) => (b as { type: "text"; text: string }).text)
+      .join("");
+
+    return text.trim();
+  } catch (err) {
+    logger.warn({ err, format }, "[Goals] formatContentForSharing failed");
+    // Fallback: strip basic markdown manually
+    return content
+      .replace(/#{1,6}\s+/g, "")
+      .replace(/\*\*(.+?)\*\*/g, "$1")
+      .replace(/\*(.+?)\*/g, "$1")
+      .replace(/^[-*]\s+/gm, "• ")
+      .slice(0, 4000)
+      .trim();
+  }
 }
