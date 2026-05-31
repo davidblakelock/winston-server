@@ -43,30 +43,40 @@ export function isBookingPlatformUrl(url: string | null | undefined): boolean {
 }
 
 // Step 1: Use Claude web_search to find a direct OpenTable, Resy, or Yelp booking page.
-// Returns the booking URL if found, or null if no platform has a listing.
+// Returns the booking URL with a restaurant-specific path, or null if not found.
 async function lookupRestaurantBookingUrl(name: string, city = "Dallas"): Promise<string | null> {
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
   if (!anthropicKey) return null;
 
   const anthropic = new Anthropic({ apiKey: anthropicKey });
   const prompt =
-    `Find the direct reservation/booking page URL for the restaurant "${name}"${city ? ` in ${city}` : ""}.\n\n` +
-    `Search in this order of preference:\n` +
-    `  1. "${name} opentable" — look for opentable.com/r/... or opentable.com/restaurant/...\n` +
-    `  2. "${name} resy" — look for resy.com/cities/.../venues/...\n` +
-    `  3. "${name} yelp reservations" — look for yelp.com/reservations/... or the restaurant's yelp.com listing page\n\n` +
-    `Rules:\n` +
-    `• Return ONLY the single direct booking/listing page URL (not a search results page, not google.com).\n` +
-    `• Prefer OpenTable first, then Resy, then Yelp.\n` +
-    `• The URL MUST contain "opentable.com", "resy.com", or "yelp.com" — reject anything else.\n` +
-    `• For Yelp: the restaurant's own Yelp listing page (e.g. yelp.com/biz/restaurant-name-city) is acceptable.\n` +
-    `• If no listing is found on any of these three platforms, return exactly: NONE\n` +
-    `• No explanation, no extra text — just the URL or NONE.`;
+    `I need the SPECIFIC restaurant page URL for "${name}"${city ? ` in ${city}` : ""} on a booking platform.\n\n` +
+    `Search the web and find the restaurant's own listing page on one of these platforms:\n\n` +
+    `OPENTABLE examples (what to look for):\n` +
+    `  https://www.opentable.com/r/nobu-dallas\n` +
+    `  https://www.opentable.com/r/pappas-bros-steakhouse-dallas\n` +
+    `  https://www.opentable.com/restaurant/profile/12345\n\n` +
+    `RESY examples:\n` +
+    `  https://resy.com/cities/dal/venues/knife-dallas\n` +
+    `  https://resy.com/cities/nyc/venues/eleven-madison-park\n\n` +
+    `YELP examples (restaurant's own business page — NOT a search page):\n` +
+    `  https://www.yelp.com/biz/kellers-drive-in-dallas\n` +
+    `  https://www.yelp.com/biz/pappas-bros-steakhouse-dallas-2\n\n` +
+    `RULES — read carefully:\n` +
+    `• The URL MUST include the restaurant's name or ID in the path (not just the domain).\n` +
+    `• REJECT these — they are homepages, not restaurant pages:\n` +
+    `    opentable.com  (no path)\n` +
+    `    resy.com  (no path)\n` +
+    `    yelp.com  (no path)\n` +
+    `    yelp.com/search?...  (search page, not the restaurant's page)\n` +
+    `• Return ONLY the single URL — no explanation, no extra text.\n` +
+    `• If you cannot find a listing with the restaurant's name/ID in the path, return exactly: NONE\n\n` +
+    `Search for: "${name} opentable reservation" OR "${name} resy reservation" OR "${name} yelp ${city}"`;
 
   try {
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 200,
+      max_tokens: 300,
       tools: [{ type: "web_search_20250305" as const, name: "web_search" }],
       messages: [{ role: "user", content: prompt }],
     });
@@ -78,13 +88,36 @@ async function lookupRestaurantBookingUrl(name: string, city = "Dallas"): Promis
 
     if (!text || /^none$/i.test(text.trim())) return null;
 
-    // Validate it's actually a booking platform URL
-    const url = text.trim().split(/\s/)[0]; // take first word in case Claude adds commentary
-    if (/opentable\.com|resy\.com|yelp\.com/i.test(url ?? "")) {
-      logger.info({ name, url }, "[AutoURL] Booking URL found via web search");
-      return url ?? null;
+    // Take the first word in case Claude adds any commentary
+    const rawUrl = text.trim().split(/[\s\n]/)[0] ?? "";
+    const url = rawUrl.replace(/[.,;!?]$/, ""); // strip trailing punctuation
+
+    // Must be on a recognised booking platform
+    if (!/opentable\.com|resy\.com|yelp\.com/i.test(url)) return null;
+
+    // Must have a meaningful path (not just the bare domain or root /)
+    // e.g. opentable.com/r/nobu-dallas  ✓
+    //      opentable.com                ✗
+    //      resy.com/                    ✗
+    //      yelp.com/search?...          ✗ (search page, not a listing)
+    try {
+      const parsed = new URL(url.startsWith("http") ? url : `https://${url}`);
+      const path = parsed.pathname.replace(/\/+$/, ""); // strip trailing slashes
+      if (path.length < 4) {
+        logger.warn({ name, url }, "[AutoURL] Booking URL rejected — no restaurant-specific path");
+        return null;
+      }
+      // Yelp: reject search pages
+      if (/yelp\.com/i.test(url) && parsed.pathname.startsWith("/search")) {
+        logger.warn({ name, url }, "[AutoURL] Yelp search page rejected — need /biz/ page");
+        return null;
+      }
+    } catch {
+      return null;
     }
-    return null;
+
+    logger.info({ name, url }, "[AutoURL] Booking URL found via web search");
+    return url;
   } catch (err) {
     logger.warn({ err, name }, "[AutoURL] Booking URL web search failed");
     return null;

@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from "express";
 import express from "express";
 import { authenticate } from "../auth/middleware.js";
 import { query } from "../db.js";
-import { lookupRestaurantUrl } from "../lists/autoUrlLookup.js";
+import { lookupRestaurantUrl, isBookingPlatformUrl } from "../lists/autoUrlLookup.js";
 import { upsertProfile } from "../onboarding/onboardingManager.js";
 import { isApifyApiKeyConfigured } from "../restaurants/apifyBooking.js";
 import { getResySession } from "../restaurants/bookingCredentialsManager.js";
@@ -97,29 +97,33 @@ router.post("/admin/backfill-restaurant-urls", async (req: Request, res: Respons
       [userName]
     );
 
-    const city = (req.body as { city?: string }).city ?? "Dallas";
+    const body = req.body as { city?: string; force?: boolean };
+    const city = body.city ?? "Dallas";
+    // force=true → re-run lookup for ALL restaurants, even those with a direct booking URL.
+    // Default (force=false) → skip any restaurant that already has a confirmed direct listing URL.
+    const force = body.force === true;
     const results: Array<{ id: number; name: string; before: string | null; after: string | null; status: string }> = [];
 
     for (const row of rows) {
-      // Skip rows that already have a booking platform URL
-      const alreadyBooked = row.url && /opentable\.com|resy\.com/i.test(row.url);
-      if (alreadyBooked) {
+      // Skip only when NOT forcing AND the row already has a verified direct booking URL.
+      // isBookingPlatformUrl() requires an actual restaurant-specific path — bare domains and
+      // yelp.com/search pages do NOT count, so those rows are always retried.
+      if (!force && isBookingPlatformUrl(row.url)) {
         results.push({ id: row.id, name: row.name, before: row.url, after: row.url, status: "skipped_already_booked" });
         continue;
       }
 
-      req.log.info({ id: row.id, name: row.name, city }, "[ADMIN] backfill-restaurant-urls — looking up");
+      req.log.info({ id: row.id, name: row.name, city, force }, "[ADMIN] backfill-restaurant-urls — looking up");
       const url = await lookupRestaurantUrl(row.name, city);
 
-      if (url) {
-        await query(
-          `UPDATE profile_items SET url = $1 WHERE id = $2`,
-          [url, row.id]
-        );
-        results.push({ id: row.id, name: row.name, before: row.url, after: url, status: "updated" });
-      } else {
-        results.push({ id: row.id, name: row.name, before: row.url, after: null, status: "not_found" });
-      }
+      await query(
+        `UPDATE profile_items SET url = $1 WHERE id = $2`,
+        [url, row.id]
+      );
+      results.push({ id: row.id, name: row.name, before: row.url, after: url, status: "updated" });
+
+      // Small delay between lookups to stay gentle on the Anthropic API
+      await new Promise<void>((resolve) => setTimeout(resolve, 800));
     }
 
     const updated = results.filter((r) => r.status === "updated").length;
