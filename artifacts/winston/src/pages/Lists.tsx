@@ -86,10 +86,21 @@ export default function Lists() {
   const [saving, setSaving] = useState(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
+  const backfillPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const token = localStorage.getItem("winston_session_token") ?? "";
   const tabCfg = TAB_CONFIG.find((t) => t.key === activeTab)!;
   const items = itemsByTab[activeTab] ?? [];
+
+  // Clean up any in-flight backfill poll on unmount
+  useEffect(() => {
+    return () => {
+      if (backfillPollRef.current !== null) {
+        clearTimeout(backfillPollRef.current);
+        backfillPollRef.current = null;
+      }
+    };
+  }, []);
 
   async function fetchItems(tab: Tab) {
     setLoading(true);
@@ -175,6 +186,13 @@ export default function Lists() {
 
   async function handleBackfillUrls() {
     if (backfilling) return;
+
+    // Stop any existing poll
+    if (backfillPollRef.current !== null) {
+      clearTimeout(backfillPollRef.current);
+      backfillPollRef.current = null;
+    }
+
     setBackfilling(true);
     setBackfillMsg(null);
     try {
@@ -184,21 +202,93 @@ export default function Lists() {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json() as { queued: number };
+
       if (data.queued === 0) {
         setBackfillMsg("All restaurants already have booking links.");
         setTimeout(() => setBackfillMsg(null), 6000);
-      } else {
-        setBackfillMsg(`Looking up booking links for ${data.queued} restaurant${data.queued === 1 ? "" : "s"}…`);
-        // Re-fetch after 10 s to surface any newly resolved URLs
-        setTimeout(() => {
-          void fetchItems("restaurants");
-          setBackfillMsg(null);
-        }, 10000);
+        setBackfilling(false);
+        return;
       }
+
+      const total = data.queued;
+
+      // Fetch a fresh snapshot immediately after POST to establish a reliable
+      // baseline — avoids counting pre-existing URLs as newly discovered.
+      let baseline = new Set<number>();
+      try {
+        const baseRes = await fetch(`${API}/api/lists/restaurants`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (baseRes.ok) {
+          const baseData = await baseRes.json() as { items: ListItem[] };
+          const baseItems = baseData.items ?? [];
+          setItemsByTab((prev) => ({ ...prev, restaurants: baseItems }));
+          baseline = new Set(baseItems.filter((r) => r.url).map((r) => r.id));
+        }
+      } catch {
+        // fall back to whatever is in state
+        baseline = new Set(
+          (itemsByTab.restaurants ?? []).filter((r) => r.url).map((r) => r.id)
+        );
+      }
+
+      let found = 0;
+      let elapsed = 0;
+      const MAX_MS = 60_000;
+      const INTERVAL_MS = 5_000;
+
+      setBackfillMsg(`Looking up booking links… (0 of ${total} found)`);
+
+      // Use recursive setTimeout so each tick only fires after the previous
+      // async fetch completes, preventing overlapping requests.
+      function schedulePoll() {
+        backfillPollRef.current = setTimeout(async () => {
+          elapsed += INTERVAL_MS;
+          let stopPolling = elapsed >= MAX_MS;
+          const prevFound = found;
+
+          try {
+            const pollRes = await fetch(`${API}/api/lists/restaurants`, {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            if (pollRes.ok) {
+              const pollData = await pollRes.json() as { items: ListItem[] };
+              const pollItems = pollData.items ?? [];
+
+              // Update the displayed list immediately on every poll
+              setItemsByTab((prev) => ({ ...prev, restaurants: pollItems }));
+
+              found = pollItems.filter((r) => r.url && !baseline.has(r.id)).length;
+
+              // Stop as soon as a round produces no new URLs, or when all found
+              if (found === prevFound || found >= total) {
+                stopPolling = true;
+              }
+            }
+          } catch {
+            // ignore transient errors and keep going
+          }
+
+          if (stopPolling) {
+            backfillPollRef.current = null;
+            setBackfilling(false);
+            if (found > 0) {
+              setBackfillMsg(`Found ${found} booking link${found === 1 ? "" : "s"}.`);
+            } else {
+              setBackfillMsg("No new booking links found.");
+            }
+            setTimeout(() => setBackfillMsg(null), 5000);
+          } else {
+            setBackfillMsg(`Looking up booking links… (${found} of ${total} found)`);
+            schedulePoll();
+          }
+        }, INTERVAL_MS);
+      }
+
+      schedulePoll();
     } catch {
       setBackfillMsg("Failed to start refresh.");
       setTimeout(() => setBackfillMsg(null), 4000);
-    } finally {
       setBackfilling(false);
     }
   }
