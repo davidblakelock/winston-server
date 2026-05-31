@@ -512,6 +512,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
     generated: boolean;
     preview: string;
     generatedAt: string | null;
+    wakeTime?: string | null;
   } | null>(null);
   const [briefingExpanded, setBriefingExpanded] = useState(false);
   const [briefingFullText, setBriefingFullText] = useState<string | null>(null);
@@ -551,6 +552,8 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
   }, [messages, isStreaming]);
 
   // ── Fetch today's briefing summary for the home screen card ───────────────
+  // Always store the response (even when generated=false) so we get wakeTime
+  // for the loading placeholder logic.
   useEffect(() => {
     const token = localStorage.getItem("winston_session_token");
     if (!token) return;
@@ -559,7 +562,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
     })
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
-        if (data && data.generated) setBriefingSummary(data);
+        if (data) setBriefingSummary(data);
       })
       .catch(() => {});
   }, []);
@@ -2533,6 +2536,34 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
 
       {/* Chat Area */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 sm:p-6 pb-24 sm:pb-32 space-y-8">
+        {/* Briefing loading placeholder — shown when we're in the wake-time window but the briefing isn't ready yet */}
+        {briefingSummary && !briefingSummary.generated && !briefingCardDismissed && (() => {
+          if (!briefingSummary.wakeTime) return null;
+          const [wakeH, wakeM] = briefingSummary.wakeTime.split(":").map(Number);
+          const now = new Date();
+          const wakeMinutes = wakeH * 60 + wakeM;
+          const nowMinutes = now.getHours() * 60 + now.getMinutes();
+          const diffMinutes = nowMinutes - wakeMinutes;
+          if (diffMinutes < 0 || diffMinutes > 30) return null;
+          return (
+            <div className="animate-in fade-in slide-in-from-top-2 duration-300">
+              <div className="rounded-2xl bg-indigo-950/40 border border-indigo-500/20 p-4 sm:p-5 shadow-sm">
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-base">🌅</span>
+                  <p className="text-[11px] font-semibold tracking-widest uppercase text-indigo-300/60">Today's Briefing</p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <svg className="animate-spin h-4 w-4 text-indigo-400/60 shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  <p className="text-[13px] text-indigo-300/60 italic">Preparing your briefing…</p>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
         {/* Today's Briefing Card — shown when today's briefing has been generated */}
         {briefingSummary?.generated && !briefingCardDismissed && (
           <div className="animate-in fade-in slide-in-from-top-2 duration-300">
