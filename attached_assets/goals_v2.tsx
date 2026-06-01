@@ -242,9 +242,12 @@ export default function GoalsScreen() {
 
   useEffect(() => { fetchGoals(); }, [fetchGoals]);
 
-  // ── Reset conversation state on screen blur ────────────────────────────
+  // ── Refresh goals on focus + reset conversation state on blur ──────────
   useFocusEffect(
     useCallback(() => {
+      // Re-fetch goals every time the screen comes into focus so any
+      // goal saved during a conversation shows up in the list immediately.
+      fetchGoals();
       return () => {
         setShowConversation(false);
         setConversation([]);
@@ -254,7 +257,7 @@ export default function GoalsScreen() {
         setConversationPhase('goal_input');
         setSavingGoal(false);
       };
-    }, [])
+    }, [fetchGoals])
   );
 
   const handleToggleStep = async (goalId: string, stepId: string, completed: boolean) => {
