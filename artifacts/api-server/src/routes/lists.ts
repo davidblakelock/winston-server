@@ -24,6 +24,12 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const router: IRouter = Router();
 
+// In-process throttle: track when each profile_item ID was last backfill-checked.
+// Prevents hammering the AI search API on every restaurant list load.
+// Cleared on server restart (Railway restarts periodically anyway).
+const restaurantBackfillChecked = new Map<number, number>(); // id → timestamp ms
+const BACKFILL_THROTTLE_MS = 4 * 60 * 60 * 1000; // 4 hours per restaurant
+
 // ── Idempotent column migrations for list_items ────────────────────────────
 query(`ALTER TABLE list_items ADD COLUMN IF NOT EXISTS reminder_time TIMESTAMPTZ`).catch(() => {});
 query(`ALTER TABLE list_items ADD COLUMN IF NOT EXISTS reminder_fired BOOLEAN NOT NULL DEFAULT FALSE`).catch(() => {});
@@ -237,12 +243,24 @@ router.get("/lists/restaurants", async (req: Request, res: Response) => {
       })),
     });
 
-    // Lazy URL backfill: trigger background lookups for restaurants that either have no URL
-    // or have a non-booking-platform URL (e.g. the restaurant's own website stored before
-    // the OpenTable/Resy/Yelp-only policy was enforced). Cap at 5 per load to stay gentle.
-    const needsLookup = rows.filter((r) => !isBookingPlatformUrl(r.url));
+    // Lazy URL backfill: trigger background lookups for restaurants that either:
+    //  a) have no URL / a non-booking-platform URL (always retry), OR
+    //  b) have an OpenTable /r/<slug> URL — those are AI-guessed slugs and can 404;
+    //     re-verify them at most once every 4 hours using the throttle map.
+    // Yelp search URLs are skipped — they mean we already tried and found nothing better.
+    const needsLookup = rows.filter((r) => {
+      if (/yelp\.com\/search/i.test(r.url ?? "")) return false; // already retried, use Yelp search
+      if (!isBookingPlatformUrl(r.url)) return true;            // no direct booking URL → check
+      // Re-verify /r/ OT slug URLs (guessed by AI, often wrong) but throttle to 4h
+      if (/opentable\.com\/r\//i.test(r.url ?? "")) {
+        const last = restaurantBackfillChecked.get(r.id) ?? 0;
+        return Date.now() - last > BACKFILL_THROTTLE_MS;
+      }
+      return false; // trusted URL (profile/ID, Resy, Yelp BIZ) — don't re-check
+    });
     if (needsLookup.length > 0) {
-      const batch = needsLookup.slice(0, 5);
+      const batch = needsLookup.slice(0, 3); // cap lower (2 Claude calls each now)
+      batch.forEach((r) => restaurantBackfillChecked.set(r.id, Date.now()));
       Promise.allSettled(
         batch.map((r) => autoUpdateRestaurantUrl(r.id, r.name))
       ).catch(() => {});
