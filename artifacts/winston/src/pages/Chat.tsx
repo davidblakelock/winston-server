@@ -2661,7 +2661,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
               )}
               {briefingSummary.generatedAt && (
                 <p className="mt-2 text-[11px] text-indigo-400/50">
-                  Generated at {new Date(briefingSummary.generatedAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })}
+                  Generated at {new Date(briefingSummary.generatedAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true, ...(briefingSummary.timezone ? { timeZone: briefingSummary.timezone } : {}) })}
                 </p>
               )}
             </div>
