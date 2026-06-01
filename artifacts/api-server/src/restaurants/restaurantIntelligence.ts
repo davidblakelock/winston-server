@@ -429,9 +429,10 @@ export function buildReservationUrl(
   const slug = details.platformSlug;
 
   // Slugs prefixed with "ws:" were found via AI web search and may be slightly
-  // wrong (causing 404s). Return null so the caller falls through to the
-  // guaranteed-working platform search URL instead.
-  if (slug?.startsWith("ws:")) return null;
+  // wrong (causing 404s). "direct:" slugs come from Google Places website fields
+  // and can be stale or point to wrong restaurants. Return null for both — the
+  // caller falls through to the guaranteed-working platform search URL instead.
+  if (slug?.startsWith("ws:") || slug?.startsWith("direct:")) return null;
 
   if (details.platform === "opentable" && slug) {
     let base: string;

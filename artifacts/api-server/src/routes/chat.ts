@@ -1091,6 +1091,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       const { rows: dbHistory } = await query<{ role: string; content: string }>(
         `SELECT role, content FROM chat_messages
          WHERE user_name = ANY($1)
+           AND (message_id IS NULL OR message_id NOT LIKE 'goals:%')
          ORDER BY created_at DESC, id DESC
          LIMIT $2`,
         [aliasNames, ACTIVE_CONTEXT_LIMIT]
@@ -2206,10 +2207,19 @@ If the conversation is not about a trip, set destination to null.`,
             `Do NOT say you can't check pricing or that you have no dates — the data is above.`;
           req.log.info({ tripId, hotels: hotelLines.length, start_date: activeTripPlan.start_date }, "[HotelAvail] Injected stored trip hotel pricing + dates");
         } else {
+          // Hotels exist in the itinerary but have no pricing data yet.
+          // Give Claude a live Google Hotels search URL so it can answer helpfully.
+          const dest = encodeURIComponent(activeTripPlan.destination ?? "");
+          const dateParams = activeTripPlan.start_date && activeTripPlan.end_date
+            ? `&check_in_date=${activeTripPlan.start_date}&check_out_date=${activeTripPlan.end_date}`
+            : "";
+          const googleHotelsUrl = `https://www.google.com/travel/hotels/s/${dest}${dateParams}`;
           systemPrompt +=
-            `\n\n[Hotel Pricing — Not Yet Enriched]\n` +
-            `This trip's hotels haven't been priced yet. Let David know pricing wasn't pulled for this trip ` +
-            `and suggest tapping the refresh/enrich button or checking Google Hotels directly for ${activeTripPlan.destination}.`;
+            `\n\n[Hotel Pricing — Not Yet Fetched]\n` +
+            `Live hotel pricing for this trip hasn't been loaded yet.\n` +
+            `Tell David you don't have the rates cached right now, but here's the direct Google Hotels link where he can check live pricing and availability:\n` +
+            `${googleHotelsUrl}\n` +
+            `Be brief and helpful — don't apologize excessively. Do NOT say you "cannot" check pricing.`;
         }
       } else {
         // ── Main chat: live Google Places search (no pricing, gives website links) ──
