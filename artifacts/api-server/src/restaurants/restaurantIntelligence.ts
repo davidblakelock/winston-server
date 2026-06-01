@@ -233,6 +233,12 @@ export async function getCachedRestaurantDetails(
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     if (cachedAt < sevenDaysAgo) return null;
 
+    // Entries with untrusted slugs (from AI web search or Google Places website field)
+    // may have wrong addresses or slugs — treat as cache miss so a fresh Places
+    // lookup re-fetches the correct address and rebuilds the search URL correctly.
+    const slug = row.platform_slug ?? "";
+    if (slug.startsWith("ws:") || slug.startsWith("direct:")) return null;
+
     const addr = row.formatted_address;
     return {
       name: row.display_name ?? restaurantName,

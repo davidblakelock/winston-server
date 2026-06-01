@@ -1216,14 +1216,25 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       `Destination: ${activeTripPlan.destination} | ${activeTripPlan.nights ?? itinDays.length} nights`;
 
     if (dayBlocks.length > 0) {
+      // Detect whether any hotel has pricing stored — if not, prepare a Google Hotels link
+      const anyHotelHasPrice = itinDays.some(d => d.hotel?.pricePerNight || d.hotel?.priceRange);
+      const dest = encodeURIComponent(activeTripPlan.destination ?? "");
+      const dateParams = activeTripPlan.start_date && activeTripPlan.end_date
+        ? `&check_in_date=${activeTripPlan.start_date}&check_out_date=${activeTripPlan.end_date}`
+        : "";
+      const googleHotelsUrl = `https://www.google.com/travel/hotels/s/${dest}${dateParams}`;
+      const pricingNote = anyHotelHasPrice
+        ? `For hotel pricing questions, answer directly using the prices above and provide booking URLs. Do NOT say you cannot check pricing or availability.`
+        : `Hotel pricing hasn't been fetched yet for this trip. When David asks about hotel prices or availability, ` +
+          `tell him the rates haven't been pulled yet and give him this Google Hotels link to check live: ${googleHotelsUrl}. ` +
+          `Do NOT say you "cannot" check — you're directing him to the live source.`;
       systemPrompt +=
         `\n\n${tripHeader}\n` +
         dayBlocks.join("\n\n") + "\n" +
         `\nINSTRUCTIONS: You have the complete trip itinerary above. ` +
         `When David asks about the trip, describe it fully — all days, all stops, activities, meals, and hotels. ` +
         `Do NOT truncate or summarize to a single day. ` +
-        `For hotel pricing questions, answer directly using the prices above and provide booking URLs. ` +
-        `Do NOT say you cannot check pricing or availability.`;
+        pricingNote;
       req.log.info({ tripId: activeTripPlan.id, tripName: activeTripPlan.trip_name, days: dayBlocks.length }, "[TripContext] Full itinerary injected into prompt");
     } else {
       systemPrompt +=
@@ -3210,8 +3221,12 @@ If dates cannot be resolved to specific days, set them to null.`,
                 resyUrl: resySearchUrl,
                 yelpUrl: yelpSearchUrl,
               };
-              (req as any)._hardcodedResponse =
-                `${details.name} takes reservations by phone. Opening the dialer for ${details.phone}.${conflictNote}`;
+              // Native app opens openTableUrl first (search), then resyUrl, then the tel: dialer.
+              // Message should match what the app actually does — opening OT/Resy search, not the dialer.
+              const searchOpened = openTableSearchUrl ? "OpenTable" : resySearchUrl ? "Resy" : null;
+              (req as any)._hardcodedResponse = searchOpened
+                ? `I've opened ${searchOpened} so you can find and book ${details.name} — the number is ${details.phone} if you'd prefer to call.${conflictNote}`
+                : `${details.name} takes reservations by phone at ${details.phone}.${conflictNote}`;
 
             } else {
               // No direct booking URL — fall back to platform search.
