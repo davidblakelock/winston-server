@@ -1131,6 +1131,80 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     return;
   }
 
+  // ── Journal context: save entry, fetch recent entries, return one focused question ──
+  // The journal mode is NOT isolated — it saves to chat_messages normally for continuity.
+  if (requestContext === "journal" && (req as any)._nativeMode === true) {
+    try {
+      const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+
+      // Fetch recent entries and save today's in parallel
+      const [recentEntries] = await Promise.all([
+        getMydayEntries(sessionUserName).then((all) => all.slice(0, 3)),
+        saveMydayEntry(sessionUserName, message, today).catch(() => null),
+      ]);
+
+      // Build recent-entries block for context (skip today's content — it IS the message)
+      const previousEntries = recentEntries.filter((e) => e.entry_date !== today).slice(0, 2);
+      const previousBlock = previousEntries.length > 0
+        ? `\nPrevious journal entries for context:\n` +
+          previousEntries.map((e) => {
+            const label = new Date(e.entry_date + "T12:00:00").toLocaleDateString("en-US", {
+              weekday: "short", month: "short", day: "numeric",
+            });
+            return `• [${label}] ${e.content}`;
+          }).join("\n")
+        : "";
+
+      // One focused follow-up question — grounded in exactly what was just said
+      const journalSystemPrompt =
+        `You are ${sessionUserName === "david" || sessionUserName === "David" ? "Rosie, David's" : "a"} warm, perceptive journaling companion. ` +
+        `Your only job right now is to ask ONE follow-up question that draws the person deeper into what they just shared. ` +
+        `Rules:\n` +
+        `• One question only — never two, never a list.\n` +
+        `• Reference the specific content they just said — never generic ("how did that make you feel?").\n` +
+        `• Keep it under 25 words.\n` +
+        `• Warm, curious, conversational — like a trusted friend paying close attention.\n` +
+        `• No preamble ("Great!", "That's interesting") — just the question.\n` +
+        `• Designed to be spoken aloud via TTS — no asterisks, no em-dashes, no markdown.` +
+        previousBlock;
+
+      const journalResp = await anthropic.messages.create({
+        model: MODEL_HAIKU,
+        max_tokens: 80,
+        system: journalSystemPrompt,
+        messages: [{ role: "user", content: message }],
+      });
+
+      const journalReply =
+        journalResp.content[0]?.type === "text" ? journalResp.content[0].text.trim() : "";
+
+      req.log.info({ chars: journalReply.length }, "[Journal] Follow-up question generated");
+
+      res.json({ response: journalReply });
+
+      // Persist both sides to chat_messages (not isolated)
+      const journalMsgId = randomUUID();
+      query(
+        `INSERT INTO chat_messages (user_name, role, content, message_id)
+         VALUES ($1, 'user', $2, $3)
+         ON CONFLICT (message_id) WHERE message_id IS NOT NULL DO NOTHING`,
+        [sessionUserName, message.slice(0, 8000), `${journalMsgId}:user`]
+      ).catch((e) => req.log.warn({ e }, "[Journal] User message save failed"));
+      if (journalReply) {
+        query(
+          `INSERT INTO chat_messages (user_name, role, content, message_id)
+           VALUES ($1, 'assistant', $2, $3)
+           ON CONFLICT (message_id) WHERE message_id IS NOT NULL DO NOTHING`,
+          [sessionUserName, journalReply.slice(0, 8000), `${journalMsgId}:assistant`]
+        ).catch((e) => req.log.warn({ e }, "[Journal] Assistant message save failed"));
+      }
+    } catch (err) {
+      req.log.error({ err }, "[Journal] Handler failed");
+      res.status(500).json({ error: "Journal handler failed" });
+    }
+    return;
+  }
+
   process.stdout.write(`[STDOUT] CHAT-HANDLER message="${message.slice(0, 100)}" len=${message.length}\n`);
 
   // Fetch recent memories, dynamic profile, and user profile concurrently
