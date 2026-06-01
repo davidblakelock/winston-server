@@ -2595,7 +2595,7 @@ If dates cannot be resolved to specific days, set them to null.`,
   // Claude Haiku determines whether the user's message is a meaningful life
   // capture response (morning intention or evening reflection), replacing brittle
   // string-matching against exact question phrasing.
-  if (!isMorningGreeting && !isMydayAdd && message.trim().length > 3) {
+  if (!isMorningGreeting && !isMydayAdd && !isIsolatedContext && message.trim().length > 3) {
     const _lcLastAssist = [...history].reverse().find((m) => m.role === "assistant");
     const _lcPriorText  = (_lcLastAssist?.content ?? "").slice(0, 600);
     if (_lcPriorText.length > 20) {
@@ -2666,7 +2666,7 @@ If dates cannot be resolved to specific days, set them to null.`,
   }
 
   // ── Goal detection — fire-and-forget background save ────────────────────────
-  if (!isMorningGreeting && !isMydayAdd && !winddownActive && GOAL_PATTERN.test(message)) {
+  if (!isMorningGreeting && !isMydayAdd && !winddownActive && !isIsolatedContext && GOAL_PATTERN.test(message)) {
     saveLifeCapture(sessionUserName, message.trim(), "goal").catch(() => {});
     req.log.info({ chars: message.length }, "[LifeCaptures] Goal detected and queued for save");
   }
