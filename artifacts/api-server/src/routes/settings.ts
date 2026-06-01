@@ -14,6 +14,7 @@ import { getCuratedContacts } from "../google/contacts.js";
 import { query } from "../db.js";
 import { clearStaticBriefingContext, clearCachedBriefing } from "../morning/briefingCache.js";
 import { preFetchMorningBriefing } from "../morning/briefingPregenerate.js";
+import { generateFreshBriefing } from "../morning/briefingFresh.js";
 import {
   getProactiveMode, setProactiveMode, isValidMode, LEGACY_MODE_MAP,
   getWinstonMode, setWinstonMode,
@@ -535,6 +536,22 @@ router.post("/briefing/refresh", async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "[BriefingRefresh] Failed to clear cache");
     res.status(500).json({ error: "Cache clear failed — check server logs." });
+  }
+});
+
+// ── GET /api/briefing/morning ─────────────────────────────────────────────────
+// Generates the morning briefing FRESH on every call — no pre-caching.
+// Live: sleep (Google Fit), weather, calendar, email, news, events, feel-good.
+router.get("/briefing/morning", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  try {
+    req.log.info({ userName }, "[FreshBriefing] Generating on-demand");
+    const text = await generateFreshBriefing(userName);
+    res.json({ ok: true, text });
+  } catch (err) {
+    req.log.error({ err }, "[FreshBriefing] Generation failed");
+    res.status(500).json({ error: "Briefing generation failed — please try again." });
   }
 });
 
