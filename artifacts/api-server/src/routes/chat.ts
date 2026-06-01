@@ -91,6 +91,7 @@ import {
   getProfile,
   upsertProfile,
   buildSystemPromptFromProfile,
+  buildPersonaPreamble,
   buildProfileContext,
   isPartnerRelationship,
   type CollectedData,
@@ -935,10 +936,11 @@ function computeFireAt(timeStr: string, tz: string): Date {
 
 function buildBaseSystemPrompt(
   userName?: string | null,
+  persona?: "rosie" | "macc" | null,
 ): string {
   const user = userName ?? "you";
-  return BASE_SYSTEM_PROMPT_TEMPLATE
-    .replace(/__USER__/g, user);
+  const preamble = buildPersonaPreamble(persona ?? null);
+  return preamble + BASE_SYSTEM_PROMPT_TEMPLATE.replace(/__USER__/g, user);
 }
 
 const BASE_SYSTEM_PROMPT_TEMPLATE = `You are a knowledgeable, genuinely helpful AI companion for __USER__. Be accurate, direct, and useful.
@@ -1147,7 +1149,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const corePrompt =
     userProfile?.onboardingCompleted && userProfile.name
       ? buildSystemPromptFromProfile(userProfile, userProfile.rawData as CollectedData)
-      : buildBaseSystemPrompt(userProfile?.name);
+      : buildBaseSystemPrompt(userProfile?.name, userProfile?.companionPersona);
 
   const profileContextBlock = buildProfileContext(
     userProfile ?? null,

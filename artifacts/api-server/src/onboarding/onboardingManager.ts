@@ -28,6 +28,7 @@ export interface UserProfile {
   homeLatitude: number | null;
   homeLongitude: number | null;
   personalityStyle: string | null;
+  companionPersona: "rosie" | "macc" | null;
   // Native onboarding preference columns
   hobbies: string[];
   musicGenres: string[];
@@ -123,6 +124,7 @@ export async function ensureOnboardingTable(): Promise<void> {
   await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS sports_teams text`);
   await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS favorite_restaurants text`);
   await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS favorite_podcasts text`);
+  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS companion_persona text CHECK (companion_persona IN ('rosie', 'macc'))`);
 }
 
 type ProfileRow = {
@@ -152,6 +154,7 @@ type ProfileRow = {
   home_latitude: number | null;
   home_longitude: number | null;
   personality_style: string | null;
+  companion_persona: string | null;
   hobbies: string[] | null;
   music_genres: string[] | null;
   tv_genres: string[] | null;
@@ -189,6 +192,7 @@ function rowToProfile(r: ProfileRow): UserProfile {
     homeLatitude: r.home_latitude ?? null,
     homeLongitude: r.home_longitude ?? null,
     personalityStyle: r.personality_style ?? null,
+    companionPersona: (r.companion_persona as "rosie" | "macc" | null) ?? null,
     hobbies: r.hobbies ?? [],
     musicGenres: r.music_genres ?? [],
     tvGenres: r.tv_genres ?? [],
@@ -209,7 +213,7 @@ export async function getProfile(userName = NATIVE_STORED_NAME): Promise<UserPro
 
 export async function updateProfileField(
   userName: string,
-  fields: { voiceId?: string; companionName?: string; personalityStyle?: string; photoUrl?: string; avatarBase64?: string | null }
+  fields: { voiceId?: string; companionName?: string; personalityStyle?: string; photoUrl?: string; avatarBase64?: string | null; companionPersona?: "rosie" | "macc" }
 ): Promise<void> {
   const sets: string[] = [];
   const vals: unknown[] = [];
@@ -219,6 +223,7 @@ export async function updateProfileField(
   if (fields.personalityStyle !== undefined) { sets.push(`personality_style = $${idx++}`); vals.push(fields.personalityStyle); }
   if (fields.photoUrl !== undefined) { sets.push(`photo_url = $${idx++}`); vals.push(fields.photoUrl); }
   if (fields.avatarBase64 !== undefined) { sets.push(`avatar_base64 = $${idx++}`); vals.push(fields.avatarBase64); }
+  if (fields.companionPersona !== undefined) { sets.push(`companion_persona = $${idx++}`); vals.push(fields.companionPersona); }
   if (sets.length === 0) return;
   vals.push(userName);
   await query(`UPDATE user_profiles SET ${sets.join(", ")} WHERE user_name = $${idx} RETURNING user_name`, vals);
@@ -478,6 +483,15 @@ export async function getActiveUsers(): Promise<ActiveUser[]> {
   return [{ userName: NATIVE_STORED_NAME, name: null, city: null, timezone: null, wakeTime: null, companionName: null }];
 }
 
+export function buildPersonaPreamble(persona: "rosie" | "macc" | null): string {
+  const p = persona ?? "rosie";
+  if (p === "macc") {
+    return `Your name is M.A.C.C. You are reliable, straight-talking, and no-nonsense — you get things done efficiently, accurately, and dependably. Never say you don't have a name or act uncertain about your identity.\n\n`;
+  }
+  // Default: Rosie
+  return `Your name is Rosie. You are warm, witty, and direct — always in the user's corner, occasionally sassy in the best way, and you treat them as the capable adult they are. You know exactly who you are. Never say you don't have a name or act uncertain about your identity.\n\n`;
+}
+
 export function buildSystemPromptFromProfile(
   profile: UserProfile,
   rawData: CollectedData
@@ -485,8 +499,9 @@ export function buildSystemPromptFromProfile(
   const userName = profile.name ?? "the user";
   const city = profile.city ?? "your city";
   const people = (rawData.people ?? []) as Array<{ name: string; city?: string }>;
+  const personaPreamble = buildPersonaPreamble(profile.companionPersona);
 
-  return `You are a knowledgeable, genuinely helpful AI companion for ${userName}. Be accurate, direct, and useful.
+  return `${personaPreamble}You are a knowledgeable, genuinely helpful AI companion for ${userName}. Be accurate, direct, and useful.
 
 • Never open with "Certainly!", "Of course!", "Absolutely!", or "Great question!"
 • Never start a response with "I" as the first word.

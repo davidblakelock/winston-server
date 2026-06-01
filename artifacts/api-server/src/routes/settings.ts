@@ -840,4 +840,22 @@ router.patch("/settings/tts", express.json(), async (req, res) => {
   res.json({ ok: true, muted });
 });
 
+// ── PATCH /api/settings/persona ──────────────────────────────────────────────
+// Saves the user's companion persona choice (rosie | macc).
+// Takes effect on the very next chat message — no session restart needed.
+router.patch("/settings/persona", express.json({ limit: "1kb" }), async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const { persona } = req.body as { persona?: string };
+  if (!persona || !["rosie", "macc"].includes(persona)) {
+    res.status(400).json({ error: "persona must be 'rosie' or 'macc'" });
+    return;
+  }
+
+  await updateProfileField(userName, { companionPersona: persona as "rosie" | "macc" });
+  logger.info({ userName, persona }, "[Settings] Companion persona updated");
+  res.json({ ok: true, persona });
+});
+
 export default router;
