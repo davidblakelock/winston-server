@@ -1158,6 +1158,11 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
   // Stable: persona + full profile context — cached by Anthropic for 5 min across requests.
   const stableSystem = corePrompt + profileContextBlock;
+  // [DIAG] Log first 500 chars of system prompt so we can confirm persona preamble
+  req.log.info(
+    { persona: userProfile?.companionPersona ?? "rosie(default)", systemPromptPreview: stableSystem.slice(0, 500) },
+    "[DIAG:PERSONA] System prompt head"
+  );
   // Dynamic: current time, recent memories, preference blocks — changes each request.
   let systemPrompt = getCurrentDateTimeBlock() + "\n" + memoryBlock + dynamicProfileBlock + prefsBlock;
 
