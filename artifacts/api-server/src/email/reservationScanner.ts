@@ -15,7 +15,6 @@ import { getAuthClientForUser } from "../google/oauth.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { logger } from "../lib/logger.js";
 import { query } from "../db.js";
-import { createCalendarEvent } from "../google/calendar.js";
 import { sendPushToAll } from "../push/pushManager.js";
 import { MODEL_HAIKU } from "../lib/models.js";
 
@@ -240,6 +239,70 @@ function addTwoHours(time: string): string {
   return `${String(newH).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
+// ── Chat-driven calendar helpers ──────────────────────────────────────────────
+
+export interface PendingCalendarReservation {
+  id: number;
+  restaurantName: string;
+  date: string;            // YYYY-MM-DD
+  time: string | null;     // HH:MM 24h
+  partySize: number | null;
+  confirmationNumber: string | null;
+  address: string | null;
+}
+
+/** Returns the most recent confirmed reservation that hasn't been added to the
+ *  calendar yet (calendar_event_id IS NULL), within the last 14 days. */
+export async function getLatestUnscheduledReservation(
+  userName: string
+): Promise<PendingCalendarReservation | null> {
+  try {
+    const { rows } = await query<{
+      id: number;
+      restaurant_name: string;
+      reservation_date: string;
+      reservation_time: string | null;
+      party_size: number | null;
+      confirmation_number: string | null;
+      address: string | null;
+    }>(
+      `SELECT id, restaurant_name, reservation_date, reservation_time, party_size,
+              confirmation_number, address
+       FROM reservation_confirmations
+       WHERE user_name = $1
+         AND calendar_event_id IS NULL
+         AND reservation_date >= CURRENT_DATE - INTERVAL '1 day'
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [userName]
+    );
+    if (!rows.length) return null;
+    const r = rows[0];
+    return {
+      id: r.id,
+      restaurantName: r.restaurant_name,
+      date: r.reservation_date,
+      time: r.reservation_time,
+      partySize: r.party_size,
+      confirmationNumber: r.confirmation_number,
+      address: r.address,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Marks a reservation record as having a calendar event. */
+export async function markReservationCalendarCreated(
+  reservationId: number,
+  calendarEventId: string
+): Promise<void> {
+  await query(
+    `UPDATE reservation_confirmations SET calendar_event_id = $1 WHERE id = $2`,
+    [calendarEventId, reservationId]
+  );
+}
+
 // ── Main scanner ──────────────────────────────────────────────────────────────
 
 export interface ScannedReservation {
@@ -318,33 +381,8 @@ export async function scanReservationEmails(
         continue;
       }
 
-      // ── Create Google Calendar event ──────────────────────────────────────
-      // Reserve 2 hours by default; use 7 PM if time is missing.
-      const startTime = parsed.time ?? "19:00";
-      const endTime = addTwoHours(startTime);
-
-      const descriptionParts: string[] = [];
-      if (parsed.confirmation_number) descriptionParts.push(`Confirmation: ${parsed.confirmation_number}`);
-      if (parsed.party_size) descriptionParts.push(`Party of ${parsed.party_size}`);
-
-      const calendarResult = await createCalendarEvent(
-        {
-          title: parsed.restaurant_name,
-          date: parsed.date,
-          startTime,
-          endTime,
-          location: parsed.address ?? undefined,
-          description: descriptionParts.length > 0 ? descriptionParts.join("\n") : undefined,
-        },
-        userName
-      ).catch((err) => {
-        logger.warn({ err, restaurant: parsed.restaurant_name }, "[ReservationScanner] Calendar create failed");
-        return null;
-      });
-
-      const calendarEventId = calendarResult?.id ?? null;
-
-      // ── Persist dedup record ──────────────────────────────────────────────
+      // ── Persist dedup record (no calendar event yet — user confirms in chat) ─
+      const calendarEventId: string | null = null;
       await saveReservation(
         userName, msgId,
         parsed.restaurant_name, parsed.date, parsed.time,
@@ -352,17 +390,18 @@ export async function scanReservationEmails(
         parsed.address, calendarEventId
       );
 
-      // ── Push notification ─────────────────────────────────────────────────
+      // ── Push notification — prompt user to add to calendar via chat ────────
       const dateLabel = formatReservationDate(parsed.date);
       const timeLabel = parsed.time ? ` at ${formatReservationTime(parsed.time)}` : "";
-      const pushBody = `${parsed.restaurant_name} added to your calendar for ${dateLabel}${timeLabel}`;
+      const partLabel = parsed.party_size ? `, party of ${parsed.party_size}` : "";
+      const pushBody = `${parsed.restaurant_name} — ${dateLabel}${timeLabel}${partLabel}. Tap to add it to your calendar.`;
 
       await sendPushToAll({
-        title: "Reservation confirmed",
+        title: "Reservation confirmed ✓",
         body: pushBody,
         tag: `reservation-${userName}-${msgId}`,
         notificationType: "reservation",
-        deepLink: "winston://calendar",
+        deepLink: "winston://chat",
       }, userName).catch(() => {});
 
       results.push({
@@ -386,7 +425,7 @@ export async function scanReservationEmails(
           calendarEventId,
           hasAddress: !!parsed.address,
         },
-        "[ReservationScanner] Reservation confirmed — calendar event created, push sent"
+        "[ReservationScanner] Reservation confirmed — push sent, awaiting user to add to calendar"
       );
     } catch (err) {
       logger.warn({ err, msgId }, "[ReservationScanner] Failed to process email");

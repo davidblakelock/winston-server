@@ -180,7 +180,6 @@ import {
   getResyCitySlug,
   findBookingPlatformByWebSearch,
   getPendingBookingConfirmation,
-  setPendingBookingConfirmation,
   clearPendingBookingConfirmation,
   getLastBookingAttempt,
   setLastBookingAttempt,
@@ -264,6 +263,10 @@ import { getPeople, type KeyPerson } from "../people/peopleManager.js";
 import { sendPushToAll } from "../push/pushManager.js";
 import { getRecentAlertContext } from "../push/weatherAlertScheduler.js";
 import { extractAndSaveFollowups } from "../followups/followupManager.js";
+import {
+  getLatestUnscheduledReservation,
+  markReservationCalendarCreated,
+} from "../email/reservationScanner.js";
 import {
   saveMydayEntry,
   getTodayMydayEntry,
@@ -1324,10 +1327,11 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isReservationConfirm = isReservationFlowActive && RESERVATION_CONFIRM.test(message.trim());
   const isReservationCancel = isReservationFlowActive && RESERVATION_CANCEL.test(message.trim());
 
-  // R001-CONFIRM: Booking confirmation — waiting for party size + guest names
+  // R001-CONFIRM legacy: keep state cleared so any stale pending entry is always
+  // discarded — booking confirmation is now driven by email scanner, not chat state.
   const pendingBookingConf = getPendingBookingConfirmation();
-  const BOOKING_CANCEL = /^(?:no\s+thanks?|never\s+mind|cancel|skip\s+it|not\s+now|forget\s+it|actually\s+(?:no|never\s+mind))(?:[,\s!.]|$)/i;
-  const isBookingConfirmActive = !isMorningGreeting && !!pendingBookingConf && !isRestaurantIntelRequest;
+  if (pendingBookingConf) clearPendingBookingConfirmation();
+  const isBookingConfirmActive = false; // no longer used; kept to avoid downstream errors
 
   const isBillAdd = !isMorningGreeting && BILL_ADD_PATTERN.test(message);
   const isBillList = !isMorningGreeting && BILL_LIST_PATTERN.test(message);
@@ -3170,28 +3174,13 @@ If dates cannot be resolved to specific days, set them to null.`,
                 ...(details.platform === "yelp"      ? { openTableUrl: reservationUrl } : {}),
               };
 
-              // If we have a date, set pending so the user can tell us who's joining
-              // and we can create the calendar event after they confirm.
-              if (intent.dateISO) {
-                setPendingBookingConfirmation({
-                  restaurantName:     details.name,
-                  details,
-                  dateISO:            intent.dateISO,
-                  timeISO:            intent.timeISO,
-                  dateLabel:          intent.dateLabel ?? intent.dateISO,
-                  timeLabel:          intent.timeLabel,
-                  partySize,
-                  restaurantCity,
-                  openTableSearchUrl,
-                  resySearchUrl,
-                  yelpSearchUrl,
-                  conflictNote,
-                });
-              }
-
+              // Email scanner picks up the confirmation email and prompts the user
+              // to add the ACTUAL confirmed time to their calendar — don't pre-set
+              // a pending confirmation here (the requested time may differ from what
+              // the platform actually gives).
               (req as any)._hardcodedResponse =
                 `I've opened ${details.name} on ${platformLabel}${dateTimeStr ? ` — ${dateTimeStr}` : ""}.${conflictNote} ` +
-                `Let me know when you've confirmed the reservation. Who else is joining you?`;
+                `Go ahead and book — I'll catch the confirmation email and let you know once it's in.`;
 
               setLastBookingAttempt({
                 restaurantName: details.name,
@@ -3274,36 +3263,34 @@ If dates cannot be resolved to specific days, set them to null.`,
     }
   }
 
-  // ── R001-CONFIRM: User confirmed the reservation and told us who's joining ────
-  // At this point the user has already booked on the platform. We just need to
-  // create the calendar event, send invites to guests with known emails,
-  // and push a confirmation.
-  if (isBookingConfirmActive && pendingBookingConf) {
-    if (BOOKING_CANCEL.test(message.trim())) {
-      clearPendingBookingConfirmation();
-      systemPrompt += `\n\n[Reservation Cancelled]\nAcknowledge briefly and warmly — "No problem, I've dropped it."`;
-    } else {
-      const _conf = pendingBookingConf;
-      clearPendingBookingConfirmation();
+  // ── R001-CONFIRM: User wants to add a confirmed reservation to calendar ───────
+  // Triggered when user says "add it to my calendar" / "yes add it" / etc.
+  // after receiving the push notification from the email scanner.
+  // The ACTUAL confirmed time comes from the email, not the originally-requested time.
+  const RESERVATION_CAL_INTENT =
+    /\b(?:add|put|yes|sure|go ahead|please|sync)\b.{0,60}\b(?:calendar|cal|schedule)\b|\b(?:add|put)\b.{0,40}\b(?:reservation|booking|dinner|table|restaurant)\b.{0,40}\b(?:calendar|cal|schedule)\b/i;
 
-      const { partySize: _partySize, guestNames: _guestNames } = await parsePartyResponse(message);
+  if (!isRestaurantIntelRequest && !isMorningGreeting && RESERVATION_CAL_INTENT.test(message)) {
+    const pendingRes = await getLatestUnscheduledReservation(sessionUserName).catch(() => null);
+
+    if (pendingRes) {
       const _user = sessionUserName;
-
-      req.log.info(
-        { restaurantName: _conf.restaurantName, partySize: _partySize, guestNames: _guestNames },
-        "[R001-CONFIRM] Creating calendar event"
+      // Extract any guest name from the message — e.g. "add it and invite Susan"
+      const guestMatch = message.match(
+        /\b(?:with|invite|for|include|and|also\s+(?:tell|let|send|notify))\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/
       );
+      const rawGuestName = guestMatch?.[1] ?? null;
 
-      // Cross-reference guest names against key_people to find emails for invites
+      // Cross-reference with My People to find email for calendar invite
       const allPeople = await getPeople(_user).catch((): KeyPerson[] => []);
       const calAttendees: Array<{ name: string; email: string }> = [];
       const notifiedNames: string[] = [];
 
-      for (const guestName of _guestNames) {
+      if (rawGuestName) {
+        const lower = rawGuestName.toLowerCase();
         const match = allPeople.find((p) => {
           const first = p.name.split(" ")[0]?.toLowerCase() ?? "";
           const full  = p.name.toLowerCase();
-          const lower = guestName.toLowerCase();
           return first === lower || full === lower || full.includes(lower);
         });
         if (match?.email) {
@@ -3312,61 +3299,64 @@ If dates cannot be resolved to specific days, set them to null.`,
         }
       }
 
-      // Build the response immediately so conversation stays snappy
-      const guestLine = _guestNames.length
-        ? ` I've noted ${_guestNames.join(" and ")} as your guest${_guestNames.length > 1 ? "s" : ""}${notifiedNames.length ? ` and sent ${notifiedNames.length > 1 ? "them" : notifiedNames[0]} a calendar invite` : ""}.`
-        : "";
-      (req as any)._hardcodedResponse =
-        `Done! I've added ${_conf.restaurantName} to your calendar for ${_conf.dateLabel}${_conf.timeLabel ? ` at ${_conf.timeLabel}` : ""}.${guestLine}`;
+      // Format confirmed date/time for response
+      const startTime = pendingRes.time ?? "19:00";
+      const [rH, rM] = startTime.split(":").map(Number);
+      const rAmPm = (rH ?? 0) >= 12 ? "PM" : "AM";
+      const rHour = (rH ?? 0) % 12 === 0 ? 12 : (rH ?? 0) % 12;
+      const rMin  = rM === 0 ? "" : `:${String(rM).padStart(2, "0")}`;
+      const timeStr = `${rHour}${rMin} ${rAmPm}`;
 
-      // Create calendar event + push in background so response isn't blocked
+      const dateStr = (() => {
+        const d = new Date(pendingRes.date + "T12:00:00");
+        return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+      })();
+
+      const guestNote = notifiedNames.length
+        ? ` Sending ${notifiedNames[0]} a calendar invite too.`
+        : rawGuestName
+          ? ` (I don't have ${rawGuestName}'s email — you can forward the confirmation to them.)`
+          : "";
+
+      (req as any)._hardcodedResponse =
+        `Done! Added ${pendingRes.restaurantName} to your calendar for ${dateStr} at ${timeStr}` +
+        `${pendingRes.partySize ? `, party of ${pendingRes.partySize}` : ""}.${guestNote}`;
+
+      // Create event + update DB in background
       Promise.resolve().then(async () => {
         try {
-          const guestNote = _guestNames.length ? `. Guests: ${_guestNames.join(", ")}` : "";
-          const timeLabel = _conf.timeLabel ?? _conf.timeISO ?? "19:00";
+          const endH = ((rH ?? 19) + 2) % 24;
+          const endTime = `${String(endH).padStart(2, "0")}:${String(rM ?? 0).padStart(2, "0")}`;
+          const descParts: string[] = [];
+          if (pendingRes.confirmationNumber) descParts.push(`Confirmation: ${pendingRes.confirmationNumber}`);
+          if (pendingRes.partySize) descParts.push(`Party of ${pendingRes.partySize}`);
+          if (notifiedNames.length) descParts.push(`Guest: ${notifiedNames.join(", ")}`);
 
           const calResult = await createCalendarEvent({
-            title:       `Dinner at ${_conf.restaurantName}`,
-            date:        _conf.dateISO,
-            startTime:   timeLabel,
-            location:    _conf.details.formattedAddress ?? _conf.restaurantName,
-            description: `Party of ${_partySize}${guestNote}`,
+            title:       `Dinner at ${pendingRes.restaurantName}`,
+            date:        pendingRes.date,
+            startTime,
+            endTime,
+            location:    pendingRes.address ?? pendingRes.restaurantName,
+            description: descParts.join("\n") || undefined,
             allDay:      false,
             attendees:   calAttendees.length ? calAttendees : undefined,
           }, _user).catch(() => null);
 
-          setLastBookingAttempt({
-            restaurantName: _conf.restaurantName,
-            dateLabel:      _conf.dateLabel,
-            timeLabel:      _conf.timeLabel,
-            partySize:      _partySize,
-            status:         "calendar_created",
-            phone:          _conf.details.phone ?? undefined,
-            timestamp:      Date.now(),
-          });
-
-          const inviteNote = notifiedNames.length
-            ? ` Invites sent to ${notifiedNames.join(" & ")}.`
-            : "";
-          const calNote = calResult ? " Added to calendar." : "";
-
-          await sendPushToAll({
-            title: `${_conf.restaurantName} — On Your Calendar ✓`,
-            body:  `${_conf.dateLabel}${_conf.timeLabel ? ` at ${_conf.timeLabel}` : ""}, party of ${_partySize}.${calNote}${inviteNote}`,
-            tag:   `reservation-confirmed-${Date.now()}`,
-            notificationType: "reservation-confirmed",
-            requireInteraction: true,
-          }, _user);
+          if (calResult?.id) {
+            await markReservationCalendarCreated(pendingRes.id, calResult.id).catch(() => {});
+          }
 
           req.log.info(
-            { restaurantName: _conf.restaurantName, partySize: _partySize, notified: notifiedNames, calCreated: !!calResult },
-            "[R001-CONFIRM] Calendar event created"
+            { restaurant: pendingRes.restaurantName, date: pendingRes.date, time: startTime, calId: calResult?.id, guests: notifiedNames },
+            "[R001-CONFIRM] Email-driven calendar event created"
           );
         } catch (err) {
-          req.log.warn({ err }, "[R001-CONFIRM] Calendar creation failed");
+          req.log.warn({ err }, "[R001-CONFIRM] Email-driven calendar creation failed");
         }
       }).catch(() => {});
     }
+    // If no pending reservation found, fall through to Claude — it will handle gracefully
   }
 
   // R001 Phase 2 — legacy stale-state cleanup only
@@ -3380,7 +3370,7 @@ If dates cannot be resolved to specific days, set them to null.`,
   }
 
   // ── Last booking attempt — inject so Claude answers follow-ups correctly ──────
-  if (!isRestaurantIntelRequest && !isBookingConfirmActive) {
+  if (!isRestaurantIntelRequest) {
     const lastBooking = getLastBookingAttempt();
     if (lastBooking) {
       let bookingStatusNote = "";
