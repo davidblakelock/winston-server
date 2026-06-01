@@ -74,14 +74,19 @@ router.post(
       ""
     ).trim();
 
-    // Resolve voice: body override → user profile → env default (same as /api/speak)
+    // Resolve voice priority: body override → user profile → env default
+    // A voiceId in the request body always wins (lets the app switch between
+    // Rosie and M.A.C.C. voices without touching the user's saved preference).
     const envVoiceId = (process.env.EL_VOICE_ID?.trim() || process.env.ELEVENLABS_VOICE_ID?.trim() || "");
-    let voiceId = (bodyVoiceId ?? "").trim() || envVoiceId;
-    try {
-      const profile = await getProfile(userName);
-      if (profile?.voiceId) voiceId = profile.voiceId;
-    } catch {
-      // Non-fatal — continue with body/env voice
+    const explicitVoiceId = (bodyVoiceId ?? "").trim();
+    let voiceId = explicitVoiceId || envVoiceId;
+    if (!explicitVoiceId) {
+      try {
+        const profile = await getProfile(userName);
+        if (profile?.voiceId) voiceId = profile.voiceId;
+      } catch {
+        // Non-fatal — continue with env voice
+      }
     }
 
     if (!EL_API_KEY || !voiceId) {
