@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "0qNrsJXeV1SmbQWD61Mtq"
+uri = "file://attached_assets/goals_v2.txt"
+type = "text"
+title = "goals_v2.tsx — save as app/goals.tsx in your Expo project"
