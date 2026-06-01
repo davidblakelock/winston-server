@@ -1,6 +1,8 @@
 import { Router } from "express";
 import express from "express";
+import { randomUUID } from "crypto";
 import { authenticate } from "../auth/middleware.js";
+import { query } from "../db.js";
 import {
   createGoal,
   getGoals,
@@ -9,6 +11,7 @@ import {
   updateStep,
   deleteGoal,
   breakdownGoal,
+  goalsFreeformChat,
   formatContentForSharing,
   type ShareFormat,
 } from "../goals/goalsManager.js";
@@ -177,6 +180,52 @@ router.post("/goals/share", express.json({ limit: "2mb" }), async (req, res) => 
   } catch (err) {
     req.log.error({ err }, "[Goals] POST /goals/share error");
     res.status(500).json({ error: "Failed to format content for sharing" });
+  }
+});
+
+// ── POST /api/goals/chat ───────────────────────────────────────────────────────
+// Free-form conversational AI response for the Goals screen.
+// Unlike /goals/breakdown this does NOT force a structured step output —
+// it's a genuine back-and-forth conversation that can go anywhere.
+// Saves the exchange to chat_messages so history persists across app restarts.
+// Body: { message: string, conversation_history?: [{role, content}] }
+// Returns: { response: string }
+router.post("/goals/chat", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const { message, conversation_history } = req.body as {
+    message?: string;
+    conversation_history?: Array<{ role: "user" | "assistant"; content: string }>;
+  };
+  if (!message || typeof message !== "string" || !message.trim()) {
+    res.status(400).json({ error: "message is required" });
+    return;
+  }
+  try {
+    const response = await goalsFreeformChat(message.trim(), conversation_history ?? [], userName);
+    // Persist exchange fire-and-forget so response is immediate
+    const msgId = randomUUID();
+    query(
+      `INSERT INTO chat_messages (user_name, role, content, message_id)
+       VALUES ($1, 'user', $2, $3)
+       ON CONFLICT (message_id) WHERE message_id IS NOT NULL DO NOTHING`,
+      [userName, message.trim().slice(0, 8000), `goals:${msgId}:user`]
+    ).then(() => req.log.info("[Goals] User message saved"))
+     .catch(() => {});
+    if (response) {
+      query(
+        `INSERT INTO chat_messages (user_name, role, content, message_id)
+         VALUES ($1, 'assistant', $2, $3)
+         ON CONFLICT (message_id) WHERE message_id IS NOT NULL DO NOTHING`,
+        [userName, response.slice(0, 8000), `goals:${msgId}:assistant`]
+      ).then(() => req.log.info("[Goals] Assistant message saved"))
+       .catch(() => {});
+    }
+    req.log.info({ responseLen: response.length }, "[Goals] POST /goals/chat completed");
+    res.json({ response });
+  } catch (err) {
+    req.log.error({ err }, "[Goals] POST /goals/chat error");
+    res.status(500).json({ error: "Failed to generate response" });
   }
 });
 

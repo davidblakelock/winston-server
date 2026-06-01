@@ -1,3 +1,5 @@
 - [Notification payload stability](notification-payload-stability.md) — agent churn keeps breaking bill/medication payloads; lock endpoints in comments, never touch without explicit user request.
 - [Trip context injection](trip-context-injection.md) — must inject full itinerary (days/activities/meals/hotels), not just hotels; hotel-only causes single-day truncation.
 - [Git push pattern](git-push-pattern.md) — main agent cannot git add/commit; subagent can push but not commit; Replit checkpoint auto-commits, then push via subagent.
+- [isIsolatedContext rule](isolated-context-rule.md) — only "trip-planning" should skip chat_messages saves; changed from "any requestContext" to explicit allowlist to prevent unintentional save suppression.
+- [Goals screen architecture](goals-screen-arch.md) — /api/goals/chat = free-form Claude Haiku chat + saves to chat_messages; /api/goals/breakdown = structured GPT-4o steps output; native v2 file at attached_assets/goals_v2.tsx.

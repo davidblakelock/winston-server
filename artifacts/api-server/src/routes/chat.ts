@@ -1053,8 +1053,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
   // ── Auto-greeting: derive time-appropriate message ────────────────────────
   const { message: rawMessage, history: rawHistory = [], isAutoGreeting = false, deviceId = null, winddownRequest = false, context: requestContext = null, tripId: rawTripId = null } = req.body;
-  // Isolated contexts (e.g. 'trip-planning') must not bleed into the main chat history.
-  const isIsolatedContext = typeof requestContext === "string" && requestContext.length > 0;
+  // Only trip-planning is isolated (it has its own DB table). All other contexts save normally.
+  const isIsolatedContext = requestContext === "trip-planning";
 
   // ── Active trip context (Trip screen) ─────────────────────────────────────
   // When the native app sends context:"trip-planning" + tripId, load the stored
@@ -3775,7 +3775,20 @@ If dates cannot be resolved to specific days, set them to null.`,
           // User gave us the content inline ("text Susan that I'll be 10 minutes late").
           // If they also requested a tone/style ("in a witty tone", "make it romantic"),
           // call Claude to compose in that style — but no added greetings or closings.
-          // If no style was requested, use their exact words verbatim.
+          // If no style was requested, use their exact words verbatim (unless there's booking context).
+
+          // Enrich vague inline content with recent restaurant booking context if available.
+          // e.g. "text Susan about dinner" → compose with full reservation details.
+          const _lastBooking = getLastBookingAttempt();
+          const _bookingFresh = _lastBooking && Date.now() - _lastBooking.timestamp < 60 * 60 * 1000;
+          const _bookingNote = _bookingFresh
+            ? ` (Context: we just booked a reservation at ${_lastBooking!.restaurantName}` +
+              `${_lastBooking!.dateLabel ? ` for ${_lastBooking!.dateLabel}` : ""}` +
+              `${_lastBooking!.timeLabel ? ` at ${_lastBooking!.timeLabel}` : ""}` +
+              `, party of ${_lastBooking!.partySize}.)`
+            : "";
+          const enrichedIntent = _bookingNote ? `${inlineIntent}${_bookingNote}` : inlineIntent;
+
           if (inlineTone !== null) {
             // Style requested inline — let Claude rephrase
             try {
@@ -3783,7 +3796,7 @@ If dates cannot be resolved to specific days, set them to null.`,
                 recipientName: resolvedName,
                 relationship,
                 tone: inlineTone,
-                userIntent: inlineIntent,
+                userIntent: enrichedIntent,
                 senderName: displayName,
               });
 
@@ -3814,31 +3827,64 @@ If dates cannot be resolved to specific days, set them to null.`,
               systemPrompt += `\n\n[Text Message Ready for ${resolvedName}]\nMessage body:\n"${body}"\n\nRead back verbatim, ask for confirmation.`;
             }
           } else {
-            // No style request — use the user's exact words verbatim
-            const body = sanitizeSmsBody(inlineIntent);
+            // No style request. If there's fresh booking context, compose via Claude so the
+            // message naturally references the reservation. Otherwise use exact words verbatim.
+            if (_bookingNote) {
+              try {
+                const composed = await composeTextMessage({
+                  recipientName: resolvedName,
+                  relationship,
+                  tone,
+                  userIntent: enrichedIntent,
+                  senderName: displayName,
+                });
+                setPendingText({
+                  phase: "awaiting_confirmation",
+                  recipientName: resolvedName,
+                  recipientPhone: phone,
+                  relationship,
+                  tone,
+                  composedBody: composed.body,
+                });
+                systemPrompt +=
+                  `\n\n[Text Message Composed for ${resolvedName}]\n` +
+                  `Message body:\n"${composed.body}"\n\n` +
+                  `Read this back to ${displayName} WORD FOR WORD. ` +
+                  `Then ask: "Does that work? Say yes and I'll open Messages so you can tap Send." ` +
+                  `CRITICAL: You are NOT sending it. Messages opens AFTER the user says yes.`;
+                req.log.info({ targetName: resolvedName, bookingContext: true }, "[T006] Inline + booking context — composed via Claude");
+              } catch (compErr) {
+                req.log.warn({ compErr }, "[T006] Booking-context compose failed — falling back to verbatim");
+                const body = sanitizeSmsBody(inlineIntent);
+                setPendingText({ phase: "awaiting_confirmation", recipientName: resolvedName, recipientPhone: phone, relationship, tone, composedBody: body });
+                systemPrompt += `\n\n[Text Message Ready for ${resolvedName}]\nMessage body:\n"${body}"\n\nRead back verbatim, ask for confirmation.`;
+              }
+            } else {
+              const body = sanitizeSmsBody(inlineIntent);
 
-            setPendingText({
-              phase: "awaiting_confirmation",
-              recipientName: resolvedName,
-              recipientPhone: phone,
-              relationship,
-              tone,
-              composedBody: body,
-            });
+              setPendingText({
+                phase: "awaiting_confirmation",
+                recipientName: resolvedName,
+                recipientPhone: phone,
+                relationship,
+                tone,
+                composedBody: body,
+              });
 
-            systemPrompt +=
-              `\n\n[Text Message Ready for ${resolvedName}]\n` +
-              `Message body:\n"${body}"\n\n` +
-              `Read this message back to ${displayName} WORD FOR WORD — do not change, add, or remove anything. ` +
-              `Then ask: "Does that look right? Say yes and I'll open Messages so you can tap Send." ` +
-              `If they want a different style, they can say "make it witty", "make it warmer", etc. ` +
-              `CRITICAL HONESTY RULES: ` +
-              `(1) You are NOT sending it and you CANNOT send it. ` +
-              `(2) The Messages app only opens AFTER the user says yes — do NOT say it is opening now. ` +
-              `(3) Never say "sending now", "opening Messages", or anything implying immediate action. ` +
-              `(4) The user dictated this exact message — read it back VERBATIM. Do not paraphrase, expand, or add to it.`;
+              systemPrompt +=
+                `\n\n[Text Message Ready for ${resolvedName}]\n` +
+                `Message body:\n"${body}"\n\n` +
+                `Read this message back to ${displayName} WORD FOR WORD — do not change, add, or remove anything. ` +
+                `Then ask: "Does that look right? Say yes and I'll open Messages so you can tap Send." ` +
+                `If they want a different style, they can say "make it witty", "make it warmer", etc. ` +
+                `CRITICAL HONESTY RULES: ` +
+                `(1) You are NOT sending it and you CANNOT send it. ` +
+                `(2) The Messages app only opens AFTER the user says yes — do NOT say it is opening now. ` +
+                `(3) Never say "sending now", "opening Messages", or anything implying immediate action. ` +
+                `(4) The user dictated this exact message — read it back VERBATIM. Do not paraphrase, expand, or add to it.`;
 
-            req.log.info({ targetName: resolvedName, hasPhone: !!phone, body: body.slice(0, 80) }, "[T006] Inline content — using verbatim (no tone requested)");
+              req.log.info({ targetName: resolvedName, hasPhone: !!phone, body: body.slice(0, 80) }, "[T006] Inline content — using verbatim (no tone requested)");
+            }
           }
         } else {
           // No inline content — ask what they want to say
@@ -5521,6 +5567,18 @@ If you cannot extract both, return null.`,
   const weatherAlertCtx = WEATHER_ALERT_RE.test(message)
     ? await getRecentAlertContext(sessionUserName).catch(() => null)
     : null;
+
+  // When NWS alert context is present, constrain Claude to only state NWS facts
+  if (weatherAlertCtx) {
+    systemPrompt +=
+      `\n\n[WEATHER ALERT — RESPONSE CONSTRAINT]\n` +
+      `Full NWS alert details have been injected into the conversation context above. Follow these rules:\n` +
+      `• State ONLY facts that appear in the NWS alert text — no speculation beyond what NWS states.\n` +
+      `• Lead with the key facts: event type, area affected, expiration/duration.\n` +
+      `• Quote any NWS safety instructions (shelter, evacuate, avoid travel) exactly as stated.\n` +
+      `• Do NOT add general weather safety tips not mentioned in the NWS text.\n` +
+      `• Keep the response calm, clear, and concise — facts first, safety instructions second.`;
+  }
 
   const messages: Anthropic.MessageParam[] = [
     ...filteredHistory.map((msg: { role: string; content: string }) => ({

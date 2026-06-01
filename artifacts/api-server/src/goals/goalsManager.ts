@@ -523,3 +523,65 @@ export async function formatContentForSharing(
       .trim();
   }
 }
+
+// ── Free-form goals conversation ───────────────────────────────────────────────
+// Used by /api/goals/chat — conversational AI response without forced step structure.
+// The caller is responsible for persisting the exchange to chat_messages.
+export async function goalsFreeformChat(
+  message: string,
+  conversationHistory: Array<{ role: "user" | "assistant"; content: string }>,
+  userName: string
+): Promise<string> {
+  const userProfile = await getProfile(userName).catch(() => null);
+  let profileContext = "";
+
+  if (userProfile) {
+    const raw = (userProfile.rawData ?? {}) as CollectedData;
+    const displayName = userProfile.name ?? userName;
+    const city = userProfile.city ?? (raw.city as string | undefined) ?? "";
+    const people = (raw.people ?? []) as Array<{ name: string; relationship: string }>;
+    const rawAny = raw as Record<string, unknown>;
+    const hobbies = ((rawAny.hobbies ?? rawAny.interests ?? "") as string);
+    const music = ((rawAny.music ?? rawAny.musicTaste ?? "") as string);
+
+    const lines: string[] = [`The user's name is ${displayName}.`];
+    if (city) lines.push(`They live in ${city}.`);
+    if (hobbies) lines.push(`Interests/hobbies: ${hobbies}.`);
+    if (music) lines.push(`Music taste: ${music}.`);
+    if (people.length > 0) {
+      lines.push("Key people:");
+      for (const p of people) lines.push(`- ${p.name} (${p.relationship})`);
+    }
+    profileContext = lines.join("\n");
+  }
+
+  const systemPrompt =
+    `You are Winston, a brilliant and warm personal advisor — like a trusted friend who gives real, specific, personalised guidance.` +
+    (profileContext ? `\n\n${profileContext}` : "") +
+    `\n\nWhen someone shares a goal or asks a question:` +
+    `\n- Give a thorough, genuine response tailored to this person.` +
+    `\n- Be specific: name actual resources, books, apps, venues, communities — never generic placeholders.` +
+    `\n- Use markdown (headers, bullets) when it adds clarity; skip it for short conversational replies.` +
+    `\n- Build on the conversation history naturally — treat this as a continuing dialogue.` +
+    `\n- Only ask a clarifying question if the goal is so vague you genuinely cannot give useful advice.` +
+    `\n- End with one optional follow-up question if it would meaningfully personalise the next response.`;
+
+  const messages: Array<{ role: "user" | "assistant"; content: string }> = [
+    ...conversationHistory,
+    { role: "user", content: message },
+  ];
+
+  const response = await anthropic.messages.create({
+    model: MODEL_HAIKU,
+    max_tokens: 2048,
+    system: systemPrompt,
+    messages,
+  });
+
+  const reply = response.content[0]?.type === "text" ? response.content[0].text.trim() : "";
+  if (!reply) {
+    logger.warn({ userName }, "[Goals] goalsFreeformChat returned empty response");
+    return "I didn't quite catch that — could you say a bit more about what you're working toward?";
+  }
+  return reply;
+}

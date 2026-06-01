@@ -240,8 +240,8 @@ async function checkWeatherAlertsForUser(userName: string): Promise<void> {
       alertArea: areaLabel,
       alertExpires: props.expires ?? "",
       // autoSendMessage causes the app to immediately send this as the user's message
-      // when the notification is tapped — Winston gives contextual safety guidance.
-      autoSendMessage: `There's a ${props.event} in effect for ${areaLabel}. What should I know and are there any actions I should take?`,
+      // when the notification is tapped — keep it short so it looks like the user typed it.
+      autoSendMessage: `Tell me about this ${props.event}.`,
       companionMessage: fullAlertText,
       // Open to the weather screen at the user's saved location
       useCurrentLocation: false,
