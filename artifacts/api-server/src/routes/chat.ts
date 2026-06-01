@@ -6032,15 +6032,16 @@ router.get("/morning-briefing/summary", authenticate, async (req: Request, res: 
 
   // Fetch wake_time alongside the briefing so the client can show a loading
   // placeholder during the generation window without a separate profile fetch.
-  const profileRow = await query<{ wake_time: string | null }>(
-    `SELECT wake_time FROM user_profiles WHERE user_name = $1 LIMIT 1`,
+  const profileRow = await query<{ wake_time: string | null; timezone: string | null }>(
+    `SELECT wake_time, timezone FROM user_profiles WHERE user_name = $1 LIMIT 1`,
     [userName]
   ).then((r) => r.rows[0]).catch(() => null);
   const wakeTime = profileRow?.wake_time ?? null;
+  const timezone = profileRow?.timezone ?? null;
 
   const result = await getPersistedBriefingSummary(userName).catch(() => null);
   if (!result) {
-    res.json({ generated: false, preview: "", generatedAt: null, wakeTime });
+    res.json({ generated: false, preview: "", generatedAt: null, wakeTime, timezone });
     return;
   }
   const preview = result.text.slice(0, 200);
@@ -6049,6 +6050,7 @@ router.get("/morning-briefing/summary", authenticate, async (req: Request, res: 
     preview,
     generatedAt: result.generatedAt.toISOString(),
     wakeTime,
+    timezone,
   });
 });
 

@@ -97,6 +97,10 @@ export interface MorningBriefingSummaryResponse {
   preview: string;
   /** ISO-8601 timestamp when the briefing was generated (null when generated is false) */
   generatedAt: string | null;
+  /** User's configured wake time in HH:MM format (null if not set) */
+  wakeTime?: string | null;
+  /** User's configured IANA timezone string (e.g. America/New_York) used to convert device clock before comparing against wakeTime */
+  timezone?: string | null;
 }
 
 export interface MorningBriefingCachedResponse {

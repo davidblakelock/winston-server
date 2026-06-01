@@ -513,6 +513,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
     preview: string;
     generatedAt: string | null;
     wakeTime?: string | null;
+    timezone?: string | null;
   } | null>(null);
   const [briefingExpanded, setBriefingExpanded] = useState(false);
   const [briefingFullText, setBriefingFullText] = useState<string | null>(null);
@@ -2563,7 +2564,27 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
           const [wakeH, wakeM] = briefingSummary.wakeTime.split(":").map(Number);
           const now = new Date();
           const wakeMinutes = wakeH * 60 + wakeM;
-          const nowMinutes = now.getHours() * 60 + now.getMinutes();
+          // Convert current time to the user's configured timezone so the window
+          // check fires at the correct local time even when the device clock is
+          // set to a different timezone.
+          let nowMinutes: number;
+          if (briefingSummary.timezone) {
+            try {
+              const parts = new Intl.DateTimeFormat("en-US", {
+                timeZone: briefingSummary.timezone,
+                hour: "numeric",
+                minute: "numeric",
+                hour12: false,
+              }).formatToParts(now);
+              const h = Number(parts.find((p) => p.type === "hour")?.value ?? now.getHours());
+              const m = Number(parts.find((p) => p.type === "minute")?.value ?? now.getMinutes());
+              nowMinutes = h * 60 + m;
+            } catch {
+              nowMinutes = now.getHours() * 60 + now.getMinutes();
+            }
+          } else {
+            nowMinutes = now.getHours() * 60 + now.getMinutes();
+          }
           const diffMinutes = nowMinutes - wakeMinutes;
           if (diffMinutes < 0 || diffMinutes > 30) return null;
           return (

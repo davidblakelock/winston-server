@@ -74,6 +74,16 @@ export const GetMorningBriefingSummaryResponse = zod.object({
     .describe(
       "ISO-8601 timestamp when the briefing was generated (null when generated is false)",
     ),
+  wakeTime: zod
+    .string()
+    .nullish()
+    .describe("User's configured wake time in HH:MM format (null if not set)"),
+  timezone: zod
+    .string()
+    .nullish()
+    .describe(
+      "User's configured IANA timezone string (e.g. America\/New_York) used to convert device clock before comparing against wakeTime",
+    ),
 });
 
 /**
