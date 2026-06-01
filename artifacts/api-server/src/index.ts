@@ -51,6 +51,7 @@ import { ensureProactiveModeTable, ensureTrustedSendersTable } from "./proactive
 import { ensureContactCommunicationLogTable } from "./intelligence/crossDomainEngine";
 import { ensureNotificationVipsTable } from "./push/notificationVips";
 import { startBackgroundEmailScanner } from "./email/backgroundEmailScanner";
+import { startPeriodicEmailScanner, ensureEmailScanLogTable } from "./email/periodicEmailScanner";
 import { ensureSavedPlacesTable } from "./location/geofenceManager";
 import { ensureListItemColumns } from "./lists/listManager";
 import { ensureListShareTable } from "./lists/listShareManager";
@@ -325,6 +326,13 @@ app.listen(port, async (err) => {
   }
 
   try {
+    await ensureEmailScanLogTable();
+    logger.info("[startup] email_scan_log table ready");
+  } catch (e) {
+    logger.warn({ e }, "email_scan_log table initialization warning");
+  }
+
+  try {
     await ensureTripPlansTable();
   } catch (e) {
     logger.warn({ e }, "Trip plans table initialization warning");
@@ -490,6 +498,7 @@ app.listen(port, async (err) => {
     startOrderTrackingScheduler();
     startTodoReminderScheduler();
     startBackgroundEmailScanner();
+    startPeriodicEmailScanner();
     startProviderScheduler();
     startConnectBirthdayScheduler();
     startContactBirthdayScheduler();
