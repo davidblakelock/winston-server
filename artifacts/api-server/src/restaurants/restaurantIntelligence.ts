@@ -230,8 +230,8 @@ export async function getCachedRestaurantDetails(
 
     const row = result.rows[0];
     const cachedAt = new Date(row.cached_at);
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    if (cachedAt < thirtyDaysAgo) return null;
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    if (cachedAt < sevenDaysAgo) return null;
 
     const addr = row.formatted_address;
     return {
@@ -426,41 +426,48 @@ export function buildReservationUrl(
   partySize: number | null
 ): string | null {
   const n = partySize ?? 2;
+  const slug = details.platformSlug;
 
-  if (details.platform === "opentable" && details.platformSlug) {
+  // Slugs prefixed with "ws:" were found via AI web search and may be slightly
+  // wrong (causing 404s). Return null so the caller falls through to the
+  // guaranteed-working platform search URL instead.
+  if (slug?.startsWith("ws:")) return null;
+
+  if (details.platform === "opentable" && slug) {
     let base: string;
-    if (details.platformSlug.startsWith("restaurant/profile/")) {
-      // /restaurant/profile/<id> format
-      base = `https://www.opentable.com/${details.platformSlug}?covers=${n}`;
-    } else if (details.platformSlug.startsWith("direct:")) {
-      // Direct slug format: opentable.com/<slug> detected without /r/ prefix.
-      // Use the canonical /r/<slug> form so dateTime and covers params are honoured
-      // by the booking widget (the bare slug redirect strips query params).
-      base = `https://www.opentable.com/r/${details.platformSlug.slice(7)}?covers=${n}`;
+    if (slug.startsWith("restaurant/profile/")) {
+      base = `https://www.opentable.com/${slug}?covers=${n}`;
+    } else if (slug.startsWith("direct:")) {
+      // Bare slug (opentable.com/<slug>) detected in Google Places website field.
+      // Keep the bare form — adding /r/ can cause 404s for some slug variants.
+      base = `https://www.opentable.com/${slug.slice(7)}?covers=${n}`;
     } else {
-      // Standard /r/<slug> format
-      base = `https://www.opentable.com/r/${details.platformSlug}?covers=${n}`;
+      // Standard /r/<slug> form confirmed from an actual OpenTable URL.
+      base = `https://www.opentable.com/r/${slug}?covers=${n}`;
     }
     if (dateISO && timeISO) return `${base}&dateTime=${dateISO}T${timeISO}:00`;
     return base;
   }
 
-  if (details.platform === "resy" && details.platformSlug && details.platformCity) {
-    const base = `https://resy.com/cities/${details.platformCity}/${details.platformSlug}?seats=${n}`;
+  if (details.platform === "resy" && slug && details.platformCity) {
+    // Skip "ws:" already handled above; skip "ws:"-city combos too
+    const city = details.platformCity?.startsWith("ws:") ? null : details.platformCity;
+    if (!city) return null;
+    const base = `https://resy.com/cities/${city}/${slug}?seats=${n}`;
     if (dateISO && timeISO) return `${base}&date=${dateISO}&time=${timeISO}:00`;
     if (dateISO) return `${base}&date=${dateISO}`;
     return base;
   }
 
-  if (details.platform === "yelp" && details.platformSlug) {
-    const yelpType = details.platformCity; // "reservation" or "waitlist"
+  if (details.platform === "yelp" && slug) {
+    const yelpType = details.platformCity;
     const path = yelpType === "waitlist" ? "waitlist" : "reservations";
     const params = new URLSearchParams({ covers: String(n) });
     if (yelpType !== "waitlist") {
       if (dateISO) params.set("date", dateISO);
       if (timeISO) params.set("time", timeISO);
     }
-    return `https://www.yelp.com/${path}/${details.platformSlug}?${params.toString()}`;
+    return `https://www.yelp.com/${path}/${slug}?${params.toString()}`;
   }
 
   return null;
@@ -541,6 +548,10 @@ export async function lookupRestaurantDetails(
     // links appear hundreds of KB into the page, well beyond any safe read limit.
     // Anthropic's web_search tool uses real indexed results and reliably finds
     // the restaurant's OT or Resy listing URL for any restaurant in the US.
+    // NOTE: slugs from web search are prefixed "ws:" — buildReservationUrl treats
+    // them as untrusted and returns null, falling through to the always-valid
+    // platform search URL. The platform value is still used to pick the right
+    // search URL (OpenTable vs Resy).
     if (platform === "phone") {
       const restaurantCity = place.formattedAddress
         ? (extractCityFromAddress(place.formattedAddress) ?? city)
@@ -550,7 +561,7 @@ export async function lookupRestaurantDetails(
       if (webResult.platform !== "phone") {
         console.log(`[RestaurantIntel] Found ${webResult.platform} via web search: ${webResult.slug}`);
         platform = webResult.platform;
-        slug = webResult.slug;
+        slug = webResult.slug ? `ws:${webResult.slug}` : null;
         platformCity = webResult.city;
       }
     }

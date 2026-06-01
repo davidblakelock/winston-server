@@ -3204,16 +3204,24 @@ If dates cannot be resolved to specific days, set them to null.`,
                 `${details.name} takes reservations by phone. Opening the dialer for ${details.phone}.${conflictNote}`;
 
             } else {
-              // No booking platform and no phone
+              // No direct booking URL — fall back to platform search.
+              // Route to the confirmed platform so the native app opens the right one.
+              // Native app opens payload.openTableUrl first, then payload.resyUrl.
+              // For a confirmed Resy restaurant, leave openTableUrl unset so Resy opens.
+              const isResy  = details.platform === "resy";
+              const isYelp  = details.platform === "yelp";
+              const primaryUrl = isResy ? resySearchUrl : isYelp ? yelpSearchUrl : openTableSearchUrl;
+              const platformLabel = isResy ? "Resy" : isYelp ? "Yelp" : "OpenTable";
               (req as any)._reservationPayload = {
                 type: "search",
                 restaurantName: details.name,
-                openTableUrl: openTableSearchUrl,
-                resyUrl: resySearchUrl,
+                ...(isResy  ? { resyUrl: primaryUrl }      : {}),
+                ...(isYelp  ? { openTableUrl: primaryUrl } : {}),
+                ...(!isResy && !isYelp ? { openTableUrl: primaryUrl } : {}),
                 yelpUrl: yelpSearchUrl,
               };
               (req as any)._hardcodedResponse =
-                `I don't have a direct booking link or phone number for ${details.name} right now.${conflictNote} I've pulled up OpenTable, Resy, and Yelp search results for you.`;
+                `I've opened ${details.name} on ${platformLabel} — I don't have a direct booking link right now, but you can search and book from there.${conflictNote}`;
             }
 
             req.log.info(
