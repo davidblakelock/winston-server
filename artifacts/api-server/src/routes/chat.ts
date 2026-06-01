@@ -275,6 +275,7 @@ import {
 } from "../myday/mydayManager.js";
 import {
   saveLifeCapture,
+  getRecentCaptures,
   runDotConnector,
   runPatternObservation,
   getPendingSuggestion,
@@ -1135,23 +1136,27 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   // The journal mode is NOT isolated — it saves to chat_messages normally for continuity.
   if (requestContext === "journal" && (req as any)._nativeMode === true) {
     try {
-      const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
-
-      // Fetch recent entries and save today's in parallel
-      const [recentEntries] = await Promise.all([
-        getMydayEntries(sessionUserName).then((all) => all.slice(0, 3)),
-        saveMydayEntry(sessionUserName, message, today).catch(() => null),
+      // Save as a life capture (observation context) and fetch recent captures in parallel.
+      // Fire-and-forget Dot-Connector + Socratic Mirror so the gold insight card updates.
+      const [recentCaptures] = await Promise.all([
+        getRecentCaptures(sessionUserName, 30).then((all) => all.slice(0, 3)),
+        saveLifeCapture(sessionUserName, message, "observation")
+          .then(() => {
+            runDotConnector(sessionUserName).catch(() => {});
+            runPatternObservation(sessionUserName).catch(() => {});
+          })
+          .catch(() => null),
       ]);
 
-      // Build recent-entries block for context (skip today's content — it IS the message)
-      const previousEntries = recentEntries.filter((e) => e.entry_date !== today).slice(0, 2);
-      const previousBlock = previousEntries.length > 0
-        ? `\nPrevious journal entries for context:\n` +
-          previousEntries.map((e) => {
-            const label = new Date(e.entry_date + "T12:00:00").toLocaleDateString("en-US", {
-              weekday: "short", month: "short", day: "numeric",
+      // Previous captures (skip the one just saved — index 0 is newest after save)
+      const previousCaptures = recentCaptures.slice(1, 3);
+      const previousBlock = previousCaptures.length > 0
+        ? `\nRecent journal context:\n` +
+          previousCaptures.map((c) => {
+            const label = new Date(c.captured_at).toLocaleDateString("en-US", {
+              timeZone: "America/Chicago", weekday: "short", month: "short", day: "numeric",
             });
-            return `• [${label}] ${e.content}`;
+            return `• [${label}] ${c.content}`;
           }).join("\n")
         : "";
 

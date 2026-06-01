@@ -1,17 +1,30 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { authenticate } from "../auth/middleware.js";
-import { getAllCaptures, saveLifeCapture } from "../lifeCaptures/lifeCapturesManager.js";
+import {
+  getAllCaptures,
+  saveLifeCapture,
+  getPendingObservation,
+  getPendingSuggestion,
+} from "../lifeCaptures/lifeCapturesManager.js";
 
 const router: IRouter = Router();
 
-// GET /api/life — all captures for the authenticated user, newest first
+// GET /api/life — captures + most recent insight (Socratic Mirror or Dot-Connector)
+// Response shape: { captures: LifeCapture[], insight: string | null }
+// Native app reads `insight` for the gold card at the top of My Day.
+// Priority: pending Socratic Mirror observation > pending Dot-Connector suggestion > null.
 router.get("/life", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
 
   try {
-    const captures = await getAllCaptures(userName);
-    res.json(captures);
+    const [captures, observation, suggestion] = await Promise.all([
+      getAllCaptures(userName),
+      getPendingObservation(userName).catch(() => null),
+      getPendingSuggestion(userName).catch(() => null),
+    ]);
+    const insight = observation?.observation ?? suggestion?.suggestion ?? null;
+    res.json({ captures, insight });
   } catch (err) {
     req.log.warn({ err }, "[Life] getAllCaptures failed");
     res.status(500).json({ error: "Failed to retrieve life captures" });
