@@ -233,11 +233,13 @@ export async function getCachedRestaurantDetails(
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     if (cachedAt < sevenDaysAgo) return null;
 
-    // Entries with untrusted slugs (from AI web search or Google Places website field)
-    // may have wrong addresses or slugs — treat as cache miss so a fresh Places
-    // lookup re-fetches the correct address and rebuilds the search URL correctly.
+    // Entries with slugs from AI web search are untrusted (Claude can hallucinate
+    // the slug). Treat them as a cache miss so a fresh Places lookup re-fetches
+    // and tries the scrape / web-search chain again to find a verified slug.
+    // "direct:" slugs come from the restaurant's own homepage scrape or Google
+    // Places websiteUri — reliable enough to cache and use.
     const slug = row.platform_slug ?? "";
-    if (slug.startsWith("ws:") || slug.startsWith("direct:")) return null;
+    if (slug.startsWith("ws:")) return null;
 
     const addr = row.formatted_address;
     return {
@@ -435,10 +437,11 @@ export function buildReservationUrl(
   const slug = details.platformSlug;
 
   // Slugs prefixed with "ws:" were found via AI web search and may be slightly
-  // wrong (causing 404s). "direct:" slugs come from Google Places website fields
-  // and can be stale or point to wrong restaurants. Return null for both — the
-  // caller falls through to the guaranteed-working platform search URL instead.
-  if (slug?.startsWith("ws:") || slug?.startsWith("direct:")) return null;
+  // wrong (hallucinated slug). Return null — caller falls through to the
+  // guaranteed-working platform search URL instead.
+  // "direct:" slugs come from the restaurant's own homepage or Google Places
+  // websiteUri — reliable enough to use directly (see buildReservationUrl below).
+  if (slug?.startsWith("ws:")) return null;
 
   if (details.platform === "opentable" && slug) {
     let base: string;
