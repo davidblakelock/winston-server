@@ -36,6 +36,7 @@ import providersRouter from "./providers";
 import peopleRouter from "./people";
 import integrationsRouter from "./integrations";
 import goalsRouter from "./goals";
+import stoicRouter from "./stoic";
 
 const router: IRouter = Router();
 
@@ -76,5 +77,6 @@ router.use(providersRouter);
 router.use(peopleRouter);
 router.use(integrationsRouter);
 router.use(goalsRouter);
+router.use(stoicRouter);
 
 export default router;
