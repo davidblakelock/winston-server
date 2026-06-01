@@ -124,7 +124,7 @@ export async function ensureOnboardingTable(): Promise<void> {
   await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS sports_teams text`);
   await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS favorite_restaurants text`);
   await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS favorite_podcasts text`);
-  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS companion_persona text CHECK (companion_persona IN ('rosie', 'macc'))`);
+  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS companion_persona text`);
 }
 
 type ProfileRow = {
