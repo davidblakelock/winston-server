@@ -1,5 +1,6 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { authenticate } from "../auth/middleware.js";
+import { query } from "../db.js";
 import {
   getAllCaptures,
   saveLifeCapture,
@@ -53,6 +54,33 @@ router.post("/life", async (req: Request, res: Response) => {
   } catch (err) {
     req.log.warn({ err }, "[Life] saveLifeCapture failed");
     res.status(500).json({ error: "Failed to save capture" });
+  }
+});
+
+// DELETE /api/life/:id — delete a capture by id
+router.delete("/life/:id", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const id = parseInt(req.params["id"] as string, 10);
+  if (isNaN(id) || id <= 0) {
+    res.status(400).json({ error: "id must be a positive integer" });
+    return;
+  }
+
+  try {
+    const { rows } = await query<{ id: number }>(
+      `DELETE FROM life_captures WHERE id = $1 AND user_name = $2 RETURNING id`,
+      [id, userName]
+    );
+    if (!rows.length) {
+      res.status(404).json({ error: "Capture not found" });
+      return;
+    }
+    res.json({ deleted: rows[0]!.id });
+  } catch (err) {
+    req.log.warn({ err }, "[Life] delete failed");
+    res.status(500).json({ error: "Failed to delete capture" });
   }
 });
 
