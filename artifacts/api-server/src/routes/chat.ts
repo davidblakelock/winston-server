@@ -3074,9 +3074,10 @@ If dates cannot be resolved to specific days, set them to null.`,
           // Directions — immediate, no confirmation needed
           const url = details?.mapsUrl ?? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(intent.restaurantName + " " + city)}`;
           const shortAddr = details?.formattedAddress?.split(",")[0] ?? intent.restaurantName;
-          (req as any)._reservationPayload = { url, type: "maps", restaurantName: intent.restaurantName };
+          // openTableUrl is used as the generic "primary URL" field the native app checks first
+          (req as any)._reservationPayload = { url, openTableUrl: url, type: "maps", restaurantName: intent.restaurantName };
           (req as any)._hardcodedResponse = `Opening Google Maps with directions to ${intent.restaurantName}${shortAddr && shortAddr !== intent.restaurantName ? ` — ${shortAddr}` : ""}.`;
-          broadcastToUser(sessionUserName, "reservation-link", { url, type: "maps", restaurantName: intent.restaurantName });
+          broadcastToUser(sessionUserName, "reservation-link", { url, openTableUrl: url, type: "maps", restaurantName: intent.restaurantName });
           req.log.info({ restaurantName: intent.restaurantName, url }, "[R001] Directions dispatched");
 
         } else if (intent.action === "info") {
@@ -3135,11 +3136,17 @@ If dates cannot be resolved to specific days, set them to null.`,
                 `for ${partySize}`,
               ].filter(Boolean).join(" ");
 
+              // Native app checks payload.openTableUrl first, then payload.resyUrl, then payload.type==='phone'.
+              // When we have a direct booking link the URL lives in `url` — mirror it into the
+              // platform-specific key so the native app can always find it regardless of shape.
               (req as any)._reservationPayload = {
                 type: details.platform,
                 url: reservationUrl,
                 restaurantName: details.name,
                 phone: details.phone ?? null,
+                ...(details.platform === "opentable" ? { openTableUrl: reservationUrl } : {}),
+                ...(details.platform === "resy"      ? { resyUrl: reservationUrl }      : {}),
+                ...(details.platform === "yelp"      ? { openTableUrl: reservationUrl } : {}),
               };
 
               // If we have a date, set pending so the user can tell us who's joining
