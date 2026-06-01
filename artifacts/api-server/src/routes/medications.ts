@@ -40,10 +40,18 @@ const EMPTY_INTERACTIONS: InteractionResult = {
 // Helper: run interaction check and broadcast "medications-changed" SSE event to the user.
 // Called after every mutation (add, update, delete) so the native app's SSE listener
 // always gets a fresh panel update regardless of whether it reads the mutation response body.
-async function broadcastMedicationInteractions(userName: string): Promise<InteractionResult> {
+// The `source` field is included in the SSE payload so the native app can distinguish
+// between add/update (where showing the interaction panel is appropriate) and delete
+// (where showing the panel is not appropriate even if avoid/sideEffects remain for
+// the still-active drugs — Meloxicam and Pravastatin always have these entries).
+async function broadcastMedicationInteractions(
+  userName: string,
+  source: "add" | "update" | "delete"
+): Promise<InteractionResult> {
   const result = await getMedicationInteractions(userName).catch(() => EMPTY_INTERACTIONS);
   broadcastToUser(userName, "medications-changed", {
     type: "medications-changed",
+    source,
     interactions: result.interactions,
     avoid: result.avoid,
     sideEffects: result.sideEffects,
@@ -175,13 +183,14 @@ router.post("/medications/add", express.json({ limit: "1mb" }), async (req, res)
 
     // Auto-check drug interactions after adding — run against all active meds including the new one.
     // Included in the response AND broadcast via SSE so the native app panel always refreshes.
-    const interactionResult = await broadcastMedicationInteractions(userName);
+    const interactionResult = await broadcastMedicationInteractions(userName, "add");
     req.log.info(
       { interactions: interactionResult.interactions.length, checked: interactionResult.checkedDrugs.length },
       "[MEDS] Interaction check after add"
     );
     res.json({
       ok: true,
+      source: "add" as const,
       alreadyExists: result.alreadyExists,
       medication: result.medication ?? null,
       interactions: interactionResult.interactions,
@@ -424,7 +433,7 @@ router.put("/medications/:id", express.json({ limit: "1mb" }), async (req, res) 
 
     // Re-check interactions and broadcast SSE after any update (name change, deactivation, etc.)
     // so the native app panel stays in sync without a manual refresh.
-    const interactionResult = await broadcastMedicationInteractions(userName);
+    const interactionResult = await broadcastMedicationInteractions(userName, "update");
     req.log.info(
       { interactions: interactionResult.interactions.length, checked: interactionResult.checkedDrugs.length },
       "[MEDS] PUT — interactions refreshed + SSE broadcast"
@@ -432,6 +441,7 @@ router.put("/medications/:id", express.json({ limit: "1mb" }), async (req, res) 
 
     res.json({
       ok: true,
+      source: "update" as const,
       medication,
       interactions: interactionResult.interactions,
       avoid: interactionResult.avoid,
@@ -468,7 +478,10 @@ router.delete("/medications/:idOrName", async (req, res) => {
     // Re-check interactions now that the medication list has changed.
     // broadcastMedicationInteractions also fires an SSE "medications-changed" event so
     // the native app panel updates even if it doesn't read the DELETE response body.
-    const interactionResult = await broadcastMedicationInteractions(userName);
+    // source="delete" lets the native app suppress the interaction panel on delete —
+    // avoid/sideEffects are always present for drugs like Meloxicam/Pravastatin even
+    // when there are no drug-drug interactions between the remaining medications.
+    const interactionResult = await broadcastMedicationInteractions(userName, "delete");
 
     req.log.info(
       { interactions: interactionResult.interactions.length, checked: interactionResult.checkedDrugs.length },
@@ -477,6 +490,7 @@ router.delete("/medications/:idOrName", async (req, res) => {
 
     res.json({
       ok: true,
+      source: "delete" as const,
       removed,
       interactions: interactionResult.interactions,
       avoid: interactionResult.avoid,
