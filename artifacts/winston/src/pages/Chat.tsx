@@ -523,6 +523,13 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
   );
   const [briefingCardShowKey, setBriefingCardShowKey] = useState(0);
 
+  const [medInteractionPanel, setMedInteractionPanel] = useState<{
+    visible: boolean;
+    interactions: Array<{ drug1: string; drug2: string; severity: string; description: string }>;
+    avoid: Array<{ drug: string; avoid: string; reason: string }>;
+    sideEffects: Array<{ drug: string; effects: string[] }>;
+  }>({ visible: false, interactions: [], avoid: [], sideEffects: [] });
+
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -1939,6 +1946,36 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         } catch {}
       });
 
+      // Medication interaction panel — shown after add/update, suppressed after delete.
+      // source="delete" means the panel must stay hidden even if avoid/sideEffects arrays
+      // are non-empty (Meloxicam and Pravastatin always have these entries).
+      source.addEventListener("medications-changed", (e) => {
+        try {
+          const data = JSON.parse(e.data) as {
+            source: "add" | "update" | "delete";
+            interactions: Array<{ drug1: string; drug2: string; severity: string; description: string }>;
+            avoid: Array<{ drug: string; avoid: string; reason: string }>;
+            sideEffects: Array<{ drug: string; effects: string[] }>;
+          };
+          if (data.source === "delete") {
+            setMedInteractionPanel({ visible: false, interactions: [], avoid: [], sideEffects: [] });
+            return;
+          }
+          const hasContent =
+            data.interactions.length > 0 ||
+            data.avoid.length > 0 ||
+            data.sideEffects.length > 0;
+          setMedInteractionPanel({
+            visible: hasContent,
+            interactions: data.interactions ?? [],
+            avoid: data.avoid ?? [],
+            sideEffects: data.sideEffects ?? [],
+          });
+        } catch (err) {
+          console.error("[MEDS] Error handling medications-changed SSE:", err);
+        }
+      });
+
       source.onopen = () => {
         backoffMs = 1_000; // reset backoff on successful connect
         console.log("SSE CONNECTED — readyState:", source.readyState);
@@ -2834,6 +2871,66 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         ))}
 
       </div>
+
+      {/* Medication interaction/side-effects panel — only shown after add/update, never after delete */}
+      {medInteractionPanel.visible && (
+        <div className="flex-shrink-0 px-4 sm:px-6 pb-2 max-w-4xl w-full">
+          <div className="rounded-2xl border border-amber-500/25 bg-amber-950/20 p-4 relative">
+            <button
+              onClick={() => setMedInteractionPanel((p) => ({ ...p, visible: false }))}
+              className="absolute top-3 right-3 text-muted-foreground hover:text-foreground transition-colors"
+              aria-label="Dismiss medication panel"
+            >
+              <X className="h-4 w-4" />
+            </button>
+            <p className="text-[11px] font-semibold tracking-widest uppercase text-amber-400/80 mb-3">
+              Medication Information
+            </p>
+
+            {medInteractionPanel.interactions.length > 0 && (
+              <div className="mb-3">
+                <p className="text-xs font-semibold text-amber-300/90 mb-1.5">Drug Interactions</p>
+                <ul className="space-y-1.5">
+                  {medInteractionPanel.interactions.map((ix, i) => (
+                    <li key={i} className="text-xs text-amber-100/80">
+                      <span className="font-medium">{ix.drug1} + {ix.drug2}</span>
+                      {ix.severity && <span className="ml-1.5 text-[10px] uppercase font-semibold text-amber-400/70">({ix.severity})</span>}
+                      {ix.description && <span className="block text-amber-200/60 mt-0.5">{ix.description}</span>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {medInteractionPanel.avoid.length > 0 && (
+              <div className="mb-3">
+                <p className="text-xs font-semibold text-amber-300/90 mb-1.5">Avoid With</p>
+                <ul className="space-y-1.5">
+                  {medInteractionPanel.avoid.map((a, i) => (
+                    <li key={i} className="text-xs text-amber-100/80">
+                      <span className="font-medium">{a.drug}</span>: {a.avoid}
+                      {a.reason && <span className="block text-amber-200/60 mt-0.5">{a.reason}</span>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {medInteractionPanel.sideEffects.length > 0 && (
+              <div>
+                <p className="text-xs font-semibold text-amber-300/90 mb-1.5">Side Effects</p>
+                <ul className="space-y-1.5">
+                  {medInteractionPanel.sideEffects.map((s, i) => (
+                    <li key={i} className="text-xs text-amber-100/80">
+                      <span className="font-medium">{s.drug}</span>: {s.effects.join(", ")}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Input Area */}
       <div className="flex-shrink-0 p-4 sm:p-6 bg-gradient-to-t from-background via-background to-transparent pt-12 absolute bottom-0 w-full max-w-4xl">
