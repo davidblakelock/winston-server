@@ -1,0 +1,46 @@
+Rewrite the morning briefing from scratch. The current version is not acceptable. Here are the exact requirements:
+Core principle: Facts only. No commentary, no filler phrases, no extra words. Clean, direct, conversational. Generate fresh at the moment the user opens it — not pre-cached — so all data is current.
+Flow — in this exact order:
+1. Greeting
+Good morning, [first name].
+Nothing else on this line.
+2. Sleep Score
+Pull from Google Fit sleep data. If a score is available say: It looks like you slept [well / pretty well / not so well] last night. Map the score: 80-100 = well, 60-79 = pretty well, below 60 = not so well. If no sleep data is available skip this line entirely — no mention of it.
+3. Weather
+Pull current weather for the user's home location. Format: It's [temp] and [condition] in Dallas.
+Then check the user's profile for any designated locations — child's city, parent's city, etc. — and surface those too. Check the Travel screen for any trips in the next 30 days and mention the weather there as well: In [destination] where you're headed June 12th, it's [temp] and [condition].
+Keep each weather line to one sentence.
+4. Calendar
+Pull today's calendar events only. If nothing: Nothing on your calendar today.
+If events exist, list them with time and title only. Do not calculate departure times unless the event is within the next 2 hours — in that case add: You'll want to leave by [time].
+5. Email
+Pull from the overnight email scan results. Surface only emails that require action — meeting requests, replies needed, time-sensitive items. Format: You have [N] emails that need attention — [brief description of most important one]. If nothing actionable: Nothing urgent in your inbox.
+6. To-Do List
+Pull the count of items on the to-do list. Format: You have [N] items on your to-do list. Want to review it before the day gets started? If empty: Your to-do list is clear.
+7. Deliveries
+Check for any packages due for delivery today. If something is due: [Package description] is expected to arrive today. If nothing: skip this line entirely.
+8. Top News
+Surface 3-4 top news stories that people will be talking about today. No tech news, no AI news, no niche stories. Major stories only — politics, economy, sports, major world events. Format as brief headlines only — one sentence each. Use web search to get current stories.
+9. Feel-Good Story
+Pull one uplifting or genuinely funny news item. Use these RSS feeds as sources in priority order: Good News Network (goodnewsnetwork.org/feed), Positive News (positive.news/feed), Reddit r/UpliftingNews. One sentence only. If nothing good is found skip it silently.
+10. Local Events
+Use two sources: Ticketmaster API for concerts, shows, and venue events. SerpAPI Google Events search for everything else — museum openings, food festivals, art shows, community events. Filter both by the user's interests from their profile and any goals they have set. Rules: surface at least one new event the user hasn't seen before. Rotate so something new appears daily. Prioritize events happening within the next 7 days. Format: Tonight at [venue]: [event name]. or This weekend: [event description].
+11. Stoic Closing
+Transition line: That's your morning. Here's something to carry with you today:
+Then the Stoic quote of the day.
+Then: You can reflect on this in [user first name]'s Life.
+This last line should be a deep link that opens the My Life / journal screen with the Stoic quote pre-loaded as the starting text so the user can capture their thoughts.
+Technical requirements:
+
+Generate completely fresh on open — no caching of weather, email, calendar, or news
+Sleep score cannot be cached — must pull live from Google Fit
+Total briefing should read in under 2 minutes when spoken via TTS
+Each section separated by a natural pause in TTS
+If any data source fails, skip that section silently — never mention the failure to the user
+Remove all existing morning briefing pre-generation code and replace with this fresh-generation approach
+The feel-good story and local events should not repeat within a 7-day window — track what has been surfaced
+
+Event sources for local events:
+Ticketmaster API — already integrated. Use it for concerts, shows, sporting events, venue events.
+SerpAPI — already integrated. Use Google Events search query: events in [user city] this week [user interests keywords]. This captures museum openings, food festivals, art shows, festivals, and community events that Ticketmaster misses.
+Filter all results against the user's profile interests and goals before surfacing
