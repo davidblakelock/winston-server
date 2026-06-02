@@ -209,14 +209,16 @@ Surface it (actionable: true) ONLY if it:
 - Contains a meeting request, calendar invite, or scheduling ask
 - Has a deadline, time-sensitive task, or urgent action item
 - Contains information David needs to act on soon
+- Contains financial information: bank transactions, account activity, investment updates, wire transfers, payment confirmations, balance alerts, fraud alerts, or any movement of money
+- Is a third-party login notification: "someone signed in to your account", new device login, OAuth app authorization, sign-in alert, or security verification for any online account
 
 Do NOT surface (actionable: false) if it is:
 - A newsletter, digest, or subscription update
 - Marketing, promotional, or sales content
-- An automated notification (account activity, security alert, system status)
+- A routine automated system status notification with no action needed
 - An order confirmation, shipping update, or receipt${hasActiveOrder ? " (unless it's a delivery delay or problem)" : ""}
 - A social media notification
-- An automated billing statement or invoice (not requiring immediate action)
+- A routine billing statement showing no change (not requiring immediate action)
 - General FYI content with no action required
 
 Return ONLY valid JSON:
