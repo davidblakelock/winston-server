@@ -30,9 +30,21 @@ const router: IRouter = Router();
 const restaurantBackfillChecked = new Map<number, number>(); // id → timestamp ms
 const BACKFILL_THROTTLE_MS = 4 * 60 * 60 * 1000; // 4 hours per restaurant
 
-// ── Idempotent column migrations for list_items ────────────────────────────
+// ── Idempotent migrations ─────────────────────────────────────────────────────
 query(`ALTER TABLE list_items ADD COLUMN IF NOT EXISTS reminder_time TIMESTAMPTZ`).catch(() => {});
 query(`ALTER TABLE list_items ADD COLUMN IF NOT EXISTS reminder_fired BOOLEAN NOT NULL DEFAULT FALSE`).catch(() => {});
+
+// lists — per-user list metadata (list_type: checklist | notepad)
+query(`
+  CREATE TABLE IF NOT EXISTS lists (
+    id          serial      PRIMARY KEY,
+    user_name   text        NOT NULL,
+    list_name   text        NOT NULL,
+    list_type   text        NOT NULL DEFAULT 'checklist',
+    created_at  timestamptz NOT NULL DEFAULT NOW(),
+    UNIQUE (user_name, list_name)
+  )
+`).catch(() => {});
 
 // ── Idempotent column migrations for profile_items (restaurants) ────────────
 // These columns were added after initial schema creation — ensure they exist in
@@ -53,7 +65,7 @@ router.use((_req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-// GET /api/lists — always returns all 4 lists with real counts from their respective tables
+// GET /api/lists — returns all lists with real counts + list_type from the lists table
 router.get("/lists", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
@@ -63,48 +75,49 @@ router.get("/lists", async (req: Request, res: Response) => {
   const SYSTEM_LISTS = new Set(["shopping", "to do", "tv-shows", "restaurants"]);
 
   try {
-    // All lists from list_items, grouped case-insensitively to avoid duplicates
-    // when the same list was created with different capitalisations.
-    const { rows: listRows } = await query<{ list_name: string; item_count: string }>(
-      `SELECT lower(list_name) AS list_name, COUNT(*) AS item_count
-       FROM list_items
-       WHERE user_name = $1
-       GROUP BY lower(list_name)`,
-      [userName]
-    );
-    const listCounts: Record<string, number> = {};
-    for (const r of listRows) listCounts[r.list_name] = parseInt(r.item_count, 10);
-
-    // TV Shows — watched_shows is the single source of truth.
-    const { rows: wsCountRows } = await query<{ cnt: string }>(
-      `SELECT COUNT(*) AS cnt FROM (
-         SELECT DISTINCT ON (lower(show_name)) id
-         FROM watched_shows
-         WHERE user_name = ANY($1)
-         ORDER BY lower(show_name), id ASC
-       ) sub`,
-      [[userName, "David"]]
-    );
-    const wsCount = parseInt(wsCountRows[0]?.cnt ?? "0", 10);
-    let tvCount: number;
-    if (wsCount > 0) {
-      tvCount = wsCount;
-    } else {
-      const { rows: piCountRows } = await query<{ cnt: string }>(
+    // Run all count queries + list metadata in parallel
+    const [listItemsRes, wsCountRes, piShowsRes, piRestRes, listMetaRes] = await Promise.all([
+      query<{ list_name: string; item_count: string }>(
+        `SELECT lower(list_name) AS list_name, COUNT(*) AS item_count
+         FROM list_items WHERE user_name = $1
+         GROUP BY lower(list_name)`,
+        [userName]
+      ),
+      query<{ cnt: string }>(
+        `SELECT COUNT(*) AS cnt FROM (
+           SELECT DISTINCT ON (lower(show_name)) id
+           FROM watched_shows WHERE user_name = ANY($1)
+           ORDER BY lower(show_name), id ASC
+         ) sub`,
+        [[userName, "David"]]
+      ),
+      query<{ cnt: string }>(
         `SELECT COUNT(*) AS cnt FROM profile_items WHERE user_name = $1 AND category = 'shows'`,
         [userName]
-      );
-      tvCount = parseInt(piCountRows[0]?.cnt ?? "0", 10);
-    }
+      ),
+      query<{ cnt: string }>(
+        `SELECT COUNT(*) AS cnt FROM profile_items WHERE user_name = $1 AND category = 'restaurants'`,
+        [userName]
+      ),
+      // list_type metadata — only exists for lists explicitly created via POST /api/lists
+      query<{ list_name: string; list_type: string }>(
+        `SELECT lower(list_name) AS list_name, list_type FROM lists WHERE user_name = $1`,
+        [userName]
+      ).catch((): { rows: Array<{ list_name: string; list_type: string }> } => ({ rows: [] })),
+    ]);
 
-    // Restaurants — from profile_items
-    const { rows: restRows } = await query<{ cnt: string }>(
-      `SELECT COUNT(*) AS cnt FROM profile_items WHERE user_name = $1 AND category = 'restaurants'`,
-      [userName]
-    );
-    const restCount = parseInt(restRows[0]?.cnt ?? "0", 10);
+    const listCounts: Record<string, number> = {};
+    for (const r of listItemsRes.rows) listCounts[r.list_name] = parseInt(r.item_count, 10);
 
-    // Custom lists — any list_name in list_items that isn't a system list or restaurants
+    // list_type lookup (defaults to 'checklist' if not in lists table)
+    const listTypeMap: Record<string, string> = {};
+    for (const r of listMetaRes.rows) listTypeMap[r.list_name] = r.list_type;
+
+    const wsCount = parseInt(wsCountRes.rows[0]?.cnt ?? "0", 10);
+    const tvCount = wsCount > 0 ? wsCount : parseInt(piShowsRes.rows[0]?.cnt ?? "0", 10);
+    const restCount = parseInt(piRestRes.rows[0]?.cnt ?? "0", 10);
+
+    // Custom lists — any list_name in list_items that isn't a system list
     const customLists = Object.entries(listCounts)
       .filter(([name]) => !SYSTEM_LISTS.has(name))
       .map(([name, count]) => ({
@@ -114,21 +127,56 @@ router.get("/lists", async (req: Request, res: Response) => {
           .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
           .join(" "),
         itemCount: count,
+        listType: listTypeMap[name] ?? "checklist",
         isCustom: true,
       }));
 
     res.json({
       lists: [
-        { listName: "shopping",    displayName: "Shopping",     itemCount: listCounts["shopping"] ?? 0 },
-        { listName: "to do",       displayName: "To Do",        itemCount: listCounts["to do"] ?? 0 },
-        { listName: "tv-shows",    displayName: "TV Shows",     itemCount: tvCount },
-        { listName: "restaurants", displayName: "Restaurants",  itemCount: restCount },
+        { listName: "shopping",    displayName: "Shopping",    itemCount: listCounts["shopping"] ?? 0, listType: "checklist" },
+        { listName: "to do",       displayName: "To Do",       itemCount: listCounts["to do"] ?? 0,    listType: "checklist" },
+        { listName: "tv-shows",    displayName: "TV Shows",    itemCount: tvCount,                      listType: "checklist" },
+        { listName: "restaurants", displayName: "Restaurants", itemCount: restCount,                    listType: "checklist" },
         ...customLists,
       ],
     });
   } catch (err) {
     req.log.warn({ err }, "Lists index GET error");
     res.status(500).json({ error: "Failed to fetch lists" });
+  }
+});
+
+// POST /api/lists — create or update a named list's metadata (list_type).
+// Must be declared before POST /api/lists/:listName wildcard.
+// Body: { listName: string, list_type?: "checklist" | "notepad" }
+router.post("/lists", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const { listName: rawName, list_type: rawType } = req.body as {
+    listName?: string;
+    list_type?: string;
+  };
+  const listName = rawName?.trim().toLowerCase();
+  if (!listName) {
+    res.status(400).json({ error: "listName is required" });
+    return;
+  }
+  const listType = rawType === "notepad" ? "notepad" : "checklist";
+
+  try {
+    await query(
+      `INSERT INTO lists (user_name, list_name, list_type)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (user_name, list_name)
+       DO UPDATE SET list_type = EXCLUDED.list_type`,
+      [userName, listName, listType]
+    );
+    req.log.info({ userName, listName, listType }, "[Lists] List metadata upserted");
+    res.json({ listName, listType });
+  } catch (err) {
+    req.log.warn({ err }, "POST /api/lists error");
+    res.status(500).json({ error: "Failed to create list" });
   }
 });
 
@@ -987,6 +1035,40 @@ router.post("/lists/:listName", async (req: Request, res: Response) => {
   } catch (err) {
     req.log.warn({ err }, "Lists POST error");
     res.status(500).json({ error: "Failed to add item" });
+  }
+});
+
+// PUT /api/lists/:listName/content — replace the entire content of a notepad list.
+// Deletes all existing items and inserts a single text-blob item.
+// MUST be declared before PUT /api/lists/:listName/:id so "content" isn't matched as :id.
+// Body: { content: string }
+router.put("/lists/:listName/content", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const { listName } = req.params;
+  const { content } = req.body as { content?: string };
+  if (typeof content !== "string") {
+    res.status(400).json({ error: "content (string) is required" });
+    return;
+  }
+  try {
+    // Replace atomically: delete all items then insert one blob
+    await query(
+      `DELETE FROM list_items WHERE user_name = $1 AND lower(list_name) = lower($2)`,
+      [userName, listName]
+    );
+    if (content.trim().length > 0) {
+      await query(
+        `INSERT INTO list_items (user_name, list_name, item_text)
+         VALUES ($1, $2, $3)`,
+        [userName, listName, content]
+      );
+    }
+    req.log.info({ userName, listName, contentLength: content.length }, "[Lists] Notepad content replaced");
+    res.json({ ok: true, listName, content });
+  } catch (err) {
+    req.log.warn({ err }, "Lists PUT /content error");
+    res.status(500).json({ error: "Failed to save notepad content" });
   }
 });
 
