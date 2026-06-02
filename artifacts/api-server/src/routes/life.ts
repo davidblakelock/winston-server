@@ -57,14 +57,59 @@ router.post("/life", async (req: Request, res: Response) => {
   }
 });
 
+// PUT /api/life/:id — edit a capture's content
+// Body: { content: string }
+router.put("/life/:id", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const rawId = req.params["id"];
+  const id = parseInt(rawId as string, 10);
+  req.log.info({ rawId, parsedId: id }, "[Life] PUT id param");
+
+  if (isNaN(id) || id <= 0) {
+    res.status(400).json({ error: "id must be a positive integer" });
+    return;
+  }
+
+  const { content } = req.body as { content?: string };
+  if (!content || typeof content !== "string" || content.trim().length === 0) {
+    res.status(400).json({ error: "content is required" });
+    return;
+  }
+
+  try {
+    const { rows } = await query<{ id: number; content: string }>(
+      `UPDATE life_captures
+       SET content = $1
+       WHERE id = $2 AND user_name = $3
+       RETURNING id, content`,
+      [content.trim(), id, userName]
+    );
+    if (!rows.length) {
+      res.status(404).json({ error: "Capture not found" });
+      return;
+    }
+    res.json(rows[0]);
+  } catch (err) {
+    req.log.warn({ err }, "[Life] PUT failed");
+    res.status(500).json({ error: "Failed to update capture" });
+  }
+});
+
 // DELETE /api/life/:id — delete a capture by id
+// Note: if the native app sends DELETE /api/life/undefined, rawId will be the
+// string "undefined" — logged here so we can diagnose client-side ID bugs.
 router.delete("/life/:id", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
 
-  const id = parseInt(req.params["id"] as string, 10);
+  const rawId = req.params["id"];
+  const id = parseInt(rawId as string, 10);
+  req.log.info({ rawId, parsedId: id }, "[Life] DELETE id param");
+
   if (isNaN(id) || id <= 0) {
-    res.status(400).json({ error: "id must be a positive integer" });
+    res.status(400).json({ error: "id must be a positive integer", received: rawId });
     return;
   }
 

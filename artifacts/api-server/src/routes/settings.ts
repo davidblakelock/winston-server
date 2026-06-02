@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
 import express from "express";
+import { randomUUID } from "node:crypto";
 import { logger } from "../lib/logger.js";
 import {
   getProfile,
@@ -549,6 +550,14 @@ router.get("/briefing/morning", async (req, res) => {
     req.log.info({ userName }, "[FreshBriefing] Generating on-demand");
     const text = await generateFreshBriefing(userName);
     res.json({ ok: true, text });
+    // Save to chat_messages so it appears in the main chat history (fire-and-forget).
+    const msgId = randomUUID();
+    query(
+      `INSERT INTO chat_messages (user_name, role, content, message_id)
+       VALUES ($1, 'assistant', $2, $3)
+       ON CONFLICT (message_id) WHERE message_id IS NOT NULL DO NOTHING`,
+      [userName, text.slice(0, 8000), msgId]
+    ).catch((e) => req.log.warn({ e }, "[FreshBriefing] chat_messages save failed"));
   } catch (err) {
     req.log.error({ err }, "[FreshBriefing] Generation failed");
     res.status(500).json({ error: "Briefing generation failed — please try again." });

@@ -1059,8 +1059,10 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
   // ── Auto-greeting: derive time-appropriate message ────────────────────────
   const { message: rawMessage, history: rawHistory = [], isAutoGreeting = false, deviceId = null, winddownRequest = false, context: requestContext = null, tripId: rawTripId = null } = req.body;
-  // Only trip-planning is isolated (it has its own DB table). All other contexts save normally.
-  const isIsolatedContext = requestContext === "trip-planning";
+  // Isolated contexts: messages are NOT saved to chat_messages (main chat history).
+  // trip-planning has its own trip_plans table.
+  // journal entries belong on the My Life screen only, not the main chat.
+  const isIsolatedContext = requestContext === "trip-planning" || requestContext === "journal";
 
   // ── Active trip context (Trip screen) ─────────────────────────────────────
   // When the native app sends context:"trip-planning" + tripId, load the stored
@@ -1186,23 +1188,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       req.log.info({ chars: journalReply.length }, "[Journal] Follow-up question generated");
 
       res.json({ response: journalReply });
-
-      // Persist both sides to chat_messages (not isolated)
-      const journalMsgId = randomUUID();
-      query(
-        `INSERT INTO chat_messages (user_name, role, content, message_id)
-         VALUES ($1, 'user', $2, $3)
-         ON CONFLICT (message_id) WHERE message_id IS NOT NULL DO NOTHING`,
-        [sessionUserName, message.slice(0, 8000), `${journalMsgId}:user`]
-      ).catch((e) => req.log.warn({ e }, "[Journal] User message save failed"));
-      if (journalReply) {
-        query(
-          `INSERT INTO chat_messages (user_name, role, content, message_id)
-           VALUES ($1, 'assistant', $2, $3)
-           ON CONFLICT (message_id) WHERE message_id IS NOT NULL DO NOTHING`,
-          [sessionUserName, journalReply.slice(0, 8000), `${journalMsgId}:assistant`]
-        ).catch((e) => req.log.warn({ e }, "[Journal] Assistant message save failed"));
-      }
+      // journal context is isolated — do NOT save to chat_messages.
+      // The user's text is already saved as a life_capture above.
     } catch (err) {
       req.log.error({ err }, "[Journal] Handler failed");
       res.status(500).json({ error: "Journal handler failed" });
