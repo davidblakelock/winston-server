@@ -36,6 +36,7 @@ export interface UserProfile {
   sportsTeams: string | null;
   favoriteRestaurants: string | null;
   favoritePodcasts: string | null;
+  favoriteArtists: string[];
 }
 
 // ── Data shape accepted by POST /api/onboarding/complete (native app) ─────────
@@ -125,6 +126,7 @@ export async function ensureOnboardingTable(): Promise<void> {
   await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS favorite_restaurants text`);
   await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS favorite_podcasts text`);
   await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS companion_persona text`);
+  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS favorite_artists jsonb DEFAULT '[]'::jsonb`);
 }
 
 type ProfileRow = {
@@ -161,6 +163,7 @@ type ProfileRow = {
   sports_teams: string | null;
   favorite_restaurants: string | null;
   favorite_podcasts: string | null;
+  favorite_artists: string[] | null;
 };
 
 function rowToProfile(r: ProfileRow): UserProfile {
@@ -199,6 +202,7 @@ function rowToProfile(r: ProfileRow): UserProfile {
     sportsTeams: r.sports_teams ?? null,
     favoriteRestaurants: r.favorite_restaurants ?? null,
     favoritePodcasts: r.favorite_podcasts ?? null,
+    favoriteArtists: r.favorite_artists ?? [],
   };
 }
 

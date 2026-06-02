@@ -31,6 +31,7 @@ const _ensureColumns: Promise<void> = (async () => {
     `ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS sports_teams text`,
     `ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS favorite_restaurants text`,
     `ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS favorite_podcasts text`,
+    `ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS favorite_artists jsonb DEFAULT '[]'::jsonb`,
   ];
   for (const sql of alters) {
     await query(sql).catch(() => { /* column may already exist — fine */ });
@@ -66,6 +67,7 @@ type ProfileRow = {
   sports_teams:         string | null;
   favorite_restaurants: string | null;
   favorite_podcasts:    string | null;
+  favorite_artists:     string[] | null;
 };
 
 async function fetchProfileRow(userName: string): Promise<ProfileRow | null> {
@@ -115,6 +117,7 @@ async function fetchProfileRow(userName: string): Promise<ProfileRow | null> {
     sports_teams:         str("sports_teams"),
     favorite_restaurants: str("favorite_restaurants"),
     favorite_podcasts:    str("favorite_podcasts"),
+    favorite_artists:     Array.isArray(r["favorite_artists"]) ? (r["favorite_artists"] as string[]) : null,
   };
 }
 
@@ -146,6 +149,7 @@ function rowToResponse(row: ProfileRow, settings: UserSettings) {
     sportsTeams:         row.sports_teams,
     favoriteRestaurants: row.favorite_restaurants,
     favoritePodcasts:    row.favorite_podcasts,
+    favoriteArtists:     row.favorite_artists ?? [],
     settings: {
       briefingWeather:  settings.briefingWeather,
       briefingCalendar: settings.briefingCalendar,
@@ -239,9 +243,10 @@ const DATE_COLS: Record<string, string> = {
 
 // JSONB array columns — must be an array of strings
 const JSONB_COLS: Record<string, string> = {
-  hobbies:     "hobbies",
-  musicGenres: "music_genres",
-  tvGenres:    "tv_genres",
+  hobbies:         "hobbies",
+  musicGenres:     "music_genres",
+  tvGenres:        "tv_genres",
+  favoriteArtists: "favorite_artists",
 };
 
 // user_settings boolean columns

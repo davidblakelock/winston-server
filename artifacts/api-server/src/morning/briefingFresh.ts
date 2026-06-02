@@ -316,6 +316,7 @@ export async function generateFreshBriefing(userName: string): Promise<string> {
   const rawExtra     = rawData as unknown as Record<string, unknown>;
   const musicGenres  = ((rawExtra["musicPreferences"] ?? rawExtra["favoriteGenres"] ?? []) as string[]);
   const allInterests = [...new Set([...interests, ...musicGenres])].filter(Boolean).slice(0, 10);
+  const favoriteArtists = (profile?.favoriteArtists ?? []).filter(Boolean);
 
   // Family cities (first 2, deduplicated against primary city)
   const familyCityEntries = people
@@ -344,7 +345,7 @@ export async function generateFreshBriefing(userName: string): Promise<string> {
     fetchAndSummarizeEmails(10, undefined, userName),
     getOrdersForBriefing(userName),
     getStoicForUser(userName),
-    fetchBestLocalEvent(primaryCity, allInterests, userName),
+    fetchBestLocalEvent(primaryCity, allInterests, userName, favoriteArtists),
     getSeenHeadlines(userName, 3),
     getSeenFgStories(userName),
     getTodoCount(userName),
