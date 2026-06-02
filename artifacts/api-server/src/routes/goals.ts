@@ -12,6 +12,7 @@ import {
   deleteGoal,
   breakdownGoal,
   goalsFreeformChat,
+  getGoalsChatHistory,
   formatContentForSharing,
   type ShareFormat,
 } from "../goals/goalsManager.js";
@@ -180,6 +181,23 @@ router.post("/goals/share", express.json({ limit: "2mb" }), async (req, res) => 
   } catch (err) {
     req.log.error({ err }, "[Goals] POST /goals/share error");
     res.status(500).json({ error: "Failed to format content for sharing" });
+  }
+});
+
+// ── GET /api/goals/chat/history ───────────────────────────────────────────────
+// Returns the last 40 goals-chat messages (≈ 20 exchanges) for the user so the
+// native screen can restore conversation state on re-open.
+// Must be declared before POST /api/goals/chat to avoid path ambiguity.
+router.get("/goals/chat/history", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  try {
+    const messages = await getGoalsChatHistory(userName, 40);
+    req.log.info({ count: messages.length }, "[Goals] GET /goals/chat/history");
+    res.json({ messages });
+  } catch (err) {
+    req.log.error({ err }, "[Goals] GET /goals/chat/history error");
+    res.status(500).json({ error: "Failed to fetch chat history" });
   }
 });
 

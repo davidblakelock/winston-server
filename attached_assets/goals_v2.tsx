@@ -240,23 +240,35 @@ export default function GoalsScreen() {
     }
   }, []);
 
-  useEffect(() => { fetchGoals(); }, [fetchGoals]);
+  // ── Fetch stored goals-chat history so user can resume where they left off ──
+  const fetchChatHistory = useCallback(async () => {
+    try {
+      const res = await fetch(`${SERVER}/api/goals/chat/history`, {
+        headers: { 'x-api-key': API_KEY },
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const msgs: ChatMessage[] = data.messages ?? [];
+      if (msgs.length > 0) {
+        setConversation(msgs);
+        setConversationPhase('conversation');
+        const firstUser = msgs.find(m => m.role === 'user');
+        if (firstUser) setPendingGoalTitle(firstUser.content.slice(0, 80));
+      }
+    } catch {
+      // Silently ignore — history is a convenience, not required
+    }
+  }, []);
 
-  // ── Refresh goals on focus + reset conversation state on blur ──────────
+  useEffect(() => {
+    fetchGoals();
+    fetchChatHistory();
+  }, [fetchGoals, fetchChatHistory]);
+
+  // ── Refresh goals list on focus; conversation state persists so history survives navigation ──
   useFocusEffect(
     useCallback(() => {
-      // Re-fetch goals every time the screen comes into focus so any
-      // goal saved during a conversation shows up in the list immediately.
       fetchGoals();
-      return () => {
-        setShowConversation(false);
-        setConversation([]);
-        setGoalText('');
-        setInput('');
-        setPendingGoalTitle('');
-        setConversationPhase('goal_input');
-        setSavingGoal(false);
-      };
     }, [fetchGoals])
   );
 
@@ -312,6 +324,14 @@ export default function GoalsScreen() {
     setPendingGoalTitle('');
     setConversationPhase('goal_input');
     setSavingGoal(false);
+  };
+
+  // Open the conversation view with existing history pre-loaded
+  const continueConversation = () => {
+    setShowConversation(true);
+    // conversation, conversationPhase, and pendingGoalTitle are already populated
+    // by fetchChatHistory — just show the view
+    setTimeout(scrollToBottom, 200);
   };
 
   // ── Share a Winston response ───────────────────────────────────────────
@@ -443,16 +463,7 @@ export default function GoalsScreen() {
 
         <View style={styles.header}>
           <TouchableOpacity
-            onPress={() => {
-              if (hasConversation) {
-                Alert.alert('Leave this conversation?', 'Your conversation will be lost.', [
-                  { text: 'Stay', style: 'cancel' },
-                  { text: 'Leave', style: 'destructive', onPress: () => setShowConversation(false) },
-                ]);
-              } else {
-                setShowConversation(false);
-              }
-            }}
+            onPress={() => setShowConversation(false)}
             style={styles.headerBtn}
           >
             <Ionicons name="arrow-back" size={22} color={COLORS.gold} />
@@ -582,6 +593,20 @@ export default function GoalsScreen() {
       </View>
       <View style={styles.divider} />
 
+      {/* Resume previous conversation if history exists */}
+      {conversation.length > 0 && (
+        <TouchableOpacity style={styles.continueChatCard} onPress={continueConversation} activeOpacity={0.8}>
+          <Ionicons name="chatbubbles-outline" size={20} color={COLORS.gold} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.continueChatLabel}>Continue conversation</Text>
+            <Text style={styles.continueChatPreview} numberOfLines={1}>
+              {conversation[conversation.length - 1]?.content}
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={COLORS.muted} />
+        </TouchableOpacity>
+      )}
+
       {isLoading ? (
         <View style={styles.centered}>
           <ActivityIndicator size="large" color={COLORS.gold} />
@@ -658,6 +683,10 @@ const styles = StyleSheet.create({
   addButtonText: { color: COLORS.background, fontWeight: '700', fontSize: 15 },
   addMoreBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 20 },
   addMoreBtnText: { color: COLORS.gold, fontSize: 14, fontWeight: '500' },
+
+  continueChatCard: { flexDirection: 'row', alignItems: 'center', gap: 12, marginHorizontal: 16, marginTop: 12, marginBottom: 4, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.gold + '40', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12 },
+  continueChatLabel: { color: COLORS.gold, fontSize: 12, fontWeight: '600', letterSpacing: 0.3, marginBottom: 2 },
+  continueChatPreview: { color: COLORS.muted, fontSize: 13, lineHeight: 18 },
 
   // Goal input
   goalInputContainer: { flex: 1, padding: 24, justifyContent: 'center' },

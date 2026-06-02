@@ -524,6 +524,38 @@ export async function formatContentForSharing(
   }
 }
 
+// ── Goals chat history ────────────────────────────────────────────────────────
+// Returns the last N goals-chat messages for the user, ordered oldest→newest.
+// Messages are identified by the `goals:` prefix on message_id.
+// limit: max messages to return (default 40 = ~20 exchanges).
+export async function getGoalsChatHistory(
+  userName: string,
+  limit = 40
+): Promise<Array<{ role: "user" | "assistant"; content: string }>> {
+  // Select the newest `limit` rows (DESC), then re-order oldest→newest (ASC)
+  // so the client receives messages in chronological conversation order.
+  const { rows } = await query<{ role: string; content: string }>(
+    `SELECT role, content
+       FROM (
+         SELECT id, role, content
+           FROM chat_messages
+          WHERE user_name = $1
+            AND message_id LIKE 'goals:%'
+          ORDER BY id DESC
+          LIMIT $2
+       ) sub
+      ORDER BY id ASC`,
+    [userName, limit]
+  );
+  const validRoles = new Set(["user", "assistant"]);
+  return rows
+    .filter((r) => validRoles.has(r.role))
+    .map((r) => ({
+      role: r.role as "user" | "assistant",
+      content: r.content,
+    }));
+}
+
 // ── Free-form goals conversation ───────────────────────────────────────────────
 // Used by /api/goals/chat — conversational AI response without forced step structure.
 // The caller is responsible for persisting the exchange to chat_messages.
