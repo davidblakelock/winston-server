@@ -255,6 +255,7 @@ interface SurfacedEmail {
   senderEmail: string;
   subject: string;
   summary: string | null;
+  threadId: string | null;
 }
 
 async function runScanForUser(userName: string): Promise<void> {
@@ -328,7 +329,7 @@ async function runScanForUser(userName: string): Promise<void> {
     if (matched) {
       const displayName = personName ?? senderName;
       await markSurfaced(userName, msgId, threadId, senderEmail, displayName, subject, 1);
-      tier1Surfaced.push({ tier: 1, senderName: displayName, senderEmail, subject, summary: null });
+      tier1Surfaced.push({ tier: 1, senderName: displayName, senderEmail, subject, summary: null, threadId });
       logger.info({ userName, msgId, sender: displayName, subject }, "[PeriodicEmail] Tier 1 — key person");
       continue;
     }
@@ -349,7 +350,7 @@ async function runScanForUser(userName: string): Promise<void> {
 
     if (result.actionable) {
       await markSurfaced(userName, msgId, threadId, senderEmail, senderName, subject, 2);
-      tier2Surfaced.push({ tier: 2, senderName, senderEmail, subject, summary: result.summary });
+      tier2Surfaced.push({ tier: 2, senderName, senderEmail, subject, summary: result.summary, threadId });
       logger.info({ userName, msgId, sender: senderName, subject, summary: result.summary }, "[PeriodicEmail] Tier 2 — actionable");
     } else {
       logger.info({ userName, msgId, subject }, "[PeriodicEmail] Tier 3 — not actionable");
@@ -367,6 +368,9 @@ async function runScanForUser(userName: string): Promise<void> {
         tag: "email-vip",
         vipOverride: true,
         notificationType: "email-vip",
+        ...(item.threadId
+          ? { gmailUrl: `https://mail.google.com/mail/u/0/#inbox/${item.threadId}` }
+          : {}),
       },
       userName
     );
@@ -392,8 +396,20 @@ async function runScanForUser(userName: string): Promise<void> {
         .join(" · ");
     }
 
+    // For a single email, include a direct Gmail thread link.
+    // For batched emails, omit it — no single canonical thread applies.
+    const singleThreadId = tier2Surfaced.length === 1 ? tier2Surfaced[0]!.threadId : null;
+
     await sendPushToAll(
-      { title, body, tag: "email-actionable", notificationType: "email-actionable" },
+      {
+        title,
+        body,
+        tag: "email-actionable",
+        notificationType: "email-actionable",
+        ...(singleThreadId
+          ? { gmailUrl: `https://mail.google.com/mail/u/0/#inbox/${singleThreadId}` }
+          : {}),
+      },
       userName
     );
     logger.info({ userName, count: tier2Surfaced.length }, "[PeriodicEmail] Tier 2 push sent");

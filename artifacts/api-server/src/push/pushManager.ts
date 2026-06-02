@@ -112,6 +112,7 @@ export interface PushPayload {
   actionTaken?: string;
   actionSnooze?: string;
   snoozeMinutes?: number;
+  gmailUrl?: string;
 }
 
 // ── Expo Push Token management ────────────────────────────────────────────────
@@ -252,6 +253,7 @@ export function buildExpoMessages(payload: PushPayload, tokens: string[]) {
       ...(payload.actionTaken ? { actionTaken: payload.actionTaken } : {}),
       ...(payload.actionSnooze ? { actionSnooze: payload.actionSnooze } : {}),
       ...(payload.snoozeMinutes != null ? { snoozeMinutes: payload.snoozeMinutes } : {}),
+      ...(payload.gmailUrl ? { gmailUrl: payload.gmailUrl } : {}),
     },
   }));
 }
