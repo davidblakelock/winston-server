@@ -236,6 +236,8 @@ import {
 import { preFetchMorningBriefing, buildSmartCalendarBlock } from "../morning/briefingPregenerate.js";
 import { getProactiveMode, buildModeInstruction } from "../proactiveMode/proactiveModeManager.js";
 import { populateCalendarSyncState } from "../departure/calendarSyncScheduler.js";
+import { createPerson } from "../people/peopleManager.js";
+import { createProvider } from "../providers/providerManager.js";
 import { logBriefingStories } from "../morning/storyDedup.js";
 import { getDallasItems, getLocalContentCity, type LocalContentItem } from "../morning/dallasContent.js";
 import { createReminder } from "../reminders/reminderManager.js";
@@ -634,9 +636,10 @@ const COMPOUND_CONTACT_SAVE_PATTERN = new RegExp(
   "(?:add|save|remember)\\s+(?:[A-Za-z'.]+\\s+){0,3}[A-Za-z'.]+\\s+(?:to|in)\\s+(?:my\\s+)?(?:winston\\s+)?(?:contacts?|profile|people)",
   "i"
 );
-// Detects when David explicitly wants to save a contact to his curated list
-// "people" is a natural synonym for contacts in speech
-const SAVE_CONTACT_PATTERN = /\b(yes,?\s+)?(save|remember|add|keep)\s+(her|him|them|this\s+(contact|person))(\s+to\s+(my\s+)?(winston\s+)?(contacts?|list|people))?\b|\b(save|add)\s+((?:\w+\s+){1,3}\w+)\s+to\s+my\s+(winston\s+)?(contacts?|list|people)\b|\b(remember|save)\s+((?:\w+\s+){1,3}\w+)\s+in\s+my\s+(winston\s+)?(contacts?|list|people)\b/i;
+// Detects when David explicitly wants to save a contact — to his curated list,
+// My People (key_people), or Service Providers.
+// "people" is a natural synonym for contacts in speech.
+const SAVE_CONTACT_PATTERN = /\b(yes,?\s+)?(save|remember|add|keep)\s+(her|him|them|this\s+(contact|person))(\s+to\s+(my\s+)?(winston\s+)?(contacts?|list|people|service\s+providers?))?\b|\b(save|add)\s+((?:\w+\s+){1,3}\w+)\s+to\s+(my\s+)?(winston\s+)?(contacts?|list|people|service\s+providers?)\b|\b(remember|save)\s+((?:\w+\s+){1,3}\w+)\s+in\s+(my\s+)?(winston\s+)?(contacts?|list|people|service\s+providers?)\b|\b(save|add)\s+(her|him|them|this)\s+to\s+(my\s+)?(people|service\s+providers?|contacts?)\b/i;
 // Detects intent to create or update a contact in Google Contacts (not just Winston/curated list)
 // e.g. "Add John Smith to my Google Contacts with number 214-555-1234"
 //      "Update Sarah's phone number in Google Contacts to 972-555-5678"
@@ -5371,45 +5374,162 @@ If you cannot extract both, return null.`,
     }
   }
 
-  // ── Save contact to curated Winston list ───────────────────────────────────
+  // ── Save contact — routes to My People, Service Providers, or curated list ──
   if (isSaveContactRequest) {
     systemPrompt += `\n\n[Contact Operation — People-Profile Suppression]\nThe profile context above may list saved "People" entries. For THIS response, completely disregard that "People" section. Do NOT volunteer, summarise, or reference any person from the profile items list. Your response must address ONLY the specific contact name mentioned in the user's current message.`;
     try {
-      // Try to extract an explicit name from the current message first
-      // e.g. "save Eric Blackstone to my contacts"
-      let contactToSave: GoogleContact | null = null;
-      const emptyContacts: GoogleContact[] = [];
-      const explicitNameMatch =
-        message.match(/\b(?:save|add|remember)\s+((?:[A-Z]\w*\s+){1,2}[A-Z]\w*)\s+(?:to|in)\s+my\s+(?:winston\s+)?(?:contacts?|people)\b/i) ??
-        message.match(/\b(?:save|add|remember)\s+((?:\w+\s+){1,3}\w+)\s+(?:to|in)\s+my\s+(?:winston\s+)?(?:contacts?|people)\b/i);
+      // Detect save destination from the current message
+      const msgLower = message.toLowerCase();
+      const saveDestination: "my_people" | "service_providers" | "curated" =
+        /\bservice\s+providers?\b/.test(msgLower) ? "service_providers" :
+        /\bmy\s+people\b/.test(msgLower) ? "my_people" :
+        "curated";
 
-      if (explicitNameMatch?.[1]) {
-        // Name was in the message — do a live lookup
-        const { contacts } = await searchContacts(explicitNameMatch[1].trim(), sessionUserName).catch(() => ({ contacts: emptyContacts, needsReauth: false, source: "none" as const }));
-        if (contacts.length > 0) contactToSave = contacts[0];
-      } else {
-        // "Yes, save her/him/them" — extract name from last assistant message
-        const lastAssistant = [...history].reverse().find((m: { role: string; content: string }) => m.role === "assistant");
-        if (lastAssistant) {
-          // Look for bullet point: • Name — or inline name mention from contact result
-          const bulletMatch = lastAssistant.content.match(/•\s+([\w\s]+?)(?:\s+—|\n|$)/);
-          const verifiedMatch = lastAssistant.content.match(/(?:found|here(?:'s|\s+is))\s+([\w\s]+?)(?:'s|\s+in\s+your\s+contacts|\s+—|\.|,)/i);
-          const candidateName = (bulletMatch?.[1] ?? verifiedMatch?.[1] ?? "").trim();
-          if (candidateName.length > 2) {
-            const { contacts } = await searchContacts(candidateName, sessionUserName).catch(() => ({ contacts: emptyContacts, needsReauth: false, source: "none" as const }));
-            if (contacts.length > 0) contactToSave = contacts[0];
-          }
+      // Collect recent context — last 6 messages give Haiku enough signal to extract
+      // the contact info that Winston surfaced in the previous turn.
+      const recentContext = [...history]
+        .slice(-6)
+        .map((m: { role: string; content: string }) => `${m.role === "assistant" ? "Winston" : "User"}: ${m.content}`)
+        .join("\n");
+
+      // Use Haiku to extract structured contact data from the conversation context
+      const extractionResp = await anthropic.messages.create({
+        model: MODEL_HAIKU,
+        max_tokens: 400,
+        messages: [{
+          role: "user",
+          content:
+            `Extract the contact's information from this conversation. Return ONLY valid JSON, no explanation.\n\n` +
+            `Conversation:\n${recentContext}\n\nCurrent message: "${message}"\n\n` +
+            `Return JSON:\n` +
+            `{\n` +
+            `  "name": "<full name or null>",\n` +
+            `  "phone": "<phone or null>",\n` +
+            `  "email": "<email or null>",\n` +
+            `  "relationship": "<e.g. friend, neighbor, colleague, or null>",\n` +
+            `  "specialty": "<e.g. cardiologist, plumber, financial advisor, or null>",\n` +
+            `  "company": "<company or practice name or null>",\n` +
+            `  "address": "<address or null>",\n` +
+            `  "website": "<website or null>",\n` +
+            `  "notes": "<any other relevant info or null>"\n` +
+            `}`,
+        }],
+      }).catch(() => null);
+
+      let extracted: {
+        name?: string | null; phone?: string | null; email?: string | null;
+        relationship?: string | null; specialty?: string | null; company?: string | null;
+        address?: string | null; website?: string | null; notes?: string | null;
+      } = {};
+      if (extractionResp) {
+        const raw = extractionResp.content[0]?.type === "text" ? extractionResp.content[0].text.trim() : "";
+        const jsonMatch = raw.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          try { extracted = JSON.parse(jsonMatch[0]); } catch { /* ignore */ }
         }
       }
 
-      if (contactToSave) {
-        await saveCuratedContact(contactToSave, sessionUserName);
+      // Fall back to Google Contacts search if Haiku couldn't extract a name
+      let gcContact: GoogleContact | null = null;
+      if (!extracted.name) {
+        const emptyContacts: GoogleContact[] = [];
+        const explicitNameMatch =
+          message.match(/\b(?:save|add|remember)\s+((?:[A-Z]\w*\s+){1,2}[A-Z]\w*)\s+(?:to|in)\b/i) ??
+          message.match(/\b(?:save|add|remember)\s+((?:\w+\s+){1,3}\w+)\s+(?:to|in)\b/i);
+        if (explicitNameMatch?.[1]) {
+          const { contacts } = await searchContacts(explicitNameMatch[1].trim(), sessionUserName).catch(() => ({ contacts: emptyContacts, needsReauth: false, source: "none" as const }));
+          if (contacts.length > 0) gcContact = contacts[0];
+        } else {
+          const lastAssistant = [...history].reverse().find((m: { role: string; content: string }) => m.role === "assistant");
+          if (lastAssistant) {
+            const bulletMatch = lastAssistant.content.match(/•\s+([\w\s]+?)(?:\s+—|\n|$)/);
+            const verifiedMatch = lastAssistant.content.match(/(?:found|here(?:'s|\s+is))\s+([\w\s]+?)(?:'s|\s+in\s+your\s+contacts|\s+—|\.|,)/i);
+            const candidateName = (bulletMatch?.[1] ?? verifiedMatch?.[1] ?? "").trim();
+            if (candidateName.length > 2) {
+              const { contacts } = await searchContacts(candidateName, sessionUserName).catch(() => ({ contacts: emptyContacts, needsReauth: false, source: "none" as const }));
+              if (contacts.length > 0) gcContact = contacts[0];
+            }
+          }
+        }
+        if (gcContact) extracted.name = gcContact.name;
+        if (gcContact?.phone && !extracted.phone) extracted.phone = gcContact.phone;
+        if (gcContact?.email && !extracted.email) extracted.email = gcContact.email;
+        if (gcContact?.address && !extracted.address) extracted.address = gcContact.address;
+      }
+
+      const contactName = extracted.name?.trim() ?? null;
+
+      if (contactName) {
         const cName = userProfile?.companionName ?? "Winston";
-        systemPrompt += `\n\n[Contact Saved to ${cName} Curated List]\n"${contactToSave.name}" has been saved to the user's ${cName} contacts.${contactToSave.phone ? ` Phone: ${contactToSave.phone}.` : ""}${contactToSave.email ? ` Email: ${contactToSave.email}.` : ""}\nConfirm naturally: "Got it — I've saved [Name] to your ${cName} contacts. I'll remember them for next time."\nCRITICAL: Mention ONLY "${contactToSave.name}" in your response. Do NOT mention or reference any other contacts from earlier in this conversation.`;
-        req.log.info({ name: contactToSave.name }, "[CONTACTS] Contact saved to curated list");
+
+        if (saveDestination === "my_people") {
+          // ── Save to key_people (My People) ──────────────────────────────────
+          const person = await createPerson(sessionUserName, {
+            name: contactName,
+            relationship: extracted.relationship ?? null,
+            phone: extracted.phone ?? null,
+            email: extracted.email ?? null,
+            address: extracted.address ?? null,
+            notes: [extracted.specialty, extracted.company, extracted.notes].filter(Boolean).join(" · ") || null,
+          });
+          systemPrompt +=
+            `\n\n[Contact Saved — My People]\n"${person.name}" has been saved to My People.` +
+            (person.phone ? ` Phone: ${person.phone}.` : "") +
+            (person.email ? ` Email: ${person.email}.` : "") +
+            `\nConfirm naturally: "Done — I've added ${person.name} to your People." Do NOT list out every field. Keep it brief.`;
+          req.log.info({ name: person.name, id: person.id }, "[CONTACTS] Saved to key_people");
+
+        } else if (saveDestination === "service_providers") {
+          // ── Save to service_providers ─────────────────────────────────────
+          // Infer category from specialty/relationship hint, default Personal
+          const categoryHint = (extracted.specialty ?? extracted.relationship ?? "").toLowerCase();
+          const category =
+            /doctor|physician|surgeon|dentist|optom|cardio|derma|ortho|physio|therapist|psychiatr|psycholog|specialist|nurse|medical|health/i.test(categoryHint) ? "Medical" :
+            /lawyer|attorney|legal|notary|paralegal/i.test(categoryHint) ? "Legal" :
+            /financial|accountant|advisor|cpa|tax|banker|broker|invest/i.test(categoryHint) ? "Financial" :
+            /plumber|electrician|contractor|handyman|roofer|landscap|pest|hvac|repair|home/i.test(categoryHint) ? "Home" :
+            /mechanic|auto|car|tire|vehicle/i.test(categoryHint) ? "Auto" :
+            "Personal";
+
+          const provider = await createProvider(sessionUserName, {
+            name: contactName,
+            category,
+            specialty: extracted.specialty ?? null,
+            phone: extracted.phone ?? null,
+            email: extracted.email ?? null,
+            address: extracted.address ?? null,
+            website: extracted.website ?? null,
+            company: extracted.company ?? null,
+            notes: extracted.notes ?? null,
+          });
+          systemPrompt +=
+            `\n\n[Contact Saved — Service Providers]\n"${provider.name}" has been saved to Service Providers under ${provider.category}.` +
+            (provider.phone ? ` Phone: ${provider.phone}.` : "") +
+            (provider.email ? ` Email: ${provider.email}.` : "") +
+            `\nConfirm naturally: "Got it — ${provider.name} is now in your Service Providers." Keep it brief.`;
+          req.log.info({ name: provider.name, id: provider.id, category: provider.category }, "[CONTACTS] Saved to service_providers");
+
+        } else {
+          // ── Save to curated google_contacts list (original behavior) ─────
+          const contactData: GoogleContact = {
+            name: contactName,
+            phone: extracted.phone ?? gcContact?.phone ?? undefined,
+            email: extracted.email ?? gcContact?.email ?? undefined,
+            address: extracted.address ?? gcContact?.address ?? undefined,
+            resourceName: gcContact?.resourceName,
+          };
+          await saveCuratedContact(contactData, sessionUserName);
+          systemPrompt +=
+            `\n\n[Contact Saved to ${cName} Curated List]\n"${contactName}" has been saved to your ${cName} contacts.` +
+            (contactData.phone ? ` Phone: ${contactData.phone}.` : "") +
+            (contactData.email ? ` Email: ${contactData.email}.` : "") +
+            `\nConfirm naturally: "Got it — I've saved ${contactName} to your ${cName} contacts. I'll remember them for next time."` +
+            `\nCRITICAL: Mention ONLY "${contactName}" in your response. Do NOT mention or reference any other contacts from earlier in this conversation.`;
+          req.log.info({ name: contactName }, "[CONTACTS] Contact saved to curated list");
+        }
       } else {
         const cName = userProfile?.companionName ?? "Winston";
-        systemPrompt += `\n\n[Contact Save — Name Not Found]\nWas unable to identify which contact to save from this message. Ask the user who specifically they'd like to save: "Who would you like me to add to your ${cName} contacts?"`;
+        systemPrompt += `\n\n[Contact Save — Name Not Found]\nWas unable to identify which contact to save from this message. Ask the user who specifically they'd like to save: "Who would you like me to add?"`;
       }
     } catch (err) {
       req.log.warn({ err }, "[CONTACTS] Save contact failed");
