@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from "express";
 import express from "express";
 import { authenticate } from "../auth/middleware.js";
 import { logger } from "../lib/logger.js";
+import { getProfile } from "../onboarding/onboardingManager.js";
 import {
   createInvite,
   acceptInvite,
@@ -88,12 +89,16 @@ router.post("/connect/accept", async (req: Request, res: Response) => {
       req.log.warn({ err }, "[Connect] key_people sync after accept failed")
     );
 
+    // Use the requester's persona name so the notification reflects their companion
+    const requesterProfile = await getProfile(connection.requester_user_name).catch(() => null);
+    const connectName = `${requesterProfile?.companionName ?? "Winston"} Connect`;
+
     await sendPushToAll({
-      title: "Winston Connect",
-      body: `${yourName} accepted your Winston Connect invite!`,
+      title: connectName,
+      body: `${yourName} accepted your ${connectName} invite!`,
       tag: "connect-accepted",
       notificationType: "connect-accepted",
-      companionMessage: `${yourName} has joined your Winston Connect! You can now send each other reminders, messages, and share a shopping list through your companions.`,
+      companionMessage: `${yourName} has joined your ${connectName}! You can now send each other reminders, messages, and share a shopping list through your companions.`,
       requireInteraction: true,
     }, connection.requester_user_name).catch(() => {});
 

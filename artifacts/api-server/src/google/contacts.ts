@@ -46,6 +46,11 @@ export async function ensureContactsTable(): Promise<void> {
   await query(`ALTER TABLE google_contacts ADD COLUMN IF NOT EXISTS birthday TEXT`).catch(() => {});
   await query(`ALTER TABLE google_contacts ADD COLUMN IF NOT EXISTS anniversary TEXT`).catch(() => {});
   await query(`ALTER TABLE google_contacts ADD COLUMN IF NOT EXISTS photo_url TEXT`).catch(() => {});
+  // Unique constraint enables upsert so photo_url is refreshed on re-add
+  await query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS google_contacts_user_display_uniq
+    ON google_contacts (user_name, LOWER(display_name))
+  `).catch(() => {});
   logger.info("[CONTACTS] google_contacts table ready");
 }
 
@@ -301,11 +306,18 @@ export async function saveCuratedContact(contact: Contact, userName: string): Pr
   await query(
     `INSERT INTO google_contacts (user_name, resource_name, display_name, email, phone, address, photo_url)
      VALUES ($1, $2, $3, $4, $5, $6, $7)
-     ON CONFLICT DO NOTHING
+     ON CONFLICT (user_name, LOWER(display_name))
+     DO UPDATE SET
+       resource_name = EXCLUDED.resource_name,
+       email         = COALESCE(EXCLUDED.email, google_contacts.email),
+       phone         = COALESCE(EXCLUDED.phone, google_contacts.phone),
+       address       = COALESCE(EXCLUDED.address, google_contacts.address),
+       photo_url     = COALESCE(EXCLUDED.photo_url, google_contacts.photo_url),
+       saved_at      = NOW()
      RETURNING id`,
     [userName, contact.resourceName ?? null, contact.name, contact.email ?? null, contact.phone ?? null, contact.address ?? null, contact.photoUrl ?? null]
   );
-  logger.info(`[CONTACTS] Curated contact saved: ${contact.name} for ${userName}`);
+  logger.info(`[CONTACTS] Curated contact saved/updated: ${contact.name} for ${userName}`);
 }
 
 export async function getCuratedContacts(userName: string): Promise<Contact[]> {

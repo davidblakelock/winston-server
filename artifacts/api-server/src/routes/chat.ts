@@ -5517,6 +5517,7 @@ If you cannot extract both, return null.`,
             email: extracted.email ?? gcContact?.email ?? undefined,
             address: extracted.address ?? gcContact?.address ?? undefined,
             resourceName: gcContact?.resourceName,
+            photoUrl: gcContact?.photoUrl ?? undefined,
           };
           await saveCuratedContact(contactData, sessionUserName);
           systemPrompt +=
