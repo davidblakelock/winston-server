@@ -232,19 +232,15 @@ async function checkWeatherAlertsForUser(userName: string): Promise<void> {
       tag: `weather-${userName}-${alertId.replace(/[^a-zA-Z0-9]/g, "-")}`,
       requireInteraction: true,
       notificationType: "weather-alert",
-      // Full NWS text for the native weather screen
+      // Full NWS alert data — native app displays these fields directly on
+      // the weather alert screen. No autoSendMessage/companionMessage so the
+      // tap opens the raw alert without any AI commentary.
       alertHeadline: headline,
       alertDescription: props.description ?? "",
       alertInstruction: props.instruction ?? "",
       alertEvent: props.event,
       alertArea: areaLabel,
       alertExpires: props.expires ?? "",
-      // autoSendMessage causes the app to immediately send this as the user's message
-      // when the notification is tapped — keep it short so it looks like the user typed it.
-      autoSendMessage: `Tell me about this ${props.event}.`,
-      companionMessage: fullAlertText,
-      // Open to the weather screen at the user's saved location
-      useCurrentLocation: false,
       alertLat: lat,
       alertLon: lon,
       alertCity: city,

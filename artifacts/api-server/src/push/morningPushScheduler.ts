@@ -121,7 +121,10 @@ async function sendMorningPush(user: ActiveUser, wakeTime: string): Promise<void
       body,
       tag: "morning-briefing",
       notificationType: "morning-briefing",
-      autoSendMessage: "good morning",
+      // Deep-link directly to the morning briefing screen — do NOT use
+      // autoSendMessage here; that routes through chat and serves the stale
+      // pre-generated briefing instead of the live fresh one.
+      deepLink: "winston://morning-briefing",
       requireInteraction: true,
     }, userName);
 
