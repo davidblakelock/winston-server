@@ -69,10 +69,15 @@ type ProfileRow = {
 };
 
 async function fetchProfileRow(userName: string): Promise<ProfileRow | null> {
-  // SELECT * so we never reference a column that might not yet exist in the DB.
-  // Every field access uses a null-coalescing fallback for resilience.
+  // LEFT JOIN google_users so we can fall back to the Google OAuth picture
+  // when the user hasn't uploaded a custom avatar (photo_url IS NULL).
+  // user_profiles columns are aliased via up.* — we add gu.picture separately.
   const { rows } = await query<Record<string, unknown>>(
-    `SELECT * FROM user_profiles WHERE user_name = $1 ORDER BY id DESC LIMIT 1`,
+    `SELECT up.*, gu.picture AS google_picture
+     FROM user_profiles up
+     LEFT JOIN google_users gu ON gu.user_name = up.user_name
+     WHERE up.user_name = $1
+     ORDER BY up.id DESC LIMIT 1`,
     [userName]
   );
   if (!rows[0]) return null;
@@ -102,7 +107,8 @@ async function fetchProfileRow(userName: string): Promise<ProfileRow | null> {
     relationship_status:  str("relationship_status"),
     booking_phone:        str("booking_phone"),
     health_notes:         str("health_notes"),
-    photo_url:            str("photo_url"),
+    // Custom avatar takes priority; fall back to Google OAuth profile picture
+    photo_url:            str("photo_url") ?? str("google_picture"),
     hobbies:              Array.isArray(r["hobbies"]) ? (r["hobbies"] as string[]) : null,
     music_genres:         Array.isArray(r["music_genres"]) ? (r["music_genres"] as string[]) : null,
     tv_genres:            Array.isArray(r["tv_genres"]) ? (r["tv_genres"] as string[]) : null,
