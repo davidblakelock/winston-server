@@ -117,19 +117,24 @@ router.get("/lists", async (req: Request, res: Response) => {
     const tvCount = wsCount > 0 ? wsCount : parseInt(piShowsRes.rows[0]?.cnt ?? "0", 10);
     const restCount = parseInt(piRestRes.rows[0]?.cnt ?? "0", 10);
 
-    // Custom lists — any list_name in list_items that isn't a system list
-    const customLists = Object.entries(listCounts)
-      .filter(([name]) => !SYSTEM_LISTS.has(name))
-      .map(([name, count]) => ({
-        listName: name,
-        displayName: name
-          .split(" ")
-          .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-          .join(" "),
-        itemCount: count,
-        listType: listTypeMap[name] ?? "checklist",
-        isCustom: true,
-      }));
+    // Custom lists — union of names in list_items AND names in the lists metadata
+    // table, excluding system lists. This ensures notepad lists appear even before
+    // any content has been saved (i.e. they exist in `lists` but have no items yet).
+    const customListNames = new Set([
+      ...Object.keys(listCounts).filter((n) => !SYSTEM_LISTS.has(n)),
+      ...Object.keys(listTypeMap).filter((n) => !SYSTEM_LISTS.has(n)),
+    ]);
+
+    const customLists = [...customListNames].map((name) => ({
+      listName: name,
+      displayName: name
+        .split(" ")
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(" "),
+      itemCount: listCounts[name] ?? 0,
+      listType: listTypeMap[name] ?? "checklist",
+      isCustom: true,
+    }));
 
     res.json({
       lists: [
