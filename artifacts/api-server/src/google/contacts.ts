@@ -11,6 +11,7 @@ export interface Contact {
   birthday?: string;
   notes?: string;
   resourceName?: string;
+  photoUrl?: string;
 }
 
 export interface ContactSearchResult {
@@ -44,6 +45,7 @@ export async function ensureContactsTable(): Promise<void> {
   // Idempotent column additions — safe to run on every startup
   await query(`ALTER TABLE google_contacts ADD COLUMN IF NOT EXISTS birthday TEXT`).catch(() => {});
   await query(`ALTER TABLE google_contacts ADD COLUMN IF NOT EXISTS anniversary TEXT`).catch(() => {});
+  await query(`ALTER TABLE google_contacts ADD COLUMN IF NOT EXISTS photo_url TEXT`).catch(() => {});
   logger.info("[CONTACTS] google_contacts table ready");
 }
 
@@ -138,6 +140,7 @@ type PersonResource = {
     text?: string;
   }>;
   biographies?: Array<{ value?: string }>;
+  photos?: Array<{ url?: string; isDefault?: boolean }>;
 };
 
 /** Convert a raw People API person object into a Contact, or null if unusable. */
@@ -171,6 +174,12 @@ function personResourceToContact(person: PersonResource): { contact: Contact; or
   }
 
   if (person.biographies?.[0]?.value) c.notes = person.biographies[0].value;
+
+  // Prefer a non-default (real) photo; fall back to the default placeholder only
+  // if it's the only option. Skip entirely if the URL is a default avatar.
+  const photos = person.photos ?? [];
+  const realPhoto = photos.find((p) => !p.isDefault) ?? photos[0];
+  if (realPhoto?.url) c.photoUrl = realPhoto.url;
 
   return { contact: c, orgName: rawOrgName };
 }
@@ -208,7 +217,7 @@ async function searchContactsLive(searchName: string, token: string): Promise<Co
   url.searchParams.set("query", searchName);
   url.searchParams.set(
     "readMask",
-    "names,emailAddresses,phoneNumbers,addresses,organizations,urls,birthdays,biographies"
+    "names,emailAddresses,phoneNumbers,addresses,organizations,urls,birthdays,biographies,photos"
   );
   url.searchParams.set("pageSize", "30"); // 30 is Google's max for searchContacts
 
@@ -251,7 +260,7 @@ async function searchConnectionsLocally(searchName: string, token: string): Prom
     const url = new URL("https://people.googleapis.com/v1/people/me/connections");
     url.searchParams.set(
       "personFields",
-      "names,emailAddresses,phoneNumbers,addresses,organizations,urls,birthdays,biographies"
+      "names,emailAddresses,phoneNumbers,addresses,organizations,urls,birthdays,biographies,photos"
     );
     url.searchParams.set("pageSize", "1000");
     if (pageToken) url.searchParams.set("pageToken", pageToken);
@@ -290,19 +299,19 @@ async function searchConnectionsLocally(searchName: string, token: string): Prom
 
 export async function saveCuratedContact(contact: Contact, userName: string): Promise<void> {
   await query(
-    `INSERT INTO google_contacts (user_name, resource_name, display_name, email, phone, address)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO google_contacts (user_name, resource_name, display_name, email, phone, address, photo_url)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      ON CONFLICT DO NOTHING
      RETURNING id`,
-    [userName, contact.resourceName ?? null, contact.name, contact.email ?? null, contact.phone ?? null, contact.address ?? null]
+    [userName, contact.resourceName ?? null, contact.name, contact.email ?? null, contact.phone ?? null, contact.address ?? null, contact.photoUrl ?? null]
   );
   logger.info(`[CONTACTS] Curated contact saved: ${contact.name} for ${userName}`);
 }
 
 export async function getCuratedContacts(userName: string): Promise<Contact[]> {
-  type Row = { display_name: string; email: string | null; phone: string | null; address: string | null; resource_name: string | null };
+  type Row = { display_name: string; email: string | null; phone: string | null; address: string | null; resource_name: string | null; photo_url: string | null };
   const { rows } = await query<Row>(
-    `SELECT display_name, email, phone, address, resource_name
+    `SELECT display_name, email, phone, address, resource_name, photo_url
      FROM google_contacts WHERE user_name = $1 ORDER BY display_name`,
     [userName]
   );
@@ -312,6 +321,7 @@ export async function getCuratedContacts(userName: string): Promise<Contact[]> {
     phone: r.phone ?? undefined,
     address: r.address ?? undefined,
     resourceName: r.resource_name ?? undefined,
+    photoUrl: r.photo_url ?? undefined,
   }));
 }
 
