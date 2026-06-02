@@ -1102,6 +1102,34 @@ router.put("/lists/:listName/:id", async (req: Request, res: Response) => {
   }
 });
 
+// DELETE /api/lists/:listName — delete the entire list and all its items.
+// MUST be declared before DELETE /api/lists/:listName/:id so Express doesn't
+// match a bare list-name as a two-segment path.
+router.delete("/lists/:listName", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const { listName } = req.params;
+  try {
+    const [itemsResult] = await Promise.all([
+      query(
+        `DELETE FROM list_items WHERE user_name = $1 AND lower(list_name) = lower($2)`,
+        [userName, listName]
+      ),
+      // Remove metadata row if it exists (safe to ignore if table or row absent)
+      query(
+        `DELETE FROM lists WHERE user_name = $1 AND lower(list_name) = lower($2)`,
+        [userName, listName]
+      ).catch(() => {}),
+    ]);
+    const deletedCount = itemsResult.rowCount ?? 0;
+    req.log.info({ userName, listName, deletedCount }, "[Lists] List deleted");
+    res.json({ deleted: true, listName, itemsRemoved: deletedCount });
+  } catch (err) {
+    req.log.warn({ err }, "Lists DELETE /:listName error");
+    res.status(500).json({ error: "Failed to delete list" });
+  }
+});
+
 // DELETE /api/lists/:listName/:id — remove an item by id
 router.delete("/lists/:listName/:id", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
