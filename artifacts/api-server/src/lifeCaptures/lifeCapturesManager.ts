@@ -162,7 +162,14 @@ export async function runDotConnector(userName: string): Promise<void> {
   await _tableInit;
 
   const captures = await getRecentCaptures(userName, 30);
-  if (captures.length === 0) return;
+  if (captures.length < 4) return; // need enough data for meaningful patterns
+
+  // Rate-limit: at most once every 3 days (same as Socratic Mirror)
+  const { rows: dcRateRows } = await query<{ id: number }>(
+    `SELECT id FROM life_suggestions WHERE user_name = $1 AND created_at >= now() - interval '3 days'`,
+    [userName]
+  );
+  if (dcRateRows.length > 0) return;
 
   const profile = await getProfile(userName).catch(() => null);
   const city    = profile?.city ?? "Dallas";

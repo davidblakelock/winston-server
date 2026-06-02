@@ -614,7 +614,7 @@ export async function fetchFamilySuggestions(
 
 // ── Format for Claude prompt ──────────────────────────────────────────────────
 
-export function formatContactsForPrompt(result: ContactSearchResult, searchName: string): string {
+export function formatContactsForPrompt(result: ContactSearchResult, searchName: string, companionName?: string): string {
   if (result.needsReauth) {
     return (
       `\n\n[Google Contacts — Reconnection Required]\n` +
@@ -650,7 +650,7 @@ export function formatContactsForPrompt(result: ContactSearchResult, searchName:
       `${lines[0]}\n` +
       `Source: Google People API (live lookup — not cached). State the contact's name, phone, and email exactly as shown. ` +
       `Do not add, modify, or infer any details not present here.\n` +
-      `After sharing this info, ask: "Want me to remember ${c.name} in your Winston contacts for next time?"`
+      `After sharing this info, ask: "Want me to remember ${c.name} in your ${companionName ?? "Winston"} contacts for next time?"`
     );
   }
 
@@ -660,7 +660,7 @@ export function formatContactsForPrompt(result: ContactSearchResult, searchName:
     `Source: Google People API (live lookup). Ask which one they mean — ` +
     `"I found a few people named ${searchName.split(" ")[0]} — which one did you mean?" ` +
     `Do NOT share phone or email until the user confirms which person. ` +
-    `Once they confirm, ask if they want to save them to their Winston contacts.`
+    `Once they confirm, ask if they want to save them to their ${companionName ?? "Winston"} contacts.`
   );
 }
 

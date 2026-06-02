@@ -624,18 +624,19 @@ const CONTACT_PATTERN = /\b(find|look\s+up|search|get|what(?:'?s)?|pull\s+up|add
 // Detects compound intent: "find X in my contacts AND add/save him/her to my profile/Winston"
 // These must be handled as a single sequential operation: lookup → save, never save-first.
 const COMPOUND_CONTACT_SAVE_PATTERN = new RegExp(
-  // Form A: "Find X in my contacts and add him/her to my profile"
-  "(?:find|look\\s+up|search(?:\\s+for)?|get)\\s+.{1,60}\\s+(?:in\\s+(?:my\\s+)?contacts?|from\\s+(?:my\\s+)?contacts?).{0,80}(?:add|save|put)\\s+(?:him|her|them|it)\\s+(?:to|in|into)\\s+(?:my\\s+)?(?:winston\\s+)?(?:profile|contacts?|list)" +
+  // Form A: "Find X in my contacts and add him/her to my profile/people"
+  "(?:find|look\\s+up|search(?:\\s+for)?|get)\\s+.{1,60}\\s+(?:in\\s+(?:my\\s+)?contacts?|from\\s+(?:my\\s+)?contacts?).{0,80}(?:add|save|put)\\s+(?:him|her|them|it)\\s+(?:to|in|into)\\s+(?:my\\s+)?(?:winston\\s+)?(?:profile|contacts?|list|people)" +
   "|" +
-  // Form B: "Add/Save/Remember X from/in my contacts" — intent is always find+save
-  "(?:add|save|remember)\\s+(?:[A-Za-z'.]+\\s+){0,3}[A-Za-z'.]+\\s+(?:from|in|to)\\s+(?:my\\s+)?(?:winston\\s+)?contacts?" +
+  // Form B: "Add/Save/Remember X from/in my contacts/people" — intent is always find+save
+  "(?:add|save|remember)\\s+(?:[A-Za-z'.]+\\s+){0,3}[A-Za-z'.]+\\s+(?:from|in|to)\\s+(?:my\\s+)?(?:winston\\s+)?(?:contacts?|people)" +
   "|" +
-  // Form C: "Add/Save X to my Winston contacts/profile"
-  "(?:add|save|remember)\\s+(?:[A-Za-z'.]+\\s+){0,3}[A-Za-z'.]+\\s+(?:to|in)\\s+(?:my\\s+)?(?:winston\\s+)?(?:contacts?|profile)",
+  // Form C: "Add/Save X to my Winston contacts/profile/people"
+  "(?:add|save|remember)\\s+(?:[A-Za-z'.]+\\s+){0,3}[A-Za-z'.]+\\s+(?:to|in)\\s+(?:my\\s+)?(?:winston\\s+)?(?:contacts?|profile|people)",
   "i"
 );
-// Detects when David explicitly wants to save a contact to his curated Winston list
-const SAVE_CONTACT_PATTERN = /\b(yes,?\s+)?(save|remember|add|keep)\s+(her|him|them|this\s+(contact|person))(\s+to\s+(my\s+)?(winston\s+)?(contacts?|list))?\b|\b(save|add)\s+((?:\w+\s+){1,3}\w+)\s+to\s+my\s+(winston\s+)?(contacts?|list)\b|\b(remember|save)\s+((?:\w+\s+){1,3}\w+)\s+in\s+my\s+(winston\s+)?(contacts?|list)\b/i;
+// Detects when David explicitly wants to save a contact to his curated list
+// "people" is a natural synonym for contacts in speech
+const SAVE_CONTACT_PATTERN = /\b(yes,?\s+)?(save|remember|add|keep)\s+(her|him|them|this\s+(contact|person))(\s+to\s+(my\s+)?(winston\s+)?(contacts?|list|people))?\b|\b(save|add)\s+((?:\w+\s+){1,3}\w+)\s+to\s+my\s+(winston\s+)?(contacts?|list|people)\b|\b(remember|save)\s+((?:\w+\s+){1,3}\w+)\s+in\s+my\s+(winston\s+)?(contacts?|list|people)\b/i;
 // Detects intent to create or update a contact in Google Contacts (not just Winston/curated list)
 // e.g. "Add John Smith to my Google Contacts with number 214-555-1234"
 //      "Update Sarah's phone number in Google Contacts to 972-555-5678"
@@ -5343,8 +5344,8 @@ If you cannot extract both, return null.`,
             (found.phone ? ` | Phone: ${found.phone}` : "") +
             (found.email ? ` | Email: ${found.email}` : "") +
             (found.address ? ` | Address: ${found.address}` : "") + "\n" +
-            `Action taken: Saved to the user's Winston curated contacts AND added to their profile.\n` +
-            `Respond with: "Found [Name] in your contacts — I've added them to your Winston profile. ` +
+            `Action taken: Saved to the user's ${userProfile?.companionName ?? "Winston"} contacts AND added to their profile.\n` +
+            `Respond with: "Found [Name] in your contacts — I've added them to your ${userProfile?.companionName ?? "Winston"} profile. ` +
             `[Share phone/email if present.] Just ask next time and I'll have the info ready."\n` +
             `CRITICAL: Mention ONLY ${found.name} in your response. Do NOT mention or reference any other contacts from earlier in this conversation.`
           );
@@ -5360,7 +5361,7 @@ If you cannot extract both, return null.`,
           req.log.info({ query: searchQuery }, "[CONTACTS] Compound lookup — not found");
         } else {
           // Standard (non-compound) contact lookup
-          systemPrompt += formatContactsForPrompt(result, searchQuery);
+          systemPrompt += formatContactsForPrompt(result, searchQuery, userProfile?.companionName ?? undefined);
         }
 
         req.log.info({ query: searchQuery, found: result.contacts?.length ?? 0, needsReauth: result.needsReauth, compound: isCompoundContactAndSave }, "[CONTACTS] Search complete");
@@ -5379,8 +5380,8 @@ If you cannot extract both, return null.`,
       let contactToSave: GoogleContact | null = null;
       const emptyContacts: GoogleContact[] = [];
       const explicitNameMatch =
-        message.match(/\b(?:save|add|remember)\s+((?:[A-Z]\w*\s+){1,2}[A-Z]\w*)\s+(?:to|in)\s+my\s+(?:winston\s+)?contacts?\b/i) ??
-        message.match(/\b(?:save|add|remember)\s+((?:\w+\s+){1,3}\w+)\s+(?:to|in)\s+my\s+(?:winston\s+)?contacts?\b/i);
+        message.match(/\b(?:save|add|remember)\s+((?:[A-Z]\w*\s+){1,2}[A-Z]\w*)\s+(?:to|in)\s+my\s+(?:winston\s+)?(?:contacts?|people)\b/i) ??
+        message.match(/\b(?:save|add|remember)\s+((?:\w+\s+){1,3}\w+)\s+(?:to|in)\s+my\s+(?:winston\s+)?(?:contacts?|people)\b/i);
 
       if (explicitNameMatch?.[1]) {
         // Name was in the message — do a live lookup
@@ -5403,10 +5404,12 @@ If you cannot extract both, return null.`,
 
       if (contactToSave) {
         await saveCuratedContact(contactToSave, sessionUserName);
-        systemPrompt += `\n\n[Contact Saved to Winston Curated List]\n"${contactToSave.name}" has been saved to the user's Winston contacts.${contactToSave.phone ? ` Phone: ${contactToSave.phone}.` : ""}${contactToSave.email ? ` Email: ${contactToSave.email}.` : ""}\nConfirm naturally: "Got it — I've saved [Name] to your Winston contacts. I'll remember them for next time."\nCRITICAL: Mention ONLY "${contactToSave.name}" in your response. Do NOT mention or reference any other contacts from earlier in this conversation.`;
+        const cName = userProfile?.companionName ?? "Winston";
+        systemPrompt += `\n\n[Contact Saved to ${cName} Curated List]\n"${contactToSave.name}" has been saved to the user's ${cName} contacts.${contactToSave.phone ? ` Phone: ${contactToSave.phone}.` : ""}${contactToSave.email ? ` Email: ${contactToSave.email}.` : ""}\nConfirm naturally: "Got it — I've saved [Name] to your ${cName} contacts. I'll remember them for next time."\nCRITICAL: Mention ONLY "${contactToSave.name}" in your response. Do NOT mention or reference any other contacts from earlier in this conversation.`;
         req.log.info({ name: contactToSave.name }, "[CONTACTS] Contact saved to curated list");
       } else {
-        systemPrompt += `\n\n[Contact Save — Name Not Found]\nWas unable to identify which contact to save from this message. Ask the user who specifically they'd like to save: "Who would you like me to add to your Winston contacts?"`;
+        const cName = userProfile?.companionName ?? "Winston";
+        systemPrompt += `\n\n[Contact Save — Name Not Found]\nWas unable to identify which contact to save from this message. Ask the user who specifically they'd like to save: "Who would you like me to add to your ${cName} contacts?"`;
       }
     } catch (err) {
       req.log.warn({ err }, "[CONTACTS] Save contact failed");
