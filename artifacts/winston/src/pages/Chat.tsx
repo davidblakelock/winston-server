@@ -523,12 +523,32 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
   );
   const [briefingCardShowKey, setBriefingCardShowKey] = useState(0);
 
+  const MED_PANEL_KEY = "med-interaction-panel";
+  const MED_PANEL_TTL_MS = 2 * 60 * 60 * 1000;
+
   const [medInteractionPanel, setMedInteractionPanel] = useState<{
     visible: boolean;
     interactions: Array<{ drug1: string; drug2: string; severity: string; description: string }>;
     avoid: Array<{ drug: string; avoid: string; reason: string }>;
     sideEffects: Array<{ drug: string; effects: string[] }>;
-  }>({ visible: false, interactions: [], avoid: [], sideEffects: [] });
+  }>(() => {
+    try {
+      const raw = localStorage.getItem(MED_PANEL_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as {
+          ts: number;
+          interactions: Array<{ drug1: string; drug2: string; severity: string; description: string }>;
+          avoid: Array<{ drug: string; avoid: string; reason: string }>;
+          sideEffects: Array<{ drug: string; effects: string[] }>;
+        };
+        if (Date.now() - parsed.ts < MED_PANEL_TTL_MS) {
+          return { visible: true, interactions: parsed.interactions, avoid: parsed.avoid, sideEffects: parsed.sideEffects };
+        }
+        localStorage.removeItem(MED_PANEL_KEY);
+      }
+    } catch {}
+    return { visible: false, interactions: [], avoid: [], sideEffects: [] };
+  });
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -1958,6 +1978,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
             sideEffects: Array<{ drug: string; effects: string[] }>;
           };
           if (data.source === "delete") {
+            localStorage.removeItem(MED_PANEL_KEY);
             setMedInteractionPanel({ visible: false, interactions: [], avoid: [], sideEffects: [] });
             return;
           }
@@ -1965,12 +1986,19 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
             data.interactions.length > 0 ||
             data.avoid.length > 0 ||
             data.sideEffects.length > 0;
-          setMedInteractionPanel({
-            visible: hasContent,
+          const panelData = {
             interactions: data.interactions ?? [],
             avoid: data.avoid ?? [],
             sideEffects: data.sideEffects ?? [],
-          });
+          };
+          if (hasContent) {
+            try {
+              localStorage.setItem(MED_PANEL_KEY, JSON.stringify({ ts: Date.now(), ...panelData }));
+            } catch {}
+          } else {
+            localStorage.removeItem(MED_PANEL_KEY);
+          }
+          setMedInteractionPanel({ visible: hasContent, ...panelData });
         } catch (err) {
           console.error("[MEDS] Error handling medications-changed SSE:", err);
         }
@@ -2877,7 +2905,7 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
         <div className="flex-shrink-0 px-4 sm:px-6 pb-2 max-w-4xl w-full">
           <div className="rounded-2xl border border-amber-500/25 bg-amber-950/20 p-4 relative">
             <button
-              onClick={() => setMedInteractionPanel((p) => ({ ...p, visible: false }))}
+              onClick={() => { localStorage.removeItem(MED_PANEL_KEY); setMedInteractionPanel((p) => ({ ...p, visible: false })); }}
               className="absolute top-3 right-3 text-muted-foreground hover:text-foreground transition-colors"
               aria-label="Dismiss medication panel"
             >
