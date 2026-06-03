@@ -61,6 +61,13 @@ export async function ensureGoalsTables(): Promise<void> {
       )
     `);
     await query(`CREATE INDEX IF NOT EXISTS goal_steps_goal_id_idx ON goal_steps(goal_id)`);
+    await query(`
+      CREATE TABLE IF NOT EXISTS goals_recap_cache (
+        user_name    text PRIMARY KEY,
+        recap        text NOT NULL,
+        generated_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
     logger.info("[Goals] Tables ready");
   } catch (err) {
     logger.warn({ err }, "[Goals] Startup migration warning");
@@ -526,6 +533,131 @@ export async function formatContentForSharing(
       .slice(0, 4000)
       .trim();
   }
+}
+
+// ── Goals recap (daily cached summary) ───────────────────────────────────────
+// Returns a Claude-generated short recap of the user's goal progress.
+// Cached in the DB and only regenerated once per 24 hours.
+
+export interface GoalsRecap {
+  recap: string;
+  generated_at: string;
+  from_cache: boolean;
+}
+
+export async function generateGoalsRecap(userName: string): Promise<GoalsRecap> {
+  // Check for a fresh cache entry (less than 24h old)
+  const { rows: cached } = await query<{ recap: string; generated_at: string }>(
+    `SELECT recap, generated_at::text
+       FROM goals_recap_cache
+      WHERE user_name = $1
+        AND generated_at > now() - INTERVAL '24 hours'`,
+    [userName]
+  );
+  if (cached[0]) {
+    return { recap: cached[0].recap, generated_at: cached[0].generated_at, from_cache: true };
+  }
+
+  // Build a summary of the user's goals to pass to Claude
+  const goals = await getGoals(userName);
+  if (goals.length === 0) {
+    const fallback = "You haven't set any goals yet — but you're here, which counts for something.";
+    await query(
+      `INSERT INTO goals_recap_cache (user_name, recap)
+       VALUES ($1, $2)
+       ON CONFLICT (user_name) DO UPDATE SET recap = EXCLUDED.recap, generated_at = now()`,
+      [userName, fallback]
+    );
+    const { rows: saved } = await query<{ generated_at: string }>(
+      `SELECT generated_at::text FROM goals_recap_cache WHERE user_name = $1`,
+      [userName]
+    );
+    return { recap: fallback, generated_at: saved[0]?.generated_at ?? new Date().toISOString(), from_cache: false };
+  }
+
+  // Calculate stats
+  const totalGoals = goals.length;
+  const totalSteps = goals.reduce((n, g) => n + g.steps.length, 0);
+  const completedSteps = goals.reduce((n, g) => n + g.steps.filter((s) => s.completed).length, 0);
+
+  // Steps completed this week
+  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const stepsThisWeek = goals.reduce(
+    (n, g) =>
+      n +
+      g.steps.filter(
+        (s) => s.completed && s.completed_at && new Date(s.completed_at) >= weekAgo
+      ).length,
+    0
+  );
+
+  // Nearest incomplete step (first incomplete step across goals, ordered by goal creation date)
+  let nearestIncomplete: { goalTitle: string; stepText: string } | null = null;
+  for (const g of goals) {
+    const incomplete = g.steps.filter((s) => !s.completed).sort((a, b) => a.order - b.order);
+    if (incomplete[0]) {
+      nearestIncomplete = { goalTitle: g.title, stepText: incomplete[0].step_text };
+      break;
+    }
+  }
+
+  // Build a brief goal list for Claude
+  const goalSummaries = goals
+    .slice(0, 8)
+    .map((g) => {
+      const done = g.steps.filter((s) => s.completed).length;
+      const total = g.steps.length;
+      return `• "${g.title}" — ${total > 0 ? `${done}/${total} steps done` : "no steps yet"}`;
+    })
+    .join("\n");
+
+  const userProfile = await getProfile(userName).catch(() => null);
+  const displayName = userProfile?.name ?? userName;
+
+  const prompt =
+    `You are Winston, a warm and direct personal advisor. ` +
+    `Write a 2–3 sentence progress recap for ${displayName} to read when they return to their Goals screen. ` +
+    `Be encouraging but honest. Reference specific numbers and, if there's a next step, name it. ` +
+    `Keep it under 60 words. No markdown, no headers — just plain conversational prose.\n\n` +
+    `Stats:\n` +
+    `- ${totalGoals} active goal${totalGoals !== 1 ? "s" : ""}\n` +
+    `- ${completedSteps} of ${totalSteps} steps complete\n` +
+    `- ${stepsThisWeek} step${stepsThisWeek !== 1 ? "s" : ""} completed this week\n` +
+    (nearestIncomplete
+      ? `- Next up: "${nearestIncomplete.stepText}" (goal: ${nearestIncomplete.goalTitle})\n`
+      : "") +
+    `\nGoals:\n${goalSummaries}`;
+
+  let recap: string;
+  try {
+    const response = await anthropic.messages.create({
+      model: MODEL_HAIKU,
+      max_tokens: 200,
+      messages: [{ role: "user", content: prompt }],
+    });
+    recap =
+      response.content[0]?.type === "text"
+        ? response.content[0].text.trim()
+        : `You have ${completedSteps} of ${totalSteps} steps done across ${totalGoals} goals. Keep going.`;
+  } catch (err) {
+    logger.warn({ err }, "[Goals] generateGoalsRecap AI failed — using fallback");
+    recap = `You have ${completedSteps} of ${totalSteps} steps done across ${totalGoals} goal${totalGoals !== 1 ? "s" : ""}.${nearestIncomplete ? ` Next up: "${nearestIncomplete.stepText}".` : ""}`;
+  }
+
+  // Save to cache
+  await query(
+    `INSERT INTO goals_recap_cache (user_name, recap)
+     VALUES ($1, $2)
+     ON CONFLICT (user_name) DO UPDATE SET recap = EXCLUDED.recap, generated_at = now()`,
+    [userName, recap]
+  ).catch((err) => logger.warn({ err }, "[Goals] Failed to cache recap"));
+
+  const { rows: saved } = await query<{ generated_at: string }>(
+    `SELECT generated_at::text FROM goals_recap_cache WHERE user_name = $1`,
+    [userName]
+  );
+
+  return { recap, generated_at: saved[0]?.generated_at ?? new Date().toISOString(), from_cache: false };
 }
 
 // ── Goals chat history ────────────────────────────────────────────────────────

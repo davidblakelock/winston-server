@@ -12,6 +12,7 @@
 
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
     ActivityIndicator,
@@ -204,12 +205,19 @@ const ChatBubble = ({
   );
 };
 
+const GOALS_LAST_VISITED_KEY = 'goals_last_visited';
+const RECAP_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
+
 // ─── Main Screen ──────────────────────────────────────────────────────────
 export default function GoalsScreen() {
   const router = useRouter();
   const [goals, setGoals] = useState<Goal[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  // Recap card state
+  const [recapText, setRecapText] = useState<string | null>(null);
+  const [recapDismissed, setRecapDismissed] = useState(false);
 
   // Conversation state
   const [showConversation, setShowConversation] = useState(false);
@@ -260,16 +268,41 @@ export default function GoalsScreen() {
     }
   }, []);
 
+  // ── Fetch recap when the user returns after 24+ hours away ─────────────
+  const checkAndFetchRecap = useCallback(async () => {
+    try {
+      const lastVisited = await AsyncStorage.getItem(GOALS_LAST_VISITED_KEY);
+      const now = Date.now();
+      const last = Number(lastVisited);
+      const shouldShow = !Number.isFinite(last) || (now - last) > RECAP_THRESHOLD_MS;
+      // Always update timestamp on visit
+      await AsyncStorage.setItem(GOALS_LAST_VISITED_KEY, String(now));
+      if (!shouldShow) return;
+      const res = await fetch(`${SERVER}/api/goals/recap`, { headers: { 'x-api-key': API_KEY } });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.recap) {
+        setRecapText(data.recap);
+        setRecapDismissed(false);
+      }
+    } catch {
+      // Non-critical — silently ignore
+    }
+  }, []);
+
   useEffect(() => {
     fetchGoals();
     fetchChatHistory();
   }, [fetchGoals, fetchChatHistory]);
 
-  // ── Refresh goals list on focus; conversation state persists so history survives navigation ──
+  // ── On screen focus: refresh goals list and check recap eligibility ──────
+  // useFocusEffect runs on every navigation return (not just mount), which is
+  // the correct trigger for "returning after a few days away".
   useFocusEffect(
     useCallback(() => {
       fetchGoals();
-    }, [fetchGoals])
+      checkAndFetchRecap();
+    }, [fetchGoals, checkAndFetchRecap])
   );
 
   const handleToggleStep = async (goalId: string, stepId: string, completed: boolean) => {
@@ -593,6 +626,23 @@ export default function GoalsScreen() {
       </View>
       <View style={styles.divider} />
 
+      {/* Recap card — shown when returning after 24+ hours away */}
+      {recapText && !recapDismissed && (
+        <View style={styles.recapCard}>
+          <View style={styles.recapCardHeader}>
+            <Ionicons name="sparkles-outline" size={16} color={COLORS.gold} />
+            <Text style={styles.recapCardLabel}>Where you left off</Text>
+            <TouchableOpacity
+              onPress={() => setRecapDismissed(true)}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Ionicons name="close" size={16} color={COLORS.muted} />
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.recapCardText}>{recapText}</Text>
+        </View>
+      )}
+
       {/* Resume previous conversation if history exists */}
       {conversation.length > 0 && (
         <TouchableOpacity style={styles.continueChatCard} onPress={continueConversation} activeOpacity={0.8}>
@@ -683,6 +733,11 @@ const styles = StyleSheet.create({
   addButtonText: { color: COLORS.background, fontWeight: '700', fontSize: 15 },
   addMoreBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 20 },
   addMoreBtnText: { color: COLORS.gold, fontSize: 14, fontWeight: '500' },
+
+  recapCard: { marginHorizontal: 16, marginTop: 12, marginBottom: 4, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.gold + '30', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12 },
+  recapCardHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 },
+  recapCardLabel: { flex: 1, color: COLORS.gold, fontSize: 11, fontWeight: '700', letterSpacing: 0.5, textTransform: 'uppercase' },
+  recapCardText: { color: COLORS.cream, fontSize: 14, lineHeight: 20 },
 
   continueChatCard: { flexDirection: 'row', alignItems: 'center', gap: 12, marginHorizontal: 16, marginTop: 12, marginBottom: 4, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.gold + '40', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12 },
   continueChatLabel: { color: COLORS.gold, fontSize: 12, fontWeight: '600', letterSpacing: 0.3, marginBottom: 2 },

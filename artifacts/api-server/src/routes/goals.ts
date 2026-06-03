@@ -12,6 +12,7 @@ import {
   breakdownGoal,
   goalsFreeformChat,
   getGoalsChatHistory,
+  generateGoalsRecap,
   formatContentForSharing,
   type ShareFormat,
 } from "../goals/goalsManager.js";
@@ -180,6 +181,23 @@ router.post("/goals/share", express.json({ limit: "2mb" }), async (req, res) => 
   } catch (err) {
     req.log.error({ err }, "[Goals] POST /goals/share error");
     res.status(500).json({ error: "Failed to format content for sharing" });
+  }
+});
+
+// ── GET /api/goals/recap ───────────────────────────────────────────────────────
+// Returns a short Claude-generated summary of the user's goal progress.
+// Cached in the DB and only regenerated once per 24 hours.
+// Returns: { recap: string, generated_at: string, from_cache: boolean }
+router.get("/goals/recap", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  try {
+    const result = await generateGoalsRecap(userName);
+    req.log.info({ fromCache: result.from_cache }, "[Goals] GET /goals/recap");
+    res.json(result);
+  } catch (err) {
+    req.log.error({ err }, "[Goals] GET /goals/recap error");
+    res.status(500).json({ error: "Failed to generate recap" });
   }
 });
 
