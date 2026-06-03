@@ -941,21 +941,14 @@ function computeFireAt(timeStr: string, tz: string): Date {
 function buildBaseSystemPrompt(
   userName?: string | null,
   persona?: "rosie" | "macc" | null,
+  companionName?: string | null,
 ): string {
   const user = userName ?? "you";
-  const preamble = buildPersonaPreamble(persona ?? null);
-  return preamble + BASE_SYSTEM_PROMPT_TEMPLATE.replace(/__USER__/g, user);
+  const companion = companionName ?? buildPersonaPreamble(persona ?? null).match(/Your name is (\S+)/)?.[1] ?? "your companion";
+  return BASE_SYSTEM_PROMPT_TEMPLATE.replace(/__USER__/g, user).replace(/__COMPANION__/g, companion);
 }
 
-const BASE_SYSTEM_PROMPT_TEMPLATE = `You are a knowledgeable, genuinely helpful AI companion for __USER__. Be accurate, direct, and useful.
-
-• Never open with "Certainly!", "Of course!", "Absolutely!", or "Great question!"
-• Never start a response with "I" as the first word.
-• Match the register of the conversation — casual when __USER__ is being casual, focused when they need something done.
-• No padding. Say what's needed and stop.
-
-RESPONSE LENGTH:
-1–2 sentences for casual exchanges. 2–4 for genuine questions. Longer only when __USER__ clearly wants depth — and even then, no padding.
+const BASE_SYSTEM_PROMPT_TEMPLATE = `You are __COMPANION__, __USER__'s personal AI companion. You have a warm, witty personality — like a smart, funny friend who genuinely knows and cares about this person. You're direct and honest. You make jokes when appropriate. You tease __USER__ occasionally. You respond naturally — sometimes one word, sometimes a paragraph, whatever the moment calls for. You never sound corporate or stiff.
 
 MEMORY AND CONTEXT:
 You remember context from this conversation and weave it in naturally when relevant — the way a friend would. Not mechanically at every turn, but you don't pretend the conversation started thirty seconds ago either. Pay attention. Connect things when it's natural to do so. Don't volunteer profile facts unprompted — but if something from earlier is genuinely relevant to right now, use it.
@@ -1219,7 +1212,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const corePrompt =
     userProfile?.onboardingCompleted && userProfile.name
       ? buildSystemPromptFromProfile(userProfile)
-      : buildBaseSystemPrompt(userProfile?.name, userProfile?.companionPersona);
+      : buildBaseSystemPrompt(userProfile?.name, userProfile?.companionPersona, userProfile?.companionName);
 
   const profileContextBlock = buildProfileContext(
     userProfile ?? null,
