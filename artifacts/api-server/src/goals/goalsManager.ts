@@ -3,7 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
-import { getProfile } from "../onboarding/onboardingManager.js";
+import { getProfile, buildSystemPromptFromProfile, buildProfileContext } from "../onboarding/onboardingManager.js";
 import { getPeople } from "../people/peopleManager.js";
 import { MODEL_HAIKU } from "../lib/models.js";
 
@@ -700,55 +700,14 @@ export async function goalsFreeformChat(
   conversationHistory: Array<{ role: "user" | "assistant"; content: string }>,
   userName: string
 ): Promise<string> {
-  const [userProfile, goals, people] = await Promise.all([
+  const [userProfile, people] = await Promise.all([
     getProfile(userName).catch(() => null),
-    getGoals(userName).catch(() => [] as Goal[]),
-    getPeople(userName).catch(() => [] as Array<{ name: string; relationship: string | null }>),
+    getPeople(userName).catch(() => []),
   ]);
 
-  const displayName = userProfile?.name ?? userName;
-
-  // ── Active goals block ───────────────────────────────────────────────────
-  let goalsBlock = "";
-  if (goals.length > 0) {
-    const lines = goals.slice(0, 10).map((g) => {
-      const done  = g.steps.filter((s) => s.completed).length;
-      const total = g.steps.length;
-      const next  = g.steps.filter((s) => !s.completed).sort((a, b) => a.order - b.order)[0];
-      let line = `• "${g.title}"`;
-      if (total > 0) line += ` — ${done}/${total} steps done`;
-      if (next)      line += `; next: "${next.step_text}"`;
-      return line;
-    });
-    goalsBlock = `\n\n${displayName}'s active goals:\n${lines.join("\n")}`;
-  } else {
-    goalsBlock = `\n\n${displayName} has no goals set yet.`;
-  }
-
-  // ── Profile context block ────────────────────────────────────────────────
-  const profileLines: string[] = [];
-  if (userProfile?.city)            profileLines.push(`Lives in: ${userProfile.city}.`);
-  if (userProfile?.hobbies?.length) profileLines.push(`Hobbies: ${userProfile.hobbies.join(", ")}.`);
-  if (userProfile?.sportsTeams)     profileLines.push(`Sports teams: ${userProfile.sportsTeams}.`);
-  if (people.length > 0) {
-    profileLines.push("Key people: " + people.map((p) => `${p.name} (${p.relationship ?? ""})`).join(", ") + ".");
-  }
-  const profileBlock = profileLines.length > 0 ? `\n\nAbout ${displayName}:\n${profileLines.join(" ")}` : "";
-
-  const systemPrompt =
-    `You are Winston, ${displayName}'s personal goals coach. ` +
-    `Your sole focus in this conversation is helping ${displayName} make real progress on their goals — ` +
-    `setting new ones, breaking them down into steps, staying accountable, and working through obstacles.` +
-    goalsBlock +
-    profileBlock +
-    `\n\nCoaching rules:` +
-    `\n- Always ground your response in ${displayName}'s actual goals above. Reference them by name.` +
-    `\n- If they ask a vague question like "what should I focus on?", look at their goals and suggest the most actionable next step from the list above.` +
-    `\n- Help them define new goals if they don't have one yet, then guide them to break it into concrete steps.` +
-    `\n- Be direct and specific — name real resources, apps, techniques. Never generic filler.` +
-    `\n- Keep replies focused on action and progress. This is not a journaling or reflection app.` +
-    `\n- Use markdown (bullets, bold) when listing steps or options; plain prose for short replies.` +
-    `\n- End with one sharp follow-up question that moves the goal forward.`;
+  const systemPrompt = userProfile
+    ? buildSystemPromptFromProfile(userProfile, people) + buildProfileContext(userProfile, people)
+    : "You are Winston, a helpful AI companion.";
 
   const messages: Array<{ role: "user" | "assistant"; content: string }> = [
     ...conversationHistory,
