@@ -19,7 +19,7 @@ import {
   checkHotelAvailability,
   isBookingAvailabilityReady,
 } from "../travel/hotelAvailability.js";
-import { getProfile, type CollectedData } from "../onboarding/onboardingManager.js";
+import { getProfile } from "../onboarding/onboardingManager.js";
 import { MODEL_SONNET } from "../lib/models.js";
 import { logger } from "../lib/logger.js";
 
@@ -85,8 +85,7 @@ router.post("/trips/save", express.json({ limit: "2mb" }), async (req, res) => {
 
   try {
     const profile = await getProfile(userName);
-    const rawData = (profile?.rawData ?? {}) as CollectedData;
-    const profileCtx = buildTravelProfileContext(rawData, profile);
+    const profileCtx = buildTravelProfileContext(profile);
 
     // Parse intent from the original user description (or fall back to destination hint)
     const intentSource = body.description ?? body.destination ?? body.planResponse.slice(0, 200);

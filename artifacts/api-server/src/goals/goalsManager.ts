@@ -3,7 +3,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
-import { getProfile, type CollectedData } from "../onboarding/onboardingManager.js";
+import { getProfile } from "../onboarding/onboardingManager.js";
+import { getPeople } from "../people/peopleManager.js";
 import { MODEL_HAIKU } from "../lib/models.js";
 
 const MODEL_GPT4O = "gpt-4o" as const;
@@ -295,19 +296,22 @@ export async function breakdownGoal(
   let userCity = "";
 
   if (userProfile) {
-    const raw = (userProfile.rawData ?? {}) as CollectedData;
-    const displayName = userProfile.name ?? userName;
-    const city = userProfile.city ?? (raw.city as string | undefined) ?? "";
-    if (city) userCity = city;
-    const people = (raw.people ?? []) as Array<{ name: string; relationship: string; city?: string; details?: string }>;
-    const rawAny = raw as Record<string, unknown>;
-    const music  = ((rawAny.music ?? rawAny.musicTaste ?? "") as string);
-    const hobbies = ((rawAny.hobbies ?? rawAny.interests ?? "") as string);
+    const displayName     = userProfile.name ?? userName;
+    const city            = userProfile.city ?? "";
+    if (city) userCity    = city;
+    const hobbies         = userProfile.hobbies ?? [];
+    const musicGenres     = userProfile.musicGenres ?? [];
+    const sportsTeams     = userProfile.sportsTeams ?? "";
+    const favoriteArtists = userProfile.favoriteArtists ?? [];
+
+    const people = await getPeople(userName).catch(() => [] as Array<{ name: string; relationship: string; city?: string | null; details?: string | null }>);
 
     const lines: string[] = [`The user's name is ${displayName}.`];
-    if (city)    lines.push(`They live in ${city}.`);
-    if (music)   lines.push(`Their existing music taste: ${music}.`);
-    if (hobbies) lines.push(`Their hobbies/interests: ${hobbies}.`);
+    if (city)                   lines.push(`They live in ${city}.`);
+    if (hobbies.length)         lines.push(`Hobbies/interests: ${hobbies.join(", ")}.`);
+    if (musicGenres.length)     lines.push(`Music taste: ${musicGenres.join(", ")}.`);
+    if (favoriteArtists.length) lines.push(`Favorite artists: ${favoriteArtists.join(", ")}.`);
+    if (sportsTeams)            lines.push(`Sports teams: ${sportsTeams}.`);
     if (people.length > 0) {
       lines.push("Key people in their life:");
       for (const p of people) {
@@ -568,18 +572,21 @@ export async function goalsFreeformChat(
   let profileContext = "";
 
   if (userProfile) {
-    const raw = (userProfile.rawData ?? {}) as CollectedData;
-    const displayName = userProfile.name ?? userName;
-    const city = userProfile.city ?? (raw.city as string | undefined) ?? "";
-    const people = (raw.people ?? []) as Array<{ name: string; relationship: string }>;
-    const rawAny = raw as Record<string, unknown>;
-    const hobbies = ((rawAny.hobbies ?? rawAny.interests ?? "") as string);
-    const music = ((rawAny.music ?? rawAny.musicTaste ?? "") as string);
+    const displayName     = userProfile.name ?? userName;
+    const city            = userProfile.city ?? "";
+    const hobbies         = userProfile.hobbies ?? [];
+    const musicGenres     = userProfile.musicGenres ?? [];
+    const favoriteArtists = userProfile.favoriteArtists ?? [];
+    const sportsTeams     = userProfile.sportsTeams ?? "";
+
+    const people = await getPeople(userName).catch(() => [] as Array<{ name: string; relationship: string }>);
 
     const lines: string[] = [`The user's name is ${displayName}.`];
-    if (city) lines.push(`They live in ${city}.`);
-    if (hobbies) lines.push(`Interests/hobbies: ${hobbies}.`);
-    if (music) lines.push(`Music taste: ${music}.`);
+    if (city)                   lines.push(`They live in ${city}.`);
+    if (hobbies.length)         lines.push(`Hobbies/interests: ${hobbies.join(", ")}.`);
+    if (musicGenres.length)     lines.push(`Music taste: ${musicGenres.join(", ")}.`);
+    if (favoriteArtists.length) lines.push(`Favorite artists: ${favoriteArtists.join(", ")}.`);
+    if (sportsTeams)            lines.push(`Sports teams: ${sportsTeams}.`);
     if (people.length > 0) {
       lines.push("Key people:");
       for (const p of people) lines.push(`- ${p.name} (${p.relationship})`);

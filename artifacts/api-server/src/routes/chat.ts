@@ -94,8 +94,8 @@ import {
   buildPersonaPreamble,
   buildProfileContext,
   isPartnerRelationship,
-  type CollectedData,
 } from "../onboarding/onboardingManager.js";
+import { getPeople } from "../people/peopleManager.js";
 import { getCachedWeather, type CachedWeather } from "../weather/weatherCache.js";
 import {
   getWatchedShows,
@@ -1204,12 +1204,13 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   process.stdout.write(`[STDOUT] CHAT-HANDLER message="${message.slice(0, 100)}" len=${message.length}\n`);
 
   // Fetch recent memories, dynamic profile, and user profile concurrently
-  const [recentMemories, allProfileItems, profilePlaces, userProfile, briefingPrefs] = await Promise.all([
+  const [recentMemories, allProfileItems, profilePlaces, userProfile, briefingPrefs, keyPeople] = await Promise.all([
     getRecentMemories(7).catch(() => []),
     getProfileItems(undefined, sessionUserName).catch(() => []),
     getProfilePlaces(sessionUserName).catch(() => []),
     getProfile(sessionUserName).catch(() => null),
     getBriefingPreferences(sessionUserName).catch(() => [] as BriefingPreference[]),
+    getPeople(sessionUserName).catch(() => []),
   ]);
   const memoryBlock = formatMemoriesForContext(recentMemories);
   const dynamicProfileBlock = formatProfileForContext(allProfileItems, sessionUserName);
@@ -1218,12 +1219,12 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   // Use dynamic system prompt if onboarding was completed for a new user
   const corePrompt =
     userProfile?.onboardingCompleted && userProfile.name
-      ? buildSystemPromptFromProfile(userProfile, userProfile.rawData as CollectedData)
+      ? buildSystemPromptFromProfile(userProfile)
       : buildBaseSystemPrompt(userProfile?.name, userProfile?.companionPersona);
 
   const profileContextBlock = buildProfileContext(
     userProfile ?? null,
-    (userProfile?.rawData ?? {}) as CollectedData
+    keyPeople
   );
 
   // Stable: persona + full profile context — cached by Anthropic for 5 min across requests.
@@ -1440,9 +1441,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isDateRemove = !isMorningGreeting && DATE_REMOVE_PATTERN.test(message);
   const isEmergency = EMERGENCY_PATTERN.test(message);
 
-  // Dynamic partner detection — read from profile (any girlfriend/boyfriend/spouse/etc.)
-  const profilePeople = ((userProfile?.rawData as CollectedData)?.people ?? []);
-  const partner = profilePeople.find((p) => isPartnerRelationship(p.relationship)) ?? null;
+  // Dynamic partner detection — read from key_people (structured table)
+  const partner = keyPeople.find((p) => isPartnerRelationship(p.relationship ?? "")) ?? null;
   const partnerFirstName = partner?.name?.split(" ")[0] ?? null;
   const partnerPattern = partnerFirstName ? new RegExp(`\\b${partnerFirstName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i") : null;
   const isPartnerRelated = !isMorningGreeting && partnerPattern !== null && partnerPattern.test(message);
@@ -1660,7 +1660,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     //   5. Call Claude with Haiku (3-5 s vs Sonnet's 15-20 s) once all data is ready.
     // Expected total delivery time: ~8-10 s (vs ~38 s before).
     const deliveryNow = new Date();
-    const homeAddress = userProfile?.homeAddress ?? ((userProfile?.rawData as CollectedData)?.homeAddress) ?? "";
+    const homeAddress = userProfile?.homeAddress ?? "";
     const primaryLat = userProfile?.latitude ?? 32.7767;
     const primaryLon = userProfile?.longitude ?? -96.7970;
     const t0 = Date.now();
@@ -1783,7 +1783,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
     // ── Morning Actions — SSE/web path only ──────────────────────────────────
     // Native no longer receives morningActions; fire the promise only for SSE.
-    const primaryCity = (userProfile?.rawData as CollectedData | undefined)?.city ?? userProfile?.city ?? "";
+    const primaryCity = userProfile?.city ?? "";
     const morningActionsPromise: Promise<MorningAction[]> = isNativeMorning
       ? Promise.resolve([])
       : assembleMorningActions({
@@ -2031,7 +2031,7 @@ If the conversation is not about a trip, set destination to null.`,
 
         const itinerary = await generateTripItinerary(
           intent,
-          userProfile as Record<string, unknown> | null
+          userProfile
         );
 
         // Enrich each hotel with SerpAPI rates + booking URLs (requires start date)
@@ -2157,7 +2157,7 @@ If the conversation is not about a trip, set destination to null.`,
 
         const itinerary = await generateTripItinerary(
           tripIntent,
-          userProfile as Record<string, unknown> | null
+          userProfile
         );
 
         // Enrich each hotel with SerpAPI rates + booking URLs (requires start date)
@@ -2715,8 +2715,7 @@ If dates cannot be resolved to specific days, set them to null.`,
 
   // ── Emergency protocol ──────────────────────────────────────────────────────
   if (isEmergency) {
-    const homeAddressForEmergency =
-      ((userProfile?.rawData as CollectedData)?.homeAddress) ?? "unknown";
+    const homeAddressForEmergency = userProfile?.homeAddress ?? "unknown";
     systemPrompt += `\n\n[EMERGENCY PROTOCOL ACTIVATED]\nThe user may be in distress or danger. Respond immediately with calm, clear, reassuring emergency guidance. Tell them to call 911. Give their home address: ${homeAddressForEmergency}. Ask if they need you to stay on the line. Use short sentences. Be calm and clear. Do NOT be wordy — emergency responders need clarity. Start your response with a warm, direct greeting using their name.`;
   }
 
@@ -3859,15 +3858,14 @@ If dates cannot be resolved to specific days, set them to null.`,
         const singleCandidate = candidates[0] ?? null;
         const phone = singleCandidate?.phone ?? null;
 
-        // Relationship: use key_people first, fall back to profile rawData
+        // Relationship: use key_people first, fall back to already-fetched keyPeople
         let relationship = singleCandidate?.relationship;
         if (!relationship) {
-          const profilePeopleAll = ((userProfile?.rawData as CollectedData)?.people ?? []) as Array<{ name: string; relationship?: string }>;
-          const profileMatch = profilePeopleAll.find(
+          const profileMatch = keyPeople.find(
             (p) => p.name.toLowerCase().includes(lowerTarget) ||
                    lowerTarget.includes(p.name.split(" ")[0]?.toLowerCase() ?? "")
           );
-          relationship = profileMatch?.relationship;
+          relationship = profileMatch?.relationship ?? undefined;
         }
 
         // Check if the user specified a tone inline ("text Sarah in a flirty tone")
@@ -5692,8 +5690,7 @@ If you cannot extract both, return null.`,
   }
 
   let navigationUrl: string | undefined;
-  const profileHomeAddress =
-    ((userProfile?.rawData as CollectedData)?.homeAddress) ?? "";
+  const profileHomeAddress = userProfile?.homeAddress ?? "";
   const placesWithHome: Array<{ name: string; address: string }> = profileHomeAddress
     ? [
         { name: "home", address: profileHomeAddress },

@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { authenticate } from "../auth/middleware.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
-import type { CollectedData } from "../onboarding/onboardingManager.js";
+import { getPeople } from "../people/peopleManager.js";
 import { getCachedWeather } from "../weather/weatherCache.js";
 import { analyzePressureDelta } from "../weather/pressureScheduler.js";
 
@@ -165,21 +165,29 @@ router.get("/weather/morning", async (req: Request, res: Response) => {
       }
     }
 
-    const rawData = (profile?.rawData ?? {}) as CollectedData;
     const FAMILY_RELS = /^(spouse|partner|girlfriend|boyfriend|fiancée?|fiancee?|wife|husband|son|daughter|child|parent|mother|father|mom|dad|brother|sister|sibling|grandm|grandp|grandma|grandpa|grandparent|grandchild|stepmom|stepdad|stepson|stepdaughter|stepfather|stepmother|stepparent)/i;
-    const people = (rawData.people ?? [])
+    const keyPeople = await getPeople(userName).catch(() => []);
+    const people = keyPeople
       .filter((p) => {
-        if (!p.city || p.city.trim().length === 0) return false;
-        if (p.city.trim().toLowerCase() === primaryCity.trim().toLowerCase()) return false;
+        if (!p.address) return false;
+        // Extract city from "Street, City, State ZIP" — second-to-last comma segment
+        const parts = p.address.split(",").map((s) => s.trim()).filter(Boolean);
+        const city = parts.length >= 2 ? parts[parts.length - 2] : parts[0];
+        if (!city || city.toLowerCase() === primaryCity.trim().toLowerCase()) return false;
         const firstWord = (p.relationship ?? "").trim().split(/\s+/)[0] ?? "";
         return FAMILY_RELS.test(firstWord);
       })
-      .slice(0, 4);
+      .slice(0, 4)
+      .map((p) => {
+        const parts = (p.address ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+        const city = parts.length >= 2 ? parts[parts.length - 2] : parts[0] ?? "";
+        return { ...p, city };
+      });
 
     const geocodedPeople = await Promise.all(
       people.map(async (p) => {
-        const coords = await geocodeCity(p.city!).catch(() => null);
-        return coords ? { name: p.name, relationship: p.relationship, city: p.city!, lat: coords.lat, lon: coords.lon } : null;
+        const coords = await geocodeCity(p.city).catch(() => null);
+        return coords ? { name: p.name, relationship: p.relationship, city: p.city, lat: coords.lat, lon: coords.lon } : null;
       })
     );
     const validPeople = geocodedPeople.filter(Boolean) as Array<{ name: string; relationship: string; city: string; lat: number; lon: number }>;

@@ -184,11 +184,9 @@ async function checkDepartureAlertsForUser(userName: string): Promise<void> {
     // ── Neighborhood intelligence — parking + nearby spots ──────────────────
     let neighborhoodBrief: string | null = null;
     try {
-      const rawData = profile?.rawData as { foodPreferences?: string[]; interests?: string[] } | null;
-      const userPrefs = [
-        ...(rawData?.foodPreferences ?? []),
-        ...(rawData?.interests ?? []).filter((i) => /bar|cocktail|coffee|wine|drink|whiskey/i.test(i)),
-      ].slice(0, 4);
+      const userPrefs = (profile?.hobbies ?? [])
+        .filter((i) => /bar|cocktail|coffee|wine|drink|whiskey/i.test(i))
+        .slice(0, 4);
 
       // Pick the most relevant nearby category based on event time
       const eventHour = start.toLocaleString("en-US", { timeZone: TZ, hour: "numeric", hour12: false });

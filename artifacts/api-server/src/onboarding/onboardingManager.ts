@@ -496,13 +496,23 @@ export function buildPersonaPreamble(persona: "rosie" | "macc" | null): string {
   return `Your name is Rosie. You are warm, witty, and direct — always in the user's corner, occasionally sassy in the best way, and you treat them as the capable adult they are. You know exactly who you are. Never say you don't have a name or act uncertain about your identity.\n\n`;
 }
 
+// Minimal shape needed by buildProfileContext / buildSystemPromptFromProfile.
+// Satisfied by KeyPerson from peopleManager and by rawData.people entries.
+export interface PersonEntry {
+  name: string;
+  relationship: string | null;
+  address?: string | null;
+  notes?: string | null;
+  birthday?: string | null;
+  anniversary?: string | null;
+}
+
 export function buildSystemPromptFromProfile(
   profile: UserProfile,
-  rawData: CollectedData
+  _keyPeople: PersonEntry[] = []
 ): string {
   const userName = profile.name ?? "the user";
   const city = profile.city ?? "your city";
-  const people = (rawData.people ?? []) as Array<{ name: string; city?: string }>;
   const personaPreamble = buildPersonaPreamble(profile.companionPersona);
 
   return `${personaPreamble}You are a knowledgeable, genuinely helpful AI companion for ${userName}. Be accurate, direct, and useful.
@@ -526,7 +536,7 @@ When referencing any Google Calendar event, use ONLY the exact event title retur
 REMINDER CONFIRMATIONS — EXACT FORMAT:
 When a reminder is confirmed, reply with ONLY: "Done — I'll remind you to [text] at [time]." For recurring: "Set — I'll remind you to [text] every [day] at [time]." That line alone — nothing before or after it.
 
-You track weather for ${city}${people.filter((p) => p.city).map((p) => ` and ${p.city}`).join("")}.`;
+You track weather for ${city}.`;
 }
 
 function formatWakeTime(t: string): string {
@@ -561,38 +571,28 @@ export function isPartnerRelationship(rel: string): boolean {
 // Call this in every system prompt, always, regardless of onboarding status.
 export function buildProfileContext(
   profile: UserProfile | null,
-  rawData: CollectedData
+  keyPeople: PersonEntry[] = []
 ): string {
   const userName = profile?.name ?? "the user";
   const city = profile?.city ?? "";
 
-  // Structured columns with rawData fallbacks
-  const birthday: string | null = profile?.birthday ?? rawData.birthday ?? null;
+  // Structured columns — no rawData fallbacks
+  const birthday: string | null = profile?.birthday ?? null;
   const age: number | null = calculateAge(birthday);
-  const neighborhood: string | null = profile?.neighborhood ?? rawData.neighborhood ?? null;
-  const relationshipStatus: string | null = profile?.relationshipStatus ?? rawData.maritalStatus ?? null;
-  const homeAddress: string | null = profile?.homeAddress ?? rawData.homeAddress ?? null;
-  const wakeTime: string | null = profile?.wakeTime ?? rawData.wakeTime ?? null;
+  const neighborhood: string | null = profile?.neighborhood ?? null;
+  const relationshipStatus: string | null = profile?.relationshipStatus ?? null;
+  const homeAddress: string | null = profile?.homeAddress ?? null;
+  const wakeTime: string | null = profile?.wakeTime ?? null;
+  const healthNotes: string = profile?.healthNotes ?? "";
 
-  // rawData-only fields
-  // Support both new `pets` array and legacy `dog` field
-  const rawPets = rawData.pets as Array<{ name: string; type: string; breed?: string; age?: number }> | undefined;
-  const legacyDog = rawData.dog as { name: string; breed?: string; age?: number } | undefined;
-  const allPets: Array<{ name: string; type: string; breed?: string; age?: number }> =
-    rawPets && rawPets.length > 0
-      ? rawPets
-      : legacyDog
-        ? [{ name: legacyDog.name, type: "dog", breed: legacyDog.breed, age: legacyDog.age }]
-        : [];
-  const healthNotes = (profile?.healthNotes ?? rawData.healthNotes ?? "") as string;
-  const people = (rawData.people ?? []) as CollectedData["people"];
-  const places = (rawData.places ?? []) as CollectedData["places"];
-  const shows = (rawData.shows ?? []) as string[];
-  const restaurants = (rawData.restaurants ?? []) as string[];
-  const interests = (rawData.interests ?? []) as string[];
-  const sportsTeams = (rawData.sportsTeams ?? []) as string[];
-  const music = (rawData.music ?? []) as string[];
-  const foodPreferences = (rawData.foodPreferences ?? []) as string[];
+  // Structured preference columns
+  const people: PersonEntry[] = keyPeople;
+  const shows: string[] = profile?.tvGenres ?? [];
+  const restaurants: string = profile?.favoriteRestaurants ?? "";
+  const interests: string[] = profile?.hobbies ?? [];
+  const sportsTeams: string = profile?.sportsTeams ?? "";
+  const music: string[] = profile?.musicGenres ?? [];
+  const favoriteArtists: string[] = profile?.favoriteArtists ?? [];
 
   // ── About section ──────────────────────────────────────────────────────────
   const aboutLines: string[] = [];
@@ -621,26 +621,17 @@ export function buildProfileContext(
     aboutLines.push(`• Relationship status: ${relationshipStatus}`);
   }
 
-  for (const pet of allPets) {
-    const typeLabel = pet.type.charAt(0).toUpperCase() + pet.type.slice(1);
-    aboutLines.push(
-      pet.breed
-        ? `• ${typeLabel}: ${pet.name}${pet.age != null ? `, ${pet.age} years old` : ""}, ${pet.breed}`
-        : `• ${typeLabel}: ${pet.name}${pet.age != null ? `, ${pet.age} years old` : ""}`
-    );
-  }
   if (healthNotes) aboutLines.push(`• Health notes: ${healthNotes}`);
 
   // ── Partner / Significant Other section ───────────────────────────────────
-  const partner = people?.find((p) => isPartnerRelationship(p.relationship));
-  const nonPartnerPeople = people?.filter((p) => !isPartnerRelationship(p.relationship)) ?? [];
+  const partner = people.find((p) => isPartnerRelationship(p.relationship ?? ""));
+  const nonPartnerPeople = people.filter((p) => !isPartnerRelationship(p.relationship ?? ""));
 
   let partnerSection = "";
   if (partner) {
     let partnerLine = `• ${partner.name} — ${partner.relationship}`;
-    if (partner.city) partnerLine += `, lives in ${partner.city}`;
-    if (partner.address) partnerLine += ` (${partner.address})`;
-    if (partner.details) partnerLine += `. ${partner.details}`;
+    if (partner.address) partnerLine += `, ${partner.address}`;
+    if (partner.notes) partnerLine += `. ${partner.notes}`;
     partnerSection = [
       "",
       `Your Partner — ${partner.name}:`,
@@ -654,52 +645,20 @@ export function buildProfileContext(
     nonPartnerPeople.length > 0
       ? nonPartnerPeople.map((p) => {
           let line = `• ${p.name} — ${p.relationship}`;
-          if (p.city) line += `, lives in ${p.city}`;
-          if (p.address) line += ` (${p.address})`;
-          if (p.details) line += `. ${p.details}`;
-          return line;
-        }).join("\n")
-      : "• None recorded";
-
-  // ── Places section ─────────────────────────────────────────────────────────
-  const placesLines =
-    places && places.length > 0
-      ? places.map((p) => {
-          let line = `• ${p.name}`;
-          if (p.address) line += ` — ${p.address}`;
-          if (p.notes) line += ` (${p.notes})`;
+          if (p.address) line += `, ${p.address}`;
+          if (p.notes) line += `. ${p.notes}`;
           return line;
         }).join("\n")
       : "• None recorded";
 
   // ── Interests section ──────────────────────────────────────────────────────
   const interestParts: string[] = [];
-  if (shows.length) interestParts.push(`• Shows: ${shows.join(", ")}`);
-  if (sportsTeams.length) interestParts.push(`• Sports: ${sportsTeams.join(", ")}`);
-  if (music.length) interestParts.push(`• Music: ${music.join(", ")}`);
-  if (restaurants.length) interestParts.push(`• Favourite restaurants: ${restaurants.join(", ")}`);
-  if (foodPreferences.length) interestParts.push(`• Dietary preferences & food notes: ${foodPreferences.join(", ")}`);
-  if (interests.length) interestParts.push(`• Hobbies & interests: ${interests.join(", ")}`);
-
-  const memoryBookSection = "";
-
-  // ── Pets section ───────────────────────────────────────────────────────────
-  const petsSection: string[] = [];
-  if (allPets.length > 0) {
-    petsSection.push("", "Your Pets:");
-    for (const pet of allPets) {
-      const typeLabel = pet.type.charAt(0).toUpperCase() + pet.type.slice(1);
-      const detail = [
-        pet.breed ?? null,
-        pet.age != null ? `${pet.age} years old` : null,
-      ].filter(Boolean).join(", ");
-      petsSection.push(`• ${typeLabel}: ${pet.name}${detail ? ` — ${detail}` : ""}`);
-    }
-    const firstName = allPets[0].name;
-    petsSection.push(
-      `⚑ You know ${userName}'s pet${allPets.length > 1 ? "s" : ""} well. Ask about them naturally in conversation — e.g. "How's ${firstName} doing today?" or "Did ${firstName} behave this morning?" Mention them occasionally in briefings when relevant. Never over-do it — just the way a close friend would.`
-    );
-  }
+  if (shows.length)           interestParts.push(`• Shows/TV genres: ${shows.join(", ")}`);
+  if (sportsTeams)            interestParts.push(`• Sports: ${sportsTeams}`);
+  if (music.length)           interestParts.push(`• Music genres: ${music.join(", ")}`);
+  if (favoriteArtists.length) interestParts.push(`• Favourite artists: ${favoriteArtists.join(", ")}`);
+  if (restaurants)            interestParts.push(`• Favourite restaurants: ${restaurants}`);
+  if (interests.length)       interestParts.push(`• Hobbies & interests: ${interests.join(", ")}`);
 
   return [
     `\nHere is everything you know about ${userName}:`,
@@ -712,13 +671,8 @@ export function buildProfileContext(
     "Your People:",
     peopleLines,
     "",
-    "Your Places:",
-    placesLines,
-    "",
     "Your Interests:",
     interestParts.length > 0 ? interestParts.join("\n") : "• None recorded",
-    ...petsSection,
-    memoryBookSection,
   ].join("\n");
 }
 

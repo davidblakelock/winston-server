@@ -6,7 +6,8 @@ import { getLastNightNotes, formatNotesForMorningBriefing } from "../winddown/wi
 import { getRecentMemories, formatMemoriesForContext } from "../memory/memoryManager.js";
 import { fetchMorningNews, fetchDailyMotivation } from "../news/newsManager.js";
 import { getProfileItems, getProfilePlaces, formatProfileForContext } from "../profile/profileManager.js";
-import { getProfile, buildSystemPromptFromProfile, buildProfileContext, type CollectedData } from "../onboarding/onboardingManager.js";
+import { getProfile, buildSystemPromptFromProfile, buildProfileContext, type PersonEntry } from "../onboarding/onboardingManager.js";
+import { getPeople } from "../people/peopleManager.js";
 import { getWatchedShows } from "../tv/showManager.js";
 import { fetchEpisodesForDate, formatEpisodeForPrompt } from "../tv/tvmaze.js";
 import { fetchSportsScores, formatSportsForPrompt } from "../sports/sportsManager.js";
@@ -201,29 +202,8 @@ function getCurrentDateTimeBlock(): string {
   );
 }
 
-function buildPeopleContextBlock(rawData: CollectedData, displayName?: string): string {
-  type PersonEntry = {
-    name?: string;
-    relationship?: string;
-    city?: string;
-    birthday?: string;
-    details?: string;
-    address?: string;
-    anniversary?: string;
-  };
-  const people = (rawData.people ?? []) as PersonEntry[];
-
-  // Pets — support both new `pets` array and legacy `dog` field
-  const rawPets = rawData.pets as Array<{ name: string; type: string; breed?: string; age?: number }> | undefined;
-  const legacyDog = rawData.dog as { name: string; breed?: string; age?: number } | undefined;
-  const allPets: Array<{ name: string; type: string; breed?: string; age?: number }> =
-    rawPets && rawPets.length > 0
-      ? rawPets
-      : legacyDog
-        ? [{ name: legacyDog.name, type: "dog", breed: legacyDog.breed, age: legacyDog.age }]
-        : [];
-
-  if (people.length === 0 && allPets.length === 0) return "";
+function buildPeopleContextBlock(people: PersonEntry[], displayName?: string): string {
+  if (people.length === 0) return "";
 
   const partnerRels = ["girlfriend", "boyfriend", "wife", "husband", "partner", "fiancée", "fiancé"];
   const lines: string[] = [];
@@ -233,47 +213,30 @@ function buildPeopleContextBlock(rawData: CollectedData, displayName?: string): 
     const rel = (p.relationship ?? "").trim();
     if (!name || !rel) continue;
 
-    const city = p.city?.trim();
+    const address = p.address?.trim();
     const birthday = p.birthday?.trim();
-    const details = p.details?.trim();
+    const notes = p.notes?.trim();
     const anniversary = p.anniversary?.trim();
     const isPartner = partnerRels.some((r) => rel.toLowerCase().includes(r));
 
     const parts: string[] = [`${name} — ${rel}${isPartner ? " (Your Partner)" : ""}`];
-    if (city) parts.push(`based in ${city}`);
+    if (address) parts.push(`${address}`);
     if (birthday) parts.push(`birthday: ${birthday}`);
     if (anniversary) parts.push(`${displayName?.split(" ")[0] ?? "your"} & ${name.split(" ")[0]} anniversary: ${anniversary}`);
-    if (details) parts.push(details);
+    if (notes) parts.push(notes);
 
     lines.push(`• ${parts.join(", ")}`);
   }
 
-  if (lines.length === 0 && allPets.length === 0) return "";
-
-  // Build pets lines
-  const petLines: string[] = [];
-  for (const pet of allPets) {
-    const typeLabel = pet.type.charAt(0).toUpperCase() + pet.type.slice(1);
-    const detail = [
-      pet.breed ?? null,
-      pet.age != null ? `${pet.age} years old` : null,
-    ].filter(Boolean).join(", ");
-    petLines.push(`• ${typeLabel}: ${pet.name}${detail ? ` — ${detail}` : ""}`);
-  }
-
-  const petsBlock = petLines.length > 0
-    ? `\n\n[Pets]\n` + petLines.join("\n") +
-      `\n• Mention pets naturally and warmly when appropriate — e.g. "Hope ${allPets[0]?.name} is keeping you company today." Don't force it into every briefing — once or twice a week is plenty.`
-    : "";
+  if (lines.length === 0) return "";
 
   return (
     `\n\n[Key People — Reference naturally in the briefing]\n` +
-    (lines.length > 0 ? lines.join("\n") : "(no people recorded)") + "\n\n" +
+    lines.join("\n") + "\n\n" +
     `HOW TO USE THIS:\n` +
     `• Susan (Your Partner) — include a warm, specific one-liner in the Section 15 closing every briefing. Examples: "Hope you and Susan have a great night", "Give Susan my best." Keep it natural — not every closing needs to be about her, but include her often.\n` +
     `• Birthdays — if any birthday is within 7 days, surface it in Section 13 with the date. If it's today, make it feel special.\n` +
-    `• Never invent details not listed here. Base any reference on the facts in this block.` +
-    petsBlock
+    `• Never invent details not listed here. Base any reference on the facts in this block.`
   );
 }
 
@@ -442,10 +405,11 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
     ];
     const intentionQuestion = INTENTION_QUESTIONS[dayOfYear % 3]!;
 
-    const [recentMemories, allProfileItems, userProfile, seenHeadlines, seenVenueHeadlines, briefingPrefs, proactiveMode, userSettings, stoicEntry] = await Promise.all([
+    const [recentMemories, allProfileItems, userProfile, keyPeople, seenHeadlines, seenVenueHeadlines, briefingPrefs, proactiveMode, userSettings, stoicEntry] = await Promise.all([
       getRecentMemories(7).catch(() => []),
       getProfileItems(undefined, userName).catch(() => []),
       getProfile(userName).catch(() => null),
+      getPeople(userName).catch(() => [] as PersonEntry[]),
       getSeenHeadlines(userName, 3).catch(() => new Set<string>()),    // news/Dallas: 3-day dedup window
       getSeenHeadlines(userName, 14).catch(() => new Set<string>()),  // venue concerts: 14-day window (events repeat until show date)
       getBriefingPreferences(userName).catch(() => []),
@@ -457,7 +421,7 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
     const dynamicProfileBlock = formatProfileForContext(allProfileItems);
     const corePrompt =
       userProfile?.onboardingCompleted && userProfile.name
-        ? buildSystemPromptFromProfile(userProfile, userProfile.rawData as CollectedData)
+        ? buildSystemPromptFromProfile(userProfile)
         : buildBaseSystemPrompt(userProfile?.name);
 
     // ── Onboarding nudge — inject once per day if profile not yet complete ────
@@ -480,13 +444,10 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
     const primaryCity = (userProfile?.city ?? "Dallas").trim();
     const primaryLat = userProfile?.latitude ?? 32.7767;
     const primaryLon = userProfile?.longitude ?? -96.7970;
-    const homeAddress = userProfile?.homeAddress ?? ((userProfile?.rawData as CollectedData)?.homeAddress) ?? "";
+    const homeAddress = userProfile?.homeAddress ?? "";
 
     // ── Build city-aware local content context from profile ──────────────────
-    // Pull preferences from both rawData (onboarding) and profile_items (ongoing)
-    // to drive preference-aware scoring in dallasContent.ts.
-    const rawData = (userProfile?.rawData ?? {}) as CollectedData;
-
+    // Pull preferences from structured profile columns + profile_items (ongoing).
     const VENUE_KEYWORDS = /theater|theatre|pavilion|amphitheater|arena|concert hall|performing arts|venue|auditorium|ballroom/i;
     const RESTAURANT_KEYWORDS = /restaurant|bar|cafe|coffee|diner|bistro|grill|kitchen|eatery|cantina|pub/i;
     const NOT_NEIGHBORHOOD = new RegExp([VENUE_KEYWORDS.source, RESTAURANT_KEYWORDS.source].join("|"), "i");
@@ -512,23 +473,31 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
       .filter((p) => p.category === "places" && !NOT_NEIGHBORHOOD.test(p.name + " " + (p.detail ?? "")))
       .map((p) => p.name);
 
-    // Favorite restaurants: combine raw_data.restaurants + profile_items.restaurants
+    // Favorite restaurants: structured column + profile_items.restaurants
     const profileRestaurants = allProfileItems
       .filter((p) => p.category === "restaurants")
       .map((p) => p.name);
+    const structuredRestaurants = userProfile?.favoriteRestaurants
+      ? userProfile.favoriteRestaurants.split(",").map((s) => s.trim()).filter(Boolean)
+      : [];
     const favoriteRestaurants = [
-      ...(rawData.restaurants ?? []),
+      ...structuredRestaurants,
       ...profileRestaurants,
     ].filter((v, i, a) => a.indexOf(v) === i); // dedupe
 
-    // Interests/hobbies: combine raw_data.interests + profile_items.interests
+    // Interests/hobbies: structured column + profile_items.interests
     const profileInterests = allProfileItems
       .filter((p) => p.category === "interests")
       .map((p) => p.name);
     const allInterests = [
-      ...(rawData.interests ?? []),
+      ...(userProfile?.hobbies ?? []),
       ...profileInterests,
     ].filter((v, i, a) => a.indexOf(v) === i);
+
+    // Sports teams: structured column (string) → split to array
+    const structuredSportsTeams = userProfile?.sportsTeams
+      ? userProfile.sportsTeams.split(",").map((s) => s.trim()).filter(Boolean)
+      : [];
 
     const localCtx = {
       city: primaryCity,
@@ -536,11 +505,11 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
       venues: profileVenues.slice(0, 8),
       artists: profileArtists.slice(0, 10),
       neighborhoods: profileNeighborhoods.slice(0, 6),
-      musicGenres: (rawData.music ?? []) as string[],
+      musicGenres: userProfile?.musicGenres ?? [],
       interests: allInterests.slice(0, 12),
       favoriteRestaurants: favoriteRestaurants.slice(0, 12),
-      sportsTeams: (rawData.sportsTeams ?? []) as string[],
-      dietaryRestrictions: [],  // no field in rawData yet; reserved for future onboarding
+      sportsTeams: structuredSportsTeams,
+      dietaryRestrictions: [],
     };
 
     const [lastNightNotes, newsBlock, yesterdayEps, todayEps, sportsScores, upcomingBills, upcomingDates, sundayData, pendingFollowUps, dallasEvents, venueConcertsBlock, dailyMotivation, personalFollowUps, outForDeliveryOrders, apifyEventResult, weeklyGift, pendingObservation, annualLetter] = await Promise.all([
@@ -736,10 +705,10 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
 
     const profileContextBlock = buildProfileContext(
       userProfile ?? null,
-      (userProfile?.rawData ?? {}) as CollectedData
+      keyPeople
     );
 
-    const peopleContextBlock = buildPeopleContextBlock((userProfile?.rawData ?? {}) as CollectedData, userProfile?.name ?? undefined);
+    const peopleContextBlock = buildPeopleContextBlock(keyPeople, userProfile?.name ?? undefined);
 
     // ── Split the system prompt into preamble (before email+calendar slot) ──────
     // and suffix (after email+calendar slot, through MASTER_BRIEFING_INSTRUCTION).

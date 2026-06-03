@@ -19,7 +19,8 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
-import { getProfile, type CollectedData } from "../onboarding/onboardingManager.js";
+import { getProfile } from "../onboarding/onboardingManager.js";
+import { getPeople } from "../people/peopleManager.js";
 import { getCachedWeather } from "../weather/weatherCache.js";
 import { fetchTodayEvents, chicagoDateStr, toChicagoTime } from "../google/calendar.js";
 import { fetchAndSummarizeEmails, type EmailSummary } from "../google/gmail.js";
@@ -306,16 +307,22 @@ export async function generateFreshBriefing(userName: string): Promise<string> {
   const primaryCity  = (profile?.city ?? "Dallas").trim();
   const primaryLat   = profile?.latitude  ?? 32.7767;
   const primaryLon   = profile?.longitude ?? -96.7970;
-  const homeAddress  = profile?.homeAddress ??
-    ((profile?.rawData as CollectedData | undefined)?.homeAddress as string | undefined) ?? "";
-  const rawData      = (profile?.rawData ?? {}) as CollectedData;
-  const people       = (rawData.people ?? []) as Array<{
-    name?: string; relationship?: string; city?: string;
-  }>;
-  const interests    = (rawData.interests ?? []) as string[];
-  const rawExtra     = rawData as unknown as Record<string, unknown>;
-  const musicGenres  = ((rawExtra["musicPreferences"] ?? rawExtra["favoriteGenres"] ?? []) as string[]);
-  const allInterests = [...new Set([...interests, ...musicGenres])].filter(Boolean).slice(0, 10);
+  const homeAddress     = profile?.homeAddress ?? "";
+  const hobbies         = profile?.hobbies ?? [];
+  const musicGenres     = profile?.musicGenres ?? [];
+  const allInterests    = [...new Set([...hobbies, ...musicGenres])].filter(Boolean).slice(0, 10);
+
+  // Family-city weather: pull from key_people; extract city from address field
+  const keyPeople = await getPeople(userName).catch(() => []);
+  const people = keyPeople
+    .filter((p) => p.address)
+    .map((p) => {
+      // "123 Main St, Dallas, TX 75201" → city is second-to-last comma segment
+      const parts = (p.address ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+      const city = parts.length >= 2 ? parts[parts.length - 2] : parts[0] ?? "";
+      return { name: p.name, relationship: p.relationship ?? "", city };
+    })
+    .filter((p) => p.city);
   const favoriteArtists = (profile?.favoriteArtists ?? []).filter(Boolean);
 
   // Family cities (first 2, deduplicated against primary city)

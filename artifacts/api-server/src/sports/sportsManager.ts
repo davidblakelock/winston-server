@@ -328,9 +328,10 @@ export async function fetchSportsScores(userName?: string): Promise<SportsScores
 
   if (userName) {
     const profile = await getProfile(userName).catch(() => null);
-    const rawTeams = (profile?.rawData as { sportsTeams?: string[] } | null)?.sportsTeams;
-    if (Array.isArray(rawTeams) && rawTeams.length > 0) {
-      teamNames = rawTeams.map((t) => t.toLowerCase().trim());
+    // sportsTeams is a structured column (string, comma-separated) — split into array
+    const rawTeams = profile?.sportsTeams;
+    if (rawTeams) {
+      teamNames = rawTeams.split(",").map((t) => t.toLowerCase().trim()).filter(Boolean);
     }
   }
 

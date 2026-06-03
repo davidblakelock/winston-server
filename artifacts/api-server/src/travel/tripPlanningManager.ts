@@ -19,8 +19,6 @@ import { NATIVE_USER } from "../auth/middleware.js";
 import { MODEL_SONNET } from "../lib/models.js";
 
 import {
-  isPartnerRelationship,
-  type CollectedData,
   type UserProfile,
 } from "../onboarding/onboardingManager.js";
 import {
@@ -246,24 +244,17 @@ export function parseTripIntent(message: string): ParsedTripIntent {
  * the conversational overview prompt and the formal itinerary generation.
  */
 export function buildTravelProfileContext(
-  rawData: CollectedData,
-  profile?: Pick<UserProfile, "healthNotes" | "name"> | null,
+  profile: UserProfile | null,
 ): string {
+  if (!profile) return "";
   const lines: string[] = [];
 
   // Home base — useful for "feels like home" restaurant/neighborhood comparisons
-  if (rawData.city) lines.push(`Home city: ${rawData.city}`);
-  if (rawData.neighborhood) lines.push(`Home neighborhood: ${rawData.neighborhood}`);
-
-  // Travel companion — derive from people list
-  const partner = rawData.people?.find((p) => isPartnerRelationship(p.relationship ?? ""));
-  if (partner) {
-    const relation = partner.relationship ?? "partner";
-    lines.push(`Traveling with: ${partner.name} (${profile?.name?.split(" ")[0] ?? "David"}'s ${relation})`);
-  }
+  if (profile.city)         lines.push(`Home city: ${profile.city}`);
+  if (profile.neighborhood) lines.push(`Home neighborhood: ${profile.neighborhood}`);
 
   // Interests — split into activity signals and cultural signals
-  const interests = rawData.interests ?? [];
+  const interests = profile.hobbies ?? [];
   const active  = interests.filter((i) => /golf|hik|pickleball|bike|run|outdoor|sport|tennis|ski|climb|kayak|active|adventure/i.test(i));
   const culture = interests.filter((i) => /music|jazz|art|museum|history|theater|concert|food|wine|film|culinary|read|cook/i.test(i));
   if (active.length)  lines.push(`Active interests: ${active.join(", ")}`);
@@ -273,36 +264,27 @@ export function buildTravelProfileContext(
   }
 
   // Music — important for live-music cities (Nashville, New Orleans, Austin, etc.)
-  if (rawData.music?.length) {
-    lines.push(`Music taste: ${rawData.music.slice(0, 6).join(", ")}`);
+  if (profile.musicGenres?.length) {
+    lines.push(`Music taste: ${profile.musicGenres.slice(0, 6).join(", ")}`);
   }
 
   // Shows / TV — signals style preferences (e.g. Yellowstone fan → ranch/western experiences)
-  if (rawData.shows?.length) {
-    lines.push(`Favorite shows: ${rawData.shows.slice(0, 4).join(", ")}`);
+  if (profile.tvGenres?.length) {
+    lines.push(`Favorite TV genres: ${profile.tvGenres.slice(0, 4).join(", ")}`);
   }
 
   // Sports teams — useful for scheduling around games or stadium visits
-  if (rawData.sportsTeams?.length) {
-    lines.push(`Sports teams: ${rawData.sportsTeams.slice(0, 4).join(", ")}`);
+  if (profile.sportsTeams) {
+    lines.push(`Sports teams: ${profile.sportsTeams}`);
   }
 
-  // Food
-  if (rawData.foodPreferences?.length) {
-    lines.push(`Food preferences: ${rawData.foodPreferences.join(", ")}`);
-  }
-  if (rawData.restaurants?.length) {
-    lines.push(`Favorite restaurants at home (style reference): ${rawData.restaurants.slice(0, 5).join(", ")}`);
-  }
-
-  // Saved places — hints at venue style/taste
-  if (rawData.places?.length) {
-    const placeNames = rawData.places.slice(0, 5).map((p) => p.name);
-    lines.push(`Saved places they love: ${placeNames.join(", ")}`);
+  // Favorite restaurants at home — style reference
+  if (profile.favoriteRestaurants) {
+    lines.push(`Favorite restaurants at home (style reference): ${profile.favoriteRestaurants}`);
   }
 
   // Health / dietary
-  if (profile?.healthNotes) {
+  if (profile.healthNotes) {
     lines.push(`Health/dietary notes: ${profile.healthNotes}`);
   }
 
@@ -327,11 +309,9 @@ function toISODateOrNull(dateStr: string | null | undefined): string | null {
 
 export async function generateTripItinerary(
   intent: ParsedTripIntent,
-  userProfile: Record<string, unknown> | null,
+  userProfile: UserProfile | null,
 ): Promise<NativeTripPlan> {
-  const rawData   = (userProfile?.rawData ?? {}) as CollectedData;
-  const profile   = userProfile as Pick<UserProfile, "healthNotes" | "name"> | null;
-  const travelCtx = buildTravelProfileContext(rawData, profile);
+  const travelCtx = buildTravelProfileContext(userProfile);
 
   const nights    = intent.nights ?? 3;
   const totalDays = nights + 1;
