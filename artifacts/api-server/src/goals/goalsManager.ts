@@ -700,32 +700,31 @@ export async function goalsFreeformChat(
   conversationHistory: Array<{ role: "user" | "assistant"; content: string }>,
   userName: string
 ): Promise<string> {
-  const [userProfile, people] = await Promise.all([
-    getProfile(userName).catch(() => null),
-    getPeople(userName).catch(() => []),
-  ]);
+  const userProfile = await getProfile(userName).catch(() => null);
+  const name = userProfile?.name ?? userName;
+  const city = userProfile?.city ?? "";
 
-  const systemPrompt = userProfile
-    ? buildSystemPromptFromProfile(userProfile, people) + buildProfileContext(userProfile, people) +
-      "\n\nThe user is on the Goals screen and discussing a goal they want to achieve. Help them naturally — you don't need to act like a coach, just be yourself."
-    : "You are Winston, a helpful AI companion.";
+  // Prepend basic profile context to the first user turn — same pattern as travel screen.
+  // No system prompt; GPT-4o responds naturally.
+  const contextPrefix = city
+    ? `[User: ${name}, based in ${city}]\n`
+    : `[User: ${name}]\n`;
 
   const messages: Array<{ role: "user" | "assistant"; content: string }> = [
     ...conversationHistory,
-    { role: "user", content: message },
+    { role: "user", content: contextPrefix + message },
   ];
 
-  const response = await anthropic.messages.create({
-    model: MODEL_HAIKU,
+  const response = await openai.chat.completions.create({
+    model: MODEL_GPT4O,
     max_tokens: 2048,
-    system: systemPrompt,
     messages,
   });
 
-  const reply = response.content[0]?.type === "text" ? response.content[0].text.trim() : "";
+  const reply = response.choices[0]?.message?.content?.trim() ?? "";
   if (!reply) {
     logger.warn({ userName }, "[Goals] goalsFreeformChat returned empty response");
-    return "I didn't quite catch that — could you say a bit more about what you're working toward?";
+    return "I didn't quite catch that — could you say a bit more?";
   }
   return reply;
 }
