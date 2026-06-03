@@ -95,7 +95,6 @@ import {
   buildProfileContext,
   isPartnerRelationship,
 } from "../onboarding/onboardingManager.js";
-import { getPeople } from "../people/peopleManager.js";
 import { getCachedWeather, type CachedWeather } from "../weather/weatherCache.js";
 import {
   getWatchedShows,
