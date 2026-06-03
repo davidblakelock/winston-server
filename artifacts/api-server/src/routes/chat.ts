@@ -1065,7 +1065,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   // Isolated contexts: messages are NOT saved to chat_messages (main chat history).
   // trip-planning has its own trip_plans table.
   // journal entries belong on the My Life screen only, not the main chat.
-  const isIsolatedContext = requestContext === "trip-planning" || requestContext === "journal";
+  const isIsolatedContext = requestContext === "trip-planning" || requestContext === "journal" || requestContext === "goals";
 
   // ── Active trip context (Trip screen) ─────────────────────────────────────
   // When the native app sends context:"trip-planning" + tripId, load the stored
