@@ -1,6 +1,5 @@
 import { Router } from "express";
 import express from "express";
-import { randomUUID } from "crypto";
 import { authenticate } from "../auth/middleware.js";
 import { query } from "../db.js";
 import {
@@ -221,24 +220,8 @@ router.post("/goals/chat", async (req, res) => {
   }
   try {
     const response = await goalsFreeformChat(message.trim(), conversation_history ?? [], userName);
-    // Persist exchange fire-and-forget so response is immediate
-    const msgId = randomUUID();
-    query(
-      `INSERT INTO chat_messages (user_name, role, content, message_id)
-       VALUES ($1, 'user', $2, $3)
-       ON CONFLICT (message_id) WHERE message_id IS NOT NULL DO NOTHING`,
-      [userName, message.trim().slice(0, 8000), `goals:${msgId}:user`]
-    ).then(() => req.log.info("[Goals] User message saved"))
-     .catch(() => {});
-    if (response) {
-      query(
-        `INSERT INTO chat_messages (user_name, role, content, message_id)
-         VALUES ($1, 'assistant', $2, $3)
-         ON CONFLICT (message_id) WHERE message_id IS NOT NULL DO NOTHING`,
-        [userName, response.slice(0, 8000), `goals:${msgId}:assistant`]
-      ).then(() => req.log.info("[Goals] Assistant message saved"))
-       .catch(() => {});
-    }
+    // Goals conversations are NOT saved to chat_messages — they live only in
+    // the Goals screen and must not appear in the main chat history.
     req.log.info({ responseLen: response.length }, "[Goals] POST /goals/chat completed");
     res.json({ response });
   } catch (err) {

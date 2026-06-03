@@ -6117,6 +6117,7 @@ router.get("/chat/history", async (req: Request, res: Response) => {
       `SELECT role, content, created_at
        FROM chat_messages
        WHERE user_name = ANY($1)
+         AND (message_id IS NULL OR message_id NOT LIKE 'goals:%')
        ORDER BY created_at DESC, id DESC
        LIMIT $2`,
       [aliasNames, limit]
