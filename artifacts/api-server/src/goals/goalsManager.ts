@@ -706,7 +706,8 @@ export async function goalsFreeformChat(
   ]);
 
   const systemPrompt = userProfile
-    ? buildSystemPromptFromProfile(userProfile, people) + buildProfileContext(userProfile, people)
+    ? buildSystemPromptFromProfile(userProfile, people) + buildProfileContext(userProfile, people) +
+      "\n\nThe user is on the Goals screen and discussing a goal they want to achieve. Help them naturally — you don't need to act like a coach, just be yourself."
     : "You are Winston, a helpful AI companion.";
 
   const messages: Array<{ role: "user" | "assistant"; content: string }> = [
