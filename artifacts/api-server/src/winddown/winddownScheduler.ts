@@ -165,12 +165,10 @@ export async function generateOpeningMessage(
     familyLine +
     (todayContext ? `Today's calendar events: ${todayContext}\n` : "") +
     (morningMood ? `This morning ${displayName} mentioned feeling: "${morningMood.substring(0, 120)}".\n` : "") +
-    `\nWrite ONE opening to start the evening check-in — 1–2 sentences. Genuinely curious, not performative. ` +
-    `Never say "how was your day?" verbatim. Never start with "Certainly," "Of course," or "Absolutely." ` +
+    `\nWrite ONE opening to start the evening check-in. Genuinely curious, not performative. ` +
     `Sound like a friend checking in — dry, warm, specific when possible. ` +
     (todayContext ? `You may reference a non-routine calendar event as a natural hook. ` : "") +
-    (familyContext ? `${familyContext} — weave in naturally if it fits. ` : "") +
-    `No headers, no bullets. 1–2 sentences only.`;
+    (familyContext ? `${familyContext} — weave in naturally if it fits. ` : "");
 
   try {
     const response = await anthropic.messages.create({

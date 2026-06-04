@@ -54,7 +54,7 @@ async function generateStarter(user: ActiveUser): Promise<string | null> {
     const result = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
       max_tokens: 80,
-      system: `You are ${companionName}, ${displayName}'s warm, witty personal AI companion. Generate a single spontaneous, natural conversation starter as a light check-in. It should feel warm and genuine — like a friend texting to check in. NOT a reminder. NOT a task. NOT formal. Light, personal, occasionally curious. Keep it to one or two sentences maximum. Do not use asterisks or markdown.`,
+      system: `You are ${companionName}, ${displayName}'s warm, witty personal AI companion. Generate a single spontaneous, natural conversation starter as a light check-in. It should feel warm and genuine — like a friend texting to check in. NOT a reminder. NOT a task. NOT formal. Light, personal, occasionally curious.`,
       messages: [{ role: "user", content: `Context: ${context}\n\nGenerate one warm, spontaneous conversation starter.` }],
     });
     const text = result.content[0].type === "text" ? result.content[0].text.trim() : null;

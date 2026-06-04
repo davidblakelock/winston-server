@@ -373,23 +373,7 @@ ONLY ask a clarifying question if the goal is so vague that you literally cannot
 
 If there is conversation history, use it to refine, continue, or go deeper. Answer follow-up questions directly and thoroughly — treat this as a continuing conversation, not a fresh start.${webSearchContext ? `\n\nREAL-TIME DATA (use this to answer the question accurately):\n${webSearchContext}` : ""}
 
-OUTPUT FORMAT — use this EXACT structure (no JSON wrapping — write plain text):
-
-Write your complete markdown response first (use all the space you need — never cut it short).
-
-Then on a new line write exactly: ---STEPS---
-Then on the next line write a JSON array of 5–12 short actionable phrases:
-["Step one", "Step two", ...]
-
-Example tail of response:
-...that's the full guide.
-
----STEPS---
-["Listen to Kind of Blue by Miles Davis", "Watch Jazz by Ken Burns on PBS", "Visit The Balcony Club"]
-
-IMPORTANT: The ---STEPS--- delimiter MUST appear. The steps JSON array must be valid. Do not wrap anything in markdown code fences.
-
-For a clarifying question instead write:
+If you need to ask a clarifying question instead of giving a full response, write exactly:
 ---QUESTION---
 Your single sharp question here.`;
 
@@ -411,44 +395,13 @@ Your single sharp question here.`;
 
   let result: BreakdownResult;
 
-  // Check for clarifying question first
+  // Check for clarifying question
   const questionDelimIdx = raw.indexOf("---QUESTION---");
   if (questionDelimIdx !== -1) {
     const questionText = raw.slice(questionDelimIdx + "---QUESTION---".length).trim();
     result = { type: "question", content: questionText || raw };
   } else {
-    // Split on steps delimiter
-    const stepsDelimIdx = raw.indexOf("---STEPS---");
-    if (stepsDelimIdx !== -1) {
-      const content = raw.slice(0, stepsDelimIdx).trim();
-      const stepsRaw = raw.slice(stepsDelimIdx + "---STEPS---".length).trim();
-      let steps: string[] = [];
-      try {
-        // Extract first JSON array from the steps section
-        const arrayMatch = stepsRaw.match(/\[[\s\S]*?\]/);
-        if (arrayMatch) steps = JSON.parse(arrayMatch[0]) as string[];
-      } catch {
-        logger.warn({ stepsRaw: stepsRaw.slice(0, 200) }, "[Goals] breakdown: steps JSON parse failed");
-      }
-      result = { type: "steps", content, steps };
-    } else {
-      // No delimiter found — try legacy JSON parse, then fall back to raw text
-      try {
-        const parsed = JSON.parse(raw) as { type?: string; content?: string; steps?: string[] };
-        if (parsed.type === "question") {
-          result = { type: "question", content: parsed.content ?? raw };
-        } else {
-          result = {
-            type: "steps",
-            content: parsed.content ?? raw,
-            steps: Array.isArray(parsed.steps) ? parsed.steps : [],
-          };
-        }
-      } catch {
-        logger.warn({ rawLen: raw.length }, "[Goals] breakdown: no delimiter or JSON found, using raw content");
-        result = { type: "steps", content: raw, steps: [] };
-      }
-    }
+    result = { type: "steps", content: raw, steps: [] };
   }
 
   // ── Auto-save goal and steps to DB ────────────────────────────────────────────

@@ -44,7 +44,7 @@ export async function generateMemorySummary(
 
   const prompt =
     `Review this conversation between ${user} and their AI companion ${companion}. ` +
-    `Write a memory note (80-120 words) capturing what's worth remembering for future conversations. ` +
+    `Write a memory note capturing what's worth remembering for future conversations. ` +
     `Focus on:\n` +
     `- Physical health mentions (pain, energy, how activities like pickleball or running went)\n` +
     `- Family and relationship updates (Olivia, Susan, etc.)\n` +
