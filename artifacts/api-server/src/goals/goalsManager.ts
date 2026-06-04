@@ -404,8 +404,11 @@ Your single sharp question here.`;
     result = { type: "steps", content: raw, steps: [] };
   }
 
-  // ── Auto-save goal and steps to DB ────────────────────────────────────────────
-  if (options.autoSave && result.type === "steps" && result.steps.length > 0) {
+  // ── Auto-save goal to DB ──────────────────────────────────────────────────────
+  // Note: steps[] is always empty since the ---STEPS--- delimiter was removed;
+  // the full response is in content (markdown). We still save the goal row and
+  // return goalId so the native app can track conversations against a goal.
+  if (options.autoSave && result.type === "steps") {
     try {
       let savedGoalId = options.goalId;
 
