@@ -94,6 +94,7 @@ import {
   buildPersonaPreamble,
   buildProfileContext,
   isPartnerRelationship,
+  getCompanionDisplayName,
 } from "../onboarding/onboardingManager.js";
 import { getCachedWeather, type CachedWeather } from "../weather/weatherCache.js";
 import {
@@ -944,7 +945,7 @@ function buildBaseSystemPrompt(
   companionName?: string | null,
 ): string {
   const user = userName ?? "you";
-  const companion = companionName ?? buildPersonaPreamble(persona ?? null).match(/Your name is (\S+)/)?.[1] ?? "your companion";
+  const companion = getCompanionDisplayName(persona, companionName);
   return BASE_SYSTEM_PROMPT_TEMPLATE.replace(/__USER__/g, user).replace(/__COMPANION__/g, companion);
 }
 

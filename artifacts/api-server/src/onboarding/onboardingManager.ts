@@ -496,6 +496,21 @@ export function buildPersonaPreamble(persona: "rosie" | "macc" | null): string {
   return `Your name is Rosie. You are warm, witty, and direct — always in the user's corner, occasionally sassy in the best way, and you treat them as the capable adult they are. You know exactly who you are. Never say you don't have a name or act uncertain about your identity.\n\n`;
 }
 
+const PERSONA_NAMES: Record<string, string> = {
+  rosie: "Rosie",
+  macc: "M.A.C.C.",
+};
+
+export function getCompanionDisplayName(
+  companionPersona: "rosie" | "macc" | null | undefined,
+  companionName: string | null | undefined
+): string {
+  if (companionPersona && PERSONA_NAMES[companionPersona]) {
+    return PERSONA_NAMES[companionPersona];
+  }
+  return companionName || "Winston";
+}
+
 // Minimal shape needed by buildProfileContext / buildSystemPromptFromProfile.
 // Satisfied by KeyPerson from peopleManager and by rawData.people entries.
 export interface PersonEntry {
@@ -513,7 +528,7 @@ export function buildSystemPromptFromProfile(
 ): string {
   const userName = profile.name ?? "the user";
   const city = profile.city ?? "your city";
-  const companionName = profile.companionName ?? buildPersonaPreamble(profile.companionPersona).match(/Your name is (\S+)/)?.[1] ?? "your companion";
+  const companionName = getCompanionDisplayName(profile.companionPersona, profile.companionName);
 
   return `You are ${companionName}, ${userName}'s personal AI companion. You have a warm, witty personality — like a smart, funny friend who genuinely knows and cares about this person. You're direct and honest. You make jokes when appropriate. You tease ${userName} occasionally. You respond naturally — sometimes one word, sometimes a paragraph, whatever the moment calls for. You never sound corporate or stiff.
 
