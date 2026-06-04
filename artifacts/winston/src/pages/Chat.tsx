@@ -4,6 +4,7 @@ import { useLocation } from "wouter";
 import { useTextToSpeech } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { toast } from "@/hooks/use-toast";
 import { useNotifications, isNotificationsSupported } from "@/hooks/useNotifications";
 import { EmergencyOverlay } from "@/components/EmergencyOverlay";
 import SettingsPanel from "@/components/SettingsPanel";
@@ -1997,6 +1998,11 @@ export default function Chat({ onSignOut, companionName: companionNameProp, voic
             } catch {}
           } else {
             localStorage.removeItem(MED_PANEL_KEY);
+            toast({
+              title: "✓ No interactions found",
+              description: "No interactions found with your current medications.",
+              duration: 4000,
+            });
           }
           setMedInteractionPanel({ visible: hasContent, ...panelData });
         } catch (err) {
