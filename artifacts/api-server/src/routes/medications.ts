@@ -341,13 +341,22 @@ router.post("/medications/snooze-reminder", express.json({ limit: "1mb" }), asyn
     const fireAt = new Date(Date.now() + snoozeMinutes * 60 * 1000);
     // Pass pushCategoryId so the re-fired reminder retains the medication action buttons
     // ("Taken ✓" and "Remind in 30 min") instead of firing as a generic reminder-action.
+    // actionTaken / actionSnooze must be in pushData so the scheduler spreads them into
+    // the Expo message — without them the buttons appear but the endpoints are missing.
+    // LOCKED: do not change actionTaken or actionSnooze without explicit user request.
     const reminder = await createReminder({
       userName,
       reminderText: `Take ${medText}`,
       fireAt,
       timezone: "America/Chicago",
       pushCategoryId: "medication-action",
-      pushData: { notificationType: "medication", tag: "medication-morning" },
+      pushData: {
+        notificationType: "medication",
+        tag: "medication-morning",
+        actionTaken: "/api/medications/confirm-taken",
+        actionSnooze: "/api/medications/snooze-reminder",
+        snoozeMinutes: 30,
+      },
     });
     req.log.info({ userName, fireAt, snoozeMinutes, reminderId: reminder.id }, "[MEDS] Snooze reminder created");
     // Return dismissTag so the native app can clear the original notification after snoozing.

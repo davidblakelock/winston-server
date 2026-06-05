@@ -193,9 +193,12 @@ router.post("/push/test-medication", async (req, res) => {
       body,
       tag: "medication-morning",
       notificationType: "medication",
+      // "medication-action" → native app shows: "Taken ✓" and "Remind in 30 min" buttons.
+      // Taken ✓      → POST /api/medications/confirm-taken
+      // Remind in 30 → POST /api/medications/snooze-reminder { snoozeMinutes: 30 }
       categoryIdentifier: "medication-action",
       requireInteraction: true,
-      actionTaken: "/api/medications/taken",
+      actionTaken: "/api/medications/confirm-taken",
       actionSnooze: "/api/medications/snooze-reminder",
       snoozeMinutes: 30,
     };
