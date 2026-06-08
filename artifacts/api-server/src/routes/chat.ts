@@ -1111,9 +1111,15 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isCallRequest = !isReminderRequest && cls.call;
   const isStoryRead = cls.story_read;
   const isStoryCount = cls.story_count;
-  const isTripSaveIntent = !isMorningGreeting && cls.trip_save;
-  const isTripPlanIntent = !isMorningGreeting && !isTripSaveIntent && cls.trip_plan;
-  process.stdout.write(`[STDOUT] INTENT-FLAGS isMorning=${isMorningGreeting} isTripSave=${isTripSaveIntent} isTripPlan=${isTripPlanIntent} msg="${message.slice(0, 80)}"\n`);
+  // ── Trip save/plan: regex fallbacks alongside classifier ─────────────────────
+  // These two intents are critical for trip screen functionality. The original
+  // regexes are kept as reliable fallbacks so the classifier doesn't have to be
+  // perfect — either source firing is sufficient.
+  const _TRIP_SAVE_RE = /\b(?:save\s+(?:this|my|the|our|it)\b|build\s+(?:(?:me|us)\s+)?(?:(?:the|a|an?)\s+)?(?:full\s+)?itinerary|build\s+it(?:\s+out)?\b|create\s+(?:(?:me|us)\s+)?(?:(?:the|a|an?)\s+)?(?:full\s+)?itinerary|make\s+(?:(?:the|a|an?)\s+)?(?:full\s+)?itinerary|generate\s+(?:(?:the|a|an?)\s+)?(?:full\s+)?itinerary|yes[,\s]+(?:please[,\s]+)?(?:build|make|create|save|do\s+it|go\s+ahead)|go\s+ahead(?:\s+and\s+(?:build|make|create|save))?|let'?s\s+(?:build|save|do|go\s+ahead)\b|yes[,\s]+let'?s\s+(?:do|build|save)\s+it|add\s+(?:it\s+)?to\s+my\s+(?:trips?|travel)|save\s+to\s+(?:my\s+)?(?:trips?|travel\s+screen)|book\s+it\b)\b/i;
+  const _TRIP_PLAN_RE = /\b(?:(?:help\s+me\s+|can\s+you\s+|please\s+)?plan\s+(?:(?:me|us|out)\s+)?(?:a|an?|our|my)\s+(?:\d+[-\s](?:day|night)s?(?:[,\s]+\d+[-\s]nights?)?[\s,]+|long\s+)?(?:trip|vacation|getaway|holiday|road\s+trip|weekend(?:\s+trip)?)|(?:put\s+together|plan\s+me|plan\s+us)\s+(?:a|an?)\s+(?:trip|vacation|getaway)|i\s+(?:want|need|would\s+like)\s+(?:you\s+)?to\s+plan\s+(?:a|my|our)\s+trip)\b/i;
+  const isTripSaveIntent = !isMorningGreeting && (cls.trip_save || _TRIP_SAVE_RE.test(message));
+  const isTripPlanIntent = !isMorningGreeting && !isTripSaveIntent && (cls.trip_plan || _TRIP_PLAN_RE.test(message));
+  process.stdout.write(`[STDOUT] INTENT-FLAGS isMorning=${isMorningGreeting} isTripSave=${isTripSaveIntent}(cls=${cls.trip_save},re=${_TRIP_SAVE_RE.test(message)}) isTripPlan=${isTripPlanIntent}(cls=${cls.trip_plan},re=${_TRIP_PLAN_RE.test(message)}) msg="${message.slice(0, 80)}"\n`);
 
   // ── Trip screen: inject FULL itinerary + hotel pricing ───────────────────
   // Inject the complete stored plan so Claude can answer ANY question about the
