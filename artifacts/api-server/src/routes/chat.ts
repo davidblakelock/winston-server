@@ -599,7 +599,8 @@ const TRIP_SAVE_INTENT = /\b(?:save\s+(?:this|my|the|our|it)\b|build\s+(?:(?:me|
 // When triggered, the server generates + auto-saves the itinerary and returns tripSaved:true
 // in the JSON response so the native app can refresh its trip list immediately.
 // Guarded by !isTripSaveIntent at the flag level to avoid double-firing.
-const TRIP_PLAN_INTENT = /\b(?:(?:help\s+me\s+|can\s+you\s+|please\s+)?plan\s+(?:(?:me|us|out)\s+)?(?:a|an?|our|my)\s+(?:\d+[-\s](?:day|night)(?:\s+\d+[-\s]night)?\s+|long\s+)?(?:trip|vacation|getaway|holiday|road\s+trip|weekend(?:\s+trip)?)|(?:put\s+together|plan\s+me|plan\s+us)\s+(?:a|an?)\s+(?:trip|vacation|getaway)|i\s+(?:want|need|would\s+like)\s+(?:you\s+)?to\s+plan\s+(?:a|my|our)\s+trip)\b/i;
+// "Plan a 4 day, 3 night road trip" — duration group allows comma between day/night counts
+const TRIP_PLAN_INTENT = /\b(?:(?:help\s+me\s+|can\s+you\s+|please\s+)?plan\s+(?:(?:me|us|out)\s+)?(?:a|an?|our|my)\s+(?:\d+[-\s](?:day|night)s?(?:[,\s]+\d+[-\s]nights?)?[\s,]+|long\s+)?(?:trip|vacation|getaway|holiday|road\s+trip|weekend(?:\s+trip)?)|(?:put\s+together|plan\s+me|plan\s+us)\s+(?:a|an?)\s+(?:trip|vacation|getaway)|i\s+(?:want|need|would\s+like)\s+(?:you\s+)?to\s+plan\s+(?:a|my|our)\s+trip)\b/i;
 
 // ── Per-user short-lived trip intent cache ────────────────────────────────────
 // Isolated contexts (e.g. 'trip-planning') don't write to chat_messages, so
