@@ -80,9 +80,14 @@ export async function hasCalendarWriteScope(userName?: string): Promise<boolean>
         `SELECT scope FROM google_auth ${PREFERRED_ACCOUNT_ORDER} LIMIT 1`
       );
   if (!rows.length || !rows[0].scope) return false;
-  return rows[0].scope
-    .split(" ")
-    .some((s) => s === "https://www.googleapis.com/auth/calendar");
+  // Split on spaces or commas (Google returns space-separated; some flows store comma-separated).
+  // Accept full calendar scope OR calendar.events (both allow creating/editing events).
+  const scopes = rows[0].scope.split(/[\s,]+/);
+  return scopes.some(
+    (s) =>
+      s === "https://www.googleapis.com/auth/calendar" ||
+      s === "https://www.googleapis.com/auth/calendar.events"
+  );
 }
 
 export async function hasContactsScope(userName?: string): Promise<boolean> {

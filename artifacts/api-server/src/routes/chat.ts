@@ -2009,8 +2009,9 @@ If the conversation is not about a trip, set destination to null.`,
       // Fallback: if Haiku couldn't extract a destination from (possibly empty) history,
       // check the in-memory cache for the last trip this user generated.
       // This covers isolated contexts (e.g. trip-planning screen) that don't write to chat_messages.
+      // NOTE: cached is hoisted here so it is also accessible when building the intent object below.
+      const cached = lastTripIntentByUser.get(sessionUserName);
       if (!extracted.destination) {
-        const cached = lastTripIntentByUser.get(sessionUserName);
         if (cached && Date.now() - cached.timestamp < TRIP_INTENT_CACHE_TTL_MS) {
           req.log.info({ dest: cached.intent.destination, age: Math.round((Date.now() - cached.timestamp) / 1000) }, "[TripPlan] Save intent — using cached trip intent (isolated context, empty history)");
           extracted.destination = cached.intent.destination;
