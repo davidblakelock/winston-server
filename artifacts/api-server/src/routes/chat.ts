@@ -1936,6 +1936,16 @@ If the conversation is not about a trip, set destination to null.`,
     systemPrompt += `\n\n[Trip Planning — Use Trip Screen]\nDavid wants to plan a trip. Do NOT plan, generate, or outline any itinerary here in the main chat. Warmly redirect him to his Trips screen (the suitcase icon at the bottom of the app) where he can plan and save full trips with you. One or two sentences max — friendly and brief.`;
   }
   if (isTripPlanIntent && requestContext === "trip-planning") {
+    // Send SSE headers + a generating heartbeat IMMEDIATELY so the client doesn't
+    // time out during the 30–60 s GPT-4o call. Without this first byte the proxy
+    // and React Native both drop the connection and report "network request failed".
+    if (!res.headersSent) {
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      res.setHeader("X-Accel-Buffering", "no");
+      res.write(`data: ${JSON.stringify({ generating: true, text: "✈️ Planning your trip…" })}\n\n`);
+    }
     try {
       req.log.info(
         {
@@ -5888,10 +5898,13 @@ If you cannot extract both, return null.`,
   }
 
   // ── Stream Claude's response via SSE ────────────────────────────────────
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-  res.setHeader("X-Accel-Buffering", "no");
+  // Headers may already be sent if trip generation flushed them early above.
+  if (!res.headersSent) {
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+  }
 
   const sendSSE = (data: Record<string, unknown>) =>
     res.write(`data: ${JSON.stringify(data)}\n\n`);
