@@ -340,10 +340,11 @@ export async function generateTripItinerary(
       // e.g. 4 days / 3 stops: Hot Springs 1 day, Eureka Springs 1 day, Bentonville 2 days (last night + departure morning).
       const count = daysPerStop + (idx >= stops.length - extraDays ? 1 : 0);
       for (let d = 0; d < count; d++) {
+        const isDeparture = dayNum === totalDays;
         const label =
-          dayNum === 1           ? " (arrival day)"
-          : dayNum === totalDays ? " (departure day)"
-          : d === 0 && idx > 0   ? " (drive in from previous stop + explore)"
+          dayNum === 1  ? " (arrival day)"
+          : isDeparture ? ` (departure morning — traveler drives home, NO hotel this day)`
+          : d === 0 && idx > 0 ? " (drive in from previous stop + explore)"
           : " (full day)";
         routing.push(`  Day ${dayNum}: ${stop}${label}`);
         dayNum++;
@@ -353,6 +354,7 @@ export async function generateTripItinerary(
 ROAD TRIP ROUTING — MANDATORY:
 This is a multi-stop road trip. You MUST assign days exactly as follows:
 ${routing.join("\n")}
+CRITICAL HOTEL RULE: Assign a hotel ONLY to days that have an overnight stay. The departure day (marked "departure morning — traveler drives home") does NOT get a hotel — leave the hotel object empty/null for that day. Each city gets exactly one hotel night unless the routing above shows it listed more than once.
 Each day's "location" field MUST match the city listed above. Do NOT place all days in the first stop.`;
   }
 
@@ -400,7 +402,7 @@ HOTELS — read carefully:
 • hotel.websiteUrl: the hotel's own official website (e.g. https://[hotelname].com) — NEVER booking.com or expedia
 • hotel.bookingUrl: the hotel's direct booking/reservations page (e.g. https://[hotelname].com/book or https://www.booking.com/hotel/...) — REQUIRED on every day, never leave empty
 • hotel.notes: write with personality — describe what makes this property special (the rooftop bar, the neighborhood feel, the historic building, the breakfast included), explain specifically why it's right for this traveler
-• If the same hotel covers multiple days, repeat it on each day with the same URLs
+• If the same hotel covers multiple consecutive overnight nights, repeat it on each of those nights with the same URLs — but NEVER assign a hotel to a departure day
 
 RESTAURANTS — read carefully:
 • Pick specific, named, real restaurants — never "a local café" or "a steakhouse downtown"
@@ -426,7 +428,7 @@ STRUCTURE:
 PERSONALIZATION — this is the most important section:
 • Music: if the destination has a live music scene (Nashville, New Orleans, Austin, Memphis) AND the traveler has music interests, build at least one evening around a specific venue or music experience
 • Food: cross-reference every restaurant pick with the traveler's known food preferences and home restaurant style — if they love BBQ at home, find the local equivalent; if they prefer lighter fare, skip the heavy spots
-• Activity intensity: match to their interests — a golfer gets a tee time suggestion, a hiker gets a specific trail with distance and views, a pickleball player might find a local court
+• Activity intensity: match to their interests — BUT only if those interests align with the trip vibe. A golfer gets a tee time suggestion on a golf trip; on a romantic/spa/wellness trip, skip sport/activity interests entirely and focus on shared experiences, couples spa treatments, scenic walks, and intimate dining instead. A hiker gets a specific trail on an outdoor trip. Never force an interest onto a trip where it doesn't fit the vibe.
 • Partner travel: if traveling with a partner, every day should feel intentionally romantic or designed for two — shared experiences, dinner-for-two spots, sunset moments
 • Shows/sports: if the traveler follows sports teams or live music and there's a game or show during the trip timing, mention it in practicalNotes
 • Reference their interests naturally in descriptions — don't just list facts, write as if you know what they'd love
