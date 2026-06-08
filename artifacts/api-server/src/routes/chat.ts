@@ -1103,7 +1103,12 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   if (isSendListViaConnect) isListRequest = false;
   const isEmailRequest = !isMorningGreeting && cls.email;
   const isDinnerTonightQuery = !isMorningGreeting && cls.dinner_tonight;
-  const isCalendarRequest = !isMorningGreeting && (cls.calendar_read || isDinnerTonightQuery);
+  // ── Calendar: regex fallbacks alongside classifier ───────────────────────────
+  const _CAL_READ_RE = /\b(calendar|schedule|agenda|appointments?|what('?s|\s+is)\s+(on\s+)?(my\s+)?(calendar|schedule|agenda|week)|(today|tomorrow|this\s+week|next\s+week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)'?s?\s+(schedule|events?|appointments?|look\s+like)|do\s+i\s+have\s+anything\s+(today|tomorrow|this\s+week|scheduled|on\s+my\s+calendar)|what\s+does\s+my\s+(day|week|morning|afternoon|evening)\s+look\s+like|what('?s|\s+is)\s+on\s+for\s+(today|tomorrow|this\s+week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|anything\s+(on\s+)?(today|tomorrow|this\s+week|my\s+calendar|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|busy\s+(today|tomorrow|this\s+week|monday|tuesday|wednesday|thursday|friday)|am\s+i\s+free\s+(today|tomorrow|this\s+(morning|afternoon|week)|monday|tuesday|wednesday|thursday|friday)|what\s+do\s+i\s+have\s+(today|tomorrow|this\s+week|this\s+morning|this\s+afternoon|on\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday))|do\s+i\s+have\s+(a\s+)?(meeting|lunch|dinner|appointment|call|interview|class|session|game)\s+(today|tomorrow|this\s+(morning|afternoon|week)|on\s+(monday|tuesday|wednesday|thursday|friday))|(when|what\s+time)\s+is\s+(my\s+)?(meeting|lunch|dinner|appointment|call|interview|class|session|game|next\s+appointment)|where\s+(am\s+i\s+(having|eating|meeting|going\s+for)|is\s+(my\s+|the\s+)?)\s*(lunch|dinner|breakfast|brunch|meeting|appointment|event)|what('?s|\s+is)\s+(my\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow)\s+(look\s+like|schedule|plans?)|what\s+are\s+my\s+plans?\s+(for\s+)?(today|tomorrow|this\s+week|tonight|this\s+(morning|afternoon|evening))|how\s+does\s+my\s+(day|week|morning|afternoon|schedule)\s+look)\b/i;
+  const _CAL_CREATE_RE = /\b(add\s+(?!.+\s+to\s+my\s+(?:shopping|grocery|to.?do|errand|task|watch))|create\s+(a\s+)?(new\s+)?(event|appointment|meeting|calendar)|schedule\s+(a\s+)?(meeting|appointment|lunch|dinner|call|event)|put\s+.+\s+on\s+(my\s+)?calendar|book\s+(a\s+)?(meeting|appointment)|set\s+up\s+(a\s+)?(meeting|appointment)|block\s+(off\s+)?time)\b/i;
+  const _CAL_MODIFY_RE = /\b(move\s+(my\s+)?(?!\w+\s+list)|reschedul|change\s+(my\s+|the\s+)?(time|date|appointment|meeting|event|calendar)|update\s+(my\s+|the\s+)?(time\s+of\s+|date\s+of\s+)?(appointment|meeting|event)|push\s+(?:back|forward|out|up)\s+(my\s+|the\s+)?(appointment|meeting|event)?|postpone\s+(my\s+|the\s+)?|shift\s+(my\s+|the\s+)?(appointment|meeting|event)|bump\s+(my\s+|the\s+)?(appointment|meeting|event)|delay\s+(my\s+|the\s+)?(appointment|meeting|event))\b/i;
+  const _CAL_DELETE_RE = /\b(cancel\s+(my\s+)?(appointment|meeting|event|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|delete\s+(my\s+)?(appointment|meeting|event|calendar\s+event)|remove\s+(my\s+)?(appointment|meeting|event)\s+from\s+(my\s+)?calendar|clear\s+(my\s+)?(appointment|meeting|event))\b/i;
+  const isCalendarRequest = !isMorningGreeting && (cls.calendar_read || isDinnerTonightQuery || _CAL_READ_RE.test(message));
   const isCompoundContactAndSave = cls.contact_compound_save;
   const isContactRequest = isCompoundContactAndSave || cls.contact_lookup;
   const isSaveContactRequest = !isContactRequest && cls.contact_save;
@@ -1206,9 +1211,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   // IMPORTANT: CREATE is evaluated before MODIFY — explicit "add/create/schedule/put on calendar"
   // always wins, even if the event title contains a word like "move" or "transfer".
   // MODIFY wins only when there is no create keyword (e.g. "reschedule", "move my appointment").
-  const isCalendarCreate = !isMorningGreeting && !isReminderRequest && cls.calendar_create;
-  const isCalendarModify = !isMorningGreeting && !isReminderRequest && !isCalendarCreate && cls.calendar_modify;
-  const isCalendarDelete = !isMorningGreeting && !isReminderRequest && cls.calendar_delete;
+  const isCalendarCreate = !isMorningGreeting && !isReminderRequest && (cls.calendar_create || _CAL_CREATE_RE.test(message));
+  const isCalendarModify = !isMorningGreeting && !isReminderRequest && !isCalendarCreate && (cls.calendar_modify || _CAL_MODIFY_RE.test(message));
+  const isCalendarDelete = !isMorningGreeting && !isReminderRequest && (cls.calendar_delete || _CAL_DELETE_RE.test(message));
   const isCalendarWriteOp = isCalendarCreate || isCalendarModify || isCalendarDelete;
   const pendingDel = getPendingDelete();
   const isDeleteConfirm = !!pendingDel && CALENDAR_CONFIRM_PATTERN.test(message.trim());
