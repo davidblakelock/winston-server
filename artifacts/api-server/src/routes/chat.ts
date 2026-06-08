@@ -257,6 +257,10 @@ import {
   buildHotelAvailabilityBlock,
   parseToISODate,
 } from "../travel/hotelAvailability.js";
+import {
+  searchHotelViaSerpApi,
+  isSerpApiReady,
+} from "../travel/serpApiHotels.js";
 import { nextOccurrenceForPattern, humanReadableRecurring } from "../reminders/recurringUtils.js";
 import { broadcastToUser } from "../reminders/sseStore.js";
 import { saveMoodCheckin } from "../mood/moodManager.js";
@@ -1299,9 +1303,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       const googleHotelsUrl = `https://www.google.com/travel/hotels/s/${dest}${dateParams}`;
       const pricingNote = anyHotelHasPrice
         ? `For hotel pricing questions, answer directly using the prices above and provide booking URLs. Do NOT say you cannot check pricing or availability.`
-        : `Hotel pricing hasn't been fetched yet for this trip. When David asks about hotel prices or availability, ` +
-          `tell him the rates haven't been pulled yet and give him this Google Hotels link to check live: ${googleHotelsUrl}. ` +
-          `Do NOT say you "cannot" check — you're directing him to the live source.`;
+        : `For hotel pricing questions, live rates will be fetched and added to this context. Do NOT say you cannot check prices.`;
       systemPrompt +=
         `\n\n${tripHeader}\n` +
         dayBlocks.join("\n\n") + "\n" +
@@ -1346,7 +1348,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isTripSaveIntent = !isMorningGreeting && TRIP_SAVE_INTENT.test(message);
   const isTripPlanIntent = !isMorningGreeting && !isTripSaveIntent && TRIP_PLAN_INTENT.test(message);
   process.stdout.write(`[STDOUT] INTENT-FLAGS isMorning=${isMorningGreeting} isTripSave=${isTripSaveIntent} isTripPlan=${isTripPlanIntent} msg="${message.slice(0, 80)}"\n`);
-  const isHotelAvailabilityQuery = !isMorningGreeting && !isTripSaveIntent && !isTripPlanIntent && HOTEL_AVAIL_INTENT.test(message);
+  const isTripPriceQuery = requestContext === "trip-planning" && !isMorningGreeting && !isTripSaveIntent && !isTripPlanIntent &&
+    /\b(?:price|prices|rate|rates|cost|costs|how\s+much|per\s+night|nightly|pricing|what(?:'s|\s+does)\s+(?:it|that|the\s+hotel)?\s*cost)\b/i.test(message);
+  const isHotelAvailabilityQuery = !isMorningGreeting && !isTripSaveIntent && !isTripPlanIntent && (HOTEL_AVAIL_INTENT.test(message) || isTripPriceQuery);
   // Guard: don't run profile handler when a trip save is being detected — they conflict
   const isProfileRequest = !isTripSaveIntent && PROFILE_PATTERN.test(message);
   // IMPORTANT: Reminder requests (REMINDER_PATTERN) must NEVER route to Google Calendar.
@@ -2292,19 +2296,62 @@ If the conversation is not about a trip, set destination to null.`,
             `Do NOT say you can't check pricing or that you have no dates — the data is above.`;
           req.log.info({ tripId, hotels: hotelLines.length, start_date: activeTripPlan.start_date }, "[HotelAvail] Injected stored trip hotel pricing + dates");
         } else {
-          // Hotels exist in the itinerary but have no pricing data yet.
-          // Give Claude a live Google Hotels search URL so it can answer helpfully.
-          const dest = encodeURIComponent(activeTripPlan.destination ?? "");
-          const dateParams = activeTripPlan.start_date && activeTripPlan.end_date
-            ? `&check_in_date=${activeTripPlan.start_date}&check_out_date=${activeTripPlan.end_date}`
+          // Hotels exist in the itinerary but no stored pricing — do a live SerpAPI lookup.
+          const tripDest   = activeTripPlan.destination ?? "";
+          const checkIn    = activeTripPlan.start_date ?? null;
+          const checkOut   = activeTripPlan.end_date ?? null;
+          const gDestEnc   = encodeURIComponent(tripDest);
+          const gDateParams = checkIn && checkOut
+            ? `?check_in_date=${checkIn}&check_out_date=${checkOut}&adults=2`
             : "";
-          const googleHotelsUrl = `https://www.google.com/travel/hotels/s/${dest}${dateParams}`;
-          systemPrompt +=
-            `\n\n[Hotel Pricing — Not Yet Fetched]\n` +
-            `Live hotel pricing for this trip hasn't been loaded yet.\n` +
-            `Tell David you don't have the rates cached right now, but here's the direct Google Hotels link where he can check live pricing and availability:\n` +
-            `${googleHotelsUrl}\n` +
-            `Be brief and helpful — don't apologize excessively. Do NOT say you "cannot" check pricing.`;
+          const googleHotelsUrl = `https://www.google.com/travel/hotels/s/${gDestEnc}${gDateParams}`;
+
+          if (checkIn && checkOut && isSerpApiReady()) {
+            // Gather unique hotel names from the itinerary (max 3 to respect SerpAPI free tier)
+            const seen = new Set<string>();
+            const uniqueHotels: string[] = [];
+            for (const day of itinDays) {
+              const name = day.hotel?.name;
+              if (name && !seen.has(name)) { seen.add(name); uniqueHotels.push(name); }
+              if (uniqueHotels.length >= 3) break;
+            }
+
+            const serpLines: string[] = [];
+            await Promise.all(uniqueHotels.map(async (hotelName) => {
+              try {
+                const r = await searchHotelViaSerpApi(hotelName, tripDest, checkIn, checkOut, 2);
+                let line = `  • ${r.name}`;
+                if (r.pricePerNight) line += ` — ${r.pricePerNight}`;
+                if (r.bookingUrl)    line += `\n    Book: ${r.bookingUrl}`;
+                serpLines.push(line);
+              } catch { /* skip */ }
+            }));
+
+            if (serpLines.length > 0) {
+              systemPrompt +=
+                `\n\n[LIVE — Hotel Rates via Google Hotels | ${tripDest}]\n` +
+                `Check-in: ${checkIn} → Check-out: ${checkOut} (${activeTripPlan.nights ?? "?"} nights)\n` +
+                serpLines.join("\n") + "\n" +
+                `Share these live rates and booking links directly and confidently. ` +
+                `Do NOT say you cannot check pricing or availability — you have the data above.`;
+              req.log.info({ tripId: activeTripPlan.id, hotels: serpLines.length }, "[HotelAvail] Live SerpAPI rates fetched for trip");
+            } else {
+              // SerpAPI returned nothing useful — fall back to Google Hotels link
+              systemPrompt +=
+                `\n\n[Hotel Rates — Google Hotels]\n` +
+                `SerpAPI returned no results for these hotels. Give David this Google Hotels link ` +
+                `with these exact dates pre-filled so he can check live rates:\n${googleHotelsUrl}\n` +
+                `Do NOT say you cannot check pricing.`;
+              req.log.info({ tripId: activeTripPlan.id }, "[HotelAvail] SerpAPI returned nothing — gave Google Hotels link");
+            }
+          } else {
+            // No trip dates set or SerpAPI not configured — give Google Hotels link
+            systemPrompt +=
+              `\n\n[Hotel Rates — Google Hotels]\n` +
+              `${checkIn ? "" : "No check-in/check-out dates are set for this trip. "}` +
+              `Give David this Google Hotels link to check live rates and availability:\n${googleHotelsUrl}\n` +
+              `Do NOT say you cannot check pricing.`;
+          }
         }
       } else {
         // ── Main chat: live Google Places search (no pricing, gives website links) ──
