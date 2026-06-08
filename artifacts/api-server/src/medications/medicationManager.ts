@@ -705,24 +705,13 @@ export function buildMedReminderText(meds: Medication[]): string {
   );
 }
 
-export function extractMedicationFromMessage(message: string): {
+export async function extractMedicationFromMessage(message: string): Promise<{
   name: string;
   dosage?: string;
   reminderTime?: string;
-} | null {
-  const nameMatch =
-    message.match(/(?:add\s+(?:a\s+)?(?:new\s+)?medication\s+(?:called\s+)?|new\s+medication\s+(?:called\s+)?|start\s+taking\s+(?:a\s+)?(?:new\s+)?medication\s+called\s+|start\s+taking\s+)([\w\s\-]+?)(?:\s+(\d+\s*(?:mg|mcg|g|ml|iu)))?(?:\s+(?:taken\s+)?at\s+(\d{1,2}(?::\d{2})?\s*[ap]m|\d{1,2}:\d{2}))?(?:[.,!]|$)/i);
-
-  if (!nameMatch) return null;
-
-  const name = nameMatch[1].trim().replace(/\s+taken$/, "").replace(/\s+at$/, "");
-  if (!name || name.length < 2) return null;
-
-  const dosage = nameMatch[2]?.trim();
-  const rawTime = nameMatch[3]?.trim();
-  const reminderTime = rawTime ? parseTimeToHHMM(rawTime) : undefined;
-
-  return { name, dosage, reminderTime };
+} | null> {
+  const { extractMedicationWithAI } = await import("../lib/intentClassifier.js");
+  return extractMedicationWithAI(message);
 }
 
 export async function updateMedicationReminderTime(
