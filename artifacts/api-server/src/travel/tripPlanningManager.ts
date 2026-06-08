@@ -314,152 +314,66 @@ export async function generateTripItinerary(
 ): Promise<NativeTripPlan> {
   const travelCtx = buildTravelProfileContext(userProfile);
 
-  const nights    = intent.nights ?? 3;
-  const totalDays = nights + 1;
-  const dest      = intent.destination;
-  const party     = intent.partyDesc ?? (intent.partySize === 1 ? "solo" : "couple");
-  const vibe      = intent.vibe ?? "mix of relaxed and adventurous";
-  const mustHaves = intent.mustHaves || "None specified";
-  const budget    = intent.budget ?? "mid-range";
-  const stopsNote = intent.stops?.length
-    ? `• Specific stops (in order if possible): ${intent.stops.join(" → ")}`
-    : "";
+  const systemPrompt = `You are an expert travel planner. Read the user's trip request carefully and generate a complete, personalized day-by-day itinerary that follows their instructions exactly.
 
-  // Build an explicit day-by-day routing table when stops are provided.
-  // This replaces the vague "each stop gets a full day" hint with a hard assignment
-  // that GPT-4o must follow exactly.
-  let routingTable = "";
-  if (intent.stops?.length && intent.stops.length > 1) {
-    const stops = intent.stops;
-    const daysPerStop = Math.floor(totalDays / stops.length);
-    const extraDays   = totalDays % stops.length;
-    const routing: string[] = [];
-    let dayNum = 1;
-    stops.forEach((stop, idx) => {
-      // Extra days go to the LAST stop(s) as a departure buffer — not the first.
-      // e.g. 4 days / 3 stops: Hot Springs 1 day, Eureka Springs 1 day, Bentonville 2 days (last night + departure morning).
-      const count = daysPerStop + (idx >= stops.length - extraDays ? 1 : 0);
-      for (let d = 0; d < count; d++) {
-        const isDeparture = dayNum === totalDays;
-        const label =
-          dayNum === 1  ? " (arrival day)"
-          : isDeparture ? ` (departure morning — check out and drive home; hotel was already assigned on the previous day, do NOT add a second hotel entry here)`
-          : d === 0 && idx > 0 ? " (drive in from previous stop + explore)"
-          : " (full day)";
-        routing.push(`  Day ${dayNum}: ${stop}${label}`);
-        dayNum++;
-      }
-    });
-    routingTable = `
-ROAD TRIP ROUTING — MANDATORY:
-This is a multi-stop road trip. You MUST assign days exactly as follows:
-${routing.join("\n")}
-CRITICAL HOTEL RULE: Assign a hotel ONLY to days that have an overnight stay. The departure day (marked "departure morning — traveler drives home") does NOT get a hotel — leave the hotel object empty/null for that day. Each city gets exactly one hotel night unless the routing above shows it listed more than once.
-Each day's "location" field MUST match the city listed above. Do NOT place all days in the first stop.`;
-  }
+Return ONLY valid JSON — no markdown fences, no explanation, just the JSON object.
 
-  const startDateNote = intent.startDate
-    ? `Start date / approximate timing: ${intent.startDate} — if this resolves to a specific calendar date, output it as start_date (YYYY-MM-DD); otherwise output null`
-    : "Start date not specified — output null for start_date and end_date";
-
-  const dayTemplate = `{
-      "dayNumber": 1,
-      "label": "Evocative day title, e.g. 'Delta Blues and First Bites'",
-      "location": "City or neighborhood name",
-      "hotel": {
-        "name": "Specific real hotel name — never generic",
-        "websiteUrl": "https://... (hotel's own official website — NOT booking.com or expedia)",
-        "bookingUrl": "https://... (hotel's direct booking page, e.g. https://[hotel].com/reservations, or a Booking.com/Expedia direct link — REQUIRED, never empty)",
-        "notes": "2–3 sentences: what makes this hotel special, its personality and vibe, why it's the right fit for this traveler's style, budget, and trip — not just 'great location'"
-      },
-      "activities": [
-        { "time": "Morning",   "title": "Specific activity name", "description": "What to do, where exactly, why it's unmissable here — name specific streets, trails, galleries, viewpoints, or experiences", "notes": "Timing, parking, reservations needed, insider tip, what to order or wear" },
-        { "time": "Afternoon", "title": "Specific activity name", "description": "Specific afternoon plan with real place names", "notes": "Practical tip" },
-        { "time": "Evening",   "title": "Specific activity name", "description": "Evening wind-down, live music, sunset spot, or neighborhood stroll — specific and real", "notes": "Practical tip" }
-      ],
-      "meals": [
-        { "time": "Lunch",  "title": "Specific restaurant name", "description": "What they're known for, the dish to order, why this place fits this traveler's palate and style — be specific and opinionated", "websiteUrl": "https://... (restaurant's own website — required, never empty)", "bookingUrl": "https://www.opentable.com/... or https://resy.com/... or same as websiteUrl if no reservation platform" },
-        { "time": "Dinner", "title": "Specific restaurant name", "description": "Why this dinner spot, what makes it the right call tonight, signature dish or experience", "websiteUrl": "https://... (restaurant website — required)", "bookingUrl": "https://www.opentable.com/... or https://resy.com/... or same as websiteUrl" }
-      ]
-    }`;
-
-  const prompt = `You are building a personalized travel itinerary for a real person. Be specific, opinionated, and genuinely helpful — this is not a generic travel guide.
-
-TRIP DETAILS:
-• Destination: ${dest}
-• Duration: ${nights} nights / ${totalDays} days
-• Traveling with: ${party}
-• Vibe: ${vibe}
-• Must-haves: ${mustHaves}
-• Budget: ${budget}
-• ${startDateNote}
-${stopsNote ? stopsNote + "\n  — Structure the itinerary so each named stop gets at least one full day. Assign hotels, activities, and meals that are actually located in or near that stop." : ""}
-${routingTable}
-${travelCtx}
-
-HOTELS — read carefully:
-• Pick a specific, named, real hotel that genuinely fits this traveler's vibe and budget
-• hotel.websiteUrl: the hotel's own official website (e.g. https://[hotelname].com) — NEVER booking.com or expedia
-• hotel.bookingUrl: the hotel's direct booking/reservations page (e.g. https://[hotelname].com/book or https://www.booking.com/hotel/...) — REQUIRED on every day, never leave empty
-• hotel.notes: write with personality — describe what makes this property special (the rooftop bar, the neighborhood feel, the historic building, the breakfast included), explain specifically why it's right for this traveler
-• If the same hotel covers multiple consecutive overnight nights, repeat it on each of those nights with the same URLs — but NEVER assign a hotel to a departure day
-
-RESTAURANTS — read carefully:
-• Pick specific, named, real restaurants — never "a local café" or "a steakhouse downtown"
-• meals[].description: be opinionated — name the dish to order, describe the atmosphere, explain why this place fits this traveler's taste (reference their food preferences and home restaurants if known)
-• meals[].websiteUrl: the restaurant's own website — REQUIRED on every meal, use your best knowledge of the real URL
-• meals[].bookingUrl: OpenTable or Resy link if the restaurant uses one; otherwise same as websiteUrl
-• 1–2 meals per day is fine; include breakfast only if it's a notable spot worth visiting
-
-ACTIVITIES:
-• 2–3 per day (Morning / Afternoon / Evening)
-• Use real place names: specific trails, galleries, streets, markets, venues, parks, stadiums, music halls
-• activities[].description: say exactly what to do there and why it's worth it — not just "visit the museum"
-• activities[].notes: include timing, reservations, parking, what to order/wear, or a local tip that makes the difference
-
-STRUCTURE:
-• Day 1: arrival day — lighter pace, settle in, one iconic first meal
-• Day ${totalDays}: departure morning — one activity max, then checkout
-• For road trips: move the location each day as the route progresses; add driving times in notes
-• practicalNotes: 4–6 genuinely useful tips (best season, what to book in advance, local transport, what to pack)
-• trip_name: creative and evocative — capture the spirit of this specific trip, NOT just "${dest} Trip" (e.g. "Ozark Slow Burn", "Delta Blues and Crater Dust", "Neon and Honky-Tonk")
-• start_date / end_date: YYYY-MM-DD only — output null if the date is vague or unknown
-
-PERSONALIZATION — this is the most important section:
-• Music: if the destination has a live music scene (Nashville, New Orleans, Austin, Memphis) AND the traveler has music interests, build at least one evening around a specific venue or music experience
-• Food: cross-reference every restaurant pick with the traveler's known food preferences and home restaurant style — if they love BBQ at home, find the local equivalent; if they prefer lighter fare, skip the heavy spots
-• Activity intensity: match to their interests — BUT only if those interests align with the trip vibe. A golfer gets a tee time suggestion on a golf trip; on a romantic/spa/wellness trip, skip sport/activity interests entirely and focus on shared experiences, couples spa treatments, scenic walks, and intimate dining instead. A hiker gets a specific trail on an outdoor trip. Never force an interest onto a trip where it doesn't fit the vibe.
-• Partner travel: if traveling with a partner, every day should feel intentionally romantic or designed for two — shared experiences, dinner-for-two spots, sunset moments
-• Shows/sports: if the traveler follows sports teams or live music and there's a game or show during the trip timing, mention it in practicalNotes
-• Reference their interests naturally in descriptions — don't just list facts, write as if you know what they'd love
-
-${routingTable ? routingTable + "\n\nRemember: the day routing above is MANDATORY. Each day's location field must exactly match the city assigned to that day." : ""}
-Return ONLY valid JSON — no markdown fences, no explanation, no commentary:
+Required structure:
 {
-  "trip_name": "Creative evocative name",
-  "destination": "${dest}",
-  "nights": ${nights},
+  "trip_name": "Creative evocative name — not just 'Arkansas Trip'",
+  "destination": "Primary destination",
+  "nights": <integer — number of overnight stays>,
   "start_date": "YYYY-MM-DD or null",
   "end_date": "YYYY-MM-DD or null",
   "itinerary": {
     "days": [
-      ${dayTemplate}
+      {
+        "dayNumber": 1,
+        "label": "Evocative day title",
+        "location": "City or neighborhood",
+        "hotel": {
+          "name": "Specific real hotel name — never generic",
+          "websiteUrl": "Hotel's own official website — never booking.com or expedia",
+          "bookingUrl": "Direct booking page or booking.com/expedia link — required, never empty",
+          "notes": "Why this hotel is right for this traveler — personality, vibe, what makes it special"
+        },
+        "activities": [
+          { "time": "Morning", "title": "Activity name", "description": "What to do and why — specific real places, streets, trails, galleries, viewpoints", "notes": "Practical tip: timing, reservations, parking, insider knowledge" }
+        ],
+        "meals": [
+          { "time": "Lunch", "title": "Specific restaurant name", "description": "Why this place — the dish to order, the atmosphere, why it fits this traveler", "websiteUrl": "Restaurant's own website — required", "bookingUrl": "OpenTable/Resy link or same as websiteUrl" }
+        ]
+      }
     ],
-    "practicalNotes": ["Tip 1", "Tip 2", "Tip 3", "Tip 4", "Tip 5"]
+    "practicalNotes": ["Tip 1", "Tip 2", "Tip 3", "Tip 4"]
   }
-}`;
+}
 
-  process.stdout.write(`[STDOUT] TRIP-PLAN generateTripItinerary CALLED dest=${dest} nights=${nights} OPENAI_KEY_SET=${!!process.env.OPENAI_API_KEY} ${new Date().toISOString()}\n`);
+Rules:
+- Follow the user's itinerary structure exactly. If they say "first night in Hot Springs, second night in Eureka Springs, third night in Bentonville" — generate exactly that: one hotel night per city, in that order, hotels matched to the correct city.
+- Pick specific, real, named hotels and restaurants. Never use generic descriptions like "a charming inn" or "a local steakhouse."
+- hotel.websiteUrl must be the hotel's own official website.
+- meals[].websiteUrl is required for every meal entry.
+- The departure day (last day) has no hotel — the traveler is checking out that morning.
+- For road trips, move location each day as the route progresses.
+- 2–3 activities per day (Morning / Afternoon / Evening), 1–2 meals per day.
+${travelCtx ? `\nTraveler profile — personalize to these preferences:\n${travelCtx}` : ""}`;
+
+  const rawMessage = intent.rawMessage ?? `Plan a ${intent.nights ?? 3}-night trip to ${intent.destination}`;
+
+  process.stdout.write(`[STDOUT] TRIP-PLAN generateTripItinerary CALLED rawMsg="${rawMessage.slice(0, 120)}" OPENAI_KEY_SET=${!!process.env.OPENAI_API_KEY} ${new Date().toISOString()}\n`);
   logger.info(
-    { model: MODEL_GPT4O, dest, nights, promptLen: prompt.length, promptPreview: prompt.slice(0, 300) },
-    "[TripPlan] 🚀 Calling GPT-4o — full prompt follows"
+    { model: MODEL_GPT4O, rawMessage: rawMessage.slice(0, 200) },
+    "[TripPlan] 🚀 Calling GPT-4o with raw user message"
   );
-  logger.info({ fullPrompt: prompt }, "[TripPlan] 📋 FULL GPT-4o PROMPT");
 
   const response = await openai.chat.completions.create({
     model:      MODEL_GPT4O,
     max_tokens: 8192,
-    messages:   [{ role: "user", content: prompt }],
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user",   content: rawMessage },
+    ],
   });
 
   const text = (response.choices[0]?.message?.content ?? "").trim();
@@ -485,7 +399,7 @@ Return ONLY valid JSON — no markdown fences, no explanation, no commentary:
   plan.end_date   = toISODateOrNull(plan.end_date);
 
   logger.info(
-    { destination: dest, nights, days: plan.itinerary?.days?.length },
+    { destination: plan.destination, nights: plan.nights, days: plan.itinerary?.days?.length },
     "[TripPlan] Itinerary generated"
   );
   return plan;

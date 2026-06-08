@@ -153,7 +153,7 @@ export async function classifyMessage(
       system:
 `You are an intent classifier for a personal AI companion. Return ONE JSON object classifying the user message.
 ALL fields required. Return ONLY valid JSON — no markdown, no commentary.
-${ctx.requestContext === "trip-planning" ? "\nSCREEN CONTEXT: User is on the TRIP PLANNING screen. Any phrase about saving, building, confirming, or generating a trip/itinerary → trip_save=true or trip_plan=true. Short phrases like 'save it', 'go ahead', 'book it', 'yes', 'do it', 'let's go' in this context → trip_save=true.\n" : ""}
+
 PRIORITY RULES (apply first):
 1. morning_greeting=true → set ALL other fields false/null/0.
 2. emergency=true → morning_greeting=false, evening_greeting=false; other flags still allowed.
@@ -187,8 +187,8 @@ story_read: read Olivia stories/archive — "read me a story", "show the archive
 story_count: count stories — "how many stories do I have".
 olivia_call: mentioned calling/FaceTiming/talking to Olivia (daughter) — "called Olivia", "talked to Olivia".
 olivia_mention: any mention of the name "Olivia" anywhere in the message.
-trip_plan: plan/generate a new trip itinerary — "plan me a trip to X", "plan a vacation to Y", "plan us a road trip", "help me plan a getaway", "put together a trip", "I want/need to plan a trip", "I'd like a weekend trip to Z", "plan a holiday to X", "can you plan a trip". Also fires for bare destination+duration phrasing on the trip screen like "Nashville 5 nights" or "Arkansas road trip 4 days" when requestContext is trip-planning${ctx.requestContext === "trip-planning" ? " [TRIP CONTEXT ACTIVE — very likely trip_plan]" : ""}.
-trip_save: save/confirm/build the trip itinerary — "save this trip", "save the trip", "save my trip", "save it", "save our trip", "book it", "build it", "build it out", "build the itinerary", "build me the itinerary", "create the itinerary", "create me an itinerary", "make the itinerary", "generate the itinerary", "yes go ahead", "yes please", "yes please build it", "go ahead", "go ahead and save", "go ahead and build", "let's do it", "let's build it", "let's save it", "let's go ahead", "add it to my trips", "add to my trips", "save to my travel screen"${ctx.requestContext === "trip-planning" ? " [TRIP CONTEXT — match broadly: any short affirmation or save phrase]" : ""}.
+trip_plan: plan a new trip — "plan me a trip to X", "I want to plan a vacation to Y".
+trip_save: save/build/confirm itinerary — "yes go ahead", "build it", "save this trip", "create the itinerary", "make it".
 hotel_availability: search for hotels — "find me a hotel", "hotels in Dallas", "check hotel availability".
 hotel_swap: swap/change a hotel in itinerary${ctx.requestContext === "trip-planning" ? " [TRIP CONTEXT ACTIVE — watch carefully]" : ""} — "swap the hotel", "change to the Omni", "use a different hotel".
 trip_price_query: asking hotel/trip cost — "how much does it cost", "nightly rate", "per night price".
