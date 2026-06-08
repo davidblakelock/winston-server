@@ -247,6 +247,7 @@ import {
   generateTripItinerary,
   enrichItineraryWithHotelAvailability,
   saveTripPlan,
+  updateTripPlan,
   getTripPlanById,
   getActiveTripPlans,
   buildTravelProfileContext,
@@ -611,6 +612,10 @@ type CachedTripIntent = {
 };
 const lastTripIntentByUser = new Map<string, CachedTripIntent>();
 const TRIP_INTENT_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+// Detects hotel swap/change requests within a saved trip itinerary.
+// Covers: "swap the hotel on day 2", "change to the Omni", "use a different hotel", "replace day 3's hotel"
+const HOTEL_SWAP_INTENT = /\b(?:swap|change|replace|switch|use|try)\b.{0,50}\b(?:hotel|resort|inn|motel|lodge|accommodation|place\s+to\s+stay|stay)\b|\b(?:hotel|resort|inn|motel|lodge)\b.{0,50}\b(?:swap|change|replace|switch|different|another|instead|prefer|rather)\b/i;
+
 // Detects hotel/room search queries. Intentionally broad — Haiku validates dates/destination.
 // Covers: "find me a hotel", "book a room", "hotels in Dallas", "where to stay", "check the Omni for June 12", etc.
 const HOTEL_AVAIL_INTENT = /\b(?:find|search|look\s+(?:for|up)|get|show|check|book|reserve|need|want|any|are\s+there|what(?:'s|\s+are)?)\b.{0,60}\b(?:hotels?|motel|resort|inn|suites?|rooms?)\b|\b(?:hotels?|motel|resort|inn|suites?|rooms?)\b.{0,80}\b(?:available|availability|open|in|near|around|for|at|book|reserve|check|price|rate|cost)\b|\bhotel\s+(?:search|lookup|availability|booking|reservation|options?|deals?|rates?|prices?)\b|\broom\s+(?:availability|booking|reservation|for)\b|\bwhere\s+(?:to\s+stay|can\s+(?:i|we)\s+stay)\b|\bplace\s+to\s+stay\b|\bstay(?:ing)?\s+(?:at|in|near|the)\b.{0,60}\b(?:hotel|resort|inn|motel|suites?)\b|\bcheck\b.{0,60}\b(?:availability|available|rooms?)\b|\bcheck.{0,40}\b(?:hotel|resort|inn|motel)\b|\bIs\s+the\s+\w.{0,50}(?:hotel|resort|inn|available)\b|\bcheck\b.{1,80}\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\b|\b(?:marriott|hilton|hyatt|omni|sheraton|westin|doubletree|hampton|fairmont|ritz[- ]carlton|waldorf|courtyard|radisson|intercontinental|holiday\s+inn|best\s+western|four\s+seasons|sofitel|w\s+hotel|aloft|kimpton|loews)\b.{0,100}\b(?:available|availability|check|book|reserve|stay|rooms?|nights?|open|for\s+\w)/i;
@@ -1351,6 +1356,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isTripPriceQuery = requestContext === "trip-planning" && !isMorningGreeting && !isTripSaveIntent && !isTripPlanIntent &&
     /\b(?:price|prices|rate|rates|cost|costs|how\s+much|per\s+night|nightly|pricing|what(?:'s|\s+does)\s+(?:it|that|the\s+hotel)?\s*cost)\b/i.test(message);
   const isHotelAvailabilityQuery = !isMorningGreeting && !isTripSaveIntent && !isTripPlanIntent && (HOTEL_AVAIL_INTENT.test(message) || isTripPriceQuery);
+  const isHotelSwapIntent = requestContext === "trip-planning" && !isMorningGreeting && !isTripSaveIntent && !isTripPlanIntent && HOTEL_SWAP_INTENT.test(message);
   // Guard: don't run profile handler when a trip save is being detected — they conflict
   const isProfileRequest = !isTripSaveIntent && PROFILE_PATTERN.test(message);
   // IMPORTANT: Reminder requests (REMINDER_PATTERN) must NEVER route to Google Calendar.
@@ -2407,6 +2413,85 @@ If dates cannot be resolved to specific days, set them to null.`,
       }
     } catch (hotelErr) {
       req.log.warn({ err: hotelErr }, "[HotelAvail] Check failed — letting Claude handle naturally");
+    }
+  }
+
+  // ── Hotel swap within a saved trip itinerary ──────────────────────────────
+  // Fires when the user asks to swap/change a hotel on a specific day.
+  // Uses Haiku to extract the target day number and the new hotel name,
+  // mutates the itinerary in memory, persists to DB, and tells Claude
+  // the swap succeeded so it can confirm naturally.
+  if (isHotelSwapIntent && activeTripPlan?.itinerary) {
+    try {
+      const swapExtractResp = await anthropic.messages.create({
+        model: MODEL_HAIKU,
+        max_tokens: 150,
+        system: `Extract the hotel swap details from this message. Respond ONLY with valid JSON — no explanation, no markdown.
+Format: {"dayNumber": number or null, "newHotelName": "string or null"}
+dayNumber: which day of the itinerary the user wants to change (1-indexed). null if not specified.
+newHotelName: the name of the hotel the user wants to use instead. null if not specified.`,
+        messages: [{ role: "user", content: message }],
+      });
+
+      const swapText = swapExtractResp.content[0].type === "text"
+        ? swapExtractResp.content[0].text.replace(/^```json\s*/i, "").replace(/```$/i, "").trim()
+        : "{}";
+
+      let swapParams: { dayNumber?: number | null; newHotelName?: string | null } = {};
+      try { swapParams = JSON.parse(swapText); } catch { /* ignore */ }
+
+      req.log.info({ swapParams, tripId: activeTripPlan.id }, "[HotelSwap] Extracted swap params");
+
+      type SwapItinDay = { dayNumber?: number; hotel?: { name?: string; bookingUrl?: string; websiteUrl?: string; pricePerNight?: string; available?: boolean; availabilityChecked?: boolean; alternativeName?: string; alternativeBookingUrl?: string; alternativePricePerNight?: string } };
+      const swapDays: SwapItinDay[] = (activeTripPlan.itinerary as { days?: SwapItinDay[] }).days ?? [];
+
+      if (swapParams.newHotelName && swapDays.length > 0) {
+        // Find target day — if no day specified, apply to day 1 (or first day with a hotel)
+        const targetDayNum = swapParams.dayNumber ?? 1;
+        const targetDay = swapDays.find(d => d.dayNumber === targetDayNum) ?? swapDays[0];
+
+        if (targetDay?.hotel) {
+          const oldHotelName = targetDay.hotel.name ?? "the hotel";
+          targetDay.hotel.name = swapParams.newHotelName;
+          // Clear stale pricing / availability — will be re-enriched on next enrich call
+          targetDay.hotel.bookingUrl = undefined;
+          targetDay.hotel.websiteUrl = undefined;
+          targetDay.hotel.pricePerNight = undefined;
+          targetDay.hotel.available = undefined;
+          targetDay.hotel.availabilityChecked = false;
+          targetDay.hotel.alternativeName = undefined;
+          targetDay.hotel.alternativeBookingUrl = undefined;
+          targetDay.hotel.alternativePricePerNight = undefined;
+
+          // Persist the updated itinerary
+          await updateTripPlan(activeTripPlan.id, sessionUserName, {
+            itinerary: activeTripPlan.itinerary as never,
+          });
+
+          (req as any)._tripUpdated = { tripUpdated: true, tripId: activeTripPlan.id };
+
+          systemPrompt +=
+            `\n\n[Hotel Swap — Confirmed]\n` +
+            `You just updated Day ${targetDayNum} of "${activeTripPlan.trip_name ?? activeTripPlan.destination}": ` +
+            `swapped "${oldHotelName}" for "${swapParams.newHotelName}" and saved the change to the itinerary.\n` +
+            `Tell David the swap is done — mention both hotel names briefly — and note that ` +
+            `booking links and pricing for ${swapParams.newHotelName} will refresh on the next enrich. ` +
+            `Keep it warm and brief (2 sentences max).`;
+
+          req.log.info(
+            { tripId: activeTripPlan.id, day: targetDayNum, oldHotel: oldHotelName, newHotel: swapParams.newHotelName },
+            "[HotelSwap] Hotel swapped and saved to DB"
+          );
+        }
+      } else {
+        // Couldn't extract enough info — ask Claude to clarify
+        systemPrompt +=
+          `\n\n[Hotel Swap — Needs Clarification]\n` +
+          `David wants to swap a hotel but I couldn't determine ${!swapParams.dayNumber ? "which day" : "the new hotel name"}. ` +
+          `Ask him to clarify ${!swapParams.dayNumber ? "which day of the trip" : "what hotel he'd like to use instead"}.`;
+      }
+    } catch (swapErr) {
+      req.log.warn({ err: swapErr }, "[HotelSwap] Swap failed — letting Claude respond naturally");
     }
   }
 
@@ -5893,7 +5978,7 @@ If you cannot extract both, return null.`,
     try {
       const nativeResp = await anthropic.messages.create({
         model: selectedModel,
-        max_tokens: 1024,
+        max_tokens: requestContext === "trip-planning" ? 3000 : 1024,
         system: buildSystemBlocks(stableSystem, systemPrompt),
         messages,
       });
@@ -5906,6 +5991,7 @@ If you cannot extract both, return null.`,
       if ((req as any)._smsPayload) nativeResponseBody.smsPayload = (req as any)._smsPayload;
       if ((req as any)._reservationPayload) nativeResponseBody.reservationPayload = (req as any)._reservationPayload;
       if ((req as any)._tripSaved) Object.assign(nativeResponseBody, (req as any)._tripSaved);
+      if ((req as any)._tripUpdated) Object.assign(nativeResponseBody, (req as any)._tripUpdated);
       // Expose the booking URL as navigationUrl so the Android app opens it
       // using the same mechanism it uses for Google Maps (directions).
       const rp2 = (req as any)._reservationPayload as { type?: string; url?: string } | undefined;
