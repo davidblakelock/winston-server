@@ -160,125 +160,82 @@ export async function ensureTripPlansTable(): Promise<void> {
   }
 }
 
-// ── Intent parsing helpers ────────────────────────────────────────────────────
+// ── Intent parsing ────────────────────────────────────────────────────────────
 
 /**
- * Parse a user message for trip intent details.
- * Returns whatever could be extracted — caller decides what's missing.
+ * Extract travel intent from the user's raw message using GPT-4o.
+ * Returns structured fields — no regex, no fragile pattern matching.
  */
-export function parseTripIntent(message: string): ParsedTripIntent {
-  const msg = message.trim();
+export async function parseTripIntent(message: string): Promise<ParsedTripIntent> {
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const currentYear = todayISO.slice(0, 4);
 
-  // Destination extraction — most specific patterns first to avoid greedy "to plan" captures
-  const destPatterns = [
-    // "trip/road trip/vacation/travel to X" or "trip through X"
-    /(?:road\s+trip|trip|vacation|holiday|getaway|travel|visit)\s+(?:through|to\s+)?([A-Z][A-Za-z\s,'-]{2,45}?)(?:\s+for|\s+with|\s+stopping|[.!?]|$)/i,
-    // "romantic/anniversary/birthday/solo/family trip to X"
-    /(?:romantic|anniversary|birthday|solo|family)\s+(?:trip|getaway|vacation)\s+(?:to\s+)?([A-Z][A-Za-z\s,'-]{2,40}?)(?:\s+for|\s+with|[.!?]|$)/i,
-    // "to/through/in/around X" — fallback; skip common verbs that follow "to" (plan, go, see, etc.)
-    /(?:to|through|in|around|visit(?:ing)?)\s+(?!(?:plan|go|see|do|get|book|check|make|take|have|find|look|help|try|start|stop|visit)\b)([A-Z][A-Za-z\s,'-]{2,50}?)(?:\s+for|\s+with|\s+stopping|[.!?]|$)/i,
-  ];
-  let destination = "";
-  for (const pat of destPatterns) {
-    const m = msg.match(pat);
-    if (m?.[1]) {
-      destination = m[1].trim().replace(/[.,!?]+$/, "").trim();
-      break;
-    }
-  }
+  try {
+    const resp = await openai.chat.completions.create({
+      model:           MODEL_GPT4O,
+      max_tokens:      400,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content:
+            `Today is ${todayISO}. Extract travel intent from the user message. Return ONLY a JSON object — no prose, no markdown:\n` +
+            `{\n` +
+            `  "destination": "primary destination — broad region/state for road trips (e.g. 'Arkansas'), specific city for single-stop trips (e.g. 'Nashville'). Never a street or venue.",\n` +
+            `  "stops": ["every named city or town in visit order — e.g. ['Hot Springs','Eureka Springs','Bentonville']. Empty array [] if none."],\n` +
+            `  "nights": <integer overnight stays — '4 days 3 nights' → 3; '4-day trip' → 3; 'weekend' → 2; null if unknown>,\n` +
+            `  "startDate": "YYYY-MM-DD resolved to ${currentYear} unless another year is implied — 'June 26th' → '${currentYear}-06-26'; null only if no date can be inferred",\n` +
+            `  "partySize": <total travelers incl. user — 'me and Susan' → 2; 'solo' → 1; 'family of 4' → 4; null if unknown>,\n` +
+            `  "partyDesc": "natural description e.g. 'me and my wife Susan', 'solo', 'family of 4'. null if not stated.",\n` +
+            `  "vibe": "one of: romantic | adventurous | relaxed | celebratory | family-friendly | road trip | cultural | foodie. Best fit or null.",\n` +
+            `  "budget": "one of: budget | mid-range | luxury — infer from 'nice hotels', 'spa', 'luxury', 'cheap', etc. null if unclear.",\n` +
+            `  "mustHaves": "comma-separated must-do items explicitly stated by the user. null if none.",\n` +
+            `  "preferences": "any other preferences — spa, fine dining, pet-friendly, hiking, etc. null if none."\n` +
+            `}`,
+        },
+        { role: "user", content: message },
+      ],
+    });
 
-  // Duration — nights or days
-  const nightsM =
-    msg.match(/\b(\d+)\s*(?:-\s*)?night/i) ??
-    msg.match(/\b(\d+)\s*(?:-\s*)?day/i);
-  let nights: number | undefined;
-  if (nightsM) {
-    nights = parseInt(nightsM[1]!, 10);
-    if (/\bday/i.test(nightsM[0]!)) nights = Math.max(1, nights - 1);
-  } else if (/\bweekend\b/i.test(msg)) {
-    nights = 2;
-  }
-
-  // Party description
-  let partyDesc: string | undefined;
-  let partySize: number | undefined;
-  const partyM = msg.match(/(?:with|take|bring|for)\s+(my\s+(?:wife|husband|partner|girlfriend|boyfriend|family|kids?|son|daughter|friend|buddy|dad|mom|parents?|sister|brother)\s*(?:\w+)?(?:\s+and\s+\w+)?|(?:just\s+)?(?:solo|by\s+myself)|(\d+)\s+(?:of\s+us|people|adults?|friends?))/i);
-  if (partyM) {
-    partyDesc = partyM[1]?.trim().replace(/[.,!?]+$/, "");
-    const numM = partyDesc?.match(/\b(\d+)\b/);
-    if (numM) partySize = parseInt(numM[1]!, 10);
-    else if (/solo|myself/i.test(partyDesc ?? "")) partySize = 1;
-    else if (/wife|husband|partner|girlfriend|boyfriend/i.test(partyDesc ?? "")) partySize = 2;
-  }
-
-  // Vibe / occasion
-  let vibe: string | undefined;
-  if (/romantic|anniversary|honeymoon/i.test(msg)) vibe = "romantic";
-  else if (/adventure|adventur|hik(?:e|ing)|outdoor|active/i.test(msg)) vibe = "adventurous";
-  else if (/relax|chill|lazy|slow|restful|peaceful/i.test(msg)) vibe = "relaxed";
-  else if (/birthday/i.test(msg)) vibe = "celebratory";
-  else if (/family|kids?/i.test(msg)) vibe = "family-friendly";
-  else if (/road\s+trip/i.test(msg)) vibe = "road trip";
-
-  // Budget
-  let budget: string | undefined;
-  if (/\b(luxury|high[\s-]?end|splurge|five[\s-]?star)\b/i.test(msg)) budget = "luxury";
-  else if (/\b(budget|cheap|affordable|inexpensive|backpack)\b/i.test(msg)) budget = "budget";
-
-  // Start date — prefer "June 26th" over bare "June"; capture "Leaving June 26th" too
-  let startDate: string | undefined;
-  const dateM = msg.match(
-    /\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:st|nd|rd|th)?\b|\b(?:in\s+)?(?:late\s+)?(?:January|February|March|April|May|June|July|August|September|October|November|December)\b|\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/i,
-  );
-  if (dateM) startDate = dateM[0];
-
-  // Must-haves (after "want to", "need", "must", "have to")
-  const mustM = msg.match(/(?:must|need(?:\s+to)?|have\s+to|want\s+to\s+(?:make\s+sure|definitely)|definitely)\s+(?:see|visit|try|do|experience)\s+([^,.!?]+)/i);
-  const mustHaves = mustM?.[1]?.trim();
-
-  // ── Multi-stop road trip city extraction ─────────────────────────────────
-  // Extracts an ordered list of stops from "first night in X, second night in Y…"
-  // or "stopping in X, Y, Z" patterns. Required for the routing table in
-  // generateTripItinerary to assign the correct city to each day.
-  let stops: string[] | undefined;
-  {
-    const ordinalMap: Record<string, number> = {
-      first: 0, "1st": 0, second: 1, "2nd": 1, third: 2, "3rd": 2,
-      fourth: 3, "4th": 3, fifth: 4, "5th": 4, last: 9999,
+    const raw    = resp.choices[0]?.message?.content ?? "{}";
+    const parsed = JSON.parse(raw) as {
+      destination?: string | null;
+      stops?:       string[] | null;
+      nights?:      number | null;
+      startDate?:   string | null;
+      partySize?:   number | null;
+      partyDesc?:   string | null;
+      vibe?:        string | null;
+      budget?:      string | null;
+      mustHaves?:   string | null;
+      preferences?: string | null;
     };
-    const stopsArr: Array<{ ord: number; name: string }> = [];
 
-    // "first night in Hot Springs, second night in Eureka Springs, last night in Bentonville"
-    // Also handles "night 1 in X, night 2 in Y"
-    const ordPat =
-      /\b(first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th|night\s+\d)\s+night\s+in\s+([A-Za-z][A-Za-z\s]{1,35}?)(?=\s*[,.\n!]|\s+and\b|\s+(?:second|third|fourth|fifth|last|the\s+last)\b|$)/gi;
-    let om: RegExpExecArray | null;
-    while ((om = ordPat.exec(msg)) !== null) {
-      const ordRaw = om[1]!.toLowerCase().replace(/\s+/g, " ");
-      const city = om[2]!.trim().replace(/[.,!?]+$/, "").trim();
-      const ordNum = ordinalMap[ordRaw] ?? (/night\s+(\d)/.exec(ordRaw)?.[1] ? parseInt(/night\s+(\d)/.exec(ordRaw)![1]!, 10) - 1 : stopsArr.length);
-      stopsArr.push({ ord: ordNum, name: city });
-    }
+    // Merge mustHaves + preferences into one field
+    const mustParts = [parsed.mustHaves, parsed.preferences].filter(Boolean);
 
-    if (stopsArr.length > 1) {
-      stopsArr.sort((a, b) => a.ord - b.ord);
-      stops = stopsArr.map((s) => s.name);
-    }
+    logger.info(
+      { destination: parsed.destination, stops: parsed.stops, nights: parsed.nights, startDate: parsed.startDate, vibe: parsed.vibe },
+      "[TripIntent] GPT-4o extraction complete",
+    );
 
-    // "stopping in X, Y, and Z" / "stops in X, Y, Z" as fallback
-    if (!stops) {
-      const stopListM = msg.match(/\bstopp?(?:ing|s?)?\s+(?:in|at)\s+([A-Za-z][A-Za-z,\s&]{5,120})(?:[.!?]|$)/i);
-      if (stopListM) {
-        const parts = (stopListM[1] ?? "")
-          .split(/,\s*(?:and\s+)?|\s+and\s+/i)
-          .map((s) => s.trim().replace(/[.,!?]+$/, ""))
-          .filter((s) => s.length > 1);
-        if (parts.length > 1) stops = parts;
-      }
-    }
+    return {
+      destination: parsed.destination ?? "",
+      stops:       (parsed.stops?.length) ? parsed.stops : undefined,
+      nights:      parsed.nights      ?? undefined,
+      startDate:   parsed.startDate   ?? undefined,
+      partySize:   parsed.partySize   ?? undefined,
+      partyDesc:   parsed.partyDesc   ?? undefined,
+      vibe:        parsed.vibe        ?? undefined,
+      budget:      parsed.budget      ?? undefined,
+      mustHaves:   mustParts.length   ? mustParts.join("; ") : undefined,
+      beenBefore:  undefined,
+      rawMessage:  message,
+    };
+  } catch (err) {
+    logger.warn({ err }, "[TripIntent] GPT-4o extraction failed — returning empty intent");
+    return { destination: "", rawMessage: message };
   }
-
-  return { destination, nights, startDate, partySize, partyDesc, vibe, mustHaves, budget, beenBefore: undefined, stops, rawMessage: msg };
 }
 
 // ── Travel profile helper ─────────────────────────────────────────────────────

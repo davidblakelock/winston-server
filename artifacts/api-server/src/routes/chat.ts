@@ -243,7 +243,6 @@ import { getDallasItems, getLocalContentCity, type LocalContentItem } from "../m
 import { createReminder } from "../reminders/reminderManager.js";
 import { getPendingRouteReminder, setPendingRouteReminder } from "../routeAware/routeAwareManager.js";
 import {
-  parseTripIntent,
   generateTripItinerary,
   enrichItineraryWithHotelAvailability,
   saveTripPlan,
@@ -2022,11 +2021,21 @@ If the conversation is not about a trip, set destination to null.`,
       }
 
       if (extracted.destination) {
-        const intent = parseTripIntent(`${extracted.nights ?? 3} nights in ${extracted.destination}${extracted.vibe ? `, ${extracted.vibe}` : ""}`);
-        intent.destination = extracted.destination;
-        if (extracted.nights) intent.nights = extracted.nights;
-        if (extracted.vibe) intent.vibe = extracted.vibe;
-        if (extracted.startDate) intent.startDate = extracted.startDate;
+        // Build intent directly from already-extracted data — no need to call parseTripIntent here
+        // since all fields came from Haiku extraction + the in-memory trip intent cache.
+        const intent: import("../travel/tripPlanningManager.js").ParsedTripIntent = {
+          destination: extracted.destination,
+          nights:      extracted.nights      ?? cached?.intent.nights      ?? 3,
+          vibe:        extracted.vibe        ?? cached?.intent.vibe        ?? undefined,
+          startDate:   extracted.startDate   ?? cached?.intent.startDate   ?? undefined,
+          stops:       cached?.intent.stops,
+          partyDesc:   cached?.intent.partyDesc,
+          partySize:   cached?.intent.partySize,
+          budget:      cached?.intent.budget,
+          mustHaves:   cached?.intent.mustHaves,
+          beenBefore:  undefined,
+          rawMessage:  message,
+        };
 
         req.log.info(
           { dest: intent.destination, nights: intent.nights, vibe: intent.vibe },
