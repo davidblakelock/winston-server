@@ -225,16 +225,60 @@ export function parseTripIntent(message: string): ParsedTripIntent {
   if (/\b(luxury|high[\s-]?end|splurge|five[\s-]?star)\b/i.test(msg)) budget = "luxury";
   else if (/\b(budget|cheap|affordable|inexpensive|backpack)\b/i.test(msg)) budget = "budget";
 
-  // Start date
+  // Start date — prefer "June 26th" over bare "June"; capture "Leaving June 26th" too
   let startDate: string | undefined;
-  const dateM = msg.match(/\b(?:in\s+)?(?:late\s+)?(?:January|February|March|April|May|June|July|August|September|October|November|December)\b|\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/i);
+  const dateM = msg.match(
+    /\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:st|nd|rd|th)?\b|\b(?:in\s+)?(?:late\s+)?(?:January|February|March|April|May|June|July|August|September|October|November|December)\b|\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/i,
+  );
   if (dateM) startDate = dateM[0];
 
   // Must-haves (after "want to", "need", "must", "have to")
   const mustM = msg.match(/(?:must|need(?:\s+to)?|have\s+to|want\s+to\s+(?:make\s+sure|definitely)|definitely)\s+(?:see|visit|try|do|experience)\s+([^,.!?]+)/i);
   const mustHaves = mustM?.[1]?.trim();
 
-  return { destination, nights, startDate, partySize, partyDesc, vibe, mustHaves, budget, beenBefore: undefined, rawMessage: msg };
+  // ── Multi-stop road trip city extraction ─────────────────────────────────
+  // Extracts an ordered list of stops from "first night in X, second night in Y…"
+  // or "stopping in X, Y, Z" patterns. Required for the routing table in
+  // generateTripItinerary to assign the correct city to each day.
+  let stops: string[] | undefined;
+  {
+    const ordinalMap: Record<string, number> = {
+      first: 0, "1st": 0, second: 1, "2nd": 1, third: 2, "3rd": 2,
+      fourth: 3, "4th": 3, fifth: 4, "5th": 4, last: 9999,
+    };
+    const stopsArr: Array<{ ord: number; name: string }> = [];
+
+    // "first night in Hot Springs, second night in Eureka Springs, last night in Bentonville"
+    // Also handles "night 1 in X, night 2 in Y"
+    const ordPat =
+      /\b(first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th|night\s+\d)\s+night\s+in\s+([A-Za-z][A-Za-z\s]{1,35}?)(?=\s*[,.\n!]|\s+and\b|\s+(?:second|third|fourth|fifth|last|the\s+last)\b|$)/gi;
+    let om: RegExpExecArray | null;
+    while ((om = ordPat.exec(msg)) !== null) {
+      const ordRaw = om[1]!.toLowerCase().replace(/\s+/g, " ");
+      const city = om[2]!.trim().replace(/[.,!?]+$/, "").trim();
+      const ordNum = ordinalMap[ordRaw] ?? (/night\s+(\d)/.exec(ordRaw)?.[1] ? parseInt(/night\s+(\d)/.exec(ordRaw)![1]!, 10) - 1 : stopsArr.length);
+      stopsArr.push({ ord: ordNum, name: city });
+    }
+
+    if (stopsArr.length > 1) {
+      stopsArr.sort((a, b) => a.ord - b.ord);
+      stops = stopsArr.map((s) => s.name);
+    }
+
+    // "stopping in X, Y, and Z" / "stops in X, Y, Z" as fallback
+    if (!stops) {
+      const stopListM = msg.match(/\bstopp?(?:ing|s?)?\s+(?:in|at)\s+([A-Za-z][A-Za-z,\s&]{5,120})(?:[.!?]|$)/i);
+      if (stopListM) {
+        const parts = (stopListM[1] ?? "")
+          .split(/,\s*(?:and\s+)?|\s+and\s+/i)
+          .map((s) => s.trim().replace(/[.,!?]+$/, ""))
+          .filter((s) => s.length > 1);
+        if (parts.length > 1) stops = parts;
+      }
+    }
+  }
+
+  return { destination, nights, startDate, partySize, partyDesc, vibe, mustHaves, budget, beenBefore: undefined, stops, rawMessage: msg };
 }
 
 // ── Travel profile helper ─────────────────────────────────────────────────────
@@ -529,80 +573,110 @@ export async function enrichItineraryWithHotelAvailability(
     "[HotelAvail] Starting hotel enrichment",
   );
 
-  // Collect unique hotel names in itinerary order, capped at max searches
-  const uniqueHotels: string[] = [];
-  for (const day of plan.itinerary.days) {
-    const name = day.hotel?.name;
-    if (name && !uniqueHotels.includes(name)) {
-      uniqueHotels.push(name);
-      if (uniqueHotels.length >= SERP_MAX_SEARCHES_PER_ITINERARY) break;
-    }
+  // Build a per-day search plan: hotel name + the specific city for that day + per-night dates.
+  // For road trips each hotel is in a different city — using plan.destination (the overall
+  // destination) for every SerpAPI search causes mismatches and zero results.
+  // Key: "HotelName::City" to de-duplicate same hotel across multiple days at same stop.
+  type HotelSearchEntry = {
+    hotelName: string;
+    city: string;       // day.location (e.g. "Eureka Springs") not plan.destination
+    dayCheckIn: string; // YYYY-MM-DD for the night this hotel is first used
+    dayCheckOut: string;
+  };
+  const searchPlan: HotelSearchEntry[] = [];
+  const seenKeys = new Set<string>();
+
+  for (let i = 0; i < plan.itinerary.days.length; i++) {
+    const day = plan.itinerary.days[i]!;
+    const hotelName = day.hotel?.name;
+    if (!hotelName) continue;
+
+    // Use the day's specific city; fall back to overall destination only if not set
+    const city = (day.location && day.location.trim()) ? day.location.trim() : plan.destination;
+
+    // Per-night dates: day i of trip = night i (0-indexed from trip start)
+    const dayCheckIn  = addNightsToISO(checkIn, i);
+    const dayCheckOut = addNightsToISO(dayCheckIn, 1);
+
+    const key = `${hotelName}::${city}`;
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+
+    if (searchPlan.length >= SERP_MAX_SEARCHES_PER_ITINERARY) break;
+    searchPlan.push({ hotelName, city, dayCheckIn, dayCheckOut });
   }
 
   logger.info(
-    { uniqueHotels, limit: SERP_MAX_SEARCHES_PER_ITINERARY },
-    "[HotelAvail] Unique hotels to enrich",
+    { searchPlan: searchPlan.map(e => `${e.hotelName} in ${e.city} (${e.dayCheckIn}→${e.dayCheckOut})`), limit: SERP_MAX_SEARCHES_PER_ITINERARY },
+    "[HotelAvail] Hotel search plan",
   );
 
-  // Pre-fetch destination-wide Google Places results (one call, cached 4 h).
-  // Used as a reliable fallback when SerpAPI is unavailable or a specific hotel
-  // name generated by GPT-4o can't be matched in Google's database.
-  const destHotels = await searchBookingAvailability(plan.destination, checkIn, checkOut, adults).catch(() => []);
-  logger.info(
-    { dest: plan.destination, destHotelsCount: destHotels.length },
-    "[HotelAvail] Destination-wide Places pre-fetch",
-  );
+  // Pre-fetch destination-wide Google Places results per unique city.
+  // Used as a reliable fallback when SerpAPI can't match a specific hotel name.
+  const destHotelsByCity = new Map<string, Awaited<ReturnType<typeof searchBookingAvailability>>>();
+  const uniqueCities = [...new Set(searchPlan.map(e => e.city))];
+  await Promise.all(uniqueCities.map(async (city) => {
+    try {
+      const results = await searchBookingAvailability(city, checkIn, checkOut, adults);
+      destHotelsByCity.set(city, results);
+      logger.info({ city, count: results.length }, "[HotelAvail] Destination-wide Places pre-fetch");
+    } catch {
+      destHotelsByCity.set(city, []);
+    }
+  }));
 
-  // Search each unique hotel once, cache results by name
+  // Run SerpAPI search for each unique hotel+city combo; cache by key
   const resultCache = new Map<string, Awaited<ReturnType<typeof searchHotelViaSerpApi>>>();
 
-  for (const hotelName of uniqueHotels) {
+  for (const entry of searchPlan) {
+    const key = `${entry.hotelName}::${entry.city}`;
     try {
       const result = await searchHotelViaSerpApi(
-        hotelName,
-        plan.destination,
-        checkIn,
-        checkOut,
+        entry.hotelName,
+        entry.city,          // ← per-day city, not overall plan.destination
+        entry.dayCheckIn,    // ← per-night check-in date
+        entry.dayCheckOut,   // ← per-night check-out date
         adults,
       );
-      resultCache.set(hotelName, result);
+      resultCache.set(key, result);
     } catch (err) {
-      logger.warn({ err, hotelName }, "[HotelAvail] SerpAPI search threw — skipping this hotel");
+      logger.warn({ err, hotel: entry.hotelName, city: entry.city }, "[HotelAvail] SerpAPI search threw — skipping");
     }
   }
 
-  // Apply results to all days — hotels beyond the search cap get no enrichment
-  for (const day of plan.itinerary.days) {
+  // Apply results to all days
+  for (let i = 0; i < plan.itinerary.days.length; i++) {
+    const day = plan.itinerary.days[i]!;
     const name = day.hotel?.name;
     if (!name) continue;
 
-    const result = resultCache.get(name);
+    const city = (day.location && day.location.trim()) ? day.location.trim() : plan.destination;
+    const key  = `${name}::${city}`;
+    const result = resultCache.get(key);
     day.hotel.availabilityChecked = true;
 
     if (result?.source === "serpapi") {
       day.hotel.available = true;
-      // Only overwrite URLs if SerpAPI returned a non-empty value — never wipe existing ones
       if (result.bookingUrl) day.hotel.bookingUrl = result.bookingUrl;
       if (result.websiteUrl && (!day.hotel.websiteUrl || day.hotel.websiteUrl === "")) {
         day.hotel.websiteUrl = result.websiteUrl;
       }
-      // If we used a proxy date (no real dates provided), mark price as approximate
       day.hotel.pricePerNight = result.pricePerNight
         ? (hasRealDates ? result.pricePerNight : `~${result.pricePerNight}`)
         : undefined;
       logger.info(
-        { hotel: name, price: day.hotel.pricePerNight, bookingUrl: result.bookingUrl.substring(0, 60), hasRealDates },
+        { hotel: name, city, price: day.hotel.pricePerNight, bookingUrl: result.bookingUrl.substring(0, 60), hasRealDates },
         "[HotelAvail] ✓ SerpAPI — rate and booking URL populated",
       );
     } else if (result?.source === "places" && result.websiteUrl) {
       day.hotel.available = false;
       if (!day.hotel.bookingUrl) day.hotel.bookingUrl = result.websiteUrl;
       if (!day.hotel.websiteUrl) day.hotel.websiteUrl = result.websiteUrl;
-      logger.info({ hotel: name, websiteUrl: result.websiteUrl }, "[HotelAvail] ~ Places name-lookup fallback — website URL set");
+      logger.info({ hotel: name, city, websiteUrl: result.websiteUrl }, "[HotelAvail] ~ Places name-lookup fallback");
     } else {
-      // Neither SerpAPI nor name-specific Places found this hotel.
-      // Try matching against destination-wide Places results as a last resort.
+      // Neither SerpAPI nor name-specific Places matched — try city-wide Places fallback
       day.hotel.available = false;
+      const destHotels = destHotelsByCity.get(city) ?? [];
 
       if (destHotels.length > 0) {
         const match = matchHotelToResults(name, destHotels);
@@ -613,22 +687,19 @@ export async function enrichItineraryWithHotelAvailability(
           if (!day.hotel.bookingUrl) day.hotel.bookingUrl = url;
           if (!day.hotel.websiteUrl) day.hotel.websiteUrl = url;
           logger.info(
-            { hotel: name, matchedName: bestHit.name, url: url.substring(0, 60) },
-            "[HotelAvail] ~ Destination-wide Places fallback — URL populated",
+            { hotel: name, city, matchedName: bestHit.name, url: url.substring(0, 60) },
+            "[HotelAvail] ~ City-wide Places fallback — URL populated",
           );
         }
 
-        // Always attach top 2 real alternatives so the app can offer options
-        const alts = destHotels
-          .filter((h) => h !== match.matched)
-          .slice(0, 2);
+        const alts = destHotels.filter((h) => h !== match.matched).slice(0, 2);
         if (alts[0]) {
           day.hotel.alternativeName       = alts[0].name;
           day.hotel.alternativeBookingUrl = alts[0].bookingUrl;
         }
-        logger.info({ hotel: name, altsCount: alts.length }, "[HotelAvail] ~ Destination-wide alternatives attached");
+        logger.info({ hotel: name, city, altsCount: alts.length }, "[HotelAvail] ~ City-wide alternatives attached");
       } else {
-        logger.info({ hotel: name }, "[HotelAvail] ✗ No result from SerpAPI, Places, or destination-wide search");
+        logger.info({ hotel: name, city }, "[HotelAvail] ✗ No result from SerpAPI, Places, or city-wide search");
       }
     }
   }
