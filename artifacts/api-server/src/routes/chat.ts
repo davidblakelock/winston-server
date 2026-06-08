@@ -224,6 +224,7 @@ import {
   type TextContactCandidate,
 } from "../text/textMessageComposer.js";
 import {
+  BRIEFING_PREF_PATTERN,
   extractBriefingPrefOp,
   upsertBriefingPreference,
   getBriefingPreferences,
@@ -232,7 +233,6 @@ import {
   isJournalPromptsEnabled,
   type BriefingPreference,
 } from "../briefingPreferences/briefingPreferencesManager.js";
-import { classifyMessage } from "../lib/intentClassifier.js";
 import { preFetchMorningBriefing, buildSmartCalendarBlock } from "../morning/briefingPregenerate.js";
 import { getProactiveMode, buildModeInstruction } from "../proactiveMode/proactiveModeManager.js";
 import { populateCalendarSyncState } from "../departure/calendarSyncScheduler.js";
@@ -513,6 +513,17 @@ function buildSystemBlocks(stable: string, dynamic: string): SystemBlock[] {
   return blocks;
 }
 
+// Tightened: must be an EXPLICIT greeting or request — never fires on bare "morning" alone
+// or on messages that contain "morning" mid-sentence (e.g. "update my morning preferences").
+const MORNING_PATTERN = /^(good\s+morning|mornin[g']?|morning\s+(briefing|summary|update)|daily\s+(briefing|summary|update)|give\s+me\s+(my\s+)?(morning\s+)?briefing|what('?s|\s+is)\s+(my\s+)?(morning\s+)?briefing|i\s+want\s+(my\s+)?(morning\s+)?briefing|wakin[g']?\s+up|just\s+woke)[\s!.,?]*/i;
+
+// "Tell me more about number 3" / "Dig into story 5" / "More on number 7" / "Number 2"
+// Fired when user wants details on a specific Top 10 news story from the morning briefing.
+const NEWS_DIG_PATTERN = /\b(?:(?:tell\s+me\s+more|more\s+(?:about|on|details?)|dig\s+(?:into|deeper)|details?\s+on|expand\s+on|what\s+happened\s+with)\s+(?:(?:story|number|#|item)\s*)?(\d+)|(?:story|number|item|#)\s*(\d+)(?:\s+please)?$)/i;
+const EVENING_PATTERN = /\b(good\s+evening|evening\s+check[\s-]?in|check[\s-]?in\s+for\s+the\s+evening|start\s+(my\s+)?evening\s+check[\s-]?in|winding\s+down|wind\s+down|heading\s+to\s+bed|going\s+to\s+bed|getting\s+ready\s+for\s+bed|calling\s+it\s+a\s+night|turning\s+in|good\s+night|goodnite|end\s+of\s+the\s+day|wrapping\s+up|relaxing\s+(tonight|this\s+evening)|settling\s+in)\b/i;
+// Catches direct weather queries at any time of day (not just during wind-down).
+// Matches: "what's the weather", "weather on Friday", "forecast", "will it rain", "how hot", etc.
+const WEATHER_PATTERN = /\b(weather|forecast|temperature|how\s+(hot|cold|warm)|will\s+it\s+(rain|snow|be\s+(hot|cold|warm|sunny|cloudy|rainy|windy))|chance\s+of\s+rain|what('?s|\s+is)\s+(it\s+like\s+)?(outside|today|tomorrow|this\s+week|this\s+weekend|on\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday))|is\s+it\s+(going\s+to|supposed\s+to)\s+(rain|snow|be\s+(hot|cold|warm|sunny|nice))|outdoor\s+(conditions?|weather)|rain\s+(today|tomorrow|this\s+week|this\s+weekend)|degrees?\s+outside|feels?\s+like\s+outside)\b/i;
 
 /** Extract a specific city from a weather message and geocode it with Nominatim.
  *  Falls back to the user's profile city/coords if no specific location is found. */
@@ -548,8 +559,25 @@ async function resolveWeatherLocation(
   } catch { /* fall through to profile city */ }
   return { city: profileCity, lat: profileLat, lon: profileLon };
 }
+// LIST_REMINDERS_PATTERN must come before REMINDER_PATTERN in evaluation order so
+// "what are my reminders?" is never mistakenly routed to the reminder-creation path.
+const LIST_REMINDERS_PATTERN = /\b(what\s+(are\s+)?(my\s+)?(active\s+|pending\s+|upcoming\s+|current\s+)?reminders?|show\s+(me\s+)?(my\s+)?(active\s+|pending\s+|upcoming\s+|current\s+)?reminders?|list\s+(my\s+)?(active\s+|pending\s+|upcoming\s+|current\s+)?reminders?|do\s+i\s+have\s+(any\s+)?(active\s+|pending\s+|upcoming\s+)?reminders?|any\s+(active\s+|pending\s+|upcoming\s+)?reminders?|reminders?\s+do\s+i\s+have)\b/i;
+const REMINDER_PATTERN = /\b(remind\s+me\b|remind\s+(me|\w+)\s+to|set\s+a?\s*reminder(\s+for\s+\w+)?|don'?t\s+let\s+me\s+forget|make\s+sure\s+i|peel\s+remind|ms\.?\s*peel\s+remind)\b/i;
+const EMAIL_PATTERN = /\b(email|emails|mail|inbox|check\s+my\s+(email|mail|inbox)|any\s+(new\s+)?(emails?|messages?|mail)|what('?s|\s+is)\s+(in\s+)?(my\s+)?(email|inbox|mail)|do\s+i\s+have\s+(any\s+)?(email|mail|messages?))\b/i;
+const CALENDAR_PATTERN = /\b(calendar|schedule|agenda|appointments?|what('?s|\s+is)\s+(on\s+)?(my\s+)?(calendar|schedule|agenda|week)|(today|tomorrow|this\s+week|next\s+week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)'?s?\s+(schedule|events?|appointments?|look\s+like)|do\s+i\s+have\s+anything\s+(today|tomorrow|this\s+week|scheduled|on\s+my\s+calendar)|what\s+does\s+my\s+(day|week|morning|afternoon|evening)\s+look\s+like|what('?s|\s+is)\s+on\s+for\s+(today|tomorrow|this\s+week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|anything\s+(on\s+)?(today|tomorrow|this\s+week|my\s+calendar|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|busy\s+(today|tomorrow|this\s+week|monday|tuesday|wednesday|thursday|friday)|am\s+i\s+free\s+(today|tomorrow|this\s+(morning|afternoon|week)|monday|tuesday|wednesday|thursday|friday)|what\s+do\s+i\s+have\s+(today|tomorrow|this\s+week|this\s+morning|this\s+afternoon|on\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday))|do\s+i\s+have\s+(a\s+)?(meeting|lunch|dinner|appointment|call|interview|class|session|game)\s+(today|tomorrow|this\s+(morning|afternoon|week)|on\s+(monday|tuesday|wednesday|thursday|friday))|(when|what\s+time)\s+is\s+(my\s+)?(meeting|lunch|dinner|appointment|call|interview|class|session|game|next\s+appointment)|where\s+(am\s+i\s+(having|eating|meeting|going\s+for)|is\s+(my\s+|the\s+)?)\s*(lunch|dinner|breakfast|brunch|meeting|appointment|event)|what('?s|\s+is)\s+(my\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow)\s+(look\s+like|schedule|plans?)|what\s+are\s+my\s+plans?\s+(for\s+)?(today|tomorrow|this\s+week|tonight|this\s+(morning|afternoon|evening))|how\s+does\s+my\s+(day|week|morning|afternoon|schedule)\s+look)\b/i;
+// NOTE: "remind me" phrases are intentionally excluded here — they go through the reminder system, not the calendar.
+// Reminders → push notifications (REMINDER_PATTERN). Calendar events → Google Calendar (CALENDAR_CREATE_PATTERN).
+const CALENDAR_CREATE_PATTERN = /\b(add\s+(?!.+\s+to\s+my\s+(?:shopping|grocery|to.?do|errand|task|watch))|create\s+(a\s+)?(new\s+)?(event|appointment|meeting|calendar)|schedule\s+(a\s+)?(meeting|appointment|lunch|dinner|call|event)|put\s+.+\s+on\s+(my\s+)?calendar|book\s+(a\s+)?(meeting|appointment)|set\s+up\s+(a\s+)?(meeting|appointment)|block\s+(off\s+)?time)\b/i;
+// NOTE: MODIFY is evaluated BEFORE CREATE so move/reschedule phrases always win.
+// Covers: move, reschedule, change (the time of), push back/forward, postpone, shift, bump, delay, update time
+const CALENDAR_MODIFY_PATTERN = /\b(move\s+(my\s+)?(?!\w+\s+list)|reschedul|change\s+(my\s+|the\s+)?(time|date|appointment|meeting|event|calendar)|update\s+(my\s+|the\s+)?(time\s+of\s+|date\s+of\s+)?(appointment|meeting|event)|push\s+(?:back|forward|out|up)\s+(my\s+|the\s+)?(appointment|meeting|event)?|postpone\s+(my\s+|the\s+)?|shift\s+(my\s+|the\s+)?(appointment|meeting|event)|bump\s+(my\s+|the\s+)?(appointment|meeting|event)|delay\s+(my\s+|the\s+)?(appointment|meeting|event))\b/i;
+const CALENDAR_DELETE_PATTERN = /\b(cancel\s+(my\s+)?(appointment|meeting|event|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|delete\s+(my\s+)?(appointment|meeting|event|calendar\s+event)|remove\s+(my\s+)?(appointment|meeting|event)\s+from\s+(my\s+)?calendar|clear\s+(my\s+)?(appointment|meeting|event))\b/i;
 const CALENDAR_CONFIRM_PATTERN = /^(yes|yeah|yep|yup|sure|go\s+ahead|please\s+do|confirmed?|absolutely|do\s+it|ok(ay)?|correct|that'?s\s+right)[\s.!]*$/i;
 const CALENDAR_CANCEL_PATTERN = /^(no|nope|nah|never\s+mind|don'?t|keep\s+it|actually\s+no|cancel\s+that|forget\s+it|hold\s+on|wait)[\s.!]*$/i;
+const LIST_PATTERN = /\b(add\s+.+\s+to\s+(my\s+)?\w.+list|remove\s+.+\s+from\s+(my\s+)?\w.+list|clear\s+(my\s+)?\w.+list|what('?s|\s+is)\s+(on\s+)?(my\s+)?\w.+list|show\s+(me\s+)?(my\s+)?\w.+list|read\s+(me\s+)?(my\s+)?\w.+list|(shopping|to\s*-?\s*do|grocery|errand|task)\s+list)\b/i;
+const CASUAL_LIST_ADD_PATTERN = /\bas\s+well\b|\bthrow\s+in\b|\balso\s+(?:add|get|grab|pick\s+up)\b|\band\s+also\b|(?:\balso|\btoo)\s*$|^(?:grab|pick\s+up)\s/i;
+// Matches "send Susan my shopping list", "share my grocery list with Mike", "forward my to-do list to dad"
+const SEND_LIST_CONNECT_PATTERN = /\b(send|share|forward|text)\b.{1,60}\b(shopping|grocery|groceries|to[\s\-]?do|todo|tasks?)\b.{0,20}\blist\b/i;
 
 function detectActiveListFromHistory(history: Array<{ role: string; content: string }>): string | null {
   const recent = [...history].slice(-8).reverse();
@@ -563,6 +591,15 @@ function detectActiveListFromHistory(history: Array<{ role: string; content: str
   return null;
 }
 const NAVIGATION_PATTERN = /\b(take\s+me\s+to|directions?\s+to|navigate\s+to|get\s+me\s+to|how\s+do\s+i\s+get\s+to|maps?\s+to|open\s+maps?\s+(for|to)|i\s+need\s+to\s+go\s+to|i\s+need\s+directions?\s+to|i\s+want\s+to\s+go\s+to|can\s+you\s+take\s+me\s+to|take\s+me|get\s+directions?\s+to|show\s+me\s+how\s+to\s+get\s+to)\b/i;
+// Matches explicit save/build requests for a trip itinerary in main chat.
+// Intentionally broad — false positives bail gracefully when Haiku finds no trip destination.
+const TRIP_SAVE_INTENT = /\b(?:save\s+(?:this|my|the|our|it)\b|build\s+(?:(?:me|us)\s+)?(?:(?:the|a|an?)\s+)?(?:full\s+)?itinerary|build\s+it(?:\s+out)?\b|create\s+(?:(?:me|us)\s+)?(?:(?:the|a|an?)\s+)?(?:full\s+)?itinerary|make\s+(?:(?:the|a|an?)\s+)?(?:full\s+)?itinerary|generate\s+(?:(?:the|a|an?)\s+)?(?:full\s+)?itinerary|yes[,\s]+(?:please[,\s]+)?(?:build|make|create|save|do\s+it|go\s+ahead)|go\s+ahead(?:\s+and\s+(?:build|make|create|save))?|let'?s\s+(?:build|save|do|go\s+ahead)\b|yes[,\s]+let'?s\s+(?:do|build|save)\s+it|add\s+(?:it\s+)?to\s+my\s+(?:trips?|travel)|save\s+to\s+(?:my\s+)?(?:trips?|travel\s+screen)|book\s+it\b)\b/i;
+// Matches direct trip-generation requests where the user wants a plan built right now.
+// When triggered, the server generates + auto-saves the itinerary and returns tripSaved:true
+// in the JSON response so the native app can refresh its trip list immediately.
+// Guarded by !isTripSaveIntent at the flag level to avoid double-firing.
+// "Plan a 4 day, 3 night road trip" — duration group allows comma between day/night counts
+const TRIP_PLAN_INTENT = /\b(?:(?:help\s+me\s+|can\s+you\s+|please\s+)?plan\s+(?:(?:me|us|out)\s+)?(?:a|an?|our|my)\s+(?:\d+[-\s](?:day|night)s?(?:[,\s]+\d+[-\s]nights?)?[\s,]+|long\s+)?(?:trip|vacation|getaway|holiday|road\s+trip|weekend(?:\s+trip)?)|(?:put\s+together|plan\s+me|plan\s+us)\s+(?:a|an?)\s+(?:trip|vacation|getaway)|i\s+(?:want|need|would\s+like)\s+(?:you\s+)?to\s+plan\s+(?:a|my|our)\s+trip)\b/i;
 
 // ── Per-user short-lived trip intent cache ────────────────────────────────────
 // Isolated contexts (e.g. 'trip-planning') don't write to chat_messages, so
@@ -575,6 +612,90 @@ type CachedTripIntent = {
 };
 const lastTripIntentByUser = new Map<string, CachedTripIntent>();
 const TRIP_INTENT_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+// Detects hotel swap/change requests within a saved trip itinerary.
+// Covers: "swap the hotel on day 2", "change to the Omni", "use a different hotel", "replace day 3's hotel"
+const HOTEL_SWAP_INTENT = /\b(?:swap|change|replace|switch|use|try)\b.{0,50}\b(?:hotel|resort|inn|motel|lodge|accommodation|place\s+to\s+stay|stay)\b|\b(?:hotel|resort|inn|motel|lodge)\b.{0,50}\b(?:swap|change|replace|switch|different|another|instead|prefer|rather)\b/i;
+
+// Detects hotel/room search queries. Intentionally broad — Haiku validates dates/destination.
+// Covers: "find me a hotel", "book a room", "hotels in Dallas", "where to stay", "check the Omni for June 12", etc.
+const HOTEL_AVAIL_INTENT = /\b(?:find|search|look\s+(?:for|up)|get|show|check|book|reserve|need|want|any|are\s+there|what(?:'s|\s+are)?)\b.{0,60}\b(?:hotels?|motel|resort|inn|suites?|rooms?)\b|\b(?:hotels?|motel|resort|inn|suites?|rooms?)\b.{0,80}\b(?:available|availability|open|in|near|around|for|at|book|reserve|check|price|rate|cost)\b|\bhotel\s+(?:search|lookup|availability|booking|reservation|options?|deals?|rates?|prices?)\b|\broom\s+(?:availability|booking|reservation|for)\b|\bwhere\s+(?:to\s+stay|can\s+(?:i|we)\s+stay)\b|\bplace\s+to\s+stay\b|\bstay(?:ing)?\s+(?:at|in|near|the)\b.{0,60}\b(?:hotel|resort|inn|motel|suites?)\b|\bcheck\b.{0,60}\b(?:availability|available|rooms?)\b|\bcheck.{0,40}\b(?:hotel|resort|inn|motel)\b|\bIs\s+the\s+\w.{0,50}(?:hotel|resort|inn|available)\b|\bcheck\b.{1,80}\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\b|\b(?:marriott|hilton|hyatt|omni|sheraton|westin|doubletree|hampton|fairmont|ritz[- ]carlton|waldorf|courtyard|radisson|intercontinental|holiday\s+inn|best\s+western|four\s+seasons|sofitel|w\s+hotel|aloft|kimpton|loews)\b.{0,100}\b(?:available|availability|check|book|reserve|stay|rooms?|nights?|open|for\s+\w)/i;
+const GOAL_PATTERN = /\b(?:i\s+(?:want|need|should|have)\s+to\s+(?:(?:start\s+|be\s+)?(?:read(?:ing)?|call(?:ing)?|see(?:ing)?|visit(?:ing)?|spend(?:ing)?\s+(?:more\s+)?time|work(?:ing)?\s+(?:more\s+)?on|get\s+(?:back\s+)?(?:into|to)|focus(?:ing)?\s+(?:more\s+)?on|reconnect(?:ing)?|exercise|write|journal|meditat|paint|cook|learn|practice|travel|save|organiz|clean|reach\s+out)|more\s+\w+|less\s+\w+)|i'?(?:ve\s+been\s+meaning\s+to|d\s+love\s+to\s+(?:start|get))|my\s+goal\s+is\s+to|i'?m\s+trying\s+to\s+(?:be\s+better\s+at|get\s+(?:more\s+)?into|start))\b/i;
+const STORY_READ_PATTERN = /\b(read\s+(me\s+)?(my\s+)?stor(y|ies)|show\s+(me\s+)?(my\s+)?stor(y|ies)|what\s+stor(y|ies)\s+have\s+i|tell\s+me\s+(my|the)\s+stor(y|ies)|ms\.?\s*peel\s+read\s+(me\s+)?(my\s+)?stor(y|ies)|olivia\s+stor(y|ies))\b/i;
+const STORY_COUNT_PATTERN = /\b(how\s+many\s+stor(y|ies)|stor(y|ies)\s+count|how\s+many\s+memories|number\s+of\s+stor(y|ies)|how\s+many\s+have\s+i\s+(captured|saved|told))\b/i;
+const TV_ADD_PATTERN = /\b(i\s+started\s+watching|i'?m\s+(now\s+)?watching|i\s+am\s+watching|started\s+watching|i\s+picked\s+up|i\s+just\s+started\s+.{1,60}|i\s+(?:want(?:ed)?\s+to|decided\s+to|plan(?:ning)?\s+to|going\s+to|about\s+to)\s+(?:start\s+)?watch(?:ing)?\b|i'?m\s+(?:going|planning)\s+to\s+(?:start\s+)?watch(?:ing)?\b|i'?m\s+(?:binging|binge\s+watching|checking\s+out|giving|trying)\s+.{1,60}|add\s+.+\s+to\s+my\s+(?:shows?|watch\s+list))\b/i;
+const TV_REMOVE_PATTERN = /\b(i\s+finished\s+watching|i\s+finished|i\s+stopped\s+watching|i'?m\s+done\s+(with|watching)|done\s+watching|finished\s+watching|remove\s+.+\s+from\s+my\s+(?:shows?|watch\s+list))\b/i;
+const TV_TONIGHT_PATTERN = /\b(what'?s\s+on\s+tonight|anything\s+(good\s+)?on\s+tonight|what\s+should\s+i\s+watch\s+tonight|what'?s\s+on\s+tv|any\s+shows?\s+tonight)\b/i;
+// Catches dinner/tonight-plans queries not already covered by CALENDAR_PATTERN
+const DINNER_TONIGHT_PATTERN = /\b(what'?s\s+for\s+dinner|dinner\s+plans?|any\s+dinner\s+plans?|do\s+i\s+have\s+dinner\s+plans?|where\s+(are\s+we|am\s+i)\s+(eating|going|having\s+dinner)|what\s+am\s+i\s+doing\s+tonight|what'?s\s+happening\s+tonight|where\s+am\s+i\s+going\s+tonight|anything\s+(happening|going\s+on)\s+tonight|plans?\s+for\s+tonight|what'?s\s+on\s+(the\s+)?agenda\s+(for\s+)?tonight|where\s+(are|am)\s+(we|i)\s+(going|eating)\s+tonight)\b/i;
+const TV_RECOMMEND_PATTERN = /\b(recommend\s+(me\s+)?a?\s*show|what\s+should\s+i\s+watch|suggest\s+(me\s+)?a?\s*show|shows?\s+like\s+|anything\s+similar|similar\s+to\s+.+\s+show|what\s+else\s+should\s+i\s+watch|find\s+me\s+a\s+show)\b/i;
+const TV_LIST_PATTERN = /\b(what\s+shows?\s+(am\s+i|are\s+we|do\s+i)\s+(watching|following)|my\s+(shows?|watch\s+list)|list\s+(my\s+)?shows?|what('?s|\s+is)\s+on\s+my\s+watch\s+list)\b/i;
+// Matches explicit contact/phone/email requests AND direct name lookups ("find Eric Blackstone", "look up Susan Smart")
+// NOTE: i flag is required — messages start with capital letters ("Find", "What's", "Look up")
+const CONTACT_PATTERN = /\b(find|look\s+up|search|get|what(?:'?s)?|pull\s+up|add|do\s+you\s+have)\b.{0,60}\b(contact|phone|number|email|info(?:rmation)?)\b|\b(contact|phone|number|email|info(?:rmation)?)\b.{0,40}\bfor\b|\b(in\s+my\s+contacts?|from\s+my\s+contacts?|my\s+contacts?)\b|\b(find|look\s+up|search\s+for|pull\s+up)\b\s+(\w+(?:\s+\w+)+)/i;
+// Detects compound intent: "find X in my contacts AND add/save him/her to my profile/Winston"
+// These must be handled as a single sequential operation: lookup → save, never save-first.
+const COMPOUND_CONTACT_SAVE_PATTERN = new RegExp(
+  // Form A: "Find X in my contacts and add him/her to my profile/people"
+  "(?:find|look\\s+up|search(?:\\s+for)?|get)\\s+.{1,60}\\s+(?:in\\s+(?:my\\s+)?contacts?|from\\s+(?:my\\s+)?contacts?).{0,80}(?:add|save|put)\\s+(?:him|her|them|it)\\s+(?:to|in|into)\\s+(?:my\\s+)?(?:winston\\s+)?(?:profile|contacts?|list|people)" +
+  "|" +
+  // Form B: "Add/Save/Remember X from/in my contacts/people" — intent is always find+save
+  "(?:add|save|remember)\\s+(?:[A-Za-z'.]+\\s+){0,3}[A-Za-z'.]+\\s+(?:from|in|to)\\s+(?:my\\s+)?(?:winston\\s+)?(?:contacts?|people)" +
+  "|" +
+  // Form C: "Add/Save X to my Winston contacts/profile/people"
+  "(?:add|save|remember)\\s+(?:[A-Za-z'.]+\\s+){0,3}[A-Za-z'.]+\\s+(?:to|in)\\s+(?:my\\s+)?(?:winston\\s+)?(?:contacts?|profile|people)",
+  "i"
+);
+// Detects when David explicitly wants to save a contact — to his curated list,
+// My People (key_people), or Service Providers.
+// "people" is a natural synonym for contacts in speech.
+const SAVE_CONTACT_PATTERN = /\b(yes,?\s+)?(save|remember|add|keep)\s+(her|him|them|this\s+(contact|person))(\s+to\s+(my\s+)?(winston\s+)?(contacts?|list|people|service\s+providers?))?\b|\b(save|add)\s+((?:\w+\s+){1,3}\w+)\s+to\s+(my\s+)?(winston\s+)?(contacts?|list|people|service\s+providers?)\b|\b(remember|save)\s+((?:\w+\s+){1,3}\w+)\s+in\s+(my\s+)?(winston\s+)?(contacts?|list|people|service\s+providers?)\b|\b(save|add)\s+(her|him|them|this)\s+to\s+(my\s+)?(people|service\s+providers?|contacts?)\b/i;
+// Detects intent to create or update a contact in Google Contacts (not just Winston/curated list)
+// e.g. "Add John Smith to my Google Contacts with number 214-555-1234"
+//      "Update Sarah's phone number in Google Contacts to 972-555-5678"
+//      "Create a Google contact for Mike Jones, email mike@jones.com"
+const GOOGLE_CONTACT_WRITE_PATTERN = /\b(add|create|save|update|change|edit)\s+.{1,60}\s+(to\s+(my\s+)?google\s+contacts?|in\s+(my\s+)?google\s+contacts?|as\s+a\s+google\s+contact?|google\s+contact\s+for)|\b(update|change|edit)\s+.{1,60}(phone|email|number|address)\s+.{0,30}(in\s+(my\s+)?google\s+contacts?|to\s+.{1,30}in\s+google)|\bcreate\s+a\s+(new\s+)?contact\s+for\b|\badd\s+.{1,40}\s+to\s+(my\s+)?contacts?\s+with\s+(number|phone|email)/i;
+// Detects "call [name]", "phone [name]", "dial [name]", "ring [name]", "give [name] a call/ring"
+// Excludes "call 911", "call me", "call you", reminder phrases, and bare "call" with no name.
+const CALL_PATTERN = /\b(call|phone|dial|ring)\s+(?!me\b|you\b|us\b|911\b|them\b|him\b|her\b|it\b|back\b|now\b|later\b)([A-Za-z][A-Za-z'.]*(?:\s+[A-Za-z][A-Za-z'.]*)?)(?:\s|$)|give\s+([A-Za-z][A-Za-z'.]*(?:\s+[A-Za-z][A-Za-z'.]*)?)\s+a\s+(call|ring)\b/i;
+const WINDDOWN_NOTE_PATTERN = /\b(remember\s+(to|that)|note\s+(for\s+tomorrow|this\s+down)|write\s+(this|that)\s+down|add\s+(this\s+)?to\s+(my\s+)?morning\s+briefing|don'?t\s+let\s+me\s+forget\s+(to|that)|make\s+sure\s+i\s+(remember|know)|for\s+tomorrow\s+(i\s+need\s+to|remind\s+me))\b/i;
+const SPORTS_PATTERN = /\b(rangers|cowboys|score|scores|how\s+did\s+(they|the\s+(rangers|cowboys))\s+do|did\s+(they|the\s+(rangers|cowboys))\s+(win|lose|play)|last\s+night'?s?\s+(game|score)|(rangers|cowboys)\s+(score|win|lose|lost|beat|game|result|update)|check\s+(the\s+)?(rangers|cowboys)|what('?s|\s+is)\s+the\s+(rangers|cowboys|score|game)|any\s+(rangers|cowboys)\s+(news|game|score))\b/i;
+const BILL_ADD_PATTERN = /\b(my\s+\w.{1,40}(bill|payment|insurance|premium|subscription|rent|mortgage|registration|fee|taxes?)\s+is\s+due|add\s+(a\s+)?(bill|payment|financial\s+obligation|reminder\s+for)|track\s+(my\s+)?(bill|payment|insurance|rent|subscription)|remind\s+me\s+(about|when|before)\s+(my\s+)?\w.{1,30}(bill|payment|due|insurance|premium|subscription|rent|mortgage|registration|fee|taxes?)|(is\s+due|renews?)\s+(on|every|each|the)\s+(the\s+)?\d{1,2}(st|nd|rd|th)?|quarterly\s+taxes?\s+are?\s+due|due\s+(on\s+)?(the\s+)?\d{1,2}(st|nd|rd|th)?\b|(rent|mortgage|insurance|premium|subscription)\s+is?\s*(due|paid|owed)|(send|pay|transfer|give)\s+.{1,40}(allowance|payment|money)\s+.{0,30}(on\s+the\s+\d{1,2}(st|nd|rd|th)?|every\s+month|monthly|each\s+month|via\s+(venmo|zelle|paypal|cash\s+app))|\ballowance\b.{0,40}(on\s+the\s+\d{1,2}(st|nd|rd|th)?|every\s+month|monthly|via\s+(venmo|zelle|paypal)))\b/i;
+const BILL_LIST_PATTERN = /\b(what\s+bills|bills?\s+(do\s+i\s+have|coming\s+up|upcoming|are\s+due|are\s+(?:you\s+)?tracking|(?:you'?re?|\s+are)\s+tracking)|show\s+(?:\w+\s+){0,4}bills?|(my\s+)?upcoming\s+(bills?|payments?|obligations?|financial)|what\s+(financial\s+)?(obligations?|payments?)\s+(do\s+i|am\s+i)|list\s+(my\s+)?(bills?|payments?|obligations?|financial\s+obligations?)|tell\s+me\s+(?:about\s+)?(?:my\s+)?(?:bills?|financial\s+obligations?)|what\s+(?:are\s+you|do\s+you)\s+tracking)\b/i;
+const BILL_REMOVE_PATTERN = /\b(remove\s+(my\s+)?\w.{1,40}(bill|payment|insurance|subscription|reminder|obligation)|stop\s+tracking\s+(my\s+)?\w.{1,40}|delete\s+(my\s+)?\w.{1,40}(bill|payment|reminder)|cancel\s+(my\s+)?\w.{1,40}(bill|reminder))\b/i;
+
+// My Day — save or retrieve the daily personal log entry
+// NOTE: MYDAY_GET must come before MYDAY_ADD so "what did I add to my day" routes to read, not write.
+const MYDAY_GET_PATTERN =
+  /\b(what\s+(?:did\s+i|have\s+i)\s+(?:write|wrote|add(?:ed)?|note(?:d)?|log(?:ged)?|put|save(?:d)?|capture(?:d)?)\s+(?:today|in\s+my\s+day|to\s+my\s+day)|show\s+(?:me\s+)?(?:my\s+(?:day(?:'?s?\s*(?:log|recap|notes?)?)?|daily\s*(?:log|recap))|today'?s?\s*(?:log|recap|entries?|notes?))|read\s+(?:me\s+)?(?:my\s+(?:day(?:'?s?\s*(?:log|recap)?)?)|today'?s?\s*(?:log|entries?))|what(?:'?s|\s+is)\s+in\s+my\s+(?:day(?:'?s?\s*(?:log|recap)?)?)|my\s+(?:day\s+)?(?:log|recap|summary)\s+for\s+today|what(?:'?s|\s+did\s+i\s+put)\s+in\s+my\s+day\s+(?:log|today))\b/i;
+const MYDAY_ADD_PATTERN =
+  /\b(add\s+(?:this|that)?\s*to\s+my\s+(?:day(?:'?s?\s*(?:log|recap|notes?)?)?|daily\s*(?:log|recap))|log\s+(?:this|that|it)\s+(?:to|for|in)\s+(?:my\s+)?(?:day|today'?s?\s*(?:log)?)|jot\s+(?:this|that)\s+down(?:\s+for\s+today)?|save\s+(?:this|that)\s+to\s+my\s+(?:day(?:'?s?\s*(?:log|recap)?)?|daily\s*(?:log|recap))|capture\s+(?:this|that)\s+for\s+today|note\s+that\b|note\s+this\s+down\s+for\s+today|remember\s+that\s+for\s+today|add\s+to\s+today'?s?\s*(?:log|recap|entries?|notes?))\b/i;
+
+// Markets / stocks
+const MARKETS_PATTERN = /\b(market(s)?|s&p|s&p\s*500|dow|nasdaq|stock(s)?|spy|dia|qqq|uso|oil\s+price|crude|financial\s+update|market\s+update|how('?s|\s+are)\s+(the\s+)?market(s)?|what('?s|\s+are)\s+(the\s+)?(market(s)?|stock(s)?|index|indices)|market\s+check|check\s+(the\s+)?market(s)?|market\s+open|wall\s+street)\b/i;
+
+// Local events — "what's happening in Dallas", "things to do this weekend", etc.
+const LOCAL_EVENTS_PATTERN = /\b(what'?s\s+happening|what'?s\s+going\s+on|things?\s+to\s+do|local\s+events?|events?\s+(?:this|the|near|in|around|next)\s+(?:weekend|week|me|town|city|area)|anything\s+(?:going\s+on|happening|to\s+do)|what\s+to\s+do|something\s+to\s+do|places?\s+to\s+go|weekend\s+plans?|things?\s+(?:happening|going\s+on)|fun\s+(?:things?|stuff|activities?)|what'?s?\s+(?:on|up)\s+(?:this|the)\s+(?:weekend|week)|events?\s+(?:tonight|this\s+week|this\s+weekend|upcoming)|what\s+can\s+(?:i|we)\s+do)\b/i;
+
+// Restaurant recommendations — "recommend a restaurant", "where should I eat", etc.
+const RESTAURANT_RECO_PATTERN =
+  /\b(recommend\s+(?:a|some|any|me\s+a)\s+(?:restaurant|place\s+to\s+eat|spot|place\s+for\s+(?:dinner|lunch|breakfast))|suggest\s+(?:a|some)\s+(?:restaurant|place|spot)|where\s+should\s+(?:i|we)\s+(?:eat|go\s+(?:for\s+)?(?:dinner|lunch|breakfast))|good\s+(?:place|restaurant|spot)\s+(?:for\s+(?:dinner|lunch)|to\s+eat)|best\s+(?:restaurant|place|spot)\s+(?:in|near|around|for)|where\s+(?:can|to)\s+(?:i|we)\s+(?:eat|grab\s+(?:dinner|lunch|breakfast|food|a\s+bite))|(?:dinner|lunch|breakfast)\s+(?:recommendation|suggestion)|find\s+(?:me\s+)?(?:a|some)\s+(?:restaurant|place\s+to\s+eat)|what.?s\s+(?:a\s+)?good\s+(?:restaurant|place)\s+(?:in|near|around|for)|take\s+(?:me|us)\s+(?:somewhere|out)\s+(?:for|to)\s+(?:eat|dinner|lunch)|(?:restaurant|dining)\s+(?:recommendation|suggestion)|good\s+(?:italian|mexican|japanese|sushi|thai|indian|chinese|french|korean|vietnamese|mediterranean|bbq|steakhouse|seafood|pizza|burger|tex-mex|ramen)\s+(?:restaurant|place|spot|food))\b/i;
+
+// R001: Restaurant intelligence — reservation booking, directions, or info for a named restaurant
+const RESTAURANT_INTEL_PATTERN =
+  /\b(make\s+(?:a\s+)?reservations?|reservations?\s+at\b|book\s+(?:a\s+)?(?:table|reservation|spot|us\s+a\s+table)|reserve\s+(?:a\s+)?(?:table|spot|reservation)|get\s+(?:us\s+)?(?:a\s+)?(?:table|reservation)\s+(?:at|for)|can\s+(?:i|we)\s+get\s+(?:in|a\s+(?:table|reservation))\s+(?:at|for)|check\s+(?:opentable|resy|availability)\s+(?:at|for)|what.?s\s+the\s+(?:number|phone)\s+for|call\s+the\s+restaurant|get\s+directions?\s+to|directions?\s+to)\b/i;
+
+// Nearby essential places — pharmacy, urgent care, hospital, grocery, gas, bank
+const NEARBY_PLACES_PATTERN =
+  /\b(where'?s?\s+(?:the\s+)?nearest|find\s+(?:an?\s+)?(?:nearby|near\s+me|closest)|closest|nearest|near\s+me)\s+(?:pharmacy|drugstore|urgent\s+care|hospital|emergency\s+room|grocery\s+store|groceries|supermarket|gas\s+station|gasoline|bank|atm)\b|\b(?:pharmacy|urgent\s+care|hospital|emergency\s+room|grocery\s+store|groceries|supermarket|gas\s+station|bank|atm)\s+(?:near\s+(?:me|here)|nearby|close\s+by)\b/i;
+
+// Important dates
+const DATE_ADD_PATTERN = /\b(('s\s+birthday|birthday\s+is|my\s+anniversary\s+with|our\s+anniversary\s+is|anniversary\s+with|birthday\s+is|remember\s+(that\s+)?(\w+\s+)?birthday|add\s+(a\s+)?(birthday|anniversary)))\b/i;
+const DATE_LIST_PATTERN = /\b(what\s+birthdays?|any\s+(upcoming\s+)?(birthdays?|anniversaries?)|my\s+(upcoming\s+)?(birthdays?|anniversaries?|important\s+dates?)|show\s+(me\s+)?((my\s+)?(birthdays?|anniversaries?|important\s+dates?))|list\s+(my\s+)?(birthdays?|anniversaries?|important\s+dates?))\b/i;
+const DATE_REMOVE_PATTERN = /\b(remove\s+.{2,40}(birthday|anniversary)|forget\s+.{2,40}(birthday|anniversary)|delete\s+.{2,40}(birthday|anniversary))\b/i;
+
+// Layer 2 transcript search — "what did I say about X last week?"
+const TRANSCRIPT_SEARCH_PATTERN =
+  /\b(?:what did (?:I|we) (?:say|talk about|discuss|mention|tell you)(?: about| regarding| on)?|remind me (?:what|when|where|who) I (?:said|talked|mentioned|told you)(?: about)?|(?:do you remember|can you recall) what I (?:said|told you)(?: about)?)\b/i;
 
 function extractTranscriptSearchTerm(msg: string): string {
   return msg
@@ -621,7 +742,48 @@ Rules:
   }
 }
 
+// Emergency protocol
+const EMERGENCY_PATTERN = /\b(ms\.?\s*peel\s+(i\s+(need|am|have|fell|can.t|cannot)|call\s+911|help\s+me)|call\s+911|i.ve\s+fallen|i\s+fell\s+(down|and)|i.m\s+not\s+(feeling|ok)|i\s+think\s+i.m\s+(having|going)|chest\s+pain|can.t\s+breathe|emergency|i\s+need\s+(help|an?\s+ambulance)|heart\s+attack|stroke|i.ve\s+been\s+(hurt|injured))\b/i;
+
+// Journal
+const JOURNAL_REVIEW_PATTERN = /\b(read\s+(me\s+)?my\s+journal|show\s+(me\s+)?my\s+journal|journal\s+entries?|what\s+(did\s+i|have\s+i)\s+journal(ed)?|my\s+journal|review\s+my\s+journal|look\s+at\s+my\s+journal)\b/i;
+
+// T001: Morning briefing follow-up — fired when the cached briefing exists
+const BRIEFING_FOLLOWUP_PATTERN = /\b(tell\s+me\s+more(\s+about)?|more\s+about|dig\s+into|what'?s?\s+the\s+(full\s+)?(story|deal)|what\s+happened\s+(with|to)|elaborate\s+on|can\s+you\s+expand|more\s+details?\s+(on|about|from)|what\s+else\s+(about|on)|follow\s+up\s+on|anything\s+else\s+on|give\s+me\s+(more|the\s+full)|expand\s+on)\b/i;
+
+
+// T005: Headache / body ache — check barometric pressure
+const HEADACHE_PATTERN = /\b(headache|head\s+ach(e|ing)|migraine|body\s+ach(e|es|ing)|joint\s+(pain|ach(e|ing))|pressure\s+headache|sinus\s+headache|feel(ing)?\s+(off|achy|not\s+great|under\s+the\s+weather)|my\s+head\s+(hurts?|is\s+killing|is\s+pounding)|skull\s+is\s+splitting)\b/i;
+
+// T006: Text message composition — "text [name]" or "send a message to [name]"
+// Allows natural speech preambles: "hey text Sarah", "can you text Mom", "ok send a message to John"
+const TEXT_PREAMBLE = /^(?:(?:ok|okay|hey|hi|alright|uh|um|so|listen|actually|well|and|also|please|can\s+you|could\s+you|will\s+you|would\s+you|i\s+(?:need|want)\s+(?:you\s+)?to)[,\s]+)*/i;
+// Verb-first: "text Susan", "send a text to Susan", "message Susan"
+const _TMP_VERB_FIRST = /(?:text|send\s+(?:a\s+)?(?:text|message|sms)(?:\s+to)?|message)\s+[A-Za-z][A-Za-z'.]*(?:\s+[A-Za-z][A-Za-z'.]*)?/;
+// Name-first: "send Susan a text", "shoot Susan a message", "drop Mom a note"
+const _TMP_NAME_FIRST = /(?:send|shoot|drop|give)\s+[A-Za-z][A-Za-z'.]*(?:\s+[A-Za-z][A-Za-z']*)?\s+(?:a\s+)?(?:text|message|sms|note)/;
+const TEXT_MESSAGE_PATTERN = new RegExp(
+  TEXT_PREAMBLE.source + _TMP_VERB_FIRST.source +
+  "|" +
+  TEXT_PREAMBLE.source + _TMP_NAME_FIRST.source,
+  "i"
+);
+
+// Olivia mentions and calls
+const OLIVIA_CALL_PATTERN = /\b(called?\s+olivia|talked?\s+(to\s+)?olivia|spoke\s+(with\s+)?olivia|olivia\s+and\s+i\s+(talked?|chatted?|spoke|called?)|just\s+(talked?|spoke|called?)\s+(to\s+|with\s+)?olivia|facetime(d)?\s+olivia|olivia\s+call)\b/i;
+const OLIVIA_MENTION_PATTERN = /\bolivia\b/i;
+
+
 // Partner mention detection — built dynamically from profile at runtime (see chatHandlerCore)
+const MED_TAKEN_PATTERN = /\b(taken|took\s+(my\s+)?(meds?|medications?|pills?|them)|meds?\s+(done|taken|all\s+done)|medications?\s+taken|took\s+them|all\s+done\s+with\s+(my\s+)?meds?|done\s+with\s+(my\s+)?meds?|yes\s+(i\s+)?(took|taken)|confirmed\s+(meds?|medications?))\b/i;
+const MED_ADD_PATTERN = /\b(add\s+(a\s+)?(?:new\s+)?medication\s+(?:called\s+)?|new\s+medication\s+(?:called\s+)?|start\s+taking\s+(?:a\s+)?(?:new\s+)?medication|add\s+.{2,40}\s+to\s+my\s+medications?)\b/i;
+const MED_LIST_PATTERN = /\b(what\s+medications?\s+(do\s+i\s+take|am\s+i\s+(on|taking)|are\s+mine)|my\s+medications?|medication\s+list|what\s+(meds?|pills?)\s+(do\s+i|am\s+i)|list\s+(my\s+)?meds?|what\s+do\s+i\s+take)\b/i;
+const MED_REMOVE_PATTERN = /\b(stop\s+taking|remove\s+.+\s+from\s+my\s+medications?|no\s+longer\s+taking|discontinued?)\b/i;
+const MED_MUTE_PATTERN = /\b(don'?t\s+(notify|remind|bug|alert|ping|bother)\s+me\s+(about|with|for)\s+(my\s+)?(meds?|medications?|pills?)|stop\s+(medication|med)\s+(reminders?|notifications?|alerts?|pings?)|disable\s+(medication|med)\s+(reminders?|notifications?)|no\s+more\s+(medication|med)\s+(reminders?|notifications?)|mute\s+(medication|med)\s+(reminders?|notifications?)|turn\s+off\s+(medication|med)\s+(reminders?|notifications?)|please\s+don'?t\s+(remind|notify)\s+me\s+(about\s+)?(my\s+)?(meds?|medications?|pills?))\b/i;
+const WAKE_TIME_PATTERN = /\b(change\s+(my\s+)?wake[\s-]?up?\s+time|update\s+(my\s+)?wake[\s-]?up?\s+time|set\s+(my\s+)?wake[\s-]?up?\s+time|wake[\s-]?up?\s+time\s+(is|at|to|changed?|set)|i\s+wake\s+up\s+(at|around)|my\s+wake[\s-]?up?\s+time|morning\s+push\s+time|change\s+(my\s+)?(morning\s+)?(alarm|wake[\s-]?up?|notification)\s+to)\b/i;
+const MED_TIME_PATTERN = /\b(change|update|set|move|reschedule)\s+(my\s+)?(med(?:ication)?s?|pill)\s+(reminder\s+)?(time\s+)?(to|at|for)\b|\b(med(?:ication)?|pill)\s+(reminder\s+)?(time|schedule)\s+(is|at|to|changed?|set)\b/i;
+const MED_UNMUTE_PATTERN = /\b(re\-?enable\s+(medication|med)\s+(reminders?|notifications?)|turn\s+on\s+(medication|med)\s+(reminders?|notifications?)|start\s+(medication|med)\s+(reminders?|notifications?)\s+again|remind\s+me\s+about\s+my\s+(meds?|medications?)\s+again|enable\s+(medication|med)\s+(reminders?|notifications?))\b/i;
+const PROFILE_PATTERN = /\b(ms\.?\s*peel\s+)?(add\s+a?\s*(new\s+)?(place|show|restaurant|person|interest|favorite)|i\s+(am|'m|am\s+currently|'m\s+currently)\s+(watching|reading)|add\s+.{1,80}\s+to\s+(?:my\s+)?(?:favorite\s+)?(?:restaurants?|places?|interests?|favorites?)\b|add\s+.{1,60}\s+as\s+(a|one\s+of\s+my)\s+(favorite\s+)?(place|show|restaurant|restaurant\s+to|person|interest)|(save|remember)\s+.{1,80}\s+as\s+(a\s+)?(?:favorite\s+)?(?:restaurant|place|interest)|remove\s+.{1,60}\s+from\s+my\s+(places|shows|restaurants|people|interests|favorites|list|profile)|what\s+(places|shows|restaurants|people|interests)\s+(do\s+i\s+(have|have\s+saved)|am\s+i)|show\s+me\s+my\s+(places|shows|restaurants|people|interests)|what('?s|\s+is)\s+(in|on)\s+my\s+(profile|saved\s+places|watch\s+list)|(add|save|remember)\s+(my\s+)?(new\s+)?(doctor|dentist|vet|therapist|therapist|trainer|coach|lawyer|attorney|accountant|financial\s+advisor|pharmacist|specialist|provider|chiropractor|optometrist|ophthalmologist|dermatologist|cardiologist|surgeon|podiatrist|psychiatrist|psychologist|stylist|barber|mechanic|plumber|contractor|electrician|realtor|agent|banker|broker|notary|tutor|instructor|nutritionist|dietitian|personal\s+trainer)\b)\b/i;
 
 interface SavedLocation {
   name: string;
@@ -1077,61 +1239,12 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   // Dynamic: current time, recent memories, preference blocks — changes each request.
   let systemPrompt = getCurrentDateTimeBlock() + "\n" + memoryBlock + dynamicProfileBlock + prefsBlock;
 
-  let reminderConfirmation = "";
-
-  // ── AI intent classification — replaces ~50 NL regex patterns ──────────────
-  const _hasCachedBriefing = !!getCachedBriefing(sessionUserName);
-  const cls = await classifyMessage(message, {
-    requestContext:     requestContext ?? "general",
-    hasActiveTripPlan:  !!activeTripPlan,
-    hasStoredHeadlines: getStoredHeadlines().length > 0,
-    hasCachedBriefing:  _hasCachedBriefing,
-  });
-
-  const isMorningGreeting = cls.morning_greeting;
-  const isEveningGreeting = !isMorningGreeting && cls.evening_greeting;
-  // [DIAG] Log pattern detection for Evening Wind-Down debugging
-  req.log.info({ message, isMorningGreeting, isEveningGreeting, clsFlags: Object.keys(cls).filter(k => (cls as unknown as Record<string,unknown>)[k] === true) }, "[DIAG:1] Pattern detection");
-  // Checked first so "what are my reminders?" doesn't bleed into the creation path.
-  const isReminderListRequest = cls.reminder_list;
-  const isReminderRequest = !isReminderListRequest && cls.reminder_set;
-  let isListRequest = cls.list_modify;
-  const activeListFromHistory = !isListRequest ? detectActiveListFromHistory(history) : null;
-  const isCasualListAdd = !isListRequest && cls.casual_list_add && activeListFromHistory !== null;
-  if (isCasualListAdd) isListRequest = true;
-  const isSendListViaConnect = !isMorningGreeting && cls.list_share;
-  if (isSendListViaConnect) isListRequest = false;
-  const isEmailRequest = !isMorningGreeting && cls.email;
-  const isDinnerTonightQuery = !isMorningGreeting && cls.dinner_tonight;
-  // ── Calendar: regex fallbacks alongside classifier ───────────────────────────
-  const _CAL_READ_RE = /\b(calendar|schedule|agenda|appointments?|what('?s|\s+is)\s+(on\s+)?(my\s+)?(calendar|schedule|agenda|week)|(today|tomorrow|this\s+week|next\s+week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)'?s?\s+(schedule|events?|appointments?|look\s+like)|do\s+i\s+have\s+anything\s+(today|tomorrow|this\s+week|scheduled|on\s+my\s+calendar)|what\s+does\s+my\s+(day|week|morning|afternoon|evening)\s+look\s+like|what('?s|\s+is)\s+on\s+for\s+(today|tomorrow|this\s+week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|anything\s+(on\s+)?(today|tomorrow|this\s+week|my\s+calendar|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|busy\s+(today|tomorrow|this\s+week|monday|tuesday|wednesday|thursday|friday)|am\s+i\s+free\s+(today|tomorrow|this\s+(morning|afternoon|week)|monday|tuesday|wednesday|thursday|friday)|what\s+do\s+i\s+have\s+(today|tomorrow|this\s+week|this\s+morning|this\s+afternoon|on\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday))|do\s+i\s+have\s+(a\s+)?(meeting|lunch|dinner|appointment|call|interview|class|session|game)\s+(today|tomorrow|this\s+(morning|afternoon|week)|on\s+(monday|tuesday|wednesday|thursday|friday))|(when|what\s+time)\s+is\s+(my\s+)?(meeting|lunch|dinner|appointment|call|interview|class|session|game|next\s+appointment)|where\s+(am\s+i\s+(having|eating|meeting|going\s+for)|is\s+(my\s+|the\s+)?)\s*(lunch|dinner|breakfast|brunch|meeting|appointment|event)|what('?s|\s+is)\s+(my\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow)\s+(look\s+like|schedule|plans?)|what\s+are\s+my\s+plans?\s+(for\s+)?(today|tomorrow|this\s+week|tonight|this\s+(morning|afternoon|evening))|how\s+does\s+my\s+(day|week|morning|afternoon|schedule)\s+look)\b/i;
-  const _CAL_CREATE_RE = /\b(add\s+(?!.+\s+to\s+my\s+(?:shopping|grocery|to.?do|errand|task|watch))|create\s+(a\s+)?(new\s+)?(event|appointment|meeting|calendar)|schedule\s+(a\s+)?(meeting|appointment|lunch|dinner|call|event)|put\s+.+\s+on\s+(my\s+)?calendar|book\s+(a\s+)?(meeting|appointment)|set\s+up\s+(a\s+)?(meeting|appointment)|block\s+(off\s+)?time)\b/i;
-  const _CAL_MODIFY_RE = /\b(move\s+(my\s+)?(?!\w+\s+list)|reschedul|change\s+(my\s+|the\s+)?(time|date|appointment|meeting|event|calendar)|update\s+(my\s+|the\s+)?(time\s+of\s+|date\s+of\s+)?(appointment|meeting|event)|push\s+(?:back|forward|out|up)\s+(my\s+|the\s+)?(appointment|meeting|event)?|postpone\s+(my\s+|the\s+)?|shift\s+(my\s+|the\s+)?(appointment|meeting|event)|bump\s+(my\s+|the\s+)?(appointment|meeting|event)|delay\s+(my\s+|the\s+)?(appointment|meeting|event))\b/i;
-  const _CAL_DELETE_RE = /\b(cancel\s+(my\s+)?(appointment|meeting|event|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|delete\s+(my\s+)?(appointment|meeting|event|calendar\s+event)|remove\s+(my\s+)?(appointment|meeting|event)\s+from\s+(my\s+)?calendar|clear\s+(my\s+)?(appointment|meeting|event))\b/i;
-  const isCalendarRequest = !isMorningGreeting && (cls.calendar_read || isDinnerTonightQuery || _CAL_READ_RE.test(message));
-  const isCompoundContactAndSave = cls.contact_compound_save;
-  const isContactRequest = isCompoundContactAndSave || cls.contact_lookup;
-  const isSaveContactRequest = !isContactRequest && cls.contact_save;
-  const isGoogleContactWrite = !isMorningGreeting && cls.google_contact_write;
-  const isCallRequest = !isReminderRequest && cls.call;
-  const isStoryRead = cls.story_read;
-  const isStoryCount = cls.story_count;
-  // ── Trip save/plan: regex fallbacks alongside classifier ─────────────────────
-  // These two intents are critical for trip screen functionality. The original
-  // regexes are kept as reliable fallbacks so the classifier doesn't have to be
-  // perfect — either source firing is sufficient.
-  const _TRIP_SAVE_RE = /\b(?:save\s+(?:this|my|the|our|it)\b|build\s+(?:(?:me|us)\s+)?(?:(?:the|a|an?)\s+)?(?:full\s+)?itinerary|build\s+it(?:\s+out)?\b|create\s+(?:(?:me|us)\s+)?(?:(?:the|a|an?)\s+)?(?:full\s+)?itinerary|make\s+(?:(?:the|a|an?)\s+)?(?:full\s+)?itinerary|generate\s+(?:(?:the|a|an?)\s+)?(?:full\s+)?itinerary|yes[,\s]+(?:please[,\s]+)?(?:build|make|create|save|do\s+it|go\s+ahead)|go\s+ahead(?:\s+and\s+(?:build|make|create|save))?|let'?s\s+(?:build|save|do|go\s+ahead)\b|yes[,\s]+let'?s\s+(?:do|build|save)\s+it|add\s+(?:it\s+)?to\s+my\s+(?:trips?|travel)|save\s+to\s+(?:my\s+)?(?:trips?|travel\s+screen)|book\s+it\b)\b/i;
-  const _TRIP_PLAN_RE = /\b(?:(?:help\s+me\s+|can\s+you\s+|please\s+)?plan\s+(?:(?:me|us|out)\s+)?(?:a|an?|our|my)\s+(?:\d+[-\s](?:day|night)s?(?:[,\s]+\d+[-\s]nights?)?[\s,]+|long\s+)?(?:trip|vacation|getaway|holiday|road\s+trip|weekend(?:\s+trip)?)|(?:put\s+together|plan\s+me|plan\s+us)\s+(?:a|an?)\s+(?:trip|vacation|getaway)|i\s+(?:want|need|would\s+like)\s+(?:you\s+)?to\s+plan\s+(?:a|my|our)\s+trip)\b/i;
-  const isTripSaveIntent = !isMorningGreeting && (cls.trip_save || _TRIP_SAVE_RE.test(message));
-  const isTripPlanIntent = !isMorningGreeting && !isTripSaveIntent && (cls.trip_plan || _TRIP_PLAN_RE.test(message));
-  process.stdout.write(`[STDOUT] INTENT-FLAGS isMorning=${isMorningGreeting} isTripSave=${isTripSaveIntent}(cls=${cls.trip_save},re=${_TRIP_SAVE_RE.test(message)}) isTripPlan=${isTripPlanIntent}(cls=${cls.trip_plan},re=${_TRIP_PLAN_RE.test(message)}) msg="${message.slice(0, 80)}"\n`);
-
   // ── Trip screen: inject FULL itinerary + hotel pricing ───────────────────
   // Inject the complete stored plan so Claude can answer ANY question about the
   // trip — activities, meals, hotels, pricing — without truncating to one day.
   // Skip when the user is about to generate a NEW trip — injecting the old plan
   // would confuse Claude (it would see two different trips in context).
-  if (activeTripPlan && !isTripPlanIntent) {
+  if (activeTripPlan && !TRIP_PLAN_INTENT.test(message)) {
     type ItinActivity = { time?: string; title?: string; description?: string; notes?: string };
     type ItinMeal = { time?: string; title?: string; description?: string; bookingUrl?: string; websiteUrl?: string };
     type ItinHotel = { name?: string; pricePerNight?: string; priceRange?: string; bookingUrl?: string; websiteUrl?: string; alternativeBookingUrl?: string; notes?: string };
@@ -1145,6 +1258,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       const loc = day.location ? ` (${day.location})` : "";
       lines.push(`Day ${dayNum}${day.label ? ` — ${day.label}` : ""}${loc}`);
 
+      // Hotel
       const h = day.hotel;
       if (h?.name) {
         let hotelLine = `  Hotel: ${h.name}`;
@@ -1155,6 +1269,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         lines.push(hotelLine);
       }
 
+      // Activities
       if (day.activities?.length) {
         lines.push("  Activities:");
         for (const a of day.activities) {
@@ -1164,6 +1279,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         }
       }
 
+      // Meals
       if (day.meals?.length) {
         lines.push("  Meals:");
         for (const m of day.meals) {
@@ -1183,7 +1299,13 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       `Destination: ${activeTripPlan.destination} | ${activeTripPlan.nights ?? itinDays.length} nights`;
 
     if (dayBlocks.length > 0) {
+      // Detect whether any hotel has pricing stored — if not, prepare a Google Hotels link
       const anyHotelHasPrice = itinDays.some(d => d.hotel?.pricePerNight || d.hotel?.priceRange);
+      const dest = encodeURIComponent(activeTripPlan.destination ?? "");
+      const dateParams = activeTripPlan.start_date && activeTripPlan.end_date
+        ? `&check_in_date=${activeTripPlan.start_date}&check_out_date=${activeTripPlan.end_date}`
+        : "";
+      const googleHotelsUrl = `https://www.google.com/travel/hotels/s/${dest}${dateParams}`;
       const pricingNote = anyHotelHasPrice
         ? `For hotel pricing questions, answer directly using the prices above and provide booking URLs. Do NOT say you cannot check pricing or availability.`
         : `For hotel pricing questions, live rates will be fetched and added to this context. Do NOT say you cannot check prices.`;
@@ -1202,53 +1324,84 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         `and suggest tapping the refresh button on the trip card.`;
     }
   }
-  const isTripPriceQuery = requestContext === "trip-planning" && !isMorningGreeting && !isTripSaveIntent && !isTripPlanIntent && cls.trip_price_query;
-  const isHotelAvailabilityQuery = !isMorningGreeting && !isTripSaveIntent && !isTripPlanIntent && (cls.hotel_availability || isTripPriceQuery);
-  const isHotelSwapIntent = requestContext === "trip-planning" && !isMorningGreeting && !isTripSaveIntent && !isTripPlanIntent && cls.hotel_swap;
+
+  let reminderConfirmation = "";
+
+  const isMorningGreeting = MORNING_PATTERN.test(message);
+  const isEveningGreeting = !isMorningGreeting && EVENING_PATTERN.test(message);
+  // [DIAG] Log pattern detection for Evening Wind-Down debugging
+  req.log.info({ message, isMorningGreeting, isEveningGreeting }, "[DIAG:1] Pattern detection");
+  // Checked first so "what are my reminders?" doesn't bleed into the creation path.
+  const isReminderListRequest = LIST_REMINDERS_PATTERN.test(message);
+  const isReminderRequest = !isReminderListRequest && REMINDER_PATTERN.test(message);
+  let isListRequest = LIST_PATTERN.test(message);
+  const activeListFromHistory = !isListRequest ? detectActiveListFromHistory(history) : null;
+  const isCasualListAdd = !isListRequest && CASUAL_LIST_ADD_PATTERN.test(message) && activeListFromHistory !== null;
+  if (isCasualListAdd) isListRequest = true;
+  const isSendListViaConnect = !isMorningGreeting && SEND_LIST_CONNECT_PATTERN.test(message);
+  if (isSendListViaConnect) isListRequest = false;
+  const isEmailRequest = !isMorningGreeting && EMAIL_PATTERN.test(message);
+  const isDinnerTonightQuery = !isMorningGreeting && DINNER_TONIGHT_PATTERN.test(message);
+  const isCalendarRequest = !isMorningGreeting && (CALENDAR_PATTERN.test(message) || isDinnerTonightQuery);
+  const isCompoundContactAndSave = COMPOUND_CONTACT_SAVE_PATTERN.test(message);
+  const isContactRequest = isCompoundContactAndSave || CONTACT_PATTERN.test(message);
+  const isSaveContactRequest = !isContactRequest && SAVE_CONTACT_PATTERN.test(message);
+  const isGoogleContactWrite = !isMorningGreeting && GOOGLE_CONTACT_WRITE_PATTERN.test(message);
+  const isCallRequest = !isReminderRequest && CALL_PATTERN.test(message);
+  const isStoryRead = STORY_READ_PATTERN.test(message);
+  const isStoryCount = STORY_COUNT_PATTERN.test(message);
+  const isTripSaveIntent = !isMorningGreeting && TRIP_SAVE_INTENT.test(message);
+  const isTripPlanIntent = !isMorningGreeting && !isTripSaveIntent && TRIP_PLAN_INTENT.test(message);
+  process.stdout.write(`[STDOUT] INTENT-FLAGS isMorning=${isMorningGreeting} isTripSave=${isTripSaveIntent} isTripPlan=${isTripPlanIntent} msg="${message.slice(0, 80)}"\n`);
+  const isTripPriceQuery = requestContext === "trip-planning" && !isMorningGreeting && !isTripSaveIntent && !isTripPlanIntent &&
+    /\b(?:price|prices|rate|rates|cost|costs|how\s+much|per\s+night|nightly|pricing|what(?:'s|\s+does)\s+(?:it|that|the\s+hotel)?\s*cost)\b/i.test(message);
+  const isHotelAvailabilityQuery = !isMorningGreeting && !isTripSaveIntent && !isTripPlanIntent && (HOTEL_AVAIL_INTENT.test(message) || isTripPriceQuery);
+  const isHotelSwapIntent = requestContext === "trip-planning" && !isMorningGreeting && !isTripSaveIntent && !isTripPlanIntent && HOTEL_SWAP_INTENT.test(message);
   // Guard: don't run profile handler when a trip save is being detected — they conflict
-  const isProfileRequest = !isTripSaveIntent && cls.profile_update;
-  // IMPORTANT: Reminder requests must NEVER route to Google Calendar.
+  const isProfileRequest = !isTripSaveIntent && PROFILE_PATTERN.test(message);
+  // IMPORTANT: Reminder requests (REMINDER_PATTERN) must NEVER route to Google Calendar.
   // IMPORTANT: CREATE is evaluated before MODIFY — explicit "add/create/schedule/put on calendar"
   // always wins, even if the event title contains a word like "move" or "transfer".
   // MODIFY wins only when there is no create keyword (e.g. "reschedule", "move my appointment").
-  const isCalendarCreate = !isMorningGreeting && !isReminderRequest && (cls.calendar_create || _CAL_CREATE_RE.test(message));
-  const isCalendarModify = !isMorningGreeting && !isReminderRequest && !isCalendarCreate && (cls.calendar_modify || _CAL_MODIFY_RE.test(message));
-  const isCalendarDelete = !isMorningGreeting && !isReminderRequest && (cls.calendar_delete || _CAL_DELETE_RE.test(message));
+  const isCalendarCreate = !isMorningGreeting && !isReminderRequest && CALENDAR_CREATE_PATTERN.test(message);
+  const isCalendarModify = !isMorningGreeting && !isReminderRequest && !isCalendarCreate && CALENDAR_MODIFY_PATTERN.test(message);
+  const isCalendarDelete = !isMorningGreeting && !isReminderRequest && CALENDAR_DELETE_PATTERN.test(message);
   const isCalendarWriteOp = isCalendarCreate || isCalendarModify || isCalendarDelete;
   const pendingDel = getPendingDelete();
   const isDeleteConfirm = !!pendingDel && CALENDAR_CONFIRM_PATTERN.test(message.trim());
   const isDeleteCancel = !!pendingDel && CALENDAR_CANCEL_PATTERN.test(message.trim());
 
-  const isTVAdd = !isMorningGreeting && cls.tv_add;
-  const isTVRemove = !isMorningGreeting && cls.tv_remove;
-  const isTVTonight = !isMorningGreeting && cls.tv_tonight;
-  const isTVRecommend = !isMorningGreeting && cls.tv_recommend;
-  const isTVList = !isMorningGreeting && cls.tv_list;
+  const isTVAdd = !isMorningGreeting && TV_ADD_PATTERN.test(message);
+  const isTVRemove = !isMorningGreeting && TV_REMOVE_PATTERN.test(message);
+  const isTVTonight = !isMorningGreeting && TV_TONIGHT_PATTERN.test(message);
+  const isTVRecommend = !isMorningGreeting && TV_RECOMMEND_PATTERN.test(message);
+  const isTVList = !isMorningGreeting && TV_LIST_PATTERN.test(message);
   const isTVRequest = isTVTonight || isTVRecommend || isTVList;
-  const isMedTaken = cls.med_taken && message.trim().split(/\s+/).length <= 12;
-  const isMedAdd = cls.med_add;
-  const isMedList = cls.med_list;
-  const isMedRemove = cls.med_remove;
-  const isMedMute = cls.med_mute;
-  const isMedUnmute = cls.med_unmute;
-  const isMedTimeChange = cls.med_reschedule;
+  const isMedTaken = MED_TAKEN_PATTERN.test(message) && message.trim().split(/\s+/).length <= 12;
+  const isMedAdd = MED_ADD_PATTERN.test(message);
+  const isMedList = MED_LIST_PATTERN.test(message);
+  const isMedRemove = MED_REMOVE_PATTERN.test(message);
+  const isMedMute = MED_MUTE_PATTERN.test(message);
+  const isMedUnmute = MED_UNMUTE_PATTERN.test(message);
+  const isMedTimeChange = MED_TIME_PATTERN.test(message);
   const isMedRequest = isMedTaken || isMedAdd || isMedList || isMedRemove || isMedMute || isMedUnmute || isMedTimeChange;
-  const isWakeTimeChange = cls.wake_time_change;
+  const isWakeTimeChange = WAKE_TIME_PATTERN.test(message);
   // "Tell me more about number 3" — dig into a specific Top 10 morning news story
-  const newsDigStoryNumber = cls.news_story_number ?? 0;
+  const newsDigMatch = !isMorningGreeting && NEWS_DIG_PATTERN.exec(message);
+  const newsDigStoryNumber = newsDigMatch ? parseInt(newsDigMatch[1] ?? newsDigMatch[2] ?? "0", 10) : 0;
   const isNewsDig = newsDigStoryNumber >= 1 && newsDigStoryNumber <= 10 && getStoredHeadlines().length > 0;
 
-  const isSportsRequest = !isMorningGreeting && cls.sports;
-  const isMarketsRequest = !isMorningGreeting && cls.markets;
-  const isWeatherRequest = !isMorningGreeting && cls.weather;
-  const isBriefingPrefRequest = !isMorningGreeting && cls.briefing_pref;
-  const isLocalEventsRequest = !isMorningGreeting && !isCalendarRequest && cls.local_events;
-  const isRestaurantReco = !isMorningGreeting && !isLocalEventsRequest && cls.restaurant_reco;
-  const isNearbyPlaces = !isMorningGreeting && !isRestaurantReco && cls.nearby_places;
+  const isSportsRequest = !isMorningGreeting && SPORTS_PATTERN.test(message);
+  const isMarketsRequest = !isMorningGreeting && MARKETS_PATTERN.test(message);
+  const isWeatherRequest = !isMorningGreeting && WEATHER_PATTERN.test(message);
+  const isBriefingPrefRequest = !isMorningGreeting && BRIEFING_PREF_PATTERN.test(message);
+  const isLocalEventsRequest = !isMorningGreeting && !isCalendarRequest && LOCAL_EVENTS_PATTERN.test(message);
+  const isRestaurantReco = !isMorningGreeting && !isLocalEventsRequest && RESTAURANT_RECO_PATTERN.test(message);
+  const isNearbyPlaces = !isMorningGreeting && !isRestaurantReco && NEARBY_PLACES_PATTERN.test(message);
 
   // R001: Restaurant intelligence (reservation, directions, info for a named restaurant)
   const pendingReservation = getPendingReservation();
-  const isRestaurantIntelRequest = !isMorningGreeting && !isRestaurantReco && cls.restaurant_intel;
+  const isRestaurantIntelRequest = !isMorningGreeting && !isRestaurantReco && RESTAURANT_INTEL_PATTERN.test(message);
   const isReservationFlowActive = !isMorningGreeting && pendingReservation !== null;
   const RESERVATION_CONFIRM = /^(?:(?:ok|okay|yeah|yep|yup|sure|alright)[,\s]+)*(yes|open\s+it|do\s+it|go\s+ahead|sounds?\s+good|let.?s\s+(?:do\s+it|book)|book\s+it|call\s+them|open\s+(?:the\s+)?(?:opentable|resy|maps?|dialer)|get\s+directions?|dial\s+(?:them|it))(?:[,\s!.]|$)/i;
   const RESERVATION_CANCEL = /^(?:no\s+thanks?|never\s+mind|cancel|skip\s+it|not\s+now|forget\s+it)(?:[,\s!.]|$)/i;
@@ -1261,12 +1414,12 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   if (pendingBookingConf) clearPendingBookingConfirmation();
   const isBookingConfirmActive = false; // no longer used; kept to avoid downstream errors
 
-  const isBillAdd = !isMorningGreeting && cls.bill_add;
-  const isBillList = !isMorningGreeting && cls.bill_list;
-  const isBillRemove = !isMorningGreeting && cls.bill_remove;
+  const isBillAdd = !isMorningGreeting && BILL_ADD_PATTERN.test(message);
+  const isBillList = !isMorningGreeting && BILL_LIST_PATTERN.test(message);
+  const isBillRemove = !isMorningGreeting && BILL_REMOVE_PATTERN.test(message);
   // My Day — GET must be checked before ADD (prevents "what did I add today" routing to write path)
-  const isMydayGet = !isMorningGreeting && cls.myday_get;
-  let isMydayAdd = !isMorningGreeting && !isMydayGet && cls.myday_add;
+  const isMydayGet = !isMorningGreeting && MYDAY_GET_PATTERN.test(message);
+  let isMydayAdd = !isMorningGreeting && !isMydayGet && MYDAY_ADD_PATTERN.test(message);
 
   // Auto-capture: if the last assistant message posed the thought-of-day "What would you add"
   // question or the evening wind-down My Day prompt, save the user's substantive response
@@ -1286,23 +1439,23 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       req.log.info({ trigger: _lastContent.slice(0, 60) }, "[MyDay] Auto-capture from contextual prompt");
     }
   }
-  const isDateAdd = !isMorningGreeting && cls.date_add;
-  const isDateList = !isMorningGreeting && cls.date_list;
-  const isDateRemove = !isMorningGreeting && cls.date_remove;
-  const isEmergency = cls.emergency;
+  const isDateAdd = !isMorningGreeting && DATE_ADD_PATTERN.test(message);
+  const isDateList = !isMorningGreeting && DATE_LIST_PATTERN.test(message);
+  const isDateRemove = !isMorningGreeting && DATE_REMOVE_PATTERN.test(message);
+  const isEmergency = EMERGENCY_PATTERN.test(message);
 
   // Dynamic partner detection — read from key_people (structured table)
   const partner = keyPeople.find((p) => isPartnerRelationship(p.relationship ?? "")) ?? null;
   const partnerFirstName = partner?.name?.split(" ")[0] ?? null;
   const partnerPattern = partnerFirstName ? new RegExp(`\\b${partnerFirstName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i") : null;
   const isPartnerRelated = !isMorningGreeting && partnerPattern !== null && partnerPattern.test(message);
-  const isJournalReview = !isMorningGreeting && cls.journal_review;
-  const isOliviaCall = !isMorningGreeting && cls.olivia_call;
-  const isOliviaMention = !isMorningGreeting && cls.olivia_mention;
+  const isJournalReview = !isMorningGreeting && JOURNAL_REVIEW_PATTERN.test(message);
+  const isOliviaCall = !isMorningGreeting && OLIVIA_CALL_PATTERN.test(message);
+  const isOliviaMention = !isMorningGreeting && OLIVIA_MENTION_PATTERN.test(message);
 
   // T001: Morning briefing follow-up — only fires when there is a cached briefing from today
-  const cachedBriefingText = _hasCachedBriefing ? getCachedBriefing(sessionUserName) : null;
-  const isBriefingFollowUp = !isMorningGreeting && !!cachedBriefingText && cls.briefing_followup;
+  const cachedBriefingText = !isMorningGreeting ? getCachedBriefing(sessionUserName) : null;
+  const isBriefingFollowUp = !isMorningGreeting && !!cachedBriefingText && BRIEFING_FOLLOWUP_PATTERN.test(message);
 
   // Onboarding nudge response — user replied yes to the setup reminder in the briefing
   const _lastMsgForNudge = [...history].reverse().find((m) => m.role === "assistant");
@@ -1314,11 +1467,11 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
 
   // T005: Headache / body ache — check pressure
-  const isHeadacheRequest = !isMorningGreeting && cls.headache;
+  const isHeadacheRequest = !isMorningGreeting && HEADACHE_PATTERN.test(message);
 
   // T006: Text message intent OR pending text flow continuation
   const pendingText = getPendingText();
-  const isTextMessageRequest = !isMorningGreeting && cls.text_compose;
+  const isTextMessageRequest = !isMorningGreeting && TEXT_MESSAGE_PATTERN.test(message);
   const isTextFlowActive = !isMorningGreeting && pendingText !== null;
 
   // Declared early so code paths before the winddown section can reference it safely.
@@ -1376,7 +1529,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     isMedRequest ||
     isTVAdd || isTVRemove || isTVList ||
     isOliviaCall ||
-    cls.navigation;
+    NAVIGATION_PATTERN.test(message);
   const selectedModel = _isSimpleIntent && !isMorningGreeting && !isEveningGreeting
     ? MODEL_HAIKU
     : MODEL_SONNET;
@@ -1856,9 +2009,8 @@ If the conversation is not about a trip, set destination to null.`,
       // Fallback: if Haiku couldn't extract a destination from (possibly empty) history,
       // check the in-memory cache for the last trip this user generated.
       // This covers isolated contexts (e.g. trip-planning screen) that don't write to chat_messages.
-      // NOTE: cached is hoisted here so it remains in scope in the if(extracted.destination) block below.
-      const cached = lastTripIntentByUser.get(sessionUserName);
       if (!extracted.destination) {
+        const cached = lastTripIntentByUser.get(sessionUserName);
         if (cached && Date.now() - cached.timestamp < TRIP_INTENT_CACHE_TTL_MS) {
           req.log.info({ dest: cached.intent.destination, age: Math.round((Date.now() - cached.timestamp) / 1000) }, "[TripPlan] Save intent — using cached trip intent (isolated context, empty history)");
           extracted.destination = cached.intent.destination;
@@ -1951,8 +2103,8 @@ If the conversation is not about a trip, set destination to null.`,
       req.log.info(
         {
           message: message.slice(0, 120),
-          regexSource: "cls.trip_plan",
-          regexMatched: isTripPlanIntent ? "trip_plan=true" : "(no match token)",
+          regexSource: TRIP_PLAN_INTENT.source,
+          regexMatched: TRIP_PLAN_INTENT.exec(message)?.[0] ?? "(no match token)",
           path: "isTripPlanIntent → generateTripItinerary() → Sonnet",
         },
         "[TripPlan] ✅ TRIP_PLAN_INTENT matched — entering generation path"
@@ -2640,7 +2792,7 @@ newHotelName: the name of the hotel the user wants to use instead. null if not s
   }
 
   // ── Goal detection — fire-and-forget background save ────────────────────────
-  if (!isMorningGreeting && !isMydayAdd && !winddownActive && !isIsolatedContext && cls.goal) {
+  if (!isMorningGreeting && !isMydayAdd && !winddownActive && !isIsolatedContext && GOAL_PATTERN.test(message)) {
     saveLifeCapture(sessionUserName, message.trim(), "goal").catch(() => {});
     req.log.info({ chars: message.length }, "[LifeCaptures] Goal detected and queued for save");
   }
@@ -4363,7 +4515,7 @@ newHotelName: the name of the hotel the user wants to use instead. null if not s
   // [DIAG] Log winddown state after possible activation
   req.log.info({ winddownActive, isEveningGreeting }, "[DIAG:2] Winddown state after activation check");
   const isCheckinNoResponse = winddownActive && message === "__CHECKIN_NO_RESPONSE__";
-  const isWinddownNote = winddownActive && !isCheckinNoResponse && cls.winddown_note;
+  const isWinddownNote = winddownActive && !isCheckinNoResponse && WINDDOWN_NOTE_PATTERN.test(message);
   const isGoodnightMessage = /\b(goodnight|good\s+night|good\s+nite|sweet\s+dreams|see\s+you\s+tomorrow|talk\s+tomorrow)\b/i.test(message);
 
   if (winddownActive) {
@@ -5132,7 +5284,7 @@ If you cannot extract both, return null.`,
   // ── Medications: add a new medication ──
   if (isMedAdd && !isMedTaken) {
     try {
-      const extracted = await extractMedicationFromMessage(message);
+      const extracted = extractMedicationFromMessage(message);
       if (extracted) {
         const result = await addMedication(extracted.name, extracted.dosage, extracted.reminderTime, sessionUserName);
         if (result.alreadyExists) {
@@ -5699,10 +5851,8 @@ If you cannot extract both, return null.`,
 
   // ── Layer 2: Transcript search — "what did I say about X last week?" ────────
   // Only triggered by explicit recall queries — never auto-loaded.
-  if (cls.transcript_search) {
-    const searchTerm = cls.transcript_search_term && cls.transcript_search_term.length >= 3
-      ? cls.transcript_search_term
-      : extractTranscriptSearchTerm(message);
+  if (TRANSCRIPT_SEARCH_PATTERN.test(message)) {
+    const searchTerm = extractTranscriptSearchTerm(message);
     if (searchTerm.length >= 3) {
       try {
         const hits = await searchTranscripts(sessionUserName, searchTerm, 90);
