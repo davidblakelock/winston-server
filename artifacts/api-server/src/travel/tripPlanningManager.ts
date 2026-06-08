@@ -336,7 +336,9 @@ export async function generateTripItinerary(
     const routing: string[] = [];
     let dayNum = 1;
     stops.forEach((stop, idx) => {
-      const count = daysPerStop + (idx < extraDays ? 1 : 0);
+      // Extra days go to the LAST stop(s) as a departure buffer — not the first.
+      // e.g. 4 days / 3 stops: Hot Springs 1 day, Eureka Springs 1 day, Bentonville 2 days (last night + departure morning).
+      const count = daysPerStop + (idx >= stops.length - extraDays ? 1 : 0);
       for (let d = 0; d < count; d++) {
         const label =
           dayNum === 1           ? " (arrival day)"
