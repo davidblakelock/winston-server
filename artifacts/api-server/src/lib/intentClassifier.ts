@@ -187,7 +187,7 @@ story_read: read Olivia stories/archive — "read me a story", "show the archive
 story_count: count stories — "how many stories do I have".
 olivia_call: mentioned calling/FaceTiming/talking to Olivia (daughter) — "called Olivia", "talked to Olivia".
 olivia_mention: any mention of the name "Olivia" anywhere in the message.
-trip_plan: plan a new trip — "plan me a trip to X", "I want to plan a vacation to Y".
+trip_plan: plan/generate a new trip itinerary — "plan me a trip to X", "plan a vacation to Y", "plan us a road trip", "help me plan a getaway", "put together a trip", "I want/need to plan a trip", "I'd like a weekend trip to Z", "plan a holiday to X", "can you plan a trip". Also fires for bare destination+duration phrasing on the trip screen like "Nashville 5 nights" or "Arkansas road trip 4 days" when requestContext is trip-planning${ctx.requestContext === "trip-planning" ? " [TRIP CONTEXT ACTIVE — very likely trip_plan]" : ""}.
 trip_save: save/build/confirm itinerary — "yes go ahead", "build it", "save this trip", "create the itinerary", "make it".
 hotel_availability: search for hotels — "find me a hotel", "hotels in Dallas", "check hotel availability".
 hotel_swap: swap/change a hotel in itinerary${ctx.requestContext === "trip-planning" ? " [TRIP CONTEXT ACTIVE — watch carefully]" : ""} — "swap the hotel", "change to the Omni", "use a different hotel".
