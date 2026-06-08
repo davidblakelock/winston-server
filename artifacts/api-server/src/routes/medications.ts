@@ -329,8 +329,6 @@ router.post("/medications/snooze-reminder", express.json({ limit: "1mb" }), asyn
   const userName = await authenticate(req, res);
   if (!userName) return;
   try {
-    const meds = await getMedications(userName);
-    const medText = meds.length > 0 ? meds.map((m) => m.name).join(", ") : "your medications";
     // Native app sends { notificationData: data } — snoozeMinutes is nested inside.
     const rawSnooze =
       req.body?.snoozeMinutes ??
@@ -346,7 +344,7 @@ router.post("/medications/snooze-reminder", express.json({ limit: "1mb" }), asyn
     // LOCKED: do not change actionTaken or actionSnooze without explicit user request.
     const reminder = await createReminder({
       userName,
-      reminderText: `Take ${medText}`,
+      reminderText: "Have you taken your medications?",
       fireAt,
       timezone: "America/Chicago",
       pushCategoryId: "medication-action",
