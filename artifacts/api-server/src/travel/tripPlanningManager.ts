@@ -343,7 +343,7 @@ export async function generateTripItinerary(
         const isDeparture = dayNum === totalDays;
         const label =
           dayNum === 1  ? " (arrival day)"
-          : isDeparture ? ` (departure morning — traveler drives home, NO hotel this day)`
+          : isDeparture ? ` (departure morning — check out and drive home; hotel was already assigned on the previous day, do NOT add a second hotel entry here)`
           : d === 0 && idx > 0 ? " (drive in from previous stop + explore)"
           : " (full day)";
         routing.push(`  Day ${dayNum}: ${stop}${label}`);
