@@ -109,6 +109,21 @@ interface ChatMessage {
   content: string;
 }
 
+// ─── Session Separator ─────────────────────────────────────────────────────
+const SessionSeparator = ({ label }: { label: string }) => (
+  <View style={separatorStyles.row}>
+    <View style={separatorStyles.line} />
+    <Text style={separatorStyles.label}>{label}</Text>
+    <View style={separatorStyles.line} />
+  </View>
+);
+
+const separatorStyles = StyleSheet.create({
+  row: { flexDirection: 'row', alignItems: 'center', marginVertical: 16, marginHorizontal: 4 },
+  line: { flex: 1, height: 1, backgroundColor: COLORS.border },
+  label: { color: COLORS.muted, fontSize: 11, fontWeight: '600', letterSpacing: 0.5, marginHorizontal: 10, textTransform: 'uppercase' },
+});
+
 // ─── Step Row ─────────────────────────────────────────────────────────────
 const StepRow = ({ step, onToggle }: { step: GoalStep; onToggle: () => void }) => (
   <TouchableOpacity style={styles.stepRow} onPress={onToggle} activeOpacity={0.7}>
@@ -228,6 +243,12 @@ export default function GoalsScreen() {
   const [conversationPhase, setConversationPhase] = useState<'goal_input' | 'conversation'>('goal_input');
   const [pendingGoalTitle, setPendingGoalTitle] = useState('');
   const [savingGoal, setSavingGoal] = useState(false);
+  // Number of messages that came from saved history (used to show session separator)
+  const [historyCount, setHistoryCount] = useState(0);
+  // Label shown on the separator between history and new messages
+  const [historySeparatorLabel, setHistorySeparatorLabel] = useState('Earlier');
+  // Whether the scroll view should jump to the bottom on its next content size change
+  const needsInitialScroll = useRef(false);
 
   const inputRef = useRef<TextInput>(null);
   const scrollRef = useRef<ScrollView>(null);
@@ -259,9 +280,31 @@ export default function GoalsScreen() {
       const msgs: ChatMessage[] = data.messages ?? [];
       if (msgs.length > 0) {
         setConversation(msgs);
+        setHistoryCount(msgs.length);
+        // Compute a human-friendly separator label from the server timestamp if provided,
+        // otherwise fall back to a generic "Earlier" label.
+        if (data.oldest_at) {
+          const then = new Date(data.oldest_at);
+          const now = new Date();
+          const diffMs = now.getTime() - then.getTime();
+          const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+          if (diffDays === 0) {
+            setHistorySeparatorLabel('Earlier today');
+          } else if (diffDays === 1) {
+            setHistorySeparatorLabel('Yesterday');
+          } else if (diffDays < 7) {
+            setHistorySeparatorLabel(`${diffDays} days ago`);
+          } else {
+            setHistorySeparatorLabel('Earlier');
+          }
+        } else {
+          setHistorySeparatorLabel('Earlier');
+        }
         setConversationPhase('conversation');
         const firstUser = msgs.find(m => m.role === 'user');
         if (firstUser) setPendingGoalTitle(firstUser.content.slice(0, 80));
+        // Signal that the conversation view should scroll to bottom when it first renders
+        needsInitialScroll.current = true;
       }
     } catch {
       // Silently ignore — history is a convenience, not required
@@ -357,14 +400,17 @@ export default function GoalsScreen() {
     setPendingGoalTitle('');
     setConversationPhase('goal_input');
     setSavingGoal(false);
+    setHistoryCount(0);
+    needsInitialScroll.current = false;
   };
 
   // Open the conversation view with existing history pre-loaded
   const continueConversation = () => {
     setShowConversation(true);
     // conversation, conversationPhase, and pendingGoalTitle are already populated
-    // by fetchChatHistory — just show the view
-    setTimeout(scrollToBottom, 200);
+    // by fetchChatHistory — just show the view. needsInitialScroll will fire
+    // the instant the ScrollView measures its content for the first time.
+    needsInitialScroll.current = true;
   };
 
   // ── Share a Winston response ───────────────────────────────────────────
@@ -558,17 +604,27 @@ export default function GoalsScreen() {
               style={styles.conversationScroll}
               contentContainerStyle={styles.conversationContent}
               showsVerticalScrollIndicator={false}
+              onContentSizeChange={() => {
+                if (needsInitialScroll.current) {
+                  needsInitialScroll.current = false;
+                  scrollRef.current?.scrollToEnd({ animated: false });
+                }
+              }}
             >
               {conversation.map((msg, index) => (
-                <ChatBubble
-                  key={index}
-                  msg={msg}
-                  onShare={
-                    msg.role === 'assistant'
-                      ? () => handleShare(msg.content)
-                      : undefined
-                  }
-                />
+                <React.Fragment key={index}>
+                  <ChatBubble
+                    msg={msg}
+                    onShare={
+                      msg.role === 'assistant'
+                        ? () => handleShare(msg.content)
+                        : undefined
+                    }
+                  />
+                  {historyCount > 0 && index === historyCount - 1 && index < conversation.length - 1 && (
+                    <SessionSeparator label={historySeparatorLabel} />
+                  )}
+                </React.Fragment>
               ))}
 
               {isThinking && (
