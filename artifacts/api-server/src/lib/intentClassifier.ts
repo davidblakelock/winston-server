@@ -151,6 +151,7 @@ export async function classifyMessage(
   message: string,
   ctx: ClassificationContext,
 ): Promise<MessageClassification> {
+  process.stdout.write(`[CLASSIFIER] input len=${message.length} ctx=${ctx.requestContext} msg="${message.slice(0, 120)}"\n`);
   try {
     const resp = await anthropic.messages.create({
       model:      MODEL_HAIKU,
