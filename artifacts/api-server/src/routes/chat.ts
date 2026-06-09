@@ -1965,7 +1965,7 @@ If the conversation is not about a trip, set destination to null.`,
           `Today's date is ${todayForTrip}. Extract trip intent from the user's message. Return ONLY valid JSON with these fields: ` +
           '{"destination":"primary destination — state or region (e.g. \\"Arkansas\\") or null","stops":["array of specific cities/towns mentioned as stops, e.g. [\\"Hot Springs\\",\\"Eureka Springs\\",\\"Bentonville\\"] — empty array [] if none named"],"nights":number or null,"partyDesc":"description like \'solo\' or \'me and Susan\' or null","vibe":"travel style or null","startDate":"YYYY-MM-DD — resolve ALL date phrases to a specific YYYY-MM-DD using today\'s date as the reference year, e.g. \'June 12\' → \\"2026-06-12\\", \'next month\' → the 1st of next month; output null only if no date can be inferred","budget":"budget|mid-range|luxury or null"}. ' +
           "NIGHTS RULE — critical: 'nights' means overnight stays, NOT calendar days. Examples: '4 days 3 nights' → nights=3. '3-night trip' → nights=3. '4-day trip' → nights=3 (days minus 1). '5 days' → nights=4. Always prefer the explicit night count when both days and nights are stated. " +
-          "STOPS RULE: stops[] must include every city or town mentioned, even when they are NOT separated by commas — e.g. 'stops in Hot Springs Eureka Springs and Bentonville' → [\"Hot Springs\",\"Eureka Springs\",\"Bentonville\"]. Split on 'and', spaces between known place names, or any separator. Always extract every named city or town into stops[]. Return null for scalar fields not mentioned. No prose, no markdown, no code fences.",
+          "STOPS RULE: stops[] must include every city or town mentioned, even when they are NOT separated by commas — e.g. 'stops in Hot Springs Eureka Springs and Bentonville' → [\"Hot Springs\",\"Eureka Springs\",\"Bentonville\"]. Split on 'and', spaces between known place names, or any separator. Always extract every named city or town into stops[]. Return null for scalar fields not mentioned. Return only raw JSON — no markdown, no code fences, no backticks.",
         messages: [{ role: "user", content: message }],
       });
 
@@ -5894,12 +5894,16 @@ If you cannot extract both, return null.`,
     } catch (err: unknown) {
       const errStatus = (err as Record<string, unknown>)?.status as number | undefined;
       req.log.error({ err, errStatus }, "Claude native error");
-      res.status(500).json({
-        error:
-          errStatus === 529
-            ? "I'm sorry — Claude's servers are a little busy right now. Give me a moment and try again."
-            : "I'm sorry — I had trouble thinking through that. Please try again.",
-      });
+      if (!res.headersSent) {
+        res.status(500).json({
+          error:
+            errStatus === 529
+              ? "I'm sorry — Claude's servers are a little busy right now. Give me a moment and try again."
+              : "I'm sorry — I had trouble thinking through that. Please try again.",
+        });
+      } else {
+        res.end();
+      }
     }
     return;
   }
