@@ -384,9 +384,9 @@ ${travelCtx ? `\nTraveler profile — personalize every recommendation to these 
 
   const rawMessage = intent.rawMessage ?? `Plan a ${intent.nights ?? 3}-night trip to ${intent.destination}`;
 
-  process.stdout.write(`[STDOUT] TRIP-PLAN generateTripItinerary CALLED rawMsg="${rawMessage.slice(0, 120)}" OPENAI_KEY_SET=${!!process.env.OPENAI_API_KEY} ${new Date().toISOString()}\n`);
+  process.stdout.write(`\n========== [TripPlan] GPT-4o INPUT ==========\n${rawMessage}\n=============================================\n`);
   logger.info(
-    { model: MODEL_GPT4O, rawMessage: rawMessage.slice(0, 200) },
+    { model: MODEL_GPT4O, rawMessageFull: rawMessage },
     "[TripPlan] 🚀 Calling GPT-4o with raw user message"
   );
 
@@ -401,9 +401,10 @@ ${travelCtx ? `\nTraveler profile — personalize every recommendation to these 
 
   const text = (response.choices[0]?.message?.content ?? "").trim();
 
+  process.stdout.write(`\n========== [TripPlan] GPT-4o FULL RESPONSE (${text.length} chars) ==========\n${text}\n=============================================\n`);
   logger.info(
-    { rawResponseLen: text.length, rawResponsePreview: text.slice(0, 500) },
-    "[TripPlan] 📥 RAW GPT-4o RESPONSE (first 500 chars)"
+    { rawResponseLen: text.length, rawResponseFull: text },
+    "[TripPlan] 📥 RAW GPT-4o RESPONSE (full)"
   );
 
   // Strip markdown fences if GPT-4o wrapped the JSON
