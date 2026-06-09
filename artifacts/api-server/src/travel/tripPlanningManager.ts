@@ -606,36 +606,41 @@ export async function enrichItineraryWithHotelAvailability(
 }
 
 /**
- * Best-effort JSON repair for common Claude output quirks:
+ * Best-effort JSON repair. Handles:
  * - trailing commas before } or ]
- * - single-quoted strings (replace with double quotes, careful with apostrophes)
- * - unquoted property names
- * - truncated JSON (trim to last valid closing brace)
+ * - truncated JSON (GPT-4o hitting max_tokens mid-response): closes unclosed
+ *   string literals and then closes all open brackets/braces in stack order.
  */
 function repairJson(raw: string): string {
   // 1. Remove trailing commas before } or ]
   let s = raw.replace(/,\s*([}\]])/g, "$1");
 
-  // 2. Try parse; if it works we're done
+  // 2. Fast path: already valid
   try { JSON.parse(s); return s; } catch (_) { /* continue */ }
 
-  // 3. Attempt to trim to the last complete top-level object if JSON is truncated
-  // Find the last balanced closing brace
-  let depth = 0;
-  let lastGoodClose = -1;
+  // 3. Walk the string tracking open structures; respect string literals and escapes.
+  //    This correctly handles truncated output where the outermost object never closes.
+  const stack: string[] = [];
+  let inString = false;
+  let escaped  = false;
+
   for (let i = 0; i < s.length; i++) {
-    if (s[i] === "{" || s[i] === "[") depth++;
-    else if (s[i] === "}" || s[i] === "]") {
-      depth--;
-      if (depth === 0) lastGoodClose = i;
-    }
+    const ch = s[i]!;
+    if (escaped)          { escaped = false; continue; }
+    if (ch === "\\" && inString) { escaped = true; continue; }
+    if (ch === '"')       { inString = !inString; continue; }
+    if (inString)         { continue; }
+    if (ch === "{")       { stack.push("}"); }
+    else if (ch === "[")  { stack.push("]"); }
+    else if (ch === "}" || ch === "]") { stack.pop(); }
   }
-  if (lastGoodClose > 0 && lastGoodClose < s.length - 1) {
-    const trimmed = s.slice(0, lastGoodClose + 1);
-    // Try once more after trimming + trailing comma removal
-    const cleaned = trimmed.replace(/,\s*([}\]])/g, "$1");
-    try { JSON.parse(cleaned); return cleaned; } catch (_) { /* fall through */ }
-  }
+
+  // Close any unclosed string literal, strip trailing comma, then close open structures.
+  let repaired = inString ? s + '"' : s;
+  repaired = repaired.replace(/,\s*$/, "");
+  while (stack.length > 0) repaired += stack.pop();
+
+  try { JSON.parse(repaired); return repaired; } catch (_) { /* fall through */ }
 
   // 4. Last resort: return as-is and let the outer catch handle it
   return s;
