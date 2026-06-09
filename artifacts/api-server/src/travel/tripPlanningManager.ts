@@ -391,8 +391,9 @@ ${travelCtx ? `\nTraveler profile — personalize every recommendation to these 
   );
 
   const response = await openai.chat.completions.create({
-    model:      MODEL_GPT4O,
-    max_tokens: 8192,
+    model:           MODEL_GPT4O,
+    max_tokens:      8192,
+    response_format: { type: "json_object" },
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user",   content: rawMessage },
