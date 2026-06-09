@@ -1,3 +1,4 @@
+console.log('STARTUP TEST f46a4afa');
 import app from "./app";
 import { logger } from "./lib/logger";
 import { setSchedulersEnabled } from "./routes/health";
