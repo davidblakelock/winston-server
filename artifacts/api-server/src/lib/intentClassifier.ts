@@ -242,8 +242,12 @@ reservation_cal_add: user wants to add a restaurant reservation to their calenda
     });
 
     const raw = resp.content[0]?.type === "text" ? resp.content[0].text.trim() : "{}";
+    process.stdout.write(`[CLASSIFIER] raw Anthropic response: ${raw}\n`);
     const m   = raw.match(/\{[\s\S]*\}/);
-    if (!m) return SAFE_DEFAULT;
+    if (!m) {
+      process.stdout.write(`[CLASSIFIER] ERROR — no JSON found in response, using SAFE_DEFAULT. raw="${raw}"\n`);
+      return SAFE_DEFAULT;
+    }
 
     const p = JSON.parse(m[0]) as Partial<MessageClassification>;
 
@@ -324,7 +328,8 @@ reservation_cal_add: user wants to add a restaurant reservation to their calenda
       reservation_cal_add:    !!p.reservation_cal_add,
     };
   } catch (err) {
-    console.error("[IntentClassifier] Failed, using safe default:", err);
+    const errMsg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    process.stdout.write(`[CLASSIFIER] ERROR — Anthropic API call failed, using SAFE_DEFAULT. error="${errMsg}"\n`);
     return SAFE_DEFAULT;
   }
 }
