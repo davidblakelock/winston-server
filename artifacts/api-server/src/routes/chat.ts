@@ -1044,14 +1044,21 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   process.stdout.write(`[STDOUT] CHAT-HANDLER message="${message.slice(0, 100)}" len=${message.length}\n`);
 
   // Fetch recent memories, dynamic profile, and user profile concurrently
+  const _pa0 = Date.now();
+  const _time = <T>(name: string, p: Promise<T>): Promise<T> =>
+    p.then(
+      r  => { process.stdout.write(`[PROMISE] ${name} ok  ${Date.now() - _pa0}ms\n`); return r; },
+      e  => { process.stdout.write(`[PROMISE] ${name} err ${Date.now() - _pa0}ms e="${String(e)}"\n`); throw e; }
+    );
   const [recentMemories, allProfileItems, profilePlaces, userProfile, briefingPrefs, keyPeople] = await Promise.all([
-    getRecentMemories(7).catch(() => []),
-    getProfileItems(undefined, sessionUserName).catch(() => []),
-    getProfilePlaces(sessionUserName).catch(() => []),
-    getProfile(sessionUserName).catch(() => null),
-    getBriefingPreferences(sessionUserName).catch(() => [] as BriefingPreference[]),
-    getPeople(sessionUserName).catch(() => []),
+    _time("getRecentMemories",       getRecentMemories(7).catch(() => [])),
+    _time("getProfileItems",         getProfileItems(undefined, sessionUserName).catch(() => [])),
+    _time("getProfilePlaces",        getProfilePlaces(sessionUserName).catch(() => [])),
+    _time("getProfile",              getProfile(sessionUserName).catch(() => null)),
+    _time("getBriefingPreferences",  getBriefingPreferences(sessionUserName).catch(() => [] as BriefingPreference[])),
+    _time("getPeople",               getPeople(sessionUserName).catch(() => [])),
   ]);
+  process.stdout.write(`[PROMISE] all-done ${Date.now() - _pa0}ms\n`);
   const memoryBlock = formatMemoriesForContext(recentMemories);
   const dynamicProfileBlock = formatProfileForContext(allProfileItems, sessionUserName);
   const prefsBlock = buildBriefingPrefsBlock(briefingPrefs, sessionUserName);
