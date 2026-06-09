@@ -1335,22 +1335,13 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const ROUTE_REMIND_ACCEPT = /^(?:yes|yeah|yep|yup|sure|ok(?:ay)?|go\s+ahead|do\s+it|please|absolutely|sounds?\s+good|set\s+(?:it|a\s+reminder|that)|add\s+(?:it|a\s+reminder))(?:[,\s!.]|$)/i;
   const isRouteReminderAccepted = !isMorningGreeting && !isTextFlowActive && !isDepartureTextAccepted
     && pendingRouteReminder !== null && ROUTE_REMIND_ACCEPT.test(message.trim());
-  // Retry: user says something like "it didn't open" / "try again" within 30 min of last SMS dispatch
-  const SMS_RETRY_PATTERN = /\b(it\s+didn.?t\s+(open|work)|try\s+again|open\s+(messages|messaging|it)\s+again|send\s+it\s+again|retry|re-?send|messages\s+(didn.?t|didn.t)\s+open)\b/i;
+  // Retry / edit-after-send: intent detected by classifier; lastSmsPayload guards
+  // so these only fire when a text was actually dispatched within the session.
   const lastSmsPayload = getLastSmsPayload();
   const isSmsRetryRequest = !isMorningGreeting && !isTextFlowActive && !isTextMessageRequest
-    && !!lastSmsPayload && SMS_RETRY_PATTERN.test(message);
-
-  // Edit-after-send: user asks to change the message AFTER it was already dispatched.
-  // Catches: "edit that", "make it shorter", "change the message", "add a joke to it", etc.
-  // Requires lastSmsPayload to be set (dispatched within 30 min) AND the message to contain
-  // edit-like words AND either "message"/"text" or the recipient's first name.
-  const SMS_EDIT_WORDS = /\b(edit|change|fix|update|redo|revise|rewrite|shorten|lengthen|shorter|longer|make\s+it|add\s+.{1,40}\s+(to|back)|remove|that('?s|\s+is)\s+not\s+right|wasn'?t\s+right|more\s+(casual|formal|professional|friendly|concise|brief)|less\s+(formal|stuffy)|different\s+(version|wording|way))\b/i;
+    && !!lastSmsPayload && cls.sms_retry;
   const isSmsEditAfterSend = !isMorningGreeting && !isTextFlowActive && !isTextMessageRequest
-    && !isSmsRetryRequest && !!lastSmsPayload && SMS_EDIT_WORDS.test(message)
-    && (/(message|text)/i.test(message)
-        || (lastSmsPayload.recipient.split(" ")[0].length > 2
-            && message.toLowerCase().includes(lastSmsPayload.recipient.split(" ")[0].toLowerCase())));
+    && !isSmsRetryRequest && !!lastSmsPayload && cls.sms_edit;
 
   // ── Model selection ───────────────────────────────────────────────────────
   // Simple/mechanical intents get Haiku (fast + cheap). Everything nuanced
@@ -3325,10 +3316,8 @@ newHotelName: the name of the hotel the user wants to use instead. null if not s
   // Triggered when user says "add it to my calendar" / "yes add it" / etc.
   // after receiving the push notification from the email scanner.
   // The ACTUAL confirmed time comes from the email, not the originally-requested time.
-  const RESERVATION_CAL_INTENT =
-    /\b(?:add|put|yes|sure|go ahead|please|sync)\b.{0,60}\b(?:calendar|cal|schedule)\b|\b(?:add|put)\b.{0,40}\b(?:reservation|booking|dinner|table|restaurant)\b.{0,40}\b(?:calendar|cal|schedule)\b/i;
-
-  if (!isRestaurantIntelRequest && !isMorningGreeting && RESERVATION_CAL_INTENT.test(message)) {
+  // Intent detected by classifier (reservation_cal_add) — no regex needed.
+  if (!isRestaurantIntelRequest && !isMorningGreeting && cls.reservation_cal_add) {
     const pendingRes = await getLatestUnscheduledReservation(sessionUserName).catch(() => null);
 
     if (pendingRes) {
@@ -5462,14 +5451,24 @@ If you cannot extract both, return null.`,
         } else if (saveDestination === "service_providers") {
           // ── Save to service_providers ─────────────────────────────────────
           // Infer category from specialty/relationship hint, default Personal
-          const categoryHint = (extracted.specialty ?? extracted.relationship ?? "").toLowerCase();
-          const category =
-            /doctor|physician|surgeon|dentist|optom|cardio|derma|ortho|physio|therapist|psychiatr|psycholog|specialist|nurse|medical|health/i.test(categoryHint) ? "Medical" :
-            /lawyer|attorney|legal|notary|paralegal/i.test(categoryHint) ? "Legal" :
-            /financial|accountant|advisor|cpa|tax|banker|broker|invest/i.test(categoryHint) ? "Financial" :
-            /plumber|electrician|contractor|handyman|roofer|landscap|pest|hvac|repair|home/i.test(categoryHint) ? "Home" :
-            /mechanic|auto|car|tire|vehicle/i.test(categoryHint) ? "Auto" :
-            "Personal";
+          const categoryHint = (extracted.specialty ?? extracted.relationship ?? "").trim();
+          // AI-based category classification — no hardcoded keyword lists.
+          const category = await (async (): Promise<string> => {
+            if (!categoryHint) return "Personal";
+            try {
+              const catResp = await anthropic.messages.create({
+                model: MODEL_HAIKU,
+                max_tokens: 10,
+                system: "Classify this professional role or specialty into exactly one category. Reply with ONLY that word — no punctuation, no explanation: Medical, Legal, Financial, Home, Auto, or Personal.",
+                messages: [{ role: "user", content: categoryHint }],
+              });
+              const result = (catResp.content[0]?.type === "text" ? catResp.content[0].text.trim() : "Personal").replace(/[^A-Za-z]/g, "");
+              const valid = ["Medical", "Legal", "Financial", "Home", "Auto", "Personal"];
+              return valid.includes(result) ? result : "Personal";
+            } catch {
+              return "Personal";
+            }
+          })();
 
           const provider = await createProvider(sessionUserName, {
             name: contactName,

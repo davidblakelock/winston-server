@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { authenticate } from "../auth/middleware.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
-import { getPeople } from "../people/peopleManager.js";
+import { getPeople, type KeyPerson } from "../people/peopleManager.js";
 import { getCachedWeather } from "../weather/weatherCache.js";
 import { analyzePressureDelta } from "../weather/pressureScheduler.js";
 
@@ -166,7 +166,7 @@ router.get("/weather/morning", async (req: Request, res: Response) => {
     }
 
     const FAMILY_RELS = /^(spouse|partner|girlfriend|boyfriend|fiancée?|fiancee?|wife|husband|son|daughter|child|parent|mother|father|mom|dad|brother|sister|sibling|grandm|grandp|grandma|grandpa|grandparent|grandchild|stepmom|stepdad|stepson|stepdaughter|stepfather|stepmother|stepparent)/i;
-    const keyPeople = await getPeople(userName).catch(() => []);
+    const keyPeople = await getPeople(userName).catch((): KeyPerson[] => []);
     const people = keyPeople
       .filter((p) => {
         if (!p.address) return false;

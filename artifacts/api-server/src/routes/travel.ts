@@ -89,7 +89,7 @@ router.post("/trips/save", express.json({ limit: "2mb" }), async (req, res) => {
 
     // Parse intent from the original user description (or fall back to destination hint)
     const intentSource = body.description ?? body.destination ?? body.planResponse.slice(0, 200);
-    const intent = parseTripIntent(intentSource);
+    const intent = await parseTripIntent(intentSource);
     if (body.destination) intent.destination = body.destination;
     if (body.nights) intent.nights = body.nights;
     if (body.startDate) intent.startDate = body.startDate;
@@ -232,7 +232,7 @@ router.post("/trips", express.json({ limit: "2mb" }), async (req, res) => {
 
     // Otherwise generate a new itinerary from the provided details
     const rawMsg = body.message ?? body.destination ?? "";
-    const intent = parseTripIntent(rawMsg);
+    const intent = await parseTripIntent(rawMsg);
     if (body.destination) intent.destination = body.destination;
     if (body.nights) intent.nights = body.nights;
     if (body.startDate) intent.startDate = body.startDate;

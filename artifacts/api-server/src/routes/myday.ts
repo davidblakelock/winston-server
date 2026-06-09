@@ -79,7 +79,7 @@ router.put("/myday/:id", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
 
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(String(req.params.id), 10);
   if (isNaN(id) || id <= 0) {
     res.status(400).json({ error: "id must be a positive integer" });
     return;
@@ -118,7 +118,7 @@ router.delete("/myday/:id", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
 
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(String(req.params.id), 10);
   if (isNaN(id) || id <= 0) {
     res.status(400).json({ error: "id must be a positive integer" });
     return;

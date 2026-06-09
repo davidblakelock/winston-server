@@ -53,7 +53,7 @@ router.delete("/memories/:id", async (req: Request, res: Response) => {
   if (!userName) return;
 
   try {
-    const id = parseInt(req.params.id, 10);
+    const id = parseInt(String(req.params.id), 10);
     const deleted = await deleteMemoryEntry(id, userName);
     if (!deleted) {
       res.status(404).json({ error: "Memory not found" });
@@ -72,7 +72,7 @@ router.patch("/memories/:id/category", async (req: Request, res: Response) => {
   if (!userName) return;
 
   try {
-    const id = parseInt(req.params.id, 10);
+    const id = parseInt(String(req.params.id), 10);
     const { category } = req.body as { category?: string };
 
     if (!category) {

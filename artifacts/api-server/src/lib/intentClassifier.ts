@@ -98,6 +98,10 @@ export interface MessageClassification {
 
   goal: boolean;
   winddown_note: boolean;
+
+  sms_retry: boolean;
+  sms_edit: boolean;
+  reservation_cal_add: boolean;
 }
 
 export interface ClassificationContext {
@@ -136,6 +140,7 @@ const SAFE_DEFAULT: MessageClassification = {
   briefing_followup: false,
   navigation: false,
   goal: false, winddown_note: false,
+  sms_retry: false, sms_edit: false, reservation_cal_add: false,
 };
 
 const LIST_TYPES = new Set(["shopping", "to-do", "grocery", "errand", "task"]);
@@ -229,7 +234,10 @@ transcript_search: recall past conversation — "what did I say about X", "what 
 briefing_followup${ctx.hasCachedBriefing ? " [BRIEFING ACTIVE]" : " [NO BRIEFING — set false]"}: follow up on morning briefing — "tell me more", "more about that", "what's the full story", "more details on", "dig into", "what happened with". ONLY when briefing context is active.
 navigation: get directions — "take me to X", "directions to X", "navigate to X", "how do I get to X".
 goal: personal goal setting — "I want to start reading more", "I need to exercise", "I should call my parents more".
-winddown_note: note for tomorrow's briefing — "remember to X tomorrow", "note for tomorrow", "add to my morning briefing".`,
+winddown_note: note for tomorrow's briefing — "remember to X tomorrow", "note for tomorrow", "add to my morning briefing".
+sms_retry: user wants to retry opening Messages after a text was dispatched — "it didn't open", "try again", "send it again", "messages didn't open", "retry", "resend".
+sms_edit: user wants to edit/revise a text message they just composed or sent — "edit that", "make it shorter", "change the message", "rewrite it", "fix that text", "add something to it", "make it more casual", "different wording".
+reservation_cal_add: user wants to add a restaurant reservation to their calendar — "add it to my calendar", "put it on my schedule", "yes add it", "sync to calendar", "add the reservation", "put the booking on my calendar".`,
       messages: [{ role: "user", content: message }],
     });
 
@@ -311,6 +319,9 @@ winddown_note: note for tomorrow's briefing — "remember to X tomorrow", "note 
       navigation:             !!p.navigation,
       goal:                   !!p.goal,
       winddown_note:          !!p.winddown_note,
+      sms_retry:              !!p.sms_retry,
+      sms_edit:               !!p.sms_edit,
+      reservation_cal_add:    !!p.reservation_cal_add,
     };
   } catch (err) {
     console.error("[IntentClassifier] Failed, using safe default:", err);

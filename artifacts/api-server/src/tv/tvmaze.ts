@@ -34,7 +34,7 @@ export async function searchShow(name: string): Promise<TVShow | null> {
       `https://api.tvmaze.com/search/shows?q=${encodeURIComponent(name)}`
     );
     if (!res.ok) return null;
-    const results: any[] = await res.json();
+    const results = await res.json() as any[];
     if (!results.length) return null;
     const show = results[0].show;
     return {
@@ -60,7 +60,7 @@ export async function getScheduleForDate(
       `https://api.tvmaze.com/schedule?country=US&date=${dateStr}`
     );
     if (!res.ok) return [];
-    const episodes: any[] = await res.json();
+    const episodes = await res.json() as any[];
     return episodes
       .filter((ep) => watchedIds.includes(ep.show?.id))
       .map((ep) => ({
@@ -90,7 +90,7 @@ export async function getWebScheduleForDate(
       `https://api.tvmaze.com/schedule/web?date=${dateStr}`
     );
     if (!res.ok) return [];
-    const episodes: any[] = await res.json();
+    const episodes = await res.json() as any[];
     return episodes
       .filter((ep) => watchedIds.includes(ep._embedded?.show?.id))
       .map((ep) => {

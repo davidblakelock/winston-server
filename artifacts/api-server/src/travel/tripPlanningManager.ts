@@ -718,7 +718,7 @@ export async function updateTripPlan(
     start_date?: string | null;
     end_date?: string | null;
     nights?: number | null;
-    itinerary?: TripItinerary | null;
+    itinerary?: NativeItinerary | null;
     status?: string;
   },
 ): Promise<TripPlanRow | null> {
@@ -762,8 +762,8 @@ export interface TodayTripDay {
   planId:      number;
   destination: string;
   dayNumber:   number;
-  day:         ItineraryDay;
-  itinerary:   TripItinerary;
+  day:         NativeItineraryDay;
+  itinerary:   NativeItinerary;
 }
 
 export async function getTodayTripDay(userName = NATIVE_USER): Promise<TodayTripDay | null> {
@@ -775,7 +775,7 @@ export async function getTodayTripDay(userName = NATIVE_USER): Promise<TodayTrip
   for (const plan of plans) {
     if (!plan.itinerary || !plan.start_date) continue;
     const itinerary = plan.itinerary;
-    const nights = plan.nights ?? itinerary.nights ?? 3;
+    const nights = plan.nights ?? 3;
 
     const startDate = new Date(plan.start_date + "T00:00:00");
     for (let i = 0; i <= nights; i++) {
@@ -801,20 +801,32 @@ export async function getTodayTripDay(userName = NATIVE_USER): Promise<TodayTrip
 export function buildTripDayBlock(todayTrip: TodayTripDay): string {
   const { destination, dayNumber, day, itinerary } = todayTrip;
   const totalDays = itinerary.days.length;
+
+  const dinner = day.meals.find((m) => m.time.toLowerCase() === "dinner");
+  const restaurantNote = dinner
+    ? `\nTonight's dinner: ${dinner.title} — ${dinner.description}`
+    : "";
   const hotelNote = day.hotel?.name ? `\nTonight's hotel: ${day.hotel.name}` : "";
-  const restaurantNote = day.restaurant?.name
-    ? `\nTonight's dinner: ${day.restaurant.name} — ${day.restaurant.cuisine}`
+
+  const byTime = (t: string) =>
+    day.activities
+      .filter((a) => a.time.toLowerCase().startsWith(t))
+      .map((a) => a.title)
+      .join(", ") || "—";
+
+  const practicalNotes = itinerary.practicalNotes.length
+    ? itinerary.practicalNotes.slice(0, 3).join("; ")
     : "";
 
   return (
     `\n\n[Trip Day — ${destination}: Day ${dayNumber} of ${totalDays}]\n` +
-    `Today's theme: ${day.title}\n` +
-    `Morning: ${day.morning}\n` +
-    `Afternoon: ${day.afternoon}\n` +
-    `Evening: ${day.evening}\n` +
+    `Today's theme: ${day.label}\n` +
+    `Morning: ${byTime("morning")}\n` +
+    `Afternoon: ${byTime("afternoon")}\n` +
+    `Evening: ${byTime("evening")}\n` +
     `${restaurantNote}${hotelNote}\n` +
-    `Practical notes: ${day.practicalNotes}\n\n` +
-    `Surface this warmly near the start of the briefing — they are on a trip today. ` +
+    (practicalNotes ? `Practical notes: ${practicalNotes}\n` : "") +
+    `\nSurface this warmly near the start of the briefing — they are on a trip today. ` +
     `Give the day a sense of excitement. Reference specific places by name.`
   );
 }

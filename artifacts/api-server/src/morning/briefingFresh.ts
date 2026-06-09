@@ -20,7 +20,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { getProfile } from "../onboarding/onboardingManager.js";
-import { getPeople } from "../people/peopleManager.js";
+import { getPeople, type KeyPerson } from "../people/peopleManager.js";
 import { getCachedWeather } from "../weather/weatherCache.js";
 import { fetchTodayEvents, chicagoDateStr, toChicagoTime } from "../google/calendar.js";
 import { fetchAndSummarizeEmails, type EmailSummary } from "../google/gmail.js";
@@ -313,7 +313,7 @@ export async function generateFreshBriefing(userName: string): Promise<string> {
   const allInterests    = [...new Set([...hobbies, ...musicGenres])].filter(Boolean).slice(0, 10);
 
   // Family-city weather: pull from key_people; extract city from address field
-  const keyPeople = await getPeople(userName).catch(() => []);
+  const keyPeople = await getPeople(userName).catch((): KeyPerson[] => []);
   const people = keyPeople
     .filter((p) => p.address)
     .map((p) => {
