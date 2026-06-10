@@ -1086,6 +1086,10 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   // Dynamic: current time, recent memories, preference blocks — changes each request.
   let systemPrompt = getCurrentDateTimeBlock() + "\n" + memoryBlock + dynamicProfileBlock + prefsBlock;
 
+  if (requestContext === "trip-planning") {
+    systemPrompt += `\n\nYou are acting as a luxury travel concierge. Respond like a knowledgeable, enthusiastic travel expert — share details, mention prices when you have them, describe hotels and experiences with personality. No restrictions on length or format.`;
+  }
+
   let reminderConfirmation = "";
 
   // ── AI intent classification — replaces ~50 NL regex patterns ──────────────
