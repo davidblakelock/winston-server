@@ -2164,16 +2164,15 @@ If dates cannot be resolved to specific days, set them to null.`,
             role: "system",
             content:
               `You are a travel concierge managing a saved trip itinerary. ` +
-              `If the user's message requests a change to the itinerary (swap a hotel, change a restaurant, modify an activity, update dates, etc.), ` +
+              `If the conversation indicates the user wants a change to the itinerary (swap a hotel, change a restaurant, modify an activity, update dates, etc.), ` +
               `apply the change and return the complete updated itinerary as a raw JSON object. ` +
               `Preserve all fields and structure exactly — only change what was asked. ` +
               `When replacing a hotel, clear its bookingUrl, websiteUrl, pricePerNight, available, availabilityChecked, alternativeName, alternativeBookingUrl, and alternativePricePerNight fields. ` +
-              `If the message is a question, a compliment, or anything that does not require changing the itinerary, return exactly: null`,
+              `If the latest message is a question, a compliment, or anything that does not require changing the itinerary, return exactly: null` +
+              `\n\nCurrent itinerary:\n${JSON.stringify(activeTripPlan.itinerary)}`,
           },
-          {
-            role: "user",
-            content: `Current itinerary:\n${JSON.stringify(activeTripPlan.itinerary)}\n\nUser message: ${message}`,
-          },
+          ...history.slice(-12).map((h) => ({ role: h.role as "user" | "assistant", content: h.content })),
+          { role: "user" as const, content: message },
         ],
       });
 
