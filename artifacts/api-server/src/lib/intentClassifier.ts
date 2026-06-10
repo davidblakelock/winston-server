@@ -155,7 +155,7 @@ export async function classifyMessage(
   try {
     const resp = await anthropic.messages.create({
       model:      MODEL_HAIKU,
-      max_tokens: 500,
+      max_tokens: 1500,
       system:
 `You are an intent classifier for a personal AI companion. Return ONE JSON object classifying the user message.
 ALL fields required. Return ONLY valid JSON — no markdown, no commentary. Do not wrap in markdown. Do not use backticks. Return the raw JSON object starting with { directly.
