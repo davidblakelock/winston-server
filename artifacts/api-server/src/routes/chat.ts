@@ -1935,16 +1935,8 @@ If the conversation is not about a trip, set destination to null.`,
     systemPrompt += `\n\n[Trip Planning — Use Trip Screen]\nDavid wants to plan a trip. Do NOT plan, generate, or outline any itinerary here in the main chat. Warmly redirect him to his Trips screen (the suitcase icon at the bottom of the app) where he can plan and save full trips with you. One or two sentences max — friendly and brief.`;
   }
   if (isTripPlanIntent && requestContext === "trip-planning") {
-    // Send SSE headers + a generating heartbeat IMMEDIATELY so the client doesn't
-    // time out during the 30–60 s GPT-4o call. Without this first byte the proxy
-    // and React Native both drop the connection and report "network request failed".
-    if (!res.headersSent) {
-      res.setHeader("Content-Type", "text/event-stream");
-      res.setHeader("Cache-Control", "no-cache");
-      res.setHeader("Connection", "keep-alive");
-      res.setHeader("X-Accel-Buffering", "no");
-      res.write(`data: ${JSON.stringify({ generating: true, text: "✈️ Planning your trip…" })}\n\n`);
-    }
+    // Extend socket timeout so the proxy doesn't drop the connection during the 30–60s generation.
+    req.socket?.setTimeout(120000);
     try {
       req.log.info(
         {
@@ -5864,13 +5856,7 @@ If you cannot extract both, return null.`,
       if (rp2?.url && (rp2.type === "opentable" || rp2.type === "resy" || rp2.type === "yelp") && !navigationUrl) {
         nativeResponseBody.navigationUrl = rp2.url;
       }
-      if (res.headersSent) {
-        // SSE mode — trip-planning heartbeat was already flushed; deliver final payload as SSE event
-        res.write(`data: ${JSON.stringify(nativeResponseBody)}\n\n`);
-        res.end();
-      } else {
-        res.json(nativeResponseBody);
-      }
+      res.json(nativeResponseBody);
 
       // ── Persist messages (fire-and-forget, must not block response) ────────
       const nativeMsgId = randomUUID();
@@ -5915,7 +5901,6 @@ If you cannot extract both, return null.`,
   }
 
   // ── Stream Claude's response via SSE ────────────────────────────────────
-  // Headers may already be sent if trip generation flushed them early above.
   if (!res.headersSent) {
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
