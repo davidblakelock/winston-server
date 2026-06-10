@@ -3164,7 +3164,7 @@ If dates cannot be resolved to specific days, set them to null.`,
             };
             (req as any)._hardcodedResponse =
               `I've found ${details.name}${dateTimeStr ? ` — ${dateTimeStr}` : ""} on ${platformLabel}.${conflictNote} Tap to book.`;
-            req.log.info({ restaurantName: details.name, platform: details.platform, bookingUrl: bookingUrl.substring(0, 80) }, "[R001] Direct booking URL dispatched");
+            req.log.info({ restaurantName: details.name, platform: details.platform, bookingUrl }, "[R001] Direct booking URL dispatched");
           } else {
             // No booking platform — let Claude respond
             if (details?.phone) {
