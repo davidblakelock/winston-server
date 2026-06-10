@@ -389,43 +389,6 @@ export async function findBookingPlatformByWebSearch(
   }
 }
 
-// Fetch the restaurant's own website and scan the HTML for booking links.
-// Many restaurants embed an OpenTable/Resy widget or link on their homepage
-// even when their Google Places "website" URL is their own domain.
-async function scrapeBookingLink(websiteUrl: string): Promise<{
-  platform: ReservationPlatform;
-  slug: string | null;
-  city: string | null;
-}> {
-  try {
-    const res = await fetch(websiteUrl, {
-      signal: AbortSignal.timeout(3000),
-      headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; RestaurantReservationBot/1.0)",
-        Accept: "text/html",
-      },
-    });
-    if (!res.ok) return { platform: "phone", slug: null, city: null };
-    // Read first 50 KB — catches booking links in <head> and early <body> for most sites.
-    // Do not go higher: Wix/Squarespace sites load content lazily at 300KB+, and the
-    // web search fallback handles those cases far more reliably.
-    const reader = res.body?.getReader();
-    if (!reader) return { platform: "phone", slug: null, city: null };
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-    while (total < 50_000) {
-      const { done, value } = await reader.read();
-      if (done || !value) break;
-      chunks.push(value);
-      total += value.byteLength;
-    }
-    reader.cancel().catch(() => {});
-    const html = Buffer.concat(chunks).toString("utf-8");
-    return detectPlatform(html);
-  } catch {
-    return { platform: "phone", slug: null, city: null };
-  }
-}
 
 export function buildReservationUrl(
   details: RestaurantDetails,
@@ -562,28 +525,11 @@ export async function lookupRestaurantDetails(
     const website = place.websiteUri ?? null;
     let { platform, slug, city: platformCity } = detectPlatform(website);
 
-    // Fallback 1: scrape the restaurant's own homepage for embedded booking links.
-    if (platform === "phone" && website) {
-      console.log(`[RestaurantIntel] Scraping ${website} for booking links…`);
-      const scraped = await scrapeBookingLink(website);
-      if (scraped.platform !== "phone") {
-        console.log(`[RestaurantIntel] Found ${scraped.platform} link via website scrape`);
-        platform = scraped.platform;
-        slug = scraped.slug;
-        platformCity = scraped.city;
-      }
-    }
-
-    // Fallback 2: AI web search for OpenTable or Resy listing.
-    // OpenTable blocks all server-side HTTP requests (returns 000/Forbidden).
-    // Resy and many restaurant sites use client-side rendering — their booking
-    // links appear hundreds of KB into the page, well beyond any safe read limit.
+    // Web search for the restaurant's OpenTable, Resy, or Yelp listing.
+    // OpenTable blocks server-side HTTP requests; most restaurant sites use
+    // client-side rendering so scraping the homepage never finds booking links.
     // Anthropic's web_search tool uses real indexed results and reliably finds
-    // the restaurant's OT or Resy listing URL for any restaurant in the US.
-    // NOTE: slugs from web search are prefixed "ws:" — buildReservationUrl treats
-    // them as untrusted and returns null, falling through to the always-valid
-    // platform search URL. The platform value is still used to pick the right
-    // search URL (OpenTable vs Resy).
+    // the correct listing URL directly.
     if (platform === "phone") {
       const restaurantCity = place.formattedAddress
         ? (extractCityFromAddress(place.formattedAddress) ?? city)
