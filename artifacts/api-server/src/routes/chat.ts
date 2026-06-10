@@ -2155,7 +2155,7 @@ If dates cannot be resolved to specific days, set them to null.`,
   // Fires on every trip-screen message that isn't plan/save. GPT-4o decides
   // whether the message requires an itinerary change (returns updated JSON)
   // or is just a question/comment (returns null). Only saves when changed.
-  if (requestContext === "trip-planning" && activeTripPlan?.itinerary && !isTripPlanIntent && !isTripSaveIntent && !isTripPriceQuery && !isHotelAvailabilityQuery) {
+  if (requestContext === "trip-planning" && activeTripPlan?.itinerary && !isTripPlanIntent && !isTripSaveIntent) {
     try {
       req.log.info({ tripId: activeTripPlan.id, message: message.slice(0, 80) }, "[TripModify] Checking with GPT-4o whether itinerary needs updating");
 
