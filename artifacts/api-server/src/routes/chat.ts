@@ -3127,6 +3127,22 @@ If dates cannot be resolved to specific days, set them to null.`,
           const otMetroId   = getOpenTableMetroId(restaurantCity);
           const resyCitySlug = getResyCitySlug(restaurantCity);
 
+          if (requestContext === "trip-planning" && !intent.dateISO && activeTripPlan?.start_date) {
+            const tripDays: Array<{ location?: string }> = (activeTripPlan.itinerary as any)?.days ?? [];
+            const normCity = restaurantCity.split(",")[0].trim().toLowerCase();
+            let dayIdx = tripDays.findIndex((d) =>
+              d.location && (d.location.toLowerCase().includes(normCity) || normCity.includes(d.location.toLowerCase()))
+            );
+            if (dayIdx === -1) dayIdx = 0;
+            if (tripDays.length > 0) {
+              const [yr, mo, dy] = activeTripPlan.start_date.split("-").map(Number);
+              const dateObj = new Date(yr, mo - 1, dy + dayIdx);
+              const dateISO = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, "0")}-${String(dateObj.getDate()).padStart(2, "0")}`;
+              intent = { ...intent, dateISO };
+              req.log.info({ restaurantCity, dayIdx, dateISO }, "[R001] Trip date derived from itinerary");
+            }
+          }
+
           const otBase = intent.dateISO && intent.timeISO
             ? `https://www.opentable.com/s/?covers=${partySize}&dateTime=${intent.dateISO}T${intent.timeISO}:00&term=${searchName}`
             : `https://www.opentable.com/s/?term=${searchName}`;
