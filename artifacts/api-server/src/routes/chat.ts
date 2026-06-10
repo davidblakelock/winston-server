@@ -1811,124 +1811,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   if (isTripSaveIntent && requestContext !== "trip-planning") {
     systemPrompt += `\n\n[Trip Planning — Use Trip Screen]\nDavid wants to save or build a trip itinerary. This must happen in the Trips screen, not here. Warmly tell him to head to his Trips screen (the suitcase icon) where he can plan and save trips with you. Keep it brief — one or two sentences, no bullet points.`;
   }
-  if (isTripSaveIntent && requestContext === "trip-planning") {
-    try {
-      // Build a readable summary of recent conversation for context extraction
-      const recentHistory = history.slice(-12);
-      const historyText = recentHistory
-        .map((h) => `${h.role === "user" ? "User" : "Winston"}: ${h.content.slice(0, 500)}`)
-        .join("\n");
-
-      // Quick Haiku call to extract trip context from conversation
-      const extractionResp = await anthropic.messages.create({
-        model: MODEL_HAIKU,
-        max_tokens: 200,
-        system: `Extract trip planning details from this conversation. Respond ONLY with valid JSON — no explanation, no markdown.
-Format: {"destination":"string or null","nights":number or null,"vibe":"string or null","startDate":"string or null"}
-If the conversation is not about a trip, set destination to null.`,
-        messages: [{ role: "user", content: historyText || `User just said: "${message}"` }],
-      });
-
-      const extractedText = extractionResp.content[0].type === "text"
-        ? extractionResp.content[0].text.trim()
-        : "{}";
-
-      let extracted: { destination?: string | null; nights?: number | null; vibe?: string | null; startDate?: string | null } = {};
-      try {
-        extracted = JSON.parse(extractedText.replace(/^```json\s*/i, "").replace(/```$/i, "").trim());
-      } catch {
-        // Malformed JSON — treat as no trip context
-      }
-
-      // Fallback: if Haiku couldn't extract a destination from (possibly empty) history,
-      // check the in-memory cache for the last trip this user generated.
-      // This covers isolated contexts (e.g. trip-planning screen) that don't write to chat_messages.
-      // NOTE: cached is hoisted here so it is also accessible when building the intent object below.
-      const cached = lastTripIntentByUser.get(sessionUserName);
-      if (!extracted.destination) {
-        if (cached && Date.now() - cached.timestamp < TRIP_INTENT_CACHE_TTL_MS) {
-          req.log.info({ dest: cached.intent.destination, age: Math.round((Date.now() - cached.timestamp) / 1000) }, "[TripPlan] Save intent — using cached trip intent (isolated context, empty history)");
-          extracted.destination = cached.intent.destination;
-          extracted.nights = cached.intent.nights ?? extracted.nights;
-          extracted.vibe = cached.intent.vibe ?? extracted.vibe;
-          extracted.startDate = cached.intent.startDate ?? extracted.startDate;
-        }
-      }
-
-      if (extracted.destination) {
-        // Build intent directly from already-extracted data — no need to call parseTripIntent here
-        // since all fields came from Haiku extraction + the in-memory trip intent cache.
-        const intent: import("../travel/tripPlanningManager.js").ParsedTripIntent = {
-          destination: extracted.destination,
-          nights:      extracted.nights      ?? cached?.intent.nights      ?? 3,
-          vibe:        extracted.vibe        ?? cached?.intent.vibe        ?? undefined,
-          startDate:   extracted.startDate   ?? cached?.intent.startDate   ?? undefined,
-          stops:       cached?.intent.stops,
-          partyDesc:   cached?.intent.partyDesc,
-          partySize:   cached?.intent.partySize,
-          budget:      cached?.intent.budget,
-          mustHaves:   cached?.intent.mustHaves,
-          beenBefore:  undefined,
-          rawMessage:  message,
-        };
-
-        req.log.info(
-          { dest: intent.destination, nights: intent.nights, vibe: intent.vibe },
-          "[TripPlan] Save intent detected — generating itinerary"
-        );
-
-        const itinerary = await generateTripItinerary(
-          intent,
-          userProfile
-        );
-
-        // Enrich each hotel with SerpAPI rates + booking URLs (requires start date)
-        await enrichItineraryWithHotelAvailability(itinerary, intent);
-
-        const savedTripId = await saveTripPlan(sessionUserName, itinerary);
-        (req as any)._tripSaved = { tripSaved: true, tripId: savedTripId, tripName: itinerary.trip_name };
-
-        req.log.info(
-          { dest: itinerary.destination, days: itinerary.itinerary.days.length, tripName: itinerary.trip_name, tripId: savedTripId },
-          "[TripPlan] Itinerary saved to DB"
-        );
-
-        const daysPreview = itinerary.itinerary.days
-          .map((d) => `Day ${d.dayNumber} — ${d.label}: ${d.activities?.[0]?.description ?? d.activities?.[0]?.title ?? d.location}`)
-          .join("; ");
-
-        const saveEnhancements = await generateTripEnhancements(itinerary);
-        const saveEnhancementsBlock = saveEnhancements.length
-          ? `\nNext-step suggestions from trip concierge:\n${saveEnhancements.map((s, i) => `${i + 1}. ${s}`).join("\n")}`
-          : "";
-
-        systemPrompt +=
-          `\n\n[Trip Itinerary Saved — "${itinerary.trip_name}"]\n` +
-          `You just built and saved a day-by-day itinerary called "${itinerary.trip_name}" ` +
-          `(${itinerary.nights} nights in ${itinerary.destination}) to ${sessionUserName}'s travel screen.\n` +
-          `Day previews: ${daysPreview}\n` +
-          `${saveEnhancementsBlock}\n\n` +
-          `TASK: Tell them it's saved — mention the trip name — and give a warm 1-sentence teaser for each day. ` +
-          `Then naturally weave in the 3–4 next-step suggestions above as specific things they should do ` +
-          `before the trip (e.g. "You'll want to grab a table at Galatoire's early — it books out fast"). ` +
-          `Write conversationally, under 280 words, no bullet points.`;
-      } else {
-        req.log.info({ message: message.slice(0, 60) }, "[TripPlan] Save intent matched but no trip context found — letting Claude handle naturally");
-      }
-    } catch (tripErr) {
-      req.log.warn({ err: tripErr }, "[TripPlan] Save intent handler failed — letting Claude respond naturally");
-      systemPrompt +=
-        `\n\n[Trip Itinerary — Generation Error]\n` +
-        `You tried to build an itinerary but hit an error. Apologize briefly and warmly, ` +
-        `say you ran into a hiccup and ask them to try again in a moment.`;
-    }
-  }
-
-  // ── Auto trip-plan generation (no save phrase needed) ────────────────────────
-  // Fires when the user asks "plan me a trip to X" or similar without saying "save".
-  // Extracts destination/nights from the current message via Haiku, generates a full
-  // itinerary via generateTripItinerary, saves to DB, and returns tripSaved:true + tripId
-  // in the JSON response so the native app can refresh its trip list automatically.
+  // ── Trip-plan generation (trip screen only) ──────────────────────────────────
+  // Fires when the user asks "plan me a trip to X". Generates a full itinerary,
+  // saves it to DB immediately, and tells the user it's saved.
   // Guard: trip planning only happens in the Trip screen. Redirect from main chat.
   if (isTripPlanIntent && requestContext !== "trip-planning") {
     systemPrompt += `\n\n[Trip Planning — Use Trip Screen]\nDavid wants to plan a trip. Do NOT plan, generate, or outline any itinerary here in the main chat. Warmly redirect him to his Trips screen (the suitcase icon at the bottom of the app) where he can plan and save full trips with you. One or two sentences max — friendly and brief.`;
@@ -2095,10 +1980,9 @@ If the conversation is not about a trip, set destination to null.`,
           `(${itinerary.nights} nights in ${itinerary.destination}) to ${sessionUserName}'s travel screen.\n` +
           `COMPLETE ITINERARY:\n${newTripDayBlocks.join("\n\n")}\n` +
           `${planEnhancementsBlock}\n\n` +
-          `TASK: Present this trip plan enthusiastically. Mention the trip name. Give a warm 1-sentence ` +
-          `teaser for each day (reference the specific activities above). Then naturally offer the 3–4 ` +
-          `specific next steps above — keep it conversational, like you thought of it yourself. ` +
-          `Tell them it's saved to their travel screen. Write conversationally, under 300 words, no bullet points.`;
+          `TASK: Tell them their trip has been saved to their travel screen — mention the trip name. ` +
+          `Give a warm 1-sentence teaser for each day (reference the specific activities above). ` +
+          `Then ask if there's anything they'd like to change. Write conversationally, under 250 words, no bullet points.`;
       }
     } catch (planErr) {
       process.stdout.write(`[STDOUT] TRIP-PLAN CATCH ERROR: ${String(planErr instanceof Error ? planErr.message : planErr)}\n`);
