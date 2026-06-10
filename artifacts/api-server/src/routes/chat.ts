@@ -1980,9 +1980,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           `(${itinerary.nights} nights in ${itinerary.destination}) to ${sessionUserName}'s travel screen.\n` +
           `COMPLETE ITINERARY:\n${newTripDayBlocks.join("\n\n")}\n` +
           `${planEnhancementsBlock}\n\n` +
-          `TASK: Tell them their trip has been saved to their travel screen — mention the trip name. ` +
-          `Give a warm 1-sentence teaser for each day (reference the specific activities above). ` +
-          `Then ask if there's anything they'd like to change. Write conversationally, under 250 words, no bullet points.`;
+          `You are a luxury travel concierge. The trip above has been saved — respond naturally.`;
       }
     } catch (planErr) {
       process.stdout.write(`[STDOUT] TRIP-PLAN CATCH ERROR: ${String(planErr instanceof Error ? planErr.message : planErr)}\n`);
