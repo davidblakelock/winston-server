@@ -1929,6 +1929,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
         const savedTripId = await saveTripPlan(sessionUserName, itinerary);
         (req as any)._tripSaved = { tripSaved: true, tripId: savedTripId, tripName: itinerary.trip_name };
+        process.stdout.write('[TRIP-SAVE] Setting _tripSaved: ' + JSON.stringify((req as any)._tripSaved) + '\n');
 
         req.log.info(
           { dest: itinerary.destination, days: itinerary.itinerary.days.length, tripName: itinerary.trip_name, tripId: savedTripId },
@@ -5737,6 +5738,7 @@ If you cannot extract both, return null.`,
       if (rp2?.url && (rp2.type === "opentable" || rp2.type === "resy" || rp2.type === "yelp") && !navigationUrl) {
         nativeResponseBody.navigationUrl = rp2.url;
       }
+      process.stdout.write('[NATIVE-RESPONSE] ' + JSON.stringify(nativeResponseBody) + '\n');
       res.json(nativeResponseBody);
 
       // ── Persist messages (fire-and-forget, must not block response) ────────
