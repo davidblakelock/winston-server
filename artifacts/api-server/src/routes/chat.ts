@@ -2221,6 +2221,13 @@ If dates cannot be resolved to specific days, set them to null.`,
         if (jsonMatch) {
           const updatedItinerary = JSON.parse(jsonMatch[0]);
 
+          process.stdout.write('[TripModify] updatedItinerary days (hotel + location): ' +
+            JSON.stringify((updatedItinerary.days ?? []).map((d: any, idx: number) => ({
+              day: idx + 1,
+              hotelName: d?.hotel?.name ?? null,
+              location: d?.location ?? null,
+            }))) + '\n');
+
           // Find days where the hotel name changed and run a targeted SerpAPI search
           // for each, using that day's city and per-night dates.
           const oldDays: any[] = (activeTripPlan.itinerary as any)?.days ?? [];
