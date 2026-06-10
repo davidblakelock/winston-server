@@ -5809,12 +5809,6 @@ If you cannot extract both, return null.`,
       if ((req as any)._smsPayload) hardcodedBody.smsPayload = (req as any)._smsPayload;
       if ((req as any)._reservationPayload) hardcodedBody.reservationPayload = (req as any)._reservationPayload;
       if ((req as any)._tripSaved) Object.assign(hardcodedBody, (req as any)._tripSaved);
-      // Expose the booking URL as navigationUrl so the Android app opens it
-      // using the same mechanism it uses for Google Maps (directions).
-      const rp = (req as any)._reservationPayload as { type?: string; url?: string } | undefined;
-      if (rp?.url && (rp.type === "opentable" || rp.type === "resy" || rp.type === "yelp")) {
-        hardcodedBody.navigationUrl = rp.url;
-      }
       res.json(hardcodedBody);
       return;
     }
@@ -5857,12 +5851,6 @@ If you cannot extract both, return null.`,
       if ((req as any)._reservationPayload) nativeResponseBody.reservationPayload = (req as any)._reservationPayload;
       if ((req as any)._tripSaved) Object.assign(nativeResponseBody, (req as any)._tripSaved);
       if ((req as any)._tripUpdated) Object.assign(nativeResponseBody, (req as any)._tripUpdated);
-      // Expose the booking URL as navigationUrl so the Android app opens it
-      // using the same mechanism it uses for Google Maps (directions).
-      const rp2 = (req as any)._reservationPayload as { type?: string; url?: string } | undefined;
-      if (rp2?.url && (rp2.type === "opentable" || rp2.type === "resy" || rp2.type === "yelp") && !navigationUrl) {
-        nativeResponseBody.navigationUrl = rp2.url;
-      }
       process.stdout.write('[NATIVE-RESPONSE] ' + JSON.stringify(nativeResponseBody) + '\n');
       res.json(nativeResponseBody);
 
