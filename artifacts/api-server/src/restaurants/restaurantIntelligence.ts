@@ -408,6 +408,7 @@ export function buildReservationUrl(
       return dateISO && timeISO ? `${base}&dateTime=${dateISO}T${timeISO}:00` : base;
     }
     if (details.platform === "resy") {
+      console.log(`[buildReservationUrl] Resy ws: slug=${realSlug} city=${details.platformCity} dateISO=${dateISO} timeISO=${timeISO}`);
       const base = details.platformCity
         ? `https://resy.com/cities/${details.platformCity}/${realSlug}?seats=${n}`
         : `https://resy.com/${realSlug}?seats=${n}`;
@@ -448,6 +449,7 @@ export function buildReservationUrl(
     // Skip "ws:" already handled above; skip "ws:"-city combos too
     const city = details.platformCity?.startsWith("ws:") ? null : details.platformCity;
     if (!city) return null;
+    console.log(`[buildReservationUrl] Resy direct — slug=${slug} city=${city} dateISO=${dateISO} timeISO=${timeISO}`);
     const base = `https://resy.com/cities/${city}/${slug}?seats=${n}`;
     if (dateISO && timeISO) return `${base}&date=${dateISO}&time=${timeISO}:00`;
     if (dateISO) return `${base}&date=${dateISO}`;
