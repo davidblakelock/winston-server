@@ -404,8 +404,8 @@ export function buildReservationUrl(
   if (slug?.startsWith("ws:")) {
     const realSlug = slug.slice(3);
     if (details.platform === "opentable") {
-      const base = `https://www.opentable.com/r/${realSlug}?p=${n}`;
-      return dateISO && timeISO ? `${base}&sd=${encodeURIComponent(`${dateISO} ${timeISO}`)}` : base;
+      const base = `https://www.opentable.com/${realSlug}?p=${n}`;
+      return dateISO && timeISO ? `${base}&sd=${dateISO}+${timeISO}` : base;
     }
     if (details.platform === "resy") {
       console.log(`[buildReservationUrl] Resy ws: slug=${realSlug} city=${details.platformCity} dateISO=${dateISO} timeISO=${timeISO}`);
@@ -436,10 +436,9 @@ export function buildReservationUrl(
       // Keep the bare form — adding /r/ can cause 404s for some slug variants.
       base = `https://www.opentable.com/${slug.slice(7)}?p=${n}`;
     } else {
-      // Standard /r/<slug> form confirmed from an actual OpenTable URL.
-      base = `https://www.opentable.com/r/${slug}?p=${n}`;
+      base = `https://www.opentable.com/${slug}?p=${n}`;
     }
-    if (dateISO && timeISO) return `${base}&sd=${encodeURIComponent(`${dateISO} ${timeISO}`)}`;
+    if (dateISO && timeISO) return `${base}&sd=${dateISO}+${timeISO}`;
     return base;
   }
 
