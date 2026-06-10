@@ -158,7 +158,7 @@ export async function classifyMessage(
       max_tokens: 500,
       system:
 `You are an intent classifier for a personal AI companion. Return ONE JSON object classifying the user message.
-ALL fields required. Return ONLY valid JSON — no markdown, no commentary.
+ALL fields required. Return ONLY valid JSON — no markdown, no commentary. Do not wrap in markdown. Do not use backticks. Return the raw JSON object starting with { directly.
 
 PRIORITY RULES (apply first):
 1. morning_greeting=true → set ALL other fields false/null/0.
@@ -244,7 +244,8 @@ reservation_cal_add: user wants to add a restaurant reservation to their calenda
 
     const raw = resp.content[0]?.type === "text" ? resp.content[0].text.trim() : "{}";
     process.stdout.write(`[CLASSIFIER] raw Anthropic response: ${raw}\n`);
-    const m   = raw.match(/\{[\s\S]*\}/);
+    const stripped = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+    const m   = stripped.match(/\{[\s\S]*\}/);
     if (!m) {
       process.stdout.write(`[CLASSIFIER] ERROR — no JSON found in response, using SAFE_DEFAULT. raw="${raw}"\n`);
       return SAFE_DEFAULT;
