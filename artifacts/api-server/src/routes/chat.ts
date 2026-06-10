@@ -177,10 +177,6 @@ import {
   setPendingReservation,
   clearPendingReservation,
   chicagoDateStr,
-  extractCityFromAddress,
-  getOpenTableMetroId,
-  getResyCitySlug,
-  findBookingPlatformByWebSearch,
   getPendingBookingConfirmation,
   clearPendingBookingConfirmation,
   getLastBookingAttempt,
@@ -3110,11 +3106,8 @@ If dates cannot be resolved to specific days, set them to null.`,
           systemPrompt += `\n\n[Restaurant Info Request — ${intent.restaurantName}] The user wants info about this restaurant${city ? ` in ${city}` : ""}. Answer from your knowledge.`;
 
         } else {
-          // Reservation — build search URLs directly from name, city, date, time, party size
+          // Reservation — look up direct booking URL via Places cache then live fetch
           const partySize = intent.partySize ?? 2;
-          const searchName = encodeURIComponent(intent.restaurantName);
-          const otMetroId = getOpenTableMetroId(city ?? "");
-          const resyCitySlug = getResyCitySlug(city ?? "");
 
           if (requestContext === "trip-planning" && !intent.dateISO && activeTripPlan?.start_date) {
             const tripDays: Array<{ location?: string }> = (activeTripPlan.itinerary as any)?.days ?? [];
@@ -3132,21 +3125,21 @@ If dates cannot be resolved to specific days, set them to null.`,
             }
           }
 
-          const otBase = intent.dateISO && intent.timeISO
-            ? `https://www.opentable.com/s/?covers=${partySize}&dateTime=${intent.dateISO}T${intent.timeISO}:00&term=${searchName}`
-            : `https://www.opentable.com/s/?covers=${partySize}&term=${searchName}`;
-          const openTableUrl = otMetroId ? `${otBase}&metroId=${otMetroId}` : otBase;
+          // 1) Cache check
+          let details = await getCachedRestaurantDetails(sessionUserName, intent.restaurantName);
+          if (details) {
+            req.log.info({ restaurantName: intent.restaurantName, platform: details.platform }, "[R001] Cache hit");
+          } else {
+            // 2) Places lookup → detectPlatform → web search
+            details = await lookupRestaurantDetails(intent.restaurantName, city ?? "");
+            if (details) {
+              await cacheRestaurantDetails(sessionUserName, intent.restaurantName, details).catch(() => {});
+              req.log.info({ restaurantName: intent.restaurantName, platform: details.platform }, "[R001] Places lookup complete");
+            }
+          }
 
-          const resyBase = resyCitySlug
-            ? `https://resy.com/cities/${resyCitySlug}?query=${searchName}&seats=${partySize}`
-            : `https://resy.com/?query=${searchName}&seats=${partySize}`;
-          const resyUrl = intent.dateISO && intent.timeISO
-            ? `${resyBase}&date=${intent.dateISO}&time=${intent.timeISO}:00`
-            : intent.dateISO ? `${resyBase}&date=${intent.dateISO}` : resyBase;
-
-          const yelpUrl = city
-            ? `https://www.yelp.com/search?find_desc=${searchName}&find_loc=${encodeURIComponent(city)}`
-            : `https://www.yelp.com/search?find_desc=${searchName}`;
+          // 3) Build direct booking URL
+          const bookingUrl = details ? buildReservationUrl(details, intent.dateISO, intent.timeISO, partySize) : null;
 
           const conflict = intent.dateISO && intent.timeISO
             ? await checkCalendarConflict(sessionUserName, intent.dateISO, intent.timeISO).catch(() => null)
@@ -3159,17 +3152,28 @@ If dates cannot be resolved to specific days, set them to null.`,
             `for ${partySize}`,
           ].filter(Boolean).join(" ");
 
-          (req as any)._reservationPayload = {
-            type: "search",
-            restaurantName: intent.restaurantName,
-            openTableUrl,
-            resyUrl,
-            yelpUrl,
-          };
-          (req as any)._hardcodedResponse =
-            `I've pulled up ${intent.restaurantName}${dateTimeStr ? ` — ${dateTimeStr}` : ""} on OpenTable, Resy, and Yelp.${conflictNote} Pick whichever works for you.`;
-
-          req.log.info({ restaurantName: intent.restaurantName, city, hasDate: !!intent.dateISO }, "[R001] Search URLs dispatched");
+          if (bookingUrl && details && details.platform !== "phone") {
+            // 4) Direct link found — send it
+            const platformLabel = details.platform === "opentable" ? "OpenTable" : details.platform === "resy" ? "Resy" : "Yelp";
+            (req as any)._reservationPayload = {
+              type: details.platform,
+              restaurantName: details.name,
+              openTableUrl: details.platform === "opentable" ? bookingUrl : undefined,
+              resyUrl: details.platform === "resy" ? bookingUrl : undefined,
+              yelpUrl: details.platform === "yelp" ? bookingUrl : undefined,
+            };
+            (req as any)._hardcodedResponse =
+              `I've found ${details.name}${dateTimeStr ? ` — ${dateTimeStr}` : ""} on ${platformLabel}.${conflictNote} Tap to book.`;
+            req.log.info({ restaurantName: details.name, platform: details.platform, bookingUrl: bookingUrl.substring(0, 80) }, "[R001] Direct booking URL dispatched");
+          } else {
+            // No booking platform — let Claude respond
+            if (details?.phone) {
+              systemPrompt += `\n\n[Restaurant Reservation — Phone Only] ${details.name} is not on OpenTable, Resy, or Yelp. Their phone number is ${details.phone}. Tell the user to call to make a reservation.`;
+            } else {
+              systemPrompt += `\n\n[Restaurant Reservation — Not Found] Could not find ${intent.restaurantName}${city ? ` in ${city}` : ""} on OpenTable, Resy, or Yelp. Let the user know and suggest they search directly.`;
+            }
+            req.log.info({ restaurantName: intent.restaurantName, hasPhone: !!details?.phone }, "[R001] No booking platform — falling through to Claude");
+          }
         }
       }
     } catch (err) {
