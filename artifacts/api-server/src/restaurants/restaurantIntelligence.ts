@@ -404,17 +404,15 @@ export function buildReservationUrl(
   if (slug?.startsWith("ws:")) {
     const realSlug = slug.slice(3);
     if (details.platform === "opentable") {
-      const base = `https://www.opentable.com/r/${realSlug}?covers=${n}`;
-      return dateISO && timeISO ? `${base}&dateTime=${dateISO}T${timeISO}:00` : base;
+      const base = `https://www.opentable.com/r/${realSlug}?p=${n}`;
+      return dateISO && timeISO ? `${base}&sd=${encodeURIComponent(`${dateISO} ${timeISO}`)}` : base;
     }
     if (details.platform === "resy") {
       console.log(`[buildReservationUrl] Resy ws: slug=${realSlug} city=${details.platformCity} dateISO=${dateISO} timeISO=${timeISO}`);
       const base = details.platformCity
-        ? `https://resy.com/cities/${details.platformCity}/${realSlug}?seats=${n}`
-        : `https://resy.com/${realSlug}?seats=${n}`;
-      if (dateISO && timeISO) return `${base}&date=${dateISO}&time=${timeISO}:00`;
-      if (dateISO) return `${base}&date=${dateISO}`;
-      return base;
+        ? `https://resy.com/cities/${details.platformCity}/venues/${realSlug}?seats=${n}`
+        : `https://resy.com/venues/${realSlug}?seats=${n}`;
+      return dateISO ? `${base}&date=${dateISO}` : base;
     }
     if (details.platform === "yelp") {
       const yelpType = details.platformCity;
@@ -432,16 +430,16 @@ export function buildReservationUrl(
   if (details.platform === "opentable" && slug) {
     let base: string;
     if (slug.startsWith("restaurant/profile/")) {
-      base = `https://www.opentable.com/${slug}?covers=${n}`;
+      base = `https://www.opentable.com/${slug}?p=${n}`;
     } else if (slug.startsWith("direct:")) {
       // Bare slug (opentable.com/<slug>) detected in Google Places website field.
       // Keep the bare form — adding /r/ can cause 404s for some slug variants.
-      base = `https://www.opentable.com/${slug.slice(7)}?covers=${n}`;
+      base = `https://www.opentable.com/${slug.slice(7)}?p=${n}`;
     } else {
       // Standard /r/<slug> form confirmed from an actual OpenTable URL.
-      base = `https://www.opentable.com/r/${slug}?covers=${n}`;
+      base = `https://www.opentable.com/r/${slug}?p=${n}`;
     }
-    if (dateISO && timeISO) return `${base}&dateTime=${dateISO}T${timeISO}:00`;
+    if (dateISO && timeISO) return `${base}&sd=${encodeURIComponent(`${dateISO} ${timeISO}`)}`;
     return base;
   }
 
@@ -450,10 +448,8 @@ export function buildReservationUrl(
     const city = details.platformCity?.startsWith("ws:") ? null : details.platformCity;
     if (!city) return null;
     console.log(`[buildReservationUrl] Resy direct — slug=${slug} city=${city} dateISO=${dateISO} timeISO=${timeISO}`);
-    const base = `https://resy.com/cities/${city}/${slug}?seats=${n}`;
-    if (dateISO && timeISO) return `${base}&date=${dateISO}&time=${timeISO}:00`;
-    if (dateISO) return `${base}&date=${dateISO}`;
-    return base;
+    const base = `https://resy.com/cities/${city}/venues/${slug}?seats=${n}`;
+    return dateISO ? `${base}&date=${dateISO}` : base;
   }
 
   if (details.platform === "yelp" && slug) {
