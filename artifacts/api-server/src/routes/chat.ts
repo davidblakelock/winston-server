@@ -2155,75 +2155,43 @@ If dates cannot be resolved to specific days, set them to null.`,
   // the swap succeeded so it can confirm naturally.
   if (isHotelSwapIntent && activeTripPlan?.itinerary) {
     try {
-      const swapExtractResp = await anthropic.messages.create({
-        model: MODEL_HAIKU,
-        max_tokens: 150,
-        system: `Extract the hotel swap details from this message. Respond ONLY with valid JSON — no explanation, no markdown.
-Format: {"dayNumber": number or null, "newHotelName": "string or null"}
-dayNumber: which day of the itinerary the user wants to change (1-indexed). null if not specified.
-newHotelName: the name of the hotel the user wants to use instead. null if not specified.`,
-        messages: [{ role: "user", content: message }],
+      req.log.info({ tripId: activeTripPlan.id, message: message.slice(0, 80) }, "[TripModify] Modification intent — sending full itinerary to GPT-4o");
+
+      const modifyResp = await openai.chat.completions.create({
+        model: MODEL_GPT4O_TRIP,
+        max_tokens: 8000,
+        messages: [
+          {
+            role: "system",
+            content:
+              `You are updating a travel itinerary based on the user's request. ` +
+              `Apply the requested change and return the complete updated itinerary as raw JSON. ` +
+              `Preserve all fields and structure exactly — only change what was asked. ` +
+              `When replacing a hotel, clear its bookingUrl, websiteUrl, pricePerNight, available, availabilityChecked, alternativeName, alternativeBookingUrl, and alternativePricePerNight fields. ` +
+              `Return ONLY the JSON object — no markdown, no explanation.`,
+          },
+          {
+            role: "user",
+            content: `Current itinerary:\n${JSON.stringify(activeTripPlan.itinerary)}\n\nModification request: ${message}`,
+          },
+        ],
       });
 
-      const swapText = swapExtractResp.content[0].type === "text"
-        ? swapExtractResp.content[0].text.replace(/^```json\s*/i, "").replace(/```$/i, "").trim()
-        : "{}";
+      const raw = modifyResp.choices[0]?.message?.content ?? "";
+      const stripped = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+      const jsonMatch = stripped.match(/\{[\s\S]*\}/);
 
-      let swapParams: { dayNumber?: number | null; newHotelName?: string | null } = {};
-      try { swapParams = JSON.parse(swapText); } catch { /* ignore */ }
-
-      req.log.info({ swapParams, tripId: activeTripPlan.id }, "[HotelSwap] Extracted swap params");
-
-      type SwapItinDay = { dayNumber?: number; hotel?: { name?: string; bookingUrl?: string; websiteUrl?: string; pricePerNight?: string; available?: boolean; availabilityChecked?: boolean; alternativeName?: string; alternativeBookingUrl?: string; alternativePricePerNight?: string } };
-      const swapDays: SwapItinDay[] = (activeTripPlan.itinerary as { days?: SwapItinDay[] }).days ?? [];
-
-      if (swapParams.newHotelName && swapDays.length > 0) {
-        // Find target day — if no day specified, apply to day 1 (or first day with a hotel)
-        const targetDayNum = swapParams.dayNumber ?? 1;
-        const targetDay = swapDays.find(d => d.dayNumber === targetDayNum) ?? swapDays[0];
-
-        if (targetDay?.hotel) {
-          const oldHotelName = targetDay.hotel.name ?? "the hotel";
-          targetDay.hotel.name = swapParams.newHotelName;
-          // Clear stale pricing / availability — will be re-enriched on next enrich call
-          targetDay.hotel.bookingUrl = undefined;
-          targetDay.hotel.websiteUrl = undefined;
-          targetDay.hotel.pricePerNight = undefined;
-          targetDay.hotel.available = undefined;
-          targetDay.hotel.availabilityChecked = false;
-          targetDay.hotel.alternativeName = undefined;
-          targetDay.hotel.alternativeBookingUrl = undefined;
-          targetDay.hotel.alternativePricePerNight = undefined;
-
-          // Persist the updated itinerary
-          await updateTripPlan(activeTripPlan.id, sessionUserName, {
-            itinerary: activeTripPlan.itinerary as never,
-          });
-
-          (req as any)._tripUpdated = { tripUpdated: true, tripId: activeTripPlan.id };
-
-          systemPrompt +=
-            `\n\n[Hotel Swap — Confirmed]\n` +
-            `You just updated Day ${targetDayNum} of "${activeTripPlan.trip_name ?? activeTripPlan.destination}": ` +
-            `swapped "${oldHotelName}" for "${swapParams.newHotelName}" and saved the change to the itinerary.\n` +
-            `Tell David the swap is done — mention both hotel names briefly — and note that ` +
-            `booking links and pricing for ${swapParams.newHotelName} will refresh on the next enrich. ` +
-            `Keep it warm and brief (2 sentences max).`;
-
-          req.log.info(
-            { tripId: activeTripPlan.id, day: targetDayNum, oldHotel: oldHotelName, newHotel: swapParams.newHotelName },
-            "[HotelSwap] Hotel swapped and saved to DB"
-          );
-        }
+      if (jsonMatch) {
+        const updatedItinerary = JSON.parse(jsonMatch[0]);
+        await updateTripPlan(activeTripPlan.id, sessionUserName, { itinerary: updatedItinerary as never });
+        (req as any)._tripUpdated = { tripUpdated: true, tripId: activeTripPlan.id };
+        systemPrompt += `\n\n[Trip Modified & Saved — "${activeTripPlan.trip_name ?? activeTripPlan.destination}"]\nYou just applied the user's modification to the itinerary and saved it. Confirm the change naturally.`;
+        req.log.info({ tripId: activeTripPlan.id }, "[TripModify] Itinerary updated and saved");
       } else {
-        // Couldn't extract enough info — ask Claude to clarify
-        systemPrompt +=
-          `\n\n[Hotel Swap — Needs Clarification]\n` +
-          `David wants to swap a hotel but I couldn't determine ${!swapParams.dayNumber ? "which day" : "the new hotel name"}. ` +
-          `Ask him to clarify ${!swapParams.dayNumber ? "which day of the trip" : "what hotel he'd like to use instead"}.`;
+        req.log.warn({ raw: raw.slice(0, 200) }, "[TripModify] GPT-4o returned no valid JSON — skipping update");
       }
-    } catch (swapErr) {
-      req.log.warn({ err: swapErr }, "[HotelSwap] Swap failed — letting Claude respond naturally");
+    } catch (modifyErr) {
+      req.log.warn({ err: modifyErr }, "[TripModify] Modification failed — letting Claude respond naturally");
     }
   }
 
