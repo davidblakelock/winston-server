@@ -404,9 +404,9 @@ export function buildReservationUrl(
   if (slug?.startsWith("ws:")) {
     const realSlug = slug.slice(3);
     if (details.platform === "opentable") {
-      const cleanSlug = realSlug.startsWith("direct:") ? realSlug.slice(7) : realSlug;
-      const base = `https://www.opentable.com/${cleanSlug}?p=${n}`;
-      return dateISO && timeISO ? `${base}&sd=${dateISO}+${timeISO}` : base;
+      const term = encodeURIComponent(details.name);
+      const base = `https://www.opentable.com/s/?covers=${n}&term=${term}`;
+      return dateISO && timeISO ? `${base}&dateTime=${dateISO}T${timeISO}:00` : base;
     }
     if (details.platform === "resy") {
       console.log(`[buildReservationUrl] Resy ws: slug=${realSlug} city=${details.platformCity} dateISO=${dateISO} timeISO=${timeISO}`);
@@ -428,18 +428,10 @@ export function buildReservationUrl(
     return null;
   }
 
-  if (details.platform === "opentable" && slug) {
-    let base: string;
-    if (slug.startsWith("restaurant/profile/")) {
-      base = `https://www.opentable.com/${slug}?p=${n}`;
-    } else if (slug.startsWith("direct:")) {
-      // Bare slug (opentable.com/<slug>) detected in Google Places website field.
-      // Keep the bare form — adding /r/ can cause 404s for some slug variants.
-      base = `https://www.opentable.com/${slug.slice(7)}?p=${n}`;
-    } else {
-      base = `https://www.opentable.com/${slug}?p=${n}`;
-    }
-    if (dateISO && timeISO) return `${base}&sd=${dateISO}+${timeISO}`;
+  if (details.platform === "opentable") {
+    const term = encodeURIComponent(details.name);
+    const base = `https://www.opentable.com/s/?covers=${n}&term=${term}`;
+    if (dateISO && timeISO) return `${base}&dateTime=${dateISO}T${timeISO}:00`;
     return base;
   }
 
