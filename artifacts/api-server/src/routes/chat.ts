@@ -3238,6 +3238,157 @@ If dates cannot be resolved to specific days, set them to null.`,
     }
   }
 
+  // ── Trip-planning reservation: extract restaurant from conversation history ──
+  // Fires when requestContext=trip-planning and the message is about booking /
+  // reserving / getting a table but cls.restaurant_intel was false (no restaurant
+  // name in the current message). Pulls the name from recent history, then runs
+  // the full R001 reservation flow with the trip destination as the city.
+  if (
+    requestContext === "trip-planning" &&
+    activeTripPlan &&
+    !isRestaurantIntelRequest &&
+    !(req as any)._hardcodedResponse &&
+    /\b(reserv(?:ation|e|ing|ed)?|book(?:ing|ed)?|get (?:a )?table|get (?:us )?in|make (?:a )?(?:dinner )?reserv)\b/i.test(message)
+  ) {
+    try {
+      const tripDest = activeTripPlan.destination;
+      const todayISO = chicagoDateStr();
+
+      // Extract restaurant name from recent history — current message has no name
+      const nameResp = await anthropic.messages.create({
+        model: MODEL_HAIKU,
+        max_tokens: 100,
+        system:
+          `The user is on a trip planning screen for a trip to ${tripDest}. ` +
+          `Look at this conversation and find the restaurant they want to make a reservation at. ` +
+          `Return ONLY the restaurant name as plain text, or the word null if no restaurant is mentioned.`,
+        messages: [
+          ...history.slice(-8).map((h) => ({ role: h.role as "user" | "assistant", content: h.content })),
+          { role: "user", content: message },
+        ],
+      });
+
+      const extractedName = nameResp.content[0]?.type === "text" ? nameResp.content[0].text.trim() : "";
+      if (!extractedName || extractedName.toLowerCase() === "null") {
+        req.log.info({ tripId: activeTripPlan.id }, "[TripRsvp] No restaurant name found in history — skipping");
+      } else {
+        req.log.info({ restaurant: extractedName, city: tripDest }, "[TripRsvp] Restaurant extracted from history — running lookup");
+
+        // Parse date / time / party size from the current message
+        const parsedIntent = await parseReservationIntent(message, todayISO);
+        const dateISO   = parsedIntent?.dateISO   ?? null;
+        const timeISO   = parsedIntent?.timeISO   ?? null;
+        const dateLabel = parsedIntent?.dateLabel ?? null;
+        const timeLabel = parsedIntent?.timeLabel ?? null;
+        const partySize = parsedIntent?.partySize ?? 2;
+
+        // Places lookup — cache-first, trip city
+        let details = await getCachedRestaurantDetails(sessionUserName, extractedName);
+        if (!details) {
+          details = await lookupRestaurantDetails(extractedName, tripDest);
+          if (details) {
+            cacheRestaurantDetails(sessionUserName, extractedName, details).catch(() => {});
+          }
+        }
+        req.log.info({ found: !!details, platform: details?.platform }, "[TripRsvp] Places lookup complete");
+
+        const searchName      = encodeURIComponent(extractedName);
+        const restaurantCity  = details?.formattedAddress
+          ? (extractCityFromAddress(details.formattedAddress) ?? tripDest)
+          : tripDest;
+        const otMetroId       = getOpenTableMetroId(restaurantCity);
+        const resyCitySlug    = getResyCitySlug(restaurantCity);
+
+        const otBase           = dateISO && timeISO
+          ? `https://www.opentable.com/s/?covers=${partySize}&dateTime=${dateISO}T${timeISO}:00&term=${searchName}`
+          : `https://www.opentable.com/s/?term=${searchName}`;
+        const openTableSearchUrl = otMetroId ? `${otBase}&metroId=${otMetroId}` : otBase;
+        const resySearchUrl      = resyCitySlug
+          ? `https://resy.com/cities/${resyCitySlug}?query=${searchName}`
+          : `https://resy.com/?query=${searchName}`;
+        const yelpSearchUrl      = `https://www.yelp.com/search?find_desc=${searchName}&find_loc=${encodeURIComponent(restaurantCity)}`;
+
+        const conflict     = dateISO && timeISO
+          ? await checkCalendarConflict(sessionUserName, dateISO, timeISO).catch(() => null)
+          : null;
+        const conflictNote = conflict ? ` Heads up — you've got a possible conflict: ${conflict}.` : "";
+
+        if (details) {
+          const reservationUrl = buildReservationUrl(details, dateISO, timeISO, partySize);
+
+          if (reservationUrl) {
+            const platformLabel = details.platform === "opentable" ? "OpenTable"
+              : details.platform === "resy" ? "Resy"
+              : details.platform === "yelp" ? "Yelp"
+              : "the booking page";
+            const dateTimeStr = [dateLabel, timeLabel ? `at ${timeLabel}` : null, `for ${partySize}`]
+              .filter(Boolean).join(" ");
+
+            (req as any)._reservationPayload = {
+              type: details.platform,
+              url: reservationUrl,
+              restaurantName: details.name,
+              phone: details.phone ?? null,
+              ...(details.platform === "opentable" ? { openTableUrl: reservationUrl } : {}),
+              ...(details.platform === "resy"      ? { resyUrl: reservationUrl }      : {}),
+              ...(details.platform === "yelp"      ? { openTableUrl: reservationUrl } : {}),
+            };
+            (req as any)._hardcodedResponse =
+              `I've opened ${details.name} on ${platformLabel}${dateTimeStr ? ` — ${dateTimeStr}` : ""}.${conflictNote} ` +
+              `Go ahead and book — I'll catch the confirmation email and let you know once it's in.`;
+            req.log.info({ restaurant: details.name, platform: details.platform, url: reservationUrl }, "[TripRsvp] Booking link opened");
+
+          } else if (details.phone) {
+            const telUri = `tel:${details.phone.replace(/[^\d+]/g, "")}`;
+            (req as any)._reservationPayload = {
+              type: "phone",
+              url: telUri,
+              restaurantName: details.name,
+              phone: details.phone,
+              openTableUrl: openTableSearchUrl,
+              resyUrl: resySearchUrl,
+              yelpUrl: yelpSearchUrl,
+            };
+            const searchOpened = openTableSearchUrl ? "OpenTable" : resySearchUrl ? "Resy" : null;
+            (req as any)._hardcodedResponse = searchOpened
+              ? `I've opened ${searchOpened} so you can find and book ${details.name} — the number is ${details.phone} if you'd prefer to call.${conflictNote}`
+              : `${details.name} takes reservations by phone at ${details.phone}.${conflictNote}`;
+
+          } else {
+            const isResy       = details.platform === "resy";
+            const isYelp       = details.platform === "yelp";
+            const primaryUrl   = isResy ? resySearchUrl : isYelp ? yelpSearchUrl : openTableSearchUrl;
+            const platformLabel = isResy ? "Resy" : isYelp ? "Yelp" : "OpenTable";
+            (req as any)._reservationPayload = {
+              type: "search",
+              restaurantName: details.name,
+              ...(isResy  ? { resyUrl: primaryUrl }      : {}),
+              ...(isYelp  ? { openTableUrl: primaryUrl } : {}),
+              ...(!isResy && !isYelp ? { openTableUrl: primaryUrl } : {}),
+              yelpUrl: yelpSearchUrl,
+            };
+            (req as any)._hardcodedResponse =
+              `I've opened ${details.name} on ${platformLabel} — I don't have a direct booking link right now, but you can search and book from there.${conflictNote}`;
+          }
+
+        } else {
+          (req as any)._reservationPayload = {
+            type: "search",
+            restaurantName: extractedName,
+            openTableUrl: openTableSearchUrl,
+            resyUrl: resySearchUrl,
+            yelpUrl: yelpSearchUrl,
+          };
+          (req as any)._hardcodedResponse =
+            `I couldn't find ${extractedName} in my directory right now.${conflictNote} I've pulled up OpenTable, Resy, and Yelp search results for you.`;
+          req.log.info({ restaurant: extractedName }, "[TripRsvp] No Places result — search fallback");
+        }
+      }
+    } catch (tripRsvpErr) {
+      req.log.warn({ err: tripRsvpErr }, "[TripRsvp] Trip reservation flow failed — falling through to GPT-4o");
+    }
+  }
+
   // ── R001-CONFIRM: User wants to add a confirmed reservation to calendar ───────
   // Triggered when user says "add it to my calendar" / "yes add it" / etc.
   // after receiving the push notification from the email scanner.
