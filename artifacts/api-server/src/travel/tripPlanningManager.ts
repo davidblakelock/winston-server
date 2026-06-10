@@ -568,6 +568,10 @@ export async function enrichItineraryWithHotelAvailability(
       day.hotel.pricePerNight = result.pricePerNight
         ? (hasRealDates ? result.pricePerNight : `~${result.pricePerNight}`)
         : undefined;
+      if (result.pricePerNight) {
+        const rateLabel = hasRealDates ? result.pricePerNight : `~${result.pricePerNight}`;
+        day.hotel.notes = `${rateLabel}/night`;
+      }
       logger.info(
         { hotel: name, city, price: day.hotel.pricePerNight, bookingUrl: result.bookingUrl.substring(0, 60), hasRealDates },
         "[HotelAvail] ✓ SerpAPI — rate and booking URL populated",
