@@ -243,7 +243,7 @@ reservation_cal_add: user wants to add a restaurant reservation to their calenda
     });
 
     const raw = resp.content[0]?.type === "text" ? resp.content[0].text.trim() : "{}";
-    process.stdout.write(`[CLASSIFIER] raw Anthropic response: ${raw}\n`);
+    process.stdout.write(`[CLASSIFIER] raw Anthropic response: ${JSON.stringify(raw)}\n`);
     const stripped = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
     const m   = stripped.match(/\{[\s\S]*\}/);
     if (!m) {
