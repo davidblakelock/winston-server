@@ -436,26 +436,31 @@ export function buildReservationUrl(
   const n = partySize ?? 2;
   const slug = details.platformSlug;
 
-  // Slugs prefixed with "ws:" were found via AI web search — the slug itself
-  // may be wrong, but we know the platform and can build a pre-filled search URL
-  // with date/time/party so the user lands on a populated search page.
+  // Slugs prefixed with "ws:" were found via AI web search. Strip the prefix
+  // and build a direct booking URL — the web search slug is correct.
   if (slug?.startsWith("ws:")) {
-    const q = encodeURIComponent(details.name);
+    const realSlug = slug.slice(3);
     if (details.platform === "opentable") {
-      const base = `https://www.opentable.com/s/?covers=${n}&term=${q}`;
+      const base = `https://www.opentable.com/r/${realSlug}?covers=${n}`;
       return dateISO && timeISO ? `${base}&dateTime=${dateISO}T${timeISO}:00` : base;
     }
     if (details.platform === "resy") {
-      const wsCity = details.platformCity?.startsWith("ws:") ? null : details.platformCity;
-      const base = wsCity
-        ? `https://resy.com/cities/${wsCity}?query=${q}&seats=${n}`
-        : `https://resy.com/?query=${q}&seats=${n}`;
+      const base = details.platformCity
+        ? `https://resy.com/cities/${details.platformCity}/${realSlug}?seats=${n}`
+        : `https://resy.com/${realSlug}?seats=${n}`;
       if (dateISO && timeISO) return `${base}&date=${dateISO}&time=${timeISO}:00`;
       if (dateISO) return `${base}&date=${dateISO}`;
       return base;
     }
     if (details.platform === "yelp") {
-      return `https://www.yelp.com/search?find_desc=${q}`;
+      const yelpType = details.platformCity;
+      const path = yelpType === "waitlist" ? "waitlist" : "reservations";
+      const params = new URLSearchParams({ covers: String(n) });
+      if (yelpType !== "waitlist") {
+        if (dateISO) params.set("date", dateISO);
+        if (timeISO) params.set("time", timeISO);
+      }
+      return `https://www.yelp.com/${path}/${realSlug}?${params.toString()}`;
     }
     return null;
   }
