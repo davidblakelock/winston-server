@@ -3050,9 +3050,25 @@ If dates cannot be resolved to specific days, set them to null.`,
     // A new request always resets any stale pending state.
     if (pendingReservation) clearPendingReservation();
     clearPendingBookingConfirmation();
-    const city = (requestContext === "trip-planning" && activeTripPlan?.destination)
-      ? activeTripPlan.destination
-      : userProfile?.city;
+    const bodyLat = typeof (req.body as any).lat === "number" ? (req.body as any).lat as number : null;
+    const bodyLng = typeof (req.body as any).lng === "number" ? (req.body as any).lng as number : null;
+    let city: string | undefined;
+    if (bodyLat !== null && bodyLng !== null) {
+      try {
+        const geoRes = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?lat=${bodyLat}&lon=${bodyLng}&format=json`,
+          { headers: { "User-Agent": "WinstonCompanion/1.0" }, signal: AbortSignal.timeout(5000) }
+        );
+        const geoData = await geoRes.json() as { address?: { city?: string; town?: string; village?: string; county?: string } };
+        city = geoData.address?.city ?? geoData.address?.town ?? geoData.address?.village ?? geoData.address?.county;
+        if (city) req.log.info({ lat: bodyLat, lng: bodyLng, city }, "[R001] City from GPS");
+      } catch { /* fall through to next priority */ }
+    }
+    if (!city && requestContext === "trip-planning" && activeTripPlan?.destination) {
+      city = activeTripPlan.destination;
+    }
+    if (!city) city = userProfile?.city;
+    const needsCityFromUser = !city;
     const todayISO = chicagoDateStr();
 
     try {
@@ -3077,8 +3093,11 @@ If dates cannot be resolved to specific days, set them to null.`,
         }
       }
 
-      if (intent) {
-        req.log.info({ restaurantName: intent.restaurantName, action: intent.action }, "[R001] Intent parsed");
+      if (intent && needsCityFromUser) {
+        systemPrompt += `\n\n[Restaurant Reservation — Location Unavailable] The user wants a reservation at ${intent.restaurantName} but their city is unknown. Ask them what city they are in before you can look up the restaurant.`;
+        req.log.info({ restaurantName: intent.restaurantName }, "[R001] No city available — asking user");
+      } else if (intent) {
+        req.log.info({ restaurantName: intent.restaurantName, action: intent.action, city }, "[R001] Intent parsed");
 
         // Cache-first Places lookup
         let details = await getCachedRestaurantDetails(sessionUserName, intent.restaurantName);
