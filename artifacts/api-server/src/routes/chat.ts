@@ -2202,6 +2202,7 @@ If dates cannot be resolved to specific days, set them to null.`,
           const tripCheckIn = parseToISODate(activeTripPlan.start_date ?? undefined);
           const baseDate = tripCheckIn ?? (() => { const d = new Date(); d.setDate(d.getDate() + 30); return d.toISOString().slice(0, 10); })();
           const hasRealDates = !!tripCheckIn;
+          const swapLines: string[] = [];
 
           for (let i = 0; i < newDays.length; i++) {
             const newDay = newDays[i];
@@ -2225,6 +2226,9 @@ If dates cannot be resolved to specific days, set them to null.`,
                   const label = hasRealDates ? result.pricePerNight : `~${result.pricePerNight}`;
                   newDay.hotel.pricePerNight = label;
                   newDay.hotel.notes         = `${label}/night`;
+                  swapLines.push(`Day ${i + 1}: ${oldName ?? "previous hotel"} → ${newName} | ${label}/night`);
+                } else {
+                  swapLines.push(`Day ${i + 1}: ${oldName ?? "previous hotel"} → ${newName}`);
                 }
                 req.log.info({ hotel: newName, city, price: newDay.hotel.pricePerNight }, "[TripModify] SerpAPI pricing applied to swapped hotel");
               } else if (result.websiteUrl) {
@@ -2232,16 +2236,23 @@ If dates cannot be resolved to specific days, set them to null.`,
                 newDay.hotel.available           = false;
                 newDay.hotel.bookingUrl          = result.websiteUrl;
                 newDay.hotel.websiteUrl          = result.websiteUrl;
+                swapLines.push(`Day ${i + 1}: ${oldName ?? "previous hotel"} → ${newName}`);
                 req.log.info({ hotel: newName, city }, "[TripModify] Places fallback URL applied to swapped hotel");
+              } else {
+                swapLines.push(`Day ${i + 1}: ${oldName ?? "previous hotel"} → ${newName}`);
               }
             } catch (serpErr) {
+              swapLines.push(`Day ${i + 1}: ${oldName ?? "previous hotel"} → ${newName}`);
               req.log.warn({ err: serpErr, hotel: newName }, "[TripModify] SerpAPI lookup failed for swapped hotel — saving without pricing");
             }
           }
 
           await updateTripPlan(activeTripPlan.id, sessionUserName, { itinerary: updatedItinerary as never });
           (req as any)._tripUpdated = { tripUpdated: true, tripId: activeTripPlan.id };
-          systemPrompt += `\n\n[Trip Modified & Saved — "${activeTripPlan.trip_name ?? activeTripPlan.destination}"]\nYou just applied the user's modification to the itinerary and saved it. Confirm the change naturally.`;
+          const swapDetail = swapLines.length > 0
+            ? `\nChanges made:\n${swapLines.join("\n")}\nMention the nightly rate if one is shown above.`
+            : "";
+          systemPrompt += `\n\n[Trip Modified & Saved — "${activeTripPlan.trip_name ?? activeTripPlan.destination}"]\nYou just applied the user's modification and saved it.${swapDetail}\nConfirm the change naturally.`;
           req.log.info({ tripId: activeTripPlan.id }, "[TripModify] Itinerary updated and saved");
         } else {
           req.log.warn({ raw: raw.slice(0, 200) }, "[TripModify] GPT-4o returned unexpected response — skipping update");
