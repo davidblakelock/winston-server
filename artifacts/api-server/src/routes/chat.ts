@@ -257,6 +257,7 @@ import {
   checkHotelAvailability,
   buildHotelAvailabilityBlock,
   parseToISODate,
+  addNightsToISO,
 } from "../travel/hotelAvailability.js";
 import {
   searchHotelViaSerpApi,
@@ -2219,17 +2220,51 @@ If dates cannot be resolved to specific days, set them to null.`,
         const jsonMatch = stripped.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
           const updatedItinerary = JSON.parse(jsonMatch[0]);
-          const enrichIntent: ParsedTripIntent = {
-            destination: activeTripPlan.destination,
-            nights:      activeTripPlan.nights ?? undefined,
-            startDate:   activeTripPlan.start_date ?? undefined,
-            endDate:     activeTripPlan.end_date ?? undefined,
-            partySize:   2,
-            rawMessage:  message,
-          };
-          await enrichItineraryWithHotelAvailability(updatedItinerary, enrichIntent).catch(
-            (err) => req.log.warn({ err }, "[TripModify] Post-swap hotel enrichment failed — continuing without pricing")
-          );
+
+          // Find days where the hotel name changed and run a targeted SerpAPI search
+          // for each, using that day's city and per-night dates.
+          const oldDays: any[] = (activeTripPlan.itinerary as any)?.days ?? [];
+          const newDays: any[] = updatedItinerary.days ?? [];
+          const tripCheckIn = parseToISODate(activeTripPlan.start_date ?? undefined);
+          const baseDate = tripCheckIn ?? (() => { const d = new Date(); d.setDate(d.getDate() + 30); return d.toISOString().slice(0, 10); })();
+          const hasRealDates = !!tripCheckIn;
+
+          for (let i = 0; i < newDays.length; i++) {
+            const newDay = newDays[i];
+            const oldDay = oldDays[i];
+            const newName: string | undefined = newDay?.hotel?.name;
+            const oldName: string | undefined = oldDay?.hotel?.name;
+            if (!newName || newName === oldName) continue;
+
+            const city: string = newDay.location?.trim() || activeTripPlan.destination;
+            const dayCheckIn  = addNightsToISO(baseDate, i);
+            const dayCheckOut = addNightsToISO(dayCheckIn, 1);
+
+            try {
+              const result = await searchHotelViaSerpApi(newName, city, dayCheckIn, dayCheckOut, 2);
+              if (result.source === "serpapi") {
+                newDay.hotel.available           = true;
+                newDay.hotel.availabilityChecked = true;
+                if (result.bookingUrl)    newDay.hotel.bookingUrl    = result.bookingUrl;
+                if (result.websiteUrl)    newDay.hotel.websiteUrl    = result.websiteUrl;
+                if (result.pricePerNight) {
+                  const label = hasRealDates ? result.pricePerNight : `~${result.pricePerNight}`;
+                  newDay.hotel.pricePerNight = label;
+                  newDay.hotel.notes         = `${label}/night`;
+                }
+                req.log.info({ hotel: newName, city, price: newDay.hotel.pricePerNight }, "[TripModify] SerpAPI pricing applied to swapped hotel");
+              } else if (result.websiteUrl) {
+                newDay.hotel.availabilityChecked = true;
+                newDay.hotel.available           = false;
+                newDay.hotel.bookingUrl          = result.websiteUrl;
+                newDay.hotel.websiteUrl          = result.websiteUrl;
+                req.log.info({ hotel: newName, city }, "[TripModify] Places fallback URL applied to swapped hotel");
+              }
+            } catch (serpErr) {
+              req.log.warn({ err: serpErr, hotel: newName }, "[TripModify] SerpAPI lookup failed for swapped hotel — saving without pricing");
+            }
+          }
+
           await updateTripPlan(activeTripPlan.id, sessionUserName, { itinerary: updatedItinerary as never });
           (req as any)._tripUpdated = { tripUpdated: true, tripId: activeTripPlan.id };
           systemPrompt += `\n\n[Trip Modified & Saved — "${activeTripPlan.trip_name ?? activeTripPlan.destination}"]\nYou just applied the user's modification to the itinerary and saved it. Confirm the change naturally.`;
