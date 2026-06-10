@@ -404,7 +404,8 @@ export function buildReservationUrl(
   if (slug?.startsWith("ws:")) {
     const realSlug = slug.slice(3);
     if (details.platform === "opentable") {
-      const base = `https://www.opentable.com/${realSlug}?p=${n}`;
+      const cleanSlug = realSlug.startsWith("direct:") ? realSlug.slice(7) : realSlug;
+      const base = `https://www.opentable.com/${cleanSlug}?p=${n}`;
       return dateISO && timeISO ? `${base}&sd=${dateISO}+${timeISO}` : base;
     }
     if (details.platform === "resy") {
