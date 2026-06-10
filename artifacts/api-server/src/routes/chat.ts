@@ -3046,7 +3046,9 @@ If dates cannot be resolved to specific days, set them to null.`,
     if (pendingReservation) clearPendingReservation();
     clearPendingBookingConfirmation();
     const displayName = userProfile?.name ?? sessionUserName;
-    const city = userProfile?.city ?? "Dallas";
+    const city = (requestContext === "trip-planning" && activeTripPlan?.destination)
+      ? activeTripPlan.destination
+      : (userProfile?.city ?? "Dallas");
     const todayISO = chicagoDateStr();
 
     try {
