@@ -251,6 +251,7 @@ import {
   getActiveTripPlans,
   buildTravelProfileContext,
   type TripPlanRow,
+  type ParsedTripIntent,
 } from "../travel/tripPlanningManager.js";
 import {
   checkHotelAvailability,
@@ -2218,6 +2219,17 @@ If dates cannot be resolved to specific days, set them to null.`,
         const jsonMatch = stripped.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
           const updatedItinerary = JSON.parse(jsonMatch[0]);
+          const enrichIntent: ParsedTripIntent = {
+            destination: activeTripPlan.destination,
+            nights:      activeTripPlan.nights ?? undefined,
+            startDate:   activeTripPlan.start_date ?? undefined,
+            endDate:     activeTripPlan.end_date ?? undefined,
+            partySize:   2,
+            rawMessage:  message,
+          };
+          await enrichItineraryWithHotelAvailability(updatedItinerary, enrichIntent).catch(
+            (err) => req.log.warn({ err }, "[TripModify] Post-swap hotel enrichment failed — continuing without pricing")
+          );
           await updateTripPlan(activeTripPlan.id, sessionUserName, { itinerary: updatedItinerary as never });
           (req as any)._tripUpdated = { tripUpdated: true, tripId: activeTripPlan.id };
           systemPrompt += `\n\n[Trip Modified & Saved — "${activeTripPlan.trip_name ?? activeTripPlan.destination}"]\nYou just applied the user's modification to the itinerary and saved it. Confirm the change naturally.`;
