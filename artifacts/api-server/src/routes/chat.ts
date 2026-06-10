@@ -5864,7 +5864,13 @@ If you cannot extract both, return null.`,
       if (rp2?.url && (rp2.type === "opentable" || rp2.type === "resy" || rp2.type === "yelp") && !navigationUrl) {
         nativeResponseBody.navigationUrl = rp2.url;
       }
-      res.json(nativeResponseBody);
+      if (res.headersSent) {
+        // SSE mode — trip-planning heartbeat was already flushed; deliver final payload as SSE event
+        res.write(`data: ${JSON.stringify(nativeResponseBody)}\n\n`);
+        res.end();
+      } else {
+        res.json(nativeResponseBody);
+      }
 
       // ── Persist messages (fire-and-forget, must not block response) ────────
       const nativeMsgId = randomUUID();
