@@ -1120,7 +1120,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isStoryCount = cls.story_count;
   const isTripSaveIntent = !isMorningGreeting && cls.trip_save;
   const isTripPlanIntent = !isMorningGreeting && !isTripSaveIntent &&
-    !cls.hotel_swap && !cls.hotel_availability && !cls.trip_price_query &&
+    !cls.hotel_availability && !cls.trip_price_query &&
     cls.trip_plan;
   process.stdout.write(`[STDOUT] INTENT-FLAGS isMorning=${isMorningGreeting} isTripSave=${isTripSaveIntent} isTripPlan=${isTripPlanIntent} requestContext=${requestContext ?? "null"} msg="${message.slice(0, 80)}"\n`);
 
@@ -1202,7 +1202,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   }
   const isTripPriceQuery = requestContext === "trip-planning" && !isMorningGreeting && !isTripSaveIntent && !isTripPlanIntent && cls.trip_price_query;
   const isHotelAvailabilityQuery = !isMorningGreeting && !isTripSaveIntent && !isTripPlanIntent && (cls.hotel_availability || isTripPriceQuery);
-  const isHotelSwapIntent = requestContext === "trip-planning" && !isMorningGreeting && !isTripSaveIntent && !isTripPlanIntent && cls.hotel_swap;
+
   // Guard: don't run profile handler when a trip save is being detected — they conflict
   const isProfileRequest = !isTripSaveIntent && cls.profile_update;
   // IMPORTANT: Reminder requests must NEVER route to Google Calendar.
@@ -2148,14 +2148,13 @@ If dates cannot be resolved to specific days, set them to null.`,
     }
   }
 
-  // ── Hotel swap within a saved trip itinerary ──────────────────────────────
-  // Fires when the user asks to swap/change a hotel on a specific day.
-  // Uses Haiku to extract the target day number and the new hotel name,
-  // mutates the itinerary in memory, persists to DB, and tells Claude
-  // the swap succeeded so it can confirm naturally.
-  if (isHotelSwapIntent && activeTripPlan?.itinerary) {
+  // ── Trip modification (trip screen only) ─────────────────────────────────
+  // Fires on every trip-screen message that isn't plan/save. GPT-4o decides
+  // whether the message requires an itinerary change (returns updated JSON)
+  // or is just a question/comment (returns null). Only saves when changed.
+  if (requestContext === "trip-planning" && activeTripPlan?.itinerary && !isTripPlanIntent && !isTripSaveIntent) {
     try {
-      req.log.info({ tripId: activeTripPlan.id, message: message.slice(0, 80) }, "[TripModify] Modification intent — sending full itinerary to GPT-4o");
+      req.log.info({ tripId: activeTripPlan.id, message: message.slice(0, 80) }, "[TripModify] Checking with GPT-4o whether itinerary needs updating");
 
       const modifyResp = await openai.chat.completions.create({
         model: MODEL_GPT4O_TRIP,
@@ -2164,31 +2163,35 @@ If dates cannot be resolved to specific days, set them to null.`,
           {
             role: "system",
             content:
-              `You are updating a travel itinerary based on the user's request. ` +
-              `Apply the requested change and return the complete updated itinerary as raw JSON. ` +
+              `You are a travel concierge managing a saved trip itinerary. ` +
+              `If the user's message requests a change to the itinerary (swap a hotel, change a restaurant, modify an activity, update dates, etc.), ` +
+              `apply the change and return the complete updated itinerary as a raw JSON object. ` +
               `Preserve all fields and structure exactly — only change what was asked. ` +
               `When replacing a hotel, clear its bookingUrl, websiteUrl, pricePerNight, available, availabilityChecked, alternativeName, alternativeBookingUrl, and alternativePricePerNight fields. ` +
-              `Return ONLY the JSON object — no markdown, no explanation.`,
+              `If the message is a question, a compliment, or anything that does not require changing the itinerary, return exactly: null`,
           },
           {
             role: "user",
-            content: `Current itinerary:\n${JSON.stringify(activeTripPlan.itinerary)}\n\nModification request: ${message}`,
+            content: `Current itinerary:\n${JSON.stringify(activeTripPlan.itinerary)}\n\nUser message: ${message}`,
           },
         ],
       });
 
-      const raw = modifyResp.choices[0]?.message?.content ?? "";
-      const stripped = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
-      const jsonMatch = stripped.match(/\{[\s\S]*\}/);
-
-      if (jsonMatch) {
-        const updatedItinerary = JSON.parse(jsonMatch[0]);
-        await updateTripPlan(activeTripPlan.id, sessionUserName, { itinerary: updatedItinerary as never });
-        (req as any)._tripUpdated = { tripUpdated: true, tripId: activeTripPlan.id };
-        systemPrompt += `\n\n[Trip Modified & Saved — "${activeTripPlan.trip_name ?? activeTripPlan.destination}"]\nYou just applied the user's modification to the itinerary and saved it. Confirm the change naturally.`;
-        req.log.info({ tripId: activeTripPlan.id }, "[TripModify] Itinerary updated and saved");
+      const raw = (modifyResp.choices[0]?.message?.content ?? "").trim();
+      if (raw === "null") {
+        req.log.info({ tripId: activeTripPlan.id }, "[TripModify] GPT-4o: no changes needed");
       } else {
-        req.log.warn({ raw: raw.slice(0, 200) }, "[TripModify] GPT-4o returned no valid JSON — skipping update");
+        const stripped = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+        const jsonMatch = stripped.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const updatedItinerary = JSON.parse(jsonMatch[0]);
+          await updateTripPlan(activeTripPlan.id, sessionUserName, { itinerary: updatedItinerary as never });
+          (req as any)._tripUpdated = { tripUpdated: true, tripId: activeTripPlan.id };
+          systemPrompt += `\n\n[Trip Modified & Saved — "${activeTripPlan.trip_name ?? activeTripPlan.destination}"]\nYou just applied the user's modification to the itinerary and saved it. Confirm the change naturally.`;
+          req.log.info({ tripId: activeTripPlan.id }, "[TripModify] Itinerary updated and saved");
+        } else {
+          req.log.warn({ raw: raw.slice(0, 200) }, "[TripModify] GPT-4o returned unexpected response — skipping update");
+        }
       }
     } catch (modifyErr) {
       req.log.warn({ err: modifyErr }, "[TripModify] Modification failed — letting Claude respond naturally");
