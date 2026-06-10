@@ -5722,16 +5722,38 @@ If you cannot extract both, return null.`,
       return;
     }
     try {
-      const nativeResp = await anthropic.messages.create({
-        model: selectedModel,
-        max_tokens: requestContext === "trip-planning" ? 3000 : 1024,
-        system: buildSystemBlocks(stableSystem, systemPrompt),
-        messages,
-      });
-      const nativeReply =
-        nativeResp.content[0]?.type === "text" ? nativeResp.content[0].text : "";
-      // [DIAG] Log the actual response text sent back to native app
-      req.log.info({ responsePreview: nativeReply.slice(0, 300) }, "[DIAG:4] Native response sent");
+      let nativeReply: string;
+
+      if (requestContext === "trip-planning") {
+        // ── Trip screen: GPT-4o handles all responses ────────────────────────
+        const tripSystemContent = [stableSystem, systemPrompt].filter(Boolean).join("\n\n");
+        const tripMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+          { role: "system", content: tripSystemContent },
+          ...filteredHistory.map((h: { role: string; content: string }) => ({
+            role: h.role as "user" | "assistant",
+            content: h.content,
+          })),
+          { role: "user", content: message },
+        ];
+        const tripResp = await openai.chat.completions.create({
+          model: MODEL_GPT4O_TRIP,
+          max_tokens: 3000,
+          messages: tripMessages,
+        });
+        nativeReply = tripResp.choices[0]?.message?.content ?? "";
+        req.log.info({ responsePreview: nativeReply.slice(0, 300) }, "[DIAG:4] GPT-4o trip response sent");
+      } else {
+        // ── All other contexts: Claude ───────────────────────────────────────
+        const claudeResp = await anthropic.messages.create({
+          model: selectedModel,
+          max_tokens: 1024,
+          system: buildSystemBlocks(stableSystem, systemPrompt),
+          messages,
+        });
+        nativeReply = claudeResp.content[0]?.type === "text" ? claudeResp.content[0].text : "";
+        req.log.info({ responsePreview: nativeReply.slice(0, 300) }, "[DIAG:4] Native response sent");
+      }
+
       const nativeResponseBody: Record<string, unknown> = { response: nativeReply };
       if (navigationUrl) nativeResponseBody.navigationUrl = navigationUrl;
       if ((req as any)._smsPayload) nativeResponseBody.smsPayload = (req as any)._smsPayload;
@@ -5774,12 +5796,12 @@ If you cannot extract both, return null.`,
       }
     } catch (err: unknown) {
       const errStatus = (err as Record<string, unknown>)?.status as number | undefined;
-      req.log.error({ err, errStatus }, "Claude native error");
+      req.log.error({ err, errStatus }, "Native response error");
       if (!res.headersSent) {
         res.status(500).json({
           error:
             errStatus === 529
-              ? "I'm sorry — Claude's servers are a little busy right now. Give me a moment and try again."
+              ? "I'm sorry — the servers are a little busy right now. Give me a moment and try again."
               : "I'm sorry — I had trouble thinking through that. Please try again.",
         });
       } else {
