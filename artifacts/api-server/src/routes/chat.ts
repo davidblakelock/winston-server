@@ -171,6 +171,7 @@ import {
   cacheRestaurantDetails,
   updateProfileItemWithAddress,
   buildReservationUrl,
+  type RestaurantIntent,
   checkCalendarConflict,
   getPendingReservation,
   setPendingReservation,
@@ -3052,7 +3053,25 @@ If dates cannot be resolved to specific days, set them to null.`,
     const todayISO = chicagoDateStr();
 
     try {
-      const intent = await parseReservationIntent(message, todayISO);
+      let intent = await parseReservationIntent(message, todayISO);
+
+      if (!intent && history.length > 0) {
+        const nameResp = await anthropic.messages.create({
+          model: MODEL_HAIKU,
+          max_tokens: 100,
+          system: `Find the restaurant the user wants to make a reservation at from this conversation. Return ONLY the restaurant name as plain text, or the word null if none is mentioned.`,
+          messages: [
+            ...history.slice(-8).map((h) => ({ role: h.role as "user" | "assistant", content: h.content })),
+            { role: "user", content: message },
+          ],
+        });
+        const extracted = nameResp.content[0]?.type === "text" ? nameResp.content[0].text.trim() : "";
+        if (extracted && extracted.toLowerCase() !== "null") {
+          intent = { restaurantName: extracted, action: "reservation", dateISO: null, dateLabel: null, timeISO: null, timeLabel: null, partySize: null } satisfies RestaurantIntent;
+          req.log.info({ restaurantName: extracted }, "[R001] Restaurant name extracted from history");
+        }
+      }
+
       if (intent) {
         req.log.info({ restaurantName: intent.restaurantName, action: intent.action }, "[R001] Intent parsed");
 

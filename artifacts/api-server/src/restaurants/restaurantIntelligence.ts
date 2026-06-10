@@ -436,12 +436,29 @@ export function buildReservationUrl(
   const n = partySize ?? 2;
   const slug = details.platformSlug;
 
-  // Slugs prefixed with "ws:" were found via AI web search and may be slightly
-  // wrong (hallucinated slug). Return null — caller falls through to the
-  // guaranteed-working platform search URL instead.
-  // "direct:" slugs come from the restaurant's own homepage or Google Places
-  // websiteUri — reliable enough to use directly (see buildReservationUrl below).
-  if (slug?.startsWith("ws:")) return null;
+  // Slugs prefixed with "ws:" were found via AI web search — the slug itself
+  // may be wrong, but we know the platform and can build a pre-filled search URL
+  // with date/time/party so the user lands on a populated search page.
+  if (slug?.startsWith("ws:")) {
+    const q = encodeURIComponent(details.name);
+    if (details.platform === "opentable") {
+      const base = `https://www.opentable.com/s/?covers=${n}&term=${q}`;
+      return dateISO && timeISO ? `${base}&dateTime=${dateISO}T${timeISO}:00` : base;
+    }
+    if (details.platform === "resy") {
+      const wsCity = details.platformCity?.startsWith("ws:") ? null : details.platformCity;
+      const base = wsCity
+        ? `https://resy.com/cities/${wsCity}?query=${q}&seats=${n}`
+        : `https://resy.com/?query=${q}&seats=${n}`;
+      if (dateISO && timeISO) return `${base}&date=${dateISO}&time=${timeISO}:00`;
+      if (dateISO) return `${base}&date=${dateISO}`;
+      return base;
+    }
+    if (details.platform === "yelp") {
+      return `https://www.yelp.com/search?find_desc=${q}`;
+    }
+    return null;
+  }
 
   if (details.platform === "opentable" && slug) {
     let base: string;
