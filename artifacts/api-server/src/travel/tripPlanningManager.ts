@@ -392,7 +392,7 @@ ${travelCtx ? `\nTraveler profile — personalize every recommendation to these 
 
   const response = await openai.chat.completions.create({
     model:           MODEL_GPT4O,
-    max_tokens:      8192,
+    max_tokens:      16000,
     response_format: { type: "json_object" },
     messages: [
       { role: "system", content: systemPrompt },
@@ -400,6 +400,10 @@ ${travelCtx ? `\nTraveler profile — personalize every recommendation to these 
     ],
   });
 
+  const finishReason = response.choices[0]?.finish_reason;
+  if (finishReason === "length") {
+    logger.warn("[TripPlan] ⚠️ GPT-4o hit max_tokens — response truncated, repair will be attempted");
+  }
   const text = (response.choices[0]?.message?.content ?? "").trim();
 
   process.stdout.write(`\n========== [TripPlan] GPT-4o FULL RESPONSE (${text.length} chars) ==========\n${text}\n=============================================\n`);
