@@ -3049,8 +3049,11 @@ If dates cannot be resolved to specific days, set them to null.`,
     const bodyLat = typeof (req.body as any).lat === "number" ? (req.body as any).lat as number : null;
     const bodyLng = typeof (req.body as any).lng === "number" ? (req.body as any).lng as number : null;
     let city: string | undefined;
-    if (requestContext === "trip-planning" && activeTripPlan?.destination) {
-      city = activeTripPlan.destination;
+    if (requestContext === "trip-planning" && activeTripPlan) {
+      const tripDays: Array<{ location?: string }> = (activeTripPlan.itinerary as any)?.days ?? [];
+      const msgLower = message.toLowerCase();
+      const matchedDay = tripDays.find((d) => d.location && msgLower.includes(d.location.toLowerCase()));
+      city = matchedDay?.location ?? activeTripPlan.destination;
     }
     if (!city && bodyLat !== null && bodyLng !== null) {
       try {
