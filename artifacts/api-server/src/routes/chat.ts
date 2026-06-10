@@ -2027,48 +2027,15 @@ const chatHandlerCore = async (req: Request, res: Response) => {
               ? `Check-in: ${activeTripPlan.start_date} (${activeTripPlan.nights ?? "?"} nights — no end date stored)`
               : `No check-in/check-out dates stored for this trip (prices are approximate).`;
 
-          if (isTripPriceQuery) {
-            // Bypass Claude entirely — GPT-4o answers price questions without trained reluctance
-            const pricingContext = `${storedDatesNote}\n${hotelLines.join("\n")}`;
-            try {
-              const priceResp = await openai.chat.completions.create({
-                model: MODEL_GPT4O_TRIP,
-                max_tokens: 600,
-                messages: [
-                  {
-                    role: "system",
-                    content:
-                      `You are a luxury travel concierge. The user is asking about hotel pricing for their trip to ${activeTripPlan.destination}. ` +
-                      `Answer directly and conversationally using this data:\n\n${pricingContext}`,
-                  },
-                  { role: "user" as const, content: message },
-                ],
-              });
-              const priceReply = priceResp.choices[0]?.message?.content ?? "";
-              if (priceReply) {
-                (req as any)._hardcodedResponse = priceReply;
-                req.log.info({ tripId, hotels: hotelLines.length }, "[HotelAvail] GPT-4o price response generated — bypassing Claude");
-              }
-            } catch (priceErr) {
-              req.log.warn({ err: priceErr }, "[HotelAvail] GPT-4o price call failed — falling back to Claude");
-              systemPrompt +=
-                `\n\n[VERIFIED — Stored Trip Hotel Data — "${activeTripPlan.trip_name ?? activeTripPlan.destination}"]\n` +
-                `${storedDatesNote}\n` +
-                `Pricing below is from a recent SerpAPI / Google Hotels search for this trip.\n` +
-                hotelLines.join("\n") + "\n" +
-                `Do NOT say you can't check pricing or that you have no dates — the data is above.`;
-            }
-          } else {
-            systemPrompt +=
-              `\n\n[VERIFIED — Stored Trip Hotel Data — "${activeTripPlan.trip_name ?? activeTripPlan.destination}"]\n` +
-              `${storedDatesNote}\n` +
-              `Pricing below is from a recent SerpAPI / Google Hotels search for this trip.\n` +
-              hotelLines.join("\n") + "\n" +
-              `NOTE: Prices marked with ~ are approximate (no fixed dates). ` +
-              `Share these prices and dates directly and confidently. Provide booking URLs so David can check live availability. ` +
-              `Do NOT say you can't check pricing or that you have no dates — the data is above.`;
-            req.log.info({ tripId, hotels: hotelLines.length, start_date: activeTripPlan.start_date }, "[HotelAvail] Injected stored trip hotel pricing + dates");
-          }
+          systemPrompt +=
+            `\n\n[VERIFIED — Stored Trip Hotel Data — "${activeTripPlan.trip_name ?? activeTripPlan.destination}"]\n` +
+            `${storedDatesNote}\n` +
+            `Pricing below is from a recent SerpAPI / Google Hotels search for this trip.\n` +
+            hotelLines.join("\n") + "\n" +
+            `NOTE: Prices marked with ~ are approximate (no fixed dates). ` +
+            `Share these prices and dates directly and confidently. Provide booking URLs so David can check live availability. ` +
+            `Do NOT say you can't check pricing or that you have no dates — the data is above.`;
+          req.log.info({ tripId, hotels: hotelLines.length, start_date: activeTripPlan.start_date }, "[HotelAvail] Injected stored trip hotel pricing + dates");
         } else {
           // Hotels exist in the itinerary but no stored pricing — do a live SerpAPI lookup.
           const tripDest   = activeTripPlan.destination ?? "";
