@@ -404,8 +404,8 @@ export function buildReservationUrl(
   if (slug?.startsWith("ws:")) {
     const realSlug = slug.slice(3);
     if (details.platform === "opentable") {
-      const term = encodeURIComponent(details.name);
-      const base = `https://www.opentable.com/s/?covers=${n}&term=${term}`;
+      const cleanSlug = realSlug.startsWith("direct:") ? realSlug.slice(7) : realSlug;
+      const base = `https://www.opentable.com/${cleanSlug}?covers=${n}`;
       return dateISO && timeISO ? `${base}&dateTime=${dateISO}T${timeISO}:00` : base;
     }
     if (details.platform === "resy") {
@@ -428,9 +428,11 @@ export function buildReservationUrl(
     return null;
   }
 
-  if (details.platform === "opentable") {
-    const term = encodeURIComponent(details.name);
-    const base = `https://www.opentable.com/s/?covers=${n}&term=${term}`;
+  if (details.platform === "opentable" && slug) {
+    const cleanSlug = slug.startsWith("restaurant/profile/") ? slug
+      : slug.startsWith("direct:") ? slug.slice(7)
+      : slug;
+    const base = `https://www.opentable.com/${cleanSlug}?covers=${n}`;
     if (dateISO && timeISO) return `${base}&dateTime=${dateISO}T${timeISO}:00`;
     return base;
   }
