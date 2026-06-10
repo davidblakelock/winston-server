@@ -3049,7 +3049,10 @@ If dates cannot be resolved to specific days, set them to null.`,
     const bodyLat = typeof (req.body as any).lat === "number" ? (req.body as any).lat as number : null;
     const bodyLng = typeof (req.body as any).lng === "number" ? (req.body as any).lng as number : null;
     let city: string | undefined;
-    if (bodyLat !== null && bodyLng !== null) {
+    if (requestContext === "trip-planning" && activeTripPlan?.destination) {
+      city = activeTripPlan.destination;
+    }
+    if (!city && bodyLat !== null && bodyLng !== null) {
       try {
         const geoRes = await fetch(
           `https://nominatim.openstreetmap.org/reverse?lat=${bodyLat}&lon=${bodyLng}&format=json`,
@@ -3059,9 +3062,6 @@ If dates cannot be resolved to specific days, set them to null.`,
         city = geoData.address?.city ?? geoData.address?.town ?? geoData.address?.village ?? geoData.address?.county;
         if (city) req.log.info({ lat: bodyLat, lng: bodyLng, city }, "[R001] City from GPS");
       } catch { /* fall through to next priority */ }
-    }
-    if (!city && requestContext === "trip-planning" && activeTripPlan?.destination) {
-      city = activeTripPlan.destination;
     }
     if (!city) city = userProfile?.city;
     const needsCityFromUser = !city;
