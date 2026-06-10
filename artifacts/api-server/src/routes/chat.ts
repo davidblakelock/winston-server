@@ -3056,16 +3056,19 @@ If dates cannot be resolved to specific days, set them to null.`,
       let intent = await parseReservationIntent(message, todayISO);
 
       if (!intent && history.length > 0) {
+        // Prefer the last assistant message — GPT-4o just named the restaurant there.
+        // Fall back to full conversation history (both roles) if no assistant turn exists.
+        const lastAssistantMsg = [...history].reverse().find((h) => h.role === "assistant")?.content ?? "";
+        const historyContext = lastAssistantMsg || history.slice(-8).map((h) => h.content).join("\n") + "\n" + message;
+
         const nameResp = await anthropic.messages.create({
           model: MODEL_HAIKU,
-          max_tokens: 100,
-          system: `Find the restaurant the user wants to make a reservation at from this conversation. Return ONLY the restaurant name as plain text, or the word null if none is mentioned.`,
-          messages: [
-            { role: "user", content: history.slice(-8).filter((h) => h.role === "user").map((h) => h.content).join("\n") + "\n" + message },
-          ],
+          max_tokens: 60,
+          system: `Extract the restaurant name the user wants to make a reservation at. Return ONLY the restaurant name — nothing else. Return null if no specific restaurant is named.`,
+          messages: [{ role: "user", content: historyContext }],
         });
         const extracted = nameResp.content[0]?.type === "text" ? nameResp.content[0].text.trim() : "";
-        if (extracted && extracted.toLowerCase() !== "null") {
+        if (extracted && extracted.toLowerCase() !== "null" && !extracted.includes("\n") && extracted.length < 100) {
           intent = { restaurantName: extracted, action: "reservation", dateISO: null, dateLabel: null, timeISO: null, timeLabel: null, partySize: null } satisfies RestaurantIntent;
           req.log.info({ restaurantName: extracted }, "[R001] Restaurant name extracted from history");
         }
@@ -3272,21 +3275,24 @@ If dates cannot be resolved to specific days, set them to null.`,
       const tripDest = activeTripPlan.destination;
       const todayISO = chicagoDateStr();
 
-      // Extract restaurant name from recent history — current message has no name
+      // Prefer last assistant message — GPT-4o just named the restaurant there.
+      // Fall back to full conversation history (both roles) if no assistant turn exists.
+      const lastAssistantMsg = [...history].reverse().find((h) => h.role === "assistant")?.content ?? "";
+      const historyContext = lastAssistantMsg || history.slice(-8).map((h) => h.content).join("\n") + "\n" + message;
+
       const nameResp = await anthropic.messages.create({
         model: MODEL_HAIKU,
-        max_tokens: 100,
+        max_tokens: 60,
         system:
           `The user is on a trip planning screen for a trip to ${tripDest}. ` +
-          `Look at this conversation and find the restaurant they want to make a reservation at. ` +
-          `Return ONLY the restaurant name as plain text, or the word null if no restaurant is mentioned.`,
-        messages: [
-          { role: "user", content: history.slice(-8).filter((h) => h.role === "user").map((h) => h.content).join("\n") + "\n" + message },
-        ],
+          `Extract the restaurant name they want to make a reservation at. ` +
+          `Return ONLY the restaurant name — nothing else. Return null if no specific restaurant is named.`,
+        messages: [{ role: "user", content: historyContext }],
       });
 
       const extractedName = nameResp.content[0]?.type === "text" ? nameResp.content[0].text.trim() : "";
-      if (!extractedName || extractedName.toLowerCase() === "null") {
+      const isValidName = !!extractedName && extractedName.toLowerCase() !== "null" && !extractedName.includes("\n") && extractedName.length < 100;
+      if (!isValidName) {
         req.log.info({ tripId: activeTripPlan.id }, "[TripRsvp] No restaurant name found in history — skipping");
       } else {
         req.log.info({ restaurant: extractedName, city: tripDest }, "[TripRsvp] Restaurant extracted from history — running lookup");
