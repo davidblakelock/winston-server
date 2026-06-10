@@ -3061,8 +3061,7 @@ If dates cannot be resolved to specific days, set them to null.`,
           max_tokens: 100,
           system: `Find the restaurant the user wants to make a reservation at from this conversation. Return ONLY the restaurant name as plain text, or the word null if none is mentioned.`,
           messages: [
-            ...history.slice(-8).map((h) => ({ role: h.role as "user" | "assistant", content: h.content })),
-            { role: "user", content: message },
+            { role: "user", content: history.slice(-8).filter((h) => h.role === "user").map((h) => h.content).join("\n") + "\n" + message },
           ],
         });
         const extracted = nameResp.content[0]?.type === "text" ? nameResp.content[0].text.trim() : "";
@@ -3282,8 +3281,7 @@ If dates cannot be resolved to specific days, set them to null.`,
           `Look at this conversation and find the restaurant they want to make a reservation at. ` +
           `Return ONLY the restaurant name as plain text, or the word null if no restaurant is mentioned.`,
         messages: [
-          ...history.slice(-8).map((h) => ({ role: h.role as "user" | "assistant", content: h.content })),
-          { role: "user", content: message },
+          { role: "user", content: history.slice(-8).filter((h) => h.role === "user").map((h) => h.content).join("\n") + "\n" + message },
         ],
       });
 
