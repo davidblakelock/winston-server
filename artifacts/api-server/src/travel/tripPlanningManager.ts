@@ -73,6 +73,7 @@ export interface NativeActivity {
   title: string;
   description: string;
   notes: string;
+  websiteUrl?: string; // Official website for the attraction, museum, spa, or venue
 }
 
 export interface NativeMeal {
@@ -362,7 +363,7 @@ Required structure:
           "notes": "2–3 sentences with the personality and voice from the example above — what makes this property special, the vibe, why it's right for these exact travelers. Include approximate nightly rate."
         },
         "activities": [
-          { "time": "Morning", "title": "Activity name", "description": "Specific real places — name the street, the trail, the gallery, the viewpoint. Say why it's unmissable.", "notes": "Driving time from previous stop if applicable. Reservations, parking, what to wear, insider tip." }
+          { "time": "Morning", "title": "Activity name", "description": "Specific real places — name the street, the trail, the gallery, the viewpoint. Say why it's unmissable.", "notes": "Driving time from previous stop if applicable. Reservations, parking, what to wear, insider tip.", "websiteUrl": "Official website for the attraction, museum, spa, or venue — required, never empty" }
         ],
         "meals": [
           { "time": "Dinner", "title": "Specific restaurant name", "description": "Opinionated recommendation — name the signature dish, describe the atmosphere, explain why this is the right call tonight for these travelers", "websiteUrl": "Restaurant's own website — required", "bookingUrl": "OpenTable/Resy link or same as websiteUrl" }
@@ -376,7 +377,7 @@ Required structure:
 Rules — follow exactly:
 - If the user specifies which city each night is in, honor that exactly: one hotel per city, in the stated order, activities and restaurants located in that city.
 - The last day (departure day) has no hotel — traveler is checking out that morning. One breakfast or morning activity max, then they drive home.
-- hotel.websiteUrl is the hotel's own official site. meals[].websiteUrl is the restaurant's own site. Both are required — never leave empty.
+- hotel.websiteUrl is the hotel's own official site. meals[].websiteUrl is the restaurant's own site. activities[].websiteUrl is the official site for the attraction, museum, spa, or venue. All are required — never leave empty.
 - For road trips, include approximate driving times between stops in the first activity notes of each travel day.
 - Where the trip vibe is romantic, every evening should feel designed for two — intimate restaurants, sunset moments, no generic tourist traps.
 - 2–3 activities per day, 1–2 meals per day (include breakfast only if it's a genuinely notable spot).

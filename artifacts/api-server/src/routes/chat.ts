@@ -2248,6 +2248,74 @@ If dates cannot be resolved to specific days, set them to null.`,
             }
           }
 
+          // Fill missing websiteUrls for hotels, meals, and activities via Google Places (parallel)
+          const placesApiKey = process.env.GOOGLE_PLACES_API_KEY;
+          if (placesApiKey) {
+            const placesLookups: Promise<void>[] = [];
+            for (const day of newDays) {
+              const dayCity: string = (day.location as string | undefined)?.trim() || activeTripPlan.destination;
+              if (day.hotel?.name && !day.hotel.websiteUrl) {
+                placesLookups.push((async () => {
+                  try {
+                    const pr = await fetch("https://places.googleapis.com/v1/places:searchText", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json", "X-Goog-Api-Key": placesApiKey, "X-Goog-FieldMask": "places.websiteUri" },
+                      body: JSON.stringify({ textQuery: `${day.hotel.name} ${dayCity}`, maxResultCount: 1 }),
+                      signal: AbortSignal.timeout(5000),
+                    });
+                    if (pr.ok) {
+                      const pd = await pr.json() as { places?: Array<{ websiteUri?: string }> };
+                      const url = pd.places?.[0]?.websiteUri;
+                      if (url) { day.hotel.websiteUrl = url; req.log.info({ name: day.hotel.name, url }, "[TripModify] Places: hotel websiteUrl filled"); }
+                    }
+                  } catch { /* non-fatal */ }
+                })());
+              }
+              for (const meal of (day.meals as any[] | undefined) ?? []) {
+                if (meal.title && !meal.websiteUrl) {
+                  placesLookups.push((async () => {
+                    try {
+                      const pr = await fetch("https://places.googleapis.com/v1/places:searchText", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json", "X-Goog-Api-Key": placesApiKey, "X-Goog-FieldMask": "places.websiteUri" },
+                        body: JSON.stringify({ textQuery: `${meal.title} restaurant ${dayCity}`, maxResultCount: 1 }),
+                        signal: AbortSignal.timeout(5000),
+                      });
+                      if (pr.ok) {
+                        const pd = await pr.json() as { places?: Array<{ websiteUri?: string }> };
+                        const url = pd.places?.[0]?.websiteUri;
+                        if (url) { meal.websiteUrl = url; req.log.info({ name: meal.title, url }, "[TripModify] Places: meal websiteUrl filled"); }
+                      }
+                    } catch { /* non-fatal */ }
+                  })());
+                }
+              }
+              for (const activity of (day.activities as any[] | undefined) ?? []) {
+                if (activity.title && !activity.websiteUrl) {
+                  placesLookups.push((async () => {
+                    try {
+                      const pr = await fetch("https://places.googleapis.com/v1/places:searchText", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json", "X-Goog-Api-Key": placesApiKey, "X-Goog-FieldMask": "places.websiteUri" },
+                        body: JSON.stringify({ textQuery: `${activity.title} ${dayCity}`, maxResultCount: 1 }),
+                        signal: AbortSignal.timeout(5000),
+                      });
+                      if (pr.ok) {
+                        const pd = await pr.json() as { places?: Array<{ websiteUri?: string }> };
+                        const url = pd.places?.[0]?.websiteUri;
+                        if (url) { activity.websiteUrl = url; req.log.info({ name: activity.title, url }, "[TripModify] Places: activity websiteUrl filled"); }
+                      }
+                    } catch { /* non-fatal */ }
+                  })());
+                }
+              }
+            }
+            if (placesLookups.length > 0) {
+              await Promise.allSettled(placesLookups);
+              req.log.info({ count: placesLookups.length }, "[TripModify] Places websiteUrl fill complete");
+            }
+          }
+
           await updateTripPlan(activeTripPlan.id, sessionUserName, { itinerary: updatedItinerary as never });
           (req as any)._tripUpdated = { tripUpdated: true, tripId: activeTripPlan.id };
           const swapDetail = swapLines.length > 0
