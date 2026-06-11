@@ -381,7 +381,7 @@ export async function findBookingPlatformByWebSearch(
       const text = block.text.trim();
       if (!text || text === "NOT_FOUND") continue;
       const detected = detectPlatform(text);
-      if (detected.platform !== "phone") return detected;
+      if (detected.platform !== "phone") return { platform: detected.platform, slug: text, city: null };
     }
     return none;
   } catch {
@@ -402,28 +402,21 @@ export function buildReservationUrl(
   // Slugs prefixed with "ws:" were found via AI web search. Strip the prefix
   // and build a direct booking URL — the web search slug is correct.
   if (slug?.startsWith("ws:")) {
-    const realSlug = slug.slice(3);
+    const bookingUrl = slug.slice(3); // full URL returned by web search
     if (details.platform === "opentable") {
-      const cleanSlug = realSlug.startsWith("direct:") ? realSlug.slice(7) : realSlug;
-      const base = `https://www.opentable.com/${cleanSlug}?covers=${n}`;
+      const base = `${bookingUrl}?covers=${n}`;
       return dateISO && timeISO ? `${base}&dateTime=${dateISO}T${timeISO}:00` : base;
     }
     if (details.platform === "resy") {
-      console.log(`[buildReservationUrl] Resy ws: slug=${realSlug} city=${details.platformCity} dateISO=${dateISO} timeISO=${timeISO}`);
-      const base = details.platformCity
-        ? `https://resy.com/cities/${details.platformCity}/venues/${realSlug}?seats=${n}`
-        : `https://resy.com/venues/${realSlug}?seats=${n}`;
+      console.log(`[buildReservationUrl] Resy ws: url=${bookingUrl} dateISO=${dateISO} timeISO=${timeISO}`);
+      const base = `${bookingUrl}?seats=${n}`;
       return dateISO ? `${base}&date=${dateISO}` : base;
     }
     if (details.platform === "yelp") {
-      const yelpType = details.platformCity;
-      const path = yelpType === "waitlist" ? "waitlist" : "reservations";
       const params = new URLSearchParams({ covers: String(n) });
-      if (yelpType !== "waitlist") {
-        if (dateISO) params.set("date", dateISO);
-        if (timeISO) params.set("time", timeISO);
-      }
-      return `https://www.yelp.com/${path}/${realSlug}?${params.toString()}`;
+      if (dateISO) params.set("date", dateISO);
+      if (timeISO) params.set("time", timeISO);
+      return `${bookingUrl}?${params.toString()}`;
     }
     return null;
   }
