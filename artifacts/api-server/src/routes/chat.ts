@@ -3108,25 +3108,42 @@ If dates cannot be resolved to specific days, set them to null.`,
         } else if (intent.action === "info") {
           systemPrompt += `\n\n[Restaurant Info Request — ${intent.restaurantName}] The user wants info about this restaurant${city ? ` in ${city}` : ""}. Answer from your knowledge.`;
 
-        } else {
-          // Reservation — look up direct booking URL via Places cache then live fetch
-          const partySize = intent.partySize ?? 2;
-
-          if (requestContext === "trip-planning" && !intent.dateISO && activeTripPlan?.start_date) {
-            const tripDays: Array<{ location?: string }> = (activeTripPlan.itinerary as any)?.days ?? [];
-            const normCity = (city ?? "").split(",")[0].trim().toLowerCase();
-            let dayIdx = tripDays.findIndex((d) =>
-              d.location && (d.location.toLowerCase().includes(normCity) || normCity.includes(d.location.toLowerCase()))
-            );
-            if (dayIdx === -1) dayIdx = 0;
-            if (tripDays.length > 0) {
-              const [yr, mo, dy] = activeTripPlan.start_date.split("-").map(Number);
-              const dateObj = new Date(yr, mo - 1, dy + dayIdx);
-              const dateISO = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, "0")}-${String(dateObj.getDate()).padStart(2, "0")}`;
-              intent = { ...intent, dateISO };
-              req.log.info({ city, dayIdx, dateISO }, "[R001] Trip date derived from itinerary");
-            }
+        } else if (requestContext === "trip-planning") {
+          // Trip context: simple Places website lookup — no platform detection, no booking URLs
+          const apiKey = process.env.GOOGLE_PLACES_API_KEY;
+          let navUrl: string | null = null;
+          if (apiKey) {
+            try {
+              const placesRes = await fetch("https://places.googleapis.com/v1/places:searchText", {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "X-Goog-Api-Key": apiKey,
+                  "X-Goog-FieldMask": "places.websiteUri,places.formattedAddress",
+                },
+                body: JSON.stringify({ textQuery: `${intent.restaurantName} restaurant ${city ?? ""}`, pageSize: 1 }),
+                signal: AbortSignal.timeout(8000),
+              });
+              if (placesRes.ok) {
+                const placesData = await placesRes.json() as { places?: Array<{ websiteUri?: string; formattedAddress?: string }> };
+                const place = placesData.places?.[0];
+                navUrl = place?.websiteUri ?? null;
+                if (!navUrl && place?.formattedAddress) {
+                  navUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.formattedAddress)}`;
+                }
+              }
+            } catch { /* fall through to maps fallback */ }
           }
+          if (!navUrl) {
+            navUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(city ? `${intent.restaurantName} ${city}` : intent.restaurantName)}`;
+          }
+          (req as any)._navigationUrl = navUrl;
+          (req as any)._hardcodedResponse = `Here's the website for ${intent.restaurantName} — you can book directly from there.`;
+          req.log.info({ restaurantName: intent.restaurantName, navUrl }, "[R001] Trip context — website URL dispatched");
+
+        } else {
+          // Non-trip context: full Places lookup → platform detection → direct booking URL
+          const partySize = intent.partySize ?? 2;
 
           // 1) Cache check
           let details = await getCachedRestaurantDetails(sessionUserName, intent.restaurantName);
@@ -3156,7 +3173,6 @@ If dates cannot be resolved to specific days, set them to null.`,
           ].filter(Boolean).join(" ");
 
           if (bookingUrl && details && details.platform !== "phone") {
-            // 4) Direct link found — send it
             const platformLabel = details.platform === "opentable" ? "OpenTable" : details.platform === "resy" ? "Resy" : "Yelp";
             (req as any)._reservationPayload = {
               type: details.platform,
@@ -3169,7 +3185,6 @@ If dates cannot be resolved to specific days, set them to null.`,
               `I've found ${details.name}${dateTimeStr ? ` — ${dateTimeStr}` : ""} on ${platformLabel}.${conflictNote} Tap to book.`;
             req.log.info({ restaurantName: details.name, platform: details.platform, bookingUrl }, "[R001] Direct booking URL dispatched");
           } else {
-            // No booking platform — let Claude respond
             if (details?.phone) {
               systemPrompt += `\n\n[Restaurant Reservation — Phone Only] ${details.name} is not on OpenTable, Resy, or Yelp. Their phone number is ${details.phone}. Tell the user to call to make a reservation.`;
             } else {
@@ -5693,6 +5708,7 @@ If you cannot extract both, return null.`,
       const hardcoded = (req as any)._hardcodedResponse as string;
       req.log.info({ responsePreview: hardcoded }, "[DIAG:4] Native response sent (hardcoded)");
       const hardcodedBody: Record<string, unknown> = { response: hardcoded };
+      if ((req as any)._navigationUrl) hardcodedBody.navigationUrl = (req as any)._navigationUrl;
       if ((req as any)._smsPayload) hardcodedBody.smsPayload = (req as any)._smsPayload;
       if ((req as any)._reservationPayload) hardcodedBody.reservationPayload = (req as any)._reservationPayload;
       if ((req as any)._tripSaved) Object.assign(hardcodedBody, (req as any)._tripSaved);
