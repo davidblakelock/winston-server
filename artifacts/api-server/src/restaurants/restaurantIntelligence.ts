@@ -381,7 +381,7 @@ export async function findBookingPlatformByWebSearch(
       const text = block.text.trim();
       if (!text || text === "NOT_FOUND") continue;
       const detected = detectPlatform(text);
-      if (detected.platform !== "phone") return { platform: detected.platform, slug: text, city: null };
+      if (detected.platform !== "phone") return detected;
     }
     return none;
   } catch {
@@ -402,52 +402,47 @@ export function buildReservationUrl(
   // Slugs prefixed with "ws:" were found via AI web search. Strip the prefix
   // and build a direct booking URL — the web search slug is correct.
   if (slug?.startsWith("ws:")) {
-    const bookingUrl = slug.slice(3); // full URL returned by web search
+    const realSlug = slug.slice(3);
     if (details.platform === "opentable") {
-      const base = `${bookingUrl}?covers=${n}`;
-      return dateISO && timeISO ? `${base}&dateTime=${dateISO}T${timeISO}:00` : base;
+      const cleanSlug = realSlug.startsWith("direct:") ? realSlug.slice(7) : realSlug;
+      const base = `https://www.opentable.com/r/${cleanSlug}?covers=${n}`;
+      return dateISO && timeISO ? `${base}&dateTime=${dateISO}T${timeISO}` : base;
     }
     if (details.platform === "resy") {
-      console.log(`[buildReservationUrl] Resy ws: url=${bookingUrl} dateISO=${dateISO} timeISO=${timeISO}`);
-      const base = `${bookingUrl}?seats=${n}`;
-      return dateISO ? `${base}&date=${dateISO}` : base;
+      console.log(`[buildReservationUrl] Resy ws: slug=${realSlug} city=${details.platformCity} dateISO=${dateISO} timeISO=${timeISO}`);
+      if (!details.platformCity) return null;
+      const base = `https://resy.com/cities/${details.platformCity}/venues/${realSlug}`;
+      return dateISO ? `${base}?date=${dateISO}&seats=${n}` : `${base}?seats=${n}`;
     }
     if (details.platform === "yelp") {
-      const params = new URLSearchParams({ covers: String(n) });
-      if (dateISO) params.set("date", dateISO);
-      if (timeISO) params.set("time", timeISO);
-      return `${bookingUrl}?${params.toString()}`;
+      const base = `https://www.yelp.com/reservations/${realSlug}?covers=${n}`;
+      if (dateISO && timeISO) return `${base}&date=${dateISO}&time=${timeISO}`;
+      if (dateISO) return `${base}&date=${dateISO}`;
+      return base;
     }
     return null;
   }
 
   if (details.platform === "opentable" && slug) {
-    const cleanSlug = slug.startsWith("restaurant/profile/") ? slug
-      : slug.startsWith("direct:") ? slug.slice(7)
-      : slug;
-    const base = `https://www.opentable.com/${cleanSlug}?covers=${n}`;
-    if (dateISO && timeISO) return `${base}&dateTime=${dateISO}T${timeISO}:00`;
+    const cleanSlug = slug.startsWith("direct:") ? slug.slice(7) : slug;
+    const base = `https://www.opentable.com/r/${cleanSlug}?covers=${n}`;
+    if (dateISO && timeISO) return `${base}&dateTime=${dateISO}T${timeISO}`;
     return base;
   }
 
   if (details.platform === "resy" && slug && details.platformCity) {
-    // Skip "ws:" already handled above; skip "ws:"-city combos too
     const city = details.platformCity?.startsWith("ws:") ? null : details.platformCity;
     if (!city) return null;
     console.log(`[buildReservationUrl] Resy direct — slug=${slug} city=${city} dateISO=${dateISO} timeISO=${timeISO}`);
-    const base = `https://resy.com/cities/${city}/venues/${slug}?seats=${n}`;
-    return dateISO ? `${base}&date=${dateISO}` : base;
+    const base = `https://resy.com/cities/${city}/venues/${slug}`;
+    return dateISO ? `${base}?date=${dateISO}&seats=${n}` : `${base}?seats=${n}`;
   }
 
   if (details.platform === "yelp" && slug) {
-    const yelpType = details.platformCity;
-    const path = yelpType === "waitlist" ? "waitlist" : "reservations";
-    const params = new URLSearchParams({ covers: String(n) });
-    if (yelpType !== "waitlist") {
-      if (dateISO) params.set("date", dateISO);
-      if (timeISO) params.set("time", timeISO);
-    }
-    return `https://www.yelp.com/${path}/${slug}?${params.toString()}`;
+    const base = `https://www.yelp.com/reservations/${slug}?covers=${n}`;
+    if (dateISO && timeISO) return `${base}&date=${dateISO}&time=${timeISO}`;
+    if (dateISO) return `${base}&date=${dateISO}`;
+    return base;
   }
 
   return null;
