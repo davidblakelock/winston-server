@@ -364,7 +364,7 @@ export async function findBookingPlatformByWebSearch(
         "Search for the restaurant's online reservation or waitlist page. " +
         "Check OpenTable first, then Resy, then Yelp Reservations or Yelp Waitlist. " +
         "Return ONLY the single best direct URL for this specific restaurant in priority order: " +
-        "1) OpenTable direct link (e.g. https://www.opentable.com/r/al-biernats-dallas), " +
+        "1) The exact OpenTable URL for this restaurant as it appears on opentable.com, " +
         "2) Resy direct link (e.g. https://resy.com/cities/dal/venues/al-biernats), " +
         "3) Yelp Reservations link (e.g. https://www.yelp.com/reservations/al-biernats-dallas), " +
         "4) Yelp Waitlist link (e.g. https://www.yelp.com/waitlist/al-biernats-dallas). " +
@@ -381,6 +381,7 @@ export async function findBookingPlatformByWebSearch(
       const text = block.text.trim();
       if (!text || text === "NOT_FOUND") continue;
       const detected = detectPlatform(text);
+      if (detected.platform === "opentable") return { platform: "opentable", slug: text, city: null };
       if (detected.platform !== "phone") return detected;
     }
     return none;
@@ -404,8 +405,7 @@ export function buildReservationUrl(
   if (slug?.startsWith("ws:")) {
     const realSlug = slug.slice(3);
     if (details.platform === "opentable") {
-      const cleanSlug = realSlug.startsWith("direct:") ? realSlug.slice(7) : realSlug;
-      const base = `https://www.opentable.com/r/${cleanSlug}?covers=${n}`;
+      const base = `${realSlug}?covers=${n}`;
       return dateISO && timeISO ? `${base}&dateTime=${dateISO}T${timeISO}` : base;
     }
     if (details.platform === "resy") {
