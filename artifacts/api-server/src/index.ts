@@ -1,5 +1,6 @@
 // Build: 2026-06-11
-console.log('STARTUP TEST f46a4afa');
+declare const __GIT_COMMIT__: string;
+console.log(`[startup] Build commit: ${__GIT_COMMIT__}`);
 import app from "./app";
 import { logger } from "./lib/logger";
 import { setSchedulersEnabled } from "./routes/health";
