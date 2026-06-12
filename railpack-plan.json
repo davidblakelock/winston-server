@@ -1,11 +1,18 @@
 {
-  "install": {
-    "cmd": "pnpm install --no-frozen-lockfile"
+  "steps": {
+    "install": {
+      "commands": [
+        "npm i -g corepack@latest && corepack enable && corepack prepare pnpm@9.15.9 --activate",
+        "pnpm install --no-frozen-lockfile"
+      ]
+    },
+    "build": {
+      "commands": [
+        "pnpm --filter @workspace/api-server run build"
+      ]
+    }
   },
-  "build": {
-    "cmd": "pnpm --filter @workspace/api-server run build"
-  },
-  "start": {
-    "cmd": "node --enable-source-maps artifacts/api-server/dist/index.mjs"
+  "deploy": {
+    "startCommand": "node --enable-source-maps artifacts/api-server/dist/index.mjs"
   }
 }
