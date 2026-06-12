@@ -18,7 +18,7 @@ Your production stack — nothing else matters:
 
 Native App (Expo/Android)
         ↓ HTTPS
-Railway Server (winston-server-production.up.railway.app)
+Railway Server (winston-server-production-5aa6.up.railway.app)
         ↓ auto-deploys from
 GitHub (davidblakelock/winston-server) main branch
         ↓
