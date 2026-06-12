@@ -1,0 +1,20 @@
+{
+  "$schema": "https://schema.railpack.com",
+  "provider": "node",
+  "steps": {
+    "install": {
+      "commands": [
+        "npm install -g pnpm@9.15.9",
+        "pnpm install --no-frozen-lockfile"
+      ]
+    },
+    "build": {
+      "commands": [
+        "pnpm --filter @workspace/api-server run build"
+      ]
+    }
+  },
+  "deploy": {
+    "startCommand": "node --enable-source-maps artifacts/api-server/dist/index.mjs"
+  }
+}
