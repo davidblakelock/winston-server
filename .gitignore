@@ -2,9 +2,6 @@
 
 # compiled output
 dist
-
-# lockfile — Railway runs pnpm install --no-frozen-lockfile so this isn't needed
-pnpm-lock.yaml
 tmp
 out-tsc
 *.tsbuildinfo
