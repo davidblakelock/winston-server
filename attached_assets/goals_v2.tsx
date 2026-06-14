@@ -32,7 +32,7 @@ import {
 } from 'react-native';
 import Markdown from 'react-native-markdown-display';
 
-const SERVER = 'https://winston-server-production-5aa6.up.railway.app';
+const SERVER = 'https://workspaceapi-server-production-5fd6.up.railway.app';
 const API_KEY = 'winston-native-2026';
 
 const COLORS = {
