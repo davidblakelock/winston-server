@@ -3175,6 +3175,28 @@ If dates cannot be resolved to specific days, set them to null.`,
           // Unified booking path — all contexts (trip-planning and general)
           const partySize = intent.partySize ?? 2;
 
+          // In trip-planning context, derive the date from the trip plan when the
+          // user didn't specify one — find the day whose location matches the city
+          // being discussed and offset from the trip's start date.
+          if (requestContext === "trip-planning" && !intent.dateISO && activeTripPlan?.start_date && city) {
+            const tripCheckIn = parseToISODate(activeTripPlan.start_date);
+            if (tripCheckIn) {
+              const tripDays: Array<{ location?: string; dayNumber?: number }> =
+                (activeTripPlan.itinerary as any)?.days ?? [];
+              const cityLower = city.toLowerCase();
+              const matchIdx = tripDays.findIndex(
+                (d) => d.location && d.location.toLowerCase().includes(cityLower)
+              );
+              if (matchIdx >= 0) {
+                intent.dateISO = addNightsToISO(tripCheckIn, matchIdx);
+                req.log.info(
+                  { city, dayIdx: matchIdx, dateISO: intent.dateISO },
+                  "[R001] Trip date derived from itinerary day"
+                );
+              }
+            }
+          }
+
           let details = await getCachedRestaurantDetails(sessionUserName, intent.restaurantName);
           if (details) {
             req.log.info({ restaurantName: intent.restaurantName, platform: details.platform }, "[R001] Cache hit");
