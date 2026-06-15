@@ -12,7 +12,7 @@ jobs:
       - name: Install Railway CLI
         run: npm install -g @railway/cli
       - name: Link Railway service
-        run: railway link --project d2a95580-4b98-40fb-b682-9ce74a9a74b5 --environment 3b44b7cc-b4de-4891-be2a-903847540da3 --service d7f3e146-d70a-418d-8191-91ec15d4c205
+        run: railway link --project d2a95580-4b98-40fb-b682-9ce74a9a74b5 --environment 3b44b7cc-b4de-4891-be2a-903847540da3 --service '@workspace/api-server'
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       - name: Deploy to Railway
