@@ -5908,22 +5908,48 @@ If you cannot extract both, return null.`,
   }
 
   try {
-    const stream = await anthropic.messages.create({
-      model: selectedModel,
-      max_tokens: isMorningGreeting ? 1800 : 1024,
-      system: buildSystemBlocks(stableSystem, systemPrompt),
-      messages,
-      stream: true,
-    });
+    if (requestContext === "trip-planning") {
+      // ── Trip screen: GPT-4o streaming ────────────────────────────────────
+      const tripSystemContent = [stableSystem, systemPrompt].filter(Boolean).join("\n\n");
+      const tripMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+        { role: "system", content: tripSystemContent },
+        ...filteredHistory.map((h: { role: string; content: string }) => ({
+          role: h.role as "user" | "assistant",
+          content: h.content,
+        })),
+        { role: "user", content: message },
+      ];
+      const tripStream = await openai.chat.completions.create({
+        model: MODEL_GPT4O_TRIP,
+        max_tokens: 3000,
+        messages: tripMessages,
+        stream: true,
+      });
+      for await (const chunk of tripStream) {
+        const text = chunk.choices[0]?.delta?.content ?? "";
+        if (text) {
+          reply += text;
+          sendSSE({ text });
+        }
+      }
+    } else {
+      const stream = await anthropic.messages.create({
+        model: selectedModel,
+        max_tokens: isMorningGreeting ? 1800 : 1024,
+        system: buildSystemBlocks(stableSystem, systemPrompt),
+        messages,
+        stream: true,
+      });
 
-    for await (const event of stream) {
-      if (
-        event.type === "content_block_delta" &&
-        event.delta.type === "text_delta"
-      ) {
-        const text = (event.delta as { type: "text_delta"; text: string }).text;
-        reply += text;
-        sendSSE({ text });
+      for await (const event of stream) {
+        if (
+          event.type === "content_block_delta" &&
+          event.delta.type === "text_delta"
+        ) {
+          const text = (event.delta as { type: "text_delta"; text: string }).text;
+          reply += text;
+          sendSSE({ text });
+        }
       }
     }
 
