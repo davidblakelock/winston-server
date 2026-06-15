@@ -3103,13 +3103,9 @@ If dates cannot be resolved to specific days, set them to null.`,
 
 
   // ── Restaurant reservation / directions / info ───────────────────────────────
-  // Fires when (a) classifier set restaurant_intel, or (b) user is in trip-planning
-  // context and the message contains a reservation keyword (name comes from history).
-  if (
-    isRestaurantIntelRequest ||
-    (requestContext === "trip-planning" && !!activeTripPlan &&
-     /\b(reserv(?:ation|e|ing|ed)?|book(?:ing|ed)?|get (?:a )?table|get (?:us )?in|make (?:a )?(?:dinner )?reserv)\b/i.test(message))
-  ) {
+  // Fires when classifier sets restaurant_intel. City priority: trip day city →
+  // activeTripPlan.destination → GPS reverse geocode → userProfile.city.
+  if (isRestaurantIntelRequest) {
     // A new request always resets any stale pending state.
     if (pendingReservation) clearPendingReservation();
     clearPendingBookingConfirmation();
@@ -3175,49 +3171,14 @@ If dates cannot be resolved to specific days, set them to null.`,
         } else if (intent.action === "info") {
           systemPrompt += `\n\n[Restaurant Info Request — ${intent.restaurantName}] The user wants info about this restaurant${city ? ` in ${city}` : ""}. Answer from your knowledge.`;
 
-        } else if (requestContext === "trip-planning") {
-          // Trip context: simple Places website lookup — no platform detection, no booking URLs
-          const apiKey = process.env.GOOGLE_PLACES_API_KEY;
-          let navUrl: string | null = null;
-          if (apiKey) {
-            try {
-              const placesRes = await fetch("https://places.googleapis.com/v1/places:searchText", {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  "X-Goog-Api-Key": apiKey,
-                  "X-Goog-FieldMask": "places.websiteUri,places.formattedAddress",
-                },
-                body: JSON.stringify({ textQuery: `${intent.restaurantName} restaurant ${city ?? ""}`, pageSize: 1 }),
-                signal: AbortSignal.timeout(8000),
-              });
-              if (placesRes.ok) {
-                const placesData = await placesRes.json() as { places?: Array<{ websiteUri?: string; formattedAddress?: string }> };
-                const place = placesData.places?.[0];
-                navUrl = place?.websiteUri ?? null;
-                if (!navUrl && place?.formattedAddress) {
-                  navUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.formattedAddress)}`;
-                }
-              }
-            } catch { /* fall through to maps fallback */ }
-          }
-          if (!navUrl) {
-            navUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(city ? `${intent.restaurantName} ${city}` : intent.restaurantName)}`;
-          }
-          (req as any)._navigationUrl = navUrl;
-          (req as any)._hardcodedResponse = `Here's the website for ${intent.restaurantName} — you can book directly from there.`;
-          req.log.info({ restaurantName: intent.restaurantName, navUrl }, "[R001] Trip context — website URL dispatched");
-
         } else {
-          // Non-trip context: full Places lookup → platform detection → direct booking URL
+          // Unified booking path — all contexts (trip-planning and general)
           const partySize = intent.partySize ?? 2;
 
-          // 1) Cache check
           let details = await getCachedRestaurantDetails(sessionUserName, intent.restaurantName);
           if (details) {
             req.log.info({ restaurantName: intent.restaurantName, platform: details.platform }, "[R001] Cache hit");
           } else {
-            // 2) Places lookup → detectPlatform → web search
             details = await lookupRestaurantDetails(intent.restaurantName, city ?? "");
             if (details) {
               await cacheRestaurantDetails(sessionUserName, intent.restaurantName, details).catch(() => {});
@@ -3225,7 +3186,6 @@ If dates cannot be resolved to specific days, set them to null.`,
             }
           }
 
-          // 3) Build direct booking URL
           const bookingUrl = details ? buildReservationUrl(details, intent.dateISO, intent.timeISO, partySize) : null;
 
           const conflict = intent.dateISO && intent.timeISO
