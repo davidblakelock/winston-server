@@ -3,7 +3,7 @@
   "_comment": "2026-06-16",
   "build": {
     "builder": "RAILPACK",
-    "buildCommand": "pnpm --filter @workspace/api-server run build"
+    "buildCommand": "rm -rf /root/.cache && pnpm --filter @workspace/api-server run build"
   },
   "deploy": {
     "startCommand": "node --enable-source-maps artifacts/api-server/dist/index.mjs",

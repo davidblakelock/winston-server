@@ -23,7 +23,6 @@ async function buildAll() {
     outdir: distDir,
     outExtension: { ".js": ".mjs" },
     logLevel: "info",
-    cache: false,
     // Bake the build timestamp into the bundle so /api/version always
     // reflects the moment this binary was compiled, not when it started.
     define: {
