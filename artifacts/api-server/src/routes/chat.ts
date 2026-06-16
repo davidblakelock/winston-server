@@ -1841,7 +1841,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       const todayForTrip = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
       const intentRaw = await anthropic.messages.create({
         model: MODEL_HAIKU,
-        max_tokens: 800,
+        max_tokens: 1500,
         system:
           `Today's date is ${todayForTrip}. Extract trip intent from the user's message. Return ONLY valid JSON with these fields: ` +
           '{"destination":"primary destination — state or region (e.g. \\"Arkansas\\") or null","stops":["array of specific cities/towns mentioned as stops, e.g. [\\"Hot Springs\\",\\"Eureka Springs\\",\\"Bentonville\\"] — empty array [] if none named"],"nights":number or null,"partyDesc":"description like \'solo\' or \'me and Susan\' or null","vibe":"travel style or null","startDate":"YYYY-MM-DD — resolve ALL date phrases to a specific YYYY-MM-DD using today\'s date as the reference year, e.g. \'June 12\' → \\"2026-06-12\\", \'next month\' → the 1st of next month; output null only if no date can be inferred","budget":"budget|mid-range|luxury or null"}. ' +
