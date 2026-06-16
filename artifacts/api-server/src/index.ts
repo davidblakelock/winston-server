@@ -1,5 +1,7 @@
 // Build: 2026-06-11
 declare const __GIT_COMMIT__: string;
+console.log('RAILWAY_GIT_COMMIT_SHA=', process.env.RAILWAY_GIT_COMMIT_SHA);
+console.log('RAILWAY_GIT_BRANCH=', process.env.RAILWAY_GIT_BRANCH);
 console.log(`[startup] Build commit: ${__GIT_COMMIT__}`);
 import app from "./app";
 import { logger } from "./lib/logger";
