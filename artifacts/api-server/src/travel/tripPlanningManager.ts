@@ -620,7 +620,7 @@ export async function enrichItineraryWithHotelAvailability(
  * - truncated JSON (GPT-4o hitting max_tokens mid-response): closes unclosed
  *   string literals and then closes all open brackets/braces in stack order.
  */
-function repairJson(raw: string): string {
+export function repairJson(raw: string): string {
   // 1. Remove trailing commas before } or ]
   let s = raw.replace(/,\s*([}\]])/g, "$1");
 

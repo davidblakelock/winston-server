@@ -247,6 +247,7 @@ import {
   getTripPlanById,
   getActiveTripPlans,
   buildTravelProfileContext,
+  repairJson,
   type TripPlanRow,
   type ParsedTripIntent,
 } from "../travel/tripPlanningManager.js";
@@ -1840,7 +1841,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       const todayForTrip = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
       const intentRaw = await anthropic.messages.create({
         model: MODEL_HAIKU,
-        max_tokens: 400,
+        max_tokens: 800,
         system:
           `Today's date is ${todayForTrip}. Extract trip intent from the user's message. Return ONLY valid JSON with these fields: ` +
           '{"destination":"primary destination — state or region (e.g. \\"Arkansas\\") or null","stops":["array of specific cities/towns mentioned as stops, e.g. [\\"Hot Springs\\",\\"Eureka Springs\\",\\"Bentonville\\"] — empty array [] if none named"],"nights":number or null,"partyDesc":"description like \'solo\' or \'me and Susan\' or null","vibe":"travel style or null","startDate":"YYYY-MM-DD — resolve ALL date phrases to a specific YYYY-MM-DD using today\'s date as the reference year, e.g. \'June 12\' → \\"2026-06-12\\", \'next month\' → the 1st of next month; output null only if no date can be inferred","budget":"budget|mid-range|luxury or null"}. ' +
@@ -1862,7 +1863,13 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         intentParsed = JSON.parse(intentText);
         console.log(`[TRIP-INTENT-PARSED] destination="${intentParsed.destination}" stops=${JSON.stringify(intentParsed.stops)} nights=${intentParsed.nights} startDate="${intentParsed.startDate}"`);
       } catch (parseErr) {
-        console.log(`[TRIP-INTENT-PARSE-FAIL] err="${String(parseErr)}" raw="${intentText.slice(0, 100)}"`);
+        console.log(`[TRIP-INTENT-PARSE-FAIL] err="${String(parseErr)}" raw="${intentText.slice(0, 200)}" — attempting repair`);
+        try {
+          intentParsed = JSON.parse(repairJson(intentText));
+          console.log(`[TRIP-INTENT-REPAIRED] destination="${intentParsed.destination}" stops=${JSON.stringify(intentParsed.stops)} nights=${intentParsed.nights}`);
+        } catch (repairErr) {
+          console.log(`[TRIP-INTENT-REPAIR-FAIL] err="${String(repairErr)}"`);
+        }
       }
       // Pre-resolve startDate to strict YYYY-MM-DD so GPT-4o stores it correctly.
       // Haiku may return "June 12th" or a partial phrase; parseToISODate normalises it.
