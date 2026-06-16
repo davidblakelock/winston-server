@@ -1,5 +1,6 @@
 {
   "$schema": "https://railway.com/railway.schema.json",
+  "_comment": "2026-06-16",
   "build": {
     "builder": "RAILPACK",
     "buildCommand": "pnpm --filter @workspace/api-server run build"
