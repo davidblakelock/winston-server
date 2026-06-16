@@ -5,10 +5,11 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    container: ghcr.io/railwayapp/cli:latest
-    env:
-      SVC_ID: d7f3e146-d70a-418d-8191-91ec15d4c205
-      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
-      - run: railway up --service $SVC_ID
+      - name: Trigger Railway Deploy
+        run: |
+          curl -X POST \
+            -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{"query":"mutation { serviceInstanceDeploy(serviceId: \"d7f3e146-d70a-418d-8191-91ec15d4c205\", environmentId: \"3b44b7cc-b4de-4891-be2a-903847540da3\") }"}' \
+            https://backboard.railway.com/graphql/v2
