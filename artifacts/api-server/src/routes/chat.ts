@@ -892,6 +892,7 @@ function getCurrentDateTimeBlock(): string {
 }
 
 const chatHandlerCore = async (req: Request, res: Response) => {
+  console.log('[REQUEST-BODY]', JSON.stringify(req.body).slice(0, 200));
   console.log("CHAT HEADERS:", JSON.stringify(req.headers));
   // ── Auth ──────────────────────────────────────────────────────────────────
   // Two valid paths:
