@@ -6,10 +6,10 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger Railway Deploy
+      - name: Trigger Railway Deploy from GitHub
         run: |
-          curl -X POST \
+          curl -s -X POST \
             -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d '{"query":"mutation { serviceInstanceDeploy(serviceId: \"d7f3e146-d70a-418d-8191-91ec15d4c205\", environmentId: \"3b44b7cc-b4de-4891-be2a-903847540da3\") }"}' \
+            -d '{\"query\":\"mutation { environmentTriggersDeploy(input: { environmentId: \\\"3b44b7cc-b4de-4891-be2a-903847540da3\\\", projectId: \\\"d2a95580-4b98-40fb-b682-9ce74a9a74b5\\\", serviceId: \\\"d7f3e146-d70a-418d-8191-91ec15d4c205\\\" }) }\"}' \
             https://backboard.railway.com/graphql/v2
