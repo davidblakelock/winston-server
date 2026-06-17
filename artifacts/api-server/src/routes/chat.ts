@@ -1966,19 +1966,20 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         );
         // ─────────────────────────────────────────────────────────────────────
 
-        // Fill missing meal websiteUrls via Google Places before saving
-        const mealPlacesApiKey = process.env.GOOGLE_PLACES_API_KEY;
-        if (mealPlacesApiKey) {
-          const mealLookups: Promise<void>[] = [];
+        // Fill missing meal and activity websiteUrls via Google Places before saving.
+        // Hotels are already handled by enrichItineraryWithHotelAvailability above.
+        const itemPlacesApiKey = process.env.GOOGLE_PLACES_API_KEY;
+        if (itemPlacesApiKey) {
+          const itemLookups: Promise<void>[] = [];
           for (const day of itinerary.itinerary.days) {
             const dayCity = (day.location as string | undefined)?.trim() || tripIntent.destination;
             for (const meal of (day.meals as any[] | undefined) ?? []) {
               if (meal.title && !meal.websiteUrl) {
-                mealLookups.push((async () => {
+                itemLookups.push((async () => {
                   try {
                     const pr = await fetch("https://places.googleapis.com/v1/places:searchText", {
                       method: "POST",
-                      headers: { "Content-Type": "application/json", "X-Goog-Api-Key": mealPlacesApiKey, "X-Goog-FieldMask": "places.websiteUri" },
+                      headers: { "Content-Type": "application/json", "X-Goog-Api-Key": itemPlacesApiKey, "X-Goog-FieldMask": "places.websiteUri" },
                       body: JSON.stringify({ textQuery: `${meal.title} restaurant ${dayCity}`, maxResultCount: 1 }),
                       signal: AbortSignal.timeout(5000),
                     });
@@ -1994,8 +1995,30 @@ const chatHandlerCore = async (req: Request, res: Response) => {
                 })());
               }
             }
+            for (const activity of (day.activities as any[] | undefined) ?? []) {
+              if (activity.title && !activity.websiteUrl) {
+                itemLookups.push((async () => {
+                  try {
+                    const pr = await fetch("https://places.googleapis.com/v1/places:searchText", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json", "X-Goog-Api-Key": itemPlacesApiKey, "X-Goog-FieldMask": "places.websiteUri" },
+                      body: JSON.stringify({ textQuery: `${activity.title} ${dayCity}`, maxResultCount: 1 }),
+                      signal: AbortSignal.timeout(5000),
+                    });
+                    if (pr.ok) {
+                      const pd = await pr.json() as { places?: Array<{ websiteUri?: string }> };
+                      const url = pd.places?.[0]?.websiteUri;
+                      if (url) {
+                        activity.websiteUrl = url;
+                        console.log(`[TripPlan] Activity URL: ${activity.title} → ${url}`);
+                      }
+                    }
+                  } catch { /* non-fatal */ }
+                })());
+              }
+            }
           }
-          if (mealLookups.length > 0) await Promise.allSettled(mealLookups);
+          if (itemLookups.length > 0) await Promise.allSettled(itemLookups);
         }
 
         // Cache the intent so isTripSaveIntent can use it even when history is empty
