@@ -2368,6 +2368,7 @@ If dates cannot be resolved to specific days, set them to null.`,
         }
       }
     } catch (modifyErr) {
+      console.log('[TripModify] Modification failed —', (modifyErr as any)?.message ?? String(modifyErr), 'letting Claude respond naturally');
       req.log.warn({ err: modifyErr }, "[TripModify] Modification failed — letting Claude respond naturally");
     }
   }
