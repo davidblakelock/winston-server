@@ -1966,55 +1966,46 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         );
         // ─────────────────────────────────────────────────────────────────────
 
-        // Fill missing meal and activity websiteUrls via GPT-4o web search before saving.
+        // Fill missing meal and activity websiteUrls before saving.
         // Hotels are already handled by enrichItineraryWithHotelAvailability above.
         const tripDestination = itinerary.destination;
+        const travelTitleRe = /\b(drive|driving|travel|depart|departure|head to|heading to|en route|transit)\b/i;
         const itemLookups: Promise<void>[] = [];
         for (const day of itinerary.itinerary.days) {
           const dayCity = (day.location as string | undefined)?.trim() || tripDestination;
           for (const meal of (day.meals as any[] | undefined) ?? []) {
             if (meal.title && !meal.websiteUrl) {
               itemLookups.push((async () => {
-                console.log(`[TripPlan] Meal URL lookup via GPT-4o: "${meal.title}" in ${dayCity}, ${tripDestination}`);
                 try {
                   const resp = await openai.chat.completions.create({
                     model: "gpt-4o-search-preview",
                     max_tokens: 100,
-                    messages: [{ role: "user", content: `Find the official website URL for the restaurant ${meal.title} located in ${dayCity}, ${tripDestination}. This is a dining establishment — return ONLY the official restaurant website URL. Do not return record labels, music venues, or any non-restaurant business. If you cannot find a reliable official restaurant website, return null.` }],
+                    messages: [{ role: "user", content: `I am planning a trip to ${tripDestination}. What is the best website link for ${meal.title} in ${dayCity}? Return only the URL, nothing else.` }],
                   });
-                  const raw = resp.choices[0]?.message?.content?.trim() ?? "";
-                  if (raw && raw !== "null" && raw.startsWith("http")) {
-                    meal.websiteUrl = raw;
-                    console.log(`[TripPlan] Meal URL: ${meal.title} → ${raw}`);
-                  } else {
-                    console.log(`[TripPlan] Meal URL: ${meal.title} → no result (raw="${raw.slice(0, 60)}")`);
-                  }
-                } catch (err) {
-                  console.log(`[TripPlan] Meal URL lookup failed: ${meal.title} — ${(err as any)?.message ?? String(err)}`);
-                }
+                  const url = resp.choices[0]?.message?.content?.trim() ?? "";
+                  if (url) { meal.websiteUrl = url; console.log(`[TripPlan] Meal URL: ${meal.title} → ${url}`); }
+                } catch (err) { console.log(`[TripPlan] Meal URL failed: ${meal.title} — ${(err as any)?.message ?? String(err)}`); }
               })());
             }
           }
           for (const activity of (day.activities as any[] | undefined) ?? []) {
             if (activity.title && !activity.websiteUrl) {
               itemLookups.push((async () => {
-                console.log(`[TripPlan] Activity URL lookup via GPT-4o: "${activity.title}" in ${dayCity}, ${tripDestination}`);
+                if (travelTitleRe.test(activity.title)) {
+                  const dest = encodeURIComponent(`${day.hotel?.name ?? ""} ${dayCity}`.trim());
+                  activity.websiteUrl = `https://www.google.com/maps/dir/?api=1&destination=${dest}`;
+                  console.log(`[TripPlan] Activity URL (maps): ${activity.title} → ${activity.websiteUrl}`);
+                  return;
+                }
                 try {
                   const resp = await openai.chat.completions.create({
                     model: "gpt-4o-search-preview",
                     max_tokens: 100,
-                    messages: [{ role: "user", content: `Find the official website URL for ${activity.title} located in ${dayCity}, ${tripDestination}. Return ONLY the official website URL for this specific attraction or activity. If you cannot find a reliable official website, return null.` }],
+                    messages: [{ role: "user", content: `I am planning a trip to ${tripDestination}. What is the best website link for ${activity.title} in ${dayCity}? Return only the URL, nothing else.` }],
                   });
-                  const raw = resp.choices[0]?.message?.content?.trim() ?? "";
-                  if (raw && raw !== "null" && raw.startsWith("http")) {
-                    activity.websiteUrl = raw;
-                    console.log(`[TripPlan] Activity URL: ${activity.title} → ${raw}`);
-                  } else {
-                    console.log(`[TripPlan] Activity URL: ${activity.title} → no result (raw="${raw.slice(0, 60)}")`);
-                  }
-                } catch (err) {
-                  console.log(`[TripPlan] Activity URL lookup failed: ${activity.title} — ${(err as any)?.message ?? String(err)}`);
-                }
+                  const url = resp.choices[0]?.message?.content?.trim() ?? "";
+                  if (url) { activity.websiteUrl = url; console.log(`[TripPlan] Activity URL: ${activity.title} → ${url}`); }
+                } catch (err) { console.log(`[TripPlan] Activity URL failed: ${activity.title} — ${(err as any)?.message ?? String(err)}`); }
               })());
             }
           }
