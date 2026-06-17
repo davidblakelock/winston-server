@@ -1824,6 +1824,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   if (isTripPlanIntent && requestContext !== "trip-planning") {
     systemPrompt += `\n\n[Trip Planning — Use Trip Screen]\nDavid wants to plan a trip. Do NOT plan, generate, or outline any itinerary here in the main chat. Warmly redirect him to his Trips screen (the suitcase icon at the bottom of the app) where he can plan and save full trips with you. One or two sentences max — friendly and brief.`;
   }
+  let forceTripModify = false;
   if (isTripPlanIntent && requestContext === "trip-planning") {
     // Extend socket timeout so the proxy doesn't drop the connection during the 30–60s generation.
     req.socket?.setTimeout(120000);
@@ -1886,8 +1887,13 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       }
 
       if (!intentParsed.destination) {
-        console.log(`[TRIP-INTENT-NO-DEST] falling back to Claude`);
-        req.log.info({ message: message.slice(0, 60) }, "[TripPlan] Plan intent matched but no destination found — letting Claude handle naturally");
+        if (activeTripPlan?.itinerary) {
+          console.log(`[TRIP-INTENT-NO-DEST] active trip exists — routing to modification handler`);
+          forceTripModify = true;
+        } else {
+          console.log(`[TRIP-INTENT-NO-DEST] falling back to Claude`);
+          req.log.info({ message: message.slice(0, 60) }, "[TripPlan] Plan intent matched but no destination found — letting Claude handle naturally");
+        }
       } else {
         req.log.info(
           { dest: intentParsed.destination, nights: intentParsed.nights, vibe: intentParsed.vibe },
@@ -2166,7 +2172,7 @@ If dates cannot be resolved to specific days, set them to null.`,
   // Fires on every trip-screen message that isn't plan/save. GPT-4o decides
   // whether the message requires an itinerary change (returns updated JSON)
   // or is just a question/comment (returns null). Only saves when changed.
-  if (requestContext === "trip-planning" && activeTripPlan?.itinerary && !isTripPlanIntent && !isTripSaveIntent && !cls.trip_price_query) {
+  if (requestContext === "trip-planning" && activeTripPlan?.itinerary && (!isTripPlanIntent || forceTripModify) && !isTripSaveIntent && !cls.trip_price_query) {
     try {
       req.log.info({ tripId: activeTripPlan.id, message: message.slice(0, 80) }, "[TripModify] Checking with GPT-4o whether itinerary needs updating");
 
