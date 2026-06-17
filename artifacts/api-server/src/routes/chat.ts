@@ -2332,6 +2332,7 @@ If dates cannot be resolved to specific days, set them to null.`,
                 }
               }
               for (const activity of (day.activities as any[] | undefined) ?? []) {
+                console.log('[TripModify] Activity check:', activity.title, 'websiteUrl=', activity.websiteUrl);
                 if (activity.title && !activity.websiteUrl) {
                   placesLookups.push((async () => {
                     try {
