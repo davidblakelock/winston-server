@@ -1208,7 +1208,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isHotelAvailabilityQuery = !isMorningGreeting && !isTripSaveIntent && !isTripPlanIntent && (cls.hotel_availability || isTripPriceQuery);
 
   // Guard: don't run profile handler when a trip save is being detected — they conflict
-  const isProfileRequest = !isTripSaveIntent && cls.profile_update;
+  const isProfileRequest = !isTripSaveIntent && cls.profile_update && requestContext !== 'trip-planning';
   // IMPORTANT: Reminder requests must NEVER route to Google Calendar.
   // IMPORTANT: CREATE is evaluated before MODIFY — explicit "add/create/schedule/put on calendar"
   // always wins, even if the event title contains a word like "move" or "transfer".
