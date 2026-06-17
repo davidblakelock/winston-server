@@ -354,10 +354,10 @@ Rules — follow exactly:
 - If the user specifies which city each night is in, honor that exactly: one hotel per city, in the stated order, activities and restaurants located in that city.
 - The last day (departure day) has no hotel — traveler is checking out that morning. One breakfast or morning activity max, then they drive home.
 - hotel.websiteUrl is the hotel's own official site. meals[].websiteUrl is the restaurant's own site. activities[].websiteUrl is the official site for the attraction, museum, spa, or venue. All are required — never leave empty.
-- For every meal and every activity, include an accurate websiteUrl field with the real official website URL. For driving segments between cities, include them as activities with a Google Maps directions URL as the websiteUrl using this exact format: https://www.google.com/maps/dir/?api=1&origin=Current+Location&destination=HOTEL_NAME+CITY where HOTEL_NAME is the destination hotel name and CITY is the destination city.
-- For road trips, include approximate driving times between stops in the first activity notes of each travel day.
-- Where the trip vibe is romantic, every evening should feel designed for two — intimate restaurants, sunset moments, no generic tourist traps.
-- 2–3 activities per day, 1–2 meals per day (include breakfast only if it's a genuinely notable spot).
+- For every meal and every activity, include an accurate websiteUrl field with the real official website URL.
+- For road trips, every day where the traveler is driving to a new location MUST begin with a driving activity. The first day must include a drive FROM the traveler's home city to the first stop. The last day must include a drive FROM the final stop back to the traveler's home city. All middle days must include a drive from the previous stop to the next stop. Set the driving activity title to "Drive from [Origin] to [Destination]", include actual drive time and distance in the description, and set websiteUrl to https://www.google.com/maps/dir/?api=1&origin=Current+Location&destination=HOTEL_NAME+CITY where HOTEL_NAME+CITY is the destination hotel name and city URL-encoded with + for spaces. The traveler home city is available in the user profile.
+- Honor the vibe and tone the user described in their message — let that guide every hotel, restaurant, and activity recommendation.
+- Include activities and meals that fit the day naturally — let the trip type and user's intent guide how many.
 ${travelCtx ? `\nTraveler profile — personalize every recommendation to these preferences:\n${travelCtx}` : ""}`;
 
   const rawMessage = intent.rawMessage ?? `Plan a ${intent.nights ?? 3}-night trip to ${intent.destination}`;
@@ -369,12 +369,12 @@ ${travelCtx ? `\nTraveler profile — personalize every recommendation to these 
   );
 
   const response = await openai.chat.completions.create({
-    model:           MODEL_GPT4O,
+    model:           "gpt-4o-search-preview",
     max_tokens:      16000,
     response_format: { type: "json_object" },
     messages: [
       { role: "system", content: systemPrompt },
-      { role: "user",   content: rawMessage },
+      { role: "user",   content: `Here is the traveler's exact request:\n\n${rawMessage}\n\nGenerate the full itinerary JSON now.` },
     ],
   });
 
