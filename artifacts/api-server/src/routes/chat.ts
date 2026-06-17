@@ -2213,6 +2213,7 @@ If dates cannot be resolved to specific days, set them to null.`,
               `Preserve all fields and structure exactly — only change what was asked. ` +
               `When replacing a hotel, clear its bookingUrl, websiteUrl, pricePerNight, available, availabilityChecked, alternativeName, alternativeBookingUrl, and alternativePricePerNight fields. ` +
               `If the latest message is a question, a compliment, or anything that does not require changing the itinerary, return exactly: null` +
+              `When adding any new activity, spa, attraction, or restaurant to the itinerary, you MUST include a websiteUrl field with the official website URL. Never add an activity without a websiteUrl. Example: {"title": "Quapaw Baths & Spa", "websiteUrl": "https://www.quapawbaths.com", "description": "..."}` +
               `\n\nCurrent itinerary:\n${JSON.stringify(activeTripPlan.itinerary)}`,
           },
           ...history.slice(-12).map((h) => ({ role: h.role as "user" | "assistant", content: h.content })),
