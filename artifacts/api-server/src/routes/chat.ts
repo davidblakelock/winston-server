@@ -1966,51 +1966,6 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         );
         // ─────────────────────────────────────────────────────────────────────
 
-        // Fill missing meal and activity websiteUrls before saving.
-        // Hotels are already handled by enrichItineraryWithHotelAvailability above.
-        const tripDestination = itinerary.destination;
-        const travelTitleRe = /\b(drive|driving|travel|depart|departure|head to|heading to|en route|transit)\b/i;
-        const itemLookups: Promise<void>[] = [];
-        for (const day of itinerary.itinerary.days) {
-          const dayCity = (day.location as string | undefined)?.trim() || tripDestination;
-          for (const meal of (day.meals as any[] | undefined) ?? []) {
-            if (meal.title && !meal.websiteUrl) {
-              itemLookups.push((async () => {
-                try {
-                  const resp = await openai.chat.completions.create({
-                    model: "gpt-4o-search-preview",
-                    max_tokens: 100,
-                    messages: [{ role: "user", content: `I am planning a trip to ${tripDestination}. What is the best website link for ${meal.title} in ${dayCity}? Return only the URL, nothing else.` }],
-                  });
-                  const url = resp.choices[0]?.message?.content?.trim() ?? "";
-                  if (url) { meal.websiteUrl = url; console.log(`[TripPlan] Meal URL: ${meal.title} → ${url}`); }
-                } catch (err) { console.log(`[TripPlan] Meal URL failed: ${meal.title} — ${(err as any)?.message ?? String(err)}`); }
-              })());
-            }
-          }
-          for (const activity of (day.activities as any[] | undefined) ?? []) {
-            if (activity.title && !activity.websiteUrl) {
-              itemLookups.push((async () => {
-                if (travelTitleRe.test(activity.title)) {
-                  const dest = encodeURIComponent(`${day.hotel?.name ?? ""} ${dayCity}`.trim());
-                  activity.websiteUrl = `https://www.google.com/maps/dir/?api=1&destination=${dest}`;
-                  console.log(`[TripPlan] Activity URL (maps): ${activity.title} → ${activity.websiteUrl}`);
-                  return;
-                }
-                try {
-                  const resp = await openai.chat.completions.create({
-                    model: "gpt-4o-search-preview",
-                    max_tokens: 100,
-                    messages: [{ role: "user", content: `I am planning a trip to ${tripDestination}. What is the best website link for ${activity.title} in ${dayCity}? Return only the URL, nothing else.` }],
-                  });
-                  const url = resp.choices[0]?.message?.content?.trim() ?? "";
-                  if (url) { activity.websiteUrl = url; console.log(`[TripPlan] Activity URL: ${activity.title} → ${url}`); }
-                } catch (err) { console.log(`[TripPlan] Activity URL failed: ${activity.title} — ${(err as any)?.message ?? String(err)}`); }
-              })());
-            }
-          }
-        }
-        if (itemLookups.length > 0) await Promise.allSettled(itemLookups);
 
         // Cache the intent so isTripSaveIntent can use it even when history is empty
         // (isolated contexts don't write to chat_messages, so DB hydration won't find it)
@@ -2335,7 +2290,7 @@ If dates cannot be resolved to specific days, set them to null.`,
             }
           }
 
-          // Fill missing websiteUrls for hotels, meals, and activities via Google Places (parallel)
+          // Fill missing hotel websiteUrls via Google Places (parallel)
           const placesApiKey = process.env.GOOGLE_PLACES_API_KEY;
           if (placesApiKey) {
             const placesLookups: Promise<void>[] = [];
@@ -2357,45 +2312,6 @@ If dates cannot be resolved to specific days, set them to null.`,
                     }
                   } catch { /* non-fatal */ }
                 })());
-              }
-              for (const meal of (day.meals as any[] | undefined) ?? []) {
-                if (meal.title && !meal.websiteUrl) {
-                  placesLookups.push((async () => {
-                    try {
-                      const pr = await fetch("https://places.googleapis.com/v1/places:searchText", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json", "X-Goog-Api-Key": placesApiKey, "X-Goog-FieldMask": "places.websiteUri" },
-                        body: JSON.stringify({ textQuery: `${meal.title} restaurant ${dayCity}`, maxResultCount: 1 }),
-                        signal: AbortSignal.timeout(5000),
-                      });
-                      if (pr.ok) {
-                        const pd = await pr.json() as { places?: Array<{ websiteUri?: string }> };
-                        const url = pd.places?.[0]?.websiteUri;
-                        if (url) { meal.websiteUrl = url; req.log.info({ name: meal.title, url }, "[TripModify] Places: meal websiteUrl filled"); }
-                      }
-                    } catch { /* non-fatal */ }
-                  })());
-                }
-              }
-              for (const activity of (day.activities as any[] | undefined) ?? []) {
-                console.log('[TripModify] Activity check:', activity.title, 'websiteUrl=', activity.websiteUrl);
-                if (activity.title && !activity.websiteUrl) {
-                  placesLookups.push((async () => {
-                    try {
-                      const pr = await fetch("https://places.googleapis.com/v1/places:searchText", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json", "X-Goog-Api-Key": placesApiKey, "X-Goog-FieldMask": "places.websiteUri" },
-                        body: JSON.stringify({ textQuery: `${activity.title} ${dayCity}`, maxResultCount: 1 }),
-                        signal: AbortSignal.timeout(5000),
-                      });
-                      if (pr.ok) {
-                        const pd = await pr.json() as { places?: Array<{ websiteUri?: string }> };
-                        const url = pd.places?.[0]?.websiteUri;
-                        if (url) { activity.websiteUrl = url; req.log.info({ name: activity.title, url }, "[TripModify] Places: activity websiteUrl filled"); }
-                      }
-                    } catch { /* non-fatal */ }
-                  })());
-                }
               }
             }
             if (placesLookups.length > 0) {

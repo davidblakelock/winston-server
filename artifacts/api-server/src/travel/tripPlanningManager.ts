@@ -378,6 +378,7 @@ Rules — follow exactly:
 - If the user specifies which city each night is in, honor that exactly: one hotel per city, in the stated order, activities and restaurants located in that city.
 - The last day (departure day) has no hotel — traveler is checking out that morning. One breakfast or morning activity max, then they drive home.
 - hotel.websiteUrl is the hotel's own official site. meals[].websiteUrl is the restaurant's own site. activities[].websiteUrl is the official site for the attraction, museum, spa, or venue. All are required — never leave empty.
+- For every meal and every activity, include an accurate websiteUrl field with the real official website URL. For driving segments between cities, include them as activities with a Google Maps directions URL as the websiteUrl using this exact format: https://www.google.com/maps/dir/?api=1&origin=Current+Location&destination=HOTEL_NAME+CITY where HOTEL_NAME is the destination hotel name and CITY is the destination city.
 - For road trips, include approximate driving times between stops in the first activity notes of each travel day.
 - Where the trip vibe is romantic, every evening should feel designed for two — intimate restaurants, sunset moments, no generic tourist traps.
 - 2–3 activities per day, 1–2 meals per day (include breakfast only if it's a genuinely notable spot).
