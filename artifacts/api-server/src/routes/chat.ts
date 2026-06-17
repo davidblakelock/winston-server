@@ -2324,23 +2324,15 @@ If dates cannot be resolved to specific days, set them to null.`,
           (req as any)._tripUpdated = { tripUpdated: true, tripId: activeTripPlan.id };
           req.log.info({ tripId: activeTripPlan.id }, "[TripModify] Itinerary updated and saved");
 
-          // Generate a natural conversational response about what changed
-          const swapDetail = swapLines.length > 0 ? swapLines.join("\n") : "";
+          // Generate a natural conversational response — pure GPT-4o, no constraints
           let modifyNarrative = "";
           try {
             const narrativeResp = await openai.chat.completions.create({
               model: MODEL_GPT4O_TRIP,
-              max_tokens: 300,
+              max_tokens: 400,
               messages: [
-                {
-                  role: "system",
-                  content:
-                    `You are a luxury travel concierge. The user's trip itinerary has just been updated and saved. ` +
-                    `Respond naturally and conversationally about what changed — like a knowledgeable friend confirming the update. ` +
-                    `Be warm, specific, and concise. Do not use bullet points or headers.` +
-                    (swapDetail ? `\n\nChanges applied:\n${swapDetail}` : ""),
-                },
-                ...history.slice(-6).map((h) => ({ role: h.role as "user" | "assistant", content: h.content })),
+                { role: "system", content: `You are a luxury travel concierge. The user's trip itinerary has already been updated and saved.` },
+                ...history.slice(-8).map((h) => ({ role: h.role as "user" | "assistant", content: h.content })),
                 { role: "user" as const, content: message },
               ],
             });
@@ -2353,6 +2345,7 @@ If dates cannot be resolved to specific days, set them to null.`,
           if (modifyNarrative) {
             systemPrompt += `\n\n[Trip Modified & Saved]\nRespond with EXACTLY this text, word for word:\n${modifyNarrative}`;
           } else {
+            const swapDetail = swapLines.length > 0 ? swapLines.join("\n") : "";
             systemPrompt += `\n\n[Trip Modified & Saved — "${activeTripPlan.trip_name ?? activeTripPlan.destination}"]\nYou just applied the user's modification and saved it.${swapDetail ? `\n${swapDetail}` : ""}\nConfirm the change naturally.`;
           }
         } else {
