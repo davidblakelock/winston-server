@@ -1966,60 +1966,49 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         );
         // ─────────────────────────────────────────────────────────────────────
 
-        // Fill missing meal and activity websiteUrls via Google Places before saving.
+        // Fill missing meal and activity websiteUrls via GPT-4o web search before saving.
         // Hotels are already handled by enrichItineraryWithHotelAvailability above.
-        const itemPlacesApiKey = process.env.GOOGLE_PLACES_API_KEY;
-        if (itemPlacesApiKey) {
-          const itemLookups: Promise<void>[] = [];
-          for (const day of itinerary.itinerary.days) {
-            const dayCity = (day.location as string | undefined)?.trim() || tripIntent.destination;
-            for (const meal of (day.meals as any[] | undefined) ?? []) {
-              if (meal.title && !meal.websiteUrl) {
-                itemLookups.push((async () => {
-                  try {
-                    const pr = await fetch("https://places.googleapis.com/v1/places:searchText", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json", "X-Goog-Api-Key": itemPlacesApiKey, "X-Goog-FieldMask": "places.websiteUri" },
-                      body: JSON.stringify({ textQuery: `${meal.title} restaurant ${dayCity}`, maxResultCount: 1 }),
-                      signal: AbortSignal.timeout(5000),
-                    });
-                    if (pr.ok) {
-                      const pd = await pr.json() as { places?: Array<{ websiteUri?: string }> };
-                      const url = pd.places?.[0]?.websiteUri;
-                      if (url) {
-                        meal.websiteUrl = url;
-                        console.log(`[TripPlan] Meal URL: ${meal.title} → ${url}`);
-                      }
-                    }
-                  } catch { /* non-fatal */ }
-                })());
-              }
-            }
-            for (const activity of (day.activities as any[] | undefined) ?? []) {
-              if (activity.title && !activity.websiteUrl) {
-                itemLookups.push((async () => {
-                  try {
-                    const pr = await fetch("https://places.googleapis.com/v1/places:searchText", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json", "X-Goog-Api-Key": itemPlacesApiKey, "X-Goog-FieldMask": "places.websiteUri" },
-                      body: JSON.stringify({ textQuery: `${activity.title} ${dayCity}`, maxResultCount: 1 }),
-                      signal: AbortSignal.timeout(5000),
-                    });
-                    if (pr.ok) {
-                      const pd = await pr.json() as { places?: Array<{ websiteUri?: string }> };
-                      const url = pd.places?.[0]?.websiteUri;
-                      if (url) {
-                        activity.websiteUrl = url;
-                        console.log(`[TripPlan] Activity URL: ${activity.title} → ${url}`);
-                      }
-                    }
-                  } catch { /* non-fatal */ }
-                })());
-              }
+        const itemLookups: Promise<void>[] = [];
+        for (const day of itinerary.itinerary.days) {
+          const dayCity = (day.location as string | undefined)?.trim() || tripIntent.destination;
+          for (const meal of (day.meals as any[] | undefined) ?? []) {
+            if (meal.title && !meal.websiteUrl) {
+              itemLookups.push((async () => {
+                try {
+                  const resp = await openai.chat.completions.create({
+                    model: "gpt-4o-search-preview",
+                    max_tokens: 100,
+                    messages: [{ role: "user", content: `Find the official website URL for ${meal.title} located in ${dayCity}. Return ONLY the URL, nothing else. If you cannot find a reliable official website, return null.` }],
+                  });
+                  const raw = resp.choices[0]?.message?.content?.trim() ?? "";
+                  if (raw && raw !== "null" && raw.startsWith("http")) {
+                    meal.websiteUrl = raw;
+                    console.log(`[TripPlan] Meal URL: ${meal.title} → ${raw}`);
+                  }
+                } catch { /* non-fatal */ }
+              })());
             }
           }
-          if (itemLookups.length > 0) await Promise.allSettled(itemLookups);
+          for (const activity of (day.activities as any[] | undefined) ?? []) {
+            if (activity.title && !activity.websiteUrl) {
+              itemLookups.push((async () => {
+                try {
+                  const resp = await openai.chat.completions.create({
+                    model: "gpt-4o-search-preview",
+                    max_tokens: 100,
+                    messages: [{ role: "user", content: `Find the official website URL for ${activity.title} located in ${dayCity}. Return ONLY the URL, nothing else. If you cannot find a reliable official website, return null.` }],
+                  });
+                  const raw = resp.choices[0]?.message?.content?.trim() ?? "";
+                  if (raw && raw !== "null" && raw.startsWith("http")) {
+                    activity.websiteUrl = raw;
+                    console.log(`[TripPlan] Activity URL: ${activity.title} → ${raw}`);
+                  }
+                } catch { /* non-fatal */ }
+              })());
+            }
+          }
         }
+        if (itemLookups.length > 0) await Promise.allSettled(itemLookups);
 
         // Cache the intent so isTripSaveIntent can use it even when history is empty
         // (isolated contexts don't write to chat_messages, so DB hydration won't find it)
