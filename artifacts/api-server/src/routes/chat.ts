@@ -2186,7 +2186,7 @@ If dates cannot be resolved to specific days, set them to null.`,
             content:
               `You are a travel concierge managing a saved trip itinerary. ` +
               `If the conversation indicates the user wants a change to the itinerary (swap a hotel, change a restaurant, modify an activity, update dates, etc.), ` +
-              `apply the change and return the complete updated itinerary as a raw JSON object. ` +
+              `apply the change and return the ENTIRE itinerary JSON with ALL days intact — you MUST include every single day from the current itinerary, not just the modified day. Removing or omitting any days is strictly forbidden. Only modify the specific element the user requested. ` +
               `Preserve all fields and structure exactly — only change what was asked. ` +
               `When replacing a hotel, clear its bookingUrl, websiteUrl, pricePerNight, available, availabilityChecked, alternativeName, alternativeBookingUrl, and alternativePricePerNight fields. ` +
               `If the latest message is a question, a compliment, or anything that does not require changing the itinerary, return exactly: null` +
