@@ -1854,10 +1854,12 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       const intentRaw0 =
         intentRaw.content[0]?.type === "text" ? intentRaw.content[0].text.trim() : "{}";
       // Strip markdown code fences that Haiku occasionally wraps around JSON
-      const intentText = intentRaw0
+      let intentText = intentRaw0
         .replace(/^```(?:json)?\s*/i, "")
         .replace(/\s*```$/, "")
         .trim();
+      const lastBrace = intentText.lastIndexOf('}');
+      if (lastBrace !== -1) intentText = intentText.slice(0, lastBrace + 1);
       console.log(`[TRIP-INTENT-HAIKU] raw="${intentRaw0.slice(0, 200)}" stripped="${intentText.slice(0, 200)}"`);
       let intentParsed: { destination?: string | null; stops?: string[] | null; nights?: number | null; partyDesc?: string | null; vibe?: string | null; startDate?: string | null; budget?: string | null } = {};
       try {
