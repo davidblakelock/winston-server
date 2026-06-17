@@ -363,7 +363,7 @@ Required structure:
           "notes": "2–3 sentences with the personality and voice from the example above — what makes this property special, the vibe, why it's right for these exact travelers. Include approximate nightly rate."
         },
         "activities": [
-          { "time": "Morning", "title": "Activity name", "description": "Specific real places — name the street, the trail, the gallery, the viewpoint. Say why it's unmissable.", "notes": "Driving time from previous stop if applicable. Reservations, parking, what to wear, insider tip.", "websiteUrl": "Official website for the attraction, museum, spa, or venue — required, never empty" }
+          { "time": "Morning", "title": "Activity name", "description": "Specific real places — name the street, the trail, the gallery, the viewpoint. Say why it's unmissable.", "notes": "Driving time from previous stop if applicable. Reservations, parking, what to wear, insider tip.", "websiteUrl": "the official website URL for this activity, attraction, spa, or restaurant — required, never null, always include a real URL" }
         ],
         "meals": [
           { "time": "Dinner", "title": "Specific restaurant name", "description": "Opinionated recommendation — name the signature dish, describe the atmosphere, explain why this is the right call tonight for these travelers", "websiteUrl": "Restaurant's own website — required", "bookingUrl": "OpenTable/Resy link or same as websiteUrl" }
