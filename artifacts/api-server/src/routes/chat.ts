@@ -1966,6 +1966,38 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         );
         // ─────────────────────────────────────────────────────────────────────
 
+        // Fill missing meal websiteUrls via Google Places before saving
+        const mealPlacesApiKey = process.env.GOOGLE_PLACES_API_KEY;
+        if (mealPlacesApiKey) {
+          const mealLookups: Promise<void>[] = [];
+          for (const day of itinerary.itinerary.days) {
+            const dayCity = (day.location as string | undefined)?.trim() || tripIntent.destination;
+            for (const meal of (day.meals as any[] | undefined) ?? []) {
+              if (meal.title && !meal.websiteUrl) {
+                mealLookups.push((async () => {
+                  try {
+                    const pr = await fetch("https://places.googleapis.com/v1/places:searchText", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json", "X-Goog-Api-Key": mealPlacesApiKey, "X-Goog-FieldMask": "places.websiteUri" },
+                      body: JSON.stringify({ textQuery: `${meal.title} restaurant ${dayCity}`, maxResultCount: 1 }),
+                      signal: AbortSignal.timeout(5000),
+                    });
+                    if (pr.ok) {
+                      const pd = await pr.json() as { places?: Array<{ websiteUri?: string }> };
+                      const url = pd.places?.[0]?.websiteUri;
+                      if (url) {
+                        meal.websiteUrl = url;
+                        console.log(`[TripPlan] Meal URL: ${meal.title} → ${url}`);
+                      }
+                    }
+                  } catch { /* non-fatal */ }
+                })());
+              }
+            }
+          }
+          if (mealLookups.length > 0) await Promise.allSettled(mealLookups);
+        }
+
         // Cache the intent so isTripSaveIntent can use it even when history is empty
         // (isolated contexts don't write to chat_messages, so DB hydration won't find it)
         lastTripIntentByUser.set(sessionUserName, { intent: tripIntent, timestamp: Date.now() });
