@@ -369,7 +369,7 @@ ${travelCtx ? `\nTraveler profile — personalize every recommendation to these 
   );
 
   const response = await openai.chat.completions.create({
-    model:           "gpt-4o-search-preview",
+    model:           MODEL_GPT4O,
     max_tokens:      16000,
     response_format: { type: "json_object" },
     messages: [
