@@ -2322,11 +2322,39 @@ If dates cannot be resolved to specific days, set them to null.`,
 
           await updateTripPlan(activeTripPlan.id, sessionUserName, { itinerary: updatedItinerary as never });
           (req as any)._tripUpdated = { tripUpdated: true, tripId: activeTripPlan.id };
-          const swapDetail = swapLines.length > 0
-            ? `\nChanges made:\n${swapLines.join("\n")}\nMention the nightly rate if one is shown above.`
-            : "";
-          systemPrompt += `\n\n[Trip Modified & Saved — "${activeTripPlan.trip_name ?? activeTripPlan.destination}"]\nYou just applied the user's modification and saved it.${swapDetail}\nConfirm the change naturally.`;
           req.log.info({ tripId: activeTripPlan.id }, "[TripModify] Itinerary updated and saved");
+
+          // Generate a natural conversational response about what changed
+          const swapDetail = swapLines.length > 0 ? swapLines.join("\n") : "";
+          let modifyNarrative = "";
+          try {
+            const narrativeResp = await openai.chat.completions.create({
+              model: MODEL_GPT4O_TRIP,
+              max_tokens: 300,
+              messages: [
+                {
+                  role: "system",
+                  content:
+                    `You are a luxury travel concierge. The user's trip itinerary has just been updated and saved. ` +
+                    `Respond naturally and conversationally about what changed — like a knowledgeable friend confirming the update. ` +
+                    `Be warm, specific, and concise. Do not use bullet points or headers.` +
+                    (swapDetail ? `\n\nChanges applied:\n${swapDetail}` : ""),
+                },
+                ...history.slice(-6).map((h) => ({ role: h.role as "user" | "assistant", content: h.content })),
+                { role: "user" as const, content: message },
+              ],
+            });
+            modifyNarrative = narrativeResp.choices[0]?.message?.content?.trim() ?? "";
+            req.log.info({ tripId: activeTripPlan.id }, "[TripModify] Narrative response generated");
+          } catch (narrativeErr) {
+            req.log.warn({ err: narrativeErr }, "[TripModify] Narrative generation failed — falling back to systemPrompt injection");
+          }
+
+          if (modifyNarrative) {
+            systemPrompt += `\n\n[Trip Modified & Saved]\nRespond with EXACTLY this text, word for word:\n${modifyNarrative}`;
+          } else {
+            systemPrompt += `\n\n[Trip Modified & Saved — "${activeTripPlan.trip_name ?? activeTripPlan.destination}"]\nYou just applied the user's modification and saved it.${swapDetail ? `\n${swapDetail}` : ""}\nConfirm the change naturally.`;
+          }
         } else {
           req.log.warn({ raw: raw.slice(0, 200) }, "[TripModify] GPT-4o returned unexpected response — skipping update");
         }
