@@ -2324,27 +2324,23 @@ If dates cannot be resolved to specific days, set them to null.`,
           (req as any)._tripUpdated = { tripUpdated: true, tripId: activeTripPlan.id };
           req.log.info({ tripId: activeTripPlan.id }, "[TripModify] Itinerary updated and saved");
 
-          // Generate a natural conversational response — pure GPT-4o, no constraints
-          let modifyNarrative = "";
+          // Generate a natural conversational response — no system prompt, no constraints, full history
           try {
             const narrativeResp = await openai.chat.completions.create({
               model: MODEL_GPT4O_TRIP,
               max_tokens: 400,
               messages: [
-                { role: "system", content: `You are a luxury travel concierge. The user's trip itinerary has already been updated and saved.` },
-                ...history.slice(-8).map((h) => ({ role: h.role as "user" | "assistant", content: h.content })),
+                ...history.map((h) => ({ role: h.role as "user" | "assistant", content: h.content })),
                 { role: "user" as const, content: message },
               ],
             });
-            modifyNarrative = narrativeResp.choices[0]?.message?.content?.trim() ?? "";
-            req.log.info({ tripId: activeTripPlan.id }, "[TripModify] Narrative response generated");
+            const modifyNarrative = narrativeResp.choices[0]?.message?.content?.trim() ?? "";
+            if (modifyNarrative) {
+              (req as any)._modifyNarrative = modifyNarrative;
+              req.log.info({ tripId: activeTripPlan.id }, "[TripModify] Narrative response generated");
+            }
           } catch (narrativeErr) {
-            req.log.warn({ err: narrativeErr }, "[TripModify] Narrative generation failed — falling back to systemPrompt injection");
-          }
-
-          if (modifyNarrative) {
-            systemPrompt += `\n\n[Trip Modified & Saved]\nRespond with EXACTLY this text, word for word:\n${modifyNarrative}`;
-          } else {
+            req.log.warn({ err: narrativeErr }, "[TripModify] Narrative generation failed — will use fallback response");
             const swapDetail = swapLines.length > 0 ? swapLines.join("\n") : "";
             systemPrompt += `\n\n[Trip Modified & Saved — "${activeTripPlan.trip_name ?? activeTripPlan.destination}"]\nYou just applied the user's modification and saved it.${swapDetail ? `\n${swapDetail}` : ""}\nConfirm the change naturally.`;
           }
@@ -5796,22 +5792,28 @@ If you cannot extract both, return null.`,
 
       if (requestContext === "trip-planning") {
         // ── Trip screen: GPT-4o handles all responses ────────────────────────
-        const tripSystemContent = [stableSystem, systemPrompt].filter(Boolean).join("\n\n");
-        const tripMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-          { role: "system", content: tripSystemContent },
-          ...filteredHistory.map((h: { role: string; content: string }) => ({
-            role: h.role as "user" | "assistant",
-            content: h.content,
-          })),
-          { role: "user", content: message },
-        ];
-        const tripResp = await openai.chat.completions.create({
-          model: MODEL_GPT4O_TRIP,
-          max_tokens: 3000,
-          messages: tripMessages,
-        });
-        nativeReply = tripResp.choices[0]?.message?.content ?? "";
-        req.log.info({ responsePreview: nativeReply.slice(0, 300) }, "[DIAG:4] GPT-4o trip response sent");
+        if ((req as any)._modifyNarrative) {
+          // Modification handler already generated the response — use it directly
+          nativeReply = (req as any)._modifyNarrative;
+          req.log.info({ responsePreview: nativeReply.slice(0, 300) }, "[DIAG:4] Trip modify narrative used directly");
+        } else {
+          const tripSystemContent = [stableSystem, systemPrompt].filter(Boolean).join("\n\n");
+          const tripMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+            { role: "system", content: tripSystemContent },
+            ...filteredHistory.map((h: { role: string; content: string }) => ({
+              role: h.role as "user" | "assistant",
+              content: h.content,
+            })),
+            { role: "user", content: message },
+          ];
+          const tripResp = await openai.chat.completions.create({
+            model: MODEL_GPT4O_TRIP,
+            max_tokens: 3000,
+            messages: tripMessages,
+          });
+          nativeReply = tripResp.choices[0]?.message?.content ?? "";
+          req.log.info({ responsePreview: nativeReply.slice(0, 300) }, "[DIAG:4] GPT-4o trip response sent");
+        }
       } else {
         // ── All other contexts: Claude ───────────────────────────────────────
         const claudeResp = await anthropic.messages.create({
