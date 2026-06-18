@@ -1888,25 +1888,6 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           req.log.info({ message: message.slice(0, 60) }, "[TripPlan] Plan intent matched but no destination found — letting Claude handle naturally");
         }
       } else {
-        // If the parsed destination is already part of the active trip (exact match or
-        // substring of destination/day location), route to modification instead of
-        // generating a new trip.
-        if (activeTripPlan?.itinerary && intentParsed.destination) {
-          const parsedLower = intentParsed.destination.toLowerCase();
-          const tripDestLower = (activeTripPlan.destination ?? "").toLowerCase();
-          const dayLocations: string[] = ((activeTripPlan.itinerary as any)?.days ?? [])
-            .map((d: any) => (d.location ?? "").toLowerCase())
-            .filter(Boolean);
-          const isPartOfActiveTrip =
-            tripDestLower.includes(parsedLower) ||
-            parsedLower.includes(tripDestLower) ||
-            dayLocations.some((loc) => loc.includes(parsedLower) || parsedLower.includes(loc));
-          if (isPartOfActiveTrip) {
-            console.log(`[TRIP-DEST-MATCH] "${intentParsed.destination}" matches active trip "${activeTripPlan.destination}" — routing to modification handler`);
-            forceTripModify = true;
-          }
-        }
-
         if (forceTripModify) {
           // skip generation — modification handler will fire below
         } else {
