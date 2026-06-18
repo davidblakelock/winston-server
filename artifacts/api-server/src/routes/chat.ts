@@ -1813,17 +1813,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   // save a formal day-by-day itinerary, we detect the intent, extract context from
   // recent conversation history, generate the structured plan, and inject a confirmation
   // so Claude acknowledges the save naturally in its response.
-  // Guard: only run from the Trip screen context. Main chat redirects to the Trip screen.
-  if (isTripSaveIntent && requestContext !== "trip-planning") {
-    systemPrompt += `\n\n[Trip Planning — Use Trip Screen]\nDavid wants to save or build a trip itinerary. This must happen in the Trips screen, not here. Warmly tell him to head to his Trips screen (the suitcase icon) where he can plan and save trips with you. Keep it brief — one or two sentences, no bullet points.`;
-  }
   // ── Trip-plan generation (trip screen only) ──────────────────────────────────
   // Fires when the user asks "plan me a trip to X". Generates a full itinerary,
   // saves it to DB immediately, and tells the user it's saved.
-  // Guard: trip planning only happens in the Trip screen. Redirect from main chat.
-  if (isTripPlanIntent && requestContext !== "trip-planning") {
-    systemPrompt += `\n\n[Trip Planning — Use Trip Screen]\nDavid wants to plan a trip. Do NOT plan, generate, or outline any itinerary here in the main chat. Warmly redirect him to his Trips screen (the suitcase icon at the bottom of the app) where he can plan and save full trips with you. One or two sentences max — friendly and brief.`;
-  }
   let forceTripModify = false;
   if (isTripPlanIntent && requestContext === "trip-planning") {
     // Extend socket timeout so the proxy doesn't drop the connection during the 30–60s generation.
