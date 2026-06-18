@@ -1125,7 +1125,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isStoryCount = cls.story_count;
   const isTripSaveIntent = !isMorningGreeting && cls.trip_save;
   process.stdout.write(`[STDOUT] CLS-RAW trip_plan=${cls.trip_plan} trip_save=${cls.trip_save} hotel_availability=${cls.hotel_availability} trip_price_query=${cls.trip_price_query} requestContext=${requestContext ?? "null"}\n`);
-  const isTripPlanIntent = !isMorningGreeting && !isTripSaveIntent && (requestContext === "trip-planning" ? (cls.trip_plan || !cls.trip_save) : (!cls.hotel_availability && !cls.trip_price_query && cls.trip_plan));
+  const isTripPlanIntent = !isMorningGreeting && !isTripSaveIntent && cls.trip_plan;
   process.stdout.write(`[STDOUT] INTENT-FLAGS isMorning=${isMorningGreeting} isTripSave=${isTripSaveIntent} isTripPlan=${isTripPlanIntent} requestContext=${requestContext ?? "null"} msg="${message.slice(0, 80)}"\n`);
 
   // ── Trip screen: inject FULL itinerary + hotel pricing ───────────────────
