@@ -5772,7 +5772,7 @@ If you cannot extract both, return null.`,
     try {
       let nativeReply: string;
 
-      if (requestContext === "trip-planning") {
+      if (requestContext === "trip-planning" || isTripPlanIntent) {
         // ── Trip screen: GPT-4o handles all responses ────────────────────────
         const tripSystemContent = [stableSystem, systemPrompt].filter(Boolean).join("\n\n");
         const tripMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
