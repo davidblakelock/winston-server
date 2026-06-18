@@ -5794,7 +5794,7 @@ If you cannot extract both, return null.`,
         // ── All other contexts: Claude ───────────────────────────────────────
         const claudeResp = await anthropic.messages.create({
           model: selectedModel,
-          max_tokens: 1024,
+          max_tokens: 4096,
           system: buildSystemBlocks(stableSystem, systemPrompt),
           messages,
         });
