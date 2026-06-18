@@ -2189,143 +2189,56 @@ If dates cannot be resolved to specific days, set them to null.`,
   // Fires on every trip-screen message that isn't plan/save. GPT-4o decides
   // whether the message requires an itinerary change (returns updated JSON)
   // or is just a question/comment (returns null). Only saves when changed.
-  if (activeTripPlan?.itinerary && (!isTripPlanIntent || forceTripModify) && !isTripSaveIntent && !cls.trip_price_query) {
-    console.log('[MOD-HANDLER] firing, forceTripModify=', forceTripModify, 'isTripPlanIntent=', isTripPlanIntent, 'activeTripPlan=', !!activeTripPlan?.itinerary);
+  if (activeTripPlan?.itinerary && !isTripPlanIntent && !isTripSaveIntent) {
     try {
-      req.log.info({ tripId: activeTripPlan.id, message: message.slice(0, 80) }, "[TripModify] Checking with GPT-4o whether itinerary needs updating");
+      const currentItinerary = JSON.stringify(activeTripPlan.itinerary, null, 2);
+      const modMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+        {
+          role: 'system',
+          content: `You are a luxury travel concierge managing an existing trip itinerary.
+The user may want to modify something (swap a hotel, change a restaurant, add an activity, ask a question) or just continue the conversation about their trip.
 
-      const modifyResp = await openai.chat.completions.create({
+Current itinerary JSON:
+${currentItinerary}
+
+If the user wants a change: return a complete updated itinerary JSON object with ALL original fields preserved plus any changes applied, and include a "conversational_response" field with your natural enthusiastic response explaining what changed and why the new choice is great.
+
+If no change is needed (question, comment, general chat): return exactly the string "null".
+
+Return ONLY the JSON object or the string "null". No markdown fences, no explanation.`
+        },
+        ...history.slice(-12).map((m: any) => ({
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+        })),
+        { role: 'user', content: message },
+      ];
+
+      const modResp = await openai.chat.completions.create({
         model: MODEL_GPT4O_TRIP,
         max_tokens: 8000,
-        messages: [
-          {
-            role: "system",
-            content:
-              `You are a travel concierge managing a saved trip itinerary. ` +
-              `If the conversation indicates the user wants a change to the itinerary (swap a hotel, change a restaurant, modify an activity, update dates, etc.), ` +
-              `apply the change and return the ENTIRE itinerary JSON with ALL days intact — you MUST include every single day from the current itinerary, not just the modified day. Removing or omitting any days is strictly forbidden. Only modify the specific element the user requested. ` +
-              `Preserve all fields and structure exactly — only change what was asked. ` +
-              `When replacing a hotel, clear its bookingUrl, websiteUrl, pricePerNight, available, availabilityChecked, alternativeName, alternativeBookingUrl, and alternativePricePerNight fields. ` +
-              `If the latest message is a question, a compliment, or anything that does not require changing the itinerary, return exactly: null` +
-              `When adding any new activity, spa, attraction, or restaurant to the itinerary, you MUST include a websiteUrl field with the official website URL. Never add an activity without a websiteUrl. Example: {"title": "Quapaw Baths & Spa", "websiteUrl": "https://www.quapawbaths.com", "description": "..."}` +
-              `\n\nCurrent itinerary:\n${JSON.stringify(activeTripPlan.itinerary)}`,
-          },
-          ...history.slice(-12).map((h) => ({ role: h.role as "user" | "assistant", content: h.content })),
-          { role: "user" as const, content: message },
-        ],
+        messages: modMessages,
       });
 
-      const raw = (modifyResp.choices[0]?.message?.content ?? "").trim();
-      if (raw === "null") {
-        req.log.info({ tripId: activeTripPlan.id }, "[TripModify] GPT-4o: no changes needed");
+      const modRaw = modResp.choices[0]?.message?.content?.trim() ?? 'null';
+
+      if (modRaw === 'null' || modRaw === '') {
+        // No changes needed — fall through to normal response
       } else {
-        const stripped = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
-        const jsonMatch = stripped.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          const updatedItinerary = JSON.parse(jsonMatch[0]);
+        const cleaned = modRaw.slice(modRaw.indexOf('{'), modRaw.lastIndexOf('}') + 1);
+        const updatedItinerary = JSON.parse(cleaned);
+        const conversationalResponse = updatedItinerary.conversational_response ?? '';
+        delete updatedItinerary.conversational_response;
 
-          process.stdout.write('[TripModify] updatedItinerary days (hotel + location): ' +
-            JSON.stringify((updatedItinerary.days ?? []).map((d: any, idx: number) => ({
-              day: idx + 1,
-              hotelName: d?.hotel?.name ?? null,
-              location: d?.location ?? null,
-            }))) + '\n');
+        await updateTripPlan(activeTripPlan.id, sessionUserName, { itinerary: updatedItinerary });
+        (req as any)._tripUpdated = { tripUpdated: true, tripId: activeTripPlan.id };
 
-          // Find days where the hotel name changed and run a targeted SerpAPI search
-          // for each, using that day's city and per-night dates.
-          const oldDays: any[] = (activeTripPlan.itinerary as any)?.days ?? [];
-          const newDays: any[] = updatedItinerary.days ?? [];
-          const tripCheckIn = parseToISODate(activeTripPlan.start_date ?? undefined);
-          const baseDate = tripCheckIn ?? (() => { const d = new Date(); d.setDate(d.getDate() + 30); return d.toISOString().slice(0, 10); })();
-          const hasRealDates = !!tripCheckIn;
-          const swapLines: string[] = [];
-
-          for (let i = 0; i < newDays.length; i++) {
-            const newDay = newDays[i];
-            const oldDay = oldDays[i];
-            const newName: string | undefined = newDay?.hotel?.name;
-            const oldName: string | undefined = oldDay?.hotel?.name;
-            if (!newName || newName === oldName) continue;
-
-            const city: string = newDay.location?.trim() || activeTripPlan.destination;
-            const dayCheckIn  = addNightsToISO(baseDate, i);
-            const dayCheckOut = addNightsToISO(dayCheckIn, 1);
-
-            try {
-              const result = await searchHotelViaSerpApi(newName, city, dayCheckIn, dayCheckOut, 2);
-              if (result.source === "serpapi") {
-                newDay.hotel.available           = true;
-                newDay.hotel.availabilityChecked = true;
-                if (result.bookingUrl)    newDay.hotel.bookingUrl    = result.bookingUrl;
-                if (result.websiteUrl)    newDay.hotel.websiteUrl    = result.websiteUrl;
-                if (result.pricePerNight) {
-                  const label = hasRealDates ? result.pricePerNight : `~${result.pricePerNight}`;
-                  newDay.hotel.pricePerNight = label;
-                  newDay.hotel.notes         = `${label}/night`;
-                  swapLines.push(`Day ${i + 1}: ${oldName ?? "previous hotel"} → ${newName} | ${label}/night`);
-                } else {
-                  swapLines.push(`Day ${i + 1}: ${oldName ?? "previous hotel"} → ${newName}`);
-                }
-                req.log.info({ hotel: newName, city, price: newDay.hotel.pricePerNight }, "[TripModify] SerpAPI pricing applied to swapped hotel");
-              } else if (result.websiteUrl) {
-                newDay.hotel.availabilityChecked = true;
-                newDay.hotel.available           = false;
-                newDay.hotel.bookingUrl          = result.websiteUrl;
-                newDay.hotel.websiteUrl          = result.websiteUrl;
-                swapLines.push(`Day ${i + 1}: ${oldName ?? "previous hotel"} → ${newName}`);
-                req.log.info({ hotel: newName, city }, "[TripModify] Places fallback URL applied to swapped hotel");
-              } else {
-                swapLines.push(`Day ${i + 1}: ${oldName ?? "previous hotel"} → ${newName}`);
-              }
-            } catch (serpErr) {
-              swapLines.push(`Day ${i + 1}: ${oldName ?? "previous hotel"} → ${newName}`);
-              req.log.warn({ err: serpErr, hotel: newName }, "[TripModify] SerpAPI lookup failed for swapped hotel — saving without pricing");
-            }
-          }
-
-          // Fill missing hotel websiteUrls via Google Places (parallel)
-          const placesApiKey = process.env.GOOGLE_PLACES_API_KEY;
-          if (placesApiKey) {
-            const placesLookups: Promise<void>[] = [];
-            for (const day of newDays) {
-              const dayCity: string = (day.location as string | undefined)?.trim() || activeTripPlan.destination;
-              if (day.hotel?.name && !day.hotel.websiteUrl) {
-                placesLookups.push((async () => {
-                  try {
-                    const pr = await fetch("https://places.googleapis.com/v1/places:searchText", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json", "X-Goog-Api-Key": placesApiKey, "X-Goog-FieldMask": "places.websiteUri" },
-                      body: JSON.stringify({ textQuery: `${day.hotel.name} ${dayCity}`, maxResultCount: 1 }),
-                      signal: AbortSignal.timeout(5000),
-                    });
-                    if (pr.ok) {
-                      const pd = await pr.json() as { places?: Array<{ websiteUri?: string }> };
-                      const url = pd.places?.[0]?.websiteUri;
-                      if (url) { day.hotel.websiteUrl = url; req.log.info({ name: day.hotel.name, url }, "[TripModify] Places: hotel websiteUrl filled"); }
-                    }
-                  } catch { /* non-fatal */ }
-                })());
-              }
-            }
-            if (placesLookups.length > 0) {
-              await Promise.allSettled(placesLookups);
-              req.log.info({ count: placesLookups.length }, "[TripModify] Places websiteUrl fill complete");
-            }
-          }
-
-          await updateTripPlan(activeTripPlan.id, sessionUserName, { itinerary: updatedItinerary as never });
-          (req as any)._tripUpdated = { tripUpdated: true, tripId: activeTripPlan.id };
-          req.log.info({ tripId: activeTripPlan.id }, "[TripModify] Itinerary updated and saved");
-
-          const swapDetail = swapLines.length > 0 ? swapLines.join("\n") : "";
-          systemPrompt += `\n\n[Trip Modified & Saved — "${activeTripPlan.trip_name ?? activeTripPlan.destination}"]\nYou just applied the user's modification and saved it.${swapDetail ? `\n${swapDetail}` : ""}\nConfirm the change naturally.`;
-        } else {
-          req.log.warn({ raw: raw.slice(0, 200) }, "[TripModify] GPT-4o returned unexpected response — skipping update");
+        if (conversationalResponse) {
+          (req as any)._hardcodedResponse = conversationalResponse;
         }
       }
-    } catch (modifyErr) {
-      console.log('[TripModify] Modification failed —', (modifyErr as any)?.message ?? String(modifyErr), 'letting Claude respond naturally');
-      req.log.warn({ err: modifyErr }, "[TripModify] Modification failed — letting Claude respond naturally");
+    } catch (err) {
+      req.log.error({ err }, '[TripModify] Error');
     }
   }
 
