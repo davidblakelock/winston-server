@@ -1817,7 +1817,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   // Fires when the user asks "plan me a trip to X". Generates a full itinerary,
   // saves it to DB immediately, and tells the user it's saved.
   let forceTripModify = false;
-  if (isTripPlanIntent && requestContext === "trip-planning") {
+  if (isTripPlanIntent) {
     // Extend socket timeout so the proxy doesn't drop the connection during the 30–60s generation.
     req.socket?.setTimeout(120000);
     try {
