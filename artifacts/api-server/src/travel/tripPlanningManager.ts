@@ -118,6 +118,7 @@ export interface NativeTripPlan {
   end_date?: string | null;    // YYYY-MM-DD or null
   status: "planning";
   itinerary: NativeItinerary;
+  conversational_response?: string;
 }
 
 // ── DB setup ──────────────────────────────────────────────────────────────────
@@ -347,7 +348,8 @@ Required structure:
       }
     ],
     "practicalNotes": ["Practical tip 1 — specific and actionable", "Book X in advance", "Best time to arrive at Y", "What to pack for Z"]
-  }
+  },
+  "conversational_response": "A warm, detailed, enthusiastic natural language response describing the full itinerary exactly as a luxury travel concierge would present it to the traveler — include all hotels, restaurants, spas, activities, driving times, and a cost summary. Write it as if you are ChatGPT responding directly to the user. Include all booking URLs as markdown links inline. Do not omit any details from the itinerary."
 }
 
 Rules — follow exactly:
@@ -404,6 +406,7 @@ ${travelCtx ? `\nTraveler profile — personalize every recommendation to these 
   // Sanitize dates so natural-language strings don't crash the DB DATE column
   plan.start_date = toISODateOrNull(plan.start_date);
   plan.end_date   = toISODateOrNull(plan.end_date);
+  plan.conversational_response = (plan as any).conversational_response ?? "";
 
   logger.info(
     { destination: plan.destination, nights: plan.nights, days: plan.itinerary?.days?.length },
