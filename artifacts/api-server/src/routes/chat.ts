@@ -241,7 +241,6 @@ import { createReminder } from "../reminders/reminderManager.js";
 import { getPendingRouteReminder, setPendingRouteReminder } from "../routeAware/routeAwareManager.js";
 import {
   generateTripItinerary,
-  enrichItineraryWithHotelAvailability,
   saveTripPlan,
   updateTripPlan,
   getTripPlanById,
@@ -1912,9 +1911,6 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           userProfile
         );
 
-        // Enrich each hotel with SerpAPI rates + booking URLs (requires start date)
-        await enrichItineraryWithHotelAvailability(itinerary, tripIntent);
-
         // ── Raw-field inspection — confirms hotel/meal URL population ─────────
         const day0 = itinerary.itinerary?.days?.[0];
         const meal0 = day0?.meals?.[0];
@@ -1948,6 +1944,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         const savedTripId = await saveTripPlan(sessionUserName, itinerary);
         (req as any)._tripSaved = { tripSaved: true, tripId: savedTripId, tripName: itinerary.trip_name };
         process.stdout.write('[TRIP-SAVE] Setting _tripSaved: ' + JSON.stringify((req as any)._tripSaved) + '\n');
+        if (itinerary.conversational_response) {
+          (req as any)._tripConversationalResponse = itinerary.conversational_response;
+        }
 
         req.log.info(
           { dest: itinerary.destination, days: itinerary.itinerary.days.length, tripName: itinerary.trip_name, tripId: savedTripId },
@@ -5660,23 +5659,28 @@ If you cannot extract both, return null.`,
       let nativeReply: string;
 
       if (requestContext === "trip-planning" || isTripPlanIntent) {
-        // ── Trip screen: GPT-4o handles all responses ────────────────────────
-        const tripSystemContent = [stableSystem, systemPrompt].filter(Boolean).join("\n\n");
-        const tripMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-          { role: "system", content: tripSystemContent },
-          ...filteredHistory.map((h: { role: string; content: string }) => ({
-            role: h.role as "user" | "assistant",
-            content: h.content,
-          })),
-          { role: "user", content: message },
-        ];
-        const tripResp = await openai.chat.completions.create({
-          model: MODEL_GPT4O_TRIP,
-          max_tokens: 3000,
-          messages: tripMessages,
-        });
-        nativeReply = tripResp.choices[0]?.message?.content ?? "";
-        req.log.info({ responsePreview: nativeReply.slice(0, 300) }, "[DIAG:4] GPT-4o trip response sent");
+        // ── Trip screen: use conversational_response from generation, or GPT-4o fallback ──
+        if ((req as any)._tripConversationalResponse) {
+          nativeReply = (req as any)._tripConversationalResponse;
+          req.log.info({ responsePreview: nativeReply.slice(0, 300) }, "[DIAG:4] Trip conversational_response used directly");
+        } else {
+          const tripSystemContent = [stableSystem, systemPrompt].filter(Boolean).join("\n\n");
+          const tripMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+            { role: "system", content: tripSystemContent },
+            ...filteredHistory.map((h: { role: string; content: string }) => ({
+              role: h.role as "user" | "assistant",
+              content: h.content,
+            })),
+            { role: "user", content: message },
+          ];
+          const tripResp = await openai.chat.completions.create({
+            model: MODEL_GPT4O_TRIP,
+            max_tokens: 3000,
+            messages: tripMessages,
+          });
+          nativeReply = tripResp.choices[0]?.message?.content ?? "";
+          req.log.info({ responsePreview: nativeReply.slice(0, 300) }, "[DIAG:4] GPT-4o trip response sent");
+        }
       } else {
         // ── All other contexts: Claude ───────────────────────────────────────
         const claudeResp = await anthropic.messages.create({
