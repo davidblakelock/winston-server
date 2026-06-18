@@ -909,22 +909,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   // journal entries belong on the My Life screen only, not the main chat.
   const isIsolatedContext = requestContext === "trip-planning" || requestContext === "journal" || requestContext === "goals";
 
-  // ── Active trip context (Trip screen) ─────────────────────────────────────
-  // When the native app sends context:"trip-planning" + tripId, load the stored
-  // trip so we can inject hotel pricing and itinerary details into the prompt.
   const tripId = typeof rawTripId === "number" ? rawTripId : (typeof rawTripId === "string" && rawTripId ? parseInt(rawTripId, 10) || null : null);
   let activeTripPlan: TripPlanRow | null = null;
-  if (requestContext === "trip-planning") {
-    try {
-      if (tripId) {
-        activeTripPlan = await getTripPlanById(tripId, sessionUserName);
-      } else {
-        // No tripId sent — fall back to most recently updated trip
-        const allTrips = await getActiveTripPlans(sessionUserName);
-        activeTripPlan = allTrips[0] ?? null;
-      }
-    } catch { /* ignore */ }
-  }
 
   // ── Layer 1: Active context window ────────────────────────────────────────
   // Claude only sees the last 20 messages. The full transcript is persisted in
@@ -1127,6 +1113,21 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   process.stdout.write(`[STDOUT] CLS-RAW trip_plan=${cls.trip_plan} trip_save=${cls.trip_save} hotel_availability=${cls.hotel_availability} trip_price_query=${cls.trip_price_query} requestContext=${requestContext ?? "null"}\n`);
   const isTripPlanIntent = !isMorningGreeting && !isTripSaveIntent && cls.trip_plan;
   process.stdout.write(`[STDOUT] INTENT-FLAGS isMorning=${isMorningGreeting} isTripSave=${isTripSaveIntent} isTripPlan=${isTripPlanIntent} requestContext=${requestContext ?? "null"} msg="${message.slice(0, 80)}"\n`);
+
+  // ── Active trip context ───────────────────────────────────────────────────
+  // When the native app sends context:"trip-planning" + tripId, load the stored
+  // trip so we can inject hotel pricing and itinerary details into the prompt.
+  if (requestContext === "trip-planning" || isTripPlanIntent || cls.hotel_swap || cls.trip_save) {
+    try {
+      if (tripId) {
+        activeTripPlan = await getTripPlanById(tripId, sessionUserName);
+      } else {
+        // No tripId sent — fall back to most recently updated trip
+        const allTrips = await getActiveTripPlans(sessionUserName);
+        activeTripPlan = allTrips[0] ?? null;
+      }
+    } catch { /* ignore */ }
+  }
 
   // ── Trip screen: inject FULL itinerary + hotel pricing ───────────────────
   // Inject the complete stored plan so Claude can answer ANY question about the
