@@ -327,7 +327,7 @@ export async function generateTripItinerary(
     messages: [
       {
         role: 'system',
-        content: `You are an expert travel planner. Plan the trip exactly as the user requests. Be specific — use real hotel names, real restaurants, real activities. Include website URLs as markdown links inline for every hotel, restaurant, and activity you mention. Include driving times between stops, cost estimates, and your honest recommendations.${travelCtx ? `\n\nTraveler profile — personalize every recommendation:\n${travelCtx}` : ''}`
+        content: `You are an expert travel planner. Plan the trip exactly as the user requests. The user's requested vibe, tone, and travel style must drive every single recommendation — hotels, restaurants, activities, and experiences must all match what the user asked for. Do not suggest anything that conflicts with the requested experience. Be specific — use real hotel names, real restaurants, real activities. Include website URLs as markdown links inline for every hotel, restaurant, and activity you mention. Include driving times between stops, cost estimates, and your honest recommendations.${travelCtx ? `\n\nTraveler profile — personalize every recommendation:\n${travelCtx}` : ''}`
       },
       {
         role: 'user',
