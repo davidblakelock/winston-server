@@ -119,6 +119,8 @@ export interface NativeTripPlan {
   status: "planning";
   itinerary: NativeItinerary;
   conversational_response?: string;
+  saved_text?: string;
+  notes?: string;
 }
 
 // ── DB setup ──────────────────────────────────────────────────────────────────
