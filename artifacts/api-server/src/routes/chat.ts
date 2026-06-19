@@ -1831,6 +1831,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         tools: [{ type: 'web_search_preview', search_context_size: 'high' }],
       });
 
+      req.log.info({ outputArray: JSON.stringify(tripResp.output) }, '[TripPlan] LIVE BLOCK — FULL RESPONSE OUTPUT ARRAY');
+
       const tripReply = tripResp.output_text ?? '';
       (req as any)._tripConversationalResponse = tripReply;
 
