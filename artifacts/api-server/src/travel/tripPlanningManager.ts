@@ -318,8 +318,8 @@ export async function generateTripItinerary(
 ): Promise<NativeTripPlan> {
 
   const resp = await openai.chat.completions.create({
-    model: MODEL_GPT4O,
-    max_tokens: 4000,
+    model: 'gpt-4o-search-preview',
+    web_search_options: { search_context_size: 'high' },
     messages: [
       { role: 'user', content: intent.rawMessage }
     ]
