@@ -640,6 +640,8 @@ export async function updateTripPlan(
     nights?: number | null;
     itinerary?: NativeItinerary | null;
     status?: string;
+    saved_text?: string;
+    notes?: string;
   },
 ): Promise<TripPlanRow | null> {
   const setClauses: string[] = ["updated_at = NOW()"];
@@ -653,6 +655,8 @@ export async function updateTripPlan(
   if ("nights" in updates) { setClauses.push(`nights = $${idx++}`); values.push(updates.nights ?? null); }
   if ("itinerary" in updates) { setClauses.push(`itinerary = $${idx++}::jsonb`); values.push(updates.itinerary ? JSON.stringify(updates.itinerary) : null); }
   if ("status" in updates) { setClauses.push(`status = $${idx++}`); values.push(updates.status); }
+  if ("saved_text" in updates) { setClauses.push(`saved_text = $${idx++}`); values.push(updates.saved_text ?? null); }
+  if ("notes" in updates) { setClauses.push(`notes = $${idx++}`); values.push(updates.notes ?? null); }
 
   if (setClauses.length === 1) return getTripPlanById(id, userName); // nothing to update
 
