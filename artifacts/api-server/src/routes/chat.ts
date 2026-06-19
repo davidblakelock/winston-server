@@ -1247,7 +1247,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
   // R001: Restaurant intelligence (reservation, directions, info for a named restaurant)
   const pendingReservation = getPendingReservation();
-  const isRestaurantIntelRequest = !isMorningGreeting && !isRestaurantReco && cls.restaurant_intel;
+  const isRestaurantIntelRequest = !isMorningGreeting && !isRestaurantReco && !activeTripPlan && cls.restaurant_intel;
   const isReservationFlowActive = !isMorningGreeting && pendingReservation !== null;
   const RESERVATION_CONFIRM = /^(?:(?:ok|okay|yeah|yep|yup|sure|alright)[,\s]+)*(yes|open\s+it|do\s+it|go\s+ahead|sounds?\s+good|let.?s\s+(?:do\s+it|book)|book\s+it|call\s+them|open\s+(?:the\s+)?(?:opentable|resy|maps?|dialer)|get\s+directions?|dial\s+(?:them|it))(?:[,\s!.]|$)/i;
   const RESERVATION_CANCEL = /^(?:no\s+thanks?|never\s+mind|cancel|skip\s+it|not\s+now|forget\s+it)(?:[,\s!.]|$)/i;
