@@ -1810,200 +1810,47 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   // recent conversation history, generate the structured plan, and inject a confirmation
   // so Claude acknowledges the save naturally in its response.
   // ── Trip-plan generation (trip screen only) ──────────────────────────────────
-  // Fires when the user asks "plan me a trip to X". Generates a full itinerary,
-  // saves it to DB immediately, and tells the user it's saved.
   let forceTripModify = false;
-  if (isTripPlanIntent) {
-    // Extend socket timeout so the proxy doesn't drop the connection during the 30–60s generation.
+  if (isTripPlanIntent || activeTripPlan) {
     req.socket?.setTimeout(120000);
     try {
-      req.log.info(
-        {
-          message: message.slice(0, 120),
-          regexSource: "cls.trip_plan",
-          regexMatched: isTripPlanIntent ? "trip_plan=true" : "(no match token)",
-          path: "isTripPlanIntent → generateTripItinerary() → Sonnet",
-        },
-        "[TripPlan] ✅ TRIP_PLAN_INTENT matched — entering generation path"
-      );
-      req.log.info({ message: message.slice(0, 80) }, "[TripPlan] Plan intent detected — extracting context");
+      const tripMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+        ...history.map((h: any) => ({
+          role: h.role === 'assistant' ? 'assistant' as const : 'user' as const,
+          content: h.content,
+        })),
+        { role: 'user', content: message },
+      ];
 
-      const todayForTrip = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
-      const intentRaw = await anthropic.messages.create({
-        model: MODEL_HAIKU,
-        max_tokens: 3000,
-        system:
-          `Today's date is ${todayForTrip}. Extract trip intent from the user's message. Return ONLY valid JSON with these fields: ` +
-          '{"destination":"primary destination — state or region (e.g. \\"Arkansas\\") or null","stops":["array of specific cities/towns mentioned as stops, e.g. [\\"Hot Springs\\",\\"Eureka Springs\\",\\"Bentonville\\"] — empty array [] if none named"],"nights":number or null,"partyDesc":"description like \'solo\' or \'me and Susan\' or null","vibe":"travel style or null","startDate":"YYYY-MM-DD — resolve ALL date phrases to a specific YYYY-MM-DD using today\'s date as the reference year, e.g. \'June 12\' → \\"2026-06-12\\", \'next month\' → the 1st of next month; output null only if no date can be inferred","budget":"budget|mid-range|luxury or null"}. ' +
-          "NIGHTS RULE — critical: 'nights' means overnight stays, NOT calendar days. Examples: '4 days 3 nights' → nights=3. '3-night trip' → nights=3. '4-day trip' → nights=3 (days minus 1). '5 days' → nights=4. Always prefer the explicit night count when both days and nights are stated. " +
-          "STOPS RULE: stops[] must include every city or town mentioned, even when they are NOT separated by commas — e.g. 'stops in Hot Springs Eureka Springs and Bentonville' → [\"Hot Springs\",\"Eureka Springs\",\"Bentonville\"]. Split on 'and', spaces between known place names, or any separator. Always extract every named city or town into stops[]. Return null for scalar fields not mentioned. Return only raw JSON — no markdown, no code fences, no backticks. " +
-          'You are a JSON extraction tool ONLY. You extract structured data from text. You do NOT check availability, make bookings, or access any systems. Return ONLY a raw JSON object with no markdown, no code fences, no backticks, no explanations, no notes. If the message is not a trip planning request, return {"destination":null,"stops":[],"nights":null,"partyDesc":null,"vibe":null,"startDate":null,"budget":null}. NEVER return plain text. ALWAYS return JSON.',
-        messages: [{ role: "user", content: message }],
+      const tripResp = await openai.chat.completions.create({
+        model: MODEL_GPT4O_TRIP,
+        max_tokens: 4000,
+        messages: tripMessages,
       });
 
-      const intentRaw0 =
-        intentRaw.content[0]?.type === "text" ? intentRaw.content[0].text.trim() : "{}";
-      // Strip markdown code fences that Haiku occasionally wraps around JSON
-      let intentText = intentRaw0
-        .replace(/^```(?:json)?\s*/i, "")
-        .replace(/\s*```$/, "")
-        .trim();
-      const lastBrace = intentText.lastIndexOf('}');
-      if (lastBrace !== -1) intentText = intentText.slice(0, lastBrace + 1);
-      console.log(`[TRIP-INTENT-HAIKU] raw="${intentRaw0.slice(0, 200)}" stripped="${intentText.slice(0, 200)}"`);
-      let intentParsed: { destination?: string | null; stops?: string[] | null; nights?: number | null; partyDesc?: string | null; vibe?: string | null; startDate?: string | null; budget?: string | null } = {};
-      try {
-        intentParsed = JSON.parse(intentText);
-        console.log(`[TRIP-INTENT-PARSED] destination="${intentParsed.destination}" stops=${JSON.stringify(intentParsed.stops)} nights=${intentParsed.nights} startDate="${intentParsed.startDate}"`);
-      } catch (parseErr) {
-        console.log(`[TRIP-INTENT-PARSE-FAIL] err="${String(parseErr)}" raw="${intentText.slice(0, 200)}" — attempting repair`);
-        try {
-          intentParsed = JSON.parse(repairJson(intentText));
-          console.log(`[TRIP-INTENT-REPAIRED] destination="${intentParsed.destination}" stops=${JSON.stringify(intentParsed.stops)} nights=${intentParsed.nights}`);
-        } catch (repairErr) {
-          console.log(`[TRIP-INTENT-REPAIR-FAIL] err="${String(repairErr)}"`);
-        }
-      }
-      // Pre-resolve startDate to strict YYYY-MM-DD so GPT-4o stores it correctly.
-      // Haiku may return "June 12th" or a partial phrase; parseToISODate normalises it.
-      if (intentParsed.startDate && !/^\d{4}-\d{2}-\d{2}$/.test(intentParsed.startDate)) {
-        const resolved = parseToISODate(intentParsed.startDate);
-        if (resolved) {
-          console.log(`[TRIP-DATE-RESOLVE] "${intentParsed.startDate}" → "${resolved}"`);
-          intentParsed.startDate = resolved;
-        }
-      }
+      const tripReply = tripResp.choices[0]?.message?.content ?? '';
+      (req as any)._tripConversationalResponse = tripReply;
 
-      if (!intentParsed.destination) {
-        if (activeTripPlan?.itinerary) {
-          console.log(`[TRIP-INTENT-NO-DEST] active trip exists — routing to modification handler`);
-          forceTripModify = true;
-        } else {
-          console.log(`[TRIP-INTENT-NO-DEST] falling back to Claude`);
-          req.log.info({ message: message.slice(0, 60) }, "[TripPlan] Plan intent matched but no destination found — letting Claude handle naturally");
-        }
+      if (activeTripPlan?.id) {
+        await updateTripPlan(activeTripPlan.id, sessionUserName, { saved_text: tripReply });
+        (req as any)._tripSaved = { tripSaved: true, tripId: activeTripPlan.id, tripName: activeTripPlan.trip_name };
       } else {
-        if (forceTripModify) {
-          // skip generation — modification handler will fire below
-        } else {
-        req.log.info(
-          { dest: intentParsed.destination, nights: intentParsed.nights, vibe: intentParsed.vibe },
-          "[TripPlan] Generating itinerary from plan intent"
-        );
-
-        const tripIntent: import("../travel/tripPlanningManager.js").ParsedTripIntent = {
-          destination: intentParsed.destination,
-          nights: intentParsed.nights ?? 3,
-          partyDesc: intentParsed.partyDesc ?? undefined,
-          vibe: intentParsed.vibe ?? undefined,
-          startDate: intentParsed.startDate ?? undefined,
-          budget: intentParsed.budget ?? undefined,
-          stops: intentParsed.stops?.length ? intentParsed.stops : undefined,
-          rawMessage: message,
+        const tripPlan: NativeTripPlan = {
+          trip_name: `Trip — ${new Date().toLocaleDateString()}`,
+          destination: '',
+          nights: 0,
+          start_date: null,
+          end_date: null,
+          status: 'planning',
+          itinerary: { days: [], practicalNotes: [] },
+          saved_text: tripReply,
+          notes: '',
         };
-
-        const itinerary = await generateTripItinerary(
-          tripIntent,
-          userProfile
-        );
-
-        // ── Raw-field inspection — confirms hotel/meal URL population ─────────
-        const day0 = itinerary.itinerary?.days?.[0];
-        const meal0 = day0?.meals?.[0];
-        req.log.info(
-          {
-            tripName: itinerary.trip_name,
-            destination: itinerary.destination,
-            nights: itinerary.nights,
-            dayCount: itinerary.itinerary?.days?.length,
-            day1_hotel_name:       day0?.hotel?.name        ?? "(missing)",
-            day1_hotel_websiteUrl: day0?.hotel?.websiteUrl  ?? "(missing)",
-            day1_hotel_bookingUrl: day0?.hotel?.bookingUrl  ?? "(missing)",
-            day1_meal0_title:      meal0?.title             ?? "(missing)",
-            day1_meal0_websiteUrl: (meal0 as any)?.websiteUrl ?? "(missing)",
-            day1_meal0_bookingUrl: meal0?.bookingUrl        ?? "(missing)",
-            rawDays: JSON.stringify(itinerary.itinerary?.days?.map((d) => ({
-              day: d.dayNumber,
-              hotel: { name: d.hotel?.name, websiteUrl: d.hotel?.websiteUrl, bookingUrl: d.hotel?.bookingUrl },
-              meals: d.meals?.map((m) => ({ title: m.title, websiteUrl: (m as any).websiteUrl, bookingUrl: m.bookingUrl })),
-            }))),
-          },
-          "[TripPlan] 🔍 RAW ITINERARY FIELDS — hotel & meal URL inspection"
-        );
-        // ─────────────────────────────────────────────────────────────────────
-
-
-        // Cache the intent so isTripSaveIntent can use it even when history is empty
-        // (isolated contexts don't write to chat_messages, so DB hydration won't find it)
-        lastTripIntentByUser.set(sessionUserName, { intent: tripIntent, timestamp: Date.now() });
-
-        const savedTripId = await saveTripPlan(sessionUserName, itinerary);
-        (req as any)._tripSaved = { tripSaved: true, tripId: savedTripId, tripName: itinerary.trip_name };
-        process.stdout.write('[TRIP-SAVE] Setting _tripSaved: ' + JSON.stringify((req as any)._tripSaved) + '\n');
-        if (itinerary.conversational_response) {
-          (req as any)._tripConversationalResponse = itinerary.conversational_response;
-        }
-
-        req.log.info(
-          { dest: itinerary.destination, days: itinerary.itinerary.days.length, tripName: itinerary.trip_name, tripId: savedTripId },
-          "[TripPlan] Auto-generated itinerary saved to DB"
-        );
-
-        // Build full itinerary block — same structure as the stored-plan injection so
-        // Claude can answer immediate follow-up questions about any day, hotel, or meal.
-        const newTripDayBlocks: string[] = [];
-        for (const day of itinerary.itinerary.days) {
-          const dayLines: string[] = [];
-          const loc2 = day.location ? ` (${day.location})` : "";
-          dayLines.push(`Day ${day.dayNumber}${day.label ? ` — ${day.label}` : ""}${loc2}`);
-          const h2 = day.hotel;
-          if (h2?.name) {
-            let hl = `  Hotel: ${h2.name}`;
-            if (h2.pricePerNight) hl += ` — ${h2.pricePerNight}`;
-            const bu = h2.bookingUrl || h2.websiteUrl;
-            if (bu) hl += `\n    Book: ${bu}`;
-            dayLines.push(hl);
-          }
-          if (day.activities?.length) {
-            dayLines.push("  Activities:");
-            for (const a2 of day.activities) {
-              dayLines.push(`    ${a2.time ? `${a2.time}: ` : ""}${a2.title ?? ""}${a2.description ? ` — ${a2.description}` : ""}`);
-            }
-          }
-          if (day.meals?.length) {
-            dayLines.push("  Meals:");
-            for (const m2 of day.meals) {
-              const mu = m2.bookingUrl || m2.websiteUrl;
-              dayLines.push(`    ${m2.time ? `${m2.time}: ` : ""}${m2.title ?? ""}${m2.description ? ` — ${m2.description}` : ""}${mu ? ` (${mu})` : ""}`);
-            }
-          }
-          newTripDayBlocks.push(dayLines.join("\n"));
-        }
-        const newTripDates = itinerary.start_date
-          ? ` | ${itinerary.start_date} – ${itinerary.end_date ?? "?"}`
-          : " | dates TBD";
-
-        const planEnhancements = await generateTripEnhancements(itinerary);
-        const planEnhancementsBlock = planEnhancements.length
-          ? `\nNext-step suggestions from trip concierge:\n${planEnhancements.map((s, i) => `${i + 1}. ${s}`).join("\n")}`
-          : "";
-
-        systemPrompt +=
-          `\n\n[Trip Itinerary Auto-Generated & Saved — "${itinerary.trip_name}"${newTripDates}]\n` +
-          `You just built and saved a day-by-day itinerary called "${itinerary.trip_name}" ` +
-          `(${itinerary.nights} nights in ${itinerary.destination}) to ${sessionUserName}'s travel screen.\n` +
-          `COMPLETE ITINERARY:\n${newTripDayBlocks.join("\n\n")}\n` +
-          `${planEnhancementsBlock}\n\n` +
-          `You are a luxury travel concierge. The trip above has been saved — respond naturally.`;
-        } // end else (!forceTripModify)
+        const savedTripId = await saveTripPlan(sessionUserName, tripPlan);
+        (req as any)._tripSaved = { tripSaved: true, tripId: savedTripId, tripName: tripPlan.trip_name };
       }
     } catch (planErr) {
-      process.stdout.write(`[STDOUT] TRIP-PLAN CATCH ERROR: ${String(planErr instanceof Error ? planErr.message : planErr)}\n`);
-      req.log.warn({ err: planErr }, "[TripPlan] Plan intent handler failed — letting Claude respond naturally");
-      systemPrompt +=
-        `\n\n[Trip Itinerary — Generation Error]\n` +
-        `You tried to build an itinerary but hit an error. Apologize briefly and warmly, ` +
-        `say you ran into a hiccup and ask them to try again in a moment.`;
+      req.log.error({ planErr }, '[TripPlan] Generation error');
     }
   }
 
