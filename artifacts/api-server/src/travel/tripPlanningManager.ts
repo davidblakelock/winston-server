@@ -323,6 +323,8 @@ export async function generateTripItinerary(
     tools: [{ type: 'web_search_preview', search_context_size: 'high' }],
   });
 
+  logger.info({ outputArray: JSON.stringify(resp.output) }, '[TripPlan] FULL RESPONSE OUTPUT ARRAY');
+
   const conversationalResponse = resp.output_text ?? '';
 
   return {
