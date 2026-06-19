@@ -1829,6 +1829,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           content: m.content as string,
         })),
         tools: [{ type: 'web_search_preview', search_context_size: 'high' }],
+        tool_choice: { type: 'web_search_preview' },
       });
 
       process.stdout.write('[TripPlan] LIVE BLOCK OUTPUT: ' + JSON.stringify(tripResp.output) + '\n');
