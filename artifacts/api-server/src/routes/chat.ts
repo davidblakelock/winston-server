@@ -5655,28 +5655,8 @@ If you cannot extract both, return null.`,
       let nativeReply: string;
 
       if (requestContext === "trip-planning" || isTripPlanIntent) {
-        // ── Trip screen: use conversational_response from generation, or GPT-4o fallback ──
-        if ((req as any)._tripConversationalResponse) {
-          nativeReply = (req as any)._tripConversationalResponse;
-          req.log.info({ responsePreview: nativeReply.slice(0, 300) }, "[DIAG:4] Trip conversational_response used directly");
-        } else {
-          const tripSystemContent = [stableSystem, systemPrompt].filter(Boolean).join("\n\n");
-          const tripMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-            { role: "system", content: tripSystemContent },
-            ...filteredHistory.map((h: { role: string; content: string }) => ({
-              role: h.role as "user" | "assistant",
-              content: h.content,
-            })),
-            { role: "user", content: message },
-          ];
-          const tripResp = await openai.chat.completions.create({
-            model: MODEL_GPT4O_TRIP,
-            max_tokens: 3000,
-            messages: tripMessages,
-          });
-          nativeReply = tripResp.choices[0]?.message?.content ?? "";
-          req.log.info({ responsePreview: nativeReply.slice(0, 300) }, "[DIAG:4] GPT-4o trip response sent");
-        }
+        nativeReply = (req as any)._tripConversationalResponse ?? "I wasn't able to generate that trip — could you try rephrasing your request?";
+        req.log.info({ responsePreview: nativeReply.slice(0, 300) }, "[DIAG:4] Trip conversational_response used directly");
       } else {
         // ── All other contexts: Claude ───────────────────────────────────────
         const claudeResp = await anthropic.messages.create({
