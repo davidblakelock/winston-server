@@ -314,7 +314,6 @@ export async function generateTripItinerary(
   intent: ParsedTripIntent,
   userProfile: UserProfile | null,
 ): Promise<NativeTripPlan> {
-  const travelCtx = buildTravelProfileContext(userProfile);
   const rawMessage = intent.rawMessage ?? `Plan a ${intent.nights ?? 3}-night trip to ${intent.destination}`;
 
   process.stdout.write(`\n========== [TripPlan] GPT-4o INPUT ==========\n${rawMessage}\n=============================================\n`);
@@ -327,7 +326,7 @@ export async function generateTripItinerary(
     messages: [
       {
         role: 'system',
-        content: `You are an expert travel planner. Plan the trip exactly as the user requests. Base every recommendation strictly on what the user actually asked for in their message. Do not add activities, themes, or suggestions that the user did not request or imply. Be specific — use real hotel names, real restaurants, real activities. Include website URLs as markdown links inline for every hotel, restaurant, and activity you mention. Include driving times between stops, cost estimates, and your honest recommendations.${travelCtx ? `\n\nTraveler profile — personalize every recommendation:\n${travelCtx}` : ''}`
+        content: `You are an expert travel planner. Plan the trip exactly as the user requests. Base every recommendation strictly on what the user actually asked for in their message. Do not add activities, themes, or suggestions that the user did not request or imply. Be specific — use real hotel names, real restaurants, real activities. Include website URLs as markdown links inline for every hotel, restaurant, and activity you mention. Include driving times between stops, cost estimates, and your honest recommendations.`
       },
       {
         role: 'user',
