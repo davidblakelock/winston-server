@@ -249,6 +249,7 @@ import {
   repairJson,
   type TripPlanRow,
   type ParsedTripIntent,
+  type NativeTripPlan,
 } from "../travel/tripPlanningManager.js";
 import {
   checkHotelAvailability,
@@ -1809,7 +1810,44 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   // save a formal day-by-day itinerary, we detect the intent, extract context from
   // recent conversation history, generate the structured plan, and inject a confirmation
   // so Claude acknowledges the save naturally in its response.
-  // TRIP GENERATION BLOCK — REBUILDING
+  let forceTripModify = false;
+  if (isTripPlanIntent) {
+    (req as any).socket?.setTimeout(120000);
+    try {
+      const tripMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+        ...history.map((h: any) => ({
+          role: h.role === 'assistant' ? 'assistant' as const : 'user' as const,
+          content: h.content,
+        })),
+        { role: 'user', content: message },
+      ];
+
+      const tripResp = await openai.chat.completions.create({
+        model: MODEL_GPT4O_TRIP,
+        max_tokens: 4000,
+        messages: tripMessages,
+      });
+
+      const tripReply = tripResp.choices[0]?.message?.content ?? '';
+      (req as any)._tripConversationalResponse = tripReply;
+
+      const tripPlan: NativeTripPlan = {
+        trip_name: `Trip — ${new Date().toLocaleDateString()}`,
+        destination: '',
+        nights: 0,
+        start_date: null,
+        end_date: null,
+        status: 'planning',
+        itinerary: { days: [], practicalNotes: [] },
+        saved_text: tripReply,
+        notes: '',
+      };
+      const savedTripId = await saveTripPlan(sessionUserName, tripPlan);
+      (req as any)._tripSaved = { tripSaved: true, tripId: savedTripId, tripName: tripPlan.trip_name };
+    } catch (planErr) {
+      req.log.error({ planErr }, '[TripPlan] Generation error');
+    }
+  }
 
 
   // ── Hotel availability check (on-demand, conversational) ─────────────────────
