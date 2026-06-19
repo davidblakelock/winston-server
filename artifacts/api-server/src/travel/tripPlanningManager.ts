@@ -348,7 +348,11 @@ export async function generateTripItinerary(
     messages: [
       {
         role: 'system',
-        content: `Extract structured trip data from the travel plan provided. Return ONLY valid JSON — no markdown fences, no explanation. Use this exact structure:
+        content: `Extract structured trip data from the travel plan provided. Return ONLY valid JSON — no markdown fences, no explanation.
+
+CRITICAL URL RULE: Extract website URLs EXACTLY as they appear in the travel plan text below — copy them character for character from the markdown links. Do NOT generate, guess, substitute, or "correct" any URL. If a hotel, restaurant, or activity is mentioned in the plan WITHOUT an explicit URL, use this fallback format instead: https://www.google.com/search?q=NAME+CITY (replacing spaces with +). Never invent a URL that does not appear in the source text.
+
+Use this exact structure:
 
 {
   "trip_name": "creative name for this trip",
