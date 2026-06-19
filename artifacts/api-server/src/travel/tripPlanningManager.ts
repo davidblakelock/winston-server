@@ -588,8 +588,8 @@ export async function saveTripPlan(
 
   const { rows } = await query<{ id: number }>(
     `INSERT INTO trip_plans
-       (user_name, destination, trip_name, start_date, end_date, nights, itinerary, status)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, 'planning')
+       (user_name, destination, trip_name, start_date, end_date, nights, itinerary, status, saved_text, notes)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, 'planning', $8, $9)
      RETURNING id`,
     [
       userName,
@@ -599,6 +599,8 @@ export async function saveTripPlan(
       endDate,
       plan.nights ?? null,
       JSON.stringify(plan.itinerary),
+      plan.saved_text ?? null,
+      plan.notes ?? null,
     ]
   );
   const id = rows[0]?.id ?? 0;
