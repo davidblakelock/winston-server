@@ -1822,13 +1822,16 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         { role: 'user', content: message },
       ];
 
-      const tripResp = await openai.chat.completions.create({
-        model: MODEL_GPT4O_TRIP,
-        max_tokens: 4000,
-        messages: tripMessages,
+      const tripResp = await openai.responses.create({
+        model: 'gpt-4o',
+        input: tripMessages.map(m => ({
+          role: m.role as 'user' | 'assistant',
+          content: m.content as string,
+        })),
+        tools: [{ type: 'web_search_preview', search_context_size: 'high' }],
       });
 
-      const tripReply = tripResp.choices[0]?.message?.content ?? '';
+      const tripReply = tripResp.output_text ?? '';
       (req as any)._tripConversationalResponse = tripReply;
 
       const tripPlan: NativeTripPlan = {
