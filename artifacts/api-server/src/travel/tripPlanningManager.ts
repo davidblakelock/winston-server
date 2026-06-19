@@ -324,14 +324,7 @@ export async function generateTripItinerary(
     model: MODEL_GPT4O,
     max_tokens: 4000,
     messages: [
-      {
-        role: 'system',
-        content: `You are an expert travel planner. Plan the trip exactly as the user requests. Base every recommendation strictly on what the user actually asked for in their message. Do not add activities, themes, or suggestions that the user did not request or imply. Be specific — use real hotel names, real restaurants, real activities. Include website URLs as markdown links inline for every hotel, restaurant, and activity you mention. Include driving times between stops, cost estimates, and your honest recommendations.`
-      },
-      {
-        role: 'user',
-        content: rawMessage
-      }
+      { role: 'user', content: intent.rawMessage }
     ]
   });
 
