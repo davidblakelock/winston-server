@@ -317,15 +317,13 @@ export async function generateTripItinerary(
   userProfile: UserProfile | null,
 ): Promise<NativeTripPlan> {
 
-  const resp = await openai.chat.completions.create({
-    model: 'gpt-4o-search-preview',
-    web_search_options: { search_context_size: 'high' },
-    messages: [
-      { role: 'user', content: intent.rawMessage }
-    ]
+  const resp = await openai.responses.create({
+    model: 'gpt-4o',
+    input: intent.rawMessage,
+    tools: [{ type: 'web_search_preview', search_context_size: 'high' }],
   });
 
-  const conversationalResponse = resp.choices[0]?.message?.content ?? '';
+  const conversationalResponse = resp.output_text ?? '';
 
   return {
     trip_name: intent.destination ? `Trip to ${intent.destination}` : 'New Trip',
