@@ -314,13 +314,8 @@ export async function generateTripItinerary(
   intent: ParsedTripIntent,
   userProfile: UserProfile | null,
 ): Promise<NativeTripPlan> {
-  const rawMessage = intent.rawMessage ?? `Plan a ${intent.nights ?? 3}-night trip to ${intent.destination}`;
 
-  process.stdout.write(`\n========== [TripPlan] GPT-4o INPUT ==========\n${rawMessage}\n=============================================\n`);
-  logger.info({ model: MODEL_GPT4O, rawMessageFull: rawMessage }, "[TripPlan] 🚀 Call 1 — natural response");
-
-  // ── Call 1: Natural conversational response ──────────────────────────────
-  const naturalResp = await openai.chat.completions.create({
+  const resp = await openai.chat.completions.create({
     model: MODEL_GPT4O,
     max_tokens: 4000,
     messages: [
@@ -328,102 +323,17 @@ export async function generateTripItinerary(
     ]
   });
 
-  const conversationalResponse = naturalResp.choices[0]?.message?.content ?? '';
-
-  logger.info({ len: conversationalResponse.length }, "[TripPlan] 📥 Call 1 complete — starting Call 2 extraction");
-
-  // ── Call 2: Structured data extraction ───────────────────────────────────
-  const extractResp = await openai.chat.completions.create({
-    model: MODEL_GPT4O,
-    max_tokens: 4000,
-    response_format: { type: 'json_object' },
-    messages: [
-      {
-        role: 'system',
-        content: `Extract structured trip data from the travel plan provided. Return ONLY valid JSON — no markdown fences, no explanation.
-
-CRITICAL URL RULE: Extract website URLs EXACTLY as they appear in the travel plan text below — copy them character for character from the markdown links. Do NOT generate, guess, substitute, or "correct" any URL. If a hotel, restaurant, or activity is mentioned in the plan WITHOUT an explicit URL, use this fallback format instead: https://www.google.com/search?q=NAME+CITY (replacing spaces with +). Never invent a URL that does not appear in the source text.
-
-Use this exact structure:
-
-{
-  "trip_name": "creative name for this trip",
-  "destination": "primary destination",
-  "nights": 3,
-  "start_date": "YYYY-MM-DD or null",
-  "end_date": "YYYY-MM-DD or null",
-  "itinerary": {
-    "days": [
-      {
-        "dayNumber": 1,
-        "label": "day title",
-        "location": "city name",
-        "hotel": {
-          "name": "exact hotel name from the plan",
-          "websiteUrl": "hotel official website URL from the plan",
-          "notes": "why this hotel was recommended"
-        },
-        "drivingUrl": "Google Maps directions URL. Day 1: https://www.google.com/maps/dir/?api=1&origin=Current+Location&destination=EXACT+HOTEL+NAME+CITY. Middle days: https://www.google.com/maps/dir/?api=1&origin=PREV+EXACT+HOTEL+NAME+CITY&destination=NEXT+EXACT+HOTEL+NAME+CITY. Last day: https://www.google.com/maps/dir/?api=1&origin=LAST+EXACT+HOTEL+NAME+CITY&destination=Current+Location. Use exact hotel name and city, encode spaces as +.",
-        "activities": [
-          {
-            "time": "Morning/Afternoon/Evening",
-            "title": "activity name",
-            "description": "why it was recommended",
-            "notes": "practical tips from the plan",
-            "websiteUrl": "official website URL from the plan"
-          }
-        ],
-        "meals": [
-          {
-            "time": "Breakfast/Lunch/Dinner",
-            "title": "restaurant name",
-            "description": "why it was recommended",
-            "websiteUrl": "restaurant official website from the plan — never OpenTable or Resy"
-          }
-        ]
-      }
-    ],
-    "practicalNotes": ["tip 1", "tip 2"]
-  }
-}`
-      },
-      {
-        role: 'user',
-        content: `Extract structured data from this travel plan:\n\n${conversationalResponse}`
-      }
-    ]
-  });
-
-  const finishReason = extractResp.choices[0]?.finish_reason;
-  if (finishReason === "length") {
-    logger.warn("[TripPlan] ⚠️ GPT-4o Call 2 hit max_tokens — response truncated, repair will be attempted");
-  }
-
-  const raw = (extractResp.choices[0]?.message?.content ?? '{}').trim();
-
-  process.stdout.write(`\n========== [TripPlan] GPT-4o EXTRACTION RESPONSE (${raw.length} chars) ==========\n${raw}\n=============================================\n`);
-  logger.info({ rawResponseLen: raw.length }, "[TripPlan] 📥 Call 2 complete");
-
-  const stripped = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
-  const jsonMatch = stripped.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) {
-    logger.error({ rawText: raw.slice(0, 1000) }, "[TripPlan] ❌ No JSON found in extraction response");
-    throw new Error("[TripPlan] No JSON found in GPT-4o extraction response");
-  }
-
-  const structured = JSON.parse(repairJson(jsonMatch[0])) as NativeTripPlan;
-
-  structured.start_date = toISODateOrNull(structured.start_date);
-  structured.end_date   = toISODateOrNull(structured.end_date);
-
-  logger.info(
-    { destination: structured.destination, nights: structured.nights, days: structured.itinerary?.days?.length },
-    "[TripPlan] Itinerary generated"
-  );
+  const conversationalResponse = resp.choices[0]?.message?.content ?? '';
 
   return {
-    ...structured,
-    conversational_response: conversationalResponse
+    trip_name: intent.destination ? `Trip to ${intent.destination}` : 'New Trip',
+    destination: intent.destination ?? '',
+    nights: intent.nights ?? 0,
+    start_date: intent.startDate ?? null,
+    end_date: null,
+    status: 'planning',
+    conversational_response: conversationalResponse,
+    itinerary: { days: [], practicalNotes: [] }
   };
 }
 
