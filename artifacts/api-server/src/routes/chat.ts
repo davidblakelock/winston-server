@@ -3867,6 +3867,13 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
         }
       }
 
+      process.stdout.write(
+        "[Gmail][DIAG] fetchAndSummarizeEmails returned " + (emails === null ? "null (not connected)" : emails === undefined ? "undefined (not fetched)" : `${emails.length} emails`) + "\n" +
+        (Array.isArray(emails) ? emails.map((e, i) =>
+          `  [${i}] from="${e.from}" subject="${e.subject}" snippet="${e.snippet?.slice(0, 120)}"`
+        ).join("\n") : "") + "\n"
+      );
+
       const gmailBlock = emails !== undefined && emails !== null
         ? (emails.length === 0
             ? `\n\n[VERIFIED — Gmail API — no unread emails in inbox]\nTell the user warmly: "Your inbox is clear — no unread emails right now." Do not elaborate.`
