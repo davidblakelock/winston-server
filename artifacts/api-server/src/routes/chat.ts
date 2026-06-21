@@ -5525,6 +5525,7 @@ If you cannot extract both, return null.`,
       const hardcodedBody: Record<string, unknown> = { response: hardcoded };
       if ((req as any)._navigationUrl) hardcodedBody.navigationUrl = (req as any)._navigationUrl;
       if ((req as any)._smsPayload) hardcodedBody.smsPayload = (req as any)._smsPayload;
+      if ((req as any)._emailPayload) hardcodedBody.emailPayload = (req as any)._emailPayload;
       if ((req as any)._reservationPayload) hardcodedBody.reservationPayload = (req as any)._reservationPayload;
       if ((req as any)._tripSaved) Object.assign(hardcodedBody, (req as any)._tripSaved);
       res.json(hardcodedBody);
@@ -5551,6 +5552,7 @@ If you cannot extract both, return null.`,
       const nativeResponseBody: Record<string, unknown> = { response: nativeReply };
       if (navigationUrl) nativeResponseBody.navigationUrl = navigationUrl;
       if ((req as any)._smsPayload) nativeResponseBody.smsPayload = (req as any)._smsPayload;
+      if ((req as any)._emailPayload) nativeResponseBody.emailPayload = (req as any)._emailPayload;
       if ((req as any)._reservationPayload) nativeResponseBody.reservationPayload = (req as any)._reservationPayload;
       if ((req as any)._tripSaved) Object.assign(nativeResponseBody, (req as any)._tripSaved);
       if ((req as any)._tripUpdated) Object.assign(nativeResponseBody, (req as any)._tripUpdated);
