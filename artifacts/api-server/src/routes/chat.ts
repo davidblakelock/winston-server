@@ -211,8 +211,7 @@ import {
   toneLabel,
   getPendingText,
   setPendingText,
-  isSendConfirmation,
-  isSendCancellation,
+  classifyConfirmationIntent,
   setLastSmsPayload,
   getLastSmsPayload,
   getPendingDepartureTextOffer,
@@ -2744,7 +2743,8 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
   // ── E007-CONF: Email reply confirmed — package for email app ──────────────
   if (isEmailReplyFlowActive && pendingEmailReply) {
     const displayName = userProfile?.name ?? sessionUserName;
-    if (isSendConfirmation(message)) {
+    const confirmIntent = await classifyConfirmationIntent(message);
+    if (confirmIntent === "send") {
       const mailtoUri =
         `mailto:${encodeURIComponent(pendingEmailReply.to)}` +
         `?subject=${encodeURIComponent(pendingEmailReply.subject)}` +
@@ -2763,7 +2763,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
       const confirmText = `The reply is ready. Your email app should open with it pre-filled for ${pendingEmailReply.recipientName} — hit send when you're ready. I can't send it directly; that part's yours.`;
       (req as any)._hardcodedResponse = confirmText;
       req.log.info({ to: pendingEmailReply.to }, "[E007-CONF] Email packaged — hardcoded response");
-    } else if (isSendCancellation(message)) {
+    } else if (confirmIntent === "cancel") {
       clearPendingEmailReply();
       systemPrompt += `\n\n[Email Reply Cancelled]\nUser cancelled. Acknowledge: "No problem, I've dropped it."`;
     } else {
@@ -3292,7 +3292,9 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
         } catch (err) {
           req.log.warn({ err }, "[T006] Tone re-compose failed");
         }
-      } else if (isSendConfirmation(message)) {
+      } else {
+        const confirmIntent = await classifyConfirmationIntent(message);
+        if (confirmIntent === "send") {
         // User confirmed — package SMS data and bypass Claude entirely.
         // Claude cannot reliably be instructed not to claim it sent the message,
         // so we hardcode the confirmation response server-side.
@@ -3354,13 +3356,13 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
         (req as any)._hardcodedResponse = confirmationText;
 
         req.log.info({ recipient: recipientName, hasPhone: !!phone }, "[T006] SMS packaged — hardcoded response, skipping Claude");
-      } else if (isSendCancellation(message)) {
+        } else if (confirmIntent === "cancel") {
         // User cancelled
         setPendingText(null);
         systemPrompt +=
           `\n\n[Text Message Cancelled]\nThe user decided not to send the message. ` +
           `Acknowledge warmly and briefly — "No problem, I've dropped it."`;
-      } else {
+        } else {
         // Some other response — user might be editing the content
         try {
           const revised = await composeTextMessage({
@@ -3387,6 +3389,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
             `(3) Never say "sending now", "opening Messages", or imply immediate action.`;
         } catch (err) {
           req.log.warn({ err }, "[T006] Revision failed");
+        }
         }
       }
     }
