@@ -3825,12 +3825,43 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
         // User-initiated check: no timestamp filter — always return the last 15 unread emails.
         // The delta filter (emailLastChecked) is for background sync only, not conversational queries.
         isEmailRequest ? fetchAndSummarizeEmails(15, undefined, sessionUserName).catch(() => null) : Promise.resolve(undefined),
-        isCalendarRequest ? fetchWeekEvents(true, sessionUserName).catch(() => null) : Promise.resolve(undefined),
+        // Fetch calendar whenever email OR calendar is requested — meeting detection needs it.
+        (isEmailRequest || isCalendarRequest) ? fetchWeekEvents(true, sessionUserName).catch(() => null) : Promise.resolve(undefined),
       ]);
 
       // Stamp last-checked so background sync knows when the user last looked
       if (isEmailRequest && emails !== null) {
         updateEmailLastChecked().catch(() => {});
+      }
+
+      // On-demand meeting detection — mirrors the morning briefing pattern.
+      // Runs whenever the user checks email and there are messages to scan.
+      let onDemandMeetingBlock = "";
+      if (isEmailRequest && emails && emails.length > 0) {
+        try {
+          const emailsForDetection: EmailInput[] = emails.map((e) => ({
+            gmailId: e.gmailId,
+            gmailThreadId: e.gmailThreadId,
+            from: e.from,
+            fromEmail: e.fromEmail,
+            subject: e.subject,
+            snippet: e.snippet,
+          }));
+          const calendarEventsForDetection = Array.isArray(events) ? events : [];
+          const detected = await Promise.race([
+            detectMeetingRequests(emailsForDetection, calendarEventsForDetection),
+            new Promise<Awaited<ReturnType<typeof detectMeetingRequests>>>((resolve) =>
+              setTimeout(() => resolve([]), 3000)
+            ),
+          ]);
+          if (detected.length > 0) {
+            setPendingMeetingRequests(detected);
+            onDemandMeetingBlock = buildMeetingRequestsBlock(detected);
+            req.log.info({ count: detected.length }, "[E007] On-demand meeting requests detected");
+          }
+        } catch (err) {
+          req.log.warn({ err }, "[E007] On-demand meeting detection failed — skipping");
+        }
       }
 
       const gmailBlock = emails !== undefined && emails !== null
@@ -3851,7 +3882,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
           ? "\n\n[Google Calendar — not connected. Let the user know they can connect Google in the app header.]"
           : "";
 
-      systemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + memoryBlock + gmailBlock + calendarBlock;
+      systemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + memoryBlock + gmailBlock + onDemandMeetingBlock + calendarBlock;
     } catch (err) {
       req.log.warn({ err }, "On-demand email/calendar fetch failed");
     }
