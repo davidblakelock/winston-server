@@ -39,6 +39,7 @@ import goalsRouter from "./goals";
 import stoicRouter from "./stoic";
 import profileRouter from "./profile";
 import inboundEmailRouter from "./inboundEmail";
+import userRecordsRouter from "./userRecords";
 
 const router: IRouter = Router();
 
@@ -82,5 +83,6 @@ router.use(goalsRouter);
 router.use(stoicRouter);
 router.use(profileRouter);
 router.use(inboundEmailRouter);
+router.use(userRecordsRouter);
 
 export default router;
