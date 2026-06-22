@@ -656,60 +656,6 @@ router.post("/lists/shopping/categorize", async (req: Request, res: Response) =>
   }
 });
 
-// ── GET /api/lists/grocery-deeplinks ─────────────────────────────────────────
-// Returns a deep link for each item on the shopping list using the user's
-// preferred grocery service (set via POST /api/integrations/:service/set-preferred).
-// MUST appear before the /lists/:listName wildcard.
-router.get("/lists/grocery-deeplinks", async (req: Request, res: Response) => {
-  const userName = await authenticate(req, res);
-  if (!userName) return;
-
-  try {
-    const [prefRows, itemRows] = await Promise.all([
-      query<{ service_name: string }>(
-        `SELECT service_name FROM user_service_preferences
-         WHERE user_name = $1 AND service_type = 'grocery' AND preferred = true AND is_connected = true
-         LIMIT 1`,
-        [userName]
-      ).then((r) => r.rows).catch((): Array<{ service_name: string }> => []),
-      query<{ id: number; item_text: string; category: string | null }>(
-        `SELECT id, item_text, category FROM list_items
-         WHERE user_name = $1 AND list_name = 'shopping'
-         ORDER BY category NULLS LAST, item_text`,
-        [userName]
-      ).then((r) => r.rows).catch((): Array<{ id: number; item_text: string; category: string | null }> => []),
-    ]);
-
-    const service = prefRows[0]?.service_name ?? null;
-
-    const deeplinks = itemRows.map((item) => ({
-      id: item.id,
-      item: item.item_text,
-      category: item.category,
-      url: buildGroceryDeepLink(service, item.item_text),
-    }));
-
-    res.json({ service, deeplinks });
-  } catch (err) {
-    req.log.warn({ err }, "[Lists] grocery-deeplinks error");
-    res.status(500).json({ error: "Failed to fetch grocery deep links" });
-  }
-});
-
-function buildGroceryDeepLink(service: string | null, item: string): string | null {
-  const encoded = encodeURIComponent(item);
-  switch (service) {
-    case "instacart":    return `https://www.instacart.com/store/search_v3/term?term=${encoded}`;
-    case "walmart":      return `https://www.walmart.com/search?q=${encoded}`;
-    case "heb":          return `https://www.heb.com/search/?q=${encoded}`;
-    case "kroger":       return `https://www.kroger.com/search?query=${encoded}`;
-    case "shipt":        return `https://www.shipt.com/search?query=${encoded}`;
-    case "amazon_fresh": return `https://www.amazon.com/s?k=${encoded}&i=amazonfresh`;
-    case "amazon":       return `https://www.amazon.com/s?k=${encoded}`;
-    default:             return null;
-  }
-}
-
 // ── To Do — dedicated slug so the URL never needs %20 encoding ───────────────
 // Maps the clean /todo path to list_name = 'to do' in the DB.
 // MUST appear before the /lists/:listName wildcard.
