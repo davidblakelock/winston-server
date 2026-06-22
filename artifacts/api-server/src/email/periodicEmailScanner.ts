@@ -20,7 +20,6 @@ import { logger } from "../lib/logger.js";
 import { query } from "../db.js";
 import { getAuthClientForUser } from "../google/oauth.js";
 import { getPeople } from "../people/peopleManager.js";
-import { getOrders } from "../orders/ordersManager.js";
 import { sendPushToAll } from "../push/pushManager.js";
 import { getActiveUsers } from "../onboarding/onboardingManager.js";
 import { classifyEmail } from "../email/emailClassifier.js";
@@ -197,14 +196,8 @@ async function runScanForUser(userName: string): Promise<void> {
     return;
   }
 
-  // Load key_people and existing orders for this user (for Tier 1 matching + order check)
-  const [people, orders] = await Promise.all([
-    getPeople(userName).catch(() => []),
-    getOrders(userName).catch(() => []),
-  ]);
-
-  // Order email IDs for active-order check in Tier 2
-  const activeOrderEmailIds = new Set(orders.map((o) => o.email_id).filter(Boolean) as string[]);
+  // Load key_people for Tier 1 matching
+  const people = await getPeople(userName).catch(() => []);
 
   const tier1Surfaced: SurfacedEmail[] = [];
   const tier2Surfaced: SurfacedEmail[] = [];
@@ -247,15 +240,18 @@ async function runScanForUser(userName: string): Promise<void> {
     if (body.includes("<")) body = stripHtml(body);
     if (body.length < 30) continue;
 
-    const isOrderEmail = activeOrderEmailIds.has(msgId);
-    const result = await classifyEmail(fromRaw, subject, "", body, isOrderEmail);
+    const result = await classifyEmail(fromRaw, subject, body);
 
-    if (result !== null) {
-      await markSurfaced(userName, msgId, threadId, senderEmail, senderName, subject, 2);
-      tier2Surfaced.push({ tier: 2, senderName, senderEmail, subject, summary: result?.summary ?? null, threadId });
-      logger.info({ userName, msgId, sender: senderName, subject, summary: result?.summary }, "[PeriodicEmail] Tier 2 — actionable");
-    } else {
+    if (result === null) {
       logger.info({ userName, msgId, subject }, "[PeriodicEmail] Tier 3 — not actionable");
+    } else if (result.action === "save_to_records" || result.action === "save_to_orders") {
+      await markSurfaced(userName, msgId, threadId, senderEmail, senderName, subject, 2);
+      logger.info({ userName, msgId, subject, action: result.action }, "[PeriodicEmail] Tier 2 — filing action, skipping push (not yet wired)");
+    } else {
+      // meeting_request or needs_reply — surface to user
+      await markSurfaced(userName, msgId, threadId, senderEmail, senderName, subject, 2);
+      tier2Surfaced.push({ tier: 2, senderName, senderEmail, subject, summary: result.summary ?? null, threadId });
+      logger.info({ userName, msgId, sender: senderName, subject, action: result.action, summary: result.summary }, "[PeriodicEmail] Tier 2 — actionable");
     }
   }
 

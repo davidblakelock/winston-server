@@ -1,8 +1,5 @@
 /**
- * Unified email classifier — shared by backgroundEmailScanner and periodicEmailScanner.
- *
- * Returns null when type="none" (no action needed), otherwise returns the full
- * classified result with extracted fields for the appropriate email type.
+ * Unified email classifier — single decision per email: what action, if any, it warrants.
  */
 
 import Anthropic from "@anthropic-ai/sdk";
@@ -11,111 +8,123 @@ import { MODEL_HAIKU } from "../lib/models.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-export type EmailType = "order" | "meeting" | "event" | "social" | "none";
+export type EmailAction = "save_to_records" | "save_to_orders" | "meeting_request" | "needs_reply" | "none";
 
 export interface ClassifiedEmail {
-  type: EmailType;
+  action: EmailAction;
   summary: string | null;
-  // internal — stamped with original subject so handlers can use it as a fallback label
   _subject?: string;
-  // order fields
-  retailer?: string | null;
-  itemName?: string | null;
-  orderNumber?: string | null;
-  trackingNumber?: string | null;
-  carrier?: string | null;
-  expectedDate?: string | null;
-  orderTotal?: string | null;
-  orderUrl?: string | null;
-  status?: "ordered" | "shipped" | "in_transit" | "out_for_delivery" | "delivered" | null;
-  // meeting fields
-  eventTitle?: string | null;
-  proposedDate?: string | null;
-  proposedStartTime?: string | null;
-  proposedEndTime?: string | null;
-  location?: string | null;
-  organizer?: string | null;
-  organizerEmail?: string | null;
-  // event fields
-  eventDate?: string | null;
+
+  record?: {
+    category: "trip" | "warranty" | "home_service" | "subscription" | "vehicle" | "other";
+    vendorName: string;
+    confirmationNumber: string | null;
+    dateStart: string | null;
+    dateEnd: string | null;
+    time: string | null;
+    address: string | null;
+    phone: string | null;
+    website: string | null;
+    amount: string | null;
+  };
+
+  order?: {
+    retailer: string;
+    itemName: string;
+    orderNumber: string | null;
+    trackingNumber: string | null;
+    carrier: string | null;
+    status: "ordered" | "shipped" | "in_transit" | "out_for_delivery" | "delivered" | null;
+    expectedDate: string | null;
+    orderTotal: string | null;
+    orderUrl: string | null;
+  };
+
+  meeting?: {
+    proposedDateTimeStr: string | null;
+    isOpenEnded: boolean;
+  };
 }
 
 export async function classifyEmail(
   from: string,
   subject: string,
-  date: string,
   body: string,
-  hasActiveOrder = false,
 ): Promise<ClassifiedEmail | null> {
   const today = new Date().toISOString().split("T")[0];
   const truncated = body.slice(0, 3000);
 
-  const orderNote = hasActiveOrder
-    ? "\nNote: this may relate to an order already being tracked — if it's just a routine shipping or delivery update, use type=\"none\"."
-    : "";
-
   const prompt = `Today: ${today}
 From: ${from}
 Subject: ${subject}
-Date: ${date}
 
 Body:
 ${truncated}
 
-Classify this email and extract relevant details. Return ONLY valid JSON:
+Decide what action this email warrants, if any. Return ONLY valid JSON:
 
 {
-  "type": "order" | "meeting" | "event" | "social" | "none",
-  "summary": "one actionable sentence for the recipient, or null",
+  "action": "save_to_records" | "save_to_orders" | "meeting_request" | "needs_reply" | "none",
+  "summary": "one short sentence, or null",
 
-  // Include if type="order" — shipping/order/delivery emails:
-  "retailer": exact retailer name or null,
-  "itemName": specific product name (never just "your order") or null,
-  "orderNumber": string or null,
-  "trackingNumber": carrier tracking number or null,
-  "carrier": "UPS" | "FedEx" | "USPS" | "DHL" | null,
-  "expectedDate": "YYYY-MM-DD" or null,
-  "orderTotal": "$XX.XX" or null,
-  "orderUrl": tracking/order URL or null,
-  "status": "ordered" | "shipped" | "in_transit" | "out_for_delivery" | "delivered" | null,
+  // include if action="save_to_records" — a booking/confirmation worth filing (hotel, restaurant, warranty, home service, subscription, vehicle, other):
+  "record": {
+    "category": "trip" | "warranty" | "home_service" | "subscription" | "vehicle" | "other",
+    "vendorName": "string",
+    "confirmationNumber": "string or null",
+    "dateStart": "YYYY-MM-DD or null",
+    "dateEnd": "YYYY-MM-DD or null",
+    "time": "string or null",
+    "address": "string or null",
+    "phone": "string or null",
+    "website": "string or null",
+    "amount": "string or null"
+  },
 
-  // Include if type="meeting" — someone personally requesting a meeting/call/appointment:
-  "eventTitle": meeting name or null,
-  "proposedDate": "YYYY-MM-DD" or null,
-  "proposedStartTime": "HH:MM" (24h) or null,
-  "proposedEndTime": "HH:MM" (24h) or null,
-  "location": location or null,
-  "organizer": sender display name or null,
-  "organizerEmail": sender email or null,
+  // include if action="save_to_orders" — a shipping/order/delivery update:
+  "order": {
+    "retailer": "string",
+    "itemName": "string",
+    "orderNumber": "string or null",
+    "trackingNumber": "string or null",
+    "carrier": "UPS" | "FedEx" | "USPS" | "DHL" | null,
+    "status": "ordered" | "shipped" | "in_transit" | "out_for_delivery" | "delivered" | null,
+    "expectedDate": "YYYY-MM-DD or null",
+    "orderTotal": "$XX.XX or null",
+    "orderUrl": "string or null"
+  },
 
-  // Include if type="event" — invitation to a group event/party/conference:
-  "eventTitle": event name or null,
-  "eventDate": "YYYY-MM-DD" or null,
-  "organizer": organizer name or null
+  // include if action="meeting_request" — someone personally asking to schedule a call/meeting/appointment:
+  "meeting": {
+    "proposedDateTimeStr": "YYYY-MM-DD HH:MM or null",
+    "isOpenEnded": true | false
+  }
 }
 
-Rules:
-- type="order": order/shipping/delivery emails from retailers or carriers
-- type="meeting": someone personally requesting to schedule a 1:1 or small-group meeting, call, or appointment
-- type="event": invitation to attend a group event (party, conference, webinar, save-the-date) not yet on calendar
-- type="social": personal email from a real person — catch-up, check-in, or conversational email that warrants a reply but isn't scheduling a specific time
-- type="none": newsletters, promotions, automated notifications, marketing, or anything with no reason for the recipient to act${orderNote}`;
+Rules for choosing action:
+- "save_to_records": a confirmation/booking worth filing away — hotel, restaurant reservation, warranty registration, home service appointment, subscription renewal, vehicle service. Never extract financial account numbers, SSNs, payment card numbers, or medical/clinical details — only logistics (confirmation number, dates, address, phone, website).
+- "save_to_orders": shipping, delivery, or order status update from a retailer or carrier.
+- "meeting_request": a real person personally asking to schedule time — a call, meeting, lunch, appointment.
+- "needs_reply": anything else from a real person that reasonably expects a response — a question, a catch-up message, a personal note — even if casual.
+- "none": newsletters, marketing, automated notifications, anything with no real action to take.
+
+CRITICAL: If the email's content is primarily financial (bank statement, account balance, wire transfer) or medical (lab results, diagnosis, clinical record), return action="none" — do not extract or surface any details from it.`;
 
   try {
     const resp = await anthropic.messages.create({
       model: MODEL_HAIKU,
-      max_tokens: 500,
+      max_tokens: 600,
       messages: [{ role: "user", content: prompt }],
     });
     const text = resp.content[0].type === "text" ? resp.content[0].text.trim() : "";
     const m = text.match(/\{[\s\S]*\}/);
     if (!m) return null;
     const parsed = JSON.parse(m[0]) as ClassifiedEmail;
-    if (!parsed.type || parsed.type === "none") return null;
+    if (!parsed.action || parsed.action === "none") return null;
     parsed._subject = subject;
     return parsed;
   } catch (err) {
-    logger.warn({ err }, "[EmailClassifier] Claude classification failed");
+    logger.warn({ err }, "[EmailClassifier] Classification failed");
     return null;
   }
 }
