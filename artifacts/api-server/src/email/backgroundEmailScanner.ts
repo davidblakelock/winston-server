@@ -13,7 +13,6 @@
 
 import cron from "node-cron";
 import { google } from "googleapis";
-import Anthropic from "@anthropic-ai/sdk";
 import { logger } from "../lib/logger.js";
 import { NATIVE_USER } from "../auth/middleware.js";
 import { getAuthClientForUser } from "../google/oauth.js";
@@ -26,11 +25,11 @@ import {
 } from "../orders/ordersManager.js";
 import { setPendingMeetingRequests, getPendingMeetingRequests } from "../email/emailMeetingManager.js";
 import { sendPushToAll } from "../push/pushManager.js";
-import { MODEL_HAIKU } from "../lib/models.js";
+import { classifyEmail } from "../email/emailClassifier.js";
+import type { ClassifiedEmail } from "../email/emailClassifier.js";
 import type { DetectedMeetingRequest } from "../email/emailMeetingManager.js";
 
 const TZ = "America/Chicago";
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // ── Social scan in-memory last-scan (meetings/events only) ────────────────────
 // Orders use DB-backed getLastOrderScanAt / updateLastOrderScanAt.
@@ -92,125 +91,12 @@ function buildOrderQuery(since: Date): string {
   return `(${clauses}) -in:spam -in:trash -from:me after:${Math.floor(since.getTime() / 1000)}`;
 }
 
-const SOCIAL_SUBJECT_KEYWORDS = [
-  "meeting", "meet", "call", "invite", "invitation", "calendar",
-  "schedule", "zoom", "teams", "google meet", "webex", "are you free",
-  "can we talk", "set up a time", "calendly",
-  "you're invited", "you have been invited", "event invitation",
-  "has invited you", "invited you to", "cordially invited",
-  "join us for", "save the date",
-];
-
 function buildSocialQuery(since: Date): string {
-  const clauses = SOCIAL_SUBJECT_KEYWORDS.map((k) => `subject:"${k}"`).join(" OR ");
-  return `in:inbox -in:spam -in:trash -from:me (${clauses}) after:${Math.floor(since.getTime() / 1000)}`;
+  // No subject keyword filter — meeting/event/social emails often have plain subjects
+  // like "Lunch?" or "Hey". classifyEmail handles the filtering.
+  return `in:inbox is:unread -in:spam -in:trash -from:me after:${Math.floor(since.getTime() / 1000)}`;
 }
 
-// ── Claude Haiku: classify + extract in one call ──────────────────────────────
-
-interface ClassifiedEmail {
-  type: "order" | "meeting" | "event" | "none";
-  summary: string | null;
-  // passed through so handlers can use it as a fallback label
-  _subject?: string;
-  // order fields
-  retailer?: string | null;
-  itemName?: string | null;
-  orderNumber?: string | null;
-  trackingNumber?: string | null;
-  carrier?: string | null;
-  expectedDate?: string | null;
-  orderTotal?: string | null;
-  orderUrl?: string | null;
-  status?: "ordered" | "shipped" | "in_transit" | "out_for_delivery" | "delivered" | null;
-  // meeting fields
-  eventTitle?: string | null;
-  proposedDate?: string | null;
-  proposedStartTime?: string | null;
-  proposedEndTime?: string | null;
-  location?: string | null;
-  description?: string | null;
-  // event fields
-  eventDate?: string | null;
-  organizer?: string | null;
-  organizerEmail?: string | null;
-}
-
-async function classifyEmail(
-  from: string,
-  subject: string,
-  date: string,
-  body: string,
-): Promise<ClassifiedEmail | null> {
-  const today = new Date().toISOString().split("T")[0];
-  const truncated = body.slice(0, 3000);
-
-  const prompt = `Today: ${today}
-From: ${from}
-Subject: ${subject}
-Date: ${date}
-
-Body:
-${truncated}
-
-Classify this email and extract relevant details. Return ONLY valid JSON:
-
-{
-  "type": "order" | "meeting" | "event" | "none",
-  "summary": "one actionable sentence for the recipient, or null",
-
-  // Include if type="order" — shipping/order/delivery emails:
-  "retailer": exact retailer name or null,
-  "itemName": specific product name (never just "your order") or null,
-  "orderNumber": string or null,
-  "trackingNumber": carrier tracking number or null,
-  "carrier": "UPS" | "FedEx" | "USPS" | "DHL" | null,
-  "expectedDate": "YYYY-MM-DD" or null,
-  "orderTotal": "$XX.XX" or null,
-  "orderUrl": tracking/order URL or null,
-  "status": "ordered" | "shipped" | "in_transit" | "out_for_delivery" | "delivered" | null,
-
-  // Include if type="meeting" — someone personally requesting a meeting/call/appointment:
-  "eventTitle": meeting name or null,
-  "proposedDate": "YYYY-MM-DD" or null,
-  "proposedStartTime": "HH:MM" (24h) or null,
-  "proposedEndTime": "HH:MM" (24h) or null,
-  "location": location or null,
-  "description": brief description or null,
-  "organizer": sender display name or null,
-  "organizerEmail": sender email or null,
-
-  // Include if type="event" — invitation to a group event/party/conference:
-  "eventTitle": event name or null,
-  "eventDate": "YYYY-MM-DD" or null,
-  "organizer": organizer name or null
-}
-
-Rules:
-- type="order": order/shipping/delivery emails from retailers or carriers
-- type="meeting": someone personally requesting to schedule a 1:1 or small-group meeting, call, or appointment
-- type="event": invitation to attend an event (party, conference, webinar, save-the-date) not yet on calendar
-- type="none": newsletters, promotions, auto-notifications, marketing, unsubscribe offers, anything not actionable`;
-
-  try {
-    const resp = await anthropic.messages.create({
-      model: MODEL_HAIKU,
-      max_tokens: 500,
-      messages: [{ role: "user", content: prompt }],
-    });
-    const text = resp.content[0].type === "text" ? resp.content[0].text.trim() : "";
-    const m = text.match(/\{[\s\S]*\}/);
-    if (!m) return null;
-    const parsed = JSON.parse(m[0]) as ClassifiedEmail;
-    if (!parsed.type || parsed.type === "none") return null;
-    // Stamp the original subject so handlers can use it as a fallback label
-    parsed._subject = subject;
-    return parsed;
-  } catch (err) {
-    logger.warn({ err }, "[BgEmailScanner] Claude classification failed");
-    return null;
-  }
-}
 
 // ── Order handler ─────────────────────────────────────────────────────────────
 
@@ -351,6 +237,18 @@ async function handleEvent(userName: string, msgId: string, result: ClassifiedEm
   logger.info({ title, date: result.eventDate }, "[BgEmailScanner] Event invite push sent");
 }
 
+// ── Social handler ────────────────────────────────────────────────────────────
+
+async function handleSocial(userName: string, msgId: string, result: ClassifiedEmail): Promise<void> {
+  const from = result.organizer ?? result._subject ?? "Someone";
+  const body = result.summary ?? result._subject ?? "Personal email";
+  await sendPushToAll(
+    { title: `Email from ${from}`, body, tag: "email-social", notificationType: "email-actionable" },
+    userName,
+  );
+  logger.info({ from, msgId }, "[BgEmailScanner] Social email push sent");
+}
+
 // ── Shared email fetch helper ─────────────────────────────────────────────────
 
 async function fetchAndClassify(
@@ -473,20 +371,21 @@ async function runScan(userName: string): Promise<void> {
     logger.info({ userName, since: since.toISOString() }, "[BgEmailScanner] Starting social scan");
 
     const socialQ = buildSocialQuery(since);
-    let meetings = 0, events = 0, skipped = 0;
+    let meetings = 0, events = 0, socials = 0, skipped = 0;
 
     const { processed, skipped: socialSkipped } = await fetchAndClassify(
       gmail, socialQ, 30, 20, userName,
       async (u, id, res) => {
         if (res.type === "meeting") { await handleMeeting(u, id, res); meetings++; }
         else if (res.type === "event") { await handleEvent(u, id, res); events++; }
+        else if (res.type === "social") { await handleSocial(u, id, res); socials++; }
       },
       "social"
     );
     skipped = socialSkipped;
 
     _socialLastScanAt.set(userName, scanStart);
-    logger.info({ userName, meetings, events, skipped }, "[BgEmailScanner] Social scan complete");
+    logger.info({ userName, meetings, events, socials, skipped }, "[BgEmailScanner] Social scan complete");
   }
 }
 

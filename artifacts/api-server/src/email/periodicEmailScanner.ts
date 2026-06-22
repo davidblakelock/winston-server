@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Periodic Email Scanner — Tiered Actionability Notifications
  *
  * Runs at 8am, 10am, noon, 2pm, 4pm, 6pm, and 8pm Central time.
@@ -16,7 +16,6 @@
 
 import cron from "node-cron";
 import { google } from "googleapis";
-import Anthropic from "@anthropic-ai/sdk";
 import { logger } from "../lib/logger.js";
 import { query } from "../db.js";
 import { getAuthClientForUser } from "../google/oauth.js";
@@ -24,10 +23,9 @@ import { getPeople } from "../people/peopleManager.js";
 import { getOrders } from "../orders/ordersManager.js";
 import { sendPushToAll } from "../push/pushManager.js";
 import { getActiveUsers } from "../onboarding/onboardingManager.js";
-import { MODEL_HAIKU } from "../lib/models.js";
+import { classifyEmail } from "../email/emailClassifier.js";
 
 const TZ = "America/Chicago";
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // ── DB: email_scan_log ─────────────────────────────────────────────────────────
 
@@ -157,66 +155,6 @@ function isKeyPerson(
   return { matched: false, personName: null };
 }
 
-// ── Tier 2: Claude Haiku actionability check ──────────────────────────────────
-
-interface ActionabilityResult {
-  actionable: boolean;
-  summary: string | null;
-}
-
-
-async function checkActionability(
-  from: string,
-  subject: string,
-  body: string,
-  hasActiveOrder: boolean
-): Promise<ActionabilityResult> {
-  const truncated = body.slice(0, 2500);
-  const today = new Date().toISOString().split("T")[0];
-
-  const prompt = `Today: ${today}
-From: ${from}
-Subject: ${subject}
-
-Body:
-${truncated}
-
-You're helping David triage his inbox the way a thoughtful, attentive assistant would.
-Decide whether this email is worth bringing to his attention now, or whether it can wait/be skipped.
-
-Surface it if it's from a real person with something personal, social, or relational to say —
-even casually, like "let's catch up" or "how are you" — or if it needs a response, contains a
-meeting/scheduling request, has a deadline, or involves money, accounts, or security.
-
-Skip it if it's a newsletter, marketing, routine automated notification, or something with
-genuinely no reason for David to see it right now.${hasActiveOrder ? "\nNote: this may relate to an order already being tracked — skip if it's just a routine shipping or delivery update." : ""}
-
-Use your judgment on tone and content, not just keywords. Return ONLY valid JSON:
-{
-  "actionable": true | false,
-  "summary": "one short sentence describing what's in it or what's needed, or null"
-}`;
-
-  try {
-    const resp = await anthropic.messages.create({
-      model: MODEL_HAIKU,
-      max_tokens: 200,
-      messages: [{ role: "user", content: prompt }],
-    });
-    const text = resp.content[0].type === "text" ? resp.content[0].text.trim() : "";
-    const m = text.match(/\{[\s\S]*\}/);
-    if (!m) return { actionable: false, summary: null };
-    const parsed = JSON.parse(m[0]) as { actionable?: boolean; summary?: string | null };
-    return {
-      actionable: parsed.actionable === true,
-      summary: parsed.summary ?? null,
-    };
-  } catch (err) {
-    logger.warn({ err }, "[PeriodicEmail] Claude actionability check failed");
-    return { actionable: false, summary: null };
-  }
-}
-
 // ── Main per-user scan ─────────────────────────────────────────────────────────
 
 interface SurfacedEmail {
@@ -310,12 +248,12 @@ async function runScanForUser(userName: string): Promise<void> {
     if (body.length < 30) continue;
 
     const isOrderEmail = activeOrderEmailIds.has(msgId);
-    const result = await checkActionability(fromRaw, subject, body, isOrderEmail);
+    const result = await classifyEmail(fromRaw, subject, "", body, isOrderEmail);
 
-    if (result.actionable) {
+    if (result !== null) {
       await markSurfaced(userName, msgId, threadId, senderEmail, senderName, subject, 2);
-      tier2Surfaced.push({ tier: 2, senderName, senderEmail, subject, summary: result.summary, threadId });
-      logger.info({ userName, msgId, sender: senderName, subject, summary: result.summary }, "[PeriodicEmail] Tier 2 — actionable");
+      tier2Surfaced.push({ tier: 2, senderName, senderEmail, subject, summary: result?.summary ?? null, threadId });
+      logger.info({ userName, msgId, sender: senderName, subject, summary: result?.summary }, "[PeriodicEmail] Tier 2 — actionable");
     } else {
       logger.info({ userName, msgId, subject }, "[PeriodicEmail] Tier 3 — not actionable");
     }
