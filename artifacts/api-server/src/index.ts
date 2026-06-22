@@ -68,6 +68,7 @@ import { startContactBirthdayScheduler } from "./google/contactBirthdayScheduler
 import { startTvEpisodeScheduler } from "./tv/tvEpisodeScheduler";
 import { startCalendarEmailScheduler } from "./push/calendarEmailScheduler";
 import { ensureStoicTables } from "./stoic/stoicManager";
+import { ensureEmailScanSettingsTable } from "./email/emailScanSettings";
 
 const rawPort = process.env["PORT"];
 
@@ -539,6 +540,14 @@ app.listen(port, async (err) => {
     logger.info("Startup migration: user_service_preferences table ready");
   } catch (e) {
     logger.warn({ e }, "Startup migration warning: user_service_preferences table");
+  }
+
+  // Create user_email_scan_settings table for per-user email scan interval and vacation mode.
+  try {
+    await ensureEmailScanSettingsTable();
+    logger.info("Startup migration: user_email_scan_settings table ready");
+  } catch (e) {
+    logger.warn({ e }, "Startup migration warning: user_email_scan_settings table");
   }
 
   // Add device_id column to push_subscriptions for multi-device notification routing.

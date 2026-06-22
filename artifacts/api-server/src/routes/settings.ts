@@ -18,6 +18,7 @@ import { preFetchMorningBriefing } from "../morning/briefingPregenerate.js";
 import { generateFreshBriefing } from "../morning/briefingFresh.js";
 import { getUserSettings, upsertUserSettings } from "../stoic/stoicManager.js";
 import { getVipContacts, addVipContact, removeVipContact, isVipSender } from "../push/notificationVips.js";
+import { getEmailScanSettings, setEmailScanSettings } from "../email/emailScanSettings.js";
 
 const router: IRouter = Router();
 
@@ -761,6 +762,58 @@ router.patch("/settings/tts", express.json(), async (req, res) => {
   }
   logger.info({ userName, muted }, "[TTS] Global mute preference updated");
   res.json({ ok: true, muted });
+});
+
+// ── GET /api/settings/email-scan ─────────────────────────────────────────────
+router.get("/settings/email-scan", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  try {
+    const settings = await getEmailScanSettings(userName);
+    res.json(settings);
+  } catch (err) {
+    req.log.error({ err }, "[EmailScan] Failed to get settings");
+    res.status(500).json({ error: "Failed to get email scan settings" });
+  }
+});
+
+// ── PATCH /api/settings/email-scan ───────────────────────────────────────────
+const VALID_INTERVALS = [30, 60, 120, 240] as const;
+
+router.patch("/settings/email-scan", express.json({ limit: "16kb" }), async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const { intervalMinutes, vacationMode } = req.body as { intervalMinutes?: unknown; vacationMode?: unknown };
+
+  if (intervalMinutes !== undefined) {
+    if (!VALID_INTERVALS.includes(intervalMinutes as (typeof VALID_INTERVALS)[number])) {
+      res.status(400).json({ error: `intervalMinutes must be one of: ${VALID_INTERVALS.join(", ")}` });
+      return;
+    }
+  }
+  if (vacationMode !== undefined && typeof vacationMode !== "boolean") {
+    res.status(400).json({ error: "vacationMode must be a boolean" });
+    return;
+  }
+
+  const updates: { intervalMinutes?: number; vacationMode?: boolean } = {};
+  if (intervalMinutes !== undefined) updates.intervalMinutes = intervalMinutes as number;
+  if (vacationMode !== undefined) updates.vacationMode = vacationMode as boolean;
+
+  if (Object.keys(updates).length === 0) {
+    res.status(400).json({ error: "No valid fields provided" });
+    return;
+  }
+
+  try {
+    const saved = await setEmailScanSettings(userName, updates);
+    logger.info({ userName, ...updates }, "[EmailScan] Settings updated");
+    res.json({ ok: true, ...saved });
+  } catch (err) {
+    req.log.error({ err }, "[EmailScan] Failed to save settings");
+    res.status(500).json({ error: "Failed to save email scan settings" });
+  }
 });
 
 // ── PATCH /api/settings/persona ──────────────────────────────────────────────
