@@ -57,6 +57,7 @@ import { ensureContactCommunicationLogTable } from "./intelligence/crossDomainEn
 import { ensureNotificationVipsTable } from "./push/notificationVips";
 import { startBackgroundEmailScanner } from "./email/backgroundEmailScanner";
 import { startPeriodicEmailScanner, ensureEmailScanLogTable } from "./email/periodicEmailScanner";
+import { startRecordsArchiver } from "./records/recordsArchiver";
 import { ensureSavedPlacesTable } from "./location/geofenceManager";
 import { ensureListItemColumns } from "./lists/listManager";
 import { ensureListShareTable } from "./lists/listShareManager";
@@ -504,6 +505,7 @@ app.listen(port, async (err) => {
     startTodoReminderScheduler();
     startBackgroundEmailScanner();
     startPeriodicEmailScanner();
+    startRecordsArchiver();
     startProviderScheduler();
     startConnectBirthdayScheduler();
     startContactBirthdayScheduler();
