@@ -230,7 +230,6 @@ import {
 } from "../briefingPreferences/briefingPreferencesManager.js";
 import { classifyMessage } from "../lib/intentClassifier.js";
 import { preFetchMorningBriefing, buildSmartCalendarBlock } from "../morning/briefingPregenerate.js";
-import { getProactiveMode, buildModeInstruction } from "../proactiveMode/proactiveModeManager.js";
 import { populateCalendarSyncState } from "../departure/calendarSyncScheduler.js";
 import { createPerson } from "../people/peopleManager.js";
 import { createProvider } from "../providers/providerManager.js";
@@ -1437,20 +1436,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     // Re-read the current mode every delivery so changes made after pre-generation
     // (e.g. user switched from balanced → whisper during the day) take effect
     // immediately without waiting for tomorrow's pre-gen cycle.
-    //
-    // max_tokens per Winston Mode:
-    //   briefing_only — 450  (~3-4 sentences, minimal)
-    //   supervised    — 600  (standard full briefing)
-    //   autopilot     — 900  (full + cross-domain insights)
-    const deliveryProactiveMode = await getProactiveMode(sessionUserName).catch(() => "supervised" as const);
-    const deliveryFirstName = userProfile?.name?.split(" ")[0] ?? "there";
-    const deliveryMaxTokens =
-      deliveryProactiveMode === "briefing_only" ? 450  :
-      deliveryProactiveMode === "autopilot"     ? 900  :
-      600;
-    // Appending the mode instruction at delivery time overrides whatever mode was
-    // baked into the static preamble at pre-gen time. This handles mode changes mid-day.
-    const deliveryModeInstruction = buildModeInstruction(deliveryProactiveMode, deliveryFirstName, userProfile?.companionName ?? "your companion");
+    const deliveryMaxTokens = 600;
 
     if (!isNativeMorning) {
       // ── SSE headers sent IMMEDIATELY — prevents proxy first-byte timeout ──
@@ -1644,19 +1630,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     const livePreamble = getCurrentDateTimeBlock() + "\n" +
       staticCtx.preamble.replace(/^\[Current date and time[^\[]+/, "");
 
-    // Assemble full system prompt: pre-built static preamble + live blocks + static suffix +
-    // delivery-time mode instruction.
-    //
-    // For briefing_only mode the static suffix is intentionally SKIPPED.
-    // The suffix contains thousands of tokens of news blocks, sports scores, and a
-    // "cover 10 stories" briefing instruction — Claude will follow that agenda even
-    // if the briefing_only instruction says "be brief". Dropping the suffix means
-    // Claude only sees the persona preamble + live email/calendar + the mode
-    // instruction, which produces the correct 3-4 sentence output without being
-    // cut off mid-sentence by the token cap.
-    const deliverySuffix = deliveryProactiveMode === "briefing_only"
-      ? deliveryModeInstruction
-      : staticCtx.suffix + deliveryModeInstruction;
+    const deliverySuffix = staticCtx.suffix;
     const fullSystemPrompt = livePreamble + liveGmailBlock + meetingRequestsBlock + liveCalendarBlock + deliverySuffix;
 
     req.log.info(

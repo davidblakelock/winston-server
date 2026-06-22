@@ -29,8 +29,7 @@ import {
 } from "./storyDedup.js";
 import { logger } from "../lib/logger.js";
 import { getBriefingPreferences, buildBriefingPrefsBlock } from "../briefingPreferences/briefingPreferencesManager.js";
-import { getProactiveMode, buildModeInstruction } from "../proactiveMode/proactiveModeManager.js";
-import { runCrossDomainEngine, buildCrossDomainBlock } from "../intelligence/crossDomainEngine.js";
+import { checkUpcomingDates } from "./morningActions.js";
 import { getStoredGarminData, formatGarminForBriefing } from "../garmin/garminService.js";
 import { getStoredFitData, formatFitForBriefing } from "../google/fit.js";
 import { getMydayEntries, type MydayEntry } from "../myday/mydayManager.js";
@@ -240,25 +239,10 @@ function buildPeopleContextBlock(people: PersonEntry[], displayName?: string): s
   );
 }
 
-function buildNarrativeBriefingInstruction(city: string, companionName: string | null, displayName?: string, mode: import("../proactiveMode/proactiveModeManager.js").WinstonMode = "supervised", intentionQuestion?: string, settings?: UserSettings): string {
+function buildNarrativeBriefingInstruction(city: string, companionName: string | null, displayName?: string, intentionQuestion?: string, settings?: UserSettings): string {
   const companion = companionName ?? "your companion";
   const firstName = displayName?.split(" ")[0] ?? "there";
   const closingQuestion = intentionQuestion ?? `What's the one thing that would make today feel worthwhile?`;
-
-  if (mode === "briefing_only") {
-    return `
-
-[MORNING BRIEFING — BRIEFING ONLY MODE]
-
-You are ${companion}. Deliver an ultra-brief morning briefing for ${firstName}.
-
-• Start with "Good morning, ${firstName}" and immediately give the single most important item for today.
-• Include ONLY: today's calendar events (if any) and/or one genuinely critical alert (urgent bill, medication, urgent reminder).
-• Skip ALL of the following completely: news, sports, weather, entertainment, markets, health, TV shows, local content, venue concerts, bills (unless due today), relationship nudges, closing thought, My Day invite.
-• If nothing critical exists: "Good morning, ${firstName}. Your day looks clear — nothing critical this morning. Let me know if you'd like more detail."
-
-`;
-  }
 
   return `
 
@@ -380,7 +364,7 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
     ];
     const intentionQuestion = INTENTION_QUESTIONS[dayOfYear % 3]!;
 
-    const [recentMemories, allProfileItems, userProfile, keyPeople, seenHeadlines, seenVenueHeadlines, briefingPrefs, proactiveMode, userSettings, stoicEntry] = await Promise.all([
+    const [recentMemories, allProfileItems, userProfile, keyPeople, seenHeadlines, seenVenueHeadlines, briefingPrefs, userSettings, stoicEntry] = await Promise.all([
       getRecentMemories(7).catch(() => []),
       getProfileItems(undefined, userName).catch(() => []),
       getProfile(userName).catch(() => null),
@@ -388,7 +372,6 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
       getSeenHeadlines(userName, 3).catch(() => new Set<string>()),    // news/Dallas: 3-day dedup window
       getSeenHeadlines(userName, 14).catch(() => new Set<string>()),  // venue concerts: 14-day window (events repeat until show date)
       getBriefingPreferences(userName).catch(() => []),
-      getProactiveMode(userName).catch(() => "supervised" as const),
       getUserSettings(userName).catch(() => null as UserSettings | null),
       getStoicForUser(userName).catch(() => null),
     ]);
@@ -787,20 +770,10 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
     // News appears before Dallas local content and venue concerts so Claude gives it
     // appropriate prominence — national/international news is mandatory in every briefing.
     // ── Cross-domain intelligence (non-calendar checks — calendar runs live at delivery) ─
-    const crossDomainActions = proactiveMode !== "briefing_only"
-      ? await runCrossDomainEngine({
-          userName,
-          calendarEvents: [],
-          mode: proactiveMode,
-          userCity: primaryCity,
-          userLat: primaryLat,
-          userLon: primaryLon,
-        }).catch(() => [])
-      : [];
-    const crossDomainBlock = buildCrossDomainBlock(crossDomainActions, userProfile?.companionName ?? "your companion");
-
-    const firstName = userProfile?.name?.split(" ")[0] ?? "there";
-    const modeInstruction = buildModeInstruction(proactiveMode, firstName, userProfile?.companionName ?? "your companion");
+    const upcomingDateActions = await checkUpcomingDates(userName).catch(() => []);
+    const crossDomainBlock = upcomingDateActions.length > 0
+      ? `\n\n[Upcoming Dates]\n` + upcomingDateActions.map((a) => `• ${a.title}: ${a.detail}`).join("\n")
+      : "";
 
     // Apify event discovery block (one curated local event from Eventbrite/Ticketmaster)
     const apifyEventBlock = apifyEventResult.block ?? "";
@@ -825,8 +798,7 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
       mydayBlock + lifeSuggestionBlock + observationBlock + weeklyGiftBlock + annualLetterBlock + crossDomainBlock + routeAwareBlock +
       _bNews + _bEvents + apifyEventBlock + dedupedVenueConcertsBlock + motivationContextBlock +
       onboardingNudgeBlock + stoicBlock +
-      buildNarrativeBriefingInstruction(primaryCity, userProfile?.companionName ?? null, userProfile?.name ?? undefined, proactiveMode, intentionQuestion, userSettings ?? undefined) +
-      modeInstruction;
+      buildNarrativeBriefingInstruction(primaryCity, userProfile?.companionName ?? null, userProfile?.name ?? undefined, intentionQuestion, userSettings ?? undefined);
 
     // Log which static sections have data
     const sectionLog: Record<string, boolean | string> = {

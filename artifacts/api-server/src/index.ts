@@ -52,8 +52,8 @@ import { startOrderTrackingScheduler } from "./orders/orderTrackingScheduler";
 import { startTodoReminderScheduler } from "./lists/todoReminderScheduler";
 import { ensureTripPlansTable } from "./travel/tripPlanningManager";
 import { ensureContextReminderColumns } from "./reminders/contextReminderManager";
-import { ensureProactiveModeTable, ensureTrustedSendersTable } from "./proactiveMode/proactiveModeManager";
-import { ensureContactCommunicationLogTable } from "./intelligence/crossDomainEngine";
+
+
 import { ensureNotificationVipsTable } from "./push/notificationVips";
 import { startBackgroundEmailScanner } from "./email/backgroundEmailScanner";
 import { startRecordsArchiver } from "./records/recordsArchiver";
@@ -344,31 +344,10 @@ app.listen(port, async (err) => {
   }
 
   try {
-    await ensureProactiveModeTable();
-    logger.info("[startup] user_proactive_settings table ready");
-  } catch (e) {
-    logger.warn({ e }, "Proactive mode table initialization warning");
-  }
-
-  try {
-    await ensureContactCommunicationLogTable();
-    logger.info("[startup] contact_communication_log table ready");
-  } catch (e) {
-    logger.warn({ e }, "Contact communication log table initialization warning");
-  }
-
-  try {
     await ensureNotificationVipsTable();
     logger.info("[startup] notification VIPs table ready");
   } catch (e) {
     logger.warn({ e }, "Notification intelligence tables initialization warning");
-  }
-
-  try {
-    await ensureTrustedSendersTable();
-    logger.info("[startup] trusted_senders table ready");
-  } catch (e) {
-    logger.warn({ e }, "Trusted senders table initialization warning");
   }
 
   try {

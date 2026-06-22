@@ -1,7 +1,7 @@
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { NATIVE_USER } from "../auth/middleware.js";
-import { getProactiveMode, shouldSendPushForMode } from "../proactiveMode/proactiveModeManager.js";
+
 
 // ── Ensure expo_push_tokens table exists and has all audit columns ────────────
 query(`
@@ -78,8 +78,6 @@ export interface PushPayload {
   title: string;
   body: string;
   tag?: string;
-  /** Set true when the notification is about/from a VIP contact — bypasses mode-based suppression. */
-  vipOverride?: boolean;
   deepLink?: string;
   mapsUrl?: string;
   mapsDeepLink?: string;
@@ -322,32 +320,10 @@ async function sendExpoNotifications(
   return sendPushToTokens(payload, tokens);
 }
 
-/**
- * Send a push notification via Expo Push Notification service to all registered
- * native app tokens for the given user.
- *
- * Respects the user's proactive mode — notifications may be suppressed based on
- * their category. Set payload.vipOverride=true to bypass mode suppression for
- * VIP-contact notifications.
- */
 export async function sendPushToAll(
   payload: PushPayload,
   userName = NATIVE_USER
 ): Promise<{ sent: number; failed: number }> {
-  try {
-    const mode = await getProactiveMode(userName);
-    const allowed = shouldSendPushForMode(mode, payload.notificationType, payload.vipOverride);
-    if (!allowed) {
-      logger.info(
-        { userName, mode, notificationType: payload.notificationType, tag: payload.tag },
-        "[Push] Suppressed by proactive mode"
-      );
-      return { sent: 0, failed: 0 };
-    }
-  } catch {
-    // If mode lookup fails, proceed with send (fail open for safety)
-  }
-
   const result = await sendExpoNotifications(payload, userName).catch((err) => {
     logger.warn({ err }, "[Push] Expo notification send failed");
     return { sent: 0, failed: 1 };

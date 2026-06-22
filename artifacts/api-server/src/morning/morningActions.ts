@@ -1,4 +1,5 @@
 import { logger } from "../lib/logger.js";
+import { query } from "../db.js";
 import { getOrdersForBriefing } from "../orders/ordersManager.js";
 import { getBillAnomalies, type BillAnomaly } from "../bills/billAnomalyScanner.js";
 import { getWeatherSuggestions, type WeatherSuggestion } from "../weather/weatherSuggestions.js";
@@ -6,8 +7,6 @@ import { getCachedWeather } from "../weather/weatherCache.js";
 import type { CalendarEvent } from "../google/calendar.js";
 import type { DetectedMeetingRequest } from "../email/emailMeetingManager.js";
 import { scanEmailsForDrafts, type EmailDraft } from "../email/draftScanner.js";
-import { runCrossDomainEngine } from "../intelligence/crossDomainEngine.js";
-import { getProactiveMode } from "../proactiveMode/proactiveModeManager.js";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -128,7 +127,54 @@ export interface AssembleMorningActionsInput {
   userCity?: string;
   userLat?: number;
   userLon?: number;
-  proactiveMode?: string;
+}
+
+// ── Upcoming dates check ───────────────────────────────────────────────────────
+
+const TZ = "America/Chicago";
+
+function nowInCT(): Date {
+  return new Date(new Date().toLocaleString("en-US", { timeZone: TZ }));
+}
+
+export async function checkUpcomingDates(userName: string): Promise<MorningAction[]> {
+  try {
+    const today = nowInCT();
+    const results: MorningAction[] = [];
+
+    const { rows } = await query<{
+      id: number;
+      person_name: string;
+      event_type: string;
+      month: number;
+      day: number;
+    }>(
+      `SELECT id, person_name, event_type, month, day
+       FROM important_dates WHERE user_name = $1 AND active = true`,
+      [userName]
+    );
+
+    for (const r of rows) {
+      const thisYear = today.getFullYear();
+      let occurrence = new Date(thisYear, r.month - 1, r.day);
+      if (occurrence < today) occurrence = new Date(thisYear + 1, r.month - 1, r.day);
+      const daysUntil = Math.round((occurrence.getTime() - today.getTime()) / 86400000);
+      if (daysUntil > 0 && daysUntil <= 10) {
+        const label = r.event_type === "birthday" ? "birthday" : "anniversary";
+        results.push({
+          type: "cross_domain_insight" as MorningActionType,
+          title: `Upcoming ${label.charAt(0).toUpperCase() + label.slice(1)}: ${r.person_name}`,
+          detail: `${r.person_name}'s ${label} is in ${daysUntil} day${daysUntil === 1 ? "" : "s"}. Want me to add a reminder to make a reservation or plan something special?`,
+          severity: daysUntil <= 3 ? "warning" : "info",
+          data: { type: "upcoming_date", personName: r.person_name, eventType: r.event_type, daysUntil },
+        });
+      }
+    }
+    return results;
+  } catch (err) {
+    logger.warn({ err, userName }, "[MorningActions] Upcoming dates check failed");
+    return [];
+  }
 }
 
 /**
@@ -141,26 +187,14 @@ export async function assembleMorningActions(
 ): Promise<MorningAction[]> {
   const { userName, detectedMeetings, calendarEvents, userCity, userLat, userLon } = input;
 
-  // Fetch proactive mode (needed for cross-domain engine)
-  const mode = await getProactiveMode(userName).catch(() => "supervised" as const);
-
   // Run all data fetches in parallel — failures are non-fatal
-  const [orders, billAnomalies, weatherData, crossDomainActions, emailDrafts] = await Promise.allSettled([
+  const [orders, billAnomalies, weatherData, upcomingDates, emailDrafts] = await Promise.allSettled([
     getOrdersForBriefing(userName),
     getBillAnomalies(userName),
     userLat && userLon && userCity
       ? getCachedWeather(userCity, userLat, userLon)
       : Promise.resolve(null),
-    mode !== "briefing_only"
-      ? runCrossDomainEngine({
-          userName,
-          calendarEvents,
-          mode,
-          userCity,
-          userLat,
-          userLon,
-        })
-      : Promise.resolve([]),
+    checkUpcomingDates(userName),
     // Scan for emails needing a reply — capped at 5 emails, 8-second hard timeout
     // to prevent sequential Claude calls from blocking the morning response.
     Promise.race([
@@ -200,11 +234,11 @@ export async function assembleMorningActions(
     logger.warn({ err: weatherData.reason, userName }, "[MorningActions] Weather fetch failed");
   }
 
-  // Cross-domain intelligence (calendar-dependent checks run here with live events)
-  if (crossDomainActions.status === "fulfilled" && crossDomainActions.value.length > 0) {
-    allActions.push(...crossDomainActions.value);
-  } else if (crossDomainActions.status === "rejected") {
-    logger.warn({ err: crossDomainActions.reason, userName }, "[MorningActions] Cross-domain engine failed");
+  // Upcoming dates (birthdays, anniversaries within 10 days)
+  if (upcomingDates.status === "fulfilled" && upcomingDates.value.length > 0) {
+    allActions.push(...upcomingDates.value);
+  } else if (upcomingDates.status === "rejected") {
+    logger.warn({ err: upcomingDates.reason, userName }, "[MorningActions] Upcoming dates check failed");
   }
 
   // Pending email drafts (emails that need a reply)

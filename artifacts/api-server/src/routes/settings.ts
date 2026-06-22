@@ -16,12 +16,6 @@ import { query } from "../db.js";
 import { clearStaticBriefingContext, clearCachedBriefing } from "../morning/briefingCache.js";
 import { preFetchMorningBriefing } from "../morning/briefingPregenerate.js";
 import { generateFreshBriefing } from "../morning/briefingFresh.js";
-import {
-  getProactiveMode, setProactiveMode, isValidMode, LEGACY_MODE_MAP,
-  getWinstonMode, setWinstonMode,
-  getTrustedSenders, addTrustedSender, removeTrustedSender,
-  type WinstonMode,
-} from "../proactiveMode/proactiveModeManager.js";
 import { getUserSettings, upsertUserSettings } from "../stoic/stoicManager.js";
 import { getVipContacts, addVipContact, removeVipContact, isVipSender } from "../push/notificationVips.js";
 
@@ -561,103 +555,6 @@ router.get("/briefing/morning", async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "[FreshBriefing] Generation failed");
     res.status(500).json({ error: "Briefing generation failed — please try again." });
-  }
-});
-
-// ── GET /api/settings/proactive-mode ─────────────────────────────────────────
-// Kept for backward compat — returns the current Winston Mode value.
-router.get("/settings/proactive-mode", async (req, res) => {
-  const userName = await authenticate(req, res);
-  if (!userName) return;
-  const mode = await getProactiveMode(userName);
-  res.json({ mode });
-});
-
-// ── POST /api/settings/proactive-mode ────────────────────────────────────────
-// Kept for backward compat — accepts both legacy values (whisper, balanced,
-// full_partner, vacation) and the new Winston Mode values, maps and saves.
-router.post("/settings/proactive-mode", express.json(), async (req, res) => {
-  const userName = await authenticate(req, res);
-  if (!userName) return;
-  const { mode } = req.body as { mode?: unknown };
-  const resolved = typeof mode === "string" && LEGACY_MODE_MAP[mode] ? LEGACY_MODE_MAP[mode] : mode;
-  if (!isValidMode(resolved)) {
-    res.status(400).json({ error: "mode must be one of: autopilot, supervised, briefing_only (or legacy: whisper, balanced, full_partner, vacation)" });
-    return;
-  }
-  await setProactiveMode(userName, resolved as WinstonMode);
-  res.json({ ok: true, mode: resolved });
-});
-
-// ── GET /api/settings/winston-mode ───────────────────────────────────────────
-router.get("/settings/winston-mode", async (req, res) => {
-  const userName = await authenticate(req, res);
-  if (!userName) return;
-  const mode = await getWinstonMode(userName);
-  res.json({ mode });
-});
-
-// ── POST /api/settings/winston-mode ──────────────────────────────────────────
-router.post("/settings/winston-mode", express.json(), async (req, res) => {
-  const userName = await authenticate(req, res);
-  if (!userName) return;
-  const { mode } = req.body as { mode?: unknown };
-  if (!isValidMode(mode)) {
-    res.status(400).json({ error: "mode must be one of: autopilot, supervised, briefing_only" });
-    return;
-  }
-  await setWinstonMode(userName, mode);
-  res.json({ ok: true, mode });
-});
-
-// ── GET /api/settings/trusted-senders ────────────────────────────────────────
-router.get("/settings/trusted-senders", async (req, res) => {
-  const userName = await authenticate(req, res);
-  if (!userName) return;
-  try {
-    const trustedSenders = await getTrustedSenders(userName);
-    res.json({ trustedSenders });
-  } catch (err) {
-    req.log.error({ err }, "[TrustedSenders] Failed to get trusted senders");
-    res.status(500).json({ error: "Failed to get trusted senders" });
-  }
-});
-
-// ── POST /api/settings/trusted-senders ───────────────────────────────────────
-router.post("/settings/trusted-senders", express.json(), async (req, res) => {
-  const userName = await authenticate(req, res);
-  if (!userName) return;
-  const { name, emailOrDomain } = req.body as { name?: unknown; emailOrDomain?: unknown };
-  if (typeof emailOrDomain !== "string" || !emailOrDomain.trim()) {
-    res.status(400).json({ error: "emailOrDomain is required" });
-    return;
-  }
-  try {
-    const sender = await addTrustedSender(
-      userName,
-      emailOrDomain.trim(),
-      typeof name === "string" ? name.trim() : undefined
-    );
-    res.status(201).json({ trustedSender: sender });
-  } catch (err) {
-    req.log.error({ err }, "[TrustedSenders] Failed to add trusted sender");
-    res.status(500).json({ error: "Failed to add trusted sender" });
-  }
-});
-
-// ── DELETE /api/settings/trusted-senders/:id ─────────────────────────────────
-router.delete("/settings/trusted-senders/:id", async (req, res) => {
-  const userName = await authenticate(req, res);
-  if (!userName) return;
-  const id = parseInt(req.params["id"] ?? "", 10);
-  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
-  try {
-    const removed = await removeTrustedSender(userName, id);
-    if (!removed) { res.status(404).json({ error: "Trusted sender not found" }); return; }
-    res.json({ ok: true });
-  } catch (err) {
-    req.log.error({ err }, "[TrustedSenders] Failed to remove trusted sender");
-    res.status(500).json({ error: "Failed to remove trusted sender" });
   }
 });
 
