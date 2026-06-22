@@ -164,27 +164,6 @@ interface ActionabilityResult {
   summary: string | null;
 }
 
-// Heuristic pre-filter — obvious non-actionable domains/patterns that don't need Claude
-const IGNORE_SENDER_DOMAINS = new Set([
-  "noreply.github.com", "notifications.github.com", "mailer.linkedin.com",
-  "e.linkedin.com", "emails.quora.com", "mail.twitter.com", "notifications.twitter.com",
-  "account.google.com", "accounts.google.com", "no-reply.accounts.google.com",
-]);
-
-const IGNORE_SUBJECT_PATTERNS = [
-  /^(unsubscribe|newsletter|weekly digest|daily digest|your daily|your weekly)/i,
-  /^(sale|offer|deal|discount|promo|free shipping|% off|save \d)/i,
-  /newsletter|marketing email|promotional/i,
-];
-
-function isObviouslyIgnorable(senderEmail: string, subject: string): boolean {
-  const domain = senderEmail.split("@")[1]?.toLowerCase() ?? "";
-  if (IGNORE_SENDER_DOMAINS.has(domain)) return true;
-  for (const pat of IGNORE_SUBJECT_PATTERNS) {
-    if (pat.test(subject)) return true;
-  }
-  return false;
-}
 
 async function checkActionability(
   from: string,
@@ -202,29 +181,20 @@ Subject: ${subject}
 Body:
 ${truncated}
 
-Decide if this email requires David's attention RIGHT NOW.
+You're helping David triage his inbox the way a thoughtful, attentive assistant would.
+Decide whether this email is worth bringing to his attention now, or whether it can wait/be skipped.
 
-Surface it (actionable: true) ONLY if it:
-- Requires a personal response from David
-- Contains a meeting request, calendar invite, or scheduling ask
-- Has a deadline, time-sensitive task, or urgent action item
-- Contains information David needs to act on soon
-- Contains financial information: bank transactions, account activity, investment updates, wire transfers, payment confirmations, balance alerts, fraud alerts, or any movement of money
-- Is a third-party login notification: "someone signed in to your account", new device login, OAuth app authorization, sign-in alert, or security verification for any online account
+Surface it if it's from a real person with something personal, social, or relational to say —
+even casually, like "let's catch up" or "how are you" — or if it needs a response, contains a
+meeting/scheduling request, has a deadline, or involves money, accounts, or security.
 
-Do NOT surface (actionable: false) if it is:
-- A newsletter, digest, or subscription update
-- Marketing, promotional, or sales content
-- A routine automated system status notification with no action needed
-- An order confirmation, shipping update, or receipt${hasActiveOrder ? " (unless it's a delivery delay or problem)" : ""}
-- A social media notification
-- A routine billing statement showing no change (not requiring immediate action)
-- General FYI content with no action required
+Skip it if it's a newsletter, marketing, routine automated notification, or something with
+genuinely no reason for David to see it right now.${hasActiveOrder ? "\nNote: this may relate to an order already being tracked — skip if it's just a routine shipping or delivery update." : ""}
 
-Return ONLY valid JSON:
+Use your judgment on tone and content, not just keywords. Return ONLY valid JSON:
 {
   "actionable": true | false,
-  "summary": "one short sentence describing what action is needed, or null if not actionable"
+  "summary": "one short sentence describing what's in it or what's needed, or null"
 }`;
 
   try {
@@ -335,12 +305,6 @@ async function runScanForUser(userName: string): Promise<void> {
     }
 
     // ── Tier 2: Claude actionability ─────────────────────────────────────────
-    // Pre-filter obvious junk before spending tokens
-    if (isObviouslyIgnorable(senderEmail, subject)) {
-      logger.info({ userName, msgId, subject }, "[PeriodicEmail] Tier 3 — pre-filter ignored");
-      continue;
-    }
-
     let body = extractBody((msgData.payload ?? {}) as GmailPart);
     if (body.includes("<")) body = stripHtml(body);
     if (body.length < 30) continue;
