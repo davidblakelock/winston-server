@@ -1,7 +1,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import multer from "multer";
 import Anthropic from "@anthropic-ai/sdk";
-import { query } from "../db.js";
+import { insertUserRecord } from "../records/recordsManager.js";
 
 const router: IRouter = Router();
 
@@ -127,32 +127,24 @@ router.post(
     );
 
     // Vendor name falls back to sender's email domain if Claude returned null
-    const vendorName = extracted.vendor_name ?? senderDomain(sender);
+    const vendorName = extracted.vendor_name ?? senderDomain(sender) ?? "Unknown";
     const rawSnippet = text.slice(0, 500);
 
     try {
-      await query(
-        `INSERT INTO user_records
-           (user_name, category, vendor_name, confirmation_number,
-            date_start, date_end, time, address, phone, website,
-            amount, notes, raw_email_snippet)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
-        [
-          username,
-          extracted.category,
-          vendorName,
-          extracted.confirmation_number,
-          extracted.date_start,
-          extracted.date_end,
-          extracted.time,
-          extracted.address,
-          extracted.phone,
-          extracted.website,
-          extracted.amount,
-          extracted.notes,
-          rawSnippet,
-        ]
-      );
+      await insertUserRecord(username, {
+        category: extracted.category,
+        vendorName,
+        confirmationNumber: extracted.confirmation_number,
+        dateStart:          extracted.date_start,
+        dateEnd:            extracted.date_end,
+        time:               extracted.time,
+        address:            extracted.address,
+        phone:              extracted.phone,
+        website:            extracted.website,
+        amount:             extracted.amount,
+        notes:              extracted.notes,
+        rawSnippet,
+      });
       process.stdout.write("[InboundEmail] inserted into user_records for user: " + username + "\n");
     } catch (err) {
       process.stdout.write("[InboundEmail] DB insert failed: " + String(err) + "\n");
