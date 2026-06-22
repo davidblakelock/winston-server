@@ -4,8 +4,8 @@
  * Two separate Gmail queries per scan:
  *   1. ORDER scan  — broad query, no inbox restriction (orders land in Promotions/Updates),
  *                    up to 50 candidates, processes up to 40. email_id passed for dedup.
- *                    Aftership tracking registered immediately on discovery.
- *   2. SOCIAL scan — meetings + events, inbox only, up to 30 candidates, processes up to 20.
+ *   2. SOCIAL scan — all unread inbox emails, up to 30 candidates, processes up to 20.
+ *                    Keyword-free — classifyEmail handles filtering.
  *
  * Claude Haiku classifies + extracts each email in a single call.
  * Last-scan timestamp is persisted to DB (order_sync_state) so restarts don't re-process.
@@ -21,17 +21,17 @@ import {
   getOrders,
   getLastOrderScanAt,
   updateLastOrderScanAt,
-  updateOrderTracking,
 } from "../orders/ordersManager.js";
 import { setPendingMeetingRequests, getPendingMeetingRequests } from "../email/emailMeetingManager.js";
 import { sendPushToAll } from "../push/pushManager.js";
 import { classifyEmail } from "../email/emailClassifier.js";
 import type { ClassifiedEmail } from "../email/emailClassifier.js";
 import type { DetectedMeetingRequest } from "../email/emailMeetingManager.js";
+import { insertUserRecord } from "../records/recordsManager.js";
 
 const TZ = "America/Chicago";
 
-// ── Social scan in-memory last-scan (meetings/events only) ────────────────────
+// ── Social scan in-memory last-scan ──────────────────────────────────────────
 // Orders use DB-backed getLastOrderScanAt / updateLastOrderScanAt.
 
 const _socialLastScanAt = new Map<string, Date>();
@@ -92,115 +92,99 @@ function buildOrderQuery(since: Date): string {
 }
 
 function buildSocialQuery(since: Date): string {
-  // No subject keyword filter — meeting/event/social emails often have plain subjects
+  // No subject keyword filter — meeting/records/reply emails often have plain subjects
   // like "Lunch?" or "Hey". classifyEmail handles the filtering.
   return `in:inbox is:unread -in:spam -in:trash -from:me after:${Math.floor(since.getTime() / 1000)}`;
 }
 
+// ── Sender display name helper ────────────────────────────────────────────────
+
+function senderDisplayName(from: string): string {
+  const m = from.match(/^(.*?)\s*<[^>]+>$/);
+  if (m) return m[1].trim().replace(/^["']|["']$/g, "") || from;
+  return from.split("@")[0] ?? from;
+}
 
 // ── Order handler ─────────────────────────────────────────────────────────────
 
 const NOTIFY_STATUSES = new Set(["out_for_delivery", "delivered"]);
 
 async function handleOrder(userName: string, msgId: string, result: ClassifiedEmail): Promise<void> {
-  // retailer is the minimum viable field — drop only if it's missing.
-  // itemName falls back to the email subject so vague "Your order has shipped" emails
-  // still get recorded rather than silently dropped.
-  if (!result.retailer) {
+  const order = result.order;
+  if (!order?.retailer) {
     logger.info({ msgId, subject: result._subject }, "[BgEmailScanner] Order dropped — no retailer extracted");
     return;
   }
-  const itemName = result.itemName || result._subject || "Order";
+  const itemName = order.itemName || result._subject || "Order";
 
   // Fetch current orders to detect status changes for push notifications
   const existing = await getOrders(userName);
   const existingByTracking = new Map(
     existing.filter((o) => o.tracking_number).map((o) => [o.tracking_number!, o.status])
   );
-  const prevStatus = result.trackingNumber
-    ? existingByTracking.get(result.trackingNumber) ?? null
+  const prevStatus = order.trackingNumber
+    ? existingByTracking.get(order.trackingNumber) ?? null
     : null;
 
   // email_id is critical — it drives ON CONFLICT deduplication in the DB
-  const saved = await upsertOrder(userName, {
-    retailer: result.retailer,
+  await upsertOrder(userName, {
+    retailer: order.retailer,
     item_name: itemName,
-    order_number: result.orderNumber ?? null,
-    tracking_number: result.trackingNumber ?? null,
-    carrier: result.carrier ?? null,
-    status: result.status ?? "ordered",
-    expected_date: result.expectedDate ?? null,
-    order_total: result.orderTotal ?? null,
+    order_number: order.orderNumber ?? null,
+    tracking_number: order.trackingNumber ?? null,
+    carrier: order.carrier ?? null,
+    status: order.status ?? "ordered",
+    expected_date: order.expectedDate ?? null,
+    order_total: order.orderTotal ?? null,
     email_id: msgId,
-    order_url: result.orderUrl ?? null,
+    order_url: order.orderUrl ?? null,
   });
 
   logger.info(
-    { retailer: result.retailer, item: itemName, status: result.status ?? "ordered", msgId },
+    { retailer: order.retailer, item: itemName, status: order.status ?? "ordered", msgId },
     "[BgEmailScanner] Order upserted"
   );
 
-  const newStatus = result.status ?? "ordered";
+  const newStatus = order.status ?? "ordered";
   const statusChanged = prevStatus !== null && prevStatus !== newStatus;
   if (statusChanged && NOTIFY_STATUSES.has(newStatus)) {
     const label = newStatus === "delivered" ? "Delivered" : "Out for delivery";
     await sendPushToAll(
-      { title: "Package Update", body: `${label}: ${result.itemName} from ${result.retailer}`, tag: "order-update" },
+      { title: "Package Update", body: `${label}: ${order.itemName} from ${order.retailer}`, tag: "order-update" },
       userName,
     );
-    logger.info({ tracking: result.trackingNumber, prevStatus, newStatus }, "[BgEmailScanner] Order push sent");
+    logger.info({ tracking: order.trackingNumber, prevStatus, newStatus }, "[BgEmailScanner] Order push sent");
   }
+}
+
+// ── Record handler ────────────────────────────────────────────────────────────
+
+async function handleRecord(userName: string, msgId: string, body: string, result: ClassifiedEmail): Promise<void> {
+  const rec = result.record;
+  if (!rec) {
+    logger.info({ msgId, subject: result._subject }, "[BgEmailScanner] Record dropped — no record fields extracted");
+    return;
+  }
+  await insertUserRecord(userName, {
+    category: rec.category,
+    vendorName: rec.vendorName,
+    confirmationNumber: rec.confirmationNumber,
+    dateStart: rec.dateStart,
+    dateEnd: rec.dateEnd,
+    time: rec.time,
+    address: rec.address,
+    phone: rec.phone,
+    website: rec.website,
+    amount: rec.amount,
+    notes: result.summary ?? null,
+    rawSnippet: body.slice(0, 500),
+  });
+  logger.info({ vendor: rec.vendorName, category: rec.category, msgId }, "[BgEmailScanner] Record saved");
 }
 
 // ── Meeting handler ───────────────────────────────────────────────────────────
 
-function isTomorrowOrSooner(proposedDate: string | null | undefined): boolean {
-  if (!proposedDate) return false;
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowStr = tomorrow.toLocaleDateString("en-CA", { timeZone: TZ });
-  return proposedDate <= tomorrowStr;
-}
-
-async function handleMeeting(userName: string, msgId: string, result: ClassifiedEmail): Promise<void> {
-  const organizer = result.organizer ?? "Someone";
-  const existing = getPendingMeetingRequests();
-  const existingIds = new Set(existing.map((m) => m.gmailId));
-  if (existingIds.has(msgId)) return;
-
-  const newRequest: DetectedMeetingRequest = {
-    gmailId: msgId,
-    gmailThreadId: msgId,
-    from: organizer,
-    fromEmail: result.organizerEmail ?? "",
-    subject: result.eventTitle ?? "Meeting request",
-    proposedDateTimeStr: result.proposedDate
-      ? `${result.proposedDate}${result.proposedStartTime ? " " + result.proposedStartTime : ""}`
-      : null,
-    isOpenEnded: !result.proposedDate,
-    calendarStatus: "unknown",
-    conflictEvent: null,
-    suggestedAlternative: null,
-  };
-
-  setPendingMeetingRequests([...existing, newRequest]);
-
-  if (isTomorrowOrSooner(result.proposedDate)) {
-    const when = result.proposedDate
-      ? `${result.proposedDate}${result.proposedStartTime ? " at " + result.proposedStartTime : ""}`
-      : "soon";
-    await sendPushToAll(
-      { title: "Meeting Request Needs Response", body: `${organizer} wants to meet ${when}`, tag: "meeting-request" },
-      userName,
-    );
-    logger.info({ organizer, date: result.proposedDate }, "[BgEmailScanner] Meeting push sent");
-  }
-  logger.info({ organizer, date: result.proposedDate }, "[BgEmailScanner] Meeting queued");
-}
-
-// ── Event handler ─────────────────────────────────────────────────────────────
-
-async function isEventOnCalendar(userName: string, title: string, date: string | null): Promise<boolean> {
+async function isAlreadyOnCalendar(userName: string, title: string, date: string | null): Promise<boolean> {
   try {
     const auth = await getAuthClientForUser(userName);
     if (!auth) return false;
@@ -218,35 +202,77 @@ async function isEventOnCalendar(userName: string, title: string, date: string |
   } catch { return false; }
 }
 
-async function handleEvent(userName: string, msgId: string, result: ClassifiedEmail): Promise<void> {
-  const title = result.eventTitle;
-  if (!title) return;
+function isTomorrowOrSooner(proposedDate: string | null | undefined): boolean {
+  if (!proposedDate) return false;
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowStr = tomorrow.toLocaleDateString("en-CA", { timeZone: TZ });
+  return proposedDate <= tomorrowStr;
+}
 
-  const alreadyOnCalendar = await isEventOnCalendar(userName, title, result.eventDate ?? null);
-  if (alreadyOnCalendar) {
-    logger.info({ title }, "[BgEmailScanner] Event already on calendar, skipping");
-    return;
+async function handleMeeting(
+  userName: string,
+  msgId: string,
+  from: string,
+  subject: string,
+  result: ClassifiedEmail,
+): Promise<void> {
+  const existing = getPendingMeetingRequests();
+  const existingIds = new Set(existing.map((m) => m.gmailId));
+  if (existingIds.has(msgId)) return;
+
+  // Parse organizer name and email from the raw From header
+  const fromMatch = from.match(/^(.*?)\s*<([^>]+)>$/);
+  const organizerName = fromMatch
+    ? fromMatch[1].trim().replace(/^["']|["']$/g, "") || senderDisplayName(from)
+    : senderDisplayName(from);
+  const organizerEmail = fromMatch ? fromMatch[2].trim() : from.trim();
+
+  const meeting = result.meeting;
+  // proposedDateTimeStr is "YYYY-MM-DD HH:MM" — extract date portion for the soon-check
+  const proposedDateOnly = meeting?.proposedDateTimeStr?.split(" ")[0] ?? null;
+
+  const newRequest: DetectedMeetingRequest = {
+    gmailId: msgId,
+    gmailThreadId: msgId,
+    from: organizerName,
+    fromEmail: organizerEmail,
+    subject,
+    proposedDateTimeStr: meeting?.proposedDateTimeStr ?? null,
+    isOpenEnded: meeting?.isOpenEnded ?? true,
+    calendarStatus: "unknown",
+    conflictEvent: null,
+    suggestedAlternative: null,
+  };
+
+  setPendingMeetingRequests([...existing, newRequest]);
+
+  if (isTomorrowOrSooner(proposedDateOnly)) {
+    const alreadyScheduled = await isAlreadyOnCalendar(userName, subject, proposedDateOnly);
+    if (alreadyScheduled) {
+      logger.info({ organizer: organizerName, proposedDateTimeStr: meeting?.proposedDateTimeStr }, "[BgEmailScanner] Meeting already on calendar, skipping push");
+    } else {
+      const when = meeting?.proposedDateTimeStr ?? "soon";
+      await sendPushToAll(
+        { title: "Meeting Request Needs Response", body: `${organizerName} wants to meet ${when}`, tag: "meeting-request" },
+        userName,
+      );
+      logger.info({ organizer: organizerName, proposedDateTimeStr: meeting?.proposedDateTimeStr }, "[BgEmailScanner] Meeting push sent");
+    }
   }
-
-  const dateStr = result.eventDate ? ` on ${result.eventDate}` : "";
-  const org = result.organizer ? ` — from ${result.organizer}` : "";
-  await sendPushToAll(
-    { title: "Event Invitation", body: `${title}${dateStr}${org}`, tag: "event-invite" },
-    userName,
-  );
-  logger.info({ title, date: result.eventDate }, "[BgEmailScanner] Event invite push sent");
+  logger.info({ organizer: organizerName, proposedDateTimeStr: meeting?.proposedDateTimeStr }, "[BgEmailScanner] Meeting queued");
 }
 
 // ── Social handler ────────────────────────────────────────────────────────────
 
-async function handleSocial(userName: string, msgId: string, result: ClassifiedEmail): Promise<void> {
-  const from = result.organizer ?? result._subject ?? "Someone";
+async function handleSocial(userName: string, msgId: string, from: string, result: ClassifiedEmail): Promise<void> {
+  const displayName = senderDisplayName(from);
   const body = result.summary ?? result._subject ?? "Personal email";
   await sendPushToAll(
-    { title: `Email from ${from}`, body, tag: "email-social", notificationType: "email-actionable" },
+    { title: `Email from ${displayName}`, body, tag: "email-social", notificationType: "email-actionable" },
     userName,
   );
-  logger.info({ from, msgId }, "[BgEmailScanner] Social email push sent");
+  logger.info({ from: displayName, msgId }, "[BgEmailScanner] Social email push sent");
 }
 
 // ── Shared email fetch helper ─────────────────────────────────────────────────
@@ -257,7 +283,7 @@ async function fetchAndClassify(
   maxFetch: number,
   maxProcess: number,
   userName: string,
-  handler: (userName: string, msgId: string, result: ClassifiedEmail) => Promise<void>,
+  handler: (userName: string, msgId: string, from: string, subject: string, body: string, result: ClassifiedEmail) => Promise<void>,
   label: string,
 ): Promise<{ processed: number; skipped: number }> {
   let messageIds: string[] = [];
@@ -288,16 +314,15 @@ async function fetchAndClassify(
 
       const from = getH("From");
       const subject = getH("Subject");
-      const date = getH("Date");
 
       let body = extractBody((detail.data.payload ?? {}) as GmailPart);
       if (body.includes("<")) body = stripHtml(body);
       if (body.length < 30) { skipped++; continue; }
 
-      const result = await classifyEmail(from, subject, date, body);
+      const result = await classifyEmail(from, subject, body);
       if (!result) { skipped++; continue; }
 
-      await handler(userName, msgId, result);
+      await handler(userName, msgId, from, subject, body, result);
       processed++;
     } catch (err) {
       logger.warn({ err, msgId, label }, "[BgEmailScanner] Failed to process email");
@@ -316,7 +341,7 @@ async function runScan(userName: string): Promise<void> {
   const orderSinceMs = lastOrderScan ? Date.now() - lastOrderScan.getTime() : Infinity;
   const shouldScanOrders = orderSinceMs >= SCAN_INTERVAL_MS;
 
-  // ── Social (meetings/events): in-memory ───────────────────────────────────
+  // ── Social (meetings/records/replies): in-memory ──────────────────────────
   const lastSocialScan = _socialLastScanAt.get(userName);
   const socialSinceMs = lastSocialScan ? Date.now() - lastSocialScan.getTime() : Infinity;
   const shouldScanSocial = socialSinceMs >= SCAN_INTERVAL_MS;
@@ -355,8 +380,9 @@ async function runScan(userName: string): Promise<void> {
     const orderQ = buildOrderQuery(since);
     const { processed: orders, skipped: orderSkipped } = await fetchAndClassify(
       gmail, orderQ, 50, 40, userName,
-      async (u, id, res) => {
-        if (res.type === "order") await handleOrder(u, id, res);
+      async (u, id, _from, _subject, body, res) => {
+        if (res.action === "save_to_orders") await handleOrder(u, id, res);
+        else if (res.action === "save_to_records") await handleRecord(u, id, body, res);
       },
       "orders"
     );
@@ -371,21 +397,20 @@ async function runScan(userName: string): Promise<void> {
     logger.info({ userName, since: since.toISOString() }, "[BgEmailScanner] Starting social scan");
 
     const socialQ = buildSocialQuery(since);
-    let meetings = 0, events = 0, socials = 0, skipped = 0;
+    let meetings = 0, records = 0, socials = 0;
 
-    const { processed, skipped: socialSkipped } = await fetchAndClassify(
+    const { skipped: socialSkipped } = await fetchAndClassify(
       gmail, socialQ, 30, 20, userName,
-      async (u, id, res) => {
-        if (res.type === "meeting") { await handleMeeting(u, id, res); meetings++; }
-        else if (res.type === "event") { await handleEvent(u, id, res); events++; }
-        else if (res.type === "social") { await handleSocial(u, id, res); socials++; }
+      async (u, id, from, subject, body, res) => {
+        if (res.action === "meeting_request") { await handleMeeting(u, id, from, subject, res); meetings++; }
+        else if (res.action === "save_to_records") { await handleRecord(u, id, body, res); records++; }
+        else if (res.action === "needs_reply") { await handleSocial(u, id, from, res); socials++; }
       },
       "social"
     );
-    skipped = socialSkipped;
 
     _socialLastScanAt.set(userName, scanStart);
-    logger.info({ userName, meetings, events, socials, skipped }, "[BgEmailScanner] Social scan complete");
+    logger.info({ userName, meetings, records, socials, skipped: socialSkipped }, "[BgEmailScanner] Social scan complete");
   }
 }
 
