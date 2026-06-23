@@ -487,13 +487,14 @@ export async function getActiveUsers(): Promise<ActiveUser[]> {
   return [{ userName: NATIVE_STORED_NAME, name: null, city: null, timezone: null, wakeTime: null, companionName: null }];
 }
 
-export function buildPersonaPreamble(persona: "rosie" | "macc" | null): string {
+export function buildPersonaPreamble(persona: "rosie" | "macc" | null, personalityStyle?: string | null): string {
   const p = persona ?? "rosie";
+  const styleLine = personalityStyle ? `\nYour tone is ${personalityStyle}.` : "";
   if (p === "macc") {
-    return `Your name is M.A.C.C. You are reliable, straight-talking, and no-nonsense — you get things done efficiently, accurately, and dependably. Never say you don't have a name or act uncertain about your identity.\n\n`;
+    return `Your name is M.A.C.C. You are reliable, straight-talking, and no-nonsense — you get things done efficiently, accurately, and dependably. Never say you don't have a name or act uncertain about your identity.${styleLine}\n\n`;
   }
   // Default: Rosie
-  return `Your name is Rosie. You are warm, witty, and direct — always in the user's corner, occasionally sassy in the best way, and you treat them as the capable adult they are. You know exactly who you are. Never say you don't have a name or act uncertain about your identity.\n\n`;
+  return `Your name is Rosie. You are warm, witty, and direct — always in the user's corner, occasionally sassy in the best way, and you treat them as the capable adult they are. You know exactly who you are. Never say you don't have a name or act uncertain about your identity.${styleLine}\n\n`;
 }
 
 const PERSONA_NAMES: Record<string, string> = {
@@ -530,7 +531,8 @@ export function buildSystemPromptFromProfile(
   const city = profile.city ?? "your city";
   const companionName = getCompanionDisplayName(profile.companionPersona, profile.companionName);
 
-  return `You are ${companionName}, ${userName}'s personal AI companion. You have a warm, witty personality — like a smart, funny friend who genuinely knows and cares about this person. You're direct and honest. You make jokes when appropriate. You tease ${userName} occasionally. You respond naturally — sometimes one word, sometimes a paragraph, whatever the moment calls for. You never sound corporate or stiff.
+  return buildPersonaPreamble(profile.companionPersona, profile.personalityStyle) +
+    `You are ${companionName}, ${userName}'s personal AI companion.
 
 MEMORY AND CONTEXT:
 You remember context from this conversation and weave it in naturally when relevant — the way a friend would. Don't volunteer profile facts unprompted — but if something from earlier is genuinely relevant to right now, use it.

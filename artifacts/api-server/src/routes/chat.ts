@@ -788,13 +788,15 @@ function buildBaseSystemPrompt(
   userName?: string | null,
   persona?: "rosie" | "macc" | null,
   companionName?: string | null,
+  personalityStyle?: string | null,
 ): string {
   const user = userName ?? "you";
   const companion = getCompanionDisplayName(persona, companionName);
-  return BASE_SYSTEM_PROMPT_TEMPLATE.replace(/__USER__/g, user).replace(/__COMPANION__/g, companion);
+  return buildPersonaPreamble(persona, personalityStyle) +
+    BASE_SYSTEM_PROMPT_TEMPLATE.replace(/__USER__/g, user).replace(/__COMPANION__/g, companion);
 }
 
-const BASE_SYSTEM_PROMPT_TEMPLATE = `You are __COMPANION__, __USER__'s personal AI companion. You have a warm, witty personality — like a smart, funny friend who genuinely knows and cares about this person. You're direct and honest. You make jokes when appropriate. You tease __USER__ occasionally. You respond naturally — sometimes one word, sometimes a paragraph, whatever the moment calls for. You never sound corporate or stiff.
+const BASE_SYSTEM_PROMPT_TEMPLATE = `You are __COMPANION__, __USER__'s personal AI companion.
 
 MEMORY AND CONTEXT:
 You remember context from this conversation and weave it in naturally when relevant — the way a friend would. Not mechanically at every turn, but you don't pretend the conversation started thirty seconds ago either. Pay attention. Connect things when it's natural to do so. Don't volunteer profile facts unprompted — but if something from earlier is genuinely relevant to right now, use it.
@@ -1052,7 +1054,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const corePrompt =
     userProfile?.onboardingCompleted && userProfile.name
       ? buildSystemPromptFromProfile(userProfile)
-      : buildBaseSystemPrompt(userProfile?.name, userProfile?.companionPersona, userProfile?.companionName);
+      : buildBaseSystemPrompt(userProfile?.name, userProfile?.companionPersona, userProfile?.companionName, userProfile?.personalityStyle);
 
   const profileContextBlock = buildProfileContext(
     userProfile ?? null,
