@@ -850,4 +850,13 @@ router.patch("/settings/wake-time", express.json({ limit: "1kb" }), async (req, 
   res.json({ ok: true, wakeTime });
 });
 
+// ── GET /api/settings/wake-time ──────────────────────────────────────────────
+router.get("/settings/wake-time", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const profile = await getProfile(userName);
+  res.json({ wakeTime: profile?.wakeTime ?? null });
+});
+
 export default router;
