@@ -4023,11 +4023,11 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
   // On-demand activation: if the user explicitly triggers "good evening" (via button tap or
   // typing), activate the check-in for today regardless of the scheduled 9 PM time.
   // The scheduled job and the button are two independent entry points — both should work.
-  winddownActive = await isWinddownActive().catch(() => false);
+  winddownActive = await isWinddownActive(sessionUserName).catch(() => false);
   if (isEveningGreeting && !winddownActive) {
     try {
-      await markFiredToday();        // INSERT today's row (idempotent — no-op if already exists)
-      await setWinddownActive(true); // Ensure active = true (in case row existed but was deactivated)
+      await markFiredToday(sessionUserName);        // INSERT today's row (idempotent — no-op if already exists)
+      await setWinddownActive(sessionUserName, true); // Ensure active = true (in case row existed but was deactivated)
       winddownActive = true;
       req.log.info("Evening check-in activated on-demand via evening greeting");
     } catch (err) {
@@ -4330,7 +4330,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
 
   if (isGoodnightMessage && winddownActive) {
     try {
-      await setWinddownActive(false);
+      await setWinddownActive(sessionUserName, false);
     } catch {}
   }
 

@@ -7,7 +7,6 @@ import {
   hasFiredToday,
   markFiredToday,
   saveTonightMessage,
-  type WinddownSettings,
 } from "./winddownManager.js";
 
 import { getProfile, getActiveUsers, type CollectedData } from "../onboarding/onboardingManager.js";
@@ -16,33 +15,7 @@ import { fetchTodayEvents, fetchTomorrowEvents } from "../google/calendar.js";
 import { getMoodForToday } from "../mood/moodManager.js";
 import { logger } from "../lib/logger.js";
 
-// ── Settings cache ────────────────────────────────────────────────────────────
-// getSettings() calls Supabase REST. A transient "other side closed" network
-// drop used to crash the entire scheduler tick before it could fire the
-// evening check-in. Cache the last-known-good value so a blip in the Supabase
-// connection never prevents the 9 PM notification from going out.
-let _cachedSettings: WinddownSettings | null = null;
-let _settingsCacheTime = 0;
-const SETTINGS_CACHE_MS = 10 * 60 * 1000; // re-fetch at most every 10 min
-
-async function getSettingsCached(): Promise<WinddownSettings> {
-  const now = Date.now();
-  if (_cachedSettings && now - _settingsCacheTime < SETTINGS_CACHE_MS) {
-    return _cachedSettings;
-  }
-  try {
-    const fresh = await getSettings();
-    _cachedSettings = fresh;
-    _settingsCacheTime = now;
-    return fresh;
-  } catch (err) {
-    if (_cachedSettings) {
-      logger.warn({ err }, "Evening check-in: getSettings failed — using cached settings");
-      return _cachedSettings;
-    }
-    throw err; // no cached value yet — propagate so the outer catch logs it
-  }
-}
+const DEFAULT_TZ = "America/Chicago";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -193,66 +166,67 @@ export function startWinddownScheduler(): void {
     if (_running) return;
     _running = true;
     try {
-      const settings = await getSettingsCached();
-
-      const tz = "America/Chicago";
-      const now = new Date();
-      const localTime = now.toLocaleTimeString("en-US", {
-        timeZone: tz,
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
-      });
-
-      if (!settings.enabled) return;
+      const users = await getActiveUsers().catch(() => [{ userName: NATIVE_STORED_NAME, name: null, city: null, timezone: null, wakeTime: null, companionName: null }]);
 
       const toMinutes = (t: string) => {
         const [h, m] = t.split(":").map(Number);
         return h * 60 + m;
       };
-      const nowMinutes = toMinutes(localTime);
-      const scheduledMinutes = toMinutes(settings.scheduledTime);
-      const minutesPast = nowMinutes - scheduledMinutes;
 
-      // 15-minute catch window — provides recovery from brief server restarts without
-      // allowing the notification to fire drastically late.
-      if (minutesPast < 0 || minutesPast >= 15) return;
-      if (await hasFiredToday()) {
-        console.log(`EVENING_CHECK_IN: already fired today — skipping`);
-        return;
+      for (const user of users) {
+        const { userName } = user;
+        const tz = user.timezone ?? DEFAULT_TZ;
+
+        const settings = await getSettings(userName).catch(() => ({ enabled: true, scheduledTime: "21:00", storyDayOfWeek: "sunday" }));
+        if (!settings.enabled) continue;
+
+        const localTime = new Date().toLocaleTimeString("en-US", {
+          timeZone: tz,
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        });
+
+        const nowMinutes = toMinutes(localTime);
+        const scheduledMinutes = toMinutes(settings.scheduledTime);
+        const minutesPast = nowMinutes - scheduledMinutes;
+
+        // 15-minute catch window — provides recovery from brief server restarts without
+        // allowing the notification to fire drastically late.
+        if (minutesPast < 0 || minutesPast >= 15) continue;
+        if (await hasFiredToday(userName)) {
+          console.log(`EVENING_CHECK_IN: already fired today — skipping`);
+          continue;
+        }
+
+        console.log(`EVENING_CHECK_IN: firing at ${localTime}`);
+        // Mark fired FIRST to prevent double-fire on subsequent ticks within the 10-min window,
+        // but wrap it so a transient DB error doesn't abort the whole notification.
+        await markFiredToday(userName).catch((err) =>
+          logger.warn({ err }, "Evening check-in: markFiredToday failed — push will still be sent")
+        );
+        logger.info({ userName, time: settings.scheduledTime }, "Evening check-in initiated");
+
+        const profile = await getProfile(userName).catch(() => null);
+        const companionName = profile?.companionName ?? "Your Companion";
+        const message = await generateOpeningMessage(companionName, userName);
+
+        await saveTonightMessage(userName, message).catch((err) =>
+          logger.warn({ err }, "Failed to save tonight's check-in message")
+        );
+
+        broadcastToUser(userName, "winddown-start", { message });
+
+        // Do NOT include autoSendMessage — the web app fetches /api/winddown/tonight-message
+        // when the notification is tapped, so the pre-generated message is displayed directly.
+        sendPushToAll({
+          title: `🌙 Evening Check-In — ${companionName}`,
+          body: `Time for your Evening Check-In — how did your day go?`,
+          tag: "winddown",
+          notificationType: "winddown",
+          requireInteraction: true,
+        }, userName).catch(() => {});
       }
-
-      console.log(`EVENING_CHECK_IN: firing at ${localTime}`);
-      // Mark fired FIRST to prevent double-fire on subsequent ticks within the 10-min window,
-      // but wrap it so a transient DB error doesn't abort the whole notification.
-      await markFiredToday().catch((err) =>
-        logger.warn({ err }, "Evening check-in: markFiredToday failed — push will still be sent")
-      );
-      logger.info({ time: settings.scheduledTime }, "Evening check-in initiated");
-
-      const users = await getActiveUsers().catch(() => [{ userName: NATIVE_STORED_NAME }]);
-      const primaryUser = users[0]?.userName ?? NATIVE_STORED_NAME;
-
-      const profile = await getProfile(primaryUser).catch(() => null);
-      const companionName = profile?.companionName ?? "Your Companion";
-
-      const message = await generateOpeningMessage(companionName, primaryUser);
-
-      await saveTonightMessage(message).catch((err) =>
-        logger.warn({ err }, "Failed to save tonight's check-in message")
-      );
-
-      broadcastToUser(primaryUser, "winddown-start", { message });
-
-      // Do NOT include autoSendMessage — the web app fetches /api/winddown/tonight-message
-      // when the notification is tapped, so the pre-generated message is displayed directly.
-      sendPushToAll({
-        title: `🌙 Evening Check-In — ${companionName}`,
-        body: `Time for your Evening Check-In — how did your day go?`,
-        tag: "winddown",
-        notificationType: "winddown",
-        requireInteraction: true,
-      }, primaryUser).catch(() => {});
     } catch (err) {
       logger.error({ err }, "Evening check-in scheduler error");
     } finally {

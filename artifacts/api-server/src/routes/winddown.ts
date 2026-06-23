@@ -9,13 +9,15 @@ import {
 } from "../winddown/winddownManager.js";
 import { generateOpeningMessage } from "../winddown/winddownScheduler.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
-import { tryAuthenticate, NATIVE_STORED_NAME } from "../auth/middleware.js";
+import { authenticate } from "../auth/middleware.js";
 
 const router: IRouter = Router();
 
-router.get("/winddown/settings", async (_req: Request, res: Response) => {
+router.get("/winddown/settings", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
   try {
-    const settings = await getSettings();
+    const settings = await getSettings(userName);
     res.json(settings);
   } catch (err) {
     res.status(500).json({ error: "Failed to get evening check-in settings" });
@@ -25,9 +27,11 @@ router.get("/winddown/settings", async (_req: Request, res: Response) => {
 // Native app calls this after tapping the push notification to retrieve
 // tonight's pre-generated opening message (stored when the scheduler fired).
 // Returns { message, firedTonight } — message is null if check-in hasn't fired yet today.
-router.get("/winddown/tonight-message", async (_req: Request, res: Response) => {
+router.get("/winddown/tonight-message", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
   try {
-    const message = await getTonightMessage();
+    const message = await getTonightMessage(userName);
     res.json({ message, firedTonight: message !== null });
   } catch (err) {
     res.status(500).json({ error: "Failed to retrieve tonight's check-in message" });
@@ -39,19 +43,16 @@ router.get("/winddown/tonight-message", async (_req: Request, res: Response) => 
 // Generates and returns an opening message immediately if the scheduler hasn't fired yet,
 // so the native app always gets a real AI-generated opening, not a null/fallback.
 router.post("/winddown/activate", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
   try {
-    await markFiredToday();        // Ensures today's row exists (no-op if already present)
-    await setWinddownActive(true); // Ensures active = true (re-activates if deactivated)
+    await markFiredToday(userName);        // Ensures today's row exists (no-op if already present)
+    await setWinddownActive(userName, true); // Ensures active = true (re-activates if deactivated)
 
-    // Resolve the authenticated user; fall back to primary user from active users list.
-    const sessionUserName = await tryAuthenticate(req) ?? NATIVE_STORED_NAME;
-
-    // Always generate fresh — the opening message includes tonight's story question,
-    // calendar events, and all 6 check-in elements. Caching would serve stale content.
-    const profile = await getProfile(sessionUserName).catch(() => null);
+    const profile = await getProfile(userName).catch(() => null);
     const companionName = profile?.companionName ?? "your companion";
-    const message = await generateOpeningMessage(companionName);
-    await saveTonightMessage(message).catch(() => {});
+    const message = await generateOpeningMessage(companionName, userName);
+    await saveTonightMessage(userName, message).catch(() => {});
 
     res.json({ activated: true, message });
   } catch (err) {
@@ -60,10 +61,13 @@ router.post("/winddown/activate", async (req: Request, res: Response) => {
 });
 
 router.put("/winddown/settings", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
   try {
-    const { enabled, scheduledTime } = req.body as {
+    const { enabled, scheduledTime, storyDayOfWeek } = req.body as {
       enabled?: boolean;
       scheduledTime?: string;
+      storyDayOfWeek?: string;
     };
 
     if (
@@ -74,7 +78,7 @@ router.put("/winddown/settings", async (req: Request, res: Response) => {
       return;
     }
 
-    const settings = await updateSettings({ enabled, scheduledTime });
+    const settings = await updateSettings(userName, { enabled, scheduledTime, storyDayOfWeek });
     res.json(settings);
   } catch (err) {
     res.status(500).json({ error: "Failed to update evening check-in settings" });
