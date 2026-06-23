@@ -19,6 +19,7 @@ import { generateFreshBriefing } from "../morning/briefingFresh.js";
 import { getUserSettings, upsertUserSettings } from "../stoic/stoicManager.js";
 import { getVipContacts, addVipContact, removeVipContact, isVipSender } from "../push/notificationVips.js";
 import { getEmailScanSettings, setEmailScanSettings } from "../email/emailScanSettings.js";
+import { getVoiceOptions } from "../voices/voiceOptionsManager.js";
 
 const router: IRouter = Router();
 
@@ -195,6 +196,18 @@ router.delete("/profile/avatar", async (req, res) => {
     req.log.error({ dbErr: String(dbErr) }, "[AVATAR] DELETE FAIL — database error");
     res.status(500).json({ error: "Could not remove photo. Please try again." });
   }
+});
+
+// ── GET /api/voices ───────────────────────────────────────────────────────────
+// Auth: open — static reference data for the voice picker UI.
+router.get("/voices", async (req, res) => {
+  const { gender } = req.query as { gender?: string };
+  if (!gender || !["female", "male"].includes(gender)) {
+    res.status(400).json({ error: "gender must be 'female' or 'male'" });
+    return;
+  }
+  const options = await getVoiceOptions(gender as "female" | "male");
+  res.json({ voices: options });
 });
 
 // ── GET /api/voices/:voiceId/preview ─────────────────────────────────────────

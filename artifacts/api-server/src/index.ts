@@ -69,6 +69,7 @@ import { startTvEpisodeScheduler } from "./tv/tvEpisodeScheduler";
 import { startCalendarEmailScheduler } from "./push/calendarEmailScheduler";
 import { ensureStoicTables } from "./stoic/stoicManager";
 import { ensureEmailScanSettingsTable } from "./email/emailScanSettings";
+import { ensureVoiceOptionsTable, seedVoiceOptions } from "./voices/voiceOptionsManager";
 
 const rawPort = process.env["PORT"];
 
@@ -548,6 +549,15 @@ app.listen(port, async (err) => {
     logger.info("Startup migration: user_email_scan_settings table ready");
   } catch (e) {
     logger.warn({ e }, "Startup migration warning: user_email_scan_settings table");
+  }
+
+  // Create voice_options table and seed with curated ElevenLabs voice list.
+  try {
+    await ensureVoiceOptionsTable();
+    await seedVoiceOptions();
+    logger.info("Startup migration: voice_options table ready");
+  } catch (e) {
+    logger.warn({ e }, "Startup migration warning: voice_options table");
   }
 
   // Add device_id column to push_subscriptions for multi-device notification routing.
