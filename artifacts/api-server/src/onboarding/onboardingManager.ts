@@ -37,6 +37,8 @@ export interface UserProfile {
   favoriteRestaurants: string | null;
   favoritePodcasts: string | null;
   favoriteArtists: string[];
+  rosieVoiceId: string | null;
+  maccVoiceId: string | null;
 }
 
 // ── Data shape accepted by POST /api/onboarding/complete (native app) ─────────
@@ -127,6 +129,10 @@ export async function ensureOnboardingTable(): Promise<void> {
   await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS favorite_podcasts text`);
   await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS companion_persona text`);
   await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS favorite_artists jsonb DEFAULT '[]'::jsonb`);
+  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS rosie_voice_id text`);
+  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS macc_voice_id text`);
+  await query(`UPDATE user_profiles SET rosie_voice_id = voice_id WHERE rosie_voice_id IS NULL AND voice_id IS NOT NULL`);
+  await query(`UPDATE user_profiles SET macc_voice_id = voice_id WHERE macc_voice_id IS NULL AND voice_id IS NOT NULL`);
 }
 
 type ProfileRow = {
@@ -164,6 +170,8 @@ type ProfileRow = {
   favorite_restaurants: string | null;
   favorite_podcasts: string | null;
   favorite_artists: string[] | null;
+  rosie_voice_id: string | null;
+  macc_voice_id: string | null;
 };
 
 function rowToProfile(r: ProfileRow): UserProfile {
@@ -203,6 +211,8 @@ function rowToProfile(r: ProfileRow): UserProfile {
     favoriteRestaurants: r.favorite_restaurants ?? null,
     favoritePodcasts: r.favorite_podcasts ?? null,
     favoriteArtists: r.favorite_artists ?? [],
+    rosieVoiceId: r.rosie_voice_id ?? null,
+    maccVoiceId: r.macc_voice_id ?? null,
   };
 }
 
@@ -217,7 +227,7 @@ export async function getProfile(userName = NATIVE_STORED_NAME): Promise<UserPro
 
 export async function updateProfileField(
   userName: string,
-  fields: { voiceId?: string; companionName?: string; personalityStyle?: string; photoUrl?: string; avatarBase64?: string | null; companionPersona?: "rosie" | "macc" }
+  fields: { voiceId?: string; companionName?: string; personalityStyle?: string; photoUrl?: string; avatarBase64?: string | null; companionPersona?: "rosie" | "macc"; rosieVoiceId?: string; maccVoiceId?: string }
 ): Promise<void> {
   const sets: string[] = [];
   const vals: unknown[] = [];
@@ -228,6 +238,8 @@ export async function updateProfileField(
   if (fields.photoUrl !== undefined) { sets.push(`photo_url = $${idx++}`); vals.push(fields.photoUrl); }
   if (fields.avatarBase64 !== undefined) { sets.push(`avatar_base64 = $${idx++}`); vals.push(fields.avatarBase64); }
   if (fields.companionPersona !== undefined) { sets.push(`companion_persona = $${idx++}`); vals.push(fields.companionPersona); }
+  if (fields.rosieVoiceId !== undefined) { sets.push(`rosie_voice_id = $${idx++}`); vals.push(fields.rosieVoiceId); }
+  if (fields.maccVoiceId !== undefined) { sets.push(`macc_voice_id = $${idx++}`); vals.push(fields.maccVoiceId); }
   if (sets.length === 0) return;
   vals.push(userName);
   await query(`UPDATE user_profiles SET ${sets.join(", ")} WHERE user_name = $${idx} RETURNING user_name`, vals);

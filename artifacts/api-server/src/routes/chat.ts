@@ -59,11 +59,6 @@ import {
   formatJournalForPrompt,
 } from "../journal/journalManager.js";
 import {
-  recordOliviaContact,
-  getDaysSinceLastCall,
-  getDaysSinceLastOliviaContact,
-} from "../olivia/oliviaTracker.js";
-import {
   detectPersonMention,
   recordMention,
   getDaysSinceLastMention,
@@ -792,7 +787,7 @@ function buildBaseSystemPrompt(
 ): string {
   const user = userName ?? "you";
   const companion = getCompanionDisplayName(persona, companionName);
-  return buildPersonaPreamble(persona, personalityStyle) +
+  return buildPersonaPreamble(persona ?? null, personalityStyle) +
     BASE_SYSTEM_PROMPT_TEMPLATE.replace(/__USER__/g, user).replace(/__COMPANION__/g, companion);
 }
 
@@ -1296,9 +1291,6 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const partnerPattern = partnerFirstName ? new RegExp(`\\b${partnerFirstName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i") : null;
   const isPartnerRelated = !isMorningGreeting && partnerPattern !== null && partnerPattern.test(message);
   const isJournalReview = !isMorningGreeting && cls.journal_review;
-  const isOliviaCall = !isMorningGreeting && cls.olivia_call;
-  const isOliviaMention = !isMorningGreeting && cls.olivia_mention;
-
   // T001: Morning briefing follow-up — only fires when there is a cached briefing from today
   const cachedBriefingText = _hasCachedBriefing ? getCachedBriefing(sessionUserName) : null;
   const isBriefingFollowUp = !isMorningGreeting && !!cachedBriefingText && cls.briefing_followup;
@@ -1365,7 +1357,6 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     isDateAdd || isDateList || isDateRemove ||
     isMedRequest ||
     isTVAdd || isTVRemove || isTVList ||
-    isOliviaCall ||
     cls.navigation;
   const selectedModel = _isSimpleIntent && !isMorningGreeting && !isEveningGreeting
     ? MODEL_HAIKU
@@ -2561,25 +2552,6 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
         }
       } catch { /* non-fatal */ }
     }
-  }
-
-  // ── Olivia relationship tracking ───────────────────────────────────────────
-  if (isOliviaCall) {
-    recordOliviaContact("call", message.substring(0, 200), sessionUserName).catch(() => {});
-    const displayName = userProfile?.name ?? sessionUserName;
-    systemPrompt += `\n\n[Olivia Contact Logged]\n${displayName} mentioned talking to or calling Olivia. This has been noted. Be warm and curious — ask how she's doing, what they talked about, how she seems. Express genuine delight that they connected.`;
-  } else if (isOliviaMention && !isOliviaCall) {
-    recordOliviaContact("mention", message.substring(0, 100), sessionUserName).catch(() => {});
-  }
-
-  if (!isMorningGreeting && !isOliviaCall) {
-    try {
-      const daysSinceCall = await getDaysSinceLastCall(sessionUserName);
-      if (daysSinceCall !== null && daysSinceCall >= 3) {
-        const displayName = userProfile?.name ?? sessionUserName;
-        systemPrompt += `\n\n[Olivia — Gentle Check-In Opportunity]\nIt's been ${daysSinceCall} days since ${displayName} last mentioned calling Olivia. If the moment feels natural in this conversation, gently note it: "${displayName}, it's been a few days since you mentioned talking to Olivia — how is she doing?" Don't force it if the conversation is about something urgent or completely unrelated.`;
-      }
-    } catch { /* non-fatal */ }
   }
 
   // ── Mood awareness ─────────────────────────────────────────────────────────
@@ -5880,7 +5852,11 @@ router.post("/speak", async (req, res) => {
     const profileUserName = await tryAuthenticate(req);
     if (profileUserName) {
       const profile = await getProfile(profileUserName).catch(() => null);
-      if (profile?.voiceId) ELEVENLABS_VOICE_ID = profile.voiceId;
+      if (profile) {
+        const persona = profile.companionPersona ?? "rosie";
+        const personaVoiceId = persona === "macc" ? profile.maccVoiceId : profile.rosieVoiceId;
+        ELEVENLABS_VOICE_ID = personaVoiceId ?? profile.voiceId ?? DEFAULT_VOICE_ID;
+      }
     }
   } catch {
     // Non-fatal — continue with default voice

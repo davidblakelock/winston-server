@@ -83,7 +83,11 @@ router.post(
     if (!explicitVoiceId) {
       try {
         const profile = await getProfile(userName);
-        if (profile?.voiceId) voiceId = profile.voiceId;
+        if (profile) {
+          const persona = profile.companionPersona ?? "rosie";
+          const personaVoiceId = persona === "macc" ? profile.maccVoiceId : profile.rosieVoiceId;
+          voiceId = personaVoiceId ?? profile.voiceId ?? voiceId;
+        }
       } catch {
         // Non-fatal — continue with env voice
       }

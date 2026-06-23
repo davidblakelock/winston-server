@@ -73,23 +73,52 @@ router.get("/settings/profile", async (req, res) => {
   });
 });
 
+// ── GET /api/settings/voice ───────────────────────────────────────────────────
+router.get("/settings/voice", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const { persona } = req.query as { persona?: string };
+  if (!persona || !["rosie", "macc"].includes(persona)) {
+    res.status(400).json({ error: "persona must be 'rosie' or 'macc'" });
+    return;
+  }
+
+  const profile = await getProfile(userName);
+  const voiceId = persona === "macc"
+    ? (profile?.maccVoiceId ?? null)
+    : (profile?.rosieVoiceId ?? null);
+  res.json({ voiceId });
+});
+
 // ── PATCH /api/settings/voice ─────────────────────────────────────────────────
 router.patch("/settings/voice", express.json({ limit: "1mb" }), async (req, res) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
 
-  const { voiceId } = req.body as { voiceId?: string };
+  const { persona, voiceId } = req.body as { persona?: string; voiceId?: string };
+  if (!persona || !["rosie", "macc"].includes(persona)) {
+    res.status(400).json({ error: "persona must be 'rosie' or 'macc'" });
+    return;
+  }
   if (!voiceId) { res.status(400).json({ error: "voiceId required" }); return; }
 
-  const voice = VOICE_OPTIONS.find((v) => v.id === voiceId);
-  if (!voice) { res.status(400).json({ error: "Invalid voiceId" }); return; }
+  const { rows } = await query<{ id: string; name: string }>(
+    `SELECT id, name FROM voice_options WHERE id = $1`,
+    [voiceId]
+  );
+  if (rows.length === 0) { res.status(400).json({ error: "Invalid voiceId" }); return; }
+  const voiceName = rows[0]!.name;
 
-  await updateProfileField(userName, { voiceId });
+  const updates = persona === "macc"
+    ? { maccVoiceId: voiceId }
+    : { rosieVoiceId: voiceId };
+  await updateProfileField(userName, updates);
 
   const confirmText = `How does this sound? I can be whoever you need me to be — I'm here for you.`;
   const audio = await generateTTS(voiceId, confirmText);
 
-  res.json({ ok: true, voiceId, voiceName: voice.name, audio });
+  res.json({ ok: true, persona, voiceId, voiceName, audio });
 });
 
 // ── PATCH /api/settings/name ──────────────────────────────────────────────────
