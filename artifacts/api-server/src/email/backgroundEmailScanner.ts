@@ -22,7 +22,7 @@ import {
   getLastOrderScanAt,
   updateLastOrderScanAt,
 } from "../orders/ordersManager.js";
-import { setPendingMeetingRequests, getPendingMeetingRequests, addPendingReplyEmails } from "../email/emailMeetingManager.js";
+import { setPendingMeetingRequests, getPendingMeetingRequests, addPendingReplyEmails, getPendingReplyEmails, buildScanSummary } from "../email/emailMeetingManager.js";
 import { sendPushToAll } from "../push/pushManager.js";
 import { classifyEmail } from "../email/emailClassifier.js";
 import type { ClassifiedEmail } from "../email/emailClassifier.js";
@@ -202,14 +202,6 @@ async function isAlreadyOnCalendar(userName: string, title: string, date: string
   } catch { return false; }
 }
 
-function isTomorrowOrSooner(proposedDate: string | null | undefined): boolean {
-  if (!proposedDate) return false;
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowStr = tomorrow.toLocaleDateString("en-CA", { timeZone: TZ });
-  return proposedDate <= tomorrowStr;
-}
-
 async function handleMeeting(
   userName: string,
   msgId: string,
@@ -229,8 +221,13 @@ async function handleMeeting(
   const organizerEmail = fromMatch ? fromMatch[2].trim() : from.trim();
 
   const meeting = result.meeting;
-  // proposedDateTimeStr is "YYYY-MM-DD HH:MM" — extract date portion for the soon-check
   const proposedDateOnly = meeting?.proposedDateTimeStr?.split(" ")[0] ?? null;
+
+  const alreadyScheduled = await isAlreadyOnCalendar(userName, subject, proposedDateOnly);
+  if (alreadyScheduled) {
+    logger.info({ organizer: organizerName, proposedDateTimeStr: meeting?.proposedDateTimeStr }, "[BgEmailScanner] Meeting already on calendar — skipping pending");
+    return;
+  }
 
   const newRequest: DetectedMeetingRequest = {
     gmailId: msgId,
@@ -246,20 +243,6 @@ async function handleMeeting(
   };
 
   setPendingMeetingRequests([...existing, newRequest]);
-
-  if (isTomorrowOrSooner(proposedDateOnly)) {
-    const alreadyScheduled = await isAlreadyOnCalendar(userName, subject, proposedDateOnly);
-    if (alreadyScheduled) {
-      logger.info({ organizer: organizerName, proposedDateTimeStr: meeting?.proposedDateTimeStr }, "[BgEmailScanner] Meeting already on calendar, skipping push");
-    } else {
-      const when = meeting?.proposedDateTimeStr ?? "soon";
-      await sendPushToAll(
-        { title: "Meeting Request Needs Response", body: `${organizerName} wants to meet ${when}`, tag: "meeting-request" },
-        userName,
-      );
-      logger.info({ organizer: organizerName, proposedDateTimeStr: meeting?.proposedDateTimeStr }, "[BgEmailScanner] Meeting push sent");
-    }
-  }
   logger.info({ organizer: organizerName, proposedDateTimeStr: meeting?.proposedDateTimeStr }, "[BgEmailScanner] Meeting queued");
 }
 
@@ -383,6 +366,9 @@ async function runScan(userName: string): Promise<void> {
 
   const gmail = google.gmail({ version: "v1", auth });
 
+  let filedOrdersCount = 0;
+  let filedRecordsCount = 0;
+
   // ── Order scan ────────────────────────────────────────────────────────────
   if (shouldScanOrders) {
     // If no orders have ever been found for this user, always look back 30 days —
@@ -398,8 +384,8 @@ async function runScan(userName: string): Promise<void> {
     const { processed: orders, skipped: orderSkipped } = await fetchAndClassify(
       gmail, orderQ, 50, 40, userName,
       async (u, id, _from, _subject, body, res) => {
-        if (res.action === "save_to_orders") await handleOrder(u, id, res);
-        else if (res.action === "save_to_records") await handleRecord(u, id, body, res);
+        if (res.action === "save_to_orders") { await handleOrder(u, id, res); filedOrdersCount++; }
+        else if (res.action === "save_to_records") { await handleRecord(u, id, body, res); filedRecordsCount++; }
       },
       "orders",
       vacationMode,
@@ -421,7 +407,7 @@ async function runScan(userName: string): Promise<void> {
       gmail, socialQ, 30, 20, userName,
       async (u, id, from, subject, body, res) => {
         if (res.action === "meeting_request") { await handleMeeting(u, id, from, subject, res); meetings++; }
-        else if (res.action === "save_to_records") { await handleRecord(u, id, body, res); records++; }
+        else if (res.action === "save_to_records") { await handleRecord(u, id, body, res); records++; filedRecordsCount++; }
         else if (res.action === "needs_reply") { await handleSocial(u, id, from, res); socials++; }
       },
       "social",
@@ -430,6 +416,22 @@ async function runScan(userName: string): Promise<void> {
 
     _socialLastScanAt.set(userName, scanStart);
     logger.info({ userName, meetings, records, socials, skipped: socialSkipped }, "[BgEmailScanner] Social scan complete");
+  }
+
+  // ── Batch summary push ────────────────────────────────────────────────────
+  const summary = await buildScanSummary({
+    pendingReplies: getPendingReplyEmails(),
+    pendingMeetings: getPendingMeetingRequests(),
+    filedRecordsCount,
+    filedOrdersCount,
+  }).catch(() => null);
+
+  if (summary) {
+    await sendPushToAll(
+      { title: "Inbox Update", body: summary, tag: "email-scan-summary" },
+      userName,
+    );
+    logger.info({ userName }, "[BgEmailScanner] Scan summary push sent");
   }
 }
 

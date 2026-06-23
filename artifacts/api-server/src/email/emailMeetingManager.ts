@@ -14,6 +14,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { logger } from "../lib/logger.js";
+import { MODEL_HAIKU } from "../lib/models.js";
 import type { CalendarEvent } from "../google/calendar.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -131,6 +132,54 @@ export function clearPendingReplyEmail(gmailId: string): void {
 
 export function clearAllPendingReplyEmails(): void {
   _pendingReplyEmails = [];
+}
+
+// ── Scan batch summary ────────────────────────────────────────────────────────
+
+interface ScanBatchSummaryInput {
+  pendingReplies: PendingReplyEmail[];
+  pendingMeetings: DetectedMeetingRequest[];
+  filedRecordsCount: number;
+  filedOrdersCount: number;
+}
+
+export async function buildScanSummary(input: ScanBatchSummaryInput): Promise<string | null> {
+  const { pendingReplies, pendingMeetings, filedRecordsCount, filedOrdersCount } = input;
+
+  if (pendingReplies.length === 0 && pendingMeetings.length === 0 && filedRecordsCount === 0 && filedOrdersCount === 0) {
+    return null;
+  }
+
+  const repliesBlock = pendingReplies.length > 0
+    ? pendingReplies.map(e => `- From ${e.from}: "${e.subject}"${e.summary ? ` — ${e.summary}` : ''}`).join('\n')
+    : 'None';
+
+  const meetingsBlock = pendingMeetings.length > 0
+    ? pendingMeetings.map(m => `- ${m.from} wants to meet${m.proposedDateTimeStr ? ` at ${m.proposedDateTimeStr}` : ' (no specific time proposed)'}`).join('\n')
+    : 'None';
+
+  const prompt = `You're writing a short, natural summary of what came in during an email scan, to tell the user conversationally — the way a thoughtful assistant would catch someone up, not a mechanical report.
+
+Emails needing a reply:
+${repliesBlock}
+
+Meeting requests:
+${meetingsBlock}
+
+Other activity: ${filedRecordsCount} confirmation(s) filed to records, ${filedOrdersCount} order update(s) filed — these were already handled silently, just mention them briefly if relevant, don't dwell on them.
+
+Write 2-4 sentences, warm and direct, that tells the user what's worth their attention and offers to help (e.g. "want me to draft a reply?"). Don't list every email mechanically — synthesize. If there's truly nothing needing the user's input, keep it very brief.`;
+
+  try {
+    const resp = await anthropic.messages.create({
+      model: MODEL_HAIKU,
+      max_tokens: 300,
+      messages: [{ role: "user", content: prompt }],
+    });
+    return resp.content[0]?.type === "text" ? resp.content[0].text.trim() : null;
+  } catch {
+    return null;
+  }
 }
 
 // ── Keyword pre-screen (fast — no API cost) ───────────────────────────────────
