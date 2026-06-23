@@ -28,6 +28,7 @@ import { classifyEmail } from "../email/emailClassifier.js";
 import type { ClassifiedEmail } from "../email/emailClassifier.js";
 import type { DetectedMeetingRequest } from "../email/emailMeetingManager.js";
 import { insertUserRecord } from "../records/recordsManager.js";
+import { getEmailScanSettings } from "../email/emailScanSettings.js";
 
 const TZ = "America/Chicago";
 
@@ -35,7 +36,6 @@ const TZ = "America/Chicago";
 // Orders use DB-backed getLastOrderScanAt / updateLastOrderScanAt.
 
 const _socialLastScanAt = new Map<string, Date>();
-const SCAN_INTERVAL_MS = 60 * 60 * 1000;
 
 // ── Gmail body helpers ────────────────────────────────────────────────────────
 
@@ -285,6 +285,7 @@ async function fetchAndClassify(
   userName: string,
   handler: (userName: string, msgId: string, from: string, subject: string, body: string, result: ClassifiedEmail) => Promise<void>,
   label: string,
+  vacationMode = false,
 ): Promise<{ processed: number; skipped: number }> {
   let messageIds: string[] = [];
   try {
@@ -319,7 +320,7 @@ async function fetchAndClassify(
       if (body.includes("<")) body = stripHtml(body);
       if (body.length < 30) { skipped++; continue; }
 
-      const result = await classifyEmail(from, subject, body);
+      const result = await classifyEmail(from, subject, body, vacationMode);
       if (!result) { skipped++; continue; }
 
       await handler(userName, msgId, from, subject, body, result);
@@ -336,18 +337,25 @@ async function fetchAndClassify(
 // ── Main scan ─────────────────────────────────────────────────────────────────
 
 async function runScan(userName: string): Promise<void> {
+  // ── Read per-user settings ────────────────────────────────────────────────
+  const { intervalMinutes, vacationMode } = await getEmailScanSettings(userName).catch(() => ({
+    intervalMinutes: 120,
+    vacationMode: false,
+  }));
+  const intervalMs = intervalMinutes * 60 * 1000;
+
   // ── Orders: use DB-backed last-scan time ──────────────────────────────────
   const lastOrderScan = await getLastOrderScanAt(userName);
   const orderSinceMs = lastOrderScan ? Date.now() - lastOrderScan.getTime() : Infinity;
-  const shouldScanOrders = orderSinceMs >= SCAN_INTERVAL_MS;
+  const shouldScanOrders = orderSinceMs >= intervalMs;
 
   // ── Social (meetings/records/replies): in-memory ──────────────────────────
   const lastSocialScan = _socialLastScanAt.get(userName);
   const socialSinceMs = lastSocialScan ? Date.now() - lastSocialScan.getTime() : Infinity;
-  const shouldScanSocial = socialSinceMs >= SCAN_INTERVAL_MS;
+  const shouldScanSocial = socialSinceMs >= intervalMs;
 
   if (!shouldScanOrders && !shouldScanSocial) {
-    const nextInMin = Math.ceil((SCAN_INTERVAL_MS - Math.min(orderSinceMs, socialSinceMs)) / 60_000);
+    const nextInMin = Math.ceil((intervalMs - Math.min(orderSinceMs, socialSinceMs)) / 60_000);
     logger.info({ userName, nextInMin }, "[BgEmailScanner] Skipping tick — not yet time");
     return;
   }
@@ -384,7 +392,8 @@ async function runScan(userName: string): Promise<void> {
         if (res.action === "save_to_orders") await handleOrder(u, id, res);
         else if (res.action === "save_to_records") await handleRecord(u, id, body, res);
       },
-      "orders"
+      "orders",
+      vacationMode,
     );
 
     await updateLastOrderScanAt(userName);
@@ -393,7 +402,7 @@ async function runScan(userName: string): Promise<void> {
 
   // ── Social scan ───────────────────────────────────────────────────────────
   if (shouldScanSocial) {
-    const since = lastSocialScan ?? new Date(Date.now() - SCAN_INTERVAL_MS);
+    const since = lastSocialScan ?? new Date(Date.now() - intervalMs);
     logger.info({ userName, since: since.toISOString() }, "[BgEmailScanner] Starting social scan");
 
     const socialQ = buildSocialQuery(since);
@@ -406,7 +415,8 @@ async function runScan(userName: string): Promise<void> {
         else if (res.action === "save_to_records") { await handleRecord(u, id, body, res); records++; }
         else if (res.action === "needs_reply") { await handleSocial(u, id, from, res); socials++; }
       },
-      "social"
+      "social",
+      vacationMode,
     );
 
     _socialLastScanAt.set(userName, scanStart);

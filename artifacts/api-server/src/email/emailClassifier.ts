@@ -50,9 +50,14 @@ export async function classifyEmail(
   from: string,
   subject: string,
   body: string,
+  vacationMode = false,
 ): Promise<ClassifiedEmail | null> {
   const today = new Date().toISOString().split("T")[0];
   const truncated = body.slice(0, 3000);
+
+  const vacationLine = vacationMode
+    ? "\nThe user is currently on vacation — only flag this as something other than none if it is genuinely urgent or time-sensitive; hold lower-priority items."
+    : "";
 
   const prompt = `Today: ${today}
 From: ${from}
@@ -60,7 +65,7 @@ Subject: ${subject}
 
 Body:
 ${truncated}
-
+${vacationLine}
 Decide what action this email warrants, if any. Return ONLY valid JSON:
 
 {
