@@ -834,4 +834,20 @@ router.patch("/settings/persona", express.json({ limit: "1kb" }), async (req, re
   res.json({ ok: true, persona });
 });
 
+// ── PATCH /api/settings/wake-time ────────────────────────────────────────────
+router.patch("/settings/wake-time", express.json({ limit: "1kb" }), async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const { wakeTime } = req.body as { wakeTime?: string };
+  if (!wakeTime || !/^\d{2}:\d{2}$/.test(wakeTime)) {
+    res.status(400).json({ error: "wakeTime must be HH:MM format" });
+    return;
+  }
+
+  await upsertProfile({ wakeTime }, userName);
+  logger.info({ userName, wakeTime }, "[Settings] Wake time updated");
+  res.json({ ok: true, wakeTime });
+});
+
 export default router;
