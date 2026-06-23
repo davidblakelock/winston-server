@@ -26,7 +26,6 @@ import { startDepartureScheduler } from "./departure/departureScheduler";
 import { startCalendarSyncScheduler, ensureCalendarSyncTable } from "./departure/calendarSyncScheduler";
 import { startPickleballScheduler, ensureProactiveMessageLogTable } from "./pickleball/pickleballScheduler";
 import { ensureRelationshipTable } from "./relationships/relationshipManager";
-import { ensureContactMentionsTable } from "./olivia/oliviaTracker";
 import { initDallasContentTable } from "./morning/dallasContent";
 import { startDallasProactiveScheduler } from "./morning/dallasProactiveScheduler";
 import { initConcertsTable, startVenueMonitorScheduler } from "./morning/venueMonitor";
@@ -143,7 +142,6 @@ app.listen(port, async (err) => {
       "lists",
       "list_items",
       "relationships",
-      "contact_mentions",
       "recommendations",
       "sunday_summaries",
       "winddown_schedules",
@@ -184,7 +182,6 @@ app.listen(port, async (err) => {
     await ensureProfileTable();
     await ensureOnboardingTable();
     await ensureRelationshipTable();
-    await ensureContactMentionsTable();
   } catch (e) {
     logger.warn({ e }, "Table initialization warning");
   }

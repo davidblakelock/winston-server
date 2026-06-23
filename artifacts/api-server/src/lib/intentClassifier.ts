@@ -35,9 +35,6 @@ export interface MessageClassification {
 
   story_read: boolean;
   story_count: boolean;
-  olivia_call: boolean;
-  olivia_mention: boolean;
-
   trip_plan: boolean;
   trip_save: boolean;
   hotel_availability: boolean;
@@ -121,7 +118,7 @@ const SAFE_DEFAULT: MessageClassification = {
   calendar_delete: false, dinner_tonight: false,
   contact_lookup: false, contact_save: false, contact_compound_save: false,
   google_contact_write: false,
-  story_read: false, story_count: false, olivia_call: false, olivia_mention: false,
+  story_read: false, story_count: false,
   trip_plan: false, trip_save: false, hotel_availability: false,
   hotel_swap: false, trip_price_query: false,
   profile_update: false,
@@ -191,8 +188,6 @@ contact_compound_save: look up AND save a contact in the same message.
 google_contact_write: write/update Google Contacts specifically.
 story_read: read Olivia stories/archive — "read me a story", "show the archive".
 story_count: count stories — "how many stories do I have".
-olivia_call: mentioned calling/FaceTiming/talking to Olivia (daughter) — "called Olivia", "talked to Olivia".
-olivia_mention: any mention of the name "Olivia" anywhere in the message.
 trip_plan: plan a new trip — "plan me a trip to X", "I want to plan a vacation to Y".
 trip_save: save/build/confirm itinerary — "yes go ahead", "build it", "save this trip", "create the itinerary", "make it".
 hotel_availability: search for hotels — "find me a hotel", "hotels in Dallas", "check hotel availability".
@@ -277,8 +272,6 @@ reservation_cal_add: user wants to add a restaurant reservation to their calenda
       google_contact_write:   !!p.google_contact_write,
       story_read:             !!p.story_read,
       story_count:            !!p.story_count,
-      olivia_call:            !!p.olivia_call,
-      olivia_mention:         !!p.olivia_mention,
       trip_plan:              !!p.trip_plan,
       trip_save:              !!p.trip_save,
       hotel_availability:     !!p.hotel_availability,

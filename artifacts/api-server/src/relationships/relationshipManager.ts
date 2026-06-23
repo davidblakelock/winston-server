@@ -10,9 +10,7 @@ export interface TrackedPerson {
 }
 
 // ── People to track (drawn from David's profile "people" array) ───────────────
-// Olivia is tracked separately via contact_mentions; other important personal
-// relationships live here.  Doctor/professional contacts are excluded —
-// those don't need relationship-nurturing nudges.
+// Doctor/professional contacts are excluded — those don't need relationship-nurturing nudges.
 export const TRACKED_PEOPLE: TrackedPerson[] = [
   {
     name: "Susan",
@@ -68,17 +66,6 @@ export async function getDaysSinceLastMention(personName: string, userName = NAT
   );
   if (!rows[0] || rows[0].days === null) return null;
   return parseInt(rows[0].days);
-}
-
-// ── Check for call-type mention today ─────────────────────────────────────────
-export async function mentionedCallToday(personName: string, userName = NATIVE_STORED_NAME): Promise<boolean> {
-  const { rows } = await query<{ count: string }>(
-    `SELECT COUNT(*) as count FROM relationship_mentions
-     WHERE user_name = $1 AND person_name = $2
-       AND mention_type = 'call' AND mention_date = CURRENT_DATE`,
-    [userName, personName]
-  );
-  return parseInt(rows[0].count) > 0;
 }
 
 // ── Detect which tracked person is mentioned ──────────────────────────────────
