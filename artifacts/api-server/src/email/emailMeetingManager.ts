@@ -98,6 +98,41 @@ export function clearPendingEmailReply(): void {
   _pendingEmailReply = null;
 }
 
+// ── Pending reply emails (needs_reply action from background scanner) ─────────
+// Unlike meeting requests, these do not expire on a timer — they persist until
+// explicitly cleared when the user replies, dismisses, or the email is no longer unread.
+
+export interface PendingReplyEmail {
+  gmailId: string;
+  from: string;
+  fromEmail: string;
+  subject: string;
+  summary: string | null;
+  scannedAt: number;
+}
+
+let _pendingReplyEmails: PendingReplyEmail[] = [];
+
+export function getPendingReplyEmails(): PendingReplyEmail[] {
+  return _pendingReplyEmails;
+}
+
+// Merges new items by gmailId (no duplicates), keeps existing pending items indefinitely.
+export function addPendingReplyEmails(newEmails: PendingReplyEmail[]): void {
+  const existingIds = new Set(_pendingReplyEmails.map(e => e.gmailId));
+  const toAdd = newEmails.filter(e => !existingIds.has(e.gmailId));
+  _pendingReplyEmails = [..._pendingReplyEmails, ...toAdd];
+}
+
+// Called when a specific email is handled (replied to, dismissed, or detected as no longer unread).
+export function clearPendingReplyEmail(gmailId: string): void {
+  _pendingReplyEmails = _pendingReplyEmails.filter(e => e.gmailId !== gmailId);
+}
+
+export function clearAllPendingReplyEmails(): void {
+  _pendingReplyEmails = [];
+}
+
 // ── Keyword pre-screen (fast — no API cost) ───────────────────────────────────
 
 const MEETING_KEYWORDS =
