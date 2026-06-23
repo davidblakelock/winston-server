@@ -22,7 +22,7 @@ import {
   getLastOrderScanAt,
   updateLastOrderScanAt,
 } from "../orders/ordersManager.js";
-import { setPendingMeetingRequests, getPendingMeetingRequests } from "../email/emailMeetingManager.js";
+import { setPendingMeetingRequests, getPendingMeetingRequests, addPendingReplyEmails } from "../email/emailMeetingManager.js";
 import { sendPushToAll } from "../push/pushManager.js";
 import { classifyEmail } from "../email/emailClassifier.js";
 import type { ClassifiedEmail } from "../email/emailClassifier.js";
@@ -265,14 +265,23 @@ async function handleMeeting(
 
 // ── Social handler ────────────────────────────────────────────────────────────
 
-async function handleSocial(userName: string, msgId: string, from: string, result: ClassifiedEmail): Promise<void> {
-  const displayName = senderDisplayName(from);
-  const body = result.summary ?? result._subject ?? "Personal email";
-  await sendPushToAll(
-    { title: `Email from ${displayName}`, body, tag: "email-social", notificationType: "email-actionable" },
-    userName,
-  );
-  logger.info({ from: displayName, msgId }, "[BgEmailScanner] Social email push sent");
+async function handleSocial(_userName: string, msgId: string, from: string, result: ClassifiedEmail): Promise<void> {
+  const fromMatch = from.match(/^(.*?)\s*<([^>]+)>$/);
+  const displayName = fromMatch
+    ? fromMatch[1].trim().replace(/^["']|["']$/g, "") || senderDisplayName(from)
+    : senderDisplayName(from);
+  const fromEmail = fromMatch ? fromMatch[2].trim() : from.trim();
+
+  addPendingReplyEmails([{
+    gmailId: msgId,
+    from: displayName,
+    fromEmail,
+    subject: result._subject ?? "Email",
+    summary: result.summary ?? null,
+    scannedAt: Date.now(),
+  }]);
+
+  logger.info({ from: displayName, msgId }, "[BgEmailScanner] Added to pending reply emails");
 }
 
 // ── Shared email fetch helper ─────────────────────────────────────────────────
