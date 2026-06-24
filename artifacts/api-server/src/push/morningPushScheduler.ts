@@ -126,6 +126,8 @@ async function sendMorningPush(user: ActiveUser, wakeTime: string): Promise<void
       // pre-generated briefing instead of the live fresh one.
       deepLink: "winston://morning-briefing",
       requireInteraction: true,
+      action: "send_message",
+      message: "Good morning",
     }, userName);
 
     if (result.sent === 0) {

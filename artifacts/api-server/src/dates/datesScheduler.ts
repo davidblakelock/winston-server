@@ -138,7 +138,8 @@ async function checkDateReminders(): Promise<void> {
         tag: `date-${d.id}-${daysUntil}`,
         notificationType: "date-reminder",
         requireInteraction: daysUntil <= 3,
-        autoSendMessage,
+        action: "send_message",
+        message: autoSendMessage,
       }, userName).catch(() => {});
 
       await markReminderSent(d.id, daysUntil, today);

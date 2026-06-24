@@ -244,6 +244,8 @@ async function checkWeatherAlertsForUser(userName: string): Promise<void> {
       alertLat: lat,
       alertLon: lon,
       alertCity: city,
+      action: "send_message",
+      message: `Tell me about this weather alert: ${headline}`,
     }, userName);
 
     logger.info({ event: props.event, alertId, area: areaLabel, userName }, "[WeatherAlerts] Push sent");

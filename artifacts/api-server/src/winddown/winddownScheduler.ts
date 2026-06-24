@@ -225,6 +225,8 @@ export function startWinddownScheduler(): void {
           tag: "winddown",
           notificationType: "winddown",
           requireInteraction: true,
+          action: "send_message",
+          message: "Evening Check In",
         }, userName).catch(() => {});
       }
     } catch (err) {
