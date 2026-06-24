@@ -187,7 +187,7 @@ router.get("/auth/callback", async (req: Request, res: Response) => {
       // Bust the auth-status cache so the app immediately sees connected: true
       authStatusCache.delete(userName);
       req.log.info({ userName }, "[AUTH] /auth/callback — redirecting to winstonnative://auth deep link");
-      res.redirect(`winstonnative://auth?token=${encodeURIComponent(sessionToken)}&connected=google`);
+      res.redirect(`winstonnative://auth?token=${encodeURIComponent(sessionToken)}&connected=google&userName=${encodeURIComponent(userName)}`);
     } else if (isSignIn) {
       // ── Create app session and redirect frontend with token ─────────────────
       req.log.info({ userName, isNewUser, hasPicture: !!picture }, "[AUTH] /auth/callback — creating app session for sign-in");
