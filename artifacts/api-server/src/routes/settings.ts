@@ -662,7 +662,7 @@ router.get("/settings/companion", async (req, res) => {
   const profile = await getProfile(userName);
   res.json({
     companionName: profile?.companionName ?? null,
-    personalityStyle: profile?.personalityStyle ?? "witty",
+    personalityStyle: profile?.personalityStyle ?? "warm",
     voiceId: profile?.voiceId ?? null,
     voices: VOICE_OPTIONS,
   });
@@ -679,7 +679,7 @@ router.post("/settings/companion", express.json({ limit: "1mb" }), async (req, r
     voiceId?: string;
   };
 
-  const VALID_STYLES = ["professional", "warm", "witty", "direct"] as const;
+  const VALID_STYLES = ["warm", "playful", "direct", "dry humor", "encouraging"] as const;
   if (personalityStyle && !(VALID_STYLES as readonly string[]).includes(personalityStyle)) {
     res.status(400).json({ error: `personalityStyle must be one of: ${VALID_STYLES.join(", ")}` });
     return;
@@ -706,7 +706,7 @@ router.post("/settings/companion", express.json({ limit: "1mb" }), async (req, r
   res.json({
     ok: true,
     companionName: profile?.companionName ?? null,
-    personalityStyle: profile?.personalityStyle ?? "witty",
+    personalityStyle: profile?.personalityStyle ?? "warm",
     voiceId: profile?.voiceId ?? null,
   });
 });
