@@ -256,6 +256,10 @@ export function buildExpoMessages(payload: PushPayload, tokens: string[]) {
       ...(payload.actionSnooze ? { actionSnooze: payload.actionSnooze } : {}),
       ...(payload.snoozeMinutes != null ? { snoozeMinutes: payload.snoozeMinutes } : {}),
       ...(payload.gmailUrl ? { gmailUrl: payload.gmailUrl } : {}),
+      ...(payload.action ? { action: payload.action } : {}),
+      ...(payload.message ? { message: payload.message } : {}),
+      ...(payload.screen ? { screen: payload.screen } : {}),
+      ...(payload.url ? { url: payload.url } : {}),
     },
   }));
 }
