@@ -22,7 +22,7 @@ import {
   getLastOrderScanAt,
   updateLastOrderScanAt,
 } from "../orders/ordersManager.js";
-import { setPendingMeetingRequests, getPendingMeetingRequests, addPendingReplyEmails, getPendingReplyEmails, buildScanSummary } from "../email/emailMeetingManager.js";
+import { setPendingMeetingRequests, getPendingMeetingRequests, addPendingReplyEmails, getPendingReplyEmails, clearPendingReplyEmail, buildScanSummary } from "../email/emailMeetingManager.js";
 import { sendPushToAll } from "../push/pushManager.js";
 import { classifyEmail } from "../email/emailClassifier.js";
 import type { ClassifiedEmail } from "../email/emailClassifier.js";
@@ -365,6 +365,39 @@ async function runScan(userName: string): Promise<void> {
   }
 
   const gmail = google.gmail({ version: "v1", auth });
+
+  // ── Auto-clear pending replies/meetings that are no longer unread or were deleted ──
+  const pendingReplies = getPendingReplyEmails();
+  for (const item of pendingReplies) {
+    try {
+      const detail = await gmail.users.messages.get({ userId: "me", id: item.gmailId, format: "minimal" });
+      const isUnread = detail.data.labelIds?.includes("UNREAD") ?? false;
+      if (!isUnread) {
+        clearPendingReplyEmail(item.gmailId);
+        logger.info({ gmailId: item.gmailId }, "[BgEmailScanner] Auto-cleared pending reply — no longer unread");
+      }
+    } catch (err) {
+      // Message lookup failed — likely deleted entirely. Clear it; nothing to act on anymore.
+      clearPendingReplyEmail(item.gmailId);
+      logger.info({ gmailId: item.gmailId }, "[BgEmailScanner] Auto-cleared pending reply — message no longer exists");
+    }
+  }
+
+  const pendingMeetings = getPendingMeetingRequests();
+  const stillValidMeetings: DetectedMeetingRequest[] = [];
+  for (const meeting of pendingMeetings) {
+    try {
+      const detail = await gmail.users.messages.get({ userId: "me", id: meeting.gmailId, format: "minimal" });
+      const isUnread = detail.data.labelIds?.includes("UNREAD") ?? false;
+      if (isUnread) stillValidMeetings.push(meeting);
+      else logger.info({ gmailId: meeting.gmailId }, "[BgEmailScanner] Auto-cleared pending meeting — no longer unread");
+    } catch {
+      logger.info({ gmailId: meeting.gmailId }, "[BgEmailScanner] Auto-cleared pending meeting — message no longer exists");
+    }
+  }
+  if (stillValidMeetings.length !== pendingMeetings.length) {
+    setPendingMeetingRequests(stillValidMeetings);
+  }
 
   let filedOrdersCount = 0;
   let filedRecordsCount = 0;
