@@ -174,20 +174,40 @@ app.listen(port, async (err) => {
 
   try {
     await ensureWinddownTables();
+  } catch (e) {
+    logger.warn({ err: e }, "winddown tables initialization warning");
+  }
+  try {
     await ensureBriefingPreferencesTable();
+  } catch (e) {
+    logger.warn({ err: e }, "briefing preferences table initialization warning");
+  }
+  try {
     await ensureMemoryTable();
+  } catch (e) {
+    logger.warn({ err: e }, "memory table initialization warning");
+  }
+  try {
     await ensureProfileTable();
+  } catch (e) {
+    logger.warn({ err: e }, "profile_items table initialization warning");
+  }
+  try {
     await ensureOnboardingTable();
+  } catch (e) {
+    logger.warn({ err: e }, "onboarding/user_profiles table initialization warning");
+  }
+  try {
     await ensureRelationshipTable();
   } catch (e) {
-    logger.warn({ e }, "Table initialization warning");
+    logger.warn({ err: e }, "relationship table initialization warning");
   }
 
   // Isolated so a failure in the block above never skips the calendar migration
   try {
     await ensureCalendarSyncTable();
   } catch (e) {
-    logger.warn({ e }, "calendar_sync_state table initialization warning");
+    logger.warn({ err: e }, "calendar_sync_state table initialization warning");
   }
 
   try {
@@ -197,7 +217,7 @@ app.listen(port, async (err) => {
     await ensureJournalSourceColumn();
     logger.info("[startup] mood_checkins, conversation_followups, memory_archive, journal source column ready");
   } catch (e) {
-    logger.warn({ e }, "New feature table initialization warning");
+    logger.warn({ err: e }, "New feature table initialization warning");
   }
 
   // Isolated block so a failure above never skips this critical table
@@ -205,53 +225,53 @@ app.listen(port, async (err) => {
     await ensureProactiveMessageLogTable();
     logger.info("[startup] proactive_message_log table ready");
   } catch (e) {
-    logger.warn({ e }, "proactive_message_log table initialization warning");
+    logger.warn({ err: e }, "proactive_message_log table initialization warning");
   }
 
   try {
     await ensureUsersTable();
     logger.info("[startup] users table ready");
   } catch (e) {
-    logger.warn({ e }, "users table initialization warning");
+    logger.warn({ err: e }, "users table initialization warning");
   }
 
   try {
     await ensureStoicTables();
     logger.info("[startup] stoic_curriculum + user_settings tables ready");
   } catch (e) {
-    logger.warn({ e }, "Stoic tables initialization warning");
+    logger.warn({ err: e }, "Stoic tables initialization warning");
   }
 
   try {
     await initDallasContentTable();
   } catch (e) {
-    logger.warn({ e }, "Dallas content table initialization warning");
+    logger.warn({ err: e }, "Dallas content table initialization warning");
   }
 
   try {
     await initConcertsTable();
   } catch (e) {
-    logger.warn({ e }, "Concerts table initialization warning");
+    logger.warn({ err: e }, "Concerts table initialization warning");
   }
 
   try {
     await initBriefingStoriesTable();
     logger.info("[startup] daily_briefing_stories table ready");
   } catch (e) {
-    logger.warn({ e }, "Briefing stories table initialization warning");
+    logger.warn({ err: e }, "Briefing stories table initialization warning");
   }
 
   try {
     await runBriefingCacheMigrations();
   } catch (e) {
-    logger.warn({ e }, "Briefing cache migration warning");
+    logger.warn({ err: e }, "Briefing cache migration warning");
   }
 
   try {
     const { ensureApifyCacheTable } = await import("./lib/apifyCache.js");
     await ensureApifyCacheTable();
   } catch (e) {
-    logger.warn({ e }, "apify_cache table initialization warning");
+    logger.warn({ err: e }, "apify_cache table initialization warning");
   }
 
   try {
@@ -263,120 +283,120 @@ app.listen(port, async (err) => {
     );
     logger.info("[startup] chat_messages.message_id dedup column ready");
   } catch (e) {
-    logger.warn({ e }, "chat_messages message_id migration warning");
+    logger.warn({ err: e }, "chat_messages message_id migration warning");
   }
 
   try {
     await ensureContactsTable();
   } catch (e) {
-    logger.warn({ e }, "Contacts table initialization warning");
+    logger.warn({ err: e }, "Contacts table initialization warning");
   }
 
   try {
     await ensureJournalInsightsTable();
     logger.info("[startup] journal_insights table ready");
   } catch (e) {
-    logger.warn({ e }, "Journal insights table initialization warning");
+    logger.warn({ err: e }, "Journal insights table initialization warning");
   }
 
   try {
     await ensurePressureTable();
     logger.info("[startup] pressure_readings table ready");
   } catch (e) {
-    logger.warn({ e }, "Pressure readings table initialization warning");
+    logger.warn({ err: e }, "Pressure readings table initialization warning");
   }
 
   try {
     await ensureConnectTables();
   } catch (e) {
-    logger.warn({ e }, "Winston Connect table initialization warning");
+    logger.warn({ err: e }, "Winston Connect table initialization warning");
   }
 
   try {
     await ensureGroupTables();
     logger.info("[startup] Connect group tables ready");
   } catch (e) {
-    logger.warn({ e }, "Connect group table initialization warning");
+    logger.warn({ err: e }, "Connect group table initialization warning");
   }
 
   try {
     await ensureCalendarSmartTables();
   } catch (e) {
-    logger.warn({ e }, "Calendar smart settings table initialization warning");
+    logger.warn({ err: e }, "Calendar smart settings table initialization warning");
   }
 
   try {
     await ensureRestaurantCacheTable();
     logger.info("[startup] restaurant_places_cache table ready");
   } catch (e) {
-    logger.warn({ e }, "Restaurant places cache table initialization warning");
+    logger.warn({ err: e }, "Restaurant places cache table initialization warning");
   }
 
   try {
     await ensureOrdersTable();
     await ensureGoalsTables();
   } catch (e) {
-    logger.warn({ e }, "Orders table initialization warning");
+    logger.warn({ err: e }, "Orders table initialization warning");
   }
 
   try {
     await ensureTripPlansTable();
   } catch (e) {
-    logger.warn({ e }, "Trip plans table initialization warning");
+    logger.warn({ err: e }, "Trip plans table initialization warning");
   }
 
   try {
     await ensureContextReminderColumns();
     logger.info("[startup] context reminder columns ready");
   } catch (e) {
-    logger.warn({ e }, "Context reminder columns initialization warning");
+    logger.warn({ err: e }, "Context reminder columns initialization warning");
   }
 
   try {
     await ensureNotificationVipsTable();
     logger.info("[startup] notification VIPs table ready");
   } catch (e) {
-    logger.warn({ e }, "Notification intelligence tables initialization warning");
+    logger.warn({ err: e }, "Notification intelligence tables initialization warning");
   }
 
   try {
     await ensureSavedPlacesTable();
     logger.info("[startup] saved_places table ready");
   } catch (e) {
-    logger.warn({ e }, "Saved places table initialization warning");
+    logger.warn({ err: e }, "Saved places table initialization warning");
   }
 
   try {
     await ensureListItemColumns();
     logger.info("[startup] list_items columns ready (added_by, category, url)");
   } catch (e) {
-    logger.warn({ e }, "List items column initialization warning");
+    logger.warn({ err: e }, "List items column initialization warning");
   }
 
   try {
     await ensureListShareTable();
   } catch (e) {
-    logger.warn({ e }, "List share permissions table initialization warning");
+    logger.warn({ err: e }, "List share permissions table initialization warning");
   }
 
   try {
     await ensureBookingColumns();
   } catch (e) {
-    logger.warn({ e }, "Booking credentials columns initialization warning");
+    logger.warn({ err: e }, "Booking credentials columns initialization warning");
   }
 
   try {
     await ensureServiceProvidersTable();
     logger.info("[startup] service_providers table ready");
   } catch (e) {
-    logger.warn({ e }, "Service providers table initialization warning");
+    logger.warn({ err: e }, "Service providers table initialization warning");
   }
 
   try {
     await ensureProviderCategoriesTable();
     logger.info("[startup] provider_categories table ready");
   } catch (e) {
-    logger.warn({ e }, "Provider categories table initialization warning");
+    logger.warn({ err: e }, "Provider categories table initialization warning");
   }
 
   // Migrate auto_pay column onto financial_obligations if it doesn't exist yet
@@ -384,7 +404,7 @@ app.listen(port, async (err) => {
     await query(`ALTER TABLE financial_obligations ADD COLUMN IF NOT EXISTS auto_pay boolean DEFAULT false`);
     logger.info("[startup] financial_obligations.auto_pay column ready");
   } catch (e) {
-    logger.warn({ e }, "auto_pay column migration warning");
+    logger.warn({ err: e }, "auto_pay column migration warning");
   }
 
   try {
@@ -394,7 +414,7 @@ app.listen(port, async (err) => {
     );
     logger.info("[startup] watched_shows unique index ready");
   } catch (e) {
-    logger.warn({ e }, "watched_shows unique index warning (non-fatal)");
+    logger.warn({ err: e }, "watched_shows unique index warning (non-fatal)");
   }
 
   // Initialize medication reminder log table (DB-backed dedup so reminders don't
@@ -403,7 +423,7 @@ app.listen(port, async (err) => {
     await initMedicationReminderLogTable();
     logger.info("[startup] medication_reminder_log table ready");
   } catch (e) {
-    logger.warn({ e }, "medication_reminder_log table init warning");
+    logger.warn({ err: e }, "medication_reminder_log table init warning");
   }
 
   // Onboarding nudge log — tracks the last date we reminded a user to finish setup
@@ -417,7 +437,7 @@ app.listen(port, async (err) => {
     );
     logger.info("[startup] onboarding_nudge_log table ready");
   } catch (e) {
-    logger.warn({ e }, "onboarding_nudge_log table init warning");
+    logger.warn({ err: e }, "onboarding_nudge_log table init warning");
   }
 
   // Repair: ensure the native user's profile is always marked onboarding_completed.
@@ -437,7 +457,7 @@ app.listen(port, async (err) => {
       logger.info({ userName: NATIVE_STORED_NAME }, "[startup] onboarding_completed check OK — flag already true");
     }
   } catch (e) {
-    logger.warn({ e }, "[startup] onboarding_completed repair failed — notifications may not fire");
+    logger.warn({ err: e }, "[startup] onboarding_completed repair failed — notifications may not fire");
   }
 
   // Schedulers run only on Railway (production). Replit is dev-only.
@@ -505,7 +525,7 @@ app.listen(port, async (err) => {
     // Clean up any stale 'David' rows left from before user_name was added
     logger.info("Music preferences and favorite venues seeded to profile_items");
   } catch (e) {
-    logger.warn({ e }, "Music preference seeding warning");
+    logger.warn({ err: e }, "Music preference seeding warning");
   }
 
   // Create user_service_preferences table for managing preferred grocery/health/shopping services.
@@ -525,7 +545,7 @@ app.listen(port, async (err) => {
     `);
     logger.info("Startup migration: user_service_preferences table ready");
   } catch (e) {
-    logger.warn({ e }, "Startup migration warning: user_service_preferences table");
+    logger.warn({ err: e }, "Startup migration warning: user_service_preferences table");
   }
 
   // Create user_email_scan_settings table for per-user email scan interval and vacation mode.
@@ -533,7 +553,7 @@ app.listen(port, async (err) => {
     await ensureEmailScanSettingsTable();
     logger.info("Startup migration: user_email_scan_settings table ready");
   } catch (e) {
-    logger.warn({ e }, "Startup migration warning: user_email_scan_settings table");
+    logger.warn({ err: e }, "Startup migration warning: user_email_scan_settings table");
   }
 
   // Create voice_options table and seed with curated ElevenLabs voice list.
@@ -542,7 +562,7 @@ app.listen(port, async (err) => {
     await seedVoiceOptions();
     logger.info("Startup migration: voice_options table ready");
   } catch (e) {
-    logger.warn({ e }, "Startup migration warning: voice_options table");
+    logger.warn({ err: e }, "Startup migration warning: voice_options table");
   }
 
   // Add device_id column to push_subscriptions for multi-device notification routing.
@@ -550,7 +570,7 @@ app.listen(port, async (err) => {
     await query(`ALTER TABLE push_subscriptions ADD COLUMN IF NOT EXISTS device_id text`);
     logger.info("Startup migration: push_subscriptions.device_id column ready");
   } catch (e) {
-    logger.warn({ e }, "Startup migration warning: push_subscriptions device_id");
+    logger.warn({ err: e }, "Startup migration warning: push_subscriptions device_id");
   }
 
   // Add updated_at column to push_subscriptions.
@@ -558,7 +578,7 @@ app.listen(port, async (err) => {
     await query(`ALTER TABLE push_subscriptions ADD COLUMN IF NOT EXISTS updated_at timestamptz`);
     logger.info("Startup migration: push_subscriptions.updated_at column ready");
   } catch (e) {
-    logger.warn({ e }, "Startup migration warning: push_subscriptions updated_at");
+    logger.warn({ err: e }, "Startup migration warning: push_subscriptions updated_at");
   }
 
   // Remove duplicate rows keeping the newest id per (user_name, device_id).
@@ -577,7 +597,7 @@ app.listen(port, async (err) => {
     );
     logger.info("Startup migration: push_subscriptions duplicate rows cleaned");
   } catch (e) {
-    logger.warn({ e }, "Startup migration warning: push_subscriptions dedup");
+    logger.warn({ err: e }, "Startup migration warning: push_subscriptions dedup");
   }
 
   // Create partial unique index on (user_name, device_id) for non-null device_ids.
@@ -590,7 +610,7 @@ app.listen(port, async (err) => {
     );
     logger.info("Startup migration: push_subscriptions unique index on (user_name, device_id) ready");
   } catch (e) {
-    logger.warn({ e }, "Startup migration warning: push_subscriptions unique index");
+    logger.warn({ err: e }, "Startup migration warning: push_subscriptions unique index");
   }
 
   // Restore voice_id for davidblakelock if it has been wiped.
@@ -603,7 +623,7 @@ app.listen(port, async (err) => {
     );
     logger.info("Startup migration: davidblakelock voice_id default ensured");
   } catch (e) {
-    logger.warn({ e }, "Startup migration warning: profile defaults fix");
+    logger.warn({ err: e }, "Startup migration warning: profile defaults fix");
   }
 
   // Migrate watched_shows rows stored under old user_name 'David' → 'davidblakelock'.
@@ -622,7 +642,7 @@ app.listen(port, async (err) => {
       logger.info("Startup migration: watched_shows user_name already clean");
     }
   } catch (e) {
-    logger.warn({ e }, "Startup migration warning: watched_shows user_name");
+    logger.warn({ err: e }, "Startup migration warning: watched_shows user_name");
   }
 
   // Remove duplicate watched_shows rows — keep only the oldest (lowest id) per user+show.
@@ -685,6 +705,6 @@ app.listen(port, async (err) => {
       logger.info("Startup migration: watched_shows has no tvmaze-id duplicates");
     }
   } catch (e) {
-    logger.warn({ e }, "Startup migration warning: watched_shows dedup");
+    logger.warn({ err: e }, "Startup migration warning: watched_shows dedup");
   }
 });
