@@ -324,8 +324,9 @@ async function runCalendarSyncForUser(userName: string): Promise<void> {
         await sendPushToAll({
           tag: "google-reconnect",
           title: `${companionName} — Google Reconnect Needed`,
-          body: "Your Google connection expired. Open the app and reconnect Gmail & Calendar.",
-          action: "none", // no reconnect screen exists yet — informational only
+          body: "Your Google connection expired. Tap to reconnect Gmail & Calendar.",
+          action: "open_url",
+          url: `${(process.env.APP_URL ?? "https://workspaceapi-server-production-5fd6.up.railway.app").replace(/\/$/, "")}/api/auth/google?redirect=native`,
         }, userName).catch(() => {});
         logger.info({ userName }, "Calendar sync: sent 'reconnect Google' push notification");
       }
