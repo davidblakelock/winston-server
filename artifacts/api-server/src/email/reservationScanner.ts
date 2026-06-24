@@ -401,7 +401,8 @@ export async function scanReservationEmails(
         body: pushBody,
         tag: `reservation-${userName}-${msgId}`,
         notificationType: "reservation",
-        deepLink: "winston://chat",
+        action: "send_message",
+        message: `Add my reservation at ${parsed.restaurant_name} on ${dateLabel}${timeLabel} to my calendar`,
       }, userName).catch(() => {});
 
       results.push({
