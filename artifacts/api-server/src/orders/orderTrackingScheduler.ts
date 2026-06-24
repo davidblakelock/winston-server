@@ -87,6 +87,8 @@ export async function pollActiveOrderTracking(
             title: "Package Update",
             body:  `${label}: ${order.item_name} from ${order.retailer}`,
             tag:   `order-${order.id}`,
+            action: "navigate",
+            screen: "/orders",
           },
           userName
         ).catch((e) =>

@@ -41,6 +41,8 @@ async function checkProviderDueAlerts(): Promise<void> {
             tag: `provider-due-${provider.id}`,
             notificationType: "provider-reminder",
             requireInteraction: true,
+            action: "navigate",
+            screen: "/providers",
           },
           userName
         );

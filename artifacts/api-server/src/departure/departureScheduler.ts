@@ -241,6 +241,7 @@ async function checkDepartureAlertsForUser(userName: string): Promise<void> {
       notificationType: "departure",
       categoryIdentifier: "departure-action",  // native app registered category for tap → Maps
       requireInteraction: true,
+      action: "open_url",
     }, userName).catch(() => {});
 
     await markAlertSent(event.summary, today, userName);

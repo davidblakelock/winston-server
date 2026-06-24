@@ -150,7 +150,7 @@ async function handleOrder(userName: string, msgId: string, result: ClassifiedEm
   if (statusChanged && NOTIFY_STATUSES.has(newStatus)) {
     const label = newStatus === "delivered" ? "Delivered" : "Out for delivery";
     await sendPushToAll(
-      { title: "Package Update", body: `${label}: ${order.itemName} from ${order.retailer}`, tag: "order-update" },
+      { title: "Package Update", body: `${label}: ${order.itemName} from ${order.retailer}`, tag: "order-update", action: "navigate", screen: "/orders" },
       userName,
     );
     logger.info({ tracking: order.trackingNumber, prevStatus, newStatus }, "[BgEmailScanner] Order push sent");

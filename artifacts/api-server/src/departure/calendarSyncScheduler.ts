@@ -527,6 +527,8 @@ async function runDepartureAlertsForUser(userName: string): Promise<void> {
       requireInteraction: true,
       notificationType: "departure",
       companionMessage: JSON.stringify({ mapsUrl, eventSummary: row.event_summary }),
+      action: "open_url",
+      url: mapsUrl,
     }, userName).catch(() => {});
 
     broadcastToUser(userName, "reminder", {

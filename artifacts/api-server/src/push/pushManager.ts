@@ -113,6 +113,8 @@ export interface PushPayload {
   gmailUrl?: string;
   action?: string;
   message?: string;
+  screen?: string;
+  url?: string;
 }
 
 // ── Expo Push Token management ────────────────────────────────────────────────
