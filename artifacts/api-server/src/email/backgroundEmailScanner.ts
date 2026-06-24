@@ -461,7 +461,7 @@ async function runScan(userName: string): Promise<void> {
 
   if (summary) {
     await sendPushToAll(
-      { title: "Inbox Update", body: summary, tag: "email-scan-summary" },
+      { title: "Inbox Update", body: summary, tag: "email-scan-summary", action: "send_message", message: "Check my email" },
       userName,
     );
     logger.info({ userName }, "[BgEmailScanner] Scan summary push sent");

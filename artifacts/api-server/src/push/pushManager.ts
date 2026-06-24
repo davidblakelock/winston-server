@@ -111,6 +111,8 @@ export interface PushPayload {
   actionSnooze?: string;
   snoozeMinutes?: number;
   gmailUrl?: string;
+  action?: string;
+  message?: string;
 }
 
 // ── Expo Push Token management ────────────────────────────────────────────────
