@@ -6,8 +6,7 @@
  *
  * Sections (in order):
  *  1. Greeting
- *  2. Sleep score (Google Fit — live)
- *  3. Weather (home city + family cities + upcoming trips)
+ *  2. Weather (home city + family cities + upcoming trips)
  *  4. Calendar (today only; departure time only if event within 2 hours)
  *  5. Email (actionable only)
  *  6. To-Do list count
@@ -27,7 +26,6 @@ import { fetchAndSummarizeEmails, type EmailSummary } from "../google/gmail.js";
 import { getOrdersForBriefing } from "../orders/ordersManager.js";
 import { getStoicForUser, incrementStoicDay } from "../stoic/stoicManager.js";
 import { fetchBestLocalEvent } from "../events/apifyEventsManager.js";
-import { fetchYesterdayFitData } from "../google/fit.js";
 import { estimateDriveTime, extractEventLocation } from "../departure/departureManager.js";
 import { getSeenHeadlines, logBriefingStories, normalizeKey } from "./storyDedup.js";
 import { query } from "../db.js";
@@ -36,13 +34,6 @@ import { MODEL_HAIKU } from "../lib/models.js";
 
 const anthropic = new Anthropic();
 
-// ── Sleep quality mapping ─────────────────────────────────────────────────────
-
-function sleepQuality(minutes: number): "well" | "pretty well" | "not so well" {
-  if (minutes >= 420) return "well";          // 7+ hours
-  if (minutes >= 360) return "pretty well";   // 6-7 hours
-  return "not so well";                       // < 6 hours
-}
 
 // ── Geocode a city name → lat/lon (Google Geocoding API) ──────────────────────
 
@@ -333,7 +324,6 @@ export async function generateFreshBriefing(userName: string): Promise<string> {
 
   // ── Step 2: Parallel data fetch (all independent) ────────────────────────
   const [
-    fitResult,
     weatherResult,
     emailResult,
     ordersResult,
@@ -347,7 +337,6 @@ export async function generateFreshBriefing(userName: string): Promise<string> {
     serpEventsResult,
     goodStoryFetchReady,  // placeholder — needs seenFg first
   ] = await Promise.allSettled([
-    fetchYesterdayFitData(userName),
     getCachedWeather(primaryCity, primaryLat, primaryLon),
     fetchAndSummarizeEmails(10, undefined, userName),
     getOrdersForBriefing(userName),
@@ -362,7 +351,6 @@ export async function generateFreshBriefing(userName: string): Promise<string> {
     Promise.resolve(null),  // feel-good fetched below after seenFg is known
   ]);
 
-  const fitData       = fitResult.status       === "fulfilled" ? fitResult.value       : null;
   const weather       = weatherResult.status   === "fulfilled" ? weatherResult.value   : null;
   const emails        = emailResult.status     === "fulfilled" ? emailResult.value      : null;
   const orders        = ordersResult.status    === "fulfilled" ? ordersResult.value     : [];
@@ -415,13 +403,6 @@ export async function generateFreshBriefing(userName: string): Promise<string> {
     }>;
 
   // ── Step 4: Build data blocks for Claude ──────────────────────────────────
-
-  // SLEEP
-  const sleepBlock = (() => {
-    if (!fitData?.sleepMinutes) return "";
-    const quality = sleepQuality(fitData.sleepMinutes);
-    return `SLEEP: It looks like you slept ${quality} last night.`;
-  })();
 
   // WEATHER
   const weatherBlock = (() => {
@@ -535,7 +516,6 @@ export async function generateFreshBriefing(userName: string): Promise<string> {
   });
 
   const dataSections = [
-    sleepBlock,
     weatherBlock,
     calBlock,
     emailBlock,

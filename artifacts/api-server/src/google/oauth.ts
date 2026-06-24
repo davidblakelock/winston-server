@@ -45,7 +45,6 @@ export const IDENTITY_SCOPES = [
 
 // ── Full integration scopes (used for "Connect Google" in settings) ───────────
 // contacts scope (write) is included so new/updated contact writes work without re-auth.
-// fitness scopes are included for Google Fit sleep + activity data in the morning briefing.
 export const SCOPES = [
   "openid",
   "https://www.googleapis.com/auth/userinfo.email",
@@ -55,8 +54,6 @@ export const SCOPES = [
   "https://www.googleapis.com/auth/calendar",
   "https://www.googleapis.com/auth/contacts.readonly",
   "https://www.googleapis.com/auth/contacts",
-  "https://www.googleapis.com/auth/fitness.sleep.read",
-  "https://www.googleapis.com/auth/fitness.activity.read",
 ];
 
 // ── Account preference SQL ─────────────────────────────────────────────────────
@@ -118,34 +115,6 @@ export async function hasContactsWriteScope(userName?: string): Promise<boolean>
   return rows[0].scope
     .split(" ")
     .some((s) => s === "https://www.googleapis.com/auth/contacts");
-}
-
-export async function hasFitnessScope(userName: string): Promise<boolean> {
-  // Check both tables — user_integrations is the canonical store written by the
-  // connect flow; google_auth is the legacy fallback. Either one having the scope
-  // is sufficient.
-  const [gaResult, uiResult] = await Promise.all([
-    query<{ scope: string | null }>(
-      `SELECT scope FROM google_auth WHERE user_name = $1 LIMIT 1`,
-      [userName]
-    ).catch(() => ({ rows: [] as Array<{ scope: string | null }> })),
-    query<{ scopes: string | null }>(
-      `SELECT scopes FROM user_integrations WHERE user_name = $1 AND provider = 'google' LIMIT 1`,
-      [userName]
-    ).catch(() => ({ rows: [] as Array<{ scopes: string | null }> })),
-  ]);
-
-  const fitnessScopeIds = [
-    "https://www.googleapis.com/auth/fitness.sleep.read",
-    "https://www.googleapis.com/auth/fitness.activity.read",
-  ];
-
-  const gaScope   = gaResult.rows[0]?.scope   ?? "";
-  const uiScopes  = uiResult.rows[0]?.scopes  ?? "";
-
-  return fitnessScopeIds.some(
-    (s) => gaScope.split(" ").includes(s) || uiScopes.split(" ").includes(s)
-  );
 }
 
 export function getRedirectUri(): string {

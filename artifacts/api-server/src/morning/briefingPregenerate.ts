@@ -30,8 +30,6 @@ import {
 import { logger } from "../lib/logger.js";
 import { getBriefingPreferences, buildBriefingPrefsBlock } from "../briefingPreferences/briefingPreferencesManager.js";
 import { checkUpcomingDates } from "./morningActions.js";
-import { getStoredGarminData, formatGarminForBriefing } from "../garmin/garminService.js";
-import { getStoredFitData, formatFitForBriefing } from "../google/fit.js";
 import { getMydayEntries, type MydayEntry } from "../myday/mydayManager.js";
 import {
   getPendingSuggestion, markSuggestionSurfaced,
@@ -273,7 +271,6 @@ AFTER SECTIONS 1–7 — ADDITIONAL CONTEXT (weave in naturally where relevant, 
 • Birthdays and dates — if any birthday or anniversary is within 7 days, mention it specifically. Skip if none.
 • TV shows — ONLY if [TV Shows — New Episodes] block is present. Never reference any show from memory or profile if that block is absent.
 • ${firstName}'s Life — if [${firstName}'s Life — Recent Entries] has entries, reference them naturally when they connect to something in today's briefing.
-• Health — Garmin/Fit data is YESTERDAY's data. ALWAYS say "yesterday." Skip if unremarkable (nothing unusual about sleep, HR, or activity).
 • Concerts and venue events — from venue concerts block if present. Skip if nothing upcoming.
 • Sunday summary — if [Sunday Summary] block is present, weave in briefly.
 • Packages/orders — mention any out-for-delivery items from the [VERIFIED — Orders Out for Delivery Today] block.
@@ -493,16 +490,6 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
         : Promise.resolve(null),
     ]);
 
-    // Fetch Garmin health data (yesterday's stored data — no live API call needed)
-    const garminData = await getStoredGarminData(userName).catch(() => null);
-
-    // Google Fit: sleep + activity — used only when Garmin is not available.
-    // Scope check is handled upstream (5 AM sync + fetchYesterdayFitData guard).
-    // If data exists in the DB for yesterday, use it regardless of scope state.
-    const fitData = !garminData
-      ? await getStoredFitData(userName).catch(() => null)
-      : null;
-
     // ── Weather context + To-Do list (fetched at pre-gen time) ───────────────
     const [weatherData, todoItems] = await Promise.all([
       getCachedWeather(primaryCity, primaryLat, primaryLon).catch(() => null),
@@ -675,9 +662,6 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
     const preamble = getCurrentDateTimeBlock() + "\n" + corePrompt + profileContextBlock +
       memoryBlock + dynamicProfileBlock + prefsBlock + notesBlock + peopleContextBlock;
 
-    const garminBlock = garminData ? formatGarminForBriefing(garminData) : "";
-    const fitBlock = fitData ? formatFitForBriefing(fitData) : "";
-
     const personalFollowUpsBlock = buildPersonalFollowupsBlock(personalFollowUps);
 
 
@@ -793,7 +777,7 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
       ? buildStoicBlock(stoicEntry, intentionQuestion ?? `What's the one thing that would make today feel worthwhile?`)
       : "";
 
-    const suffix = _bWeather + garminBlock + fitBlock + tripDayBlock + ordersBlock + _bTodos + tvMorningBlock + billsMorningBlock + datesBlock +
+    const suffix = _bWeather + tripDayBlock + ordersBlock + _bTodos + tvMorningBlock + billsMorningBlock + datesBlock +
       sundaySummaryBlock + recFollowUpBlock + personalFollowUpsBlock +
       mydayBlock + lifeSuggestionBlock + observationBlock + weeklyGiftBlock + annualLetterBlock + crossDomainBlock + routeAwareBlock +
       _bNews + _bEvents + apifyEventBlock + dedupedVenueConcertsBlock + motivationContextBlock +
@@ -809,7 +793,6 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
 
       "news": dedupedNewsBlock.length > 0,
       "sports": !!(sportsScores),
-      "garmin_health": !!garminBlock,
       "local_dallas": filteredDallasItems.length > 0 ? `${filteredDallasItems.length} items` : `EMPTY (fallback — raw:${rawDallasItems.length})`,
       "music_events": filteredVenueConcerts.length > 0 ? `${filteredVenueConcerts.length} concerts` : "EMPTY",
       "birthdays": upcomingDates.length > 0,

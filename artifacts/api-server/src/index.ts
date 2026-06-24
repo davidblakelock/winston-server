@@ -33,10 +33,8 @@ import { initBriefingStoriesTable } from "./morning/storyDedup";
 import { runBriefingCacheMigrations } from "./morning/briefingCache";
 import { addProfileItem } from "./profile/profileManager";
 import { ensureContactsTable } from "./google/contacts";
-import { startGarminScheduler } from "./garmin/garminScheduler";
 import { ensureJournalInsightsTable, startJournalPatternScheduler } from "./journal/journalPatternAnalyzer";
 import { ensurePressureTable, startPressureScheduler } from "./weather/pressureScheduler";
-import { ensureFitTable } from "./google/fit";
 import { ensureMoodTable } from "./mood/moodManager";
 import { ensureFollowupsTable } from "./followups/followupManager";
 import { ensureMemoryArchiveTable } from "./memory/memoryArchiveManager";
@@ -191,13 +189,6 @@ app.listen(port, async (err) => {
     await ensureCalendarSyncTable();
   } catch (e) {
     logger.warn({ e }, "calendar_sync_state table initialization warning");
-  }
-
-  try {
-    await ensureFitTable();
-    logger.info("[startup] google_fit_data table ready");
-  } catch (e) {
-    logger.warn({ e }, "Google Fit table initialization warning");
   }
 
   try {
@@ -468,7 +459,6 @@ app.listen(port, async (err) => {
     startPickleballScheduler();
     startDallasProactiveScheduler();
     startVenueMonitorScheduler();
-    startGarminScheduler();
     startJournalPatternScheduler();
     startPressureScheduler();
     startOrderTrackingScheduler();
