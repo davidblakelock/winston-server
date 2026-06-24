@@ -45,7 +45,6 @@ import { ensureCalendarSmartTables } from "./routes/calendarSmart";
 import { ensureRestaurantCacheTable } from "./restaurants/restaurantIntelligence";
 import { ensureOrdersTable } from "./orders/ordersManager";
 import { ensureGoalsTables } from "./goals/goalsManager";
-import { startOrderTrackingScheduler } from "./orders/orderTrackingScheduler";
 import { startTodoReminderScheduler } from "./lists/todoReminderScheduler";
 import { ensureTripPlansTable } from "./travel/tripPlanningManager";
 import { ensureContextReminderColumns } from "./reminders/contextReminderManager";
@@ -461,7 +460,6 @@ app.listen(port, async (err) => {
     startVenueMonitorScheduler();
     startJournalPatternScheduler();
     startPressureScheduler();
-    startOrderTrackingScheduler();
     startTodoReminderScheduler();
     startBackgroundEmailScanner();
     startRecordsArchiver();

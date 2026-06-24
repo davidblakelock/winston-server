@@ -10,7 +10,6 @@ import {
   consolidateOrders,
 } from "../orders/ordersManager.js";
 import { scanOrderEmails } from "../orders/gmailOrderScanner.js";
-import { pollActiveOrderTracking } from "../orders/orderTrackingScheduler.js";
 import { logger } from "../lib/logger.js";
 
 const router: IRouter = Router();
@@ -33,7 +32,6 @@ router.get("/orders", async (req, res) => {
 // ── POST /api/orders/sync ─────────────────────────────────────────────────────
 // 1. Scans Gmail for new order/shipping emails since last sync (90 days on first run).
 // 2. Parses each email with Claude Haiku.
-// 3. Updates live tracking status via direct carrier scraping for all active orders.
 // Body: { force?: boolean } — when true, ignores last_scan_at and looks back 90 days.
 router.post("/orders/sync", express.json({ limit: "1mb" }), async (req, res) => {
   const userName = await authenticate(req, res);
@@ -75,15 +73,10 @@ router.post("/orders/sync", express.json({ limit: "1mb" }), async (req, res) => 
       req.log.info({ userName, consolidated }, "[Orders] Duplicate rows removed by consolidation");
     }
 
-    // ── Step 3: Update live tracking via direct carrier scraping (throttled — 30 min cooldown per order)
-    const { updated: trackingUpdated } = await pollActiveOrderTracking(userName);
-    req.log.info({ userName, trackingUpdated }, "[Orders] Tracking updates complete");
-
     const updatedOrders = await getOrders(userName);
     res.json({
       ok: true,
       newOrders: newCount,
-      trackingUpdated,
       orders: updatedOrders,
     });
   } catch (err) {
