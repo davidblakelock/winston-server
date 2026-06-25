@@ -446,6 +446,7 @@ export async function createCalendarEvent(details: {
     }
     return { id: response.data.id, htmlLink: response.data.htmlLink ?? "" };
   } catch (err: unknown) {
+    logger.error({ err, errData: (err as any)?.response?.data ?? null }, "[CALENDAR CREATE] *** TEMP DIAGNOSTIC *** Google Calendar API insert failed");
     const errMsg = err instanceof Error ? err.message : String(err);
     const errCode = (err as any)?.code ?? (err as any)?.status ?? "unknown";
     console.error(`[CALENDAR CREATE] Google Calendar API insert failed — code: ${errCode}, message: ${errMsg}`);
