@@ -29,6 +29,7 @@ import type { ClassifiedEmail } from "../email/emailClassifier.js";
 import type { DetectedMeetingRequest } from "../email/emailMeetingManager.js";
 import { insertUserRecord, getLastSocialScanAt, updateLastSocialScanAt } from "../records/recordsManager.js";
 import { getEmailScanSettings } from "../email/emailScanSettings.js";
+import { checkForConflict, addOneHour } from "../email/meetingScanner.js";
 import { query } from "../db.js";
 
 const TZ = "America/Chicago";
@@ -184,24 +185,6 @@ async function handleRecord(userName: string, msgId: string, body: string, resul
 
 // ── Meeting handler ───────────────────────────────────────────────────────────
 
-async function isAlreadyOnCalendar(userName: string, title: string, date: string | null): Promise<boolean> {
-  try {
-    const auth = await getAuthClientForUser(userName);
-    if (!auth) return false;
-    const calendar = google.calendar({ version: "v3", auth });
-    const timeMin = date
-      ? new Date(new Date(date + "T00:00:00").getTime() - 86400000).toISOString()
-      : new Date().toISOString();
-    const timeMax = date
-      ? new Date(new Date(date + "T00:00:00").getTime() + 2 * 86400000).toISOString()
-      : new Date(Date.now() + 90 * 86400000).toISOString();
-    const resp = await calendar.events.list({
-      calendarId: "primary", q: title, timeMin, timeMax, maxResults: 5, singleEvents: true,
-    });
-    return (resp.data.items?.length ?? 0) > 0;
-  } catch { return false; }
-}
-
 async function handleMeeting(
   userName: string,
   msgId: string,
@@ -221,11 +204,18 @@ async function handleMeeting(
   const organizerEmail = fromMatch ? fromMatch[2].trim() : from.trim();
 
   const meeting = result.meeting;
-  const proposedDateOnly = meeting?.proposedDateTimeStr?.split(" ")[0] ?? null;
+  const proposedDateOnly  = meeting?.proposedDateTimeStr?.split(" ")[0] ?? null;
+  const proposedStartTime = meeting?.proposedDateTimeStr?.split(" ")[1] ?? null;
 
-  const alreadyScheduled = await isAlreadyOnCalendar(userName, subject, proposedDateOnly);
+  let alreadyScheduled = false;
+  let conflictingEventName: string | null = null;
+  if (proposedDateOnly && proposedStartTime) {
+    const conflict = await checkForConflict(userName, proposedDateOnly, proposedStartTime, addOneHour(proposedStartTime));
+    alreadyScheduled = conflict.hasConflict;
+    conflictingEventName = conflict.conflictingEvent;
+  }
   if (alreadyScheduled) {
-    logger.info({ organizer: organizerName, proposedDateTimeStr: meeting?.proposedDateTimeStr }, "[BgEmailScanner] Meeting already on calendar — skipping pending");
+    logger.info({ organizer: organizerName, proposedDateTimeStr: meeting?.proposedDateTimeStr, conflictingEvent: conflictingEventName }, "[BgEmailScanner] Meeting already on calendar — skipping pending");
     return;
   }
 
