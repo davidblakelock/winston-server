@@ -452,14 +452,19 @@ async function runScan(userName: string): Promise<void> {
   }
 
   // ── Batch summary push ────────────────────────────────────────────────────
+  const summaryReplies = getPendingReplyEmails();
+  const summaryMeetings = getPendingMeetingRequests();
+  logger.info({ userName, pendingRepliesCount: summaryReplies.length, pendingReplies: summaryReplies, pendingMeetingsCount: summaryMeetings.length }, "[BgEmailScanner] Pending state before summary");
+
   const summary = await buildScanSummary({
-    pendingReplies: getPendingReplyEmails(),
-    pendingMeetings: getPendingMeetingRequests(),
+    pendingReplies: summaryReplies,
+    pendingMeetings: summaryMeetings,
     filedRecordsCount,
     filedOrdersCount,
   }).catch(() => null);
 
   if (summary) {
+    logger.info({ userName, summary }, "[BgEmailScanner] Scan summary generated");
     await sendPushToAll(
       { title: "Inbox Update", body: summary, tag: "email-scan-summary", action: "send_message", message: "Check my email" },
       userName,
