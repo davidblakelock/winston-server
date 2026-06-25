@@ -299,7 +299,7 @@ export async function detectMeetingRequests(
 
 // ── Briefing block builder ─────────────────────────────────────────────────────
 
-export function buildMeetingRequestsBlock(requests: DetectedMeetingRequest[]): string {
+export function buildMeetingRequestsBlock(requests: DetectedMeetingRequest[], userName: string): string {
   if (requests.length === 0) return "";
 
   const lines: string[] = [
@@ -318,7 +318,7 @@ export function buildMeetingRequestsBlock(requests: DetectedMeetingRequest[]): s
         lines.push(`  Calendar: CONFLICT — "${r.conflictEvent}" is already scheduled`);
         const alt = r.suggestedAlternative ?? "a different time";
         lines.push(
-          `  → Tell David about the conflict. Suggest ${alt} as an alternative. ` +
+          `  → Tell ${userName} about the conflict. Suggest ${alt} as an alternative. ` +
             `Ask: "Want me to draft a reply suggesting ${alt}?"`,
         );
       } else {
@@ -337,10 +337,36 @@ export function buildMeetingRequestsBlock(requests: DetectedMeetingRequest[]): s
   }
 
   lines.push(
-    "BETA RULE: When David says yes, compose the reply and read it back for approval.",
-    "He sends it via his email app — you cannot send it directly.",
+    `BETA RULE: When ${userName} says yes, compose the reply and read it back for approval.`,
+    `${userName} sends it via his email app — you cannot send it directly.`,
   );
 
+  return lines.join("\n");
+}
+
+export function buildPendingRepliesBlock(replies: PendingReplyEmail[], userName: string): string {
+  if (replies.length === 0) return "";
+  const lines: string[] = [
+    "\n\n[Pending Email Replies — Detected in Inbox]",
+    "Surface these NATURALLY while covering the email section. Do NOT create a separate section.",
+    "Weave them conversationally into the email summary.\n",
+  ];
+  for (const r of replies) {
+    lines.push(`• From: ${r.from} (${r.fromEmail})`);
+    lines.push(`  Subject: "${r.subject}"`);
+    if (r.summary) {
+      lines.push(`  Context: ${r.summary}`);
+    }
+    lines.push(
+      `  → Mention this needs a reply. Ask: "Want me to draft a reply to ${r.from}?"`,
+    );
+    lines.push("");
+  }
+  lines.push(
+    `BETA RULE: When ${userName} says yes to drafting one (or says 'yes' generally with multiple pending), compose ONE reply at a time and read it back for approval before moving to the next.`,
+    `If ${userName} asks for a specific person by name (e.g. 'just reply to Susan'), only act on that one — leave the others pending.`,
+    `${userName} sends each reply via his email app — you cannot send it directly.`,
+  );
   return lines.join("\n");
 }
 

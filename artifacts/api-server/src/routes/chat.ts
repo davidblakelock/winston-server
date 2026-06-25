@@ -183,12 +183,14 @@ import {
 import {
   detectMeetingRequests,
   buildMeetingRequestsBlock,
+  buildPendingRepliesBlock,
   composeEmailReply,
   getPendingMeetingRequests,
   setPendingMeetingRequests,
   clearPendingMeetingRequests,
   getPendingEmailReply,
   setPendingEmailReply,
+  getPendingReplyEmails,
   clearPendingEmailReply,
   type EmailInput,
 } from "../email/emailMeetingManager.js";
@@ -1592,12 +1594,13 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       detectedMeetings = detectedMeetingsRaw;
       if (detectedMeetings.length > 0) {
         setPendingMeetingRequests(detectedMeetings);
-        meetingRequestsBlock = buildMeetingRequestsBlock(detectedMeetings);
+        meetingRequestsBlock = buildMeetingRequestsBlock(detectedMeetings, sessionUserName);
         req.log.info({ count: detectedMeetings.length }, "[E007] Meeting requests detected in morning emails");
       }
     } catch (err) {
       req.log.warn({ err }, "[E007] Meeting detection failed — skipping");
     }
+    const pendingRepliesBlock = buildPendingRepliesBlock(getPendingReplyEmails(), sessionUserName);
 
     // ── Morning Actions — SSE/web path only ──────────────────────────────────
     // Native no longer receives morningActions; fire the promise only for SSE.
@@ -1624,7 +1627,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       staticCtx.preamble.replace(/^\[Current date and time[^\[]+/, "");
 
     const deliverySuffix = staticCtx.suffix;
-    const fullSystemPrompt = livePreamble + liveGmailBlock + meetingRequestsBlock + liveCalendarBlock + deliverySuffix;
+    const fullSystemPrompt = livePreamble + liveGmailBlock + meetingRequestsBlock + pendingRepliesBlock + liveCalendarBlock + deliverySuffix;
 
     req.log.info(
       { promptChars: fullSystemPrompt.length, hasEmail: !!liveGmailBlock, hasCalendar: !!liveCalendarBlock },
@@ -1638,7 +1641,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       const nativeBriefing = await anthropic.messages.create({
         model: MODEL_HAIKU,
         max_tokens: deliveryMaxTokens,
-        system: buildSystemBlocks(livePreamble, liveGmailBlock + meetingRequestsBlock + liveCalendarBlock + deliverySuffix),
+        system: buildSystemBlocks(livePreamble, liveGmailBlock + meetingRequestsBlock + pendingRepliesBlock + liveCalendarBlock + deliverySuffix),
         messages: [{ role: "user", content: "good morning" }],
       });
       const nativeBriefingText =
@@ -3807,7 +3810,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
           ]);
           if (detected.length > 0) {
             setPendingMeetingRequests(detected);
-            onDemandMeetingBlock = buildMeetingRequestsBlock(detected);
+            onDemandMeetingBlock = buildMeetingRequestsBlock(detected, sessionUserName);
             req.log.info({ count: detected.length }, "[E007] On-demand meeting requests detected");
           }
         } catch (err) {
@@ -3840,7 +3843,8 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
           ? "\n\n[Google Calendar — not connected. Let the user know they can connect Google in the app header.]"
           : "";
 
-      systemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + memoryBlock + gmailBlock + onDemandMeetingBlock + calendarBlock;
+      const pendingRepliesBlock = buildPendingRepliesBlock(getPendingReplyEmails(), sessionUserName);
+      systemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + memoryBlock + gmailBlock + onDemandMeetingBlock + pendingRepliesBlock + calendarBlock;
     } catch (err) {
       req.log.warn({ err }, "On-demand email/calendar fetch failed");
     }
