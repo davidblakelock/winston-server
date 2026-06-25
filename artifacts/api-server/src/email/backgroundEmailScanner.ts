@@ -29,6 +29,7 @@ import type { ClassifiedEmail } from "../email/emailClassifier.js";
 import type { DetectedMeetingRequest } from "../email/emailMeetingManager.js";
 import { insertUserRecord } from "../records/recordsManager.js";
 import { getEmailScanSettings } from "../email/emailScanSettings.js";
+import { query } from "../db.js";
 
 const TZ = "America/Chicago";
 
@@ -330,11 +331,37 @@ async function fetchAndClassify(
 
 async function runScan(userName: string): Promise<void> {
   // ── Read per-user settings ────────────────────────────────────────────────
-  const { intervalMinutes, vacationMode } = await getEmailScanSettings(userName).catch(() => ({
+  const { intervalMinutes, vacationMode, pauseHour } = await getEmailScanSettings(userName).catch(() => ({
     intervalMinutes: 120,
     vacationMode: false,
+    pauseHour: 22,
   }));
   const intervalMs = intervalMinutes * 60 * 1000;
+
+  // ── Read user timezone + wake time for pause-window check ─────────────────
+  let userTz = TZ;
+  let wakeHour = 7;
+  try {
+    const { rows: profileRows } = await query<{ timezone: string | null; wake_time: string | null }>(
+      `SELECT timezone, wake_time FROM user_profiles WHERE user_name = $1 LIMIT 1`,
+      [userName]
+    );
+    if (profileRows[0]?.timezone) userTz = profileRows[0].timezone;
+    if (profileRows[0]?.wake_time) {
+      const parsed = parseInt(profileRows[0].wake_time.split(":")[0] ?? "7", 10);
+      if (!isNaN(parsed)) wakeHour = parsed;
+    }
+  } catch { /* use defaults */ }
+
+  // FUTURE: replace this static pause-hour check with Android DND/Bedtime mode detection once that native permission flow is built
+  const nowHour = parseInt(
+    new Date().toLocaleString("en-US", { timeZone: userTz, hour: "numeric", hour12: false }),
+    10
+  );
+  if (nowHour >= pauseHour || nowHour < wakeHour) {
+    logger.info({ userName, nowHour, pauseHour, wakeHour }, "[BgEmailScanner] Skipping tick — outside scan window");
+    return;
+  }
 
   // ── Orders: use DB-backed last-scan time ──────────────────────────────────
   const lastOrderScan = await getLastOrderScanAt(userName);
