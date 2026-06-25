@@ -192,6 +192,7 @@ import {
   setPendingEmailReply,
   getPendingReplyEmails,
   clearPendingEmailReply,
+  clearAllPendingReplyEmails,
   type EmailInput,
 } from "../email/emailMeetingManager.js";
 import { getCachedBriefing, setCachedBriefing, getCachedBriefingIfRecent, getStaticBriefingContext, loadStaticContextFromDb, getPersistedBriefingText, getPersistedBriefingSummary } from "../morning/briefingCache.js";
@@ -1654,6 +1655,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           "Morning briefing fetched (native) and cached"
         );
         broadcastToUser(sessionUserName, "briefing_updated", {});
+        clearAllPendingReplyEmails();
+        clearPendingMeetingRequests();
       }
       res.json({ response: nativeBriefingText });
 
@@ -1686,7 +1689,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     const stream = anthropic.messages.stream({
       model: MODEL_HAIKU,
       max_tokens: deliveryMaxTokens,
-      system: buildSystemBlocks(livePreamble, liveGmailBlock + meetingRequestsBlock + liveCalendarBlock + deliverySuffix),
+      system: buildSystemBlocks(livePreamble, liveGmailBlock + meetingRequestsBlock + pendingRepliesBlock + liveCalendarBlock + deliverySuffix),
       messages: [{ role: "user", content: "good morning" }],
     });
 
@@ -1715,6 +1718,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       void logBriefingStories(sessionUserName, staticCtx.candidateStoryKeys);
       req.log.info({ chars: fullBriefingText.length }, "Morning briefing streamed and cached for follow-up context");
       broadcastToUser(sessionUserName, "briefing_updated", {});
+      clearAllPendingReplyEmails();
+      clearPendingMeetingRequests();
     }
 
     return; // Morning greeting fully handled — skip generic handler below
