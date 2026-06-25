@@ -826,7 +826,7 @@ router.patch("/settings/email-scan", express.json({ limit: "16kb" }), async (req
   const userName = await authenticate(req, res);
   if (!userName) return;
 
-  const { intervalMinutes, vacationMode } = req.body as { intervalMinutes?: unknown; vacationMode?: unknown };
+  const { intervalMinutes, vacationMode, pauseHour } = req.body as { intervalMinutes?: unknown; vacationMode?: unknown; pauseHour?: unknown };
 
   if (intervalMinutes !== undefined) {
     if (!VALID_INTERVALS.includes(intervalMinutes as (typeof VALID_INTERVALS)[number])) {
@@ -838,10 +838,17 @@ router.patch("/settings/email-scan", express.json({ limit: "16kb" }), async (req
     res.status(400).json({ error: "vacationMode must be a boolean" });
     return;
   }
+  if (pauseHour !== undefined) {
+    if (typeof pauseHour !== "number" || !Number.isInteger(pauseHour) || pauseHour < 0 || pauseHour > 23) {
+      res.status(400).json({ error: "pauseHour must be an integer between 0 and 23" });
+      return;
+    }
+  }
 
-  const updates: { intervalMinutes?: number; vacationMode?: boolean } = {};
+  const updates: { intervalMinutes?: number; vacationMode?: boolean; pauseHour?: number } = {};
   if (intervalMinutes !== undefined) updates.intervalMinutes = intervalMinutes as number;
   if (vacationMode !== undefined) updates.vacationMode = vacationMode as boolean;
+  if (pauseHour !== undefined) updates.pauseHour = pauseHour as number;
 
   if (Object.keys(updates).length === 0) {
     res.status(400).json({ error: "No valid fields provided" });
