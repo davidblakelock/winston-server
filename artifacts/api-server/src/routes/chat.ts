@@ -4428,11 +4428,11 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
         if (!extracted.isRecurring) {
           try {
             await query(
-              `INSERT INTO list_items (user_name, list_name, item_text, reminder_time)
-               VALUES ($1, 'to do', $2, $3)
+              `INSERT INTO list_items (user_name, list_name, item_text, reminder_time, reminder_fired)
+               VALUES ($1, 'to do', $2, $3, TRUE)
                ON CONFLICT (user_name, list_name, lower(item_text))
                DO UPDATE SET reminder_time  = EXCLUDED.reminder_time,
-                             reminder_fired = FALSE`,
+                             reminder_fired = TRUE`,
               [sessionUserName, extracted.reminderText, fireAt]
             );
             req.log.info({ text: extracted.reminderText, fireAt }, "[Reminder] Mirrored to to-do list");
