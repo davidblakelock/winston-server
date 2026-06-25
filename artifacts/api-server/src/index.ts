@@ -44,6 +44,7 @@ import { ensureGroupTables } from "./connect/groupManager";
 import { ensureCalendarSmartTables } from "./routes/calendarSmart";
 import { ensureRestaurantCacheTable } from "./restaurants/restaurantIntelligence";
 import { ensureOrdersTable } from "./orders/ordersManager";
+import { ensureUserRecordsColumns, ensureSocialScanStateTable } from "./records/recordsManager";
 import { ensureGoalsTables } from "./goals/goalsManager";
 import { startTodoReminderScheduler } from "./lists/todoReminderScheduler";
 import { ensureTripPlansTable } from "./travel/tripPlanningManager";
@@ -337,6 +338,13 @@ app.listen(port, async (err) => {
     await ensureGoalsTables();
   } catch (e) {
     logger.warn({ err: e }, "Orders table initialization warning");
+  }
+
+  try {
+    await ensureUserRecordsColumns();
+    await ensureSocialScanStateTable();
+  } catch (e) {
+    logger.warn({ err: e }, "Records table migration warning");
   }
 
   try {

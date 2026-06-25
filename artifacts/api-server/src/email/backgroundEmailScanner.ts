@@ -27,16 +27,14 @@ import { sendPushToAll } from "../push/pushManager.js";
 import { classifyEmail } from "../email/emailClassifier.js";
 import type { ClassifiedEmail } from "../email/emailClassifier.js";
 import type { DetectedMeetingRequest } from "../email/emailMeetingManager.js";
-import { insertUserRecord } from "../records/recordsManager.js";
+import { insertUserRecord, getLastSocialScanAt, updateLastSocialScanAt } from "../records/recordsManager.js";
 import { getEmailScanSettings } from "../email/emailScanSettings.js";
 import { query } from "../db.js";
 
 const TZ = "America/Chicago";
 
-// ── Social scan in-memory last-scan ──────────────────────────────────────────
-// Orders use DB-backed getLastOrderScanAt / updateLastOrderScanAt.
-
-const _socialLastScanAt = new Map<string, Date>();
+// Social scan last-scan is DB-backed via social_scan_state (mirrors order_sync_state).
+// Previously in-memory, which caused re-insertion of the same emails after every restart.
 
 // ── Gmail body helpers ────────────────────────────────────────────────────────
 
@@ -179,6 +177,7 @@ async function handleRecord(userName: string, msgId: string, body: string, resul
     amount: rec.amount,
     notes: result.summary ?? null,
     rawSnippet: body.slice(0, 500),
+    gmailId: msgId,
   });
   logger.info({ vendor: rec.vendorName, category: rec.category, msgId }, "[BgEmailScanner] Record saved");
 }
@@ -368,8 +367,8 @@ async function runScan(userName: string): Promise<void> {
   const orderSinceMs = lastOrderScan ? Date.now() - lastOrderScan.getTime() : Infinity;
   const shouldScanOrders = orderSinceMs >= intervalMs;
 
-  // ── Social (meetings/records/replies): in-memory ──────────────────────────
-  const lastSocialScan = _socialLastScanAt.get(userName);
+  // ── Social (meetings/records/replies): DB-backed ─────────────────────────
+  const lastSocialScan = await getLastSocialScanAt(userName);
   const socialSinceMs = lastSocialScan ? Date.now() - lastSocialScan.getTime() : Infinity;
   const shouldScanSocial = socialSinceMs >= intervalMs;
 
@@ -474,7 +473,7 @@ async function runScan(userName: string): Promise<void> {
       vacationMode,
     );
 
-    _socialLastScanAt.set(userName, scanStart);
+    await updateLastSocialScanAt(userName);
     logger.info({ userName, meetings, records, socials, skipped: socialSkipped }, "[BgEmailScanner] Social scan complete");
   }
 
