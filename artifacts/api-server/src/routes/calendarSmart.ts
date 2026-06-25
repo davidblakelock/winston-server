@@ -5,6 +5,8 @@ import {
   scanEmailsForMeetings,
   acceptMeetingRequest,
   declineMeetingRequest,
+  checkForConflict,
+  addOneHour,
   type MeetingRequest,
 } from "../email/meetingScanner.js";
 import { query } from "../db.js";
@@ -332,6 +334,25 @@ router.post("/calendar/smart/accept", express.json({ limit: "1mb" }), async (req
   }
 
   try {
+    // Re-verify against the live calendar — the hasConflict flag on the meeting object
+    // was set at scan time and may be stale if another event was booked since then.
+    if (meeting.proposedDate && meeting.proposedStartTime) {
+      const endTime = meeting.proposedEndTime ?? addOneHour(meeting.proposedStartTime);
+      const freshConflict = await checkForConflict(userName, meeting.proposedDate, meeting.proposedStartTime, endTime);
+      if (freshConflict.hasConflict) {
+        req.log.warn(
+          { userName, emailId: meeting.emailId, conflictingEvent: freshConflict.conflictingEvent },
+          "[CalendarSmart] Accept blocked — fresh conflict detected",
+        );
+        res.status(409).json({
+          error: "conflict",
+          conflictingEvent: freshConflict.conflictingEvent,
+          message: `Cannot accept — "${freshConflict.conflictingEvent ?? "another event"}" is already scheduled at that time.`,
+        });
+        return;
+      }
+    }
+
     const result = await acceptMeetingRequest(userName, meeting);
     await logAction(userName, meeting.emailId, "accepted", result.calendarEventId ?? null, meeting.organizer, meeting.subject);
     req.log.info(

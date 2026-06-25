@@ -134,7 +134,7 @@ Do NOT count: order confirmations, newsletters, event announcements you're not b
 
 // ── Conflict check ────────────────────────────────────────────────────────────
 
-async function checkForConflict(
+export async function checkForConflict(
   userName: string,
   date: string,
   startTime: string,
@@ -294,7 +294,7 @@ export async function scanEmailsForMeetings(
   return results;
 }
 
-function addOneHour(time: string): string {
+export function addOneHour(time: string): string {
   const [h, m] = time.split(":").map(Number);
   return `${String((h + 1) % 24).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
