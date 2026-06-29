@@ -470,7 +470,7 @@ async function runScan(userName: string): Promise<void> {
   // ── Batch summary push ────────────────────────────────────────────────────
   const summaryReplies = getPendingReplyEmails();
   const summaryMeetings = getPendingMeetingRequests();
-  logger.info({ userName, pendingRepliesCount: summaryReplies.length, pendingReplies: summaryReplies, pendingMeetingsCount: summaryMeetings.length }, "[BgEmailScanner] Pending state before summary");
+  logger.info({ userName, pendingRepliesCount: summaryReplies.length, pendingReplies: summaryReplies, pendingMeetingsCount: summaryMeetings.length, filedRecordsCount, filedOrdersCount }, "[BgEmailScanner] Pending state before summary");
 
   const summary = await buildScanSummary({
     pendingReplies: summaryReplies,
