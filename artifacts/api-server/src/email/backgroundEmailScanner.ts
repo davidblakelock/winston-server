@@ -417,6 +417,8 @@ async function runScan(userName: string): Promise<void> {
 
   let filedOrdersCount = 0;
   let filedRecordsCount = 0;
+  const urgentAlerts: { subject: string; summary: string }[] = [];
+  const fyiItems: { subject: string; summary: string }[] = [];
 
   // ── Order scan ────────────────────────────────────────────────────────────
   if (shouldScanOrders) {
@@ -432,9 +434,11 @@ async function runScan(userName: string): Promise<void> {
     const orderQ = buildOrderQuery(since);
     const { processed: orders, skipped: orderSkipped } = await fetchAndClassify(
       gmail, orderQ, 50, 40, userName,
-      async (u, id, _from, _subject, body, res) => {
+      async (u, id, _from, subject, body, res) => {
         if (res.action === "save_to_orders") { await handleOrder(u, id, res); filedOrdersCount++; }
         else if (res.action === "save_to_records") { await handleRecord(u, id, body, res); filedRecordsCount++; }
+        else if (res.action === "urgent_alert") { urgentAlerts.push({ subject, summary: res.summary ?? subject }); }
+        else if (res.action === "fyi") { fyiItems.push({ subject, summary: res.summary ?? subject }); }
       },
       "orders",
       vacationMode,
@@ -458,6 +462,8 @@ async function runScan(userName: string): Promise<void> {
         if (res.action === "meeting_request") { await handleMeeting(u, id, from, subject, res); meetings++; }
         else if (res.action === "save_to_records") { await handleRecord(u, id, body, res); records++; filedRecordsCount++; }
         else if (res.action === "needs_reply") { await handleSocial(u, id, from, res); socials++; }
+        else if (res.action === "urgent_alert") { urgentAlerts.push({ subject, summary: res.summary ?? subject }); }
+        else if (res.action === "fyi") { fyiItems.push({ subject, summary: res.summary ?? subject }); }
       },
       "social",
       vacationMode,
@@ -470,13 +476,15 @@ async function runScan(userName: string): Promise<void> {
   // ── Batch summary push ────────────────────────────────────────────────────
   const summaryReplies = getPendingReplyEmails();
   const summaryMeetings = getPendingMeetingRequests();
-  logger.info({ userName, pendingRepliesCount: summaryReplies.length, pendingReplies: summaryReplies, pendingMeetingsCount: summaryMeetings.length, filedRecordsCount, filedOrdersCount }, "[BgEmailScanner] Pending state before summary");
+  logger.info({ userName, pendingRepliesCount: summaryReplies.length, pendingReplies: summaryReplies, pendingMeetingsCount: summaryMeetings.length, filedRecordsCount, filedOrdersCount, urgentAlertCount: urgentAlerts.length, fyiCount: fyiItems.length }, "[BgEmailScanner] Pending state before summary");
 
   const summary = await buildScanSummary({
     pendingReplies: summaryReplies,
     pendingMeetings: summaryMeetings,
     filedRecordsCount,
     filedOrdersCount,
+    urgentAlerts,
+    fyiItems,
   }).catch(() => null);
 
   if (summary) {

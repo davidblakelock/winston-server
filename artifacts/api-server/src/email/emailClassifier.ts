@@ -8,7 +8,7 @@ import { MODEL_HAIKU } from "../lib/models.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-export type EmailAction = "save_to_records" | "save_to_orders" | "meeting_request" | "needs_reply" | "none";
+export type EmailAction = "save_to_records" | "save_to_orders" | "meeting_request" | "needs_reply" | "urgent_alert" | "fyi" | "none";
 
 export interface ClassifiedEmail {
   action: EmailAction;
@@ -69,10 +69,10 @@ ${vacationLine}
 Decide what action this email warrants, if any. Return ONLY valid JSON:
 
 {
-  "action": "save_to_records" | "save_to_orders" | "meeting_request" | "needs_reply" | "none",
+  "action": "save_to_records" | "save_to_orders" | "meeting_request" | "needs_reply" | "urgent_alert" | "fyi" | "none",
   "summary": "one short sentence, or null",
 
-  // include if action="save_to_records" — a booking/confirmation worth filing (hotel, restaurant, warranty, home service, subscription, vehicle, other):
+  // include if action="save_to_records" — a genuine forward-looking booking with a specific date, location, or confirmation number:
   "record": {
     "category": "trip" | "warranty" | "home_service" | "subscription" | "vehicle" | "other",
     "vendorName": "string",
@@ -107,13 +107,13 @@ Decide what action this email warrants, if any. Return ONLY valid JSON:
 }
 
 Rules for choosing action:
-- "save_to_records": a confirmation/booking worth filing away — hotel, restaurant reservation, warranty registration, home service appointment, subscription renewal, vehicle service. Never extract financial account numbers, SSNs, payment card numbers, or medical/clinical details — only logistics (confirmation number, dates, address, phone, website).
+- "save_to_records": a genuine forward-looking booking or registration with a specific date, location, or confirmation number — hotel, restaurant reservation, car rental, flight or train ticket, warranty registration, home service appointment (plumber, HVAC, etc.), vehicle service appointment. Subscription charge receipts and recurring billing are NOT records — use "fyi" instead.
 - "save_to_orders": shipping, delivery, or order status update from a retailer or carrier.
 - "meeting_request": a real person personally asking to schedule time — a call, meeting, lunch, appointment.
-- "needs_reply": anything else from a real person that reasonably expects a response — a question, a catch-up message, a personal note — even if casual.
-- "none": newsletters, marketing, automated notifications, anything with no real action to take.
-
-CRITICAL: If the email's content is primarily financial (bank statement, account balance, wire transfer) or medical (lab results, diagnosis, clinical record), return action="none" — do not extract or surface any details from it.`;
+- "needs_reply": anything from a real person that reasonably expects a response — a question, a catch-up message, a personal note — even if casual.
+- "urgent_alert": anything genuinely urgent requiring the user's immediate awareness — fraud alerts, suspicious login warnings, account security notices, unrecognized transaction alerts, identity theft warnings. Always flag these prominently; never drop them silently.
+- "fyi": a recurring charge, subscription renewal, or routine non-urgent account/balance notice — gym membership charge, SaaS billing, streaming renewal, routine bank activity summary. Worth briefly mentioning, not stored anywhere.
+- "none": pure marketing, newsletters, promotional offers, automated service notifications with no real information value. Use this ONLY for noise. Never use "none" for anything financial, security-related, or potentially urgent.`;
 
   try {
     const resp = await anthropic.messages.create({

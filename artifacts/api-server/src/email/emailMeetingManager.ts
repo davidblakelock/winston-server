@@ -141,14 +141,27 @@ interface ScanBatchSummaryInput {
   pendingMeetings: DetectedMeetingRequest[];
   filedRecordsCount: number;
   filedOrdersCount: number;
+  urgentAlerts: { subject: string; summary: string }[];
+  fyiItems: { subject: string; summary: string }[];
 }
 
 export async function buildScanSummary(input: ScanBatchSummaryInput): Promise<string | null> {
-  const { pendingReplies, pendingMeetings, filedRecordsCount, filedOrdersCount } = input;
+  const { pendingReplies, pendingMeetings, filedRecordsCount, filedOrdersCount, urgentAlerts, fyiItems } = input;
 
-  if (pendingReplies.length === 0 && pendingMeetings.length === 0 && filedRecordsCount === 0 && filedOrdersCount === 0) {
+  if (
+    pendingReplies.length === 0 &&
+    pendingMeetings.length === 0 &&
+    filedRecordsCount === 0 &&
+    filedOrdersCount === 0 &&
+    urgentAlerts.length === 0 &&
+    fyiItems.length === 0
+  ) {
     return null;
   }
+
+  const urgentBlock = urgentAlerts.length > 0
+    ? urgentAlerts.map(a => `- "${a.subject}": ${a.summary}`).join('\n')
+    : null;
 
   const repliesBlock = pendingReplies.length > 0
     ? pendingReplies.map(e => `- From ${e.from}: "${e.subject}"${e.summary ? ` — ${e.summary}` : ''}`).join('\n')
@@ -158,22 +171,36 @@ export async function buildScanSummary(input: ScanBatchSummaryInput): Promise<st
     ? pendingMeetings.map(m => `- ${m.from} wants to meet${m.proposedDateTimeStr ? ` at ${m.proposedDateTimeStr}` : ' (no specific time proposed)'}`).join('\n')
     : 'None';
 
-  const prompt = `You're writing a short, natural summary of what came in during an email scan, to tell the user conversationally — the way a thoughtful assistant would catch someone up, not a mechanical report.
+  const fyiBlock = fyiItems.length > 0
+    ? fyiItems.map(f => `- ${f.summary}`).join('\n')
+    : null;
 
+  const filedLine = (filedRecordsCount > 0 || filedOrdersCount > 0)
+    ? `${filedRecordsCount} booking/record(s) filed, ${filedOrdersCount} order update(s) filed — already handled silently.`
+    : null;
+
+  const prompt = `You're writing a short, natural summary of what came in during an email scan, to tell the user conversationally — the way a thoughtful assistant would catch someone up, not a mechanical report.
+${urgentBlock ? `
+URGENT — lead with these and flag them clearly, the user must not miss them:
+${urgentBlock}
+` : ''}
 Emails needing a reply:
 ${repliesBlock}
 
 Meeting requests:
 ${meetingsBlock}
-
-Other activity: ${filedRecordsCount} confirmation(s) filed to records, ${filedOrdersCount} order update(s) filed — these were already handled silently, just mention them briefly if relevant, don't dwell on them.
-
-Write 2-4 sentences, warm and direct, that tells the user what's worth their attention and offers to help (e.g. "want me to draft a reply?"). Don't list every email mechanically — synthesize. If there's truly nothing needing the user's input, keep it very brief.`;
+${fyiBlock ? `
+Routine notices (mention briefly at the end, don't dwell):
+${fyiBlock}
+` : ''}${filedLine ? `
+Background: ${filedLine}
+` : ''}
+Write 2-4 sentences, warm and direct. If there are urgent alerts, lead with those prominently. For emails needing replies, offer to help draft one. Don't list every item mechanically — synthesize. If nothing needs the user's input, keep it very brief.`;
 
   try {
     const resp = await anthropic.messages.create({
       model: MODEL_HAIKU,
-      max_tokens: 300,
+      max_tokens: 400,
       messages: [{ role: "user", content: prompt }],
     });
     return resp.content[0]?.type === "text" ? resp.content[0].text.trim() : null;
