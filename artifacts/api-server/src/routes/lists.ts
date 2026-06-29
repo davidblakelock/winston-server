@@ -1023,24 +1023,28 @@ router.put("/lists/:listName/content", async (req: Request, res: Response) => {
   }
 });
 
-// PUT /api/lists/:listName/:id — update an existing item's text and/or url
+// PUT /api/lists/:listName/:id — update an existing item's text, url, and/or reminder_time
 router.put("/lists/:listName/:id", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
   const { listName, id } = req.params;
-  const { item, url: rawUrl } = req.body as { item?: string; url?: string };
+  const { item, url: rawUrl, reminder_time: rawReminderTime } = req.body as { item?: string; url?: string; reminder_time?: string };
   if (!item?.trim()) {
     res.status(400).json({ error: "item is required" });
     return;
   }
   const manualUrl = rawUrl?.trim() || null;
+  const reminderTime = rawReminderTime?.trim() || null;
   try {
-    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string }>(
+    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string; reminder_time: string | null }>(
       `UPDATE list_items
-       SET item_text = $1, url = COALESCE($2, url)
-       WHERE id = $3 AND user_name = $4 AND list_name = $5
-       RETURNING id, item_text, added_by, url, created_at`,
-      [item.trim(), manualUrl, id, userName, listName]
+       SET item_text      = $1,
+           url            = COALESCE($2, url),
+           reminder_time  = COALESCE($3, reminder_time),
+           reminder_fired = CASE WHEN $3 IS NOT NULL THEN FALSE ELSE reminder_fired END
+       WHERE id = $4 AND user_name = $5 AND list_name = $6
+       RETURNING id, item_text, added_by, url, created_at, reminder_time`,
+      [item.trim(), manualUrl, reminderTime, id, userName, listName]
     );
     if (rows.length === 0) {
       res.status(404).json({ error: "Item not found" });
