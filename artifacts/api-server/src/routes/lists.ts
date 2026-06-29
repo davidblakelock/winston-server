@@ -33,6 +33,7 @@ const BACKFILL_THROTTLE_MS = 4 * 60 * 60 * 1000; // 4 hours per restaurant
 // ── Idempotent migrations ─────────────────────────────────────────────────────
 query(`ALTER TABLE list_items ADD COLUMN IF NOT EXISTS reminder_time TIMESTAMPTZ`).catch(() => {});
 query(`ALTER TABLE list_items ADD COLUMN IF NOT EXISTS reminder_fired BOOLEAN NOT NULL DEFAULT FALSE`).catch(() => {});
+query(`ALTER TABLE list_items ADD COLUMN IF NOT EXISTS notes TEXT`).catch(() => {});
 
 // lists — per-user list metadata (list_type: checklist | notepad)
 query(`
@@ -664,8 +665,8 @@ router.get(["/lists/todo", "/lists/to do"], async (req: Request, res: Response) 
   if (!userName) return;
   res.setHeader("Cache-Control", "no-store");
   try {
-    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string; reminder_time: string | null }>(
-      `SELECT id, item_text, added_by, url, created_at, reminder_time FROM list_items
+    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string; reminder_time: string | null; notes: string | null }>(
+      `SELECT id, item_text, added_by, url, created_at, reminder_time, notes FROM list_items
        WHERE user_name = $1 AND list_name = 'to do'
        ORDER BY created_at ASC`,
       [userName]
@@ -680,9 +681,10 @@ router.get(["/lists/todo", "/lists/to do"], async (req: Request, res: Response) 
 router.post(["/lists/todo", "/lists/to do"], async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
-  const { item, url: rawTodoUrl, ownerUserName, reminder_time: rawReminderTime } = req.body as { item?: string; url?: string; ownerUserName?: string; reminder_time?: string };
+  const { item, url: rawTodoUrl, ownerUserName, reminder_time: rawReminderTime, notes: rawNotes } = req.body as { item?: string; url?: string; ownerUserName?: string; reminder_time?: string; notes?: string };
   const manualUrl = rawTodoUrl?.trim() || null;
   const reminderTime = rawReminderTime?.trim() || null;
+  const todoNotes = rawNotes?.trim() || null;
   if (!item?.trim()) { res.status(400).json({ error: "item is required" }); return; }
 
   const targetUser = ownerUserName?.trim() ?? userName;
@@ -712,12 +714,12 @@ router.post(["/lists/todo", "/lists/to do"], async (req: Request, res: Response)
       return;
     }
     const addedByLabel = await getRequesterLabel(targetUser, userName).catch(() => userName);
-    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string; reminder_time: string | null }>(
-      `INSERT INTO list_items (user_name, list_name, item_text, added_by, url, reminder_time)
-       VALUES ($1, 'to do', $2, $3, $4, $5)
+    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string; reminder_time: string | null; notes: string | null }>(
+      `INSERT INTO list_items (user_name, list_name, item_text, added_by, url, reminder_time, notes)
+       VALUES ($1, 'to do', $2, $3, $4, $5, $6)
        ON CONFLICT (user_name, list_name, lower(item_text)) DO NOTHING
-       RETURNING id, item_text, added_by, url, created_at, reminder_time`,
-      [targetUser, item.trim(), addedByLabel, manualUrl, reminderTime]
+       RETURNING id, item_text, added_by, url, created_at, reminder_time, notes`,
+      [targetUser, item.trim(), addedByLabel, manualUrl, reminderTime, todoNotes]
     );
     const newItem = rows[0];
     if (newItem) {
@@ -738,16 +740,17 @@ router.post(["/lists/todo", "/lists/to do"], async (req: Request, res: Response)
   }
 
   try {
-    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string; reminder_time: string | null }>(
-      `INSERT INTO list_items (user_name, list_name, item_text, url, reminder_time)
-       VALUES ($1, 'to do', $2, $3, $4)
+    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string; reminder_time: string | null; notes: string | null }>(
+      `INSERT INTO list_items (user_name, list_name, item_text, url, reminder_time, notes)
+       VALUES ($1, 'to do', $2, $3, $4, $5)
        ON CONFLICT (user_name, list_name, lower(item_text))
        DO UPDATE SET item_text     = EXCLUDED.item_text,
                      url           = CASE WHEN EXCLUDED.url IS NOT NULL THEN EXCLUDED.url ELSE list_items.url END,
                      reminder_time = CASE WHEN EXCLUDED.reminder_time IS NOT NULL THEN EXCLUDED.reminder_time ELSE list_items.reminder_time END,
-                     reminder_fired = CASE WHEN EXCLUDED.reminder_time IS NOT NULL THEN FALSE ELSE list_items.reminder_fired END
-       RETURNING id, item_text, added_by, url, created_at, reminder_time`,
-      [userName, item.trim(), manualUrl, reminderTime]
+                     reminder_fired = CASE WHEN EXCLUDED.reminder_time IS NOT NULL THEN FALSE ELSE list_items.reminder_fired END,
+                     notes         = CASE WHEN EXCLUDED.notes IS NOT NULL THEN EXCLUDED.notes ELSE list_items.notes END
+       RETURNING id, item_text, added_by, url, created_at, reminder_time, notes`,
+      [userName, item.trim(), manualUrl, reminderTime, todoNotes]
     );
     syncListItemToConnections("to do", [item.trim()], userName).catch(() => {});
     res.json({ item: rows[0] });
@@ -858,8 +861,8 @@ router.get("/lists/:listName", async (req: Request, res: Response) => {
   res.setHeader("Cache-Control", "no-store");
   const { listName } = req.params;
   try {
-    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string; reminder_time: string | null }>(
-      `SELECT id, item_text, added_by, url, created_at, reminder_time
+    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string; reminder_time: string | null; notes: string | null }>(
+      `SELECT id, item_text, added_by, url, created_at, reminder_time, notes
        FROM list_items
        WHERE user_name = $1 AND lower(list_name) = lower($2)
        ORDER BY created_at ASC`,
@@ -953,27 +956,26 @@ router.post("/lists/:listName", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
   const { listName } = req.params;
-  const { item, url } = req.body as { item?: string; url?: string };
+  const { item, url, notes: rawNotes } = req.body as { item?: string; url?: string; notes?: string };
   if (!item || !item.trim()) {
     res.status(400).json({ error: "item is required" });
     return;
   }
 
   const manualUrl = url?.trim() || null;
+  const notes = rawNotes?.trim() || null;
   const isAutoLookupList = !manualUrl && !!detectAutoLookupType(listName);
 
   try {
-    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string }>(
-      `INSERT INTO list_items (user_name, list_name, item_text, url)
-       VALUES ($1, $2, $3, $4)
+    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string; notes: string | null }>(
+      `INSERT INTO list_items (user_name, list_name, item_text, url, notes)
+       VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (user_name, list_name, lower(item_text))
        DO UPDATE SET item_text = EXCLUDED.item_text,
-                     url = CASE
-                             WHEN EXCLUDED.url IS NOT NULL THEN EXCLUDED.url
-                             ELSE list_items.url
-                           END
-       RETURNING id, item_text, added_by, url, created_at`,
-      [userName, listName, item.trim(), manualUrl]
+                     url = CASE WHEN EXCLUDED.url IS NOT NULL THEN EXCLUDED.url ELSE list_items.url END,
+                     notes = CASE WHEN EXCLUDED.notes IS NOT NULL THEN EXCLUDED.notes ELSE list_items.notes END
+       RETURNING id, item_text, added_by, url, created_at, notes`,
+      [userName, listName, item.trim(), manualUrl, notes]
     );
     const newItem = rows[0];
 
@@ -1028,23 +1030,25 @@ router.put("/lists/:listName/:id", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
   const { listName, id } = req.params;
-  const { item, url: rawUrl, reminder_time: rawReminderTime } = req.body as { item?: string; url?: string; reminder_time?: string };
+  const { item, url: rawUrl, reminder_time: rawReminderTime, notes: rawNotes } = req.body as { item?: string; url?: string; reminder_time?: string; notes?: string };
   if (!item?.trim()) {
     res.status(400).json({ error: "item is required" });
     return;
   }
   const manualUrl = rawUrl?.trim() || null;
   const reminderTime = rawReminderTime?.trim() || null;
+  const notes = rawNotes?.trim() || null;
   try {
-    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string; reminder_time: string | null }>(
+    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string; reminder_time: string | null; notes: string | null }>(
       `UPDATE list_items
        SET item_text      = $1,
            url            = COALESCE($2, url),
            reminder_time  = COALESCE($3, reminder_time),
-           reminder_fired = CASE WHEN $3 IS NOT NULL THEN FALSE ELSE reminder_fired END
-       WHERE id = $4 AND user_name = $5 AND list_name = $6
-       RETURNING id, item_text, added_by, url, created_at, reminder_time`,
-      [item.trim(), manualUrl, reminderTime, id, userName, listName]
+           reminder_fired = CASE WHEN $3 IS NOT NULL THEN FALSE ELSE reminder_fired END,
+           notes          = COALESCE($4, notes)
+       WHERE id = $5 AND user_name = $6 AND list_name = $7
+       RETURNING id, item_text, added_by, url, created_at, reminder_time, notes`,
+      [item.trim(), manualUrl, reminderTime, notes, id, userName, listName]
     );
     if (rows.length === 0) {
       res.status(404).json({ error: "Item not found" });
