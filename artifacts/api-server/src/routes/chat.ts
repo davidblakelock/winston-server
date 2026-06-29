@@ -659,6 +659,8 @@ function buildMapsUrl(address: string): string {
 interface ExtractedReminder {
   reminderText: string;
   time: string | null; // null when the user gave no explicit time
+  dayOfWeek: string | null; // 'monday'–'sunday' when a specific day is named; null for relative phrases or recurring patterns
+  nextWeek: boolean; // true only when the literal word 'next' immediately precedes the day name
   isRecurring: boolean;
   recurring: string | null;
   forContact: string | null;
@@ -696,6 +698,8 @@ For relative times ("in 5 minutes", "in 1 hour", "in 30 minutes") add the offset
 Return ONLY valid JSON with these fields:
 - reminderText: string — what to remind about (concise, e.g. "call dentist")
 - time: string or null — 24-hour HH:MM format if an explicit or relative time is given (e.g. "15:00" for 3pm, "07:00" for 7am). Return null if NO time is mentioned at all — do NOT guess or use the current time.
+- dayOfWeek: string or null — lowercase day name ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday") if a specific day of the week is named (e.g. "next Monday", "this Friday", "on Tuesday"). Return null for relative phrases ("in 5 minutes", "tomorrow", "tonight") and for recurring patterns.
+- nextWeek: boolean — true ONLY when the literal word "next" immediately precedes the day name (e.g. "next Monday" → true). False for bare day names ("Monday"), "this Monday", "upcoming Monday", or any recurring pattern.
 - isRecurring: boolean
 - recurring: string or null — one of:
     null                   (one-time reminder)
@@ -713,16 +717,19 @@ Return ONLY valid JSON with these fields:
 - forContact: string or null — if the reminder is FOR another person (not the user themselves), their first name only (e.g. "Sarah"). Null if the reminder is for the user.
 
 Examples:
-"remind me to call Olivia at 3pm" → {"reminderText":"call Olivia","time":"15:00","isRecurring":false,"recurring":null,"forContact":null}
-"remind Sarah to call the dentist at 3pm" → {"reminderText":"call the dentist","time":"15:00","isRecurring":false,"recurring":null,"forContact":"Sarah"}
-"set a reminder for Sarah to take her medication at 8am" → {"reminderText":"take her medication","time":"08:00","isRecurring":false,"recurring":null,"forContact":"Sarah"}
-"remind me to take my medication every morning at 7am" → {"reminderText":"take my medication","time":"07:00","isRecurring":true,"recurring":"daily","forContact":null}
-"remind me to walk Winston every weekday at 8am" → {"reminderText":"walk Winston","time":"08:00","isRecurring":true,"recurring":"weekdays","forContact":null}
-"remind me every Tuesday and Thursday at 6am to stretch" → {"reminderText":"stretch","time":"06:00","isRecurring":true,"recurring":"weekly:tue,thu","forContact":null}
-"remind me every Monday at 9am" → {"reminderText":"...","time":"09:00","isRecurring":true,"recurring":"weekly:mon","forContact":null}
-"remind me on the 15th of every month at noon to pay rent" → {"reminderText":"pay rent","time":"12:00","isRecurring":true,"recurring":"monthly:15","forContact":null}
-"remind me in 5 minutes" (current time 14:30) → {"reminderText":"...","time":"14:35","isRecurring":false,"recurring":null,"forContact":null}
-"remind me to take my medicine" (no time given) → {"reminderText":"take my medicine","time":null,"isRecurring":false,"recurring":null,"forContact":null}`,
+"remind me to call Olivia at 3pm" → {"reminderText":"call Olivia","time":"15:00","dayOfWeek":null,"nextWeek":false,"isRecurring":false,"recurring":null,"forContact":null}
+"remind Sarah to call the dentist at 3pm" → {"reminderText":"call the dentist","time":"15:00","dayOfWeek":null,"nextWeek":false,"isRecurring":false,"recurring":null,"forContact":"Sarah"}
+"set a reminder for Sarah to take her medication at 8am" → {"reminderText":"take her medication","time":"08:00","dayOfWeek":null,"nextWeek":false,"isRecurring":false,"recurring":null,"forContact":"Sarah"}
+"remind me to take my medication every morning at 7am" → {"reminderText":"take my medication","time":"07:00","dayOfWeek":null,"nextWeek":false,"isRecurring":true,"recurring":"daily","forContact":null}
+"remind me to walk Winston every weekday at 8am" → {"reminderText":"walk Winston","time":"08:00","dayOfWeek":null,"nextWeek":false,"isRecurring":true,"recurring":"weekdays","forContact":null}
+"remind me every Tuesday and Thursday at 6am to stretch" → {"reminderText":"stretch","time":"06:00","dayOfWeek":null,"nextWeek":false,"isRecurring":true,"recurring":"weekly:tue,thu","forContact":null}
+"remind me every Monday at 9am" → {"reminderText":"remind me","time":"09:00","dayOfWeek":null,"nextWeek":false,"isRecurring":true,"recurring":"weekly:mon","forContact":null}
+"remind me on the 15th of every month at noon to pay rent" → {"reminderText":"pay rent","time":"12:00","dayOfWeek":null,"nextWeek":false,"isRecurring":true,"recurring":"monthly:15","forContact":null}
+"remind me in 5 minutes" (current time 14:30) → {"reminderText":"remind me","time":"14:35","dayOfWeek":null,"nextWeek":false,"isRecurring":false,"recurring":null,"forContact":null}
+"remind me to take my medicine" (no time given) → {"reminderText":"take my medicine","time":null,"dayOfWeek":null,"nextWeek":false,"isRecurring":false,"recurring":null,"forContact":null}
+"remind me next Monday at 8am" → {"reminderText":"remind me","time":"08:00","dayOfWeek":"monday","nextWeek":true,"isRecurring":false,"recurring":null,"forContact":null}
+"remind me this Friday at noon" → {"reminderText":"remind me","time":"12:00","dayOfWeek":"friday","nextWeek":false,"isRecurring":false,"recurring":null,"forContact":null}
+"remind me tomorrow at 9am" → {"reminderText":"remind me","time":"09:00","dayOfWeek":null,"nextWeek":false,"isRecurring":false,"recurring":null,"forContact":null}`,
     messages: [{ role: "user", content: message }],
   });
 
@@ -780,6 +787,50 @@ function computeFireAt(timeStr: string, tz: string): Date {
 
   // Shift fake-UTC back to real UTC by adding the offset
   return new Date(candidateMs + offsetMs);
+}
+
+function resolveNextDayOfWeek(dayOfWeek: string, timeStr: string, tz: string, nextWeek: boolean): Date {
+  const DAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+  const target = DAY_NAMES.indexOf(dayOfWeek.toLowerCase());
+  if (target === -1) return computeFireAt(timeStr, tz); // unknown day → fall back
+
+  const [desiredH, desiredM] = timeStr.split(":").map(Number);
+  const now = new Date();
+
+  // Get wall-clock date components in tz (same pattern as computeFireAt)
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  const p = Object.fromEntries(fmt.formatToParts(now).map((x) => [x.type, x.value]));
+  const tzYear  = parseInt(p.year,   10);
+  const tzMonth = parseInt(p.month,  10) - 1; // 0-indexed
+  const tzDay   = parseInt(p.day,    10);
+  const tzHour  = parseInt(p.hour,   10);
+  const tzMin   = parseInt(p.minute, 10);
+
+  // Today's day-of-week in tz (noon UTC anchor avoids DST midnight ambiguity)
+  const today = new Date(Date.UTC(tzYear, tzMonth, tzDay, 12, 0, 0)).getUTCDay();
+
+  let daysUntil = (target - today + 7) % 7;
+  if (daysUntil === 0) daysUntil = 7; // same weekday as today → skip to next week
+
+  // "next Monday" said on a Sunday (daysUntil=1) should resolve to 8 days, not tomorrow
+  if (nextWeek && daysUntil <= 1) daysUntil += 7;
+
+  // Compute UTC↔wall offset at current moment (same as computeFireAt)
+  const localNowMs = Date.UTC(tzYear, tzMonth, tzDay, tzHour, tzMin, 0);
+  const nowTruncMs = now.getTime() - (now.getSeconds() * 1000 + now.getMilliseconds());
+  const offsetMs = nowTruncMs - localNowMs;
+
+  // Build target wall-clock date (today + daysUntil days) at desired time, then shift to real UTC
+  const targetWallMs = Date.UTC(tzYear, tzMonth, tzDay + daysUntil, desiredH, desiredM, 0);
+  return new Date(targetWallMs + offsetMs);
 }
 
 function buildBaseSystemPrompt(
@@ -4387,7 +4438,9 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
 
         // For recurring reminders with specific day patterns (weekly:tue,thu, monthly:15, etc.)
         // use nextOccurrenceForPattern to compute the FIRST correct fire date.
-        // For one-time or "daily"/"weekdays"/"weekends" reminders, computeFireAt is sufficient.
+        // For one-time reminders naming a specific day ("next Monday", "this Friday"),
+        // use resolveNextDayOfWeek so the date is computed server-side, not by the LLM.
+        // For all other one-time reminders, computeFireAt is sufficient.
         const recurringPattern = extracted.recurring;
         const needsPatternScheduling =
           extracted.isRecurring &&
@@ -4396,7 +4449,9 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
 
         const fireAt = needsPatternScheduling
           ? nextOccurrenceForPattern(recurringPattern!, resolvedTime, "America/Chicago")
-          : computeFireAt(resolvedTime, "America/Chicago");
+          : extracted.dayOfWeek && !extracted.isRecurring
+            ? resolveNextDayOfWeek(extracted.dayOfWeek, resolvedTime, "America/Chicago", extracted.nextWeek ?? false)
+            : computeFireAt(resolvedTime, "America/Chicago");
 
         const [hh, mm] = resolvedTime.split(":").map(Number);
         const displayTime = new Date(0);
