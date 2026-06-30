@@ -1027,6 +1027,7 @@ router.put("/lists/:listName/content", async (req: Request, res: Response) => {
 
 // PUT /api/lists/:listName/:id — update an existing item's text, url, and/or reminder_time
 router.put("/lists/:listName/:id", async (req: Request, res: Response) => {
+  (req as any).log?.info({ params: req.params, body: req.body }, "[Lists PUT] Raw request received");
   const userName = await authenticate(req, res);
   if (!userName) return;
   const { listName, id } = req.params;
