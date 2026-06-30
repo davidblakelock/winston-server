@@ -114,9 +114,9 @@ app.listen(port, async (err) => {
       logger.warn("[Firebase] FIREBASE_SERVICE_ACCOUNT_JSON not set — FCM unavailable");
     } else {
       const serviceAccount = JSON.parse(raw) as Record<string, unknown>;
-      const { default: admin } = await import("firebase-admin");
-      if (!admin.apps.length) {
-        admin.initializeApp({ credential: admin.credential.cert(serviceAccount as Parameters<typeof admin.credential.cert>[0]) });
+      const { initializeApp, cert, getApps } = await import("firebase-admin/app");
+      if (!getApps().length) {
+        initializeApp({ credential: cert(serviceAccount as Parameters<typeof cert>[0]) });
       }
       logger.info({ projectId: serviceAccount.project_id }, "[Firebase] Admin SDK initialised OK");
     }
