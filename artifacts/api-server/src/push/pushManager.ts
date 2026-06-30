@@ -195,6 +195,39 @@ async function recordTokenFailure(expoPushToken: string, errorCode: string): Pro
   );
 }
 
+// ── FCM push token management ─────────────────────────────────────────────────
+
+export async function saveFcmToken(
+  userName: string,
+  fcmToken: string,
+  deviceId?: string
+): Promise<{ action: "inserted" | "updated" }> {
+  const { rows } = await query<{ xmax: string }>(
+    `INSERT INTO fcm_push_tokens (user_name, fcm_token, device_id, updated_at)
+     VALUES ($1, $2, $3, now())
+     ON CONFLICT (fcm_token) DO UPDATE SET
+       user_name  = EXCLUDED.user_name,
+       device_id  = EXCLUDED.device_id,
+       updated_at = now()
+     RETURNING xmax::text`,
+    [userName, fcmToken, deviceId ?? null]
+  );
+  const action = rows[0]?.xmax === "0" ? "inserted" : "updated";
+  logger.info({ userName, deviceId: deviceId ?? null, action }, "[FCM Push] Token saved");
+  return { action };
+}
+
+export async function getFcmTokens(userName = NATIVE_USER): Promise<string[]> {
+  const { rows } = await query<{ fcm_token: string }>(
+    `SELECT DISTINCT ON (device_id) fcm_token
+       FROM fcm_push_tokens
+      WHERE user_name = $1
+      ORDER BY device_id, updated_at DESC`,
+    [userName]
+  );
+  return rows.map((r) => r.fcm_token);
+}
+
 export async function getExpoTokens(userName = NATIVE_USER): Promise<string[]> {
   // Return only the most-recently-updated token per device_id so stale tokens
   // from previous app installs/re-installs don't receive (and fail) every send.

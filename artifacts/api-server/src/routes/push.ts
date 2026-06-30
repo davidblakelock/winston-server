@@ -17,6 +17,7 @@ import {
   saveExpoToken,
   removeExpoToken,
   getExpoTokens,
+  saveFcmToken,
 } from "../push/pushManager.js";
 import { logger } from "../lib/logger.js";
 import { tryAuthenticate, NATIVE_USER, resolveUserAlias } from "../auth/middleware.js";
@@ -55,6 +56,31 @@ router.post("/push/expo-token", async (req, res) => {
   } catch (err) {
     logger.error({ err }, "[Expo Push] Failed to save token");
     res.status(500).json({ error: "Failed to save Expo push token" });
+  }
+});
+
+// POST /api/push/fcm-token — register a native FCM token from the native app
+router.post("/push/fcm-token", async (req, res) => {
+  const authedUser = await tryAuthenticate(req);
+  const { fcmToken, userName: bodyUserName, deviceId } = req.body as {
+    fcmToken?: string;
+    userName?: string;
+    deviceId?: string;
+  };
+  const userName = authedUser ?? (resolveUserAlias(bodyUserName ?? "") || NATIVE_USER);
+
+  if (!fcmToken || typeof fcmToken !== "string" || !fcmToken.trim()) {
+    res.status(400).json({ error: "Missing or empty fcmToken" });
+    return;
+  }
+
+  try {
+    const { action } = await saveFcmToken(userName, fcmToken.trim(), deviceId);
+    logger.info({ userName, deviceId, action }, "[FCM Push] Token registered");
+    res.json({ success: true, action });
+  } catch (err) {
+    logger.error({ err }, "[FCM Push] Failed to save token");
+    res.status(500).json({ error: "Failed to save FCM token" });
   }
 });
 

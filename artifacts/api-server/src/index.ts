@@ -715,4 +715,21 @@ app.listen(port, async (err) => {
   } catch (e) {
     logger.warn({ err: e }, "Startup migration warning: watched_shows dedup");
   }
+
+  // Create fcm_push_tokens table for native FCM token storage.
+  try {
+    await query(`
+      CREATE TABLE IF NOT EXISTS fcm_push_tokens (
+        id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        user_name text NOT NULL,
+        fcm_token text NOT NULL UNIQUE,
+        device_id text,
+        created_at timestamptz DEFAULT now(),
+        updated_at timestamptz DEFAULT now()
+      )
+    `);
+    logger.info("Startup migration: fcm_push_tokens table ready");
+  } catch (e) {
+    logger.warn({ err: e }, "Startup migration warning: fcm_push_tokens table");
+  }
 });
