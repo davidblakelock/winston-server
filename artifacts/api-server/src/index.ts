@@ -763,4 +763,46 @@ app.listen(port, async (err) => {
   } catch (e) {
     logger.warn({ err: e }, "Startup migration warning: profile_items notes column");
   }
+
+  // Create medication_reminder_times table for per-medication scheduled times.
+  try {
+    await query(`
+      CREATE TABLE IF NOT EXISTS medication_reminder_times (
+        id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        medication_id integer NOT NULL REFERENCES medications(id) ON DELETE CASCADE,
+        reminder_time text NOT NULL,
+        created_at timestamptz DEFAULT now()
+      )
+    `);
+    logger.info("Startup migration: medication_reminder_times table ready");
+  } catch (e) {
+    logger.warn({ err: e }, "Startup migration warning: medication_reminder_times table");
+  }
+
+  // Unique index — prevents duplicate times per medication, also makes the backfill ON CONFLICT safe.
+  try {
+    await query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS medication_reminder_times_med_time_uidx
+        ON medication_reminder_times (medication_id, reminder_time)
+    `);
+    logger.info("Startup migration: medication_reminder_times unique index ready");
+  } catch (e) {
+    logger.warn({ err: e }, "Startup migration warning: medication_reminder_times unique index");
+  }
+
+  // One-time backfill: seed one row per existing medication that has a non-null reminder_time.
+  // ON CONFLICT DO NOTHING makes this idempotent — safe on every subsequent startup.
+  try {
+    const { rows: seeded } = await query<{ id: number }>(`
+      INSERT INTO medication_reminder_times (medication_id, reminder_time)
+      SELECT id, reminder_time
+        FROM medications
+       WHERE reminder_time IS NOT NULL
+      ON CONFLICT (medication_id, reminder_time) DO NOTHING
+      RETURNING id
+    `);
+    logger.info({ seeded: seeded.length }, "Startup migration: medication_reminder_times backfill complete");
+  } catch (e) {
+    logger.warn({ err: e }, "Startup migration warning: medication_reminder_times backfill");
+  }
 });
