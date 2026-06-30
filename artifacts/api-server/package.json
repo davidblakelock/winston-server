@@ -19,6 +19,7 @@
     "cors": "^2",
     "drizzle-orm": "catalog:",
     "express": "^5",
+    "firebase-admin": "^14.1.0",
     "garmin-connect": "^1.6.2",
     "googleapis": "^171.4.0",
     "multer": "^2.1.1",

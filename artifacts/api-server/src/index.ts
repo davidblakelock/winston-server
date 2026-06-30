@@ -107,6 +107,23 @@ app.listen(port, async (err) => {
     logger.info({ envCheck }, "[ENV] All critical environment variables present");
   }
 
+  // ── Firebase Admin SDK diagnostic — confirm FIREBASE_SERVICE_ACCOUNT_JSON loads ─
+  try {
+    const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+    if (!raw) {
+      logger.warn("[Firebase] FIREBASE_SERVICE_ACCOUNT_JSON not set — FCM unavailable");
+    } else {
+      const serviceAccount = JSON.parse(raw) as Record<string, unknown>;
+      const { default: admin } = await import("firebase-admin");
+      if (!admin.apps.length) {
+        admin.initializeApp({ credential: admin.credential.cert(serviceAccount as Parameters<typeof admin.credential.cert>[0]) });
+      }
+      logger.info({ projectId: serviceAccount.project_id }, "[Firebase] Admin SDK initialised OK");
+    }
+  } catch (e) {
+    logger.error({ err: e }, "[Firebase] Admin SDK init FAILED — check FIREBASE_SERVICE_ACCOUNT_JSON");
+  }
+
   // ── Explicit DB backend probe — logs which backend resolved at startup ────────
   try {
     const { rows: probeRows } = await query<{ ok: number }>(`SELECT 1 AS ok`);
