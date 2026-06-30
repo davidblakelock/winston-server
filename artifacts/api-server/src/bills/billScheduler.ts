@@ -3,6 +3,7 @@ import { logger } from "../lib/logger.js";
 import { getActiveUsers } from "../onboarding/onboardingManager.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
 import { sendPushToAll } from "../push/pushManager.js";
+import { sendFcmNotification } from "../push/fcmSender.js";
 import { query } from "../db.js";
 import {
   getBills,
@@ -122,40 +123,40 @@ async function checkBillReminders(): Promise<void> {
       const dueDateISO = nextDueDate.toISOString().split("T")[0];
       const amountLabel = bill.amount ? ` · $${bill.amount}` : "";
 
-      await sendPushToAll(
+      sendPushToAll(
         {
           title: `${bill.name}${amountLabel} due ${daysUntil === 0 ? "today" : `in ${daysUntil} day${daysUntil === 1 ? "" : "s"}`}`,
           body,
           tag: `bill-${bill.id}`,
-          notificationType: "bill-reminder",
-          // "bill-action" → native app shows: "Paid ✓" and "Remind me tomorrow"
-          // Paid ✓         → POST /api/bills/paid              { billId }
-          // Remind me tmrw → POST /api/bills/remind-tomorrow   { billId }
+          notificationType: "bill",
           categoryIdentifier: "bill-action",
           requireInteraction: true,
-          // Top-level data fields — forwarded in the Expo push data envelope so the
-          // native action handler can fire the correct endpoint in the background.
           billId: bill.id,
           billName: bill.name,
           amount: bill.amount ?? "",
           dueDateISO,
-          // Explicit action endpoint hints — native handler reads these from data
-          // so the correct API path is never hardcoded in the app.
           actionTaken: "/api/bills/paid",
           actionSnooze: "/api/bills/remind-tomorrow",
-          // companionMessage as a plain object (NOT a stringified string) — some
-          // native action handlers JSON.parse it, others read it directly.
-          companionMessage: {
-            billId: bill.id,
-            billName: bill.name,
-            amount: bill.amount ?? "",
-            dueDateISO,
-            actionTaken: "/api/bills/paid",
-            actionSnooze: "/api/bills/remind-tomorrow",
-          },
         },
         userName
-      );
+      ).catch((err: unknown) => {
+        logger.error({ err, billId: bill.id, userName }, "[BILLS] Expo push delivery failed");
+      });
+
+      sendFcmNotification({
+        userName,
+        notificationType: "bill",
+        title: `${bill.name}${amountLabel} due ${daysUntil === 0 ? "today" : `in ${daysUntil} day${daysUntil === 1 ? "" : "s"}`}`,
+        body,
+        data: {
+          billId: String(bill.id),
+          billName: bill.name,
+          amount: bill.amount ?? "",
+          dueDateISO,
+        },
+      }).catch((err: unknown) => {
+        logger.error({ err, billId: bill.id, userName }, "[BILLS] FCM push delivery failed");
+      });
 
       logger.info(
         { billId: bill.id, name: bill.name, daysUntil, userName },

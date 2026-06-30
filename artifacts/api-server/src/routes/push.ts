@@ -270,7 +270,7 @@ router.post("/push/test-bill", async (req, res) => {
       title: `${bill.name}${amountLabel} due ${daysUntil === 0 ? "today" : `in ${daysUntil} day${daysUntil === 1 ? "" : "s"}`}`,
       body: buildBillReminderMessage(bill, displayName),
       tag: `bill-${bill.id}`,
-      notificationType: "bill-reminder",
+      notificationType: "bill",
       categoryIdentifier: "bill-action",
       requireInteraction: true,
       billId: bill.id,
@@ -279,14 +279,6 @@ router.post("/push/test-bill", async (req, res) => {
       dueDateISO,
       actionTaken: "/api/bills/paid",
       actionSnooze: "/api/bills/remind-tomorrow",
-      companionMessage: {
-        billId: bill.id,
-        billName: bill.name,
-        amount: bill.amount ?? "",
-        dueDateISO,
-        actionTaken: "/api/bills/paid",
-        actionSnooze: "/api/bills/remind-tomorrow",
-      },
     };
 
     const dbTokens = await getExpoTokens();

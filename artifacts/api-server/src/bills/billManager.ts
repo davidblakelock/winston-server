@@ -274,49 +274,33 @@ query(`ALTER TABLE financial_obligations ADD COLUMN IF NOT EXISTS paid_through_d
 
 // ── Billing cycle helpers ──────────────────────────────────────────────────────
 
-/**
- * Returns the ISO date string (YYYY-MM-DD, CT) of the start of the current
- * billing cycle — i.e. the most recent past occurrence of the bill's due day.
- * If paid_through_date >= this date, the bill is considered paid this cycle.
- */
+// Returns the start of the current unpaid window: 7 days before the next
+// monthly due date. paidThroughDate >= this date means "paid this cycle."
 export function computeCycleStartDate(bill: Bill, now: Date = new Date()): string {
   const tz = "America/Chicago";
   const todayStr = now.toLocaleDateString("en-CA", { timeZone: tz });
-  const [todayY, todayM, todayD] = todayStr.split("-").map(Number);
+  const [todayY, todayM] = todayStr.split("-").map(Number);
 
-  function clampDay(year: number, month: number, day: number): string {
-    const maxDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
-    return new Date(Date.UTC(year, month - 1, Math.min(day, maxDay), 12))
-      .toLocaleDateString("en-CA", { timeZone: tz });
+  // setUTCDate handles negative offsets by rolling back into the prior month
+  // (e.g. dueDay=5 → windowStart is Dec 29 of the previous month).
+  function windowStart(year: number, month: number): string {
+    const d = new Date(Date.UTC(year, month - 1, bill.dueDay, 12));
+    d.setUTCDate(d.getUTCDate() - 7);
+    return d.toLocaleDateString("en-CA", { timeZone: tz });
   }
 
-  if (bill.frequency === "monthly") {
-    // If we're on or past the due day this month, cycle started this month
-    if (todayD >= bill.dueDay) {
-      return clampDay(todayY, todayM, bill.dueDay);
-    }
-    // Otherwise cycle started last month
-    const prevM = todayM === 1 ? 12 : todayM - 1;
-    const prevY = todayM === 1 ? todayY - 1 : todayY;
-    return clampDay(prevY, prevM, bill.dueDay);
+  const nextM = todayM === 12 ? 1 : todayM + 1;
+  const nextY = todayM === 12 ? todayY + 1 : todayY;
+  const prevM = todayM === 1 ? 12 : todayM - 1;
+  const prevY = todayM === 1 ? todayY - 1 : todayY;
+
+  // Check next month first: when dueDay ≤ 7, the 7-day window for the next
+  // due date may have already opened in the current calendar month.
+  for (const [y, m] of [[nextY, nextM], [todayY, todayM], [prevY, prevM]] as [number, number][]) {
+    const w = windowStart(y, m);
+    if (w <= todayStr) return w;
   }
-
-  const months = (bill.dueMonths ?? "")
-    .split(",")
-    .map((s) => parseInt(s.trim(), 10))
-    .filter((n) => n >= 1 && n <= 12)
-    .sort((a, b) => a - b);
-
-  if (!months.length) return "1970-01-01";
-
-  // Find the most recent past due month/day
-  for (let yr = todayY; yr >= todayY - 1; yr--) {
-    for (let i = months.length - 1; i >= 0; i--) {
-      const candidate = clampDay(yr, months[i], bill.dueDay);
-      if (candidate <= todayStr) return candidate;
-    }
-  }
-  return "1970-01-01";
+  return windowStart(prevY, prevM);
 }
 
 // ── Bill payment log ──────────────────────────────────────────────────────────
