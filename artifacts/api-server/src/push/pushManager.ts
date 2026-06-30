@@ -217,6 +217,22 @@ export async function saveFcmToken(
   return { action };
 }
 
+export async function removeFcmToken(fcmToken: string, reason = "explicit-delete"): Promise<void> {
+  const { rows } = await query<{ id: number; user_name: string; device_id: string | null }>(
+    `DELETE FROM fcm_push_tokens WHERE fcm_token = $1 RETURNING id, user_name, device_id`,
+    [fcmToken]
+  );
+  if (rows.length > 0) {
+    const r = rows[0];
+    logger.warn(
+      { id: r.id, userName: r.user_name, deviceId: r.device_id, tokenTail: "…" + fcmToken.slice(-20), reason },
+      `[FCM Push] Token DELETED from fcm_push_tokens — reason: ${reason}`
+    );
+  } else {
+    logger.info({ tokenTail: "…" + fcmToken.slice(-20), reason }, "[FCM Push] removeFcmToken: token not found (already gone)");
+  }
+}
+
 export async function getFcmTokens(userName = NATIVE_USER): Promise<string[]> {
   const { rows } = await query<{ fcm_token: string }>(
     `SELECT DISTINCT ON (device_id) fcm_token
