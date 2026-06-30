@@ -17,7 +17,6 @@ import { clearStaticBriefingContext, clearCachedBriefing } from "../morning/brie
 import { preFetchMorningBriefing } from "../morning/briefingPregenerate.js";
 import { generateFreshBriefing } from "../morning/briefingFresh.js";
 import { getUserSettings, upsertUserSettings } from "../stoic/stoicManager.js";
-import { getVipContacts, addVipContact, removeVipContact, isVipSender } from "../push/notificationVips.js";
 import { getEmailScanSettings, setEmailScanSettings } from "../email/emailScanSettings.js";
 import { getVoiceOptions } from "../voices/voiceOptionsManager.js";
 
@@ -598,60 +597,6 @@ router.get("/briefing/morning", async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "[FreshBriefing] Generation failed");
     res.status(500).json({ error: "Briefing generation failed — please try again." });
-  }
-});
-
-// ── GET /api/settings/vip-contacts ───────────────────────────────────────────
-router.get("/settings/vip-contacts", async (req, res) => {
-  const userName = await authenticate(req, res);
-  if (!userName) return;
-  try {
-    const vips = await getVipContacts(userName);
-    res.json({ vips });
-  } catch (err) {
-    req.log.error({ err }, "[VIPs] Failed to get VIP contacts");
-    res.status(500).json({ error: "Failed to get VIP contacts" });
-  }
-});
-
-// ── POST /api/settings/vip-contacts ──────────────────────────────────────────
-router.post("/settings/vip-contacts", express.json(), async (req, res) => {
-  const userName = await authenticate(req, res);
-  if (!userName) return;
-  const { contactName, contactPhone, contactEmail } = req.body as {
-    contactName?: unknown; contactPhone?: unknown; contactEmail?: unknown;
-  };
-  if (typeof contactName !== "string" || !contactName.trim()) {
-    res.status(400).json({ error: "contactName is required" });
-    return;
-  }
-  try {
-    const vip = await addVipContact(
-      userName,
-      contactName.trim(),
-      typeof contactPhone === "string" ? contactPhone : undefined,
-      typeof contactEmail === "string" ? contactEmail : undefined
-    );
-    res.status(201).json({ vip });
-  } catch (err) {
-    req.log.error({ err }, "[VIPs] Failed to add VIP contact");
-    res.status(500).json({ error: "Failed to add VIP contact" });
-  }
-});
-
-// ── DELETE /api/settings/vip-contacts/:id ────────────────────────────────────
-router.delete("/settings/vip-contacts/:id", async (req, res) => {
-  const userName = await authenticate(req, res);
-  if (!userName) return;
-  const id = parseInt(req.params["id"] ?? "", 10);
-  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
-  try {
-    const removed = await removeVipContact(userName, id);
-    if (!removed) { res.status(404).json({ error: "VIP contact not found" }); return; }
-    res.json({ ok: true });
-  } catch (err) {
-    req.log.error({ err }, "[VIPs] Failed to remove VIP contact");
-    res.status(500).json({ error: "Failed to remove VIP contact" });
   }
 });
 

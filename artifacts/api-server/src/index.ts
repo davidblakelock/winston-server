@@ -51,7 +51,6 @@ import { ensureTripPlansTable } from "./travel/tripPlanningManager";
 import { ensureContextReminderColumns } from "./reminders/contextReminderManager";
 
 
-import { ensureNotificationVipsTable } from "./push/notificationVips";
 import { startBackgroundEmailScanner } from "./email/backgroundEmailScanner";
 import { startRecordsArchiver } from "./records/recordsArchiver";
 import { ensureSavedPlacesTable } from "./location/geofenceManager";
@@ -385,12 +384,7 @@ app.listen(port, async (err) => {
     logger.warn({ err: e }, "Context reminder columns initialization warning");
   }
 
-  try {
-    await ensureNotificationVipsTable();
-    logger.info("[startup] notification VIPs table ready");
-  } catch (e) {
-    logger.warn({ err: e }, "Notification intelligence tables initialization warning");
-  }
+
 
   try {
     await ensureSavedPlacesTable();
