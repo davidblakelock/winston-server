@@ -430,13 +430,8 @@ async function runScan(userName: string): Promise<void> {
 
   // ── Order scan ────────────────────────────────────────────────────────────
   if (shouldScanOrders) {
-    // If no orders have ever been found for this user, always look back 30 days —
-    // even if last_scan_at exists (it may have been set before auth was working).
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    const existingOrders = await getOrders(userName);
-    // Only treat as "has real orders" if at least one has a tracking number.
-    const hasTrackedOrders = existingOrders.some((o) => !!o.tracking_number);
-    const since = hasTrackedOrders ? (lastOrderScan ?? thirtyDaysAgo) : thirtyDaysAgo;
+    const since = lastOrderScan ?? thirtyDaysAgo;
     logger.info({ userName, since: since.toISOString(), hasTrackedOrders }, "[BgEmailScanner] Starting order scan");
 
     const orderQ = buildOrderQuery(since);
