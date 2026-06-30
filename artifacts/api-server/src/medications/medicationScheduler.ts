@@ -28,13 +28,11 @@ export function startMedicationScheduler(): void {
     _running = true;
     try {
       const localTime = getCurrentLocalTime();
-
       const users = await getActiveUsers().catch(() => []);
       if (!users.length) return;
 
       for (const user of users) {
-        const { userName, companionName } = user;
-        const companion = companionName ?? "Winston";
+        const { userName } = user;
 
         const remindersEnabled = await getMedicationRemindersEnabled(userName).catch(() => true);
         if (!remindersEnabled) continue;
@@ -42,60 +40,58 @@ export function startMedicationScheduler(): void {
         const meds = await getMedications(userName).catch(() => []);
         if (!meds.length) continue;
 
-        const reminderTimes = [...new Set(meds.map((m) => m.reminderTime))];
+        // Upfront check: once the user confirms taken, suppress every remaining time slot for today.
+        let taken = false;
+        try {
+          taken = await hasTakenMedicationsToday(userName);
+        } catch (err) {
+          logger.warn({ err, userName }, "[MED] hasTakenMedicationsToday threw — treating as not taken");
+        }
+        if (taken) {
+          logger.info({ userName, localTime }, "[MED] Medications already taken today — suppressing all remaining times");
+          continue;
+        }
 
-        for (const rt of reminderTimes) {
-          // Only fire within a morning window (reminder time → 11:00 AM max).
-          // Without this ceiling, a server restart in the afternoon/evening will
-          // re-fire because the production DB has no "sent today" record from dev.
-          if (localTime < rt || localTime >= "11:00") continue;
+        // Flatten reminderTimes arrays across all meds, deduplicated by unique time value.
+        const uniqueTimes = [
+          ...new Set(meds.flatMap((m) => m.reminderTimes ?? [m.reminderTime])),
+        ];
 
+        for (const time of uniqueTimes) {
+          if (localTime < time) continue;
+
+          // Dedup key is per user+time — each time slot fires independently.
+          const reminderKey = `${userName}:${time}`;
           let alreadySent = false;
           try {
-            alreadySent = await hasMedicationReminderSentToday(userName, "initial");
+            alreadySent = await hasMedicationReminderSentToday(userName, reminderKey);
           } catch (err) {
-            // Table missing — skip rather than fire. Far safer than firing twice.
-            logger.warn({ err, userName, rt }, "[MED] hasMedicationReminderSentToday threw — skipping tick");
+            logger.warn({ err, userName, time }, "[MED] hasMedicationReminderSentToday threw — skipping tick");
             continue;
           }
 
           if (alreadySent) {
-            logger.info({ userName, rt, localTime }, "[MED] Reminder already sent today — skipping");
+            logger.info({ userName, time, localTime }, "[MED] Reminder already sent for this time today — skipping");
             continue;
           }
 
-          let taken = false;
-          try {
-            taken = await hasTakenMedicationsToday(userName);
-          } catch (err) {
-            logger.warn({ err, userName }, "[MED] hasTakenMedicationsToday threw — treating as not taken");
-          }
+          sendPushToAll({
+            title: "Time for your medications 💊",
+            body: "Have you taken your medications?",
+            tag: "medication-morning",
+            notificationType: "medication",
+            categoryIdentifier: "medication-action",
+            requireInteraction: true,
+            actionTaken: "/api/medications/confirm-taken",
+            actionSnooze: "/api/medications/snooze-reminder",
+            snoozeMinutes: 60,
+          }, userName).catch((err: unknown) => {
+            logger.error({ err, userName, time }, "[MED] Push delivery failed");
+          });
+          logger.info({ time, userName }, "[MED] Reminder fired");
 
-          if (!taken) {
-            sendPushToAll({
-              title: "Time for your medications 💊",
-              body: "Good morning — have you taken your medications?",
-              tag: "medication-morning",
-              notificationType: "medication",
-              // "medication-action" → native app shows: "Taken ✓" and "Remind in 30 min"
-              // Taken ✓      → POST /api/medications/confirm-taken
-              // Remind in 60 → POST /api/medications/snooze-reminder { snoozeMinutes: 60 }
-              categoryIdentifier: "medication-action",
-              requireInteraction: true,
-              actionTaken: "/api/medications/confirm-taken",
-              actionSnooze: "/api/medications/snooze-reminder",
-              snoozeMinutes: 60,
-            }, userName).catch((err: unknown) => {
-              logger.error({ err, userName }, "[MED] Push delivery failed");
-            });
-            logger.info({ time: rt, userName }, "[MED] Morning reminder fired");
-          } else {
-            logger.info({ userName, rt }, "[MED] Skipping push — medications already taken today");
-          }
-
-          // Mark sent regardless of taken status — prevents re-firing on server restart
-          await logMedicationReminderSent(userName, "initial").catch((err: unknown) => {
-            logger.warn({ err, userName }, "[MED] logMedicationReminderSent failed");
+          await logMedicationReminderSent(userName, reminderKey).catch((err: unknown) => {
+            logger.warn({ err, userName, time }, "[MED] logMedicationReminderSent failed");
           });
         }
       }

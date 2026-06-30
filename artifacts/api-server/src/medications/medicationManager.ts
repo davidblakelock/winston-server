@@ -639,7 +639,7 @@ export async function logMedicationsTaken(meds: Medication[], userName = NATIVE_
 
 export async function hasMedicationReminderSentToday(
   userName: string,
-  type: "initial" | "followup"
+  type: string
 ): Promise<boolean> {
   const { rows } = await query(
     `SELECT 1 FROM medication_reminder_log
@@ -651,7 +651,7 @@ export async function hasMedicationReminderSentToday(
 
 export async function logMedicationReminderSent(
   userName: string,
-  type: "initial" | "followup"
+  type: string
 ): Promise<void> {
   await query(
     `INSERT INTO medication_reminder_log (user_name, reminder_date, reminder_type)
