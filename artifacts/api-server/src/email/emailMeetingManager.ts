@@ -143,10 +143,11 @@ interface ScanBatchSummaryInput {
   filedOrdersCount: number;
   urgentAlerts: { subject: string; summary: string }[];
   fyiItems: { subject: string; summary: string }[];
+  confirmedMeetings: { from: string; subject: string; proposedDateTimeStr: string | null }[];
 }
 
 export async function buildScanSummary(input: ScanBatchSummaryInput): Promise<string | null> {
-  const { pendingReplies, pendingMeetings, filedRecordsCount, filedOrdersCount, urgentAlerts, fyiItems } = input;
+  const { pendingReplies, pendingMeetings, filedRecordsCount, filedOrdersCount, urgentAlerts, fyiItems, confirmedMeetings } = input;
 
   if (
     pendingReplies.length === 0 &&
@@ -154,7 +155,8 @@ export async function buildScanSummary(input: ScanBatchSummaryInput): Promise<st
     filedRecordsCount === 0 &&
     filedOrdersCount === 0 &&
     urgentAlerts.length === 0 &&
-    fyiItems.length === 0
+    fyiItems.length === 0 &&
+    confirmedMeetings.length === 0
   ) {
     return null;
   }
@@ -170,6 +172,10 @@ export async function buildScanSummary(input: ScanBatchSummaryInput): Promise<st
   const meetingsBlock = pendingMeetings.length > 0
     ? pendingMeetings.map(m => `- ${m.from} wants to meet${m.proposedDateTimeStr ? ` at ${m.proposedDateTimeStr}` : ' (no specific time proposed)'}`).join('\n')
     : 'None';
+
+  const confirmedBlock = confirmedMeetings.length > 0
+    ? confirmedMeetings.map(m => `- ${m.from} confirmed: "${m.subject}"${m.proposedDateTimeStr ? ` (${m.proposedDateTimeStr})` : ''}`).join('\n')
+    : null;
 
   const fyiBlock = fyiItems.length > 0
     ? fyiItems.map(f => `- ${f.summary}`).join('\n')
@@ -189,7 +195,10 @@ ${repliesBlock}
 
 Meeting requests:
 ${meetingsBlock}
-${fyiBlock ? `
+${confirmedBlock ? `
+Confirmed plans (no reply needed, just acknowledge in passing):
+${confirmedBlock}
+` : ''}${fyiBlock ? `
 Routine notices (mention briefly at the end, don't dwell):
 ${fyiBlock}
 ` : ''}${filedLine ? `

@@ -191,17 +191,24 @@ async function handleMeeting(
   from: string,
   subject: string,
   result: ClassifiedEmail,
+  confirmedMeetings: { from: string; subject: string; proposedDateTimeStr: string | null }[],
 ): Promise<void> {
-  const existing = getPendingMeetingRequests();
-  const existingIds = new Set(existing.map((m) => m.gmailId));
-  if (existingIds.has(msgId)) return;
-
-  // Parse organizer name and email from the raw From header
+  // Parse organizer name and email from the raw From header — used by both paths
   const fromMatch = from.match(/^(.*?)\s*<([^>]+)>$/);
   const organizerName = fromMatch
     ? fromMatch[1].trim().replace(/^["']|["']$/g, "") || senderDisplayName(from)
     : senderDisplayName(from);
   const organizerEmail = fromMatch ? fromMatch[2].trim() : from.trim();
+
+  if (result.meeting?.isConfirmation) {
+    confirmedMeetings.push({ from: organizerName, subject, proposedDateTimeStr: result.meeting.proposedDateTimeStr ?? null });
+    logger.info({ from: organizerName, proposedDateTimeStr: result.meeting.proposedDateTimeStr }, "[BgEmailScanner] Meeting confirmation noted");
+    return;
+  }
+
+  const existing = getPendingMeetingRequests();
+  const existingIds = new Set(existing.map((m) => m.gmailId));
+  if (existingIds.has(msgId)) return;
 
   const meeting = result.meeting;
   const proposedDateOnly  = meeting?.proposedDateTimeStr?.split(" ")[0] ?? null;
@@ -419,6 +426,7 @@ async function runScan(userName: string): Promise<void> {
   let filedRecordsCount = 0;
   const urgentAlerts: { subject: string; summary: string }[] = [];
   const fyiItems: { subject: string; summary: string }[] = [];
+  const confirmedMeetings: { from: string; subject: string; proposedDateTimeStr: string | null }[] = [];
 
   // ── Order scan ────────────────────────────────────────────────────────────
   if (shouldScanOrders) {
@@ -459,7 +467,7 @@ async function runScan(userName: string): Promise<void> {
     const { skipped: socialSkipped } = await fetchAndClassify(
       gmail, socialQ, 30, 20, userName,
       async (u, id, from, subject, body, res) => {
-        if (res.action === "meeting_request") { await handleMeeting(u, id, from, subject, res); meetings++; }
+        if (res.action === "meeting_request") { await handleMeeting(u, id, from, subject, res, confirmedMeetings); meetings++; }
         else if (res.action === "save_to_records") { await handleRecord(u, id, body, res); records++; filedRecordsCount++; }
         else if (res.action === "needs_reply") { await handleSocial(u, id, from, res); socials++; }
         else if (res.action === "urgent_alert") { urgentAlerts.push({ subject, summary: res.summary ?? subject }); }
@@ -476,7 +484,7 @@ async function runScan(userName: string): Promise<void> {
   // ── Batch summary push ────────────────────────────────────────────────────
   const summaryReplies = getPendingReplyEmails();
   const summaryMeetings = getPendingMeetingRequests();
-  logger.info({ userName, pendingRepliesCount: summaryReplies.length, pendingReplies: summaryReplies, pendingMeetingsCount: summaryMeetings.length, filedRecordsCount, filedOrdersCount, urgentAlertCount: urgentAlerts.length, fyiCount: fyiItems.length }, "[BgEmailScanner] Pending state before summary");
+  logger.info({ userName, pendingRepliesCount: summaryReplies.length, pendingReplies: summaryReplies, pendingMeetingsCount: summaryMeetings.length, filedRecordsCount, filedOrdersCount, urgentAlertCount: urgentAlerts.length, fyiCount: fyiItems.length, confirmedMeetingsCount: confirmedMeetings.length }, "[BgEmailScanner] Pending state before summary");
 
   const summary = await buildScanSummary({
     pendingReplies: summaryReplies,
@@ -485,6 +493,7 @@ async function runScan(userName: string): Promise<void> {
     filedOrdersCount,
     urgentAlerts,
     fyiItems,
+    confirmedMeetings,
   }).catch(() => null);
 
   if (summary) {

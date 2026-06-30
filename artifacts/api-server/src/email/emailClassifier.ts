@@ -43,6 +43,7 @@ export interface ClassifiedEmail {
   meeting?: {
     proposedDateTimeStr: string | null;
     isOpenEnded: boolean;
+    isConfirmation: boolean;
   };
 }
 
@@ -109,7 +110,7 @@ Decide what action this email warrants, if any. Return ONLY valid JSON:
 Rules for choosing action:
 - "save_to_records": a genuine forward-looking booking or registration with a specific date, location, or confirmation number — hotel, restaurant reservation, car rental, flight or train ticket, warranty registration, home service appointment (plumber, HVAC, etc.), vehicle service appointment. Subscription charge receipts and recurring billing are NOT records — use "fyi" instead.
 - "save_to_orders": shipping, delivery, or order status update from a retailer or carrier.
-- "meeting_request": a real person personally asking to schedule time — a call, meeting, lunch, appointment.
+- "meeting_request": a real person communicating about a meeting or appointment — either (a) a NEW request where the user hasn't responded yet and a time may or may not be set, or (b) a CONFIRMATION that an already-proposed plan is locked in (time, place, and attendees decided; no response needed, just acknowledge it happened). Set isConfirmation=false for new requests, isConfirmation=true when the meeting is already confirmed.
 - "needs_reply": anything from a real person that reasonably expects a response — a question, a catch-up message, a personal note — even if casual.
 - "urgent_alert": anything genuinely urgent requiring the user's immediate awareness — fraud alerts, suspicious login warnings, account security notices, unrecognized transaction alerts, identity theft warnings. Always flag these prominently; never drop them silently.
 - "fyi": a recurring charge, subscription renewal, or routine non-urgent account/balance notice — gym membership charge, SaaS billing, streaming renewal, routine bank activity summary. Worth briefly mentioning, not stored anywhere.
