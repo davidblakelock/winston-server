@@ -107,6 +107,14 @@ app.listen(port, async (err) => {
     logger.info({ envCheck }, "[ENV] All critical environment variables present");
   }
 
+  // ── Explicit DB backend probe — logs which backend resolved at startup ────────
+  try {
+    const { rows: probeRows } = await query<{ ok: number }>(`SELECT 1 AS ok`);
+    logger.info({ ok: probeRows[0]?.ok === 1 }, "[startup] DB backend probe complete — using Supabase REST");
+  } catch (e) {
+    logger.error({ err: e }, "[startup] DB backend probe FAILED — check SUPABASE_URL / SUPABASE_SERVICE_KEY");
+  }
+
   // ── One-time: migrate any rows still stored under legacy user_name 'David' ──
   // The session may have been created before the canonical name was set to
   // 'davidblakelock'. We sweep every user-data table on startup so stale rows

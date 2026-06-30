@@ -15,8 +15,9 @@ import type pg from "pg";
 const SUPABASE_URL = process.env.SUPABASE_URL ?? "";
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY ?? "";
 
-// Resolved once at startup by probeSupabase()
+// Resolved once at startup by probeSupabase(); shared Promise prevents concurrent probes
 let _useSupabase: boolean | null = null;
+let _probePromise: Promise<boolean> | null = null;
 
 async function probeSupabase(): Promise<boolean> {
   if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) return false;
@@ -29,7 +30,7 @@ async function probeSupabase(): Promise<boolean> {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ sql_text: "SELECT 1 AS ok" }),
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(15000),
     });
     if (res.ok) {
       const body = (await res.json()) as { rows?: unknown[] };
@@ -50,11 +51,13 @@ async function probeSupabase(): Promise<boolean> {
   }
 }
 
-// Probe once, then cache
+// All concurrent callers share a single probe Promise — prevents race condition where
+// module-level query() calls in pushManager.ts fire multiple concurrent probes,
+// one of which may fail and permanently cache _useSupabase = false.
 async function useSupabase(): Promise<boolean> {
-  if (_useSupabase === null) {
-    _useSupabase = await probeSupabase();
-  }
+  if (_useSupabase !== null) return _useSupabase;
+  if (!_probePromise) _probePromise = probeSupabase();
+  _useSupabase = await _probePromise;
   return _useSupabase;
 }
 
