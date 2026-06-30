@@ -79,12 +79,12 @@ export function startMedicationScheduler(): void {
               notificationType: "medication",
               // "medication-action" → native app shows: "Taken ✓" and "Remind in 30 min"
               // Taken ✓      → POST /api/medications/confirm-taken
-              // Remind in 30 → POST /api/medications/snooze-reminder { snoozeMinutes: 30 }
+              // Remind in 60 → POST /api/medications/snooze-reminder { snoozeMinutes: 60 }
               categoryIdentifier: "medication-action",
               requireInteraction: true,
               actionTaken: "/api/medications/confirm-taken",
               actionSnooze: "/api/medications/snooze-reminder",
-              snoozeMinutes: 30,
+              snoozeMinutes: 60,
             }, userName).catch((err: unknown) => {
               logger.error({ err, userName }, "[MED] Push delivery failed");
             });

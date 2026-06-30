@@ -212,14 +212,14 @@ router.post("/push/test-medication", async (req, res) => {
       body: "Good morning — have you taken your medications?",
       tag: "medication-morning",
       notificationType: "medication",
-      // "medication-action" → native app shows: "Taken ✓" and "Remind in 30 min" buttons.
+      // "medication-action" → native app shows: "Taken ✓" and "Remind in 60 min" buttons.
       // Taken ✓      → POST /api/medications/confirm-taken
-      // Remind in 30 → POST /api/medications/snooze-reminder { snoozeMinutes: 30 }
+      // Remind in 60 → POST /api/medications/snooze-reminder { snoozeMinutes: 60 }
       categoryIdentifier: "medication-action",
       requireInteraction: true,
       actionTaken: "/api/medications/confirm-taken",
       actionSnooze: "/api/medications/snooze-reminder",
-      snoozeMinutes: 30,
+      snoozeMinutes: 60,
     };
 
     const dbTokens = await getExpoTokens();

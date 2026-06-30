@@ -362,7 +362,7 @@ router.post("/medications/snooze-reminder", express.json({ limit: "1mb" }), asyn
       req.body?.notificationData?.snoozeMinutes;
     const snoozeMinutes = typeof rawSnooze === "number"
       ? Math.max(1, Math.min(rawSnooze, 480))
-      : 30;
+      : 60;
     const fireAt = new Date(Date.now() + snoozeMinutes * 60 * 1000);
     // Pass pushCategoryId so the re-fired reminder retains the medication action buttons
     // ("Taken ✓" and "Remind in 30 min") instead of firing as a generic reminder-action.
@@ -380,7 +380,7 @@ router.post("/medications/snooze-reminder", express.json({ limit: "1mb" }), asyn
         tag: "medication-morning",
         actionTaken: "/api/medications/confirm-taken",
         actionSnooze: "/api/medications/snooze-reminder",
-        snoozeMinutes: 30,
+        snoozeMinutes: 60,
       },
     });
     req.log.info({ userName, fireAt, snoozeMinutes, reminderId: reminder.id }, "[MEDS] Snooze reminder created");
