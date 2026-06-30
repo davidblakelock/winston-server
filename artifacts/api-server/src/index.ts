@@ -740,4 +740,10 @@ app.listen(port, async (err) => {
   } catch (e) {
     logger.warn({ err: e }, "Startup migration warning: fcm_push_tokens table");
   }
+  try {
+    await query(`ALTER TABLE profile_items ADD COLUMN IF NOT EXISTS notes TEXT`);
+    logger.info("Startup migration: profile_items.notes column ready");
+  } catch (e) {
+    logger.warn({ err: e }, "Startup migration warning: profile_items notes column");
+  }
 });

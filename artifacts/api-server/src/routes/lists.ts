@@ -279,8 +279,8 @@ router.get("/lists/restaurants", async (req: Request, res: Response) => {
   if (!userName) return;
   res.setHeader("Cache-Control", "no-store");
   try {
-    const { rows } = await query<{ id: number; name: string; detail: string | null; url: string | null; booking_platform: string | null; created_at: string }>(
-      `SELECT id, name, detail, url, booking_platform, created_at
+    const { rows } = await query<{ id: number; name: string; detail: string | null; url: string | null; booking_platform: string | null; notes: string | null; created_at: string }>(
+      `SELECT id, name, detail, url, booking_platform, notes, created_at
        FROM profile_items
        WHERE user_name = $1 AND category = 'restaurants'
        ORDER BY created_at DESC`,
@@ -293,6 +293,7 @@ router.get("/lists/restaurants", async (req: Request, res: Response) => {
         detail: r.detail ?? null,
         url: r.url ?? null,
         booking_platform: r.booking_platform ?? null,
+        notes: r.notes ?? null,
         created_at: r.created_at,
       })),
     });
@@ -397,33 +398,35 @@ router.delete("/lists/restaurants/:id", async (req: Request, res: Response) => {
   }
 });
 
-// PUT /api/lists/restaurants/:id — update a restaurant name and/or url
+// PUT /api/lists/restaurants/:id — update a restaurant name, url, and/or notes
 router.put("/lists/restaurants/:id", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
   const { id } = req.params;
-  const { item, url: rawUrl } = req.body as { item?: string; url?: string };
+  const { item, url: rawUrl, notes } = req.body as { item?: string; url?: string; notes?: string | null };
   if (!item?.trim()) {
     res.status(400).json({ error: "item is required" });
     return;
   }
   const manualUrl = rawUrl?.trim() || null;
   const manualPlatform = manualUrl ? detectBookingPlatform(manualUrl) : null;
+  const notesVal = notes !== undefined ? (notes?.trim() || null) : undefined;
   try {
-    const { rows } = await query<{ id: number; name: string; url: string | null; booking_platform: string | null }>(
+    const { rows } = await query<{ id: number; name: string; url: string | null; booking_platform: string | null; notes: string | null }>(
       `UPDATE profile_items
        SET name = $1,
            url = COALESCE($2, url),
-           booking_platform = CASE WHEN $2 IS NOT NULL THEN $3 ELSE booking_platform END
-       WHERE id = $4 AND user_name = $5 AND category = 'restaurants'
-       RETURNING id, name, url, booking_platform`,
-      [item.trim(), manualUrl, manualPlatform, id, userName]
+           booking_platform = CASE WHEN $2 IS NOT NULL THEN $3 ELSE booking_platform END,
+           notes = COALESCE($4, notes)
+       WHERE id = $5 AND user_name = $6 AND category = 'restaurants'
+       RETURNING id, name, url, booking_platform, notes`,
+      [item.trim(), manualUrl, manualPlatform, notesVal ?? null, id, userName]
     );
     if (rows.length === 0) {
       res.status(404).json({ error: "Restaurant not found" });
       return;
     }
-    res.json({ item: { id: rows[0].id, item_text: rows[0].name, url: rows[0].url, booking_platform: rows[0].booking_platform } });
+    res.json({ item: { id: rows[0].id, item_text: rows[0].name, url: rows[0].url, booking_platform: rows[0].booking_platform, notes: rows[0].notes } });
   } catch (err) {
     req.log.warn({ err }, "Restaurants list PUT error");
     res.status(500).json({ error: "Failed to update restaurant" });
