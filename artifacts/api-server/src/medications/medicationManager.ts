@@ -11,6 +11,7 @@ export interface Medication {
   name: string;
   dosage: string | null;
   reminderTime: string;
+  reminderTimes?: string[];
   active: boolean;
   frequency: string | null;
   timeOfDay: string | null;
@@ -38,16 +39,23 @@ export async function getMedications(
     name: string;
     dosage: string | null;
     reminder_time: string;
+    reminder_times: string[] | null;
     active: boolean;
     frequency: string | null;
     time_of_day: string | null;
     prescribing_doctor: string | null;
     notes: string | null;
   }>(
-    `SELECT id, name, dosage, reminder_time, active, frequency, time_of_day, prescribing_doctor, notes
-     FROM medications
-     WHERE user_name = $1 ${includeInactive ? "" : "AND active = true"}
-     ORDER BY reminder_time ASC, name ASC`,
+    `SELECT m.id, m.name, m.dosage, m.reminder_time, m.active, m.frequency, m.time_of_day, m.prescribing_doctor, m.notes,
+            COALESCE(
+              (SELECT json_agg(mrt.reminder_time ORDER BY mrt.reminder_time)
+               FROM medication_reminder_times mrt
+               WHERE mrt.medication_id = m.id),
+              json_build_array(m.reminder_time)
+            ) AS reminder_times
+     FROM medications m
+     WHERE m.user_name = $1 ${includeInactive ? "" : "AND m.active = true"}
+     ORDER BY m.reminder_time ASC, m.name ASC`,
     [userName]
   );
   return rows.map((r) => ({
@@ -55,6 +63,7 @@ export async function getMedications(
     name: r.name,
     dosage: r.dosage,
     reminderTime: r.reminder_time,
+    reminderTimes: Array.isArray(r.reminder_times) ? r.reminder_times : [r.reminder_time],
     active: r.active,
     frequency: r.frequency,
     timeOfDay: r.time_of_day,

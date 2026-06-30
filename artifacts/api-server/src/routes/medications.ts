@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import express from "express";
 import { authenticate } from "../auth/middleware.js";
+import { query } from "../db.js";
 import {
   getMedications,
   addMedication,
@@ -62,6 +63,18 @@ async function broadcastMedicationInteractions(
 }
 
 const router: IRouter = Router();
+
+// Replace all reminder times for a medication — delete existing rows then re-insert.
+// Called after any add/update that includes a reminderTimes array.
+async function replaceReminderTimes(medicationId: number, times: string[]): Promise<void> {
+  await query(`DELETE FROM medication_reminder_times WHERE medication_id = $1`, [medicationId]);
+  for (const t of times) {
+    await query(
+      `INSERT INTO medication_reminder_times (medication_id, reminder_time) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+      [medicationId, t]
+    );
+  }
+}
 
 // ── GET /api/medications ──────────────────────────────────────────────────────
 // Returns medications for the user. Pass ?all=true to include inactive.
@@ -146,11 +159,12 @@ router.post("/medications/add", express.json({ limit: "1mb" }), async (req, res)
   if (!userName) return;
 
   const {
-    name, dosage, reminderTime, frequency, timeOfDay, prescribingDoctor, notes,
+    name, dosage, reminderTime, reminderTimes, frequency, timeOfDay, prescribingDoctor, notes,
   } = req.body as {
     name?: string;
     dosage?: string;
     reminderTime?: string;
+    reminderTimes?: string[];
     frequency?: string;
     timeOfDay?: string;
     prescribingDoctor?: string;
@@ -161,8 +175,17 @@ router.post("/medications/add", express.json({ limit: "1mb" }), async (req, res)
     res.status(400).json({ error: "name is required" });
     return;
   }
-  if (reminderTime && !/^\d{2}:\d{2}$/.test(reminderTime)) {
-    res.status(400).json({ error: "reminderTime must be HH:MM format, e.g. '08:00'" });
+
+  // Resolve reminder times: prefer reminderTimes[], fall back to single reminderTime, then default.
+  const resolvedTimes: string[] =
+    Array.isArray(reminderTimes) && reminderTimes.length > 0
+      ? reminderTimes
+      : reminderTime !== undefined
+      ? [reminderTime]
+      : ["08:00"];
+
+  if (resolvedTimes.some((t) => !/^\d{2}:\d{2}$/.test(t))) {
+    res.status(400).json({ error: "Each reminderTime must be HH:MM format, e.g. '08:00'" });
     return;
   }
 
@@ -171,7 +194,7 @@ router.post("/medications/add", express.json({ limit: "1mb" }), async (req, res)
       {
         name: name.trim(),
         dosage: dosage?.trim(),
-        reminderTime: reminderTime ?? "08:00",
+        reminderTime: resolvedTimes[0],
         frequency: frequency?.trim(),
         timeOfDay: timeOfDay?.trim(),
         prescribingDoctor: prescribingDoctor?.trim(),
@@ -180,6 +203,10 @@ router.post("/medications/add", express.json({ limit: "1mb" }), async (req, res)
       userName
     );
     req.log.info({ name: name.trim(), alreadyExists: result.alreadyExists }, "[MEDS] POST /medications/add");
+
+    if (result.medication) {
+      await replaceReminderTimes(result.medication.id, resolvedTimes);
+    }
 
     // Auto-check drug interactions after adding — run against all active meds including the new one.
     // Included in the response AND broadcast via SSE so the native app panel always refreshes.
@@ -192,7 +219,7 @@ router.post("/medications/add", express.json({ limit: "1mb" }), async (req, res)
       ok: true,
       source: "add" as const,
       alreadyExists: result.alreadyExists,
-      medication: result.medication ?? null,
+      medication: result.medication ? { ...result.medication, reminderTimes: resolvedTimes } : null,
       interactions: interactionResult.interactions,
       avoid: interactionResult.avoid,
       sideEffects: interactionResult.sideEffects,
@@ -409,11 +436,12 @@ router.put("/medications/:id", express.json({ limit: "1mb" }), async (req, res) 
   }
   const id = parseInt(req.params.id, 10);
   const {
-    name, dosage, reminderTime, frequency, timeOfDay, prescribingDoctor, notes, active,
+    name, dosage, reminderTime, reminderTimes, frequency, timeOfDay, prescribingDoctor, notes, active,
   } = req.body as {
     name?: string;
     dosage?: string | null;
     reminderTime?: string;
+    reminderTimes?: string[];
     frequency?: string | null;
     timeOfDay?: string | null;
     prescribingDoctor?: string | null;
@@ -421,15 +449,23 @@ router.put("/medications/:id", express.json({ limit: "1mb" }), async (req, res) 
     active?: boolean;
   };
 
-  if (reminderTime && !/^\d{2}:\d{2}$/.test(reminderTime)) {
-    res.status(400).json({ error: "reminderTime must be HH:MM format, e.g. '08:00'" });
+  // Resolve reminder times only if the caller sent something time-related.
+  const resolvedTimes: string[] | null =
+    Array.isArray(reminderTimes) && reminderTimes.length > 0
+      ? reminderTimes
+      : reminderTime !== undefined
+      ? [reminderTime]
+      : null;
+
+  if (resolvedTimes?.some((t) => !/^\d{2}:\d{2}$/.test(t))) {
+    res.status(400).json({ error: "Each reminderTime must be HH:MM format, e.g. '08:00'" });
     return;
   }
 
   try {
     const medication = await updateMedication(
       id,
-      { name: name?.trim(), dosage, reminderTime, frequency, timeOfDay, prescribingDoctor, notes, active },
+      { name: name?.trim(), dosage, reminderTime: resolvedTimes?.[0], frequency, timeOfDay, prescribingDoctor, notes, active },
       userName
     );
     if (!medication) {
@@ -437,6 +473,10 @@ router.put("/medications/:id", express.json({ limit: "1mb" }), async (req, res) 
       return;
     }
     req.log.info({ id, userName }, "[MEDS] PUT /medications/:id");
+
+    if (resolvedTimes) {
+      await replaceReminderTimes(id, resolvedTimes);
+    }
 
     // Re-check interactions and broadcast SSE after any update (name change, deactivation, etc.)
     // so the native app panel stays in sync without a manual refresh.
@@ -449,7 +489,7 @@ router.put("/medications/:id", express.json({ limit: "1mb" }), async (req, res) 
     res.json({
       ok: true,
       source: "update" as const,
-      medication,
+      medication: resolvedTimes ? { ...medication, reminderTimes: resolvedTimes } : medication,
       interactions: interactionResult.interactions,
       avoid: interactionResult.avoid,
       sideEffects: interactionResult.sideEffects,
