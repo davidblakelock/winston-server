@@ -1,7 +1,7 @@
 import cron from "node-cron";
 import { logger } from "../lib/logger.js";
 import { getActiveUsers } from "../onboarding/onboardingManager.js";
-import { sendPushToAll } from "../push/pushManager.js";
+import { sendFcmNotification } from "../push/fcmSender.js";
 import { getProvidersWithUpcomingDue } from "./providerManager.js";
 
 const TZ = "America/Chicago";
@@ -34,18 +34,13 @@ async function checkProviderDueAlerts(): Promise<void> {
 
         const daysLabel = days === 0 ? "today" : days === 1 ? "tomorrow" : `in ${days} days`;
 
-        await sendPushToAll(
-          {
-            title: "Appointment Due",
-            body: `Your appointment with ${provider.name}${provider.company ? ` (${provider.company})` : ""} is ${daysLabel}. Want me to help schedule it?`,
-            tag: `provider-due-${provider.id}`,
-            notificationType: "provider-reminder",
-            requireInteraction: true,
-            action: "navigate",
-            screen: "/providers",
-          },
-          userName
-        );
+        await sendFcmNotification({
+          userName,
+          notificationType: "provider-reminder",
+          title: "Appointment Due",
+          body: `Your appointment with ${provider.name}${provider.company ? ` (${provider.company})` : ""} is ${daysLabel}. Want me to help schedule it?`,
+          data: { action: "navigate", screen: "/providers" },
+        });
 
         logger.info(
           { userName, providerId: provider.id, name: provider.name, daysLabel },

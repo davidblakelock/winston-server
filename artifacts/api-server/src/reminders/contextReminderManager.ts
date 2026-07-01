@@ -2,7 +2,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { createReminder, type ReminderRow } from "./reminderManager.js";
-import { sendPushToAll } from "../push/pushManager.js";
+import { sendFcmNotification } from "../push/fcmSender.js";
+import { getProfile, getCompanionDisplayName } from "../onboarding/onboardingManager.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -162,15 +163,15 @@ async function fireTrigger(
   );
 
   // Send push
-  await sendPushToAll(
-    {
-      title: `⏰ Reminder — ${companionName}`,
-      body: reminder.reminder_text,
-      tag: `context-reminder-${reminder.id}`,
-      notificationType: "reminder",
-    },
-    userName
-  ).catch((err: unknown) => {
+  const profile = await getProfile(userName).catch(() => null);
+  const personaName = getCompanionDisplayName(profile?.companionPersona, profile?.companionName);
+  await sendFcmNotification({
+    userName,
+    notificationType: "reminder",
+    title: "⏰ Reminder",
+    body: `${personaName} — ${reminder.reminder_text}`,
+    data: { reminderId: String(reminder.id) },
+  }).catch((err: unknown) => {
     logger.warn({ err, reminderId: reminder.id }, "[ContextReminder] Push delivery failed");
   });
 

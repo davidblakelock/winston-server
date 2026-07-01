@@ -2,7 +2,8 @@ import cron from "node-cron";
 import { query } from "../db.js";
 import { broadcast, broadcastToUser } from "./sseStore.js";
 import { sendPushToAll } from "../push/pushManager.js";
-import { getProfile } from "../onboarding/onboardingManager.js";
+import { sendFcmNotification } from "../push/fcmSender.js";
+import { getProfile, getCompanionDisplayName } from "../onboarding/onboardingManager.js";
 import { logger } from "../lib/logger.js";
 import { nextOccurrenceForPattern } from "./recurringUtils.js";
 
@@ -64,7 +65,7 @@ export function startScheduler(): void {
 
         // ── 3. Look up companion name (used in both paths below) ──────────
         const profile = await getProfile(reminder.user_name).catch(() => null);
-        const companionName = profile?.companionName ?? "your companion";
+        const companionName = getCompanionDisplayName(profile?.companionPersona, profile?.companionName);
 
         // ── 4a. Contact push — if this reminder is FOR a contact with Winston ──
         // Look up contact_push_links: finds the linked Winston user for the named contact.
@@ -121,28 +122,20 @@ export function startScheduler(): void {
         const extraPushData: Record<string, unknown> = reminder.push_data
           ? (() => { try { return JSON.parse(reminder.push_data) as Record<string, unknown>; } catch { return {}; } })()
           : {};
-        await sendPushToAll({
+        await sendFcmNotification({
+          userName: reminder.user_name,
+          notificationType: reminder.push_category_id === "bill-action" ? "bill-reminder" : "reminder",
           title: reminder.for_contact
             ? `✅ Reminder sent to ${reminder.for_contact} — ${companionName}`
             : reminder.push_category_id === "bill-action"
               ? `Bill Due Soon`
               : `⏰ Reminder — ${companionName}`,
           body: reminder.reminder_text,
-          tag: reminder.push_category_id === "bill-action"
-            ? (() => {
-                try {
-                  const d = reminder.push_data ? JSON.parse(reminder.push_data) as Record<string, unknown> : {};
-                  const cm = d.companionMessage ? JSON.parse(d.companionMessage as string) as Record<string, unknown> : {};
-                  return cm.billId ? `bill-${cm.billId}` : `reminder-${reminder.id}`;
-                } catch { return `reminder-${reminder.id}`; }
-              })()
-            : `reminder-${reminder.id}`,
-          reminderId: reminder.id,
-          notificationType: reminder.push_category_id === "bill-action" ? "bill-reminder" : "reminder",
-          categoryIdentifier: reminder.push_category_id ?? "reminder-action",
-          requireInteraction: !reminder.for_contact,
-          ...extraPushData,
-        }, reminder.user_name);
+          data: {
+            reminderId: String(reminder.id),
+            ...Object.fromEntries(Object.entries(extraPushData).map(([k, v]) => [k, String(v)])),
+          },
+        });
 
         logger.info({ id: reminder.id, text: reminder.reminder_text, forContact: reminder.for_contact ?? "self" }, "Reminder fired");
 

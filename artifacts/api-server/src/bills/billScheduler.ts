@@ -2,7 +2,6 @@ import cron from "node-cron";
 import { logger } from "../lib/logger.js";
 import { getActiveUsers } from "../onboarding/onboardingManager.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
-import { sendPushToAll } from "../push/pushManager.js";
 import { sendFcmNotification } from "../push/fcmSender.js";
 import { query } from "../db.js";
 import {
@@ -122,26 +121,6 @@ async function checkBillReminders(): Promise<void> {
 
       const dueDateISO = nextDueDate.toISOString().split("T")[0];
       const amountLabel = bill.amount ? ` · $${bill.amount}` : "";
-
-      sendPushToAll(
-        {
-          title: `${bill.name}${amountLabel} due ${daysUntil === 0 ? "today" : `in ${daysUntil} day${daysUntil === 1 ? "" : "s"}`}`,
-          body,
-          tag: `bill-${bill.id}`,
-          notificationType: "bill",
-          categoryIdentifier: "bill-action",
-          requireInteraction: true,
-          billId: bill.id,
-          billName: bill.name,
-          amount: bill.amount ?? "",
-          dueDateISO,
-          actionTaken: "/api/bills/paid",
-          actionSnooze: "/api/bills/remind-tomorrow",
-        },
-        userName
-      ).catch((err: unknown) => {
-        logger.error({ err, billId: bill.id, userName }, "[BILLS] Expo push delivery failed");
-      });
 
       sendFcmNotification({
         userName,

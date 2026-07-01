@@ -1,6 +1,6 @@
 import cron from "node-cron";
 import { broadcastToUser } from "../reminders/sseStore.js";
-import { sendPushToAll } from "../push/pushManager.js";
+import { sendFcmNotification } from "../push/fcmSender.js";
 import { logger } from "../lib/logger.js";
 import { getProfile, getActiveUsers, type CollectedData } from "../onboarding/onboardingManager.js";
 import {
@@ -230,19 +230,18 @@ async function checkDepartureAlertsForUser(userName: string): Promise<void> {
       mapsUrl,
     });
 
-    await sendPushToAll({
+    sendFcmNotification({
+      userName,
+      notificationType: "departure",
       title: `🚗 Leave by ${leaveTimeStr} — ${event.summary}`,
       body: pushBody,
-      tag: `departure-${userName}-${event.summary}`,
-      url: mapsUrl,             // web push click action
-      mapsUrl,                  // native app: open via Linking.openURL on tap
-      mapsDeepLink,             // compact Maps deep-link (preferred on mobile)
-      destination: location,    // raw destination for native app to build its own URL
-      notificationType: "departure",
-      categoryIdentifier: "departure-action",  // native app registered category for tap → Maps
-      requireInteraction: true,
-      action: "open_url",
-    }, userName).catch(() => {});
+      data: {
+        action: "open_url",
+        url: mapsUrl,
+        mapsDeepLink,
+        destination: location,
+      },
+    }).catch(() => {});
 
     await markAlertSent(event.summary, today, userName);
 

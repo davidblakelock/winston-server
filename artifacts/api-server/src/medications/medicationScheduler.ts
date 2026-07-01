@@ -1,5 +1,4 @@
 import cron from "node-cron";
-import { sendPushToAll } from "../push/pushManager.js";
 import { sendFcmNotification } from "../push/fcmSender.js";
 import {
   getMedications,
@@ -80,20 +79,6 @@ export function startMedicationScheduler(): void {
             logger.info({ userName, time, localTime }, "[MED] Reminder already sent for this time today — skipping");
             continue;
           }
-
-          sendPushToAll({
-            title: "Time for your medications 💊",
-            body: "Have you taken your medications?",
-            tag: "medication-morning",
-            notificationType: "medication",
-            categoryIdentifier: "medication-action",
-            requireInteraction: true,
-            actionTaken: "/api/medications/confirm-taken",
-            actionSnooze: "/api/medications/snooze-reminder",
-            snoozeMinutes: 60,
-          }, userName).catch((err: unknown) => {
-            logger.error({ err, userName, time }, "[MED] Expo push delivery failed");
-          });
 
           sendFcmNotification({
             userName,

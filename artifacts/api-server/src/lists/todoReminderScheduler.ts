@@ -1,6 +1,6 @@
 import cron from "node-cron";
 import { query } from "../db.js";
-import { sendPushToAll } from "../push/pushManager.js";
+import { sendFcmNotification } from "../push/fcmSender.js";
 import { logger } from "../lib/logger.js";
 
 interface TodoReminderRow {
@@ -37,18 +37,15 @@ export function startTodoReminderScheduler(): void {
         );
         if (!locked.rows.length) continue;
 
-        await sendPushToAll(
-          {
-            title: "Reminder",
-            body: `Just a reminder — ${item.item_text}`,
-            tag: `todo-reminder-${item.id}`,
-            notificationType: "reminder",
-            requireInteraction: true,
-            action: "navigate",
-            screen: "/lists?list=to+do",
-          },
-          item.user_name
-        );
+        sendFcmNotification({
+          userName: item.user_name,
+          notificationType: "reminder",
+          title: "Reminder",
+          body: `Just a reminder — ${item.item_text}`,
+          data: { screen: "/lists?list=to+do", action: "navigate" },
+        }).catch((err: unknown) => {
+          logger.error({ err, id: item.id }, "[TodoReminder] FCM push delivery failed");
+        });
 
         // Timezone note: reminder_time is stored as TIMESTAMPTZ (UTC).
         // computeFireAt() in chat.ts uses Intl.DateTimeFormat to convert

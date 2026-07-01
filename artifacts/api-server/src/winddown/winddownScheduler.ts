@@ -1,7 +1,7 @@
 import cron from "node-cron";
 import Anthropic from "@anthropic-ai/sdk";
 import { broadcastToUser } from "../reminders/sseStore.js";
-import { sendPushToAll } from "../push/pushManager.js";
+import { sendFcmNotification } from "../push/fcmSender.js";
 import {
   getSettings,
   hasFiredToday,
@@ -9,7 +9,7 @@ import {
   saveTonightMessage,
 } from "./winddownManager.js";
 
-import { getProfile, getActiveUsers, type CollectedData } from "../onboarding/onboardingManager.js";
+import { getProfile, getActiveUsers, getCompanionDisplayName, type CollectedData } from "../onboarding/onboardingManager.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 import { fetchTodayEvents, fetchTomorrowEvents } from "../google/calendar.js";
 import { getMoodForToday } from "../mood/moodManager.js";
@@ -208,7 +208,7 @@ export function startWinddownScheduler(): void {
         logger.info({ userName, time: settings.scheduledTime }, "Evening check-in initiated");
 
         const profile = await getProfile(userName).catch(() => null);
-        const companionName = profile?.companionName ?? "Your Companion";
+        const companionName = getCompanionDisplayName(profile?.companionPersona, profile?.companionName);
         const message = await generateOpeningMessage(companionName, userName);
 
         await saveTonightMessage(userName, message).catch((err) =>
@@ -219,15 +219,13 @@ export function startWinddownScheduler(): void {
 
         // Do NOT include autoSendMessage — the web app fetches /api/winddown/tonight-message
         // when the notification is tapped, so the pre-generated message is displayed directly.
-        sendPushToAll({
-          title: `🌙 Evening Check-In — ${companionName}`,
-          body: `Time for your Evening Check-In — how did your day go?`,
-          tag: "winddown",
+        sendFcmNotification({
+          userName,
           notificationType: "winddown",
-          requireInteraction: true,
-          action: "send_message",
-          message: "Evening Check In",
-        }, userName).catch(() => {});
+          title: "🌙 Evening Check-In",
+          body: `${companionName} here — how did your day go?`,
+          data: { action: "send_message", message: "Evening Check In" },
+        }).catch(() => {});
       }
     } catch (err) {
       logger.error({ err }, "Evening check-in scheduler error");
