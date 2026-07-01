@@ -7,7 +7,7 @@ import { upsertProfile } from "../onboarding/onboardingManager.js";
 import { isApifyApiKeyConfigured } from "../restaurants/apifyBooking.js";
 import { getResySession } from "../restaurants/bookingCredentialsManager.js";
 import { estimateDriveTime } from "../departure/departureManager.js";
-import { sendPushToAll } from "../push/pushManager.js";
+import { sendFcmNotification } from "../push/fcmSender.js";
 
 const router = Router();
 
@@ -462,13 +462,12 @@ router.post("/admin/test-push", express.json({ limit: "256kb" }), async (req: Re
   };
 
   if (type === "medication") {
-    const result = await sendPushToAll({
+    const result = await sendFcmNotification({
+      userName,
+      notificationType: "medication",
       title: "Medication Reminder",
       body: "Time to take your medications.",
-      tag: `test-medication-${Date.now()}`,
-      notificationType: "medication",
-      requireInteraction: true,
-    }, userName);
+    });
     req.log.info({ userName, sent: result.sent }, "[AdminTestPush] Medication test push sent");
     res.json({ ok: true, type: "medication", sent: result.sent });
     return;
@@ -478,18 +477,19 @@ router.post("/admin/test-push", express.json({ limit: "256kb" }), async (req: Re
     const name = billName ?? "Test Bill";
     const amt = amount ?? "$99.00";
     const due = dueDateISO ?? new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    const result = await sendPushToAll({
+    const result = await sendFcmNotification({
+      userName,
+      notificationType: "bill",
       title: "Bill Reminder",
       body: `${name} (${amt}) is due soon.`,
-      tag: `test-bill-${Date.now()}`,
-      notificationType: "bill-reminder",
-      requireInteraction: true,
-      billId: billId ?? 0,
-      billName: name,
-      amount: amt,
-      dueDateISO: due,
-    } as Parameters<typeof sendPushToAll>[0], userName);
-    req.log.info({ userName, sent: result.sent }, "[AdminTestPush] Bill-reminder test push sent");
+      data: {
+        billId: String(billId ?? 0),
+        billName: name,
+        amount: amt,
+        dueDateISO: due,
+      },
+    });
+    req.log.info({ userName, sent: result.sent }, "[AdminTestPush] Bill test push sent");
     res.json({ ok: true, type: "bill-reminder", sent: result.sent });
     return;
   }

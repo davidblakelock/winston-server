@@ -20,7 +20,8 @@ import {
   saveFcmToken,
 } from "../push/pushManager.js";
 import { logger } from "../lib/logger.js";
-import { tryAuthenticate, NATIVE_USER, resolveUserAlias } from "../auth/middleware.js";
+import { tryAuthenticate, authenticate, NATIVE_USER, resolveUserAlias } from "../auth/middleware.js";
+import { sendFcmNotification } from "../push/fcmSender.js";
 import { getAuthClientForUser } from "../google/oauth.js";
 import { fetchTodayEvents } from "../google/calendar.js";
 
@@ -199,59 +200,33 @@ router.get("/push/calendar-debug", async (req, res) => {
   res.json(result);
 });
 
-// POST /api/push/test-medication — send a test medication push to the native app
-// Accepts optional { token: "ExponentPushToken[...]" } to bypass the DB lookup.
-// Uses the same payload and message builder as the real medication scheduler.
+// POST /api/push/test-medication — send a test medication push to the authenticated user
 router.post("/push/test-medication", async (req, res) => {
-  const { sendPushToAll, sendPushToTokens, getExpoTokens, buildExpoMessages } = await import("../push/pushManager.js");
+  const userName = await authenticate(req, res);
+  if (!userName) return;
   try {
-    const { token: overrideToken } = req.body as { token?: string };
-
-    const pushPayload = {
+    const result = await sendFcmNotification({
+      userName,
+      notificationType: "medication",
       title: "Time for your medications 💊",
       body: "Good morning — have you taken your medications?",
-      tag: "medication-morning",
-      notificationType: "medication",
-      // "medication-action" → native app shows: "Taken ✓" and "Remind in 60 min" buttons.
-      // Taken ✓      → POST /api/medications/confirm-taken
-      // Remind in 60 → POST /api/medications/snooze-reminder { snoozeMinutes: 60 }
-      categoryIdentifier: "medication-action",
-      requireInteraction: true,
-      actionTaken: "/api/medications/confirm-taken",
-      actionSnooze: "/api/medications/snooze-reminder",
-      snoozeMinutes: 60,
-    };
-
-    const dbTokens = await getExpoTokens();
-    let result: { sent: number; failed: number };
-    if (overrideToken) {
-      result = await sendPushToTokens(pushPayload, [overrideToken]);
-    } else {
-      result = await sendPushToAll(pushPayload);
-    }
-
-    const tokens = overrideToken ? [overrideToken] : dbTokens;
-    const expoMessage = buildExpoMessages(pushPayload, tokens);
-
-    logger.info({ result, overrideToken: overrideToken ? "…" + overrideToken.slice(-20) : null }, "[Expo Push] Test medication push sent");
-    res.json({ ok: true, ...result, expoMessage, usingOverrideToken: !!overrideToken, dbTokenCount: dbTokens.length });
+    });
+    logger.info({ userName, ...result }, "[FCM Push] Test medication push sent");
+    res.json({ ok: true, ...result });
   } catch (err) {
-    logger.error({ err }, "[Expo Push] Test medication push failed");
+    logger.error({ err }, "[FCM Push] Test medication push failed");
     res.status(500).json({ error: "Failed to send test push" });
   }
 });
 
-// POST /api/push/test-bill — send a test bill-due push using the first upcoming active bill
-// Accepts optional { token: "ExponentPushToken[...]" } to bypass the DB lookup.
-// Uses the same payload and message builder as the real bill scheduler.
+// POST /api/push/test-bill — send a test bill push using the authenticated user's first upcoming bill
 router.post("/push/test-bill", async (req, res) => {
-  const { sendPushToAll, sendPushToTokens, getExpoTokens, buildExpoMessages } = await import("../push/pushManager.js");
+  const userName = await authenticate(req, res);
+  if (!userName) return;
   const { getUpcomingBills, computeNextDueDate, buildBillReminderMessage } = await import("../bills/billManager.js");
   const { getProfile } = await import("../onboarding/onboardingManager.js");
   try {
-    const { token: overrideToken } = req.body as { token?: string };
-
-    const upcoming = await getUpcomingBills(90, NATIVE_USER);
+    const upcoming = await getUpcomingBills(90, userName);
     if (!upcoming.length) {
       res.status(404).json({ error: "No upcoming active bills found" });
       return;
@@ -259,43 +234,29 @@ router.post("/push/test-bill", async (req, res) => {
 
     const bill = upcoming[0];
     const nextDueDate = computeNextDueDate(bill);
-    const profile = await getProfile(NATIVE_USER);
-    const displayName = profile?.name ?? "David";
+    const profile = await getProfile(userName);
+    const displayName = profile?.name ?? userName;
 
     const dueDateISO = nextDueDate.toISOString().split("T")[0];
     const daysUntil = bill.daysUntilDue ?? 0;
     const amountLabel = bill.amount ? ` · $${bill.amount}` : "";
 
-    const pushPayload = {
+    const result = await sendFcmNotification({
+      userName,
+      notificationType: "bill",
       title: `${bill.name}${amountLabel} due ${daysUntil === 0 ? "today" : `in ${daysUntil} day${daysUntil === 1 ? "" : "s"}`}`,
       body: buildBillReminderMessage(bill, displayName),
-      tag: `bill-${bill.id}`,
-      notificationType: "bill",
-      categoryIdentifier: "bill-action",
-      requireInteraction: true,
-      billId: bill.id,
-      billName: bill.name,
-      amount: bill.amount ?? "",
-      dueDateISO,
-      actionTaken: "/api/bills/paid",
-      actionSnooze: "/api/bills/remind-tomorrow",
-    };
-
-    const dbTokens = await getExpoTokens();
-    let result: { sent: number; failed: number };
-    if (overrideToken) {
-      result = await sendPushToTokens(pushPayload, [overrideToken]);
-    } else {
-      result = await sendPushToAll(pushPayload);
-    }
-
-    const tokens = overrideToken ? [overrideToken] : dbTokens;
-    const expoMessage = buildExpoMessages(pushPayload, tokens);
-
-    logger.info({ result, overrideToken: overrideToken ? "…" + overrideToken.slice(-20) : null }, "[Expo Push] Test bill push sent");
-    res.json({ ok: true, ...result, expoMessage, usingOverrideToken: !!overrideToken, dbTokenCount: dbTokens.length });
+      data: {
+        billId: String(bill.id),
+        billName: bill.name,
+        amount: bill.amount ?? "",
+        dueDateISO,
+      },
+    });
+    logger.info({ userName, ...result }, "[FCM Push] Test bill push sent");
+    res.json({ ok: true, ...result });
   } catch (err) {
-    logger.error({ err }, "[Expo Push] Test bill push failed");
+    logger.error({ err }, "[FCM Push] Test bill push failed");
     res.status(500).json({ error: "Failed to send test bill push" });
   }
 });
