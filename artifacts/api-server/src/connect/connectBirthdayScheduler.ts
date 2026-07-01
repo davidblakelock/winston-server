@@ -9,7 +9,7 @@
 import cron from "node-cron";
 import { logger } from "../lib/logger.js";
 import { getActiveUsers } from "../onboarding/onboardingManager.js";
-import { sendPushToAll } from "../push/pushManager.js";
+import { sendFcmNotification } from "../push/fcmSender.js";
 import { query } from "../db.js";
 
 const TZ = "America/Chicago";
@@ -93,16 +93,12 @@ async function checkBirthdayAlerts(): Promise<void> {
             if (days >= 0 && days <= 7) {
               const daysLabel =
                 days === 0 ? "today" : days === 1 ? "tomorrow" : `in ${days} days`;
-              await sendPushToAll(
-                {
-                  title: "Birthday Reminder",
-                  body: `A reminder — ${displayName}'s birthday is ${daysLabel}.`,
-                  tag: `birthday-${row.id}-${today}`,
-                  notificationType: "birthday-reminder",
-                  requireInteraction: false,
-                },
-                userName
-              );
+              await sendFcmNotification({
+                userName,
+                notificationType: "birthday-reminder",
+                title: "Birthday Reminder",
+                body: `A reminder — ${displayName}'s birthday is ${daysLabel}.`,
+              });
               logger.info(
                 { userName, connection: displayName, days },
                 "[ConnectBirthday] Birthday push sent"
@@ -121,16 +117,12 @@ async function checkBirthdayAlerts(): Promise<void> {
           if (days >= 0 && days <= 7) {
             const daysLabel =
               days === 0 ? "today" : days === 1 ? "tomorrow" : `in ${days} days`;
-            await sendPushToAll(
-              {
-                title: "Key Date Reminder",
-                body: `A reminder — ${displayName}'s ${kd.label} is ${daysLabel}.`,
-                tag: `keydate-${row.id}-${kd.label.replace(/\s+/g, "-")}-${today}`,
-                notificationType: "key-date-reminder",
-                requireInteraction: false,
-              },
-              userName
-            );
+            await sendFcmNotification({
+              userName,
+              notificationType: "key-date-reminder",
+              title: "Key Date Reminder",
+              body: `A reminder — ${displayName}'s ${kd.label} is ${daysLabel}.`,
+            });
             logger.info(
               { userName, connection: displayName, label: kd.label, days },
               "[ConnectBirthday] Key-date push sent"

@@ -11,7 +11,7 @@ import cron from "node-cron";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { getActiveUsers } from "../onboarding/onboardingManager.js";
-import { sendPushToAll } from "../push/pushManager.js";
+import { sendFcmNotification } from "../push/fcmSender.js";
 
 const TZ = "America/Chicago";
 
@@ -84,16 +84,12 @@ async function checkContactBirthdays(): Promise<void> {
           const body =
             `A reminder — ${row.display_name}'s ${eventLabel} is ${daysLabel}.`;
 
-          await sendPushToAll(
-            {
-              title: field === "birthday" ? "🎂 Birthday Reminder" : "💍 Anniversary Reminder",
-              body,
-              tag,
-              notificationType: "contact-date-reminder",
-              requireInteraction: false,
-            },
-            userName
-          );
+          await sendFcmNotification({
+            userName,
+            notificationType: "contact-date-reminder",
+            title: field === "birthday" ? "🎂 Birthday Reminder" : "💍 Anniversary Reminder",
+            body,
+          });
 
           // Log to dedup
           await query(

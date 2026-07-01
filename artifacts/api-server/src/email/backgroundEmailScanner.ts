@@ -23,7 +23,7 @@ import {
   updateLastOrderScanAt,
 } from "../orders/ordersManager.js";
 import { setPendingMeetingRequests, getPendingMeetingRequests, addPendingReplyEmails, getPendingReplyEmails, clearPendingReplyEmail, buildScanSummary } from "../email/emailMeetingManager.js";
-import { sendPushToAll } from "../push/pushManager.js";
+import { sendFcmNotification } from "../push/fcmSender.js";
 import { classifyEmail } from "../email/emailClassifier.js";
 import type { ClassifiedEmail } from "../email/emailClassifier.js";
 import type { DetectedMeetingRequest } from "../email/emailMeetingManager.js";
@@ -149,10 +149,13 @@ async function handleOrder(userName: string, msgId: string, result: ClassifiedEm
   const statusChanged = prevStatus !== null && prevStatus !== newStatus;
   if (statusChanged && NOTIFY_STATUSES.has(newStatus)) {
     const label = newStatus === "delivered" ? "Delivered" : "Out for delivery";
-    await sendPushToAll(
-      { title: "Package Update", body: `${label}: ${order.itemName} from ${order.retailer}`, tag: "order-update", action: "navigate", screen: "/orders" },
+    await sendFcmNotification({
       userName,
-    );
+      notificationType: "order-update",
+      title: "Package Update",
+      body: `${label}: ${order.itemName} from ${order.retailer}`,
+      data: { action: "navigate", screen: "/orders" },
+    });
     logger.info({ tracking: order.trackingNumber, prevStatus, newStatus }, "[BgEmailScanner] Order push sent");
   }
 }
@@ -493,10 +496,13 @@ async function runScan(userName: string): Promise<void> {
 
   if (summary) {
     logger.info({ userName, summary }, "[BgEmailScanner] Scan summary generated");
-    await sendPushToAll(
-      { title: "Inbox Update", body: summary, tag: "email-scan-summary", action: "send_message", message: "Check my email" },
+    await sendFcmNotification({
       userName,
-    );
+      notificationType: "email-scan-summary",
+      title: "Inbox Update",
+      body: summary,
+      data: { action: "send_message", message: "Check my email" },
+    });
     logger.info({ userName }, "[BgEmailScanner] Scan summary push sent");
   }
 }

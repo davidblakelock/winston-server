@@ -1,8 +1,8 @@
 import cron from "node-cron";
 import { broadcastToUser } from "../reminders/sseStore.js";
-import { sendPushToAll } from "../push/pushManager.js";
+import { sendFcmNotification } from "../push/fcmSender.js";
 import { logger } from "../lib/logger.js";
-import { getProfile, getActiveUsers, type CollectedData } from "../onboarding/onboardingManager.js";
+import { getProfile, getActiveUsers, getCompanionDisplayName, type CollectedData } from "../onboarding/onboardingManager.js";
 import { fetchTodayEvents, type CalendarEvent } from "../google/calendar.js";
 import { GoogleInvalidGrantError, clearGoogleTokensForUser } from "../google/oauth.js";
 import { estimateDriveTime, extractEventLocation, computeLeaveAt } from "./departureManager.js";
@@ -18,7 +18,7 @@ const TZ = "America/Chicago";
 
 async function getCompanionName(userName: string): Promise<string> {
   const profile = await getProfile(userName).catch(() => null);
-  return profile?.companionName ?? "Your Companion";
+  return getCompanionDisplayName(profile?.companionPersona, profile?.companionName);
 }
 
 function localDateStr(): string {
@@ -321,13 +321,16 @@ async function runCalendarSyncForUser(userName: string): Promise<void> {
       if (!_invalidGrantNotifiedUsers.has(userName)) {
         _invalidGrantNotifiedUsers.add(userName);
         const companionName = await getCompanionName(userName);
-        await sendPushToAll({
-          tag: "google-reconnect",
+        await sendFcmNotification({
+          userName,
+          notificationType: "google-reconnect",
           title: `${companionName} — Google Reconnect Needed`,
           body: "Your Google connection expired. Tap to reconnect Gmail & Calendar.",
-          action: "open_url",
-          url: `${(process.env.APP_URL ?? "https://workspaceapi-server-production-5fd6.up.railway.app").replace(/\/$/, "")}/api/auth/google?redirect=native`,
-        }, userName).catch(() => {});
+          data: {
+            action: "open_url",
+            url: `${(process.env.APP_URL ?? "https://workspaceapi-server-production-5fd6.up.railway.app").replace(/\/$/, "")}/api/auth/google?redirect=native`,
+          },
+        }).catch(() => {});
         logger.info({ userName }, "Calendar sync: sent 'reconnect Google' push notification");
       }
       return;
@@ -522,16 +525,17 @@ async function runDepartureAlertsForUser(userName: string): Promise<void> {
 
     await markDepartureNotified(today, row.event_id, userName);
 
-    await sendPushToAll({
+    sendFcmNotification({
+      userName,
+      notificationType: "departure",
       title: `🗺️ Time to Leave — ${companionName}`,
       body: pushBody,
-      tag: `departure-${row.event_id}`,
-      requireInteraction: true,
-      notificationType: "departure",
-      companionMessage: JSON.stringify({ mapsUrl, eventSummary: row.event_summary }),
-      action: "open_url",
-      url: mapsUrl,
-    }, userName).catch(() => {});
+      data: {
+        action: "open_url",
+        url: mapsUrl,
+        eventSummary: row.event_summary,
+      },
+    }).catch(() => {});
 
     broadcastToUser(userName, "reminder", {
       id: `departure-${row.event_id}-${Date.now()}`,

@@ -1,5 +1,5 @@
 import cron from "node-cron";
-import { sendPushToAll } from "./pushManager.js";
+import { sendFcmNotification } from "./fcmSender.js";
 import { logger } from "../lib/logger.js";
 import { getWatchedShows } from "../tv/showManager.js";
 import { fetchEpisodesForDate } from "../tv/tvmaze.js";
@@ -116,19 +116,13 @@ async function sendMorningPush(user: ActiveUser, wakeTime: string): Promise<void
   try {
     const body = await buildMorningBody(user);
     const displayName = user.name ?? userName;
-    const result = await sendPushToAll({
+    const result = await sendFcmNotification({
+      userName,
+      notificationType: "morning-briefing",
       title: `Good morning, ${displayName} ☀️`,
       body,
-      tag: "morning-briefing",
-      notificationType: "morning-briefing",
-      // Deep-link directly to the morning briefing screen — do NOT use
-      // autoSendMessage here; that routes through chat and serves the stale
-      // pre-generated briefing instead of the live fresh one.
-      deepLink: "winston://morning-briefing",
-      requireInteraction: true,
-      action: "send_message",
-      message: "Good morning",
-    }, userName);
+      data: { action: "send_message", message: "Good morning" },
+    });
 
     if (result.sent === 0) {
       // Push failed (network error, no valid tokens, etc.) — release the slot
@@ -222,12 +216,12 @@ async function runPerUserChecks(): Promise<void> {
         checkMiddayNews(userName)
           .then(async (story) => {
             if (!story) return; // Nothing significant — send nothing
-            await sendPushToAll({
-              title: "Breaking News",
-              body:  story,
-              tag:   `midday-news-${today}`,
+            await sendFcmNotification({
+              userName,
               notificationType: "midday-news",
-            }, userName);
+              title: "Breaking News",
+              body: story,
+            });
             logger.info({ userName, story: story.slice(0, 80) }, "[MiddayNews] Push sent");
           })
           .catch((err) => logger.warn({ err, userName }, "[MiddayNews] Check error"));

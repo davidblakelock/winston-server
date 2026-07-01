@@ -4,7 +4,7 @@ import { logger } from "../lib/logger.js";
 import { getActiveUsers } from "../onboarding/onboardingManager.js";
 import { getWatchedShows } from "./showManager.js";
 import { fetchEpisodesForDate, type ScheduledEpisode } from "./tvmaze.js";
-import { sendPushToAll } from "../push/pushManager.js";
+import { sendFcmNotification } from "../push/fcmSender.js";
 
 const TZ = "America/Chicago";
 
@@ -83,13 +83,12 @@ async function checkEpisodesForUser(userName: string): Promise<void> {
     const when = ep.airtime ? ` at ${ep.airtime}` : "";
     const network = ep.network ?? "streaming";
 
-    await sendPushToAll({
+    await sendFcmNotification({
+      userName,
+      notificationType: "tv-episode",
       title: `New ${ep.showName} today 📺`,
       body: `${ep.episodeLabel}${title} is now on ${network}${when}.`,
-      tag: `tv-episode-${ep.showId}-${ep.episodeLabel}`,
-      notificationType: "tv-episode",
-      requireInteraction: false,
-    }, userName).catch((err) => {
+    }).catch((err) => {
       logger.warn({ err, userName, show: ep.showName }, "[TVEpisode] Push send failed");
     });
 

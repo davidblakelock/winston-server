@@ -9,7 +9,7 @@
 // the alert is active.
 
 import cron from "node-cron";
-import { sendPushToAll } from "./pushManager.js";
+import { sendFcmNotification } from "./fcmSender.js";
 import { logger } from "../lib/logger.js";
 import { getActiveUsers, getProfile } from "../onboarding/onboardingManager.js";
 import { query } from "../db.js";
@@ -226,27 +226,25 @@ async function checkWeatherAlertsForUser(userName: string): Promise<void> {
     // Short body for the notification banner (push char limit ~110 chars)
     const notifBody = headline.length > 110 ? `${headline.slice(0, 107)}…` : headline;
 
-    await sendPushToAll({
+    await sendFcmNotification({
+      userName,
+      notificationType: "weather-alert",
       title: `⚠️ ${props.event}`,
       body: notifBody,
-      tag: `weather-${userName}-${alertId.replace(/[^a-zA-Z0-9]/g, "-")}`,
-      requireInteraction: true,
-      notificationType: "weather-alert",
-      // Full NWS alert data — native app displays these fields directly on
-      // the weather alert screen. No autoSendMessage/companionMessage so the
-      // tap opens the raw alert without any AI commentary.
-      alertHeadline: headline,
-      alertDescription: props.description ?? "",
-      alertInstruction: props.instruction ?? "",
-      alertEvent: props.event,
-      alertArea: areaLabel,
-      alertExpires: props.expires ?? "",
-      alertLat: lat,
-      alertLon: lon,
-      alertCity: city,
-      action: "send_message",
-      message: `Tell me about this weather alert: ${headline}`,
-    }, userName);
+      data: {
+        action: "send_message",
+        message: `Tell me about this weather alert: ${headline}`,
+        alertHeadline: headline,
+        alertDescription: props.description ?? "",
+        alertInstruction: props.instruction ?? "",
+        alertEvent: props.event,
+        alertArea: areaLabel,
+        alertExpires: props.expires ?? "",
+        alertLat: String(lat),
+        alertLon: String(lon),
+        alertCity: city,
+      },
+    });
 
     logger.info({ event: props.event, alertId, area: areaLabel, userName }, "[WeatherAlerts] Push sent");
   }

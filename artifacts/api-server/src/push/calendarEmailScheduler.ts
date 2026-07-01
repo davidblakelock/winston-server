@@ -15,7 +15,7 @@ import cron from "node-cron";
 import { google } from "googleapis";
 import { getAuthClientForUser } from "../google/oauth.js";
 import { fetchWeekEvents, type CalendarEvent } from "../google/calendar.js";
-import { sendPushToAll } from "./pushManager.js";
+import { sendFcmNotification } from "./fcmSender.js";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { getActiveUsers, type ActiveUser } from "../onboarding/onboardingManager.js";
@@ -235,15 +235,12 @@ async function checkUserCalendarEmail(user: ActiveUser): Promise<void> {
       "[CalEmailSched] Sending calendar-email-intel push",
     );
 
-    await sendPushToAll(
-      {
-        title,
-        body,
-        tag: `cal-email-intel-${msg.id}`,
-        notificationType: "calendar-email-intel",
-      },
+    await sendFcmNotification({
       userName,
-    ).catch((err) =>
+      notificationType: "calendar-email-intel",
+      title,
+      body,
+    }).catch((err) =>
       logger.warn({ err, userName, msgId: msg.id }, "[CalEmailSched] Push send failed"),
     );
 
