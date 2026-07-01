@@ -45,7 +45,7 @@ export function startTodoReminderScheduler(): void {
             notificationType: "reminder",
             requireInteraction: true,
             action: "navigate",
-            screen: "/lists",
+            screen: "/lists?list=to+do",
           },
           item.user_name
         );
