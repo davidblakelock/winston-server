@@ -59,6 +59,11 @@ export function startMedicationScheduler(): void {
 
         for (const time of uniqueTimes) {
           if (localTime < time) continue;
+          // Don't fire more than 2 hours after the scheduled time — prevents
+          // a late server start (e.g. 7 PM deploy) from sending the 7 AM slot.
+          const [schedH, schedM] = time.split(":").map(Number);
+          const [localH, localM] = localTime.split(":").map(Number);
+          if (localH * 60 + localM > schedH * 60 + schedM + 120) continue;
 
           // Dedup key is per user+time — each time slot fires independently.
           const reminderKey = `${userName}:${time}`;
