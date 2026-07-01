@@ -4,7 +4,7 @@ import { logger } from "../lib/logger.js";
 
 export interface FcmNotificationParams {
   userName: string;
-  notificationType: "medication" | "bill" | "reminder" | "other";
+  notificationType: string;
   title: string;
   body: string;
   data?: Record<string, string>;
