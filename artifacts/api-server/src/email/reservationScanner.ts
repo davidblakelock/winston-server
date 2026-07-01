@@ -15,7 +15,7 @@ import { getAuthClientForUser } from "../google/oauth.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { logger } from "../lib/logger.js";
 import { query } from "../db.js";
-import { sendPushToAll } from "../push/pushManager.js";
+import { sendFcmNotification } from "../push/fcmSender.js";
 import { MODEL_HAIKU } from "../lib/models.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -396,14 +396,16 @@ export async function scanReservationEmails(
       const partLabel = parsed.party_size ? `, party of ${parsed.party_size}` : "";
       const pushBody = `${parsed.restaurant_name} — ${dateLabel}${timeLabel}${partLabel}. Tap to add it to your calendar.`;
 
-      await sendPushToAll({
+      await sendFcmNotification({
+        userName,
+        notificationType: "reservation",
         title: "Reservation confirmed ✓",
         body: pushBody,
-        tag: `reservation-${userName}-${msgId}`,
-        notificationType: "reservation",
-        action: "send_message",
-        message: `Add my reservation at ${parsed.restaurant_name} on ${dateLabel}${timeLabel} to my calendar`,
-      }, userName).catch(() => {});
+        data: {
+          action: "send_message",
+          message: `Add my reservation at ${parsed.restaurant_name} on ${dateLabel}${timeLabel} to my calendar`,
+        },
+      }).catch(() => {});
 
       results.push({
         gmailId: msgId,

@@ -53,7 +53,6 @@ import { ensureContextReminderColumns } from "./reminders/contextReminderManager
 
 import { startBackgroundEmailScanner } from "./email/backgroundEmailScanner";
 import { startRecordsArchiver } from "./records/recordsArchiver";
-import { ensureSavedPlacesTable } from "./location/geofenceManager";
 import { ensureListItemColumns } from "./lists/listManager";
 import { ensureListShareTable } from "./lists/listShareManager";
 import { ensureBookingColumns } from "./restaurants/bookingCredentialsManager";
@@ -385,13 +384,6 @@ app.listen(port, async (err) => {
   }
 
 
-
-  try {
-    await ensureSavedPlacesTable();
-    logger.info("[startup] saved_places table ready");
-  } catch (e) {
-    logger.warn({ err: e }, "Saved places table initialization warning");
-  }
 
   try {
     await ensureListItemColumns();
