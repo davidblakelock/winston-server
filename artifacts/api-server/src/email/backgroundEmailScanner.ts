@@ -109,11 +109,11 @@ function senderDisplayName(from: string): string {
 
 const NOTIFY_STATUSES = new Set(["out_for_delivery", "delivered"]);
 
-async function handleOrder(userName: string, msgId: string, result: ClassifiedEmail): Promise<void> {
+async function handleOrder(userName: string, msgId: string, result: ClassifiedEmail): Promise<boolean> {
   const order = result.order;
   if (!order?.retailer) {
     logger.info({ msgId, subject: result._subject }, "[BgEmailScanner] Order dropped — no retailer extracted");
-    return;
+    return false;
   }
   const itemName = order.itemName || result._subject || "Order";
 
@@ -157,7 +157,9 @@ async function handleOrder(userName: string, msgId: string, result: ClassifiedEm
       data: { action: "navigate", screen: "/orders" },
     });
     logger.info({ tracking: order.trackingNumber, prevStatus, newStatus }, "[BgEmailScanner] Order push sent");
+    return true;
   }
+  return false;
 }
 
 // ── Record handler ────────────────────────────────────────────────────────────
@@ -426,6 +428,7 @@ async function runScan(userName: string): Promise<void> {
   }
 
   let filedOrdersCount = 0;
+  let pushedOrdersCount = 0;
   let filedRecordsCount = 0;
   const urgentAlerts: { subject: string; summary: string }[] = [];
   const fyiItems: { subject: string; summary: string }[] = [];
@@ -441,7 +444,11 @@ async function runScan(userName: string): Promise<void> {
     const { processed: orders, skipped: orderSkipped } = await fetchAndClassify(
       gmail, orderQ, 50, 40, userName,
       async (u, id, _from, subject, body, res) => {
-        if (res.action === "save_to_orders") { await handleOrder(u, id, res); filedOrdersCount++; }
+        if (res.action === "save_to_orders") {
+          const pushed = await handleOrder(u, id, res);
+          if (pushed) pushedOrdersCount++;
+          else filedOrdersCount++;
+        }
         else if (res.action === "save_to_records") { await handleRecord(u, id, body, res); filedRecordsCount++; }
         else if (res.action === "urgent_alert") { urgentAlerts.push({ subject, summary: res.summary ?? subject }); }
         else if (res.action === "fyi") { fyiItems.push({ subject, summary: res.summary ?? subject }); }
@@ -504,6 +511,15 @@ async function runScan(userName: string): Promise<void> {
       data: { action: "send_message", message: "Check my email" },
     });
     logger.info({ userName }, "[BgEmailScanner] Scan summary push sent");
+  } else if (pushedOrdersCount === 0) {
+    await sendFcmNotification({
+      userName,
+      notificationType: "email-scan-summary",
+      title: "Inbox Update",
+      body: "Your inbox is clean — nothing new to report.",
+      data: { action: "send_message", message: "Check my email" },
+    });
+    logger.info({ userName }, "[BgEmailScanner] Clean inbox push sent");
   }
 }
 

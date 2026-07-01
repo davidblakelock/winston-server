@@ -158,7 +158,7 @@ export async function buildScanSummary(input: ScanBatchSummaryInput): Promise<st
     fyiItems.length === 0 &&
     confirmedMeetings.length === 0
   ) {
-    return "Your inbox is clean — nothing new to report.";
+    return null;
   }
 
   const urgentBlock = urgentAlerts.length > 0
