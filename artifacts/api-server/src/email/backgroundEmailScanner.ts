@@ -432,7 +432,7 @@ async function runScan(userName: string): Promise<void> {
   if (shouldScanOrders) {
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     const since = lastOrderScan ?? thirtyDaysAgo;
-    logger.info({ userName, since: since.toISOString(), hasTrackedOrders }, "[BgEmailScanner] Starting order scan");
+    logger.info({ userName, since: since.toISOString() }, "[BgEmailScanner] Starting order scan");
 
     const orderQ = buildOrderQuery(since);
     const { processed: orders, skipped: orderSkipped } = await fetchAndClassify(
