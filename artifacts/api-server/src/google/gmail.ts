@@ -113,6 +113,13 @@ function generateTypos(word: string): string[] {
   return typos.filter((t) => t !== word && t.length >= 3);
 }
 
+export interface ScamAnalysis {
+  isSuspicious: boolean;
+  riskLevel: "high" | "medium" | "low";
+  flags: string[];
+  summary: string;
+}
+
 export function analyzeEmailForScam(email: {
   from: string;
   fromEmail: string;

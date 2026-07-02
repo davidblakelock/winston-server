@@ -480,7 +480,7 @@ export async function updateCalendarEvent(
   const calendar = google.calendar({ version: "v3", auth });
 
   // Fetch current event first so we can preserve unchanged fields
-  let current: Awaited<ReturnType<typeof calendar.events.get>>;
+  let current: any; // eslint-disable-line @typescript-eslint/no-explicit-any
   try {
     current = await calendar.events.get({ calendarId: "primary", eventId });
     console.log(`[CALENDAR UPDATE] fetched current event: "${current.data.summary}" start=${current.data.start?.dateTime ?? current.data.start?.date}`);

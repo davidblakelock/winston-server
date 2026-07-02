@@ -323,8 +323,8 @@ export async function breakdownGoal(
       lines.push("Key people in their life:");
       for (const p of people) {
         let entry = `- ${p.name} (${p.relationship})`;
-        if (p.city) entry += `, lives in ${p.city}`;
-        if (p.details) entry += ` — ${p.details}`;
+        if ('city' in p && p.city) entry += `, lives in ${p.city}`;
+        if ('details' in p && p.details) entry += ` — ${p.details}`;
         lines.push(entry);
       }
     }
@@ -390,7 +390,7 @@ Your single sharp question here.`;
 
   if (!raw) {
     logger.warn("[Goals] breakdown: GPT-4o returned empty response");
-    return { type: "question", content: "What's the single biggest obstacle you've hit on this before?", steps: [] };
+    return { type: "question", content: "What's the single biggest obstacle you've hit on this before?" };
   }
 
   let result: BreakdownResult;

@@ -141,7 +141,7 @@ export async function checkForConflict(
   endTime: string,
 ): Promise<{ hasConflict: boolean; conflictingEvent: string | null }> {
   try {
-    const events = await fetchEventsForDate(new Date(date + "T12:00:00"), userName);
+    const events = await fetchEventsForDate(date, userName);
     if (!events || events.length === 0) return { hasConflict: false, conflictingEvent: null };
 
     const [startH, startM] = startTime.split(":").map(Number);

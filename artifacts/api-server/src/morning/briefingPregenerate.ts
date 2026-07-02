@@ -339,7 +339,7 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
   const generationDateKey = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
   logger.info({ userName, generationDateKey }, "Pre-generating morning briefing");
   try {
-    const watchedShows = await getWatchedShows().catch(() => []);
+    const watchedShows = await getWatchedShows().catch((): Awaited<ReturnType<typeof getWatchedShows>> => []);
     const watchedIds = watchedShows.filter((s) => s.tvmazeId).map((s) => s.tvmazeId!);
     const now = new Date();
     const yesterday = new Date(now.getTime() - 86400000);
@@ -420,7 +420,7 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
 
     // Artists: profile_items.music category (individual artist entries)
     const profileArtists = allProfileItems
-      .filter((p) => p.category === "music" || p.category === "favorites")
+      .filter((p) => p.category === "interests")
       .map((p) => p.name);
 
     // Neighborhoods: profile places that are NOT venues or restaurants
