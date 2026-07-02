@@ -25,6 +25,8 @@ export async function sendFcmNotification(
   // pass numbers or booleans through the `data` spread.
   const dataPayload: Record<string, string> = {
     notificationType,
+    title,
+    body,
     ...Object.fromEntries(Object.entries(data ?? {}).map(([k, v]) => [k, String(v)])),
   };
 
@@ -37,7 +39,6 @@ export async function sendFcmNotification(
       try {
         const messageId = await messaging.send({
           token,
-          notification: { title, body },
           data: dataPayload,
         });
         sent++;
