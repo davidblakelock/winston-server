@@ -71,10 +71,10 @@ function stripHtml(html: string): string {
 
 // ── Gmail query builders ──────────────────────────────────────────────────────
 
-function buildSocialQuery(since: Date): string {
+function buildSocialQuery(): string {
   // No subject keyword filter — meeting/records/reply emails often have plain subjects
   // like "Lunch?" or "Hey". classifyEmail handles the filtering.
-  return `in:inbox is:unread -in:spam -in:trash -from:me after:${Math.floor(since.getTime() / 1000)}`;
+  return `in:inbox is:unread -in:spam -in:trash -from:me`;
 }
 
 // ── Sender display name helper ────────────────────────────────────────────────
@@ -352,10 +352,9 @@ async function runScan(userName: string): Promise<void> {
 
   // ── Social scan ───────────────────────────────────────────────────────────
   if (shouldScanSocial) {
-    const since = lastSocialScan ?? new Date(Date.now() - intervalMs);
-    logger.info({ userName, since: since.toISOString() }, "[BgEmailScanner] Starting social scan");
+    logger.info({ userName }, "[BgEmailScanner] Starting social scan");
 
-    const socialQ = buildSocialQuery(since);
+    const socialQ = buildSocialQuery();
     let meetings = 0, records = 0, socials = 0;
 
     const { skipped: socialSkipped } = await fetchAndClassify(
