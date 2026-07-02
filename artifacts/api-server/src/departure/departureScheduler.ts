@@ -2,7 +2,7 @@ import cron from "node-cron";
 import { broadcastToUser } from "../reminders/sseStore.js";
 import { sendFcmNotification } from "../push/fcmSender.js";
 import { logger } from "../lib/logger.js";
-import { getProfile, getActiveUsers, type CollectedData } from "../onboarding/onboardingManager.js";
+import { getProfile, getActiveUsers, getCompanionDisplayName, type CollectedData } from "../onboarding/onboardingManager.js";
 import {
   estimateDriveTime,
   shouldFireAlert,
@@ -23,11 +23,6 @@ query(`ALTER TABLE departure_alert_log ADD COLUMN IF NOT EXISTS user_name text N
   .catch(() => {});
 
 const TZ = "America/Chicago";
-
-async function getCompanionName(userName: string): Promise<string> {
-  const profile = await getProfile(userName).catch(() => null);
-  return profile?.companionName ?? "Your Companion";
-}
 
 function localDateStr(): string {
   return new Date().toLocaleDateString("en-CA", { timeZone: TZ });
@@ -113,12 +108,18 @@ async function checkDepartureAlertsForUser(userName: string): Promise<void> {
   const today = localDateStr();
 
   for (const event of events) {
-    if (!event.summary || event.allDay || !event.startIso) continue;
+    if (!event.summary || event.allDay || !event.startIso) {
+      logger.info({ event: event.summary ?? "(no summary)", allDay: event.allDay, userName }, "[DepartureAlert] Skipping event — allDay, missing summary, or missing startIso");
+      continue;
+    }
     const start = new Date(event.startIso);
 
     const minutesUntilEvent = (start.getTime() - now.getTime()) / 60000;
     // Pre-filter: allow up to 4 hours out so long drives (up to ~3.5h) are covered.
-    if (minutesUntilEvent < 0 || minutesUntilEvent > 240) continue;
+    if (minutesUntilEvent < 0 || minutesUntilEvent > 240) {
+      logger.info({ event: event.summary, minutesUntilStart: Math.round(minutesUntilEvent), userName }, "[DepartureAlert] Skipping event — outside 0–240 minute window");
+      continue;
+    }
 
     const location = extractEventLocation({
       summary: event.summary,
@@ -131,13 +132,22 @@ async function checkDepartureAlertsForUser(userName: string): Promise<void> {
     }
 
     const alreadySent = await hasAlertBeenSent(event.summary, today, userName);
-    if (alreadySent) continue;
+    if (alreadySent) {
+      logger.info({ event: event.summary, eventDate: today, userName }, "[DepartureAlert] Skipping event — alert already sent today");
+      continue;
+    }
 
     const drive = await estimateDriveTime(location, effectiveHomeAddress, homeLat, homeLon);
-    if (!drive) continue;
+    if (!drive) {
+      logger.info({ event: event.summary, origin: effectiveHomeAddress, destination: location, userName }, "[DepartureAlert] Skipping event — estimateDriveTime returned null");
+      continue;
+    }
 
     const fire = shouldFireAlert(start, drive.durationMinutes, now);
-    if (!fire) continue;
+    if (!fire) {
+      logger.info({ event: event.summary, minutesUntilStart: Math.round(minutesUntilEvent), driveDurationMinutes: drive.durationMinutes, userName }, "[DepartureAlert] Skipping event — shouldFireAlert returned false");
+      continue;
+    }
 
     const baseMessage = buildDepartureAlertMessage(
       event.summary,
@@ -148,7 +158,7 @@ async function checkDepartureAlertsForUser(userName: string): Promise<void> {
       displayName
     );
 
-    const companionName = await getCompanionName(userName);
+    const companionName = getCompanionDisplayName(profile?.companionPersona, profile?.companionName);
 
     // Universal Google Maps navigation URL — opens native Maps app on iOS/Android
     // when tapped via Linking.openURL; falls back to browser on web.
