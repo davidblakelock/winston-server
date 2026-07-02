@@ -24,10 +24,8 @@ query(`ALTER TABLE departure_alert_log ADD COLUMN IF NOT EXISTS user_name text N
 query(`ALTER TABLE departure_alert_log ADD COLUMN IF NOT EXISTS event_start_iso text`)
   .catch(() => {});
 
-const TZ = "America/Chicago";
-
-function localDateStr(): string {
-  return new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+function localDateStr(tz: string): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: tz });
 }
 
 // ── In-memory set to avoid double-firing ─────────────────────────────────────
@@ -67,7 +65,7 @@ async function markAlertSent(eventTitle: string, eventDate: string, eventStartIs
 // ── Clear in-memory set at midnight ──────────────────────────────────────────
 let _lastDay: string | null = null;
 function clearIfNewDay() {
-  const today = localDateStr();
+  const today = localDateStr("America/Chicago");
   if (_lastDay !== today) {
     _alertedToday.clear();
     _lastDay = today;
@@ -77,6 +75,7 @@ function clearIfNewDay() {
 // ── Per-user check ────────────────────────────────────────────────────────────
 async function checkDepartureAlertsForUser(userName: string): Promise<void> {
   const profile = await getProfile(userName).catch(() => null);
+  const tz = profile?.timezone ?? "America/Chicago";
   const displayName = profile?.name ?? userName;
   const homeAddress = profile?.homeAddress ?? ((profile?.rawData as CollectedData)?.homeAddress) ?? "";
   const homeLat = (profile?.homeLatitude && profile.homeLatitude !== 0 ? profile.homeLatitude : null)
@@ -107,7 +106,7 @@ async function checkDepartureAlertsForUser(userName: string): Promise<void> {
   if (!events) return;
 
   const now = new Date();
-  const today = localDateStr();
+  const today = localDateStr(tz);
 
   for (const event of events) {
     if (!event.summary || event.allDay || !event.startIso) {
@@ -178,14 +177,14 @@ async function checkDepartureAlertsForUser(userName: string): Promise<void> {
       `https://maps.google.com/?daddr=${encodeURIComponent(location)}&dirflg=d`;
 
     const eventTimeStr = start.toLocaleTimeString("en-US", {
-      timeZone: TZ,
+      timeZone: tz,
       hour: "numeric",
       minute: "2-digit",
       hour12: true,
     });
     const leaveAt = computeLeaveAt(start, drive.durationMinutes);
     const leaveTimeStr = leaveAt.toLocaleTimeString("en-US", {
-      timeZone: TZ,
+      timeZone: tz,
       hour: "numeric",
       minute: "2-digit",
       hour12: true,
@@ -201,7 +200,7 @@ async function checkDepartureAlertsForUser(userName: string): Promise<void> {
         .slice(0, 4);
 
       // Pick the most relevant nearby category based on event time
-      const eventHour = start.toLocaleString("en-US", { timeZone: TZ, hour: "numeric", hour12: false });
+      const eventHour = start.toLocaleString("en-US", { timeZone: tz, hour: "numeric", hour12: false });
       const nearbyType = parseInt(eventHour, 10) >= 17 ? "cocktail bar" : "coffee shop";
 
       const nearbyData = await searchNearbyVenueTypes(location, ["parking", nearbyType], 2);
