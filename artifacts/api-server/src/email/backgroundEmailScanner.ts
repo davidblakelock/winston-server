@@ -371,7 +371,7 @@ async function runScan(userName: string): Promise<void> {
       vacationMode,
     );
 
-    await updateLastSocialScanAt(userName);
+    await updateLastSocialScanAt(userName, scanStart);
     logger.info({ userName, meetings, records, socials, skipped: socialSkipped }, "[BgEmailScanner] Social scan complete");
   }
 

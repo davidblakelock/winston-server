@@ -48,13 +48,13 @@ export async function getLastSocialScanAt(userName: string): Promise<Date | null
   return val ? new Date(val) : null;
 }
 
-export async function updateLastSocialScanAt(userName: string): Promise<void> {
+export async function updateLastSocialScanAt(userName: string, at?: Date): Promise<void> {
   await query(
     `INSERT INTO social_scan_state (user_name, last_scan_at)
-     VALUES ($1, now())
+     VALUES ($1, $2)
      ON CONFLICT (user_name)
-     DO UPDATE SET last_scan_at = now()`,
-    [userName]
+     DO UPDATE SET last_scan_at = $2`,
+    [userName, at ?? new Date()]
   );
 }
 
