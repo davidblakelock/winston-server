@@ -21,6 +21,8 @@ import {
 // ── Schema migration: add user_name to departure_alert_log if missing ─────────
 query(`ALTER TABLE departure_alert_log ADD COLUMN IF NOT EXISTS user_name text NOT NULL DEFAULT '${NATIVE_STORED_NAME}'`)
   .catch(() => {});
+query(`ALTER TABLE departure_alert_log ADD COLUMN IF NOT EXISTS event_start_iso text`)
+  .catch(() => {});
 
 const TZ = "America/Chicago";
 
@@ -31,15 +33,15 @@ function localDateStr(): string {
 // ── In-memory set to avoid double-firing ─────────────────────────────────────
 const _alertedToday = new Set<string>();
 
-async function hasAlertBeenSent(eventTitle: string, eventDate: string, userName: string): Promise<boolean> {
-  const key = `${userName}::${eventTitle}::${eventDate}`;
+async function hasAlertBeenSent(eventTitle: string, eventDate: string, eventStartIso: string, userName: string): Promise<boolean> {
+  const key = `${userName}::${eventTitle}::eventDate::${eventDate}::${eventStartIso}`;
   if (_alertedToday.has(key)) return true;
 
   try {
     const { rows } = await query<{ count: string }>(
       `SELECT COUNT(*) as count FROM departure_alert_log
-       WHERE event_title = $1 AND event_date = $2 AND user_name = $3`,
-      [eventTitle, eventDate, userName]
+       WHERE event_title = $1 AND event_date = $2 AND event_start_iso = $3 AND user_name = $4`,
+      [eventTitle, eventDate, eventStartIso, userName]
     );
     return parseInt(rows[0]?.count ?? "0", 10) > 0;
   } catch {
@@ -47,17 +49,17 @@ async function hasAlertBeenSent(eventTitle: string, eventDate: string, userName:
   }
 }
 
-async function markAlertSent(eventTitle: string, eventDate: string, userName: string): Promise<void> {
-  const key = `${userName}::${eventTitle}::${eventDate}`;
+async function markAlertSent(eventTitle: string, eventDate: string, eventStartIso: string, userName: string): Promise<void> {
+  const key = `${userName}::${eventTitle}::eventDate::${eventDate}::${eventStartIso}`;
   _alertedToday.add(key);
 
   try {
     await query(
-      `INSERT INTO departure_alert_log (event_title, event_date, user_name)
-       VALUES ($1, $2, $3)
+      `INSERT INTO departure_alert_log (event_title, event_date, event_start_iso, user_name)
+       VALUES ($1, $2, $3, $4)
        ON CONFLICT DO NOTHING
        RETURNING id`,
-      [eventTitle, eventDate, userName]
+      [eventTitle, eventDate, eventStartIso, userName]
     );
   } catch {}
 }
@@ -131,7 +133,7 @@ async function checkDepartureAlertsForUser(userName: string): Promise<void> {
       continue;
     }
 
-    const alreadySent = await hasAlertBeenSent(event.summary, today, userName);
+    const alreadySent = await hasAlertBeenSent(event.summary, today, event.startIso, userName);
     if (alreadySent) {
       logger.info({ event: event.summary, eventDate: today, userName }, "[DepartureAlert] Skipping event — alert already sent today");
       continue;
@@ -253,7 +255,7 @@ async function checkDepartureAlertsForUser(userName: string): Promise<void> {
       },
     }).catch(() => {});
 
-    await markAlertSent(event.summary, today, userName);
+    await markAlertSent(event.summary, today, event.startIso, userName);
 
     logger.info(
       { event: event.summary, driveMinutes: drive.durationMinutes, source: drive.source, userName },
