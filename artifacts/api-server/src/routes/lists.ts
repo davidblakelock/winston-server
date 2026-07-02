@@ -19,6 +19,9 @@ import {
 } from "../lists/listShareManager.js";
 import { autoUpdateItemUrl, autoUpdateRestaurantUrl, detectAutoLookupType, lookupRestaurantUrl, isBookingPlatformUrl, detectBookingPlatform } from "../lists/autoUrlLookup.js";
 import { sendPushToAll } from "../push/pushManager.js";
+import { extractReminder, computeFireAt, resolveNextDayOfWeek } from "../reminders/reminderParser.js";
+import { nextOccurrenceForPattern } from "../reminders/recurringUtils.js";
+import { getProfile } from "../onboarding/onboardingManager.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -742,6 +745,32 @@ router.post(["/lists/todo", "/lists/to do"], async (req: Request, res: Response)
     return;
   }
 
+  let resolvedItemText = item.trim();
+  let resolvedReminderTime = reminderTime;
+  if (!resolvedReminderTime && /remind/i.test(resolvedItemText)) {
+    try {
+      const profile = await getProfile(userName).catch(() => null);
+      const tz = profile?.timezone ?? "America/Chicago";
+      const extracted = await extractReminder(resolvedItemText, tz);
+      if (extracted?.time) {
+        const recurringPattern = extracted.recurring;
+        const needsPatternScheduling =
+          extracted.isRecurring &&
+          recurringPattern &&
+          (recurringPattern.startsWith("weekly:") || recurringPattern.startsWith("monthly:"));
+        const fireAt = needsPatternScheduling
+          ? nextOccurrenceForPattern(recurringPattern!, extracted.time, tz)
+          : extracted.dayOfWeek && !extracted.isRecurring
+            ? resolveNextDayOfWeek(extracted.dayOfWeek, extracted.time, tz, extracted.nextWeek ?? false)
+            : computeFireAt(extracted.time, tz);
+        resolvedReminderTime = fireAt.toISOString();
+        resolvedItemText = extracted.reminderText || resolvedItemText;
+      }
+    } catch {
+      // extraction failed — store as plain item
+    }
+  }
+
   try {
     const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string; reminder_time: string | null; notes: string | null }>(
       `INSERT INTO list_items (user_name, list_name, item_text, url, reminder_time, notes)
@@ -753,9 +782,9 @@ router.post(["/lists/todo", "/lists/to do"], async (req: Request, res: Response)
                      reminder_fired = CASE WHEN EXCLUDED.reminder_time IS NOT NULL THEN FALSE ELSE list_items.reminder_fired END,
                      notes         = CASE WHEN EXCLUDED.notes IS NOT NULL THEN EXCLUDED.notes ELSE list_items.notes END
        RETURNING id, item_text, added_by, url, created_at, reminder_time, notes`,
-      [userName, item.trim(), manualUrl, reminderTime, todoNotes]
+      [userName, resolvedItemText, manualUrl, resolvedReminderTime, todoNotes]
     );
-    syncListItemToConnections("to do", [item.trim()], userName).catch(() => {});
+    syncListItemToConnections("to do", [resolvedItemText], userName).catch(() => {});
     res.json({ item: rows[0] });
   } catch (err) {
     req.log.warn({ err }, "To Do POST error");
