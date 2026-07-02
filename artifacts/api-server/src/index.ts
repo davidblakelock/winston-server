@@ -32,6 +32,7 @@ import { initConcertsTable, startVenueMonitorScheduler } from "./morning/venueMo
 import { initBriefingStoriesTable } from "./morning/storyDedup";
 import { runBriefingCacheMigrations } from "./morning/briefingCache";
 import { addProfileItem } from "./profile/profileManager";
+import { syncPeopleDatesToImportantDates } from "./people/peopleManager.js";
 import { ensureContactsTable } from "./google/contacts";
 import { ensureJournalInsightsTable, startJournalPatternScheduler } from "./journal/journalPatternAnalyzer";
 import { ensurePressureTable, startPressureScheduler } from "./weather/pressureScheduler";
@@ -479,6 +480,13 @@ app.listen(port, async (err) => {
     logger.warn({ err: e }, "[startup] onboarding_completed repair failed — notifications may not fire");
   }
 
+  try {
+    await syncPeopleDatesToImportantDates();
+    logger.info("[startup] key_people dates synced → important_dates");
+  } catch (e) {
+    logger.warn({ err: e }, "[startup] key_people dates sync warning");
+  }
+
   // Schedulers run only on Railway (production). Replit is dev-only.
   // RAILWAY_ENVIRONMENT is set automatically by Railway on all deployments.
   if (process.env.RAILWAY_ENVIRONMENT) {
@@ -527,7 +535,7 @@ app.listen(port, async (err) => {
       { name: "Classic Jazz",      detail: "Loves classic jazz — bebop, big band, standards" },
     ];
     for (const pref of musicPrefs) {
-      await addProfileItem("music", pref.name, pref.detail, NATIVE_STORED_NAME).catch(() => {});
+      await addProfileItem("interests", pref.name, pref.detail, NATIVE_STORED_NAME).catch(() => {});
     }
     const favoriteVenues: Array<{ name: string; detail: string }> = [
       { name: "Kessler Theater",               detail: "Favorite Dallas music venue — intimate, eclectic bookings" },
@@ -539,7 +547,7 @@ app.listen(port, async (err) => {
       { name: "Jazz at the Meyerson",          detail: "Favorite jazz venue — Meyerson Symphony Center" },
     ];
     for (const venue of favoriteVenues) {
-      await addProfileItem("favorite_venues", venue.name, venue.detail, NATIVE_STORED_NAME).catch(() => {});
+      await addProfileItem("places", venue.name, venue.detail, NATIVE_STORED_NAME).catch(() => {});
     }
     // Clean up any stale 'David' rows left from before user_name was added
     logger.info("Music preferences and favorite venues seeded to profile_items");
