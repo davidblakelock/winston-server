@@ -16,12 +16,6 @@ import { google } from "googleapis";
 import { logger } from "../lib/logger.js";
 import { NATIVE_USER } from "../auth/middleware.js";
 import { getAuthClientForUser } from "../google/oauth.js";
-import {
-  upsertOrder,
-  getOrders,
-  getLastOrderScanAt,
-  updateLastOrderScanAt,
-} from "../orders/ordersManager.js";
 import { setPendingMeetingRequests, getPendingMeetingRequests, addPendingReplyEmails, getPendingReplyEmails, clearPendingReplyEmail, buildScanSummary } from "../email/emailMeetingManager.js";
 import { sendFcmNotification } from "../push/fcmSender.js";
 import { classifyEmail } from "../email/emailClassifier.js";
@@ -77,20 +71,6 @@ function stripHtml(html: string): string {
 
 // ── Gmail query builders ──────────────────────────────────────────────────────
 
-// No `in:inbox` — order/shipping emails land in Promotions, Updates, or the
-// dedicated Orders tab. Restricting to inbox silently drops nearly everything.
-const ORDER_SUBJECT_KEYWORDS = [
-  "order confirmation", "your order", "has shipped", "out for delivery",
-  "delivered", "shipment notification", "shipping confirmation", "order shipped",
-  "package delivered", "your package", "order update", "tracking number",
-  "order receipt", "purchase confirmation", "payment confirmed",
-];
-
-function buildOrderQuery(since: Date): string {
-  const clauses = ORDER_SUBJECT_KEYWORDS.map((k) => `subject:"${k}"`).join(" OR ");
-  return `(${clauses}) -in:spam -in:trash -from:me after:${Math.floor(since.getTime() / 1000)}`;
-}
-
 function buildSocialQuery(since: Date): string {
   // No subject keyword filter — meeting/records/reply emails often have plain subjects
   // like "Lunch?" or "Hey". classifyEmail handles the filtering.
@@ -103,63 +83,6 @@ function senderDisplayName(from: string): string {
   const m = from.match(/^(.*?)\s*<[^>]+>$/);
   if (m) return m[1].trim().replace(/^["']|["']$/g, "") || from;
   return from.split("@")[0] ?? from;
-}
-
-// ── Order handler ─────────────────────────────────────────────────────────────
-
-const NOTIFY_STATUSES = new Set(["out_for_delivery", "delivered"]);
-
-async function handleOrder(userName: string, msgId: string, result: ClassifiedEmail): Promise<boolean> {
-  const order = result.order;
-  if (!order?.retailer) {
-    logger.info({ msgId, subject: result._subject }, "[BgEmailScanner] Order dropped — no retailer extracted");
-    return false;
-  }
-  const itemName = order.itemName || result._subject || "Order";
-
-  // Fetch current orders to detect status changes for push notifications
-  const existing = await getOrders(userName);
-  const existingByTracking = new Map(
-    existing.filter((o) => o.tracking_number).map((o) => [o.tracking_number!, o.status])
-  );
-  const prevStatus = order.trackingNumber
-    ? existingByTracking.get(order.trackingNumber) ?? null
-    : null;
-
-  // email_id is critical — it drives ON CONFLICT deduplication in the DB
-  await upsertOrder(userName, {
-    retailer: order.retailer,
-    item_name: itemName,
-    order_number: order.orderNumber ?? null,
-    tracking_number: order.trackingNumber ?? null,
-    carrier: order.carrier ?? null,
-    status: order.status ?? "ordered",
-    expected_date: order.expectedDate ?? null,
-    order_total: order.orderTotal ?? null,
-    email_id: msgId,
-    order_url: order.orderUrl ?? null,
-  });
-
-  logger.info(
-    { retailer: order.retailer, item: itemName, status: order.status ?? "ordered", msgId },
-    "[BgEmailScanner] Order upserted"
-  );
-
-  const newStatus = order.status ?? "ordered";
-  const statusChanged = prevStatus !== null && prevStatus !== newStatus;
-  if (statusChanged && NOTIFY_STATUSES.has(newStatus)) {
-    const label = newStatus === "delivered" ? "Delivered" : "Out for delivery";
-    await sendFcmNotification({
-      userName,
-      notificationType: "order-update",
-      title: "Package Update",
-      body: `${label}: ${order.itemName} from ${order.retailer}`,
-      data: { action: "navigate", screen: "/orders" },
-    });
-    logger.info({ tracking: order.trackingNumber, prevStatus, newStatus }, "[BgEmailScanner] Order push sent");
-    return true;
-  }
-  return false;
 }
 
 // ── Record handler ────────────────────────────────────────────────────────────
@@ -364,18 +287,13 @@ async function runScan(userName: string): Promise<void> {
     return;
   }
 
-  // ── Orders: use DB-backed last-scan time ──────────────────────────────────
-  const lastOrderScan = await getLastOrderScanAt(userName);
-  const orderSinceMs = lastOrderScan ? Date.now() - lastOrderScan.getTime() : Infinity;
-  const shouldScanOrders = orderSinceMs >= intervalMs;
-
   // ── Social (meetings/records/replies): DB-backed ─────────────────────────
   const lastSocialScan = await getLastSocialScanAt(userName);
   const socialSinceMs = lastSocialScan ? Date.now() - lastSocialScan.getTime() : Infinity;
   const shouldScanSocial = socialSinceMs >= intervalMs;
 
-  if (!shouldScanOrders && !shouldScanSocial) {
-    const nextInMin = Math.ceil((intervalMs - Math.min(orderSinceMs, socialSinceMs)) / 60_000);
+  if (!shouldScanSocial) {
+    const nextInMin = Math.ceil((intervalMs - socialSinceMs) / 60_000);
     logger.info({ userName, nextInMin }, "[BgEmailScanner] Skipping tick — not yet time");
     return;
   }
@@ -427,39 +345,10 @@ async function runScan(userName: string): Promise<void> {
     setPendingMeetingRequests(stillValidMeetings);
   }
 
-  let filedOrdersCount = 0;
-  let pushedOrdersCount = 0;
   let filedRecordsCount = 0;
   const urgentAlerts: { subject: string; summary: string }[] = [];
   const fyiItems: { subject: string; summary: string }[] = [];
   const confirmedMeetings: { from: string; subject: string; proposedDateTimeStr: string | null }[] = [];
-
-  // ── Order scan ────────────────────────────────────────────────────────────
-  if (shouldScanOrders) {
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    const since = lastOrderScan ?? thirtyDaysAgo;
-    logger.info({ userName, since: since.toISOString() }, "[BgEmailScanner] Starting order scan");
-
-    const orderQ = buildOrderQuery(since);
-    const { processed: orders, skipped: orderSkipped } = await fetchAndClassify(
-      gmail, orderQ, 50, 40, userName,
-      async (u, id, _from, subject, body, res) => {
-        if (res.action === "save_to_orders") {
-          const pushed = await handleOrder(u, id, res);
-          if (pushed) pushedOrdersCount++;
-          else filedOrdersCount++;
-        }
-        else if (res.action === "save_to_records") { await handleRecord(u, id, body, res); filedRecordsCount++; }
-        else if (res.action === "urgent_alert") { urgentAlerts.push({ subject, summary: res.summary ?? subject }); }
-        else if (res.action === "fyi") { fyiItems.push({ subject, summary: res.summary ?? subject }); }
-      },
-      "orders",
-      vacationMode,
-    );
-
-    await updateLastOrderScanAt(userName);
-    logger.info({ userName, orders, skipped: orderSkipped }, "[BgEmailScanner] Order scan complete");
-  }
 
   // ── Social scan ───────────────────────────────────────────────────────────
   if (shouldScanSocial) {
@@ -489,13 +378,12 @@ async function runScan(userName: string): Promise<void> {
   // ── Batch summary push ────────────────────────────────────────────────────
   const summaryReplies = getPendingReplyEmails();
   const summaryMeetings = getPendingMeetingRequests();
-  logger.info({ userName, pendingRepliesCount: summaryReplies.length, pendingReplies: summaryReplies, pendingMeetingsCount: summaryMeetings.length, filedRecordsCount, filedOrdersCount, urgentAlertCount: urgentAlerts.length, fyiCount: fyiItems.length, confirmedMeetingsCount: confirmedMeetings.length }, "[BgEmailScanner] Pending state before summary");
+  logger.info({ userName, pendingRepliesCount: summaryReplies.length, pendingReplies: summaryReplies, pendingMeetingsCount: summaryMeetings.length, filedRecordsCount, urgentAlertCount: urgentAlerts.length, fyiCount: fyiItems.length, confirmedMeetingsCount: confirmedMeetings.length }, "[BgEmailScanner] Pending state before summary");
 
   const summary = await buildScanSummary({
     pendingReplies: summaryReplies,
     pendingMeetings: summaryMeetings,
     filedRecordsCount,
-    filedOrdersCount,
     urgentAlerts,
     fyiItems,
     confirmedMeetings,
@@ -511,7 +399,7 @@ async function runScan(userName: string): Promise<void> {
       data: { action: "send_message", message: "Check my email" },
     });
     logger.info({ userName }, "[BgEmailScanner] Scan summary push sent");
-  } else if (pushedOrdersCount === 0) {
+  } else {
     await sendFcmNotification({
       userName,
       notificationType: "email-scan-summary",

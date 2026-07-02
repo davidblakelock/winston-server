@@ -140,20 +140,18 @@ interface ScanBatchSummaryInput {
   pendingReplies: PendingReplyEmail[];
   pendingMeetings: DetectedMeetingRequest[];
   filedRecordsCount: number;
-  filedOrdersCount: number;
   urgentAlerts: { subject: string; summary: string }[];
   fyiItems: { subject: string; summary: string }[];
   confirmedMeetings: { from: string; subject: string; proposedDateTimeStr: string | null }[];
 }
 
 export async function buildScanSummary(input: ScanBatchSummaryInput): Promise<string | null> {
-  const { pendingReplies, pendingMeetings, filedRecordsCount, filedOrdersCount, urgentAlerts, fyiItems, confirmedMeetings } = input;
+  const { pendingReplies, pendingMeetings, filedRecordsCount, urgentAlerts, fyiItems, confirmedMeetings } = input;
 
   if (
     pendingReplies.length === 0 &&
     pendingMeetings.length === 0 &&
     filedRecordsCount === 0 &&
-    filedOrdersCount === 0 &&
     urgentAlerts.length === 0 &&
     fyiItems.length === 0 &&
     confirmedMeetings.length === 0
@@ -181,8 +179,8 @@ export async function buildScanSummary(input: ScanBatchSummaryInput): Promise<st
     ? fyiItems.map(f => `- ${f.summary}`).join('\n')
     : null;
 
-  const filedLine = (filedRecordsCount > 0 || filedOrdersCount > 0)
-    ? `${filedRecordsCount} booking/record(s) filed, ${filedOrdersCount} order update(s) filed — already handled silently.`
+  const filedLine = filedRecordsCount > 0
+    ? `${filedRecordsCount} booking/record(s) filed — already handled silently.`
     : null;
 
   const prompt = `You're writing a short, natural summary of what came in during an email scan, to tell the user conversationally — the way a thoughtful assistant would catch someone up, not a mechanical report.
