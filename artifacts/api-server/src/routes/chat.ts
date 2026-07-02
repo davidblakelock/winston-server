@@ -126,9 +126,6 @@ import {
   confirmDateAdded,
 } from "../dates/datesManager.js";
 import {
-  isTodayPickleballDay,
-} from "../pickleball/pickleballManager.js";
-import {
   fetchMarkets,
   buildMarketsBlock,
 } from "../markets/marketsManager.js";

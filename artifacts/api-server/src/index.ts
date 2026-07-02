@@ -24,7 +24,6 @@ import { startBillScheduler } from "./bills/billScheduler";
 import { startDatesScheduler } from "./dates/datesScheduler";
 import { startDepartureScheduler } from "./departure/departureScheduler";
 import { startCalendarSyncScheduler, ensureCalendarSyncTable } from "./departure/calendarSyncScheduler";
-import { startPickleballScheduler, ensureProactiveMessageLogTable } from "./pickleball/pickleballScheduler";
 import { ensureRelationshipTable } from "./relationships/relationshipManager";
 import { initDallasContentTable } from "./morning/dallasContent";
 import { startDallasProactiveScheduler } from "./morning/dallasProactiveScheduler";
@@ -246,12 +245,6 @@ app.listen(port, async (err) => {
   }
 
   // Isolated block so a failure above never skips this critical table
-  try {
-    await ensureProactiveMessageLogTable();
-    logger.info("[startup] proactive_message_log table ready");
-  } catch (e) {
-    logger.warn({ err: e }, "proactive_message_log table initialization warning");
-  }
 
   try {
     await ensureUsersTable();
@@ -502,7 +495,6 @@ app.listen(port, async (err) => {
     });
     startDepartureScheduler();
     startCalendarSyncScheduler();
-    startPickleballScheduler();
     startDallasProactiveScheduler();
     startVenueMonitorScheduler();
     startJournalPatternScheduler();
