@@ -176,3 +176,54 @@ export async function deletePerson(id: number, userName: string): Promise<boolea
   );
   return (res.rowCount ?? 0) > 0;
 }
+// ── Sync key_people birthdays/anniversaries → important_dates ─────────────────
+// Runs at startup. Idempotent — skips any that already exist.
+export async function syncPeopleDatesToImportantDates(): Promise<void> {
+  const { rows } = await query<{
+    user_name: string;
+    name: string;
+    relationship: string | null;
+    birthday: string | null;
+    anniversary: string | null;
+  }>(
+    `SELECT user_name, name, relationship, birthday, anniversary
+     FROM key_people
+     WHERE birthday IS NOT NULL OR anniversary IS NOT NULL`
+  );
+
+  let synced = 0;
+
+  for (const row of rows) {
+    for (const eventType of ["birthday", "anniversary"] as const) {
+      const raw = eventType === "birthday" ? row.birthday : row.anniversary;
+      if (!raw) continue;
+
+      // Parse MM/DD/YYYY
+      const parts = raw.split("/");
+      if (parts.length !== 3) continue;
+      const month = parseInt(parts[0], 10);
+      const day = parseInt(parts[1], 10);
+      const year = parseInt(parts[2], 10);
+      if (isNaN(month) || isNaN(day) || month < 1 || month > 12 || day < 1 || day > 31) continue;
+
+      await query(
+        `INSERT INTO important_dates (user_name, person_name, relationship, event_type, month, day, year)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT DO NOTHING`,
+        [
+          row.user_name,
+          row.name,
+          row.relationship ?? null,
+          eventType,
+          month,
+          day,
+          isNaN(year) ? null : year,
+        ]
+      ).catch(() => {});
+
+      synced++;
+    }
+  }
+
+  logger.info({ synced }, "[People] Synced key_people dates → important_dates");
+}
