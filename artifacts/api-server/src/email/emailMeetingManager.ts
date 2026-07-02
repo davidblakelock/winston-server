@@ -145,7 +145,7 @@ interface ScanBatchSummaryInput {
   confirmedMeetings: { from: string; subject: string; proposedDateTimeStr: string | null }[];
 }
 
-export async function buildScanSummary(input: ScanBatchSummaryInput): Promise<string | null> {
+export async function buildScanSummary(input: ScanBatchSummaryInput): Promise<{ pushBody: string; summary: string } | null> {
   const { pendingReplies, pendingMeetings, filedRecordsCount, urgentAlerts, fyiItems, confirmedMeetings } = input;
 
   if (
@@ -202,15 +202,22 @@ ${fyiBlock}
 ` : ''}${filedLine ? `
 Background: ${filedLine}
 ` : ''}
-Write 2-4 sentences, warm and direct. If there are urgent alerts, lead with those prominently. For emails needing replies, offer to help draft one. Don't list every item mechanically — synthesize. If nothing needs the user's input, keep it very brief.`;
+Return ONLY valid JSON with two fields:
+- pushBody: a single line ≤100 characters summarizing what came in. Examples: "3 emails — 1 needs reply", "⚠️ Urgent: fraud alert", "2 meeting requests", "Inbox clear". Lead with ⚠️ if there are urgent alerts.
+- summary: 2-4 sentences, warm and direct. If there are urgent alerts, lead with those prominently. For emails needing replies, offer to help draft one. Don't list every item mechanically — synthesize. If nothing needs the user's input, keep it very brief.`;
 
   try {
     const resp = await anthropic.messages.create({
       model: MODEL_HAIKU,
-      max_tokens: 400,
+      max_tokens: 500,
       messages: [{ role: "user", content: prompt }],
     });
-    return resp.content[0]?.type === "text" ? resp.content[0].text.trim() : null;
+    const text = resp.content[0]?.type === "text" ? resp.content[0].text.trim() : null;
+    if (!text) return null;
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+    const parsed = JSON.parse(jsonMatch[0]) as { pushBody: string; summary: string };
+    return { pushBody: parsed.pushBody, summary: parsed.summary };
   } catch {
     return null;
   }

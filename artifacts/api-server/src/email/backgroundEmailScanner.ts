@@ -380,7 +380,7 @@ async function runScan(userName: string): Promise<void> {
   const summaryMeetings = getPendingMeetingRequests();
   logger.info({ userName, pendingRepliesCount: summaryReplies.length, pendingReplies: summaryReplies, pendingMeetingsCount: summaryMeetings.length, filedRecordsCount, urgentAlertCount: urgentAlerts.length, fyiCount: fyiItems.length, confirmedMeetingsCount: confirmedMeetings.length }, "[BgEmailScanner] Pending state before summary");
 
-  const summary = await buildScanSummary({
+  const scanResult = await buildScanSummary({
     pendingReplies: summaryReplies,
     pendingMeetings: summaryMeetings,
     filedRecordsCount,
@@ -389,14 +389,14 @@ async function runScan(userName: string): Promise<void> {
     confirmedMeetings,
   }).catch(() => null);
 
-  if (summary) {
-    logger.info({ userName, summary }, "[BgEmailScanner] Scan summary generated");
+  if (scanResult) {
+    logger.info({ userName, summary: scanResult.summary }, "[BgEmailScanner] Scan summary generated");
     await sendFcmNotification({
       userName,
       notificationType: "email-scan-summary",
       title: "Inbox Update",
-      body: summary,
-      data: { action: "send_message", message: "Check my email" },
+      body: scanResult.pushBody,
+      data: { action: "send_message", message: "Check my email", emailSummary: scanResult.summary },
     });
     logger.info({ userName }, "[BgEmailScanner] Scan summary push sent");
   } else {
@@ -404,7 +404,7 @@ async function runScan(userName: string): Promise<void> {
       userName,
       notificationType: "email-scan-summary",
       title: "Inbox Update",
-      body: "Your inbox is clean — nothing new to report.",
+      body: "Inbox clear",
       data: { action: "send_message", message: "Check my email" },
     });
     logger.info({ userName }, "[BgEmailScanner] Clean inbox push sent");
