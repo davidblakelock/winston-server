@@ -231,7 +231,6 @@ import { createProvider } from "../providers/providerManager.js";
 import { logBriefingStories } from "../morning/storyDedup.js";
 import { getDallasItems, getLocalContentCity, type LocalContentItem } from "../morning/dallasContent.js";
 import { createReminder } from "../reminders/reminderManager.js";
-import { getPendingRouteReminder, setPendingRouteReminder } from "../routeAware/routeAwareManager.js";
 import {
   generateTripItinerary,
   saveTripPlan,
@@ -1207,11 +1206,6 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isDepartureTextAccepted = !isMorningGreeting && !isTextFlowActive && !isTextMessageRequest
     && pendingDepartureOffer !== null && DEPARTURE_TEXT_ACCEPT.test(message.trim());
 
-  // R007-ROUTE: Route-aware stop reminder — user said yes after briefing offered a reminder
-  const pendingRouteReminder = getPendingRouteReminder();
-  const ROUTE_REMIND_ACCEPT = /^(?:yes|yeah|yep|yup|sure|ok(?:ay)?|go\s+ahead|do\s+it|please|absolutely|sounds?\s+good|set\s+(?:it|a\s+reminder|that)|add\s+(?:it|a\s+reminder))(?:[,\s!.]|$)/i;
-  const isRouteReminderAccepted = !isMorningGreeting && !isTextFlowActive && !isDepartureTextAccepted
-    && pendingRouteReminder !== null && ROUTE_REMIND_ACCEPT.test(message.trim());
   // Retry / edit-after-send: intent detected by classifier; lastSmsPayload guards
   // so these only fire when a text was actually dispatched within the session.
   const lastSmsPayload = getLastSmsPayload();
@@ -2537,36 +2531,6 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
     }
   }
 
-  // ── R007-ROUTE: Route-aware stop reminder — user confirmed the offer ─────────
-  if (isRouteReminderAccepted && pendingRouteReminder) {
-    try {
-      const endTime = new Date(pendingRouteReminder.eventEndIso);
-      const fireAt  = new Date(endTime.getTime() - 30 * 60 * 1000);
-      const fireLabel = fireAt.toLocaleTimeString("en-US", {
-        timeZone: "America/Chicago", hour: "numeric", minute: "2-digit",
-      });
-      await createReminder({
-        userName:     sessionUserName,
-        reminderText: pendingRouteReminder.reminderText,
-        fireAt,
-        timezone: "America/Chicago",
-      });
-      setPendingRouteReminder(null);
-      systemPrompt +=
-        `\n\n[Route Reminder Set]\n` +
-        `Reminder confirmed for ${fireLabel} — 30 minutes before ${pendingRouteReminder.eventSummary} ends. ` +
-        `The reminder text: "${pendingRouteReminder.reminderText}". ` +
-        `Confirm warmly in one sentence. Example: "Done — I'll remind you at ${fireLabel} to stop at ${pendingRouteReminder.businessName} on your way home."`;
-      req.log.info(
-        { fireAt: fireAt.toISOString(), business: pendingRouteReminder.businessName, event: pendingRouteReminder.eventSummary },
-        "[R007-ROUTE] Route stop reminder created"
-      );
-    } catch (err) {
-      req.log.warn({ err }, "[R007-ROUTE] Reminder creation failed");
-      systemPrompt +=
-        `\n\n[Route Reminder Error]\nTell the user you had trouble setting that reminder and ask them to try again.`;
-    }
-  }
 
   // ── E007-CONF: Email reply confirmed — package for email app ──────────────
   if (isEmailReplyFlowActive && pendingEmailReply) {

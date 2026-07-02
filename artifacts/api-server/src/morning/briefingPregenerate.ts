@@ -36,7 +36,6 @@ import {
   getPendingObservation, markObservationSurfaced,
   getWeeklyGift, generateAndStoreAnnualLetter, getStoredAnnualLetter,
 } from "../lifeCaptures/lifeCapturesManager.js";
-import { buildRouteAwareSuggestions, buildRouteAwareBlock } from "../routeAware/routeAwareManager.js";
 import { buildCalendarEmailCorrelations, formatCorrelationNote, type CalendarEmailCorrelation } from "./calendarEmailIntelligence.js";
 import { getOrdersForBriefing } from "../orders/ordersManager.js";
 import { getCachedWeather } from "../weather/weatherCache.js";
@@ -723,30 +722,6 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
         `Pause briefly after. Then continue to the thought of the day.`;
     }
 
-    // ── Route-aware proactive suggestions ────────────────────────────────────
-    // Fetch today + tomorrow calendar events to find stops on the way home.
-    // Non-fatal: if Google APIs fail or home address is missing, routeAwareBlock = "".
-    let routeAwareBlock = "";
-    if (homeAddress) {
-      try {
-        const [todayEvts, tomorrowEvts] = await Promise.all([
-          fetchTodayEvents(userName).catch(() => null),
-          fetchTomorrowEvents(userName).catch(() => null),
-        ]);
-        const allEvts = [...(todayEvts ?? []), ...(tomorrowEvts ?? [])];
-        if (allEvts.length) {
-          const routeSuggestions = await buildRouteAwareSuggestions(
-            userName, allEvts, homeAddress, primaryCity
-          ).catch(() => []);
-          if (routeSuggestions.length) {
-            routeAwareBlock = buildRouteAwareBlock(userName, routeSuggestions);
-            logger.info({ userName, count: routeSuggestions.length }, "[RouteAware] Suggestions built for briefing");
-          }
-        }
-      } catch (err) {
-        logger.warn({ err }, "[RouteAware] Suggestion build failed — skipping");
-      }
-    }
 
     // All data blocks assembled — build the suffix.
     // The briefing instruction is the final element so Claude's marching orders
@@ -779,7 +754,7 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
 
     const suffix = _bWeather + tripDayBlock + ordersBlock + _bTodos + tvMorningBlock + billsMorningBlock + datesBlock +
       sundaySummaryBlock + recFollowUpBlock + personalFollowUpsBlock +
-      mydayBlock + lifeSuggestionBlock + observationBlock + weeklyGiftBlock + annualLetterBlock + crossDomainBlock + routeAwareBlock +
+      mydayBlock + lifeSuggestionBlock + observationBlock + weeklyGiftBlock + annualLetterBlock + crossDomainBlock +
       _bNews + _bEvents + apifyEventBlock + dedupedVenueConcertsBlock + motivationContextBlock +
       onboardingNudgeBlock + stoicBlock +
       buildNarrativeBriefingInstruction(primaryCity, userProfile?.companionName ?? null, userProfile?.name ?? undefined, intentionQuestion, userSettings ?? undefined);
