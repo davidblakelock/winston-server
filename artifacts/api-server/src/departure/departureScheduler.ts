@@ -241,6 +241,11 @@ async function checkDepartureAlertsForUser(userName: string): Promise<void> {
       mapsUrl,
     });
 
+    logger.info(
+      { event: event.summary, userName, payload: { action: "open_url", url: mapsUrl, mapsDeepLink, destination: location } },
+      "[DepartureAlert] FCM payload"
+    );
+
     sendFcmNotification({
       userName,
       notificationType: "departure",

@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { query } from "../db.js";
-import { extractListOp, executeListOp, buildListContext, getItems } from "../lists/listManager.js";
 import { fetchAndSummarizeEmails, formatEmailsForPrompt, buildImportantEmailInstruction, getEmailLastChecked, updateEmailLastChecked } from "../google/gmail.js";
 import {
   fetchTodayEvents,
@@ -253,13 +252,12 @@ import {
   searchHotelViaSerpApi,
   isSerpApiReady,
 } from "../travel/serpApiHotels.js";
-import { nextOccurrenceForPattern, humanReadableRecurring } from "../reminders/recurringUtils.js";
-import { extractReminder, computeFireAt, resolveNextDayOfWeek, type ExtractedReminder } from "../reminders/reminderParser.js";
 import { broadcastToUser } from "../reminders/sseStore.js";
 import { saveMoodCheckin } from "../mood/moodManager.js";
 import { findConnectionByLabel, saveConnectMessage, markMessageDelivered } from "../connect/connectManager.js";
 import { getAllProviders, touchLastContactDate } from "../providers/providerManager.js";
 import { getPeople, type KeyPerson } from "../people/peopleManager.js";
+import { getAllLists, addItems, categorizeAndUpdateItem, syncListItemToConnections } from "../lists/listManager.js";
 import { sendPushToAll } from "../push/pushManager.js";
 import { getRecentAlertContext } from "../push/weatherAlertScheduler.js";
 import { extractAndSaveFollowups } from "../followups/followupManager.js";
@@ -940,7 +938,37 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   // Dynamic: current time, recent memories, preference blocks — changes each request.
   let systemPrompt = getCurrentDateTimeBlock() + "\n" + memoryBlock + dynamicProfileBlock + prefsBlock;
 
-  let reminderConfirmation = "";
+  // ── Always-on list & reminder context ────────────────────────────────────
+  // Injected unconditionally so Claude always has current state without keyword
+  // detection. Parallels the existing Promise.all above.
+  {
+    const [allListItems, pendingReminderRows] = await Promise.all([
+      getAllLists(sessionUserName).catch(() => ({} as Record<string, string[]>)),
+      query<{ reminder_text: string; fire_at: string; for_contact: string | null }>(
+        `SELECT reminder_text, fire_at, for_contact FROM reminders
+         WHERE user_name = $1 AND status = 'pending' ORDER BY fire_at ASC`,
+        [sessionUserName]
+      ).then((r) => r.rows).catch(() => [] as { reminder_text: string; fire_at: string; for_contact: string | null }[]),
+    ]);
+    for (const [listName, items] of Object.entries(allListItems)) {
+      if (items.length > 0) {
+        systemPrompt += `\n\n[${listName} list — current state]\n` +
+          items.map((item, i) => `${i + 1}. ${item}`).join("\n");
+      }
+    }
+    if (pendingReminderRows.length > 0) {
+      const fmtTime = (iso: string) =>
+        new Date(iso).toLocaleString("en-US", {
+          timeZone: "America/Chicago",
+          weekday: "short", month: "short", day: "numeric",
+          hour: "numeric", minute: "2-digit", hour12: true,
+        });
+      systemPrompt += `\n\n[Active Reminders — ${pendingReminderRows.length} pending]\n` +
+        pendingReminderRows
+          .map((r, i) => `${i + 1}. ${r.reminder_text}${r.for_contact ? ` (for ${r.for_contact})` : ""} — ${fmtTime(r.fire_at)}`)
+          .join("\n");
+    }
+  }
 
   // ── AI intent classification — replaces ~50 NL regex patterns ──────────────
   const _hasCachedBriefing = !!getCachedBriefing(sessionUserName);
@@ -955,15 +983,6 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isEveningGreeting = !isMorningGreeting && cls.evening_greeting;
   // [DIAG] Log pattern detection for Evening Wind-Down debugging
   req.log.info({ message, isMorningGreeting, isEveningGreeting, clsFlags: Object.keys(cls).filter(k => (cls as unknown as Record<string,unknown>)[k] === true) }, "[DIAG:1] Pattern detection");
-  // Checked first so "what are my reminders?" doesn't bleed into the creation path.
-  const isReminderListRequest = cls.reminder_list;
-  const isReminderRequest = !isReminderListRequest && cls.reminder_set;
-  let isListRequest = cls.list_modify;
-  const activeListFromHistory = !isListRequest ? detectActiveListFromHistory(history) : null;
-  const isCasualListAdd = !isListRequest && cls.casual_list_add && activeListFromHistory !== null;
-  if (isCasualListAdd) isListRequest = true;
-  const isSendListViaConnect = !isMorningGreeting && cls.list_share;
-  if (isSendListViaConnect) isListRequest = false;
   const isEmailRequest = !isMorningGreeting && cls.email;
   const isDinnerTonightQuery = !isMorningGreeting && cls.dinner_tonight;
   const isCalendarRequest = !isMorningGreeting && (cls.calendar_read || isDinnerTonightQuery);
@@ -971,7 +990,6 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isContactRequest = isCompoundContactAndSave || cls.contact_lookup;
   const isSaveContactRequest = !isContactRequest && cls.contact_save;
   const isGoogleContactWrite = !isMorningGreeting && cls.google_contact_write;
-  const isCallRequest = !isReminderRequest && cls.call;
   const isStoryRead = cls.story_read;
   const isStoryCount = cls.story_count;
   const isTripSaveIntent = !isMorningGreeting && cls.trip_save;
@@ -1079,9 +1097,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   // IMPORTANT: CREATE is evaluated before MODIFY — explicit "add/create/schedule/put on calendar"
   // always wins, even if the event title contains a word like "move" or "transfer".
   // MODIFY wins only when there is no create keyword (e.g. "reschedule", "move my appointment").
-  const isCalendarCreate = !isMorningGreeting && !isReminderRequest && cls.calendar_create;
-  const isCalendarModify = !isMorningGreeting && !isReminderRequest && !isCalendarCreate && cls.calendar_modify;
-  const isCalendarDelete = !isMorningGreeting && !isReminderRequest && cls.calendar_delete;
+  const isCalendarCreate = !isMorningGreeting && cls.calendar_create;
+  const isCalendarModify = !isMorningGreeting && !isCalendarCreate && cls.calendar_modify;
+  const isCalendarDelete = !isMorningGreeting && cls.calendar_delete;
   const isCalendarWriteOp = isCalendarCreate || isCalendarModify || isCalendarDelete;
   const pendingDel = getPendingDelete();
   const isDeleteConfirm = !!pendingDel && CALENDAR_CONFIRM_PATTERN.test(message.trim());
@@ -1157,8 +1175,6 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isDateAdd = !isMorningGreeting && cls.date_add;
   const isDateList = !isMorningGreeting && cls.date_list;
   const isDateRemove = !isMorningGreeting && cls.date_remove;
-  const isEmergency = cls.emergency;
-
   // Dynamic partner detection — read from key_people (structured table)
   const partner = keyPeople.find((p) => isPartnerRelationship(p.relationship ?? "")) ?? null;
   const partnerFirstName = partner?.name?.split(" ")[0] ?? null;
@@ -1181,9 +1197,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   // T005: Headache / body ache — check pressure
   const isHeadacheRequest = !isMorningGreeting && cls.headache;
 
-  // T006: Text message intent OR pending text flow continuation
+  // T006: Text message continuation flow
   const pendingText = getPendingText();
-  const isTextMessageRequest = !isMorningGreeting && cls.text_compose;
   const isTextFlowActive = !isMorningGreeting && pendingText !== null;
 
   // Declared early so code paths before the winddown section can reference it safely.
@@ -1195,7 +1210,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const pendingMeetingRequests = getPendingMeetingRequests();
   const EMAIL_REPLY_ACCEPT = /^(?:(?:ok|okay|yeah|yep|yup|sure|alright)[,\s]+)*(yes|draft\s+(?:it|a\s+reply|the\s+reply)|yes\s+draft|do\s+it|sounds?\s+good|let.?s\s+do\s+it|go\s+ahead)(?:[,\s!.]|$)/i;
   const isEmailReplyAccepted =
-    !isMorningGreeting && !isTextFlowActive && !isTextMessageRequest &&
+    !isMorningGreeting && !isTextFlowActive &&
     pendingEmailReply === null && pendingMeetingRequests.length > 0 &&
     EMAIL_REPLY_ACCEPT.test(message.trim());
   const isEmailReplyFlowActive = pendingEmailReply !== null;
@@ -1203,30 +1218,26 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   // T006-DEP: Departure text offer — user said yes after a departure alert offered to text someone
   const pendingDepartureOffer = getPendingDepartureTextOffer();
   const DEPARTURE_TEXT_ACCEPT = /^(?:yes|yeah|yep|yup|sure|go\s+ahead|do\s+it|ok(?:ay)?|send\s+it|text\s+(her|him|them)|that\s+works?|sounds?\s+good)(?:[,\s!.]|$)/i;
-  const isDepartureTextAccepted = !isMorningGreeting && !isTextFlowActive && !isTextMessageRequest
+  const isDepartureTextAccepted = !isMorningGreeting && !isTextFlowActive
     && pendingDepartureOffer !== null && DEPARTURE_TEXT_ACCEPT.test(message.trim());
 
   // Retry / edit-after-send: intent detected by classifier; lastSmsPayload guards
   // so these only fire when a text was actually dispatched within the session.
   const lastSmsPayload = getLastSmsPayload();
-  const isSmsRetryRequest = !isMorningGreeting && !isTextFlowActive && !isTextMessageRequest
+  const isSmsRetryRequest = !isMorningGreeting && !isTextFlowActive
     && !!lastSmsPayload && cls.sms_retry;
-  const isSmsEditAfterSend = !isMorningGreeting && !isTextFlowActive && !isTextMessageRequest
+  const isSmsEditAfterSend = !isMorningGreeting && !isTextFlowActive
     && !isSmsRetryRequest && !!lastSmsPayload && cls.sms_edit;
 
   // ── Model selection ───────────────────────────────────────────────────────
   // Simple/mechanical intents get Haiku (fast + cheap). Everything nuanced
   // — conversation, morning briefing, text composition, calendar, etc. — gets Sonnet.
   const _isSimpleIntent =
-    isReminderRequest ||
-    isListRequest ||
-    isCallRequest ||
     isBillAdd || isBillList || isBillRemove ||
     isMydayAdd || isMydayGet ||
     isDateAdd || isDateList || isDateRemove ||
     isMedRequest ||
-    isTVAdd || isTVRemove || isTVList ||
-    cls.navigation;
+    isTVAdd || isTVRemove || isTVList;
   const selectedModel = _isSimpleIntent && !isMorningGreeting && !isEveningGreeting
     ? MODEL_HAIKU
     : MODEL_SONNET;
@@ -2249,12 +2260,6 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
     }
   }
 
-  // ── Emergency protocol ──────────────────────────────────────────────────────
-  if (isEmergency) {
-    const homeAddressForEmergency = userProfile?.homeAddress ?? "unknown";
-    systemPrompt += `\n\n[EMERGENCY PROTOCOL ACTIVATED]\nThe user may be in distress or danger. Respond immediately with calm, clear, reassuring emergency guidance. Tell them to call 911. Give their home address: ${homeAddressForEmergency}. Ask if they need you to stay on the line. Use short sentences. Be calm and clear. Do NOT be wordy — emergency responders need clarity. Start your response with a warm, direct greeting using their name.`;
-  }
-
   // ── Important dates ──────────────────────────────────────────────────────────
   if (isDateAdd) {
     try {
@@ -2337,7 +2342,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
   if (!isMorningGreeting) {
     try {
       const followUps = await getPendingFollowUps(3, 4, sessionUserName);
-      if (followUps.length > 0 && !isDateAdd && !isEmergency) {
+      if (followUps.length > 0 && !isDateAdd) {
         systemPrompt += buildRecommendationFollowUpBlock(followUps);
         // Auto-resolve: mark all as followed_up immediately — one attempt only
         for (const fu of followUps) {
@@ -3185,288 +3190,8 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
         }
       }
     }
-  } else if (isTextMessageRequest) {
-    // Starting a new text message flow
-    const targetName = extractTextTargetName(message);
-    if (targetName) {
-      // Detect inline content — user may have included what to say in the same message.
-      // e.g. "text Susan and tell her I had a great time" → inline intent = "I had a great time"
-      // Strip the text trigger + name from the message, then strip junction words.
-      const INLINE_JUNCTION = /^[\s,]*(?:and\s+)?(?:tell(?:ing)?\s+(?:her|him|them)|say(?:ing)?|that|to\s+say|letting?\s+(?:her|him|them)\s+know|tell\s+(?:her|him|them))\s+/i;
-      const stripped_msg = message.replace(/^(?:.*?\s)?(?:text|send\s+(?:a\s+)?(?:text|message|sms)(?:\s+to)?|message|(?:send|shoot|drop|give)\s+[A-Za-z][A-Za-z'.]*(?:\s+[A-Za-z][A-Za-z'.]*)?\s+(?:a\s+)?(?:text|message|sms|note))\s+[A-Za-z][A-Za-z'.]*(?:\s+[A-Za-z][A-Za-z'.]*)?/i, "").trim();
-      const inlineIntent = stripped_msg.replace(INLINE_JUNCTION, "").trim();
-      const hasInlineContent = inlineIntent.length >= 10;
-
-      try {
-        // ── Contact resolution: key_people first, then Google Contacts ──────
-        // Build a list of candidates matching targetName.
-        // Priority rule: any match in key_people beats any Google Contact.
-        // If more than one candidate exists across both sources, ask which one.
-
-        const allKeyPeople = await getPeople(sessionUserName).catch((): KeyPerson[] => []);
-        const lowerTarget = targetName.toLowerCase();
-
-        const keyMatches = allKeyPeople.filter((p) => {
-          const first = p.name.split(" ")[0]?.toLowerCase() ?? "";
-          const full  = p.name.toLowerCase();
-          return first === lowerTarget || full === lowerTarget || full.includes(lowerTarget);
-        });
-
-        let candidates: TextContactCandidate[] = keyMatches.map((p) => ({
-          name: p.name,
-          phone: p.phone ?? null,
-          relationship: p.relationship ?? undefined,
-          source: "key_people" as const,
-        }));
-
-        // Phone enrichment: a person may be in key_people (with relationship/notes)
-        // but never had their phone saved there. Google Contacts often has it.
-        // Without this, the SMS URI has no recipient and iOS shows a blank compose screen.
-        if (candidates.length > 0 && candidates.some((c) => c.phone === null)) {
-          try {
-            const enrichResult = await searchContacts(targetName, sessionUserName);
-            const enrichFiltered = enrichResult.contacts.filter((c) => {
-              const first = (c.name ?? "").split(" ")[0]?.toLowerCase() ?? "";
-              return first === lowerTarget || (c.name ?? "").toLowerCase().includes(lowerTarget);
-            });
-            for (const candidate of candidates) {
-              if (candidate.phone !== null) continue;
-              const candFirst = candidate.name.split(" ")[0]?.toLowerCase() ?? "";
-              const gcMatch = enrichFiltered.find((c) => {
-                const gcFirst = (c.name ?? "").split(" ")[0]?.toLowerCase() ?? "";
-                return gcFirst === candFirst || (c.name ?? "").toLowerCase().includes(candFirst);
-              });
-              if (gcMatch?.phone) {
-                candidate.phone = gcMatch.phone;
-                req.log.info({ name: candidate.name, phone: gcMatch.phone }, "[T006] Phone enriched from Google Contacts for key_people entry");
-              }
-            }
-          } catch {
-            // Non-fatal — proceed with whatever phones we already have
-          }
-        }
-
-        // Only fall back to Google Contacts when key_people has no match at all
-        if (candidates.length === 0) {
-          const contactResult = await searchContacts(targetName, sessionUserName);
-          // Filter to contacts whose display name starts with the target first name
-          // (avoids pulling in unrelated contacts from a fuzzy search)
-          const filtered = contactResult.contacts.filter((c) => {
-            const first = (c.name ?? "").split(" ")[0]?.toLowerCase() ?? "";
-            return first === lowerTarget || (c.name ?? "").toLowerCase().includes(lowerTarget);
-          });
-          candidates = filtered.map((c) => ({
-            name: c.name ?? targetName,
-            phone: c.phone ?? null,
-            relationship: undefined,
-            source: "contacts" as const,
-          }));
-        }
-
-        // ── Disambiguation: multiple people with the same first name ─────────
-        if (candidates.length > 1) {
-          const inlineTone = detectInlineTone(message);
-          const tone: MessageTone = inlineTone ?? "casual";
-          setPendingText({
-            phase: "awaiting_disambiguation",
-            recipientName: targetName,
-            recipientPhone: null,
-            tone,
-            candidates,
-            inlineIntent: hasInlineContent ? inlineIntent : undefined,
-          });
-
-          const list = candidates.map((c, i) => {
-            const rel  = c.relationship ? ` (${c.relationship})` : "";
-            const src  = c.source === "key_people" ? " — key person" : "";
-            return `${i + 1}. ${c.name}${rel}${src}`;
-          }).join("\n");
-          systemPrompt +=
-            `\n\n[Text Message — Multiple "${targetName}" Found]\n` +
-            `${list}\n\n` +
-            `Tell ${userProfile?.name ?? sessionUserName} you found ${candidates.length} people named ` +
-            `"${targetName}" and ask which one they mean. ` +
-            `Read the numbered list back naturally (name + label). ` +
-            `They can say the full name, last name, relationship, or "the first one" / "the second one".`;
-
-          req.log.info({ targetName, count: candidates.length }, "[T006] Disambiguation required");
-        } else {
-        // ── Single match or no match — proceed with the original flow ────────
-        const singleCandidate = candidates[0] ?? null;
-        const phone = singleCandidate?.phone ?? null;
-
-        // Relationship: use key_people first, fall back to already-fetched keyPeople
-        let relationship = singleCandidate?.relationship;
-        if (!relationship) {
-          const profileMatch = keyPeople.find(
-            (p) => p.name.toLowerCase().includes(lowerTarget) ||
-                   lowerTarget.includes(p.name.split(" ")[0]?.toLowerCase() ?? "")
-          );
-          relationship = profileMatch?.relationship ?? undefined;
-        }
-
-        // Check if the user specified a tone inline ("text Sarah in a flirty tone")
-        const inlineTone = detectInlineTone(message);
-        const tone: MessageTone = inlineTone ?? detectToneFromRelationship(relationship ?? targetName);
-        const displayName = userProfile?.name ?? sessionUserName;
-        const toneLbl = toneLabel(tone);
-
-        const resolvedName = singleCandidate?.name ?? targetName;
-
-        if (hasInlineContent) {
-          // User gave us the content inline ("text Susan that I'll be 10 minutes late").
-          // If they also requested a tone/style ("in a witty tone", "make it romantic"),
-          // call Claude to compose in that style — but no added greetings or closings.
-          // If no style was requested, use their exact words verbatim (unless there's booking context).
-
-          // Enrich vague inline content with recent restaurant booking context if available.
-          // e.g. "text Susan about dinner" → compose with full reservation details.
-          const _lastBooking = getLastBookingAttempt();
-          const _bookingFresh = _lastBooking && Date.now() - _lastBooking.timestamp < 60 * 60 * 1000;
-          const _bookingNote = _bookingFresh
-            ? ` (Context: we just booked a reservation at ${_lastBooking!.restaurantName}` +
-              `${_lastBooking!.dateLabel ? ` for ${_lastBooking!.dateLabel}` : ""}` +
-              `${_lastBooking!.timeLabel ? ` at ${_lastBooking!.timeLabel}` : ""}` +
-              `, party of ${_lastBooking!.partySize}.)`
-            : "";
-          const enrichedIntent = _bookingNote ? `${inlineIntent}${_bookingNote}` : inlineIntent;
-
-          if (inlineTone !== null) {
-            // Style requested inline — let Claude rephrase
-            try {
-              const composed = await composeTextMessage({
-                recipientName: resolvedName,
-                relationship,
-                tone: inlineTone,
-                userIntent: enrichedIntent,
-                senderName: displayName,
-              });
-
-              setPendingText({
-                phase: "awaiting_confirmation",
-                recipientName: resolvedName,
-                recipientPhone: phone,
-                relationship,
-                tone: inlineTone,
-                composedBody: composed.body,
-              });
-
-              systemPrompt +=
-                `\n\n[Text Message Composed for ${resolvedName} — ${toneLabel(inlineTone)} tone]\n` +
-                `Message body:\n"${composed.body}"\n\n` +
-                `Read this back to ${displayName} WORD FOR WORD — do not change, add, or remove anything. ` +
-                `Then ask: "Does that work? Say yes and I'll open Messages so you can tap Send." ` +
-                `CRITICAL HONESTY RULES: ` +
-                `(1) You are NOT sending it — you CANNOT send it. ` +
-                `(2) Messages only opens AFTER the user says yes. ` +
-                `(3) Never say "sending now", "opening Messages", or anything implying immediate action.`;
-
-              req.log.info({ targetName: resolvedName, hasPhone: !!phone, tone: inlineTone, inlineContent: inlineIntent.slice(0, 60) }, "[T006] Inline content with tone — composed via Claude");
-            } catch (compErr) {
-              req.log.warn({ compErr }, "[T006] Inline tone compose failed — falling back to verbatim");
-              const body = sanitizeSmsBody(inlineIntent);
-              setPendingText({ phase: "awaiting_confirmation", recipientName: resolvedName, recipientPhone: phone, relationship, tone: inlineTone, composedBody: body });
-              systemPrompt += `\n\n[Text Message Ready for ${resolvedName}]\nMessage body:\n"${body}"\n\nRead back verbatim, ask for confirmation.`;
-            }
-          } else {
-            // No style request. If there's fresh booking context, compose via Claude so the
-            // message naturally references the reservation. Otherwise use exact words verbatim.
-            if (_bookingNote) {
-              try {
-                const composed = await composeTextMessage({
-                  recipientName: resolvedName,
-                  relationship,
-                  tone,
-                  userIntent: enrichedIntent,
-                  senderName: displayName,
-                });
-                setPendingText({
-                  phase: "awaiting_confirmation",
-                  recipientName: resolvedName,
-                  recipientPhone: phone,
-                  relationship,
-                  tone,
-                  composedBody: composed.body,
-                });
-                systemPrompt +=
-                  `\n\n[Text Message Composed for ${resolvedName}]\n` +
-                  `Message body:\n"${composed.body}"\n\n` +
-                  `Read this back to ${displayName} WORD FOR WORD. ` +
-                  `Then ask: "Does that work? Say yes and I'll open Messages so you can tap Send." ` +
-                  `CRITICAL: You are NOT sending it. Messages opens AFTER the user says yes.`;
-                req.log.info({ targetName: resolvedName, bookingContext: true }, "[T006] Inline + booking context — composed via Claude");
-              } catch (compErr) {
-                req.log.warn({ compErr }, "[T006] Booking-context compose failed — falling back to verbatim");
-                const body = sanitizeSmsBody(inlineIntent);
-                setPendingText({ phase: "awaiting_confirmation", recipientName: resolvedName, recipientPhone: phone, relationship, tone, composedBody: body });
-                systemPrompt += `\n\n[Text Message Ready for ${resolvedName}]\nMessage body:\n"${body}"\n\nRead back verbatim, ask for confirmation.`;
-              }
-            } else {
-              const body = sanitizeSmsBody(inlineIntent);
-
-              setPendingText({
-                phase: "awaiting_confirmation",
-                recipientName: resolvedName,
-                recipientPhone: phone,
-                relationship,
-                tone,
-                composedBody: body,
-              });
-
-              systemPrompt +=
-                `\n\n[Text Message Ready for ${resolvedName}]\n` +
-                `Message body:\n"${body}"\n\n` +
-                `Read this message back to ${displayName} WORD FOR WORD — do not change, add, or remove anything. ` +
-                `Then ask: "Does that look right? Say yes and I'll open Messages so you can tap Send." ` +
-                `If they want a different style, they can say "make it witty", "make it warmer", etc. ` +
-                `CRITICAL HONESTY RULES: ` +
-                `(1) You are NOT sending it and you CANNOT send it. ` +
-                `(2) The Messages app only opens AFTER the user says yes — do NOT say it is opening now. ` +
-                `(3) Never say "sending now", "opening Messages", or anything implying immediate action. ` +
-                `(4) The user dictated this exact message — read it back VERBATIM. Do not paraphrase, expand, or add to it.`;
-
-              req.log.info({ targetName: resolvedName, hasPhone: !!phone, body: body.slice(0, 80) }, "[T006] Inline content — using verbatim (no tone requested)");
-            }
-          }
-        } else {
-          // No inline content — ask what they want to say
-          setPendingText({
-            phase: "awaiting_intent",
-            recipientName: resolvedName,
-            recipientPhone: phone,
-            relationship,
-            tone,
-          });
-
-          const phoneNote = phone
-            ? `I found ${resolvedName}'s number.`
-            : `I didn't find a number for ${resolvedName} in your contacts, but I'll compose it and you can fill that in.`;
-          const toneNote = inlineTone ? ` I'll keep it ${toneLbl}.` : (relationship ? ` Since they're your ${relationship}, I'll keep it ${toneLbl}.` : ` I'll write it ${toneLbl}.`);
-
-          systemPrompt +=
-            `\n\n[Text Message Flow Started — Recipient: ${resolvedName}]\n` +
-            `${phoneNote}${toneNote}\n\n` +
-            `Ask ${displayName} what they'd like to say — something like: ` +
-            `"${phoneNote.replace("I", "Got it — ")} What would you like to say?"`;
-
-          req.log.info({ targetName: resolvedName, source: singleCandidate?.source ?? "none", hasPhone: !!phone, relationship, tone }, "[T006] Text message flow started — awaiting intent");
-        }
-        } // end else (single/no match branch)
-      } catch (err) {
-        req.log.warn({ err }, "[T006] Contact lookup failed");
-        setPendingText({
-          phase: "awaiting_intent",
-          recipientName: targetName,
-          recipientPhone: null,
-          tone: "casual",
-        });
-        systemPrompt +=
-          `\n\n[Text Message Flow — Contact Lookup Failed]\n` +
-          `Couldn't look up ${targetName} right now. ` +
-          `Ask the user what they'd like to say to ${targetName} and you'll compose it.`;
-      }
-    }
   }
+
 
   // ── T006-retry: user says "it didn't open" / "try again" after SMS dispatch ──
   if (isSmsRetryRequest && lastSmsPayload) {
@@ -4060,11 +3785,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
     // Utility-only requests (list adds/reads, medication, reminders) should
     // never trigger the full evening check-in script — the user just wants
     // the task done. isEveningGreeting still allows the check-in to start.
-    const isUtilityOnlyRequest =
-      (isListRequest && !isEveningGreeting) ||
-      isMedRequest ||
-      (isReminderRequest && !isEveningGreeting) ||
-      isReminderListRequest;
+    const isUtilityOnlyRequest = isMedRequest;
 
     // Skip the evening check-in system prompt when a text message flow is
     // active — T006 context already in systemPrompt takes priority.
@@ -4192,301 +3913,6 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
       }
     } catch (err) {
       req.log.warn({ err }, "Journal review failed");
-    }
-  }
-
-  if (isReminderRequest) {
-    try {
-      const extracted = await extractReminder(message, "America/Chicago");
-
-      if (extracted) {
-        // If no explicit time was given, default to 30 minutes from now so the
-        // reminder fires soon rather than being silently pushed to tomorrow.
-        let resolvedTime: string;
-        let noTimeGiven = false;
-        if (!extracted.time) {
-          noTimeGiven = true;
-          const soon = new Date(Date.now() + 30 * 60 * 1000);
-          const ctFmtNow = new Intl.DateTimeFormat("en-US", {
-            timeZone: "America/Chicago",
-            hour: "2-digit",
-            minute: "2-digit",
-            hour12: false,
-          });
-          const ctPartsNow = Object.fromEntries(
-            ctFmtNow.formatToParts(soon).map((x) => [x.type, x.value])
-          );
-          resolvedTime = `${ctPartsNow.hour}:${ctPartsNow.minute}`;
-        } else {
-          resolvedTime = extracted.time;
-        }
-
-        // For recurring reminders with specific day patterns (weekly:tue,thu, monthly:15, etc.)
-        // use nextOccurrenceForPattern to compute the FIRST correct fire date.
-        // For one-time reminders naming a specific day ("next Monday", "this Friday"),
-        // use resolveNextDayOfWeek so the date is computed server-side, not by the LLM.
-        // For all other one-time reminders, computeFireAt is sufficient.
-        const recurringPattern = extracted.recurring;
-        const needsPatternScheduling =
-          extracted.isRecurring &&
-          recurringPattern &&
-          (recurringPattern.startsWith("weekly:") || recurringPattern.startsWith("monthly:"));
-
-        const fireAt = needsPatternScheduling
-          ? nextOccurrenceForPattern(recurringPattern!, resolvedTime, "America/Chicago")
-          : extracted.dayOfWeek && !extracted.isRecurring
-            ? resolveNextDayOfWeek(extracted.dayOfWeek, resolvedTime, "America/Chicago", extracted.nextWeek ?? false)
-            : computeFireAt(resolvedTime, "America/Chicago");
-
-        const [hh, mm] = resolvedTime.split(":").map(Number);
-        const displayTime = new Date(0);
-        displayTime.setHours(hh, mm);
-        const timeLabel = displayTime.toLocaleTimeString("en-US", {
-          hour: "numeric",
-          minute: "2-digit",
-          hour12: true,
-        });
-
-        const recurringLabel = extracted.isRecurring && recurringPattern
-          ? humanReadableRecurring(recurringPattern)
-          : null;
-
-        await createReminder({
-          userName: sessionUserName,
-          reminderText: extracted.reminderText,
-          fireAt,
-          recurring: recurringPattern ?? null,
-          recurringTime: extracted.isRecurring ? resolvedTime : null,
-          timezone: "America/Chicago",
-          forContact: extracted.forContact ?? null,
-        });
-
-        // ── Mirror one-time reminders onto the to-do list ───────────────────
-        // Recurring reminders are habits, not tasks — skip those.
-        // forContact means "also notify this person via Winston Connect" — the
-        // reminder is still a task for the user, so always mirror one-time ones.
-        if (!extracted.isRecurring) {
-          try {
-            await query(
-              `INSERT INTO list_items (user_name, list_name, item_text, reminder_time, reminder_fired)
-               VALUES ($1, 'to do', $2, $3, TRUE)
-               ON CONFLICT (user_name, list_name, lower(item_text))
-               DO UPDATE SET reminder_time  = EXCLUDED.reminder_time,
-                             reminder_fired = TRUE`,
-              [sessionUserName, extracted.reminderText, fireAt]
-            );
-            req.log.info({ text: extracted.reminderText, fireAt }, "[Reminder] Mirrored to to-do list");
-          } catch (todoErr) {
-            req.log.warn({ todoErr }, "[Reminder] Failed to mirror to to-do list — reminder still saved");
-          }
-        }
-
-        req.log.info({ extracted, resolvedTime, fireAt, noTimeGiven, recurringLabel }, "Reminder saved");
-
-        if (extracted.forContact) {
-          // Schedule the reminder for the recipient via Winston Connect.
-          // Creates a row in the RECIPIENT's reminders table so the scheduler
-          // fires the push at the correct local time — not immediately.
-          let connectScheduled = false;
-          let connectSenderLabel = sessionUserName;
-          try {
-            const match = await findConnectionByLabel(sessionUserName, extracted.forContact);
-            if (match) {
-              connectSenderLabel = match.senderLabel;
-              const recipientReminderText = `A message from ${match.senderLabel}: ${extracted.reminderText}`;
-
-              // Schedule in recipient's reminders table — scheduler fires push at fireAt
-              await createReminder({
-                userName: match.recipientUserName,
-                reminderText: recipientReminderText,
-                fireAt,
-                timezone: "America/Chicago",
-              });
-
-              // Mirror to recipient's to-do list so they see it there too
-              await query(
-                `INSERT INTO list_items (user_name, list_name, item_text, reminder_time, added_by)
-                 VALUES ($1, 'to do', $2, $3, $4)
-                 ON CONFLICT (user_name, list_name, lower(item_text))
-                 DO UPDATE SET reminder_time  = EXCLUDED.reminder_time,
-                               reminder_fired = FALSE`,
-                [match.recipientUserName, extracted.reminderText, fireAt, match.senderLabel]
-              ).catch(() => {});
-
-              connectScheduled = true;
-              req.log.info(
-                { recipient: match.recipientUserName, fireAt: fireAt.toISOString(), text: extracted.reminderText },
-                "[Connect] Cross-user reminder scheduled"
-              );
-            }
-          } catch (connectErr) {
-            req.log.warn({ connectErr }, "[Connect] Winston Connect scheduling failed — local reminder still saved");
-          }
-
-          reminderConfirmation =
-            `\n\n[Reminder saved for contact]\n` +
-            `Contact: "${extracted.forContact}"\n` +
-            `Text: "${extracted.reminderText}"\n` +
-            `Time: ${timeLabel}${noTimeGiven ? " (defaulted — no time specified)" : ""}\n` +
-            (connectScheduled
-              ? `Scheduled push on ${extracted.forContact}'s companion at ${timeLabel}. ` +
-                `Message will read: "A message from ${connectSenderLabel}: ${extracted.reminderText}". ` +
-                `Also added "${extracted.reminderText}" to ${extracted.forContact}'s to-do list with a ${timeLabel} reminder. ` +
-                `Reply with ONLY: "Done — I'll remind ${extracted.forContact} to ${extracted.reminderText} at ${timeLabel}."`
-              : `${extracted.forContact} is not currently linked via Winston Connect, so no push was scheduled. ` +
-                `Reply with ONLY: "Done — I'll remind you to follow up with ${extracted.forContact} about ${extracted.reminderText} at ${timeLabel}. They'll need Winston Connect to receive it directly."`);
-        } else {
-          const recurringPhrase = recurringLabel ? ` ${recurringLabel}` : "";
-          reminderConfirmation =
-            `\n\n[Reminder saved]\n` +
-            `Text: "${extracted.reminderText}"\n` +
-            `Time: ${timeLabel}${noTimeGiven ? " (defaulted to 30 min from now — user gave no explicit time)" : ""}\n` +
-            `Recurring: ${recurringLabel ?? "no"}\n` +
-            `Reply with ONLY the confirmation. No other text, no personality, no references to anything else. ` +
-            (noTimeGiven
-              ? `One line: "Done — I'll remind you to ${extracted.reminderText} at ${timeLabel}. Let me know if you'd like a different time."`
-              : extracted.isRecurring
-                ? `One line: "Set — I'll remind you to ${extracted.reminderText}${recurringPhrase} at ${timeLabel}."`
-                : `One line: "Done — I'll remind you to ${extracted.reminderText} at ${timeLabel}."`);
-        }
-
-        systemPrompt = systemPrompt + reminderConfirmation;
-      }
-    } catch (err) {
-      req.log.warn({ err }, "Reminder extraction failed, continuing normally");
-    }
-  }
-
-  if (isReminderListRequest) {
-    try {
-      const { rows: pending } = await query<{
-        id: number;
-        reminder_text: string;
-        fire_at: string;
-        recurring: string | null;
-        for_contact: string | null;
-      }>(
-        `SELECT id, reminder_text, fire_at, recurring, for_contact
-           FROM reminders
-          WHERE user_name = $1
-            AND status = 'pending'
-          ORDER BY fire_at ASC`,
-        [sessionUserName]
-      );
-
-      const tz = "America/Chicago";
-      const formatFireAt = (isoStr: string) => {
-        const d = new Date(isoStr);
-        return d.toLocaleString("en-US", {
-          timeZone: tz,
-          weekday: "short",
-          month: "short",
-          day: "numeric",
-          hour: "numeric",
-          minute: "2-digit",
-          hour12: true,
-        });
-      };
-
-      let reminderListBlock: string;
-      if (pending.length === 0) {
-        reminderListBlock =
-          `\n\n[Active Reminders]\nNo pending reminders. ` +
-          `Reply naturally: "You don't have any active reminders right now."`;
-      } else {
-        const lines = pending.map((r, i) => {
-          const contact = r.for_contact ? ` (for ${r.for_contact})` : "";
-          const recur = r.recurring ? ` [${humanReadableRecurring(r.recurring)}]` : "";
-          return `${i + 1}. ${r.reminder_text}${contact}${recur} — ${formatFireAt(r.fire_at)}`;
-        });
-        reminderListBlock =
-          `\n\n[Active Reminders — ${pending.length} pending]\n${lines.join("\n")}\n` +
-          `Read these back naturally and conversationally. Don't just list them verbatim — weave them into a brief reply.`;
-      }
-
-      systemPrompt = systemPrompt + reminderListBlock;
-      req.log.info({ count: pending.length }, "Reminder list injected into prompt");
-    } catch (err) {
-      req.log.warn({ err }, "Reminder list fetch failed, continuing normally");
-    }
-  }
-
-  if (isSendListViaConnect) {
-    try {
-      const extraction = await anthropic.messages.create({
-        model: MODEL_HAIKU,
-        max_tokens: 80,
-        system: `Extract the contact name and list name from this message.
-Return ONLY valid JSON: {"contact":"<name>","listName":"shopping"|"to do"}
-listName must be exactly "shopping" or "to do" (grocery/groceries → shopping, todo/tasks → to do).
-If you cannot extract both, return null.`,
-        messages: [{ role: "user", content: message }],
-      });
-      const raw = extraction.content[0]?.type === "text" ? extraction.content[0].text.trim() : "";
-      let parsed: { contact: string; listName: string } | null = null;
-      try { parsed = raw && raw !== "null" ? JSON.parse(raw) : null; } catch { parsed = null; }
-
-      if (parsed?.contact && parsed?.listName) {
-        const match = await findConnectionByLabel(sessionUserName, parsed.contact);
-        if (match) {
-          const items = await getItems(parsed.listName, sessionUserName).catch(() => [] as string[]);
-          if (items.length === 0) {
-            systemPrompt +=
-              `\n\n[Send List via Connect — Empty List]\n` +
-              `Your ${parsed.listName} list is empty, so nothing was sent to ${parsed.contact}.\n` +
-              `Reply with ONLY one line: "Your ${parsed.listName} list is empty — nothing to send."`;
-          } else {
-            const listText = items.map((item, i) => `${i + 1}. ${item}`).join("\n");
-            const msgText = `Here's my ${parsed.listName} list:\n${listText}`;
-            const msgId = await saveConnectMessage(sessionUserName, match.recipientUserName, "list", msgText);
-            const pushResult = await sendPushToAll(
-              {
-                title: `List from ${match.senderLabel}`,
-                body: `${parsed.listName} list — ${items.length} item${items.length !== 1 ? "s" : ""}`,
-                tag: `connect-list-${msgId}`,
-                notificationType: "connect-message",
-                companionMessage: msgText,
-              },
-              match.recipientUserName
-            ).catch(() => ({ sent: 0 }));
-            if (pushResult.sent > 0) await markMessageDelivered(msgId);
-            req.log.info({ msgId, recipient: match.recipientUserName, itemCount: items.length, listName: parsed.listName }, "[Connect] List sent via Winston Connect");
-            systemPrompt +=
-              `\n\n[List sent via Winston Connect]\n` +
-              `Contact: "${parsed.contact}"\n` +
-              `List: ${parsed.listName} (${items.length} item${items.length !== 1 ? "s" : ""})\n` +
-              `Message sent to ${parsed.contact}'s companion.\n` +
-              `Reply with ONLY one line: "Done — I've sent your ${parsed.listName} list to ${parsed.contact}."`;
-          }
-        } else {
-          systemPrompt +=
-            `\n\n[Send List via Connect — Contact Not Linked]\n` +
-            `"${parsed.contact}" is not connected via Winston Connect.\n` +
-            `Reply with ONLY one line: "I don't have ${parsed.contact} connected via Winston Connect, so I couldn't send the list. Ask them to link up first."`;
-        }
-      }
-    } catch (connectErr) {
-      req.log.warn({ connectErr }, "[Connect] Send list via Connect failed");
-    }
-  }
-
-  if (isListRequest) {
-    try {
-      const op = await extractListOp(message, isCasualListAdd ? (activeListFromHistory ?? undefined) : undefined);
-      if (op) {
-        const result = await executeListOp(op, sessionUserName);
-        const listContext = buildListContext(result);
-        systemPrompt = systemPrompt + listContext;
-        req.log.info({ op, itemCount: result.currentItems.length, insertedCount: result.items.length }, "List operation executed");
-      } else {
-        req.log.warn({ message }, "List op — extractListOp returned null (could not parse)");
-        systemPrompt = systemPrompt +
-          `\n\n[List Request — Could Not Parse]\nCould not determine which list or operation was requested. Ask the user to clarify (e.g., "Which list — shopping or to do?"). Do NOT guess or invent any list items.`;
-      }
-    } catch (err) {
-      req.log.warn({ err: err instanceof Error ? { message: (err as Error).message, stack: (err as Error).stack } : String(err) }, "List operation failed");
-      systemPrompt = systemPrompt +
-        `\n\n[List Request — Failed]\nThe list retrieval failed due to a system error. Tell the user: "I couldn't retrieve your list right now — please try again in a moment." Do NOT invent or guess any list items.`;
     }
   }
 
@@ -5094,91 +4520,6 @@ If you cannot extract both, return null.`,
     }
   }
 
-  // ── "Call [name]" phone lookup ────────────────────────────────────────────────
-  if (isCallRequest) {
-    try {
-      // Extract the target name from CALL_PATTERN groups
-      const callMatch = message.match(
-        /\b(?:call|phone|dial|ring)\s+(?!me\b|you\b|us\b|911\b|them\b|him\b|her\b|it\b|back\b|now\b|later\b)([A-Za-z][A-Za-z'.]*(?:\s+[A-Za-z][A-Za-z'.]*)?)(?:\s|$)/i
-      ) ?? message.match(
-        /give\s+([A-Za-z][A-Za-z'.]*(?:\s+[A-Za-z][A-Za-z'.]*)?)\s+a\s+(?:call|ring)/i
-      );
-      const callTargetName = callMatch?.[1]?.trim() ?? "";
-      console.log(`[CALL INTENT] Detected — target="${callTargetName}"`);
-
-      if (callTargetName.length > 1) {
-        // Extract phone from a free-text detail string (e.g. "Phone: 214-555-1234 | Email: ...")
-        const extractPhone = (detail: string | null | undefined): string | null => {
-          if (!detail) return null;
-          const m = detail.match(/(\+?1?[-.\s]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4})/);
-          return m ? m[1].replace(/\s+/g, "-").replace(/[()]/g, "").replace(/\.\-/g, "-") : null;
-        };
-
-        // Fuzzy name match helper — true when any word of target appears in candidate name
-        const nameMatches = (candidate: string, target: string): boolean => {
-          const targetLower = target.toLowerCase();
-          const candidateLower = candidate.toLowerCase();
-          // Exact start match first
-          if (candidateLower.startsWith(targetLower) || targetLower.startsWith(candidateLower)) return true;
-          // Any target word (≥3 chars) found in candidate
-          return target.toLowerCase().split(/\s+/).filter(w => w.length >= 3).some(w => candidateLower.includes(w));
-        };
-
-        let foundPhone: string | null = null;
-        let foundName: string = callTargetName;
-
-        // Tier 1: profile_items (people category) — fastest, zero API calls
-        const profilePeople = await getProfileItems("people", sessionUserName).catch(() => []);
-        const profileMatch = profilePeople.find(p => nameMatches(p.name, callTargetName));
-        if (profileMatch) {
-          foundPhone = extractPhone(profileMatch.detail);
-          foundName = profileMatch.name;
-          console.log(`[CALL INTENT] Tier-1 profile_items hit: "${foundName}" phone="${foundPhone}"`);
-        }
-
-        // Tier 2: curated google_contacts — has a dedicated phone column
-        if (!foundPhone) {
-          const curated = await getCuratedContacts(sessionUserName).catch(() => []);
-          const curatedMatch = curated.find(c => nameMatches(c.name, callTargetName));
-          if (curatedMatch) {
-            foundPhone = curatedMatch.phone ?? null;
-            foundName = curatedMatch.name;
-            console.log(`[CALL INTENT] Tier-2 curated contacts hit: "${foundName}" phone="${foundPhone}"`);
-          }
-        }
-
-        // Tier 3: live Google Contacts API search
-        if (!foundPhone) {
-          const searchResult = await searchContacts(callTargetName, sessionUserName).catch(() => ({ contacts: [], needsReauth: false, source: "none" as const }));
-          if (searchResult.contacts.length > 0) {
-            const liveMatch = searchResult.contacts[0];
-            foundPhone = liveMatch.phone ?? null;
-            foundName = liveMatch.name;
-            console.log(`[CALL INTENT] Tier-3 Google Contacts hit: "${foundName}" phone="${foundPhone}"`);
-          }
-        }
-
-        if (foundPhone) {
-          systemPrompt +=
-            `\n\n[CALL REQUEST — Phone Found]\n` +
-            `${sessionUserName} wants to call ${foundName}.\n` +
-            `Phone number: ${foundPhone}\n` +
-            `IMPORTANT: Include the phone number formatted as-is in your response — the native app detects it to offer a tap-to-dial button. ` +
-            `Respond naturally, e.g. "Here's ${foundName.split(" ")[0]}'s number: ${foundPhone}" or "Calling ${foundName.split(" ")[0]} at ${foundPhone}." Keep it short.`;
-        } else {
-          systemPrompt +=
-            `\n\n[CALL REQUEST — No Phone Found]\n` +
-            `${sessionUserName} wants to call "${callTargetName}" but no phone number was found in profile, curated contacts, or Google Contacts.\n` +
-            `Respond conversationally: "I don't have a number for ${callTargetName} — want me to look them up or save their number?"`;
-        }
-
-        req.log.info({ callTargetName, foundName, hasPhone: !!foundPhone }, "[CALL INTENT] Lookup complete");
-      }
-    } catch (err) {
-      req.log.warn({ err }, "[CALL INTENT] Lookup failed, continuing without");
-    }
-  }
-
   let navigationUrl: string | undefined;
   const profileHomeAddress = userProfile?.homeAddress ?? "";
   const placesWithHome: Array<{ name: string; address: string }> = profileHomeAddress
@@ -5190,20 +4531,6 @@ If you cannot extract both, return null.`,
         ...profilePlaces,
       ]
     : profilePlaces;
-  const navLocation = detectNavigation(message, placesWithHome);
-  if (navLocation) {
-    navigationUrl = buildMapsUrl(navLocation.address);
-    const displayName =
-      navLocation.name === "home" ? "home" : navLocation.name;
-    systemPrompt =
-      systemPrompt +
-      `\n\n[Navigation request detected]\n` +
-      `The user is asking for directions to: ${displayName}\n` +
-      `Address: ${navLocation.address}\n` +
-      `Google Maps is opening automatically. Your response should be a single short sentence confirming this, e.g. "Opening directions to ${displayName} now." Do not add anything else.`;
-    req.log.info({ location: navLocation.name, url: navigationUrl }, "Navigation triggered");
-  }
-
   // ── Layer 2: Transcript search — "what did I say about X last week?" ────────
   // Only triggered by explicit recall queries — never auto-loaded.
   if (cls.transcript_search) {
@@ -5246,8 +4573,8 @@ If you cannot extract both, return null.`,
   const BILL_DATA_PATTERN    = /\[Financial Obligations\]|due (?:on (?:the )?\d+|in \d+ days?)|\$[\d,.]+ (?:is )?due|tracked bills|upcoming bills|bill.*due date/i;
 
   const scrubPatterns: Array<{ active: boolean; pattern: RegExp; label: string }> = [
-    { active: isListRequest,              pattern: LIST_DATA_PATTERN,    label: "[LISTS]" },
-    { active: isContactRequest || isCallRequest || isSaveContactRequest, pattern: CONTACT_DATA_PATTERN, label: "[CONTACTS]" },
+    { active: true,                       pattern: LIST_DATA_PATTERN,    label: "[LISTS]" },
+    { active: isContactRequest || isSaveContactRequest, pattern: CONTACT_DATA_PATTERN, label: "[CONTACTS]" },
     { active: isMedList,                  pattern: MED_DATA_PATTERN,     label: "[MEDS]" },
     { active: isBillList,                 pattern: BILL_DATA_PATTERN,    label: "[BILLS]" },
   ];
@@ -5345,15 +4672,212 @@ If you cannot extract both, return null.`,
         nativeReply = (req as any)._tripConversationalResponse ?? "I wasn't able to generate that trip — could you try rephrasing your request?";
         req.log.info({ responsePreview: nativeReply.slice(0, 300) }, "[DIAG:4] Trip conversational_response used directly");
       } else {
-        // ── All other contexts: Claude ───────────────────────────────────────
+        // ── All other contexts: Claude with structured JSON output ────────────
+        const nativeSystemPrompt = systemPrompt +
+          `\n\nRespond with a JSON object only — no markdown, no preamble:\n` +
+          `{\n` +
+          `  "reply": "your natural language response to the user",\n` +
+          `  "action": {\n` +
+          `    "type": "none" | "add_todo" | "add_reminder" | "add_todo_with_reminder" | "remind_contact" | "send_sms" | "make_call" | "navigate",\n` +
+          `    "listName": "to do" or "shopping" or null,\n` +
+          `    "itemText": "clean task text only — never include time or date phrases here",\n` +
+          `    "reminderTime": "ISO 8601 datetime in America/Chicago timezone, or null",\n` +
+          `    "forContact": "first name of the contact, or null",\n` +
+          `    "phone": "phone number or null",\n` +
+          `    "smsBody": "composed SMS body text or null",\n` +
+          `    "navigationTarget": "screen path (e.g. /lists) or address string, or null"\n` +
+          `  }\n` +
+          `}\n` +
+          `Rules:\n` +
+          `- add_todo: user wants a list item with no time (e.g. "pick up laundry", "buy milk")\n` +
+          `- add_reminder: user wants a timed alert only (no list item)\n` +
+          `- add_todo_with_reminder: user wants a list item AND a timed reminder\n` +
+          `- remind_contact: the reminder is FOR another person — set forContact to their first name\n` +
+          `- send_sms: user wants to text someone — set smsBody to the drafted message\n` +
+          `- make_call: user wants to call someone — set forContact to their name\n` +
+          `- navigate: user wants directions or to open a screen\n` +
+          `- none: everything else (conversation, questions, information lookups)`;
+
         const claudeResp = await anthropic.messages.create({
           model: selectedModel,
           max_tokens: 4096,
-          system: buildSystemBlocks(stableSystem, systemPrompt),
+          system: buildSystemBlocks(stableSystem, nativeSystemPrompt),
           messages,
         });
-        nativeReply = claudeResp.content[0]?.type === "text" ? claudeResp.content[0].text : "";
-        req.log.info({ responsePreview: nativeReply.slice(0, 300) }, "[DIAG:4] Native response sent");
+        const rawResponse = claudeResp.content[0]?.type === "text" ? claudeResp.content[0].text : "";
+        req.log.info({ inputTokens: claudeResp.usage.input_tokens, outputTokens: claudeResp.usage.output_tokens }, "[TOKENS]");
+
+        interface ParsedAction {
+          type?: string;
+          listName?: string | null;
+          itemText?: string | null;
+          reminderTime?: string | null;
+          forContact?: string | null;
+          phone?: string | null;
+          smsBody?: string | null;
+          navigationTarget?: string | null;
+        }
+        let parsedAction: ParsedAction = { type: "none" };
+        try {
+          const jsonText = rawResponse.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
+          const parsed = JSON.parse(jsonText) as { reply?: string; action?: ParsedAction };
+          nativeReply = parsed.reply ?? rawResponse;
+          parsedAction = parsed.action ?? { type: "none" };
+        } catch {
+          nativeReply = rawResponse;
+          req.log.warn({ preview: rawResponse.slice(0, 200) }, "[PARSE] Claude response was not valid JSON — using as plain text");
+        }
+
+        req.log.info({ actionType: parsedAction.type, responsePreview: nativeReply.slice(0, 300) }, "[DIAG:4] Native response parsed");
+
+        // ── Execute action from Claude's structured response ──────────────────
+        const extractPhone = (s: string | null | undefined): string | null => {
+          if (!s) return null;
+          const m = s.match(/(\+?1?[-.\s]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4})/);
+          return m ? m[1].replace(/\s+/g, "-").replace(/[()]/g, "") : null;
+        };
+        const nameMatches = (candidate: string, target: string): boolean => {
+          const tl = target.toLowerCase(); const cl = candidate.toLowerCase();
+          if (cl.startsWith(tl) || tl.startsWith(cl)) return true;
+          return tl.split(/\s+/).filter((w) => w.length >= 3).some((w) => cl.includes(w));
+        };
+
+        switch (parsedAction.type) {
+          case "add_todo": {
+            const listName = parsedAction.listName ?? "to do";
+            const itemText = (parsedAction.itemText ?? "").trim();
+            if (itemText) {
+              const inserted = await addItems(listName, [itemText], sessionUserName)
+                .catch((e) => { req.log.warn({ e }, "[ACTION] add_todo failed"); return []; });
+              if (listName === "shopping") {
+                for (const row of inserted) categorizeAndUpdateItem(row.id, row.item_text).catch(() => {});
+              }
+              if (listName === "shopping" || listName === "to do") {
+                syncListItemToConnections(listName, [itemText], sessionUserName).catch(() => {});
+              }
+              req.log.info({ listName, itemText }, "[ACTION] add_todo");
+            }
+            break;
+          }
+
+          case "add_reminder": {
+            const itemText = (parsedAction.itemText ?? "").trim();
+            if (itemText && parsedAction.reminderTime) {
+              const fireAt = new Date(parsedAction.reminderTime);
+              if (!isNaN(fireAt.getTime())) {
+                await createReminder({ userName: sessionUserName, reminderText: itemText, fireAt, timezone: "America/Chicago" })
+                  .catch((e) => req.log.warn({ e }, "[ACTION] add_reminder failed"));
+                req.log.info({ itemText, fireAt }, "[ACTION] add_reminder");
+              }
+            }
+            break;
+          }
+
+          case "add_todo_with_reminder": {
+            const listName = parsedAction.listName ?? "to do";
+            const itemText = (parsedAction.itemText ?? "").trim();
+            if (itemText) {
+              const inserted = await addItems(listName, [itemText], sessionUserName)
+                .catch((e) => { req.log.warn({ e }, "[ACTION] add_todo_with_reminder list failed"); return []; });
+              if (listName === "shopping") {
+                for (const row of inserted) categorizeAndUpdateItem(row.id, row.item_text).catch(() => {});
+              }
+              if (listName === "shopping" || listName === "to do") {
+                syncListItemToConnections(listName, [itemText], sessionUserName).catch(() => {});
+              }
+            }
+            if (itemText && parsedAction.reminderTime) {
+              const fireAt = new Date(parsedAction.reminderTime);
+              if (!isNaN(fireAt.getTime())) {
+                await createReminder({ userName: sessionUserName, reminderText: itemText, fireAt, timezone: "America/Chicago" })
+                  .catch((e) => req.log.warn({ e }, "[ACTION] add_todo_with_reminder reminder failed"));
+                req.log.info({ listName, itemText, fireAt }, "[ACTION] add_todo_with_reminder");
+              }
+            }
+            break;
+          }
+
+          case "remind_contact": {
+            const itemText = (parsedAction.itemText ?? "").trim();
+            if (itemText && parsedAction.forContact && parsedAction.reminderTime) {
+              const fireAt = new Date(parsedAction.reminderTime);
+              if (!isNaN(fireAt.getTime())) {
+                await createReminder({ userName: sessionUserName, reminderText: itemText, fireAt, timezone: "America/Chicago", forContact: parsedAction.forContact })
+                  .catch((e) => req.log.warn({ e }, "[ACTION] remind_contact local failed"));
+                const match = await findConnectionByLabel(sessionUserName, parsedAction.forContact).catch(() => null);
+                if (match) {
+                  await createReminder({ userName: match.recipientUserName, reminderText: `A message from ${match.senderLabel}: ${itemText}`, fireAt, timezone: "America/Chicago" })
+                    .catch((e) => req.log.warn({ e }, "[ACTION] remind_contact Connect failed"));
+                  await query(
+                    `INSERT INTO list_items (user_name, list_name, item_text, reminder_time, added_by)
+                     VALUES ($1, 'to do', $2, $3, $4)
+                     ON CONFLICT (user_name, list_name, lower(item_text))
+                     DO UPDATE SET reminder_time = EXCLUDED.reminder_time, reminder_fired = FALSE`,
+                    [match.recipientUserName, itemText, fireAt, match.senderLabel]
+                  ).catch(() => {});
+                  req.log.info({ recipient: match.recipientUserName, fireAt }, "[ACTION] remind_contact Connect scheduled");
+                }
+              }
+            }
+            break;
+          }
+
+          case "send_sms": {
+            const smsBody = (parsedAction.smsBody ?? "").trim();
+            const recipientName = parsedAction.forContact ?? "";
+            let phone = (parsedAction.phone ?? "").replace(/[^\d+]/g, "");
+            if (!phone && recipientName) {
+              const sr = await searchContacts(recipientName, sessionUserName).catch(() => ({ contacts: [], needsReauth: false, source: "none" as const }));
+              phone = (sr.contacts[0]?.phone ?? "").replace(/[^\d+]/g, "");
+            }
+            if (smsBody) {
+              const encodedBody = encodeURIComponent(smsBody);
+              const smsUri = phone ? `sms:${phone}&body=${encodedBody}` : `sms:?body=${encodedBody}`;
+              (req as any)._smsPayload = { phone, body: smsBody, recipient: recipientName, smsUri };
+              req.log.info({ recipient: recipientName, hasPhone: !!phone }, "[ACTION] send_sms");
+            }
+            break;
+          }
+
+          case "make_call": {
+            const targetName = parsedAction.forContact ?? "";
+            let foundPhone: string | null = parsedAction.phone ?? null;
+            if (!foundPhone && targetName) {
+              const pp = await getProfileItems("people", sessionUserName).catch(() => []);
+              const pm = pp.find((p) => nameMatches(p.name, targetName));
+              if (pm) foundPhone = extractPhone(pm.detail);
+              if (!foundPhone) {
+                const curated = await getCuratedContacts(sessionUserName).catch(() => []);
+                const cm = curated.find((c) => nameMatches(c.name, targetName));
+                if (cm) foundPhone = cm.phone ?? null;
+              }
+              if (!foundPhone) {
+                const sr = await searchContacts(targetName, sessionUserName).catch(() => ({ contacts: [], needsReauth: false, source: "none" as const }));
+                if (sr.contacts.length > 0) foundPhone = sr.contacts[0].phone ?? null;
+              }
+            }
+            if (foundPhone) {
+              navigationUrl = `tel:${foundPhone.replace(/[^\d+]/g, "")}`;
+              req.log.info({ targetName, foundPhone }, "[ACTION] make_call");
+            }
+            break;
+          }
+
+          case "navigate": {
+            if (parsedAction.navigationTarget) {
+              const target = parsedAction.navigationTarget;
+              const place = placesWithHome.find((p) =>
+                target.toLowerCase().includes(p.name.toLowerCase())
+              );
+              navigationUrl = place ? buildMapsUrl(place.address) : target;
+              req.log.info({ target, resolved: navigationUrl }, "[ACTION] navigate");
+            }
+            break;
+          }
+
+          default:
+            break;
+        }
       }
 
       const nativeResponseBody: Record<string, unknown> = { response: nativeReply };
