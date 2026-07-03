@@ -970,6 +970,13 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     }
   }
 
+  // ── Active list screen context ────────────────────────────────────────────
+  // When the user is on a list screen, tell Claude which list is active so
+  // it uses the right listName without relying on message vocabulary alone.
+  if (requestContext && !isIsolatedContext) {
+    systemPrompt += `\n\n[Active Screen: ${requestContext} list]\nThe user is currently on the ${requestContext} list screen. When adding items without specifying a list, set listName to "${requestContext}".`;
+  }
+
   // ── AI intent classification — replaces ~50 NL regex patterns ──────────────
   const _hasCachedBriefing = !!getCachedBriefing(sessionUserName);
   const cls = await classifyMessage(message, {
@@ -4744,7 +4751,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
 
         switch (parsedAction.type) {
           case "add_todo": {
-            const listName = parsedAction.listName ?? "to do";
+            const listName = parsedAction.listName ?? (requestContext && !isIsolatedContext ? requestContext : "to do");
             const itemText = (parsedAction.itemText ?? "").trim();
             if (itemText) {
               const inserted = await addItems(listName, [itemText], sessionUserName)
@@ -4774,7 +4781,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
           }
 
           case "add_todo_with_reminder": {
-            const listName = parsedAction.listName ?? "to do";
+            const listName = parsedAction.listName ?? (requestContext && !isIsolatedContext ? requestContext : "to do");
             const itemText = (parsedAction.itemText ?? "").trim();
             if (itemText) {
               const inserted = await addItems(listName, [itemText], sessionUserName)
