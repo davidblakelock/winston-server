@@ -16,7 +16,7 @@ import { google } from "googleapis";
 import { logger } from "../lib/logger.js";
 import { NATIVE_USER } from "../auth/middleware.js";
 import { getAuthClientForUser } from "../google/oauth.js";
-import { setPendingMeetingRequests, getPendingMeetingRequests, addPendingReplyEmails, getPendingReplyEmails, clearPendingReplyEmail, buildScanSummary } from "../email/emailMeetingManager.js";
+import { setPendingMeetingRequests, getPendingMeetingRequests, addPendingReplyEmails, getPendingReplyEmails, clearPendingReplyEmail } from "../email/emailMeetingManager.js";
 import { sendFcmNotification } from "../push/fcmSender.js";
 import { classifyEmail } from "../email/emailClassifier.js";
 import type { ClassifiedEmail } from "../email/emailClassifier.js";
@@ -289,12 +289,18 @@ async function runScan(userName: string): Promise<void> {
 
   // ── Social (meetings/records/replies): DB-backed ─────────────────────────
   const lastSocialScan = await getLastSocialScanAt(userName);
-  const socialSinceMs = lastSocialScan ? Date.now() - lastSocialScan.getTime() : Infinity;
-  const shouldScanSocial = socialSinceMs >= intervalMs;
+  const currentMinute = new Date().getMinutes();
+  const lastScan = lastSocialScan?.getTime() ?? 0;
+  const onSchedule = currentMinute % intervalMinutes === 0;
+  const notYetFiredThisWindow = Date.now() - lastScan >= intervalMs;
+  const shouldScanSocial = onSchedule && notYetFiredThisWindow;
 
   if (!shouldScanSocial) {
-    const nextInMin = Math.ceil((intervalMs - socialSinceMs) / 60_000);
-    logger.info({ userName, nextInMin }, "[BgEmailScanner] Skipping tick — not yet time");
+    if (!onSchedule) {
+      logger.info({ userName, currentMinute, intervalMinutes }, "[BgEmailScanner] Skipping tick — not a scheduled fire minute");
+    } else {
+      logger.info({ userName, currentMinute, intervalMinutes }, "[BgEmailScanner] Skipping tick — already ran in this window");
+    }
     return;
   }
 
@@ -349,13 +355,13 @@ async function runScan(userName: string): Promise<void> {
   const urgentAlerts: { subject: string; summary: string }[] = [];
   const fyiItems: { subject: string; summary: string }[] = [];
   const confirmedMeetings: { from: string; subject: string; proposedDateTimeStr: string | null }[] = [];
+  let meetings = 0, records = 0, socials = 0;
 
   // ── Social scan ───────────────────────────────────────────────────────────
   if (shouldScanSocial) {
     logger.info({ userName }, "[BgEmailScanner] Starting social scan");
 
     const socialQ = buildSocialQuery();
-    let meetings = 0, records = 0, socials = 0;
 
     const { skipped: socialSkipped } = await fetchAndClassify(
       gmail, socialQ, 30, 20, userName,
@@ -375,38 +381,33 @@ async function runScan(userName: string): Promise<void> {
   }
 
   // ── Batch summary push ────────────────────────────────────────────────────
-  const summaryReplies = getPendingReplyEmails();
-  const summaryMeetings = getPendingMeetingRequests();
-  logger.info({ userName, pendingRepliesCount: summaryReplies.length, pendingReplies: summaryReplies, pendingMeetingsCount: summaryMeetings.length, filedRecordsCount, urgentAlertCount: urgentAlerts.length, fyiCount: fyiItems.length, confirmedMeetingsCount: confirmedMeetings.length }, "[BgEmailScanner] Pending state before summary");
+  const scanReplies = getPendingReplyEmails();
+  const scanMeetings = getPendingMeetingRequests();
+  logger.info(
+    { userName, pendingRepliesCount: scanReplies.length, pendingMeetingsCount: scanMeetings.length, filedRecordsCount, urgentAlertCount: urgentAlerts.length, fyiCount: fyiItems.length, confirmedMeetingsCount: confirmedMeetings.length },
+    "[BgEmailScanner] Pending state before summary"
+  );
 
-  const scanResult = await buildScanSummary({
-    pendingReplies: summaryReplies,
-    pendingMeetings: summaryMeetings,
-    filedRecordsCount,
-    urgentAlerts,
-    fyiItems,
-    confirmedMeetings,
-  }).catch(() => null);
+  const totalEmails = meetings + records + socials + urgentAlerts.length + fyiItems.length + confirmedMeetings.length;
+  const actionableCount = scanReplies.length + scanMeetings.length + urgentAlerts.length;
 
-  if (scanResult) {
-    logger.info({ userName, summary: scanResult.summary }, "[BgEmailScanner] Scan summary generated");
+  if (totalEmails > 0) {
+    const title = `📬 ${totalEmails} new email${totalEmails === 1 ? "" : "s"}`;
+    const body = actionableCount > 0 ? `${actionableCount} might need your attention` : "Nothing urgent";
+    const hasActionable = actionableCount > 0;
     await sendFcmNotification({
       userName,
-      notificationType: "email-scan-summary",
-      title: "Inbox Update",
-      body: scanResult.pushBody,
-      data: { action: "send_message", message: "Check my email", emailSummary: scanResult.summary },
+      notificationType: "email-scan",
+      title,
+      body,
+      data: {
+        action: "send_message",
+        message: "Check my email",
+        hasActionable: String(hasActionable),
+        ...(hasActionable ? { pushCategoryId: "email-action" } : {}),
+      },
     });
-    logger.info({ userName }, "[BgEmailScanner] Scan summary push sent");
-  } else {
-    await sendFcmNotification({
-      userName,
-      notificationType: "email-scan-summary",
-      title: "Inbox Update",
-      body: "Inbox clear",
-      data: { action: "send_message", message: "Check my email" },
-    });
-    logger.info({ userName }, "[BgEmailScanner] Clean inbox push sent");
+    logger.info({ userName, totalEmails, actionableCount }, "[BgEmailScanner] Email scan push sent");
   }
 }
 
