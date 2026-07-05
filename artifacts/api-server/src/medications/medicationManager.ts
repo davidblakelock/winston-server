@@ -502,6 +502,8 @@ export async function initMedicationReminderLogTable(): Promise<void> {
       sent_at       timestamptz NOT NULL DEFAULT NOW()
     )
   `);
+  await query(`ALTER TABLE medication_reminder_log ADD COLUMN IF NOT EXISTS acknowledged boolean NOT NULL DEFAULT FALSE`);
+  await query(`ALTER TABLE medication_reminder_log ADD COLUMN IF NOT EXISTS acknowledged_at timestamptz`);
   await query(
     `CREATE UNIQUE INDEX IF NOT EXISTS medication_reminder_log_uniq
      ON medication_reminder_log (user_name, reminder_date, reminder_type)`
@@ -620,6 +622,15 @@ export async function hasTakenMedicationsToday(userName = NATIVE_STORED_NAME): P
   const { rows } = await query(
     `SELECT 1 FROM medication_logs WHERE user_name = $1 AND log_date = CURRENT_DATE`,
     [userName]
+  );
+  return rows.length > 0;
+}
+
+export async function hasAcknowledgedSlot(userName: string, time: string): Promise<boolean> {
+  const { rows } = await query(
+    `SELECT 1 FROM medication_reminder_log
+     WHERE user_name = $1 AND reminder_type = $2 AND reminder_date = CURRENT_DATE AND acknowledged = TRUE`,
+    [userName, `${userName}:${time}`]
   );
   return rows.length > 0;
 }

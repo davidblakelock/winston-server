@@ -3,6 +3,7 @@ import { sendFcmNotification } from "../push/fcmSender.js";
 import {
   getMedications,
   hasTakenMedicationsToday,
+  hasAcknowledgedSlot,
   getMedicationRemindersEnabled,
   hasMedicationReminderSentToday,
   logMedicationReminderSent,
@@ -49,21 +50,6 @@ export function startMedicationScheduler(): void {
         const meds = await getMedications(userName).catch(() => []);
         if (!meds.length) continue;
 
-        // Upfront check: once the user confirms taken, suppress every remaining time slot for today.
-        let taken = false;
-        try {
-          taken = await hasTakenMedicationsToday(userName);
-        } catch (err) {
-          logger.warn({ err, userName }, "[MED] hasTakenMedicationsToday threw — treating as not taken");
-        }
-        if (taken) {
-          if (!_takenLoggedToday.has(userName)) {
-            logger.info({ userName, localTime }, "[MED] Medications already taken today — suppressing all remaining times");
-            _takenLoggedToday.add(userName);
-          }
-          continue;
-        }
-
         // Flatten reminderTimes arrays across all meds, deduplicated by unique time value.
         const uniqueTimes = [
           ...new Set(meds.flatMap((m) => m.reminderTimes ?? [m.reminderTime])),
@@ -92,11 +78,27 @@ export function startMedicationScheduler(): void {
             continue;
           }
 
+          let slotAcknowledged = false;
+          try {
+            slotAcknowledged = await hasAcknowledgedSlot(userName, time);
+          } catch (err) {
+            logger.warn({ err, userName, time }, "[MED] hasAcknowledgedSlot threw — treating as not acknowledged");
+          }
+          if (slotAcknowledged) {
+            if (!_takenLoggedToday.has(userName)) {
+              const allTaken = await hasTakenMedicationsToday(userName).catch(() => false);
+              logger.info({ userName, time, localTime, allTaken }, "[MED] Medications already taken today — suppressing all remaining times");
+              _takenLoggedToday.add(userName);
+            }
+            continue;
+          }
+
           sendFcmNotification({
             userName,
             notificationType: "medication",
             title: "Time for your medications 💊",
             body: "Have you taken your medications?",
+            data: { reminderTime: time },
           }).catch((err: unknown) => {
             logger.error({ err, userName, time }, "[MED] FCM push delivery failed");
           });

@@ -340,9 +340,18 @@ router.post("/medications/confirm-taken", express.json({ limit: "1mb" }), async 
   const userName = await authenticate(req, res);
   if (!userName) return;
   try {
+    const reminderTime = req.body?.reminderTime ?? req.body?.notificationData?.reminderTime;
+    if (reminderTime) {
+      await query(
+        `UPDATE medication_reminder_log
+            SET acknowledged = TRUE, acknowledged_at = NOW()
+          WHERE user_name = $1 AND reminder_type = $2 AND reminder_date = CURRENT_DATE`,
+        [userName, `${userName}:${reminderTime}`]
+      );
+    }
     const meds = await getMedications(userName);
     if (meds.length > 0) await logMedicationsTaken(meds, userName);
-    req.log.info({ userName, medCount: meds.length }, "[MEDS] Confirmed taken via notification action");
+    req.log.info({ userName, medCount: meds.length, reminderTime }, "[MEDS] Confirmed taken via notification action");
     // dismissTag tells the native app which notification tag to dismiss after confirming.
     res.json({ ok: true, dismissTag: "medication-morning" });
   } catch (err) {
