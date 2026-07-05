@@ -19,7 +19,6 @@ import { ensureOnboardingTable } from "./onboarding/onboardingManager";
 import { startMedicationScheduler } from "./medications/medicationScheduler";
 import { initMedicationReminderLogTable } from "./medications/medicationManager";
 import { startMorningPushScheduler } from "./push/morningPushScheduler";
-import { startWeatherAlertScheduler } from "./push/weatherAlertScheduler";
 import { startBillScheduler } from "./bills/billScheduler";
 import { startDatesScheduler } from "./dates/datesScheduler";
 import { startDepartureScheduler } from "./departure/departureScheduler";
@@ -48,8 +47,6 @@ import { ensureUserRecordsColumns, ensureSocialScanStateTable } from "./records/
 import { ensureGoalsTables } from "./goals/goalsManager";
 import { startTodoReminderScheduler } from "./lists/todoReminderScheduler";
 import { ensureTripPlansTable } from "./travel/tripPlanningManager";
-import { ensureContextReminderColumns } from "./reminders/contextReminderManager";
-
 
 import { startBackgroundEmailScanner } from "./email/backgroundEmailScanner";
 import { startRecordsArchiver } from "./records/recordsArchiver";
@@ -371,15 +368,6 @@ app.listen(port, async (err) => {
   }
 
   try {
-    await ensureContextReminderColumns();
-    logger.info("[startup] context reminder columns ready");
-  } catch (e) {
-    logger.warn({ err: e }, "Context reminder columns initialization warning");
-  }
-
-
-
-  try {
     await ensureListItemColumns();
     logger.info("[startup] list_items columns ready (added_by, category, url)");
   } catch (e) {
@@ -488,7 +476,6 @@ app.listen(port, async (err) => {
     startWinddownScheduler();
     startMedicationScheduler();
     startMorningPushScheduler();
-    startWeatherAlertScheduler();
     startBillScheduler();
     await startDatesScheduler().catch((err: unknown) => {
       logger.warn({ err }, "Dates scheduler startup failed — server continues normally");

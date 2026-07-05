@@ -146,7 +146,7 @@ export function startConnectBirthdayScheduler(): void {
   }
 
   cron.schedule(
-    "0 9 * * *",
+    "0 8 * * *",
     async () => {
       try { await checkBirthdayAlerts(); }
       catch (err) { logger.error({ err }, "[ConnectBirthday] scheduler error"); }

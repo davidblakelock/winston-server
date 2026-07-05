@@ -259,7 +259,6 @@ import { getAllProviders, touchLastContactDate } from "../providers/providerMana
 import { getPeople, type KeyPerson } from "../people/peopleManager.js";
 import { getAllLists, addItems, categorizeAndUpdateItem, syncListItemToConnections } from "../lists/listManager.js";
 import { sendPushToAll } from "../push/pushManager.js";
-import { getRecentAlertContext } from "../push/weatherAlertScheduler.js";
 import { extractAndSaveFollowups } from "../followups/followupManager.js";
 import {
   getLatestUnscheduledReservation,
@@ -4609,27 +4608,6 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
 
   // Weather alert context: when the user taps a push notification and asks about
   // a recent NWS alert, look up the stored full text and inject it so Claude can
-  // give a real answer instead of "I don't have the details."
-  // "in effect for" matches every autoSendMessage from the weather alert scheduler
-  // (they all say "There's a X in effect for Y") — catches event types not listed explicitly.
-  const WEATHER_ALERT_RE =
-    /weather\s+alert|in\s+effect\s+for|air\s+quality\s*(alert|advisory)?|smoke\s+advisory|ozone\s+action|severe\s+thunderstorm|tornado\s+(warning|emergency)|flash\s+flood|flood\s+warning|winter\s+storm|ice\s+storm|blizzard|fire\s+weather|excessive\s+heat|heat\s+(warning|advisory)|extreme\s+cold|freeze\s+warning|dust\s+storm|dense\s+(fog|smoke)|hurricane\s+(warning|watch)|tropical\s+storm|tsunami\s+(warning|watch)|hazardous\s+weather|NWS|issued.*C[DS]T|issued.*E[DS]T/i;
-  const weatherAlertCtx = WEATHER_ALERT_RE.test(message)
-    ? await getRecentAlertContext(sessionUserName).catch(() => null)
-    : null;
-
-  // When NWS alert context is present, constrain Claude to only state NWS facts
-  if (weatherAlertCtx) {
-    systemPrompt +=
-      `\n\n[WEATHER ALERT — RESPONSE CONSTRAINT]\n` +
-      `Full NWS alert details have been injected into the conversation context above. Follow these rules:\n` +
-      `• State ONLY facts that appear in the NWS alert text — no speculation beyond what NWS states.\n` +
-      `• Lead with the key facts: event type, area affected, expiration/duration.\n` +
-      `• Quote any NWS safety instructions (shelter, evacuate, avoid travel) exactly as stated.\n` +
-      `• Do NOT add general weather safety tips not mentioned in the NWS text.\n` +
-      `• Keep the response calm, clear, and concise — facts first, safety instructions second.`;
-  }
-
   const messages: Anthropic.MessageParam[] = [
     ...filteredHistory.map((msg: { role: string; content: string }) => ({
       role: msg.role as "user" | "assistant",

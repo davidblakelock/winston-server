@@ -574,7 +574,7 @@ export function startCalendarSyncScheduler(): void {
   // New-event / moved-event detection — every 5 minutes
   let _syncRunning = false;
   cron.schedule(
-    "*/5 7-22 * * *",
+    "0 * * * *",
     async () => {
       if (_syncRunning) return;
       _syncRunning = true;
@@ -592,7 +592,7 @@ export function startCalendarSyncScheduler(): void {
   // Departure-time alerts — every 2 minutes (finer resolution so we don't miss the window)
   let _departRunning = false;
   cron.schedule(
-    "*/2 6-23 * * *",
+    "*/10 * * * *",
     async () => {
       if (_departRunning) return;
       _departRunning = true;
@@ -607,5 +607,5 @@ export function startCalendarSyncScheduler(): void {
     { timezone: TZ }
   );
 
-  logger.info("Calendar sync scheduler (every 5 min, 7am–10pm CT) + departure alert scheduler (every 2 min) started");
+  logger.info("Calendar sync scheduler (hourly) + departure alert scheduler (every 10 min) started");
 }

@@ -128,7 +128,7 @@ export function startContactBirthdayScheduler(): void {
   }
 
   cron.schedule(
-    "0 9 * * *",
+    "0 8 * * *",
     async () => {
       const today = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
       _lastCheckedDate = today;

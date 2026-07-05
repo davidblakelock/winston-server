@@ -18,15 +18,6 @@ function getLocalDateString(): string {
   return new Date().toLocaleDateString("en-CA", { timeZone: TZ });
 }
 
-function getLocalTime(): string {
-  return new Date().toLocaleTimeString("en-US", {
-    timeZone: TZ,
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
-}
-
 function daysBetween(a: Date, b: Date): number {
   const tz = "America/Chicago";
   const aStr = a.toLocaleDateString("en-CA", { timeZone: tz });
@@ -156,13 +147,10 @@ export function startBillScheduler(): void {
   }
 
   let _running = false;
-  cron.schedule("0 * * * * *", async () => {
+  cron.schedule("0 8 * * *", async () => {
     if (_running) return;
     _running = true;
     try {
-      const localTime = getLocalTime();
-      const [h] = localTime.split(":").map(Number);
-      if (h < 9) return;
       await checkBillReminders();
     } catch (err) {
       logger.error({ err }, "Bill scheduler error");

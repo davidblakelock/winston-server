@@ -6,13 +6,6 @@ import { addClient, removeClient, broadcast, registerClientUser } from "../remin
 import { createReminder, markReminderDone } from "../reminders/reminderManager.js";
 import { validateSession } from "../auth/sessionAuth.js";
 import { authenticate, NATIVE_USER } from "../auth/middleware.js";
-import {
-  parseContextReminderIntent,
-  createContextReminder,
-  checkLocationTriggers,
-  getContextReminders,
-} from "../reminders/contextReminderManager.js";
-import { getProfile } from "../onboarding/onboardingManager.js";
 
 const router: IRouter = Router();
 
@@ -372,112 +365,6 @@ router.post("/reminders/snooze", async (req: Request, res: Response) => {
   );
   req.log?.info?.({ id, minutes, snoozeUntil }, "[REMINDERS/SNOOZE] Reminder snoozed");
   res.json({ success: true, snoozedUntil: snoozeUntil });
-});
-
-// ── POST /api/reminders/context ───────────────────────────────────────────────
-// Create a context-aware reminder that fires when a trigger condition is met
-// (person seen, location reached, calendar event matched) rather than at a fixed time.
-// Body: { text: string, triggerType?: string, triggerData?: object }
-// Response: { ok: true, reminder: { id, reminderText, triggerType, triggerData } }
-router.post("/reminders/context", express.json({ limit: "1mb" }), async (req: Request, res: Response) => {
-  const userName = await authenticate(req, res);
-  if (!userName) return;
-
-  const { text, triggerType, triggerData } = req.body as {
-    text?: string;
-    triggerType?: string;
-    triggerData?: Record<string, unknown>;
-  };
-
-  if (!text?.trim()) {
-    res.status(400).json({ error: "text is required" });
-    return;
-  }
-
-  try {
-    // If caller provided explicit trigger info, use it; otherwise let Claude parse
-    if (triggerType && triggerData) {
-      const reminder = await createContextReminder(
-        userName,
-        text.trim(),
-        triggerType as "calendar" | "location" | "person" | "time",
-        triggerData as { personName?: string; locationName?: string; calendarKeyword?: string },
-      );
-      res.json({ ok: true, reminder: { id: reminder.id, reminderText: reminder.reminder_text, triggerType, triggerData } });
-      return;
-    }
-
-    const parsed = await parseContextReminderIntent(text.trim());
-    if (!parsed) {
-      res.status(400).json({ error: "Could not parse reminder intent" });
-      return;
-    }
-
-    const fireAt = parsed.fireAt ? new Date(parsed.fireAt) : undefined;
-    const reminder = await createContextReminder(
-      userName,
-      parsed.reminderText,
-      parsed.triggerType,
-      parsed.triggerData,
-      fireAt,
-    );
-
-    req.log.info({ userName, triggerType: parsed.triggerType }, "[REMINDERS] Context reminder created");
-    res.json({
-      ok: true,
-      reminder: {
-        id: reminder.id,
-        reminderText: reminder.reminder_text,
-        triggerType: parsed.triggerType,
-        triggerData: parsed.triggerData,
-        fireAt: reminder.fire_at,
-      },
-    });
-  } catch (err) {
-    req.log.error({ err }, "[REMINDERS] POST /reminders/context error");
-    res.status(500).json({ error: "Failed to create context reminder" });
-  }
-});
-
-// ── GET /api/reminders/context ────────────────────────────────────────────────
-// Returns all active context-triggered reminders for the user.
-router.get("/reminders/context", async (req: Request, res: Response) => {
-  const userName = await authenticate(req, res);
-  if (!userName) return;
-  try {
-    const reminders = await getContextReminders(userName);
-    res.json({ reminders });
-  } catch (err) {
-    req.log.error({ err }, "[REMINDERS] GET /reminders/context error");
-    res.status(500).json({ error: "Failed to fetch context reminders" });
-  }
-});
-
-// ── POST /api/location/update ─────────────────────────────────────────────────
-// Called by the native app when the device location changes significantly.
-// Checks location-based context reminders and fires any that match.
-// Body: { lat: number, lon: number }
-// Response: { ok: true, triggeredCount: number }
-router.post("/location/update", express.json({ limit: "1mb" }), async (req: Request, res: Response) => {
-  const userName = await authenticate(req, res);
-  if (!userName) return;
-
-  const { lat, lon } = req.body as { lat?: number; lon?: number };
-  if (typeof lat !== "number" || typeof lon !== "number") {
-    res.status(400).json({ error: "lat and lon (numbers) are required" });
-    return;
-  }
-
-  try {
-    const profile = await getProfile(userName).catch(() => null);
-    const companionName = profile?.companionName ?? "your companion";
-    await checkLocationTriggers(userName, lat, lon, companionName);
-    req.log.info({ userName, lat, lon }, "[LOCATION] Location update processed");
-    res.json({ ok: true });
-  } catch (err) {
-    req.log.error({ err }, "[LOCATION] POST /location/update error");
-    res.status(500).json({ error: "Failed to process location update" });
-  }
 });
 
 export default router;
