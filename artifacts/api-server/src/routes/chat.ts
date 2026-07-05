@@ -4622,16 +4622,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
           },
         ]
       : []),
-    ...(weatherAlertCtx
-      ? [
-          {
-            role: "assistant" as const,
-            content:
-              `[WEATHER ALERT — Full NWS details for the ${weatherAlertCtx.event}` +
-              ` affecting ${weatherAlertCtx.area}]\n\n${weatherAlertCtx.fullText}`,
-          },
-        ]
-      : []),
+
     { role: "user", content: message },
   ];
 
