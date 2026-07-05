@@ -12,6 +12,14 @@ import { logger } from "../lib/logger.js";
 
 const TZ = "America/Chicago";
 
+const _takenLoggedToday = new Set<string>();
+let _takenLogDay: string | null = null;
+
+function clearTakenLogIfNewDay() {
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+  if (_takenLogDay !== today) { _takenLoggedToday.clear(); _takenLogDay = today; }
+}
+
 function getCurrentLocalTime(): string {
   return new Date().toLocaleTimeString("en-US", {
     timeZone: TZ,
@@ -28,6 +36,7 @@ export function startMedicationScheduler(): void {
     _running = true;
     try {
       const localTime = getCurrentLocalTime();
+      clearTakenLogIfNewDay();
       const users = await getActiveUsers().catch(() => []);
       if (!users.length) return;
 
@@ -48,7 +57,10 @@ export function startMedicationScheduler(): void {
           logger.warn({ err, userName }, "[MED] hasTakenMedicationsToday threw — treating as not taken");
         }
         if (taken) {
-          logger.info({ userName, localTime }, "[MED] Medications already taken today — suppressing all remaining times");
+          if (!_takenLoggedToday.has(userName)) {
+            logger.info({ userName, localTime }, "[MED] Medications already taken today — suppressing all remaining times");
+            _takenLoggedToday.add(userName);
+          }
           continue;
         }
 
