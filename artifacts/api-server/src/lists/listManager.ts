@@ -127,10 +127,25 @@ export function sortByCategory<T extends { category?: string | null }>(items: T[
 
 export async function categorizeAndUpdateItem(id: number, itemText: string): Promise<void> {
   const category = await categorizeSingleItem(itemText);
+  logger.info({ id, itemText, category }, "[Lists] Item categorized");
   await query(
     `UPDATE list_items SET category = $1 WHERE id = $2`,
     [category, id]
   ).catch((err) => logger.warn({ err, id }, "[Lists] Category update failed"));
+}
+
+/** Batch-categorize multiple items in one Haiku call, then update each row in the DB. */
+export async function batchCategorizeAndUpdateItems(rows: Array<{ id: number; item_text: string }>): Promise<void> {
+  if (!rows.length) return;
+  const categoryMap = await batchCategorizeItems(rows.map((r) => r.item_text));
+  for (const row of rows) {
+    const category = categoryMap[row.item_text.toLowerCase()] ?? "Other";
+    logger.info({ id: row.id, itemText: row.item_text, category }, "[Lists] Item categorized");
+    await query(
+      `UPDATE list_items SET category = $1 WHERE id = $2`,
+      [category, row.id]
+    ).catch((err) => logger.warn({ err, id: row.id }, "[Lists] Category update failed"));
+  }
 }
 
 // ── Sync new items to all connected users ─────────────────────────────────────

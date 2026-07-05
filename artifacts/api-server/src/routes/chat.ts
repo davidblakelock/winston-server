@@ -257,7 +257,7 @@ import { saveMoodCheckin } from "../mood/moodManager.js";
 import { findConnectionByLabel, saveConnectMessage, markMessageDelivered } from "../connect/connectManager.js";
 import { getAllProviders, touchLastContactDate } from "../providers/providerManager.js";
 import { getPeople, type KeyPerson } from "../people/peopleManager.js";
-import { getAllLists, addItems, categorizeAndUpdateItem, syncListItemToConnections } from "../lists/listManager.js";
+import { getAllLists, addItems, batchCategorizeAndUpdateItems, syncListItemToConnections } from "../lists/listManager.js";
 import { sendPushToAll } from "../push/pushManager.js";
 import { extractAndSaveFollowups } from "../followups/followupManager.js";
 import {
@@ -951,6 +951,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     ]);
     for (const [listName, items] of Object.entries(allListItems)) {
       if (items.length > 0) {
+        if (requestContext && !isIsolatedContext && listName === requestContext) continue;
         systemPrompt += `\n\n[${listName} list — current state]\n` +
           items.map((item, i) => `${i + 1}. ${item}`).join("\n");
       }
@@ -4673,6 +4674,9 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
           `    "navigationTarget": "screen path (e.g. /lists) or address string, or null"\n` +
           `  }\n` +
           `}\n` +
+          `CRITICAL: When adding items to any list, ALWAYS emit the appropriate add action ` +
+          `regardless of what the current list state shows. Never tell the user an item is ` +
+          `already on the list — emit the action and let the database handle deduplication silently.\n` +
           `Rules:\n` +
           `- add_todo: user wants a list item with no time (e.g. "pick up laundry", "buy milk")\n` +
           `- add_reminder: user wants a timed alert only (no list item)\n` +
@@ -4730,17 +4734,17 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
         switch (parsedAction.type) {
           case "add_todo": {
             const listName = parsedAction.listName ?? (requestContext && !isIsolatedContext ? requestContext : "to do");
-            const itemText = (parsedAction.itemText ?? "").trim();
-            if (itemText) {
-              const inserted = await addItems(listName, [itemText], sessionUserName)
+            const items = (parsedAction.itemText ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+            if (items.length > 0) {
+              const inserted = await addItems(listName, items, sessionUserName)
                 .catch((e) => { req.log.warn({ e }, "[ACTION] add_todo failed"); return []; });
-              if (listName === "shopping") {
-                for (const row of inserted) categorizeAndUpdateItem(row.id, row.item_text).catch(() => {});
+              if (listName === "shopping" && inserted.length > 0) {
+                batchCategorizeAndUpdateItems(inserted).catch(() => {});
               }
               if (listName === "shopping" || listName === "to do") {
-                syncListItemToConnections(listName, [itemText], sessionUserName).catch(() => {});
+                syncListItemToConnections(listName, items, sessionUserName).catch(() => {});
               }
-              req.log.info({ listName, itemText }, "[ACTION] add_todo");
+              req.log.info({ listName, items }, "[ACTION] add_todo");
             }
             break;
           }
@@ -4762,13 +4766,14 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
             const listName = parsedAction.listName ?? (requestContext && !isIsolatedContext ? requestContext : "to do");
             const itemText = (parsedAction.itemText ?? "").trim();
             if (itemText) {
-              const inserted = await addItems(listName, [itemText], sessionUserName)
+              const items = itemText.split(",").map((s) => s.trim()).filter(Boolean);
+              const inserted = await addItems(listName, items, sessionUserName)
                 .catch((e) => { req.log.warn({ e }, "[ACTION] add_todo_with_reminder list failed"); return []; });
-              if (listName === "shopping") {
-                for (const row of inserted) categorizeAndUpdateItem(row.id, row.item_text).catch(() => {});
+              if (listName === "shopping" && inserted.length > 0) {
+                batchCategorizeAndUpdateItems(inserted).catch(() => {});
               }
               if (listName === "shopping" || listName === "to do") {
-                syncListItemToConnections(listName, [itemText], sessionUserName).catch(() => {});
+                syncListItemToConnections(listName, items, sessionUserName).catch(() => {});
               }
             }
             if (itemText && parsedAction.reminderTime) {
