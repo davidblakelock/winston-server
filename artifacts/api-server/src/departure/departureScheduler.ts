@@ -161,20 +161,10 @@ async function checkDepartureAlertsForUser(userName: string): Promise<void> {
 
     const companionName = getCompanionDisplayName(profile?.companionPersona, profile?.companionName);
 
-    // Universal Google Maps navigation URL — opens native Maps app on iOS/Android
-    // when tapped via Linking.openURL; falls back to browser on web.
-    // No &origin= — omitting it tells Google Maps to use the device's current
-    // GPS location as the starting point, which is correct for a departure alert
-    // (the user may not be at home when they tap it).
-    const mapsUrl =
-      `https://www.google.com/maps/dir/?api=1` +
-      `&destination=${encodeURIComponent(location)}` +
-      `&travelmode=driving`;
-
-    // Compact deep-link variant: more likely to trigger the native Maps app
-    // directly on iOS and Android without a browser redirect.
-    const mapsDeepLink =
-      `https://maps.google.com/?daddr=${encodeURIComponent(location)}&dirflg=d`;
+    // Android intent URI — opens Google Maps navigation directly without a browser hop.
+    // mapsDeepLink is the HTTPS fallback for iOS / web.
+    const mapsUrl = `google.navigation:q=${encodeURIComponent(location)}`;
+    const mapsDeepLink = `https://maps.google.com/?daddr=${encodeURIComponent(location)}&dirflg=d`;
 
     const eventTimeStr = start.toLocaleTimeString("en-US", {
       timeZone: tz,

@@ -273,8 +273,8 @@ router.post("/push/test-departure", async (req, res) => {
       body: "Tap to open Google Maps",
       data: {
         action: "open_url",
-        url: "https://www.google.com/maps",
-        mapsDeepLink: "https://maps.google.com/?dirflg=d",
+        url: "https://www.google.com/maps/dir/?api=1&destination=Test+Destination&travelmode=driving",
+        mapsDeepLink: "https://maps.google.com/?daddr=Test+Destination&dirflg=d",
         destination: "Test Destination",
       },
     });
