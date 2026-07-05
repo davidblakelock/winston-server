@@ -261,4 +261,29 @@ router.post("/push/test-bill", async (req, res) => {
   }
 });
 
+// POST /api/push/test-departure — send a test departure FCM push to the authenticated user
+router.post("/push/test-departure", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  try {
+    const result = await sendFcmNotification({
+      userName,
+      notificationType: "departure",
+      title: "🚗 Test Departure",
+      body: "Tap to open Google Maps",
+      data: {
+        action: "open_url",
+        url: "https://www.google.com/maps",
+        mapsDeepLink: "https://maps.google.com/?dirflg=d",
+        destination: "Test Destination",
+      },
+    });
+    logger.info({ userName, ...result }, "[FCM Push] Test departure push sent");
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    logger.error({ err }, "[FCM Push] Test departure push failed");
+    res.status(500).json({ error: "Failed to send test departure push" });
+  }
+});
+
 export default router;
