@@ -3454,6 +3454,19 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
         if (parsed.ambiguous && parsed.clarificationNeeded) {
           systemPrompt += `\n\n[Calendar Create — Clarification Needed]\nAsk the user: "${parsed.clarificationNeeded}" — before creating the event.`;
         } else {
+          // Gap 4 fix: check for conflicts before creating
+          let conflictWarning = "";
+          if (parsed.date && parsed.startTime && !parsed.allDay) {
+            const conflict = await checkCalendarConflict(
+              sessionUserName,
+              parsed.date,
+              parsed.startTime
+            ).catch(() => null);
+            if (conflict) {
+              conflictWarning = `\n\nHEADS UP — CONFLICT DETECTED: There is already "${conflict}" on the calendar at that time. Mention this to the user before confirming the new event was added. Say something like "Just so you know, you already have [conflict] at that time — I've added [new event] anyway, but worth a look."`;
+            }
+          }
+
           const created = await createCalendarEvent({
             title: parsed.title,
             date: parsed.date,
@@ -3483,6 +3496,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
             } else {
               calendarCreateMsg += ` Then ask if they'd also like a reminder for it.`;
             }
+            calendarCreateMsg += conflictWarning;
             systemPrompt += calendarCreateMsg;
             req.log.info({ title: parsed.title, date: parsed.date }, "Calendar event created");
           } else {
