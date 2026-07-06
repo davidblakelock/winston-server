@@ -1199,7 +1199,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isHeadacheRequest = !isMorningGreeting && cls.headache;
 
   // T006: Text message continuation flow
-  const pendingText = getPendingText();
+  const pendingText = getPendingText(sessionUserName);
   const isTextFlowActive = !isMorningGreeting && pendingText !== null;
 
   // Declared early so code paths before the winddown section can reference it safely.
@@ -1217,14 +1217,14 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isEmailReplyFlowActive = pendingEmailReply !== null;
 
   // T006-DEP: Departure text offer — user said yes after a departure alert offered to text someone
-  const pendingDepartureOffer = getPendingDepartureTextOffer();
+  const pendingDepartureOffer = getPendingDepartureTextOffer(sessionUserName);
   const DEPARTURE_TEXT_ACCEPT = /^(?:yes|yeah|yep|yup|sure|go\s+ahead|do\s+it|ok(?:ay)?|send\s+it|text\s+(her|him|them)|that\s+works?|sounds?\s+good)(?:[,\s!.]|$)/i;
   const isDepartureTextAccepted = !isMorningGreeting && !isTextFlowActive
     && pendingDepartureOffer !== null && DEPARTURE_TEXT_ACCEPT.test(message.trim());
 
   // Retry / edit-after-send: intent detected by classifier; lastSmsPayload guards
   // so these only fire when a text was actually dispatched within the session.
-  const lastSmsPayload = getLastSmsPayload();
+  const lastSmsPayload = getLastSmsPayload(sessionUserName);
   const isSmsRetryRequest = !isMorningGreeting && !isTextFlowActive
     && !!lastSmsPayload && cls.sms_retry;
   const isSmsEditAfterSend = !isMorningGreeting && !isTextFlowActive
@@ -2505,7 +2505,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
   if (isDepartureTextAccepted && pendingDepartureOffer) {
     const displayName = userProfile?.name ?? sessionUserName;
     const intent = `I'm on my way to ${pendingDepartureOffer.eventSummary}`;
-    clearPendingDepartureTextOffer();
+    clearPendingDepartureTextOffer(sessionUserName);
     try {
       const composed = await composeTextMessage({
         recipientName: pendingDepartureOffer.recipientName,
@@ -2513,7 +2513,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
         userIntent: intent,
         senderName: displayName,
       });
-      setPendingText({
+      setPendingText(sessionUserName, {
         phase: "awaiting_confirmation",
         recipientName: pendingDepartureOffer.recipientName,
         recipientPhone: pendingDepartureOffer.recipientPhone,
@@ -2954,7 +2954,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
               userIntent: inlineIntent,
               senderName: displayName,
             });
-            setPendingText({
+            setPendingText(sessionUserName, {
               phase: "awaiting_confirmation",
               recipientName: resolved.name,
               recipientPhone: resolved.phone,
@@ -2971,11 +2971,11 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
               `CRITICAL HONESTY RULES: (1) You are composing — NOT sending. (2) Messages app opens AFTER user says yes. (3) Never say "sending now" or "opening Messages".`;
           } catch (compErr) {
             req.log.warn({ compErr }, "[T006-DISAMBIG] Inline composition after disambiguation failed");
-            setPendingText({ phase: "awaiting_intent", recipientName: resolved.name, recipientPhone: resolved.phone, relationship: resolved.relationship, tone });
+            setPendingText(sessionUserName, { phase: "awaiting_intent", recipientName: resolved.name, recipientPhone: resolved.phone, relationship: resolved.relationship, tone });
             systemPrompt += `\n\n[Text Message Flow — ${resolved.name} selected]\nAsk ${displayName} what they'd like to say to ${resolved.name}.`;
           }
         } else {
-          setPendingText({ phase: "awaiting_intent", recipientName: resolved.name, recipientPhone: resolved.phone, relationship: resolved.relationship, tone });
+          setPendingText(sessionUserName, { phase: "awaiting_intent", recipientName: resolved.name, recipientPhone: resolved.phone, relationship: resolved.relationship, tone });
           const phoneNote = resolved.phone ? `Got ${resolved.name}'s number.` : `I don't have a number for ${resolved.name}, but I'll compose it and you can fill that in.`;
           systemPrompt += `\n\n[Text Message Flow — ${resolved.name} selected]\n${phoneNote} Ask ${displayName} what they'd like to say.`;
         }
@@ -3011,7 +3011,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
             senderName: displayName,
           });
 
-          setPendingText({
+          setPendingText(sessionUserName, {
             ...pendingText,
             phase: "awaiting_confirmation",
             tone: effectiveTone,
@@ -3031,14 +3031,14 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
           req.log.info({ recipient: pendingText.recipientName, tone: effectiveTone }, "[T006] Intent with tone — composed via Claude");
         } catch (err) {
           req.log.warn({ err }, "[T006] Tone compose failed");
-          setPendingText(null);
+          setPendingText(sessionUserName, null);
           systemPrompt += `\n\n[Text Message — Composition Error]\nTell ${displayName} you had trouble with that and ask them to try again.`;
         }
       } else {
         // No style request — use the user's exact words verbatim
         const body = sanitizeSmsBody(message);
 
-        setPendingText({
+        setPendingText(sessionUserName, {
           ...pendingText,
           phase: "awaiting_confirmation",
           composedBody: body,
@@ -3071,7 +3071,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
             senderName: displayName,
           });
 
-          setPendingText({
+          setPendingText(sessionUserName, {
             ...pendingText,
             tone: effectiveTone,
             composedBody: recomposed.body,
@@ -3103,7 +3103,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
         // may silently drop or mangle.
         const body = sanitizeSmsBody(pendingText.composedBody ?? "");
         const recipientName = pendingText.recipientName;
-        setPendingText(null);
+        setPendingText(sessionUserName, null);
 
         // Sanitize phone number into E.164-like format for the sms: URI.
         // Google Contacts stores numbers with formatting chars like "(972) 555-0123"
@@ -3142,7 +3142,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
           tone: pendingText.tone,
         };
         (req as any)._smsPayload = smsPayload;
-        setLastSmsPayload(smsPayload); // persist for edit/retry within 30 min
+        setLastSmsPayload(sessionUserName, smsPayload); // persist for edit/retry within 30 min
         broadcastToUser(sessionUserName, "sms-compose", { type: "sms_compose", ...smsPayload });
 
         // Hardcode the verbal response — do NOT call Claude for this turn.
@@ -3156,7 +3156,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
         req.log.info({ recipient: recipientName, hasPhone: !!phone }, "[T006] SMS packaged — hardcoded response, skipping Claude");
         } else if (confirmIntent === "cancel") {
         // User cancelled
-        setPendingText(null);
+        setPendingText(sessionUserName, null);
         systemPrompt +=
           `\n\n[Text Message Cancelled]\nThe user decided not to send the message. ` +
           `Acknowledge warmly and briefly — "No problem, I've dropped it."`;
@@ -3171,7 +3171,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
             senderName: displayName,
           });
 
-          setPendingText({
+          setPendingText(sessionUserName, {
             ...pendingText,
             composedBody: revised.body,
           });
@@ -3211,7 +3211,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
   if (isSmsEditAfterSend && lastSmsPayload) {
     const displayName = userProfile?.name ?? sessionUserName;
     // Rehydrate pending state from the stored payload
-    setPendingText({
+    setPendingText(sessionUserName, {
       phase: "awaiting_confirmation",
       recipientName: lastSmsPayload.recipient,
       recipientPhone: lastSmsPayload.phone || null,
@@ -3232,7 +3232,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
         senderName: displayName,
       });
 
-      setPendingText({
+      setPendingText(sessionUserName, {
         phase: "awaiting_confirmation",
         recipientName: lastSmsPayload.recipient,
         recipientPhone: lastSmsPayload.phone || null,
@@ -3256,7 +3256,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
     } catch (err) {
       req.log.warn({ err }, "[T006-edit-after-send] Revision failed");
       // Reset state on failure — don't leave a corrupted flow
-      setPendingText(null);
+      setPendingText(sessionUserName, null);
       systemPrompt +=
         `\n\n[Text Message Edit Failed]\n` +
         `Tell ${displayName} honestly: "I had trouble revising that. Just say 'text ${lastSmsPayload.recipient}' and I'll start fresh."`;

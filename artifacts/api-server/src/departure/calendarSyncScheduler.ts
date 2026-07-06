@@ -514,7 +514,7 @@ async function runDepartureAlertsForUser(userName: string): Promise<void> {
 
     // Store offer state so the next chat message can pick it up
     if (textOfferRecipient) {
-      setPendingDepartureTextOffer({
+      setPendingDepartureTextOffer(userName, {
         recipientName: textOfferRecipient.name,
         recipientPhone: textOfferRecipient.phone,
         eventSummary: row.event_summary,

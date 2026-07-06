@@ -310,43 +310,48 @@ export interface SmsPayload {
   tone?: MessageTone;
 }
 
-let _pendingText: PendingTextState | null = null;
+const _pendingTextMap = new Map<string, PendingTextState>();
 // Keeps the last dispatched SMS payload for up to 30 minutes so the user can
 // retry if the native app didn't open Messages successfully.
-let _lastSmsPayload: SmsPayload | null = null;
-let _lastSmsPayloadAt: number = 0;
+const _lastSmsPayloadMap = new Map<string, SmsPayload>();
+const _lastSmsPayloadAtMap = new Map<string, number>();
 const SMS_RETRY_WINDOW_MS = 30 * 60 * 1000;
 
-export function getPendingText(): PendingTextState | null {
-  return _pendingText;
+export function getPendingText(userName: string): PendingTextState | null {
+  return _pendingTextMap.get(userName) ?? null;
 }
 
-export function setPendingText(state: PendingTextState | null): void {
-  _pendingText = state;
-  if (state) {
-    logger.info({ phase: state.phase, recipient: state.recipientName }, "[TEXT] Pending state updated");
-  } else {
+export function setPendingText(userName: string, state: PendingTextState | null): void {
+  if (state === null) {
+    _pendingTextMap.delete(userName);
     logger.info("[TEXT] Pending state cleared");
+  } else {
+    _pendingTextMap.set(userName, state);
+    logger.info({ phase: state.phase, recipient: state.recipientName }, "[TEXT] Pending state updated");
   }
 }
 
-export function setLastSmsPayload(payload: SmsPayload): void {
-  _lastSmsPayload = payload;
-  _lastSmsPayloadAt = Date.now();
+export function setLastSmsPayload(userName: string, payload: SmsPayload): void {
+  _lastSmsPayloadMap.set(userName, payload);
+  _lastSmsPayloadAtMap.set(userName, Date.now());
   logger.info({ recipient: payload.recipient }, "[TEXT] Last SMS payload stored for retry");
 }
 
-export function getLastSmsPayload(): SmsPayload | null {
-  if (!_lastSmsPayload) return null;
-  if (Date.now() - _lastSmsPayloadAt > SMS_RETRY_WINDOW_MS) {
-    _lastSmsPayload = null;
+export function getLastSmsPayload(userName: string): SmsPayload | null {
+  const payload = _lastSmsPayloadMap.get(userName) ?? null;
+  if (!payload) return null;
+  const storedAt = _lastSmsPayloadAtMap.get(userName) ?? 0;
+  if (Date.now() - storedAt > SMS_RETRY_WINDOW_MS) {
+    _lastSmsPayloadMap.delete(userName);
+    _lastSmsPayloadAtMap.delete(userName);
     return null;
   }
-  return _lastSmsPayload;
+  return payload;
 }
 
-export function clearLastSmsPayload(): void {
-  _lastSmsPayload = null;
+export function clearLastSmsPayload(userName: string): void {
+  _lastSmsPayloadMap.delete(userName);
+  _lastSmsPayloadAtMap.delete(userName);
 }
 
 // ── Pending departure text offer ──────────────────────────────────────────────
@@ -362,26 +367,29 @@ export interface PendingDepartureTextOffer {
 }
 
 const DEPARTURE_OFFER_TTL_MS = 30 * 60 * 1000; // 30 minutes
-let _pendingDepartureTextOffer: PendingDepartureTextOffer | null = null;
+const _pendingDepartureTextOfferMap = new Map<string, PendingDepartureTextOffer>();
 
-export function getPendingDepartureTextOffer(): PendingDepartureTextOffer | null {
-  if (!_pendingDepartureTextOffer) return null;
-  if (Date.now() - _pendingDepartureTextOffer.createdAt > DEPARTURE_OFFER_TTL_MS) {
-    _pendingDepartureTextOffer = null;
+export function getPendingDepartureTextOffer(userName: string): PendingDepartureTextOffer | null {
+  const offer = _pendingDepartureTextOfferMap.get(userName) ?? null;
+  if (!offer) return null;
+  if (Date.now() - offer.createdAt > DEPARTURE_OFFER_TTL_MS) {
+    _pendingDepartureTextOfferMap.delete(userName);
     return null;
   }
-  return _pendingDepartureTextOffer;
+  return offer;
 }
 
-export function setPendingDepartureTextOffer(offer: PendingDepartureTextOffer | null): void {
-  _pendingDepartureTextOffer = offer;
+export function setPendingDepartureTextOffer(userName: string, offer: PendingDepartureTextOffer | null): void {
   if (offer) {
+    _pendingDepartureTextOfferMap.set(userName, offer);
     logger.info({ recipient: offer.recipientName, event: offer.eventSummary }, "[TEXT] Departure text offer stored");
+  } else {
+    _pendingDepartureTextOfferMap.delete(userName);
   }
 }
 
-export function clearPendingDepartureTextOffer(): void {
-  _pendingDepartureTextOffer = null;
+export function clearPendingDepartureTextOffer(userName: string): void {
+  _pendingDepartureTextOfferMap.delete(userName);
 }
 
 // ── Confirmation detection ────────────────────────────────────────────────────
