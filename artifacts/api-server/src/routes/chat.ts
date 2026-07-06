@@ -4691,15 +4691,68 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
           navigationTarget?: string | null;
         }
         let parsedAction: ParsedAction = { type: "none" };
-        try {
-          const jsonText = rawResponse.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
-          const parsed = JSON.parse(jsonText) as { reply?: string; action?: ParsedAction };
-          nativeReply = parsed.reply ?? rawResponse;
-          parsedAction = parsed.action ?? { type: "none" };
-        } catch {
-          nativeReply = rawResponse;
-          req.log.warn({ preview: rawResponse.slice(0, 200) }, "[PARSE] Claude response was not valid JSON — using as plain text");
-        }
+        // ── Robust JSON extraction ─────────────────────────────────────────
+        // Claude sometimes returns: pure JSON, JSON wrapped in fences, or
+        // reply text with JSON appended. Try each strategy in order.
+        const extractReplyAndAction = (raw: string): { reply: string; action: ParsedAction } => {
+          // Strategy 1: Pure JSON or fenced JSON — strip fences and parse
+          const stripped = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
+          if (stripped.startsWith("{")) {
+            try {
+              const parsed = JSON.parse(stripped) as { reply?: string; action?: ParsedAction };
+              if (parsed.reply && typeof parsed.reply === "string" && parsed.reply.trim().length > 0) {
+                return {
+                  reply: parsed.reply.trim(),
+                  action: parsed.action ?? { type: "none" },
+                };
+              }
+            } catch { /* fall through to next strategy */ }
+          }
+
+          // Strategy 2: Reply text with JSON blob appended — split on first {
+          // This handles the case where Claude outputs text then appends JSON
+          const jsonStart = raw.indexOf('\n{');
+          if (jsonStart > 0) {
+            const textPart = raw.slice(0, jsonStart).trim();
+            const jsonPart = raw.slice(jsonStart).trim();
+            if (textPart.length > 0) {
+              try {
+                const parsed = JSON.parse(jsonPart) as { reply?: string; action?: ParsedAction };
+                return {
+                  reply: textPart,
+                  action: parsed.action ?? { type: "none" },
+                };
+              } catch { /* fall through */ }
+            }
+          }
+
+          // Strategy 3: Find any JSON object anywhere in the response
+          const jsonMatch = raw.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            try {
+              const parsed = JSON.parse(jsonMatch[0]) as { reply?: string; action?: ParsedAction };
+              if (parsed.reply && typeof parsed.reply === "string" && parsed.reply.trim().length > 0) {
+                return {
+                  reply: parsed.reply.trim(),
+                  action: parsed.action ?? { type: "none" },
+                };
+              }
+            } catch { /* fall through */ }
+          }
+
+          // Strategy 4: No parseable JSON found — use raw response as reply text.
+          // Strip any partial JSON-looking suffix to be safe.
+          const cleanedRaw = raw.replace(/\s*\{[\s\S]*$/, "").trim();
+          req.log.warn({ preview: raw.slice(0, 200) }, "[PARSE] No valid JSON found — using raw text");
+          return {
+            reply: cleanedRaw.length > 0 ? cleanedRaw : raw.trim(),
+            action: { type: "none" },
+          };
+        };
+
+        const extracted = extractReplyAndAction(rawResponse);
+        nativeReply = extracted.reply;
+        parsedAction = extracted.action;
 
         req.log.info({ actionType: parsedAction.type, responsePreview: nativeReply.slice(0, 300) }, "[DIAG:4] Native response parsed");
 
@@ -4867,6 +4920,11 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
       // ── Persist messages (fire-and-forget, must not block response) ────────
       const nativeMsgId = randomUUID();
       req.log.info({ user: sessionUserName, isAutoGreeting, hasReply: !!nativeReply, isIsolatedContext, requestContext }, "[CHAT] Native save triggered");
+      // Strip any leaked JSON from content before persisting — belt-and-suspenders
+      // guard in case the extractor above ever misses an edge case.
+      const sanitizeForDb = (text: string): string =>
+        text.replace(/\s*\{[\s\S]*"reply"[\s\S]*\}[\s]*$/m, "").trim();
+
       if (!isAutoGreeting && !isIsolatedContext) {
         query(
           `INSERT INTO chat_messages (user_name, role, content, message_id)
@@ -4883,7 +4941,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
           `INSERT INTO chat_messages (user_name, role, content, message_id)
            VALUES ($1, 'assistant', $2, $3)
            ON CONFLICT (message_id) WHERE message_id IS NOT NULL DO NOTHING`,
-          [sessionUserName, nativeReply.slice(0, 8000), `${nativeMsgId}:assistant`]
+          [sessionUserName, sanitizeForDb(nativeReply).slice(0, 8000), `${nativeMsgId}:assistant`]
         ).then(() => req.log.info("[CHAT] Native assistant message saved"))
          .catch((e) => req.log.warn({ e }, "[CHAT] Native assistant message save failed"));
       } else if (nativeReply && isIsolatedContext) {
