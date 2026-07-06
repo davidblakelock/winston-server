@@ -445,12 +445,19 @@ export function buildImportantEmailInstruction(
 ): string {
   if (emails.length === 0) return "";
   return (
-    `\n\nEMAIL HANDLING INSTRUCTIONS:\n` +
-    `Review the emails above and call out any that genuinely need attention — ` +
-    `bills, deadlines, action items, time-sensitive requests, replies that are overdue, or anything the user should act on today. ` +
-    `Mention those naturally in conversation first. ` +
-    `Skip or briefly summarize newsletters, promotions, and routine notifications. ` +
-    `Be warm and practical — like a smart assistant flagging what actually matters.`
+    `\n\nEMAIL PRESENTATION INSTRUCTIONS:\n` +
+    `Present emails that need attention clearly and concisely — no lengthy commentary or opinions. ` +
+    `For each actionable email, state: who it's from, what it needs, and offer ONE specific action.\n` +
+    `Format each actionable email like this:\n` +
+    `• [From] — [what it needs] → [specific offer: "Want me to draft a reply?" or "This needs your attention"]\n\n` +
+    `For meeting requests: offer to draft a reply or check calendar availability.\n` +
+    `For emails needing a reply: offer to draft the reply, read it back for approval before sending.\n` +
+    `For calendar invites: offer to accept, decline, or check for conflicts.\n` +
+    `For bills/deadlines: flag the amount/date, ask if they want a reminder set.\n` +
+    `For newsletters/promotions: skip entirely or mention in one brief line at the end.\n\n` +
+    `CRITICAL: Be brief and action-oriented. No lengthy summaries, no opinions about email content. ` +
+    `Present the facts, offer the action, wait for the user's response. ` +
+    `The user can say "delete that", "mark it read", "remind me about that" and you should handle it naturally.`
   );
 }
 
