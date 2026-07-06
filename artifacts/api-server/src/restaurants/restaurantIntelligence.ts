@@ -121,10 +121,24 @@ export interface PendingReservation {
 }
 
 // ── In-memory state (single-user) ─────────────────────────────────────────────
-let _pendingReservation: PendingReservation | null = null;
-export function getPendingReservation(): PendingReservation | null { return _pendingReservation; }
-export function setPendingReservation(r: PendingReservation | null): void { _pendingReservation = r; }
-export function clearPendingReservation(): void { _pendingReservation = null; }
+const _pendingReservationMap = new Map<string, { data: PendingReservation; expiresAt: number }>();
+const PENDING_RESERVATION_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
+export function getPendingReservation(userName: string): PendingReservation | null {
+  const entry = _pendingReservationMap.get(userName);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    _pendingReservationMap.delete(userName);
+    return null;
+  }
+  return entry.data;
+}
+export function setPendingReservation(userName: string, r: PendingReservation): void {
+  _pendingReservationMap.set(userName, { data: r, expiresAt: Date.now() + PENDING_RESERVATION_TTL_MS });
+}
+export function clearPendingReservation(userName: string): void {
+  _pendingReservationMap.delete(userName);
+}
 
 // ── Booking confirmation state ─────────────────────────────────────────────
 // Stores context after we've opened the booking deep link, while waiting for
@@ -144,15 +158,23 @@ export interface PendingBookingConfirmation {
   conflictNote:       string;
 }
 
-let _pendingBookingConf: PendingBookingConfirmation | null = null;
-export function getPendingBookingConfirmation(): PendingBookingConfirmation | null {
-  return _pendingBookingConf;
+const _pendingBookingConfMap = new Map<string, { data: PendingBookingConfirmation; expiresAt: number }>();
+const PENDING_BOOKING_TTL_MS = 15 * 60 * 1000; // 15 minutes
+
+export function getPendingBookingConfirmation(userName: string): PendingBookingConfirmation | null {
+  const entry = _pendingBookingConfMap.get(userName);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    _pendingBookingConfMap.delete(userName);
+    return null;
+  }
+  return entry.data;
 }
-export function setPendingBookingConfirmation(s: PendingBookingConfirmation | null): void {
-  _pendingBookingConf = s;
+export function setPendingBookingConfirmation(userName: string, s: PendingBookingConfirmation): void {
+  _pendingBookingConfMap.set(userName, { data: s, expiresAt: Date.now() + PENDING_BOOKING_TTL_MS });
 }
-export function clearPendingBookingConfirmation(): void {
-  _pendingBookingConf = null;
+export function clearPendingBookingConfirmation(userName: string): void {
+  _pendingBookingConfMap.delete(userName);
 }
 
 // ── Last booking attempt ──────────────────────────────────────────────────
@@ -170,17 +192,18 @@ export interface LastBookingAttempt {
   timestamp:       number;
 }
 
-let _lastBookingAttempt: LastBookingAttempt | null = null;
-export function getLastBookingAttempt(): LastBookingAttempt | null {
-  if (!_lastBookingAttempt) return null;
-  if (Date.now() - _lastBookingAttempt.timestamp > 30 * 60 * 1000) {
-    _lastBookingAttempt = null;
+const _lastBookingAttemptMap = new Map<string, LastBookingAttempt>();
+export function getLastBookingAttempt(userName: string): LastBookingAttempt | null {
+  const a = _lastBookingAttemptMap.get(userName) ?? null;
+  if (!a) return null;
+  if (Date.now() - a.timestamp > 30 * 60 * 1000) {
+    _lastBookingAttemptMap.delete(userName);
     return null;
   }
-  return _lastBookingAttempt;
+  return a;
 }
-export function setLastBookingAttempt(a: LastBookingAttempt): void {
-  _lastBookingAttempt = a;
+export function setLastBookingAttempt(userName: string, a: LastBookingAttempt): void {
+  _lastBookingAttemptMap.set(userName, a);
 }
 
 // ── DB cache ──────────────────────────────────────────────────────────────────

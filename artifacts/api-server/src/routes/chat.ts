@@ -1134,7 +1134,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isNearbyPlaces = !isMorningGreeting && !isRestaurantReco && cls.nearby_places;
 
   // R001: Restaurant intelligence (reservation, directions, info for a named restaurant)
-  const pendingReservation = getPendingReservation();
+  const pendingReservation = getPendingReservation(sessionUserName);
   const isRestaurantIntelRequest = !isMorningGreeting && !isRestaurantReco && !activeTripPlan && cls.restaurant_intel;
   const isReservationFlowActive = !isMorningGreeting && pendingReservation !== null;
   const RESERVATION_CONFIRM = /^(?:(?:ok|okay|yeah|yep|yup|sure|alright)[,\s]+)*(yes|open\s+it|do\s+it|go\s+ahead|sounds?\s+good|let.?s\s+(?:do\s+it|book)|book\s+it|call\s+them|open\s+(?:the\s+)?(?:opentable|resy|maps?|dialer)|get\s+directions?|dial\s+(?:them|it))(?:[,\s!.]|$)/i;
@@ -1144,8 +1144,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
   // R001-CONFIRM legacy: keep state cleared so any stale pending entry is always
   // discarded — booking confirmation is now driven by email scanner, not chat state.
-  const pendingBookingConf = getPendingBookingConfirmation();
-  if (pendingBookingConf) clearPendingBookingConfirmation();
+  const pendingBookingConf = getPendingBookingConfirmation(sessionUserName);
+  if (pendingBookingConf) clearPendingBookingConfirmation(sessionUserName);
   const isBookingConfirmActive = false; // no longer used; kept to avoid downstream errors
 
   const isBillAdd = !isMorningGreeting && cls.bill_add;
@@ -2640,8 +2640,8 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
   // activeTripPlan.destination → GPS reverse geocode → userProfile.city.
   if (isRestaurantIntelRequest) {
     // A new request always resets any stale pending state.
-    if (pendingReservation) clearPendingReservation();
-    clearPendingBookingConfirmation();
+    if (pendingReservation) clearPendingReservation(sessionUserName);
+    clearPendingBookingConfirmation(sessionUserName);
     const bodyLat = typeof (req.body as any).lat === "number" ? (req.body as any).lat as number : null;
     const bodyLng = typeof (req.body as any).lng === "number" ? (req.body as any).lng as number : null;
     let city: string | undefined;
@@ -2878,16 +2878,16 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
   // R001 Phase 2 — legacy stale-state cleanup only
   if (isReservationFlowActive && pendingReservation) {
     if (isReservationCancel) {
-      clearPendingReservation();
+      clearPendingReservation(sessionUserName);
       systemPrompt += `\n\n[Reservation Cancelled]\nAcknowledge briefly and warmly — "No problem, I've dropped it."`;
     } else {
-      clearPendingReservation();
+      clearPendingReservation(sessionUserName);
     }
   }
 
   // ── Last booking attempt — inject so Claude answers follow-ups correctly ──────
   if (!isRestaurantIntelRequest) {
-    const lastBooking = getLastBookingAttempt();
+    const lastBooking = getLastBookingAttempt(sessionUserName);
     if (lastBooking) {
       let bookingStatusNote = "";
       if (lastBooking.status === "calendar_created") {
