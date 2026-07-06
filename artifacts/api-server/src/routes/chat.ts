@@ -1,4 +1,4 @@
-﻿import { Router, type IRouter } from "express";
+import { Router, type IRouter } from "express";
 import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
@@ -230,28 +230,6 @@ import { createProvider } from "../providers/providerManager.js";
 import { logBriefingStories } from "../morning/storyDedup.js";
 import { getDallasItems, getLocalContentCity, type LocalContentItem } from "../morning/dallasContent.js";
 import { createReminder } from "../reminders/reminderManager.js";
-import {
-  generateTripItinerary,
-  saveTripPlan,
-  updateTripPlan,
-  getTripPlanById,
-  getActiveTripPlans,
-  buildTravelProfileContext,
-  repairJson,
-  type TripPlanRow,
-  type ParsedTripIntent,
-  type NativeTripPlan,
-} from "../travel/tripPlanningManager.js";
-import {
-  checkHotelAvailability,
-  buildHotelAvailabilityBlock,
-  parseToISODate,
-  addNightsToISO,
-} from "../travel/hotelAvailability.js";
-import {
-  searchHotelViaSerpApi,
-  isSerpApiReady,
-} from "../travel/serpApiHotels.js";
 import { broadcastToUser } from "../reminders/sseStore.js";
 import { saveMoodCheckin } from "../mood/moodManager.js";
 import { findConnectionByLabel, saveConnectMessage, markMessageDelivered } from "../connect/connectManager.js";
@@ -358,70 +336,6 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const MODEL_GPT4O_TRIP = "gpt-4o" as const;
-
-/**
- * Calls GPT-4o to generate 3–4 specific, itinerary-aware next step suggestions
- * (live music, dinner reservations, scenic detours, hotel tips, etc.).
- * Returns [] on any failure so the caller can degrade gracefully.
- */
-async function generateTripEnhancements(itinerary: {
-  trip_name: string;
-  destination: string;
-  nights: number;
-  itinerary: {
-    days: Array<{
-      dayNumber: number;
-      label: string;
-      location: string;
-      activities?: Array<{ title?: string; description?: string }>;
-      hotel?: { name?: string };
-    }>;
-  };
-}): Promise<string[]> {
-  try {
-    const daysJson = JSON.stringify(
-      itinerary.itinerary.days.map((d) => ({
-        day: d.dayNumber,
-        label: d.label,
-        location: d.location,
-        activities: d.activities?.slice(0, 2).map((a) => a.title ?? a.description),
-        hotel: d.hotel?.name,
-      }))
-    );
-    const resp = await openai.chat.completions.create({
-      model: MODEL_GPT4O_TRIP,
-      max_tokens: 400,
-      messages: [
-        {
-          role: "system",
-          content:
-            `You are a well-traveled concierge who knows this destination deeply. ` +
-            `Given this specific itinerary, suggest exactly 3–4 concrete next steps ` +
-            `that would genuinely enhance the trip — things like a live music venue ` +
-            `on a specific night, a dinner reservation worth booking in advance, a ` +
-            `scenic drive or detour, a hidden-gem activity, a hotel room-view or ` +
-            `upgrade tip, or a timing tip for a busy attraction. Be specific to this ` +
-            `trip and destination — no generic travel advice. ` +
-            `Respond ONLY with valid JSON: {"suggestions":["suggestion 1","suggestion 2","suggestion 3"]}`,
-        },
-        {
-          role: "user",
-          content:
-            `Trip: "${itinerary.trip_name}" — ${itinerary.nights} nights in ${itinerary.destination}.\n` +
-            `Itinerary: ${daysJson}`,
-        },
-      ],
-    });
-    const raw = resp.choices[0]?.message?.content?.trim() ?? "";
-    const match = raw.match(/\{[\s\S]*\}/);
-    if (!match) return [];
-    const parsed = JSON.parse(match[0]) as { suggestions?: string[] };
-    return Array.isArray(parsed.suggestions) ? parsed.suggestions.slice(0, 4) : [];
-  } catch {
-    return [];
-  }
-}
 
 function formatWeatherBlock(w: CachedWeather): string {
   return (
@@ -556,17 +470,6 @@ function detectActiveListFromHistory(history: Array<{ role: string; content: str
 }
 const NAVIGATION_PATTERN = /\b(take\s+me\s+to|directions?\s+to|navigate\s+to|get\s+me\s+to|how\s+do\s+i\s+get\s+to|maps?\s+to|open\s+maps?\s+(for|to)|i\s+need\s+to\s+go\s+to|i\s+need\s+directions?\s+to|i\s+want\s+to\s+go\s+to|can\s+you\s+take\s+me\s+to|take\s+me|get\s+directions?\s+to|show\s+me\s+how\s+to\s+get\s+to)\b/i;
 
-// ── Per-user short-lived trip intent cache ────────────────────────────────────
-// Isolated contexts (e.g. 'trip-planning') don't write to chat_messages, so
-// isTripSaveIntent can't hydrate the conversation from DB. This cache stores
-// the last generated ParsedTripIntent per user for up to 30 minutes, giving
-// the save handler something to work with even when history is empty.
-type CachedTripIntent = {
-  intent: import("../travel/tripPlanningManager.js").ParsedTripIntent;
-  timestamp: number;
-};
-const lastTripIntentByUser = new Map<string, CachedTripIntent>();
-const TRIP_INTENT_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
 function extractTranscriptSearchTerm(msg: string): string {
   return msg
@@ -732,17 +635,15 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   if (!sessionUserName) return;
 
   // ── Auto-greeting: derive time-appropriate message ────────────────────────
-  const { message: rawMessage, history: rawHistory = [], isAutoGreeting = false, deviceId = null, winddownRequest = false, context: requestContext = null, tripId: rawTripId = null, timezone: rawTimezone = null } = req.body;
+  const { message: rawMessage, history: rawHistory = [], isAutoGreeting = false, deviceId = null, winddownRequest = false, context: requestContext = null, timezone: rawTimezone = null } = req.body;
   const timezone: string = (typeof rawTimezone === 'string' && rawTimezone.trim().length > 0)
     ? rawTimezone.trim()
     : 'America/Chicago';
   // Isolated contexts: messages are NOT saved to chat_messages (main chat history).
   // trip-planning has its own trip_plans table.
   // journal entries belong on the My Life screen only, not the main chat.
-  const isIsolatedContext = requestContext === "trip-planning" || requestContext === "journal" || requestContext === "goals";
+  const isIsolatedContext = requestContext === "journal" || requestContext === "goals";
 
-  const tripId = typeof rawTripId === "number" ? rawTripId : (typeof rawTripId === "string" && rawTripId ? parseInt(rawTripId, 10) || null : null);
-  let activeTripPlan: TripPlanRow | null = null;
 
   // ── Layer 1: Active context window ────────────────────────────────────────
   // Claude only sees the last 20 messages. The full transcript is persisted in
@@ -947,7 +848,6 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const _hasCachedBriefing = !!getCachedBriefing(sessionUserName);
   const cls = await classifyMessage(message, {
     requestContext:     requestContext ?? "general",
-    hasActiveTripPlan:  !!activeTripPlan,
     hasStoredHeadlines: getStoredHeadlines().length > 0,
     hasCachedBriefing:  _hasCachedBriefing,
   });
@@ -965,107 +865,10 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isGoogleContactWrite = !isMorningGreeting && cls.google_contact_write;
   const isStoryRead = cls.story_read;
   const isStoryCount = cls.story_count;
-  const isTripSaveIntent = !isMorningGreeting && cls.trip_save;
-  process.stdout.write(`[STDOUT] CLS-RAW trip_plan=${cls.trip_plan} trip_save=${cls.trip_save} hotel_availability=${cls.hotel_availability} trip_price_query=${cls.trip_price_query} requestContext=${requestContext ?? "null"}\n`);
-  const isTripPlanIntent = !isMorningGreeting && !isTripSaveIntent && cls.trip_plan;
-  process.stdout.write(`[STDOUT] INTENT-FLAGS isMorning=${isMorningGreeting} isTripSave=${isTripSaveIntent} isTripPlan=${isTripPlanIntent} requestContext=${requestContext ?? "null"} msg="${message.slice(0, 80)}"\n`);
 
-  // ── Active trip context ───────────────────────────────────────────────────
-  // When the native app sends context:"trip-planning" + tripId, load the stored
-  // trip so we can inject hotel pricing and itinerary details into the prompt.
-  if (requestContext === "trip-planning" || isTripPlanIntent || cls.hotel_swap || cls.trip_save) {
-    try {
-      if (tripId) {
-        activeTripPlan = await getTripPlanById(tripId, sessionUserName);
-      } else {
-        // No tripId sent — fall back to most recently updated trip
-        const allTrips = await getActiveTripPlans(sessionUserName);
-        activeTripPlan = allTrips[0] ?? null;
-      }
-    } catch { /* ignore */ }
-  }
 
-  // ── Trip screen: inject FULL itinerary + hotel pricing ───────────────────
-  // Inject the complete stored plan so Claude can answer ANY question about the
-  // trip — activities, meals, hotels, pricing — without truncating to one day.
-  // Skip when the user is about to generate a NEW trip — injecting the old plan
-  // would confuse Claude (it would see two different trips in context).
-  if (activeTripPlan && !isTripPlanIntent) {
-    type ItinActivity = { time?: string; title?: string; description?: string; notes?: string };
-    type ItinMeal = { time?: string; title?: string; description?: string; bookingUrl?: string; websiteUrl?: string };
-    type ItinHotel = { name?: string; pricePerNight?: string; priceRange?: string; bookingUrl?: string; websiteUrl?: string; alternativeBookingUrl?: string; notes?: string };
-    type ItinDay = { dayNumber?: number; label?: string; location?: string; hotel?: ItinHotel; activities?: ItinActivity[]; meals?: ItinMeal[] };
-    const itinDays: ItinDay[] = ((activeTripPlan.itinerary as unknown as Record<string, unknown>)?.days as ItinDay[] | undefined) ?? [];
 
-    const dayBlocks: string[] = [];
-    for (const day of itinDays) {
-      const lines: string[] = [];
-      const dayNum = day.dayNumber ?? (itinDays.indexOf(day) + 1);
-      const loc = day.location ? ` (${day.location})` : "";
-      lines.push(`Day ${dayNum}${day.label ? ` — ${day.label}` : ""}${loc}`);
-
-      const h = day.hotel;
-      if (h?.name) {
-        let hotelLine = `  Hotel: ${h.name}`;
-        if (h.pricePerNight) hotelLine += ` — ${h.pricePerNight}`;
-        else if (h.priceRange) hotelLine += ` — approx. ${h.priceRange}`;
-        const bookUrl = h.bookingUrl || h.websiteUrl || h.alternativeBookingUrl;
-        if (bookUrl) hotelLine += `\n    Book: ${bookUrl}`;
-        lines.push(hotelLine);
-      }
-
-      if (day.activities?.length) {
-        lines.push("  Activities:");
-        for (const a of day.activities) {
-          const timeLabel = a.time ? `${a.time}: ` : "";
-          const desc = a.description ?? a.notes ?? "";
-          lines.push(`    ${timeLabel}${a.title ?? ""}${desc ? ` — ${desc}` : ""}`);
-        }
-      }
-
-      if (day.meals?.length) {
-        lines.push("  Meals:");
-        for (const m of day.meals) {
-          const timeLabel = m.time ? `${m.time}: ` : "";
-          const url = m.bookingUrl || m.websiteUrl;
-          const urlSuffix = url ? ` (${url})` : "";
-          lines.push(`    ${timeLabel}${m.title ?? ""}${m.description ? ` — ${m.description}` : ""}${urlSuffix}`);
-        }
-      }
-
-      dayBlocks.push(lines.join("\n"));
-    }
-
-    const tripHeader =
-      `[Full Trip Plan — "${activeTripPlan.trip_name ?? activeTripPlan.destination}"` +
-      `${activeTripPlan.start_date ? ` | ${activeTripPlan.start_date} – ${activeTripPlan.end_date ?? "?"}` : " | dates TBD"}]\n` +
-      `Destination: ${activeTripPlan.destination} | ${activeTripPlan.nights ?? itinDays.length} nights`;
-
-    if (dayBlocks.length > 0) {
-      const anyHotelHasPrice = itinDays.some(d => d.hotel?.pricePerNight || d.hotel?.priceRange);
-      const pricingNote = anyHotelHasPrice
-        ? `For hotel pricing questions, answer directly using the prices above and provide booking URLs. Do NOT say you cannot check pricing or availability.`
-        : `For hotel pricing questions, live rates will be fetched and added to this context. Do NOT say you cannot check prices.`;
-      systemPrompt +=
-        `\n\n${tripHeader}\n` +
-        dayBlocks.join("\n\n") + "\n" +
-        `\nINSTRUCTIONS: You have the complete trip itinerary above. ` +
-        `When David asks about the trip, describe it fully — all days, all stops, activities, meals, and hotels. ` +
-        `Do NOT truncate or summarize to a single day. ` +
-        pricingNote;
-      req.log.info({ tripId: activeTripPlan.id, tripName: activeTripPlan.trip_name, days: dayBlocks.length }, "[TripContext] Full itinerary injected into prompt");
-    } else {
-      systemPrompt +=
-        `\n\n${tripHeader}\n` +
-        `No itinerary days found yet. If David asks about pricing or the plan, let him know the trip hasn't been generated yet ` +
-        `and suggest tapping the refresh button on the trip card.`;
-    }
-  }
-  const isTripPriceQuery = requestContext === "trip-planning" && !isMorningGreeting && !isTripSaveIntent && !isTripPlanIntent && cls.trip_price_query;
-  const isHotelAvailabilityQuery = !isMorningGreeting && !isTripSaveIntent && !isTripPlanIntent && (cls.hotel_availability || isTripPriceQuery);
-
-  // Guard: don't run profile handler when a trip save is being detected — they conflict
-  const isProfileRequest = !isTripSaveIntent && cls.profile_update && requestContext !== 'trip-planning';
+  const isProfileRequest = cls.profile_update;
   // IMPORTANT: Reminder requests must NEVER route to Google Calendar.
   // IMPORTANT: CREATE is evaluated before MODIFY — explicit "add/create/schedule/put on calendar"
   // always wins, even if the event title contains a word like "move" or "transfer".
@@ -1107,7 +910,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
   // R001: Restaurant intelligence (reservation, directions, info for a named restaurant)
   const pendingReservation = getPendingReservation(sessionUserName);
-  const isRestaurantIntelRequest = !isMorningGreeting && !isRestaurantReco && !activeTripPlan && cls.restaurant_intel;
+  const isRestaurantIntelRequest = !isMorningGreeting && !isRestaurantReco && cls.restaurant_intel;
   const isReservationFlowActive = !isMorningGreeting && pendingReservation !== null;
   const RESERVATION_CONFIRM = /^(?:(?:ok|okay|yeah|yep|yup|sure|alright)[,\s]+)*(yes|open\s+it|do\s+it|go\s+ahead|sounds?\s+good|let.?s\s+(?:do\s+it|book)|book\s+it|call\s+them|open\s+(?:the\s+)?(?:opentable|resy|maps?|dialer)|get\s+directions?|dial\s+(?:them|it))(?:[,\s!.]|$)/i;
   const RESERVATION_CANCEL = /^(?:no\s+thanks?|never\s+mind|cancel|skip\s+it|not\s+now|forget\s+it)(?:[,\s!.]|$)/i;
@@ -1629,266 +1432,6 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     }
   }
 
-  // ── Trip itinerary save: user says "save this" / "build the itinerary" / "yes let's do it" ──
-  // Trip planning itself happens naturally through Claude. When the user is ready to
-  // save a formal day-by-day itinerary, we detect the intent, extract context from
-  // recent conversation history, generate the structured plan, and inject a confirmation
-  // so Claude acknowledges the save naturally in its response.
-  let forceTripModify = false;
-  if (isTripPlanIntent) {
-    (req as any).socket?.setTimeout(120000);
-    try {
-      const tripMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-        ...history.map((h: any) => ({
-          role: h.role === 'assistant' ? 'assistant' as const : 'user' as const,
-          content: h.content,
-        })),
-        { role: 'user', content: message },
-      ];
-
-      const tripResp = await openai.responses.create({
-        model: 'gpt-4o',
-        input: tripMessages.map(m => ({
-          role: m.role as 'user' | 'assistant',
-          content: m.content as string,
-        })),
-        tools: [{ type: 'web_search_preview', search_context_size: 'high' }],
-        tool_choice: { type: 'web_search_preview' },
-      });
-
-      process.stdout.write('[TripPlan] LIVE BLOCK OUTPUT: ' + JSON.stringify(tripResp.output) + '\n');
-
-      const tripReply = tripResp.output_text ?? '';
-      (req as any)._tripConversationalResponse = tripReply;
-
-      const tripPlan: NativeTripPlan = {
-        trip_name: `Trip — ${new Date().toLocaleDateString()}`,
-        destination: '',
-        nights: 0,
-        start_date: null,
-        end_date: null,
-        status: 'planning',
-        itinerary: { days: [], practicalNotes: [] },
-        saved_text: tripReply,
-        notes: '',
-      };
-      const savedTripId = await saveTripPlan(sessionUserName, tripPlan);
-      (req as any)._tripSaved = { tripSaved: true, tripId: savedTripId, tripName: tripPlan.trip_name };
-    } catch (planErr) {
-      req.log.error({ planErr }, '[TripPlan] Generation error');
-    }
-  }
-
-
-  // ── Hotel availability check (on-demand, conversational) ─────────────────────
-  // Fires when the user asks "Is [hotel] available June 12–15?" or "hotel availability in Dallas".
-  // When in Trip screen context with a loaded trip, uses the stored SerpAPI pricing from
-  // the trip's itinerary instead of making a live Places search (which has no pricing).
-  if (isHotelAvailabilityQuery) {
-    try {
-      // ── Trip screen: inject stored hotel pricing from the trip's itinerary ──
-      if (activeTripPlan?.itinerary) {
-        type ItinDay = { hotel?: { name?: string; pricePerNight?: string; bookingUrl?: string; websiteUrl?: string; alternativeBookingUrl?: string } };
-        const itinDays: ItinDay[] = (activeTripPlan.itinerary as { days?: ItinDay[] }).days ?? [];
-        const hotelLines: string[] = [];
-        const seen = new Set<string>();
-        for (const day of itinDays) {
-          const h = day.hotel;
-          if (!h?.name || seen.has(h.name)) continue;
-          seen.add(h.name);
-          let line = `  • ${h.name}`;
-          if (h.pricePerNight) line += ` — ${h.pricePerNight}`;
-          const bookUrl = h.bookingUrl || h.websiteUrl || h.alternativeBookingUrl;
-          if (bookUrl) line += `\n    Book: ${bookUrl}`;
-          hotelLines.push(line);
-        }
-        if (hotelLines.length > 0) {
-          const storedDatesNote = activeTripPlan.start_date && activeTripPlan.end_date
-            ? `Check-in: ${activeTripPlan.start_date} → Check-out: ${activeTripPlan.end_date} (${activeTripPlan.nights ?? "?"} nights)`
-            : activeTripPlan.start_date
-              ? `Check-in: ${activeTripPlan.start_date} (${activeTripPlan.nights ?? "?"} nights — no end date stored)`
-              : `No check-in/check-out dates stored for this trip (prices are approximate).`;
-
-          systemPrompt +=
-            `\n\n[VERIFIED — Stored Trip Hotel Data — "${activeTripPlan.trip_name ?? activeTripPlan.destination}"]\n` +
-            `${storedDatesNote}\n` +
-            `Pricing below is from a recent SerpAPI / Google Hotels search for this trip.\n` +
-            hotelLines.join("\n") + "\n" +
-            `NOTE: Prices marked with ~ are approximate (no fixed dates). ` +
-            `Share these prices and dates directly and confidently. Provide booking URLs so David can check live availability. ` +
-            `Do NOT say you can't check pricing or that you have no dates — the data is above.`;
-          req.log.info({ tripId, hotels: hotelLines.length, start_date: activeTripPlan.start_date }, "[HotelAvail] Injected stored trip hotel pricing + dates");
-        } else {
-          // Hotels exist in the itinerary but no stored pricing — do a live SerpAPI lookup.
-          const tripDest   = activeTripPlan.destination ?? "";
-          const checkIn    = activeTripPlan.start_date ?? null;
-          const checkOut   = activeTripPlan.end_date ?? null;
-          const gDestEnc   = encodeURIComponent(tripDest);
-          const gDateParams = checkIn && checkOut
-            ? `?check_in_date=${checkIn}&check_out_date=${checkOut}&adults=2`
-            : "";
-          const googleHotelsUrl = `https://www.google.com/travel/hotels/s/${gDestEnc}${gDateParams}`;
-
-          if (checkIn && checkOut && isSerpApiReady()) {
-            // Gather unique hotel names from the itinerary (max 3 to respect SerpAPI free tier)
-            const seen = new Set<string>();
-            const uniqueHotels: string[] = [];
-            for (const day of itinDays) {
-              const name = day.hotel?.name;
-              if (name && !seen.has(name)) { seen.add(name); uniqueHotels.push(name); }
-              if (uniqueHotels.length >= 3) break;
-            }
-
-            const serpLines: string[] = [];
-            await Promise.all(uniqueHotels.map(async (hotelName) => {
-              try {
-                const r = await searchHotelViaSerpApi(hotelName, tripDest, checkIn, checkOut, 2);
-                let line = `  • ${r.name}`;
-                if (r.pricePerNight) line += ` — ${r.pricePerNight}`;
-                if (r.bookingUrl)    line += `\n    Book: ${r.bookingUrl}`;
-                serpLines.push(line);
-              } catch { /* skip */ }
-            }));
-
-            if (serpLines.length > 0) {
-              systemPrompt +=
-                `\n\n[LIVE — Hotel Rates via Google Hotels | ${tripDest}]\n` +
-                `Check-in: ${checkIn} → Check-out: ${checkOut} (${activeTripPlan.nights ?? "?"} nights)\n` +
-                serpLines.join("\n") + "\n" +
-                `Share these live rates and booking links directly and confidently. ` +
-                `Do NOT say you cannot check pricing or availability — you have the data above.`;
-              req.log.info({ tripId: activeTripPlan.id, hotels: serpLines.length }, "[HotelAvail] Live SerpAPI rates fetched for trip");
-            } else {
-              // SerpAPI returned nothing useful — fall back to Google Hotels link
-              systemPrompt +=
-                `\n\n[Hotel Rates — Google Hotels]\n` +
-                `SerpAPI returned no results for these hotels. Give David this Google Hotels link ` +
-                `with these exact dates pre-filled so he can check live rates:\n${googleHotelsUrl}\n` +
-                `Do NOT say you cannot check pricing.`;
-              req.log.info({ tripId: activeTripPlan.id }, "[HotelAvail] SerpAPI returned nothing — gave Google Hotels link");
-            }
-          } else {
-            // No trip dates set or SerpAPI not configured — give Google Hotels link
-            systemPrompt +=
-              `\n\n[Hotel Rates — Google Hotels]\n` +
-              `${checkIn ? "" : "No check-in/check-out dates are set for this trip. "}` +
-              `Give David this Google Hotels link to check live rates and availability:\n${googleHotelsUrl}\n` +
-              `Do NOT say you cannot check pricing.`;
-          }
-        }
-      } else {
-        // ── Main chat: live Google Places search (no pricing, gives website links) ──
-        const todayISO = new Date().toLocaleDateString("en-CA", { timeZone: timezone });
-        const extractResp = await anthropic.messages.create({
-          model: MODEL_HAIKU,
-          max_tokens: 200,
-          system: `Extract hotel availability search parameters from this message. Respond ONLY with valid JSON — no explanation, no markdown.
-Format: {"hotelName":"string or null","destination":"string","checkIn":"YYYY-MM-DD or null","checkOut":"YYYY-MM-DD or null","adults":number}
-Today is ${todayISO}. Resolve relative phrases like "this weekend", "next Friday", "June 12-15" to specific YYYY-MM-DD dates.
-If no specific hotel is named, set hotelName to null. If destination is unclear, infer from hotel name (e.g. "Omni Dallas" → "Dallas").
-If dates cannot be resolved to specific days, set them to null.`,
-          messages: [{ role: "user", content: message }],
-        });
-
-        const extractedText = extractResp.content[0].type === "text"
-          ? extractResp.content[0].text.trim()
-          : "{}";
-
-        let hotelParams: {
-          hotelName?: string | null;
-          destination?: string;
-          checkIn?: string | null;
-          checkOut?: string | null;
-          adults?: number;
-        } = {};
-        try {
-          hotelParams = JSON.parse(extractedText.replace(/^```json\s*/i, "").replace(/```$/i, "").trim());
-        } catch { /* ignore */ }
-
-        req.log.info({ hotelParams }, "[HotelAvail] Extracted params from message");
-
-        if (hotelParams.destination && hotelParams.checkIn && hotelParams.checkOut) {
-          const result = await checkHotelAvailability({
-            hotelName:   hotelParams.hotelName ?? undefined,
-            destination: hotelParams.destination,
-            checkIn:     hotelParams.checkIn,
-            checkOut:    hotelParams.checkOut,
-            adults:      hotelParams.adults ?? 2,
-          });
-          req.log.info(
-            { dest: hotelParams.destination, checkIn: hotelParams.checkIn, checkOut: hotelParams.checkOut, totalFound: result.totalFound, foundSpecific: !!result.specific },
-            "[HotelAvail] Places search complete"
-          );
-          systemPrompt += buildHotelAvailabilityBlock(result);
-        } else {
-          req.log.info({ hotelParams }, "[HotelAvail] Missing params — asking user to clarify");
-          systemPrompt +=
-            `\n\n[Hotel Availability — Incomplete Request]\n` +
-            `The user seems to be asking about hotel availability, but I couldn't parse specific dates or destination. ` +
-            `Ask them to confirm: (1) destination or hotel name, (2) check-in date, (3) check-out date, (4) number of guests.`;
-        }
-      }
-    } catch (hotelErr) {
-      req.log.warn({ err: hotelErr }, "[HotelAvail] Check failed — letting Claude handle naturally");
-    }
-  }
-
-  // ── Trip modification (trip screen only) ─────────────────────────────────
-  // Fires on every trip-screen message that isn't plan/save. GPT-4o decides
-  // whether the message requires an itinerary change (returns updated JSON)
-  // or is just a question/comment (returns null). Only saves when changed.
-  if (activeTripPlan?.itinerary && !isTripPlanIntent && !isTripSaveIntent) {
-    try {
-      const currentItinerary = JSON.stringify(activeTripPlan.itinerary, null, 2);
-      const modMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-        {
-          role: 'system',
-          content: `You are a luxury travel concierge managing an existing trip itinerary.
-The user may want to modify something (swap a hotel, change a restaurant, add an activity, ask a question) or just continue the conversation about their trip.
-
-Current itinerary JSON:
-${currentItinerary}
-
-If the user wants a change: return a complete updated itinerary JSON object with ALL original fields preserved plus any changes applied, and include a "conversational_response" field with your natural enthusiastic response explaining what changed and why the new choice is great.
-
-If no change is needed (question, comment, general chat): return exactly the string "null".
-
-Return ONLY the JSON object or the string "null". No markdown fences, no explanation.`
-        },
-        ...history.slice(-12).map((m: any) => ({
-          role: m.role as 'user' | 'assistant',
-          content: m.content,
-        })),
-        { role: 'user', content: message },
-      ];
-
-      const modResp = await openai.chat.completions.create({
-        model: MODEL_GPT4O_TRIP,
-        max_tokens: 8000,
-        messages: modMessages,
-      });
-
-      const modRaw = modResp.choices[0]?.message?.content?.trim() ?? 'null';
-
-      if (modRaw === 'null' || modRaw === '') {
-        // No changes needed — fall through to normal response
-      } else {
-        const cleaned = modRaw.slice(modRaw.indexOf('{'), modRaw.lastIndexOf('}') + 1);
-        const updatedItinerary = JSON.parse(cleaned);
-        const conversationalResponse = updatedItinerary.conversational_response ?? '';
-        delete updatedItinerary.conversational_response;
-
-        await updateTripPlan(activeTripPlan.id, sessionUserName, { itinerary: updatedItinerary });
-        (req as any)._tripUpdated = { tripUpdated: true, tripId: activeTripPlan.id };
-
-        if (conversationalResponse) {
-          (req as any)._hardcodedResponse = conversationalResponse;
-        }
-      }
-    } catch (err) {
-      req.log.error({ err }, '[TripModify] Error');
-    }
-  }
 
   if (isSportsRequest) {
     try {
@@ -2510,8 +2053,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
   }
 
   // ── Restaurant reservation / directions / info ───────────────────────────────
-  // Fires when classifier sets restaurant_intel. City priority: trip day city →
-  // activeTripPlan.destination → GPS reverse geocode → userProfile.city.
+  // Fires when classifier sets restaurant_intel. City priority: GPS reverse geocode → userProfile.city.
   if (isRestaurantIntelRequest) {
     // A new request always resets any stale pending state.
     if (pendingReservation) clearPendingReservation(sessionUserName);
@@ -2519,12 +2061,6 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
     const bodyLat = typeof (req.body as any).lat === "number" ? (req.body as any).lat as number : null;
     const bodyLng = typeof (req.body as any).lng === "number" ? (req.body as any).lng as number : null;
     let city: string | undefined;
-    if (requestContext === "trip-planning" && activeTripPlan) {
-      const tripDays: Array<{ location?: string }> = (activeTripPlan.itinerary as any)?.days ?? [];
-      const msgLower = message.toLowerCase();
-      const matchedDay = tripDays.find((d) => d.location && msgLower.includes(d.location.toLowerCase()));
-      city = matchedDay?.location ?? activeTripPlan.destination;
-    }
     if (!city && bodyLat !== null && bodyLng !== null) {
       try {
         const geoRes = await fetch(
@@ -2550,9 +2086,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
         const nameResp = await anthropic.messages.create({
           model: MODEL_HAIKU,
           max_tokens: 60,
-          system: requestContext === "trip-planning" && activeTripPlan?.destination
-            ? `The user is on a trip planning screen for a trip to ${activeTripPlan.destination}. Extract the restaurant name they want to make a reservation at. Return ONLY the restaurant name — nothing else. Return null if no specific restaurant is named.`
-            : `Extract the restaurant name the user wants to make a reservation at. Return ONLY the restaurant name — nothing else. Return null if no specific restaurant is named.`,
+          system: `Extract the restaurant name the user wants to make a reservation at. Return ONLY the restaurant name — nothing else. Return null if no specific restaurant is named.`,
           messages: [{ role: "user", content: historyContext }],
         });
         const extracted = nameResp.content[0]?.type === "text" ? nameResp.content[0].text.trim() : "";
@@ -2585,24 +2119,6 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
           // In trip-planning context, derive the date from the trip plan when the
           // user didn't specify one — find the day whose location matches the city
           // being discussed and offset from the trip's start date.
-          if (requestContext === "trip-planning" && !intent.dateISO && activeTripPlan?.start_date && city) {
-            const tripCheckIn = parseToISODate(activeTripPlan.start_date);
-            if (tripCheckIn) {
-              const tripDays: Array<{ location?: string; dayNumber?: number }> =
-                (activeTripPlan.itinerary as any)?.days ?? [];
-              const cityLower = city.toLowerCase();
-              const matchIdx = tripDays.findIndex(
-                (d) => d.location && d.location.toLowerCase().includes(cityLower)
-              );
-              if (matchIdx >= 0) {
-                intent.dateISO = addNightsToISO(tripCheckIn, matchIdx);
-                req.log.info(
-                  { city, dayIdx: matchIdx, dateISO: intent.dateISO },
-                  "[R001] Trip date derived from itinerary day"
-                );
-              }
-            }
-          }
 
           let details = await getCachedRestaurantDetails(sessionUserName, intent.restaurantName);
           if (details) {
@@ -4331,10 +3847,6 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
     try {
       let nativeReply: string;
 
-      if (requestContext === "trip-planning" || isTripPlanIntent) {
-        nativeReply = (req as any)._tripConversationalResponse ?? "I wasn't able to generate that trip — could you try rephrasing your request?";
-        req.log.info({ responsePreview: nativeReply.slice(0, 300) }, "[DIAG:4] Trip conversational_response used directly");
-      } else {
         // ── All other contexts: Claude with structured JSON output ────────────
         const nativeSystemPrompt = systemPrompt +
           `\n\nRespond with a JSON object only — no markdown, no preamble:\n` +
@@ -4598,7 +4110,6 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
           default:
             break;
         }
-      }
 
       const nativeResponseBody: Record<string, unknown> = { response: nativeReply };
       if (navigationUrl) nativeResponseBody.navigationUrl = navigationUrl;
@@ -4700,31 +4211,6 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
   }
 
   try {
-    if (requestContext === "trip-planning") {
-      // ── Trip screen: GPT-4o streaming ────────────────────────────────────
-      const tripSystemContent = [stableSystem, systemPrompt].filter(Boolean).join("\n\n");
-      const tripMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-        { role: "system", content: tripSystemContent },
-        ...filteredHistory.map((h: { role: string; content: string }) => ({
-          role: h.role as "user" | "assistant",
-          content: h.content,
-        })),
-        { role: "user", content: message },
-      ];
-      const tripStream = await openai.chat.completions.create({
-        model: MODEL_GPT4O_TRIP,
-        max_tokens: 3000,
-        messages: tripMessages,
-        stream: true,
-      });
-      for await (const chunk of tripStream) {
-        const text = chunk.choices[0]?.delta?.content ?? "";
-        if (text) {
-          reply += text;
-          sendSSE({ text });
-        }
-      }
-    } else {
       const stream = await anthropic.messages.create({
         model: selectedModel,
         max_tokens: isMorningGreeting ? 1800 : 1024,
@@ -4743,7 +4229,6 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
           sendSSE({ text });
         }
       }
-    }
 
     sendSSE({ done: true, messageId, ...(navigationUrl ? { navigationUrl } : {}) });
   } catch (err: unknown) {
