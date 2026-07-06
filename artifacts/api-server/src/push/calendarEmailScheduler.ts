@@ -240,6 +240,7 @@ async function checkUserCalendarEmail(user: ActiveUser): Promise<void> {
       notificationType: "calendar-email-intel",
       title,
       body,
+      data: { action: "send_message", message: "Check my email" },
     }).catch((err) =>
       logger.warn({ err, userName, msgId: msg.id }, "[CalEmailSched] Push send failed"),
     );

@@ -112,8 +112,8 @@ Rules for choosing action:
 - "save_to_orders": shipping, delivery, or order status update from a retailer or carrier.
 - "meeting_request": a real person communicating about a meeting or appointment — either (a) a NEW request where the user hasn't responded yet and a time may or may not be set, or (b) a CONFIRMATION that an already-proposed plan is locked in (time, place, and attendees decided; no response needed, just acknowledge it happened). Set isConfirmation=false for new requests, isConfirmation=true when the meeting is already confirmed.
 - "needs_reply": anything from a real person that reasonably expects a response — a question, a catch-up message, a personal note — even if casual.
-- "urgent_alert": anything genuinely urgent requiring the user's immediate awareness — fraud alerts, suspicious login warnings, account security notices, unrecognized transaction alerts, identity theft warnings. Always flag these prominently; never drop them silently.
-- "fyi": a recurring charge, subscription renewal, or routine non-urgent account/balance notice — gym membership charge, SaaS billing, streaming renewal, routine bank activity summary. Worth briefly mentioning, not stored anywhere.
+- "urgent_alert": anything genuinely urgent requiring the user's immediate awareness — fraud alerts, suspicious login warnings, account security notices, unrecognized transaction alerts, identity theft warnings. Also use this for large or unexpected financial transactions from payment platforms (Venmo, Zelle, PayPal, Cash App, Apple Pay) — any single transfer of $200 or more qualifies. Always flag these prominently; never drop them silently.
+- "fyi": a small recurring charge, subscription renewal, or routine low-value account/balance notice — gym membership charge ($0–$50), SaaS billing, streaming renewal, routine bank activity summary, small peer payments. Worth briefly mentioning, not stored anywhere.
 - "none": pure marketing, newsletters, promotional offers, automated service notifications with no real information value. Use this ONLY for noise. Never use "none" for anything financial, security-related, or potentially urgent.`;
 
   try {
