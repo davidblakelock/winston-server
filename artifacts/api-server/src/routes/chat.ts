@@ -3766,7 +3766,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
 
     // Build dynamic family context for the evening wind-down
     const _windDownDisplayName = userProfile?.name ?? sessionUserName;
-    const _closeFamilyPeople = profilePeople.filter((p: { relationship?: string }) => {
+    const _closeFamilyPeople = keyPeople.filter((p: { relationship?: string }) => {
       const rel = (p.relationship ?? "").toLowerCase();
       return ["wife","husband","spouse","partner","girlfriend","boyfriend","daughter","son","child","dog","cat","pet","corgi","puppy"].includes(rel);
     });
@@ -3880,7 +3880,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
   if (isStoryRead) {
     try {
       const stories = await getStories();
-      const _readPerson = profilePeople.find((p: { relationship?: string }) => {
+      const _readPerson = keyPeople.find((p: { relationship?: string }) => {
         const rel = (p.relationship ?? "").toLowerCase();
         return ["daughter","son","child"].includes(rel);
       })?.name ?? null;
