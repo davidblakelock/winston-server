@@ -760,7 +760,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   if (!sessionUserName) return;
 
   // ── Auto-greeting: derive time-appropriate message ────────────────────────
-  const { message: rawMessage, history: rawHistory = [], isAutoGreeting = false, deviceId = null, winddownRequest = false, context: requestContext = null, tripId: rawTripId = null } = req.body;
+  const { message: rawMessage, history: rawHistory = [], isAutoGreeting = false, deviceId = null, winddownRequest = false, context: requestContext = null, tripId: rawTripId = null, timezone = "America/Chicago" } = req.body;
   // Isolated contexts: messages are NOT saved to chat_messages (main chat history).
   // trip-planning has its own trip_plans table.
   // journal entries belong on the My Life screen only, not the main chat.
@@ -843,7 +843,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         ? `\nRecent journal context:\n` +
           previousCaptures.map((c) => {
             const label = new Date(c.captured_at).toLocaleDateString("en-US", {
-              timeZone: "America/Chicago", weekday: "short", month: "short", day: "numeric",
+              timeZone: timezone, weekday: "short", month: "short", day: "numeric",
             });
             return `• [${label}] ${c.content}`;
           }).join("\n")
@@ -949,7 +949,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     if (pendingReminderRows.length > 0) {
       const fmtTime = (iso: string) =>
         new Date(iso).toLocaleString("en-US", {
-          timeZone: "America/Chicago",
+          timeZone: timezone,
           weekday: "short", month: "short", day: "numeric",
           hour: "numeric", minute: "2-digit", hour12: true,
         });
@@ -1240,7 +1240,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     : MODEL_SONNET;
 
   // ── Sleep reminder: gently note the time if after 11pm CT (once per night) ──
-  const chicagoHour = new Date().toLocaleString("en-US", { timeZone: "America/Chicago", hour: "numeric", hour12: false });
+  const chicagoHour = new Date().toLocaleString("en-US", { timeZone: timezone, hour: "numeric", hour12: false });
   const currentHourCT = parseInt(chicagoHour, 10);
   let sleepReminderFired = false;
   if (currentHourCT >= 23 || currentHourCT === 0) {
@@ -1607,7 +1607,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       req.log.info({ storyNumber: newsDigStoryNumber, title: story.title }, "[NewsDig] Fetching more details for story");
       const isNativeNewsDig = req.headers["x-native-app"] === "true";
       const now = new Date();
-      const todayStr = now.toLocaleDateString("en-US", { timeZone: "America/Chicago", weekday: "long", month: "long", day: "numeric", year: "numeric" });
+      const todayStr = now.toLocaleDateString("en-US", { timeZone: timezone, weekday: "long", month: "long", day: "numeric", year: "numeric" });
 
       try {
         const digResponse = await anthropic.messages.create({
@@ -1802,7 +1802,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         }
       } else {
         // ── Main chat: live Google Places search (no pricing, gives website links) ──
-        const todayISO = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+        const todayISO = new Date().toLocaleDateString("en-CA", { timeZone: timezone });
         const extractResp = await anthropic.messages.create({
           model: MODEL_HAIKU,
           max_tokens: 200,
@@ -3282,7 +3282,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
           .map(
             (i: LocalContentItem) =>
               `• ${i.headline}${i.summary ? ` — ${i.summary}` : ""}` +
-              `${i.publishedAt ? ` (${new Date(i.publishedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "America/Chicago" })})` : ""}`
+              `${i.publishedAt ? ` (${new Date(i.publishedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: timezone })})` : ""}`
           )
           .join("\n");
 
@@ -3582,7 +3582,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
   const isGoodnightMessage = /\b(goodnight|good\s+night|good\s+nite|sweet\s+dreams|see\s+you\s+tomorrow|talk\s+tomorrow)\b/i.test(message);
 
   if (winddownActive) {
-    const tz = "America/Chicago";
+    const tz = timezone;
     const now = new Date();
     const dayName = now.toLocaleDateString("en-US", { timeZone: tz, weekday: "long" });
 
@@ -4648,7 +4648,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
           `    "type": "none" | "add_todo" | "add_reminder" | "add_todo_with_reminder" | "remind_contact" | "send_sms" | "make_call" | "navigate",\n` +
           `    "listName": "to do" or "shopping" or null,\n` +
           `    "itemText": "clean task text only — never include time or date phrases here",\n` +
-          `    "reminderTime": "ISO 8601 datetime in America/Chicago timezone, or null",\n` +
+          `    "reminderTime": "ISO 8601 datetime in ${timezone} timezone, or null",\n` +
           `    "forContact": "first name of the contact, or null",\n` +
           `    "phone": "phone number or null",\n` +
           `    "smsBody": "composed SMS body text or null",\n` +
@@ -4735,7 +4735,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
             if (itemText && parsedAction.reminderTime) {
               const fireAt = new Date(parsedAction.reminderTime);
               if (!isNaN(fireAt.getTime())) {
-                await createReminder({ userName: sessionUserName, reminderText: itemText, fireAt, timezone: "America/Chicago" })
+                await createReminder({ userName: sessionUserName, reminderText: itemText, fireAt, timezone })
                   .catch((e) => req.log.warn({ e }, "[ACTION] add_reminder failed"));
                 req.log.info({ itemText, fireAt }, "[ACTION] add_reminder");
               }
@@ -4760,7 +4760,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
             if (itemText && parsedAction.reminderTime) {
               const fireAt = new Date(parsedAction.reminderTime);
               if (!isNaN(fireAt.getTime())) {
-                await createReminder({ userName: sessionUserName, reminderText: itemText, fireAt, timezone: "America/Chicago" })
+                await createReminder({ userName: sessionUserName, reminderText: itemText, fireAt, timezone })
                   .catch((e) => req.log.warn({ e }, "[ACTION] add_todo_with_reminder reminder failed"));
                 req.log.info({ listName, itemText, fireAt }, "[ACTION] add_todo_with_reminder");
               }
@@ -4773,11 +4773,11 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
             if (itemText && parsedAction.forContact && parsedAction.reminderTime) {
               const fireAt = new Date(parsedAction.reminderTime);
               if (!isNaN(fireAt.getTime())) {
-                await createReminder({ userName: sessionUserName, reminderText: itemText, fireAt, timezone: "America/Chicago", forContact: parsedAction.forContact })
+                await createReminder({ userName: sessionUserName, reminderText: itemText, fireAt, timezone, forContact: parsedAction.forContact })
                   .catch((e) => req.log.warn({ e }, "[ACTION] remind_contact local failed"));
                 const match = await findConnectionByLabel(sessionUserName, parsedAction.forContact).catch(() => null);
                 if (match) {
-                  await createReminder({ userName: match.recipientUserName, reminderText: `A message from ${match.senderLabel}: ${itemText}`, fireAt, timezone: "America/Chicago" })
+                  await createReminder({ userName: match.recipientUserName, reminderText: `A message from ${match.senderLabel}: ${itemText}`, fireAt, timezone })
                     .catch((e) => req.log.warn({ e }, "[ACTION] remind_contact Connect failed"));
                   await query(
                     `INSERT INTO list_items (user_name, list_name, item_text, reminder_time, added_by)
