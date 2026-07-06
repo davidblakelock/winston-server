@@ -457,6 +457,46 @@ export async function createCalendarEvent(details: {
   }
 }
 
+/**
+ * Check if there is an existing calendar event that overlaps with the
+ * proposed start time on a given date. Returns the conflicting event
+ * summary if found, or null if the slot is free.
+ */
+export async function checkCalendarConflict(
+  userName: string,
+  dateISO: string,   // YYYY-MM-DD
+  startTime: string, // HH:MM 24-hour
+  durationMinutes = 60
+): Promise<string | null> {
+  try {
+    const auth = await resolveAuthClient(userName);
+    if (!auth) return null;
+    const calendar = google.calendar({ version: "v3", auth });
+
+    const startMs = new Date(`${dateISO}T${startTime}:00`).getTime();
+    const endMs   = startMs + durationMinutes * 60 * 1000;
+
+    const timeMin = new Date(startMs).toISOString();
+    const timeMax = new Date(endMs).toISOString();
+
+    const res = await calendar.events.list({
+      calendarId: "primary",
+      timeMin,
+      timeMax,
+      singleEvents: true,
+      maxResults: 5,
+    });
+
+    const events = res.data.items ?? [];
+    if (events.length === 0) return null;
+
+    return events[0]?.summary ?? "an existing event";
+  } catch (err) {
+    logger.warn({ err, dateISO, startTime }, "[Calendar] checkCalendarConflict failed");
+    return null;
+  }
+}
+
 export async function updateCalendarEvent(
   eventId: string,
   updates: {

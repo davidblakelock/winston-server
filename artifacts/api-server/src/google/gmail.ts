@@ -433,7 +433,9 @@ export function formatEmailsForPrompt(emails: EmailSummary[]): string {
   const lines: string[] = ["UNREAD EMAILS:"];
   for (let i = 0; i < emails.length; i++) {
     const e = emails[i];
-    lines.push(`${i + 1}. From: ${e.from} | Subject: ${e.subject} | ${e.snippet.slice(0, 120)}`);
+    lines.push(
+      `${i + 1}. [gmailId:${e.gmailId}] From: ${e.from} <${e.fromEmail ?? ""}> | Subject: ${e.subject} | ${e.snippet.slice(0, 120)}`
+    );
   }
   return lines.join("\n");
 }
@@ -459,5 +461,66 @@ export function buildImportantEmailInstruction(
     `Present the facts, offer the action, wait for the user's response. ` +
     `The user can say "delete that", "mark it read", "remind me about that" and you should handle it naturally.`
   );
+}
+
+// ── Gmail action functions ────────────────────────────────────────────────────
+
+export async function trashEmail(
+  gmailId: string,
+  userName?: string
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const auth = userName ? await getAuthClientForUser(userName) : await getAuthClient();
+    if (!auth) return { ok: false, error: "Google not connected" };
+    const gmail = google.gmail({ version: "v1", auth });
+    await gmail.users.messages.trash({ userId: "me", id: gmailId });
+    return { ok: true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn("[Gmail] trashEmail failed", { err, gmailId });
+    return { ok: false, error: message };
+  }
+}
+
+export async function archiveEmail(
+  gmailId: string,
+  userName?: string
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const auth = userName ? await getAuthClientForUser(userName) : await getAuthClient();
+    if (!auth) return { ok: false, error: "Google not connected" };
+    const gmail = google.gmail({ version: "v1", auth });
+    await gmail.users.messages.modify({
+      userId: "me",
+      id: gmailId,
+      requestBody: { removeLabelIds: ["INBOX"] },
+    });
+    return { ok: true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn("[Gmail] archiveEmail failed", { err, gmailId });
+    return { ok: false, error: message };
+  }
+}
+
+export async function markEmailRead(
+  gmailId: string,
+  userName?: string
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const auth = userName ? await getAuthClientForUser(userName) : await getAuthClient();
+    if (!auth) return { ok: false, error: "Google not connected" };
+    const gmail = google.gmail({ version: "v1", auth });
+    await gmail.users.messages.modify({
+      userId: "me",
+      id: gmailId,
+      requestBody: { removeLabelIds: ["UNREAD"] },
+    });
+    return { ok: true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn("[Gmail] markEmailRead failed", { err, gmailId });
+    return { ok: false, error: message };
+  }
 }
 
