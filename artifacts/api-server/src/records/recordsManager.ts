@@ -1,4 +1,5 @@
 import { query } from "../db.js";
+import { logger } from "../lib/logger.js";
 
 export interface NewUserRecord {
   category: "trip" | "warranty" | "home_service" | "subscription" | "vehicle" | "other";
@@ -64,9 +65,64 @@ export async function insertUserRecord(
   userName: string,
   record: NewUserRecord
 ): Promise<void> {
+  // ── Idempotent upsert strategy ────────────────────────────────────────────
+  // Priority 1: if same confirmation_number + user_name already exists,
+  //   update it — handles re-sends of the same booking with a new Gmail ID.
+  // Priority 2: if same gmail_id + user_name already exists, skip silently
+  //   — prevents duplicates across server restarts.
+  // Priority 3: fresh insert.
+
+  // Check for existing record by confirmation_number first (most reliable key)
+  if (record.confirmationNumber) {
+    const existing = await query<{ id: number }>(
+      `SELECT id FROM user_records
+       WHERE user_name = $1
+         AND confirmation_number = $2
+         AND deleted_at IS NULL
+       LIMIT 1`,
+      [userName, record.confirmationNumber]
+    );
+    if (existing.rows.length > 0) {
+      // Update existing record — same confirmation, possibly updated details
+      await query(
+        `UPDATE user_records SET
+           vendor_name       = COALESCE($3, vendor_name),
+           date_start        = COALESCE($4::date, date_start),
+           date_end          = COALESCE($5::date, date_end),
+           time              = COALESCE($6, time),
+           address           = COALESCE($7, address),
+           phone             = COALESCE($8, phone),
+           website           = COALESCE($9, website),
+           amount            = COALESCE($10, amount),
+           notes             = COALESCE($11, notes),
+           raw_email_snippet = COALESCE($12, raw_email_snippet),
+           gmail_id          = COALESCE($13, gmail_id)
+         WHERE id = $1 AND user_name = $2`,
+        [
+          existing.rows[0]!.id, userName,
+          record.vendorName ?? null,
+          record.dateStart ?? null,
+          record.dateEnd ?? null,
+          record.time ?? null,
+          record.address ?? null,
+          record.phone ?? null,
+          record.website ?? null,
+          record.amount ?? null,
+          record.notes ?? null,
+          record.rawSnippet ?? null,
+          record.gmailId ?? null,
+        ]
+      );
+      logger.info(
+        { id: existing.rows[0]!.id, confirmationNumber: record.confirmationNumber },
+        "[Records] Updated existing record by confirmation_number"
+      );
+      return;
+    }
+  }
+
+  // Fresh insert — use gmail_id conflict as safety net against duplicates
   if (record.gmailId) {
-    // ON CONFLICT targets the partial unique index — skips silently if this Gmail
-    // message has already been saved, preventing duplicates across server restarts.
     await query(
       `INSERT INTO user_records
          (user_name, category, vendor_name, confirmation_number,
@@ -75,20 +131,11 @@ export async function insertUserRecord(
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
        ON CONFLICT (user_name, gmail_id) WHERE gmail_id IS NOT NULL DO NOTHING`,
       [
-        userName,
-        record.category,
-        record.vendorName,
-        record.confirmationNumber,
-        record.dateStart,
-        record.dateEnd,
-        record.time,
-        record.address,
-        record.phone,
-        record.website,
-        record.amount,
-        record.notes,
-        record.rawSnippet,
-        record.gmailId,
+        userName, record.category, record.vendorName, record.confirmationNumber ?? null,
+        record.dateStart ?? null, record.dateEnd ?? null, record.time ?? null,
+        record.address ?? null, record.phone ?? null, record.website ?? null,
+        record.amount ?? null, record.notes ?? null,
+        record.rawSnippet ?? null, record.gmailId,
       ]
     );
   } else {
@@ -99,19 +146,10 @@ export async function insertUserRecord(
           amount, notes, raw_email_snippet)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
       [
-        userName,
-        record.category,
-        record.vendorName,
-        record.confirmationNumber,
-        record.dateStart,
-        record.dateEnd,
-        record.time,
-        record.address,
-        record.phone,
-        record.website,
-        record.amount,
-        record.notes,
-        record.rawSnippet,
+        userName, record.category, record.vendorName, record.confirmationNumber ?? null,
+        record.dateStart ?? null, record.dateEnd ?? null, record.time ?? null,
+        record.address ?? null, record.phone ?? null, record.website ?? null,
+        record.amount ?? null, record.notes ?? null, record.rawSnippet ?? null,
       ]
     );
   }

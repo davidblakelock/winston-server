@@ -17,6 +17,7 @@ import { logger } from "../lib/logger.js";
 import { query } from "../db.js";
 import { sendFcmNotification } from "../push/fcmSender.js";
 import { MODEL_HAIKU } from "../lib/models.js";
+import { insertUserRecord } from "../records/recordsManager.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -316,12 +317,76 @@ export interface ScannedReservation {
   calendarEventId: string | null;
 }
 
+const CONFIRMATION_PATTERNS = [
+  {
+    category: "trip" as const,
+    label: "Restaurant Reservation",
+    vendors: ["opentable.com", "resy.com", "tock.com", "yelp.com", "exploretock.com", "sevenrooms.com"],
+    subjects: ["reservation confirmed", "reservation confirmation", "your reservation", "booking confirmed", "table confirmed"],
+  },
+  {
+    category: "trip" as const,
+    label: "Flight",
+    vendors: ["aa.com", "united.com", "delta.com", "southwest.com", "jetblue.com", "alaskaair.com", "spirit.com", "frontier.com", "hawaiianairlines.com"],
+    subjects: ["flight confirmation", "itinerary", "e-ticket", "booking confirmation", "your flight"],
+  },
+  {
+    category: "trip" as const,
+    label: "Hotel",
+    vendors: ["marriott.com", "hilton.com", "hyatt.com", "ihg.com", "wyndham.com", "bestwestern.com", "hotels.com", "booking.com", "expedia.com", "airbnb.com", "vrbo.com"],
+    subjects: ["reservation confirmed", "booking confirmed", "hotel confirmation", "stay confirmed", "your reservation"],
+  },
+  {
+    category: "trip" as const,
+    label: "Car Rental",
+    vendors: ["enterprise.com", "hertz.com", "avis.com", "budget.com", "nationalcar.com", "alamo.com", "dollar.com", "thrifty.com"],
+    subjects: ["rental confirmation", "car rental confirmation", "reservation confirmed", "your rental"],
+  },
+  {
+    category: "warranty" as const,
+    label: "Warranty",
+    vendors: [],
+    subjects: ["warranty confirmation", "warranty registered", "product registration", "registration confirmed"],
+  },
+  {
+    category: "subscription" as const,
+    label: "Subscription",
+    vendors: [],
+    subjects: ["subscription confirmed", "subscription activated", "you're subscribed", "welcome to", "membership confirmed"],
+  },
+  {
+    category: "home_service" as const,
+    label: "Home Service",
+    vendors: [],
+    subjects: ["appointment confirmed", "service confirmed", "your appointment", "booking confirmed", "scheduled", "service scheduled"],
+  },
+  {
+    category: "vehicle" as const,
+    label: "Vehicle Service",
+    vendors: [],
+    subjects: ["service appointment", "vehicle service", "oil change", "auto service", "service reminder", "your vehicle"],
+  },
+] as const;
+
+type RecordCategory = "trip" | "warranty" | "home_service" | "subscription" | "vehicle" | "other";
+
+function detectCategory(from: string, subject: string): { category: RecordCategory; label: string } | null {
+  const fromLower = from.toLowerCase();
+  const subjectLower = subject.toLowerCase();
+  for (const pattern of CONFIRMATION_PATTERNS) {
+    const vendorMatch = pattern.vendors.some((v) => fromLower.includes(v));
+    const subjectMatch = pattern.subjects.some((s) => subjectLower.includes(s));
+    if (vendorMatch || subjectMatch) {
+      return { category: pattern.category as RecordCategory, label: pattern.label };
+    }
+  }
+  return null;
+}
+
 export async function scanReservationEmails(
   userName: string,
   since?: Date,
 ): Promise<ScannedReservation[]> {
-  await ensureReservationTable();
-
   const auth = await getAuthClientForUser(userName);
   if (!auth) {
     logger.warn({ userName }, "[ReservationScanner] No auth client");
@@ -335,9 +400,12 @@ export async function scanReservationEmails(
   }
 
   const gmail = google.gmail({ version: "v1", auth });
-  const q = buildReservationQuery(since);
 
-  logger.info({ userName, since: since?.toISOString(), q }, "[ReservationScanner] Scanning Gmail");
+  const cutoff = since ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const afterDate = Math.floor(cutoff.getTime() / 1000);
+  const q = `in:inbox -in:spam -in:trash after:${afterDate} (subject:(confirmation confirmed itinerary receipt booking reservation appointment scheduled warranty subscription))`;
+
+  logger.info({ userName, q }, "[ReservationScanner] Scanning Gmail");
 
   let messageIds: string[] = [];
   try {
@@ -354,8 +422,12 @@ export async function scanReservationEmails(
 
   for (const msgId of messageIds.slice(0, 30)) {
     try {
-      if (await hasProcessed(userName, msgId)) {
-        logger.info({ msgId }, "[ReservationScanner] Already processed — skipping");
+      const alreadySaved = await query<{ id: number }>(
+        `SELECT id FROM user_records WHERE user_name = $1 AND gmail_id = $2 AND deleted_at IS NULL LIMIT 1`,
+        [userName, msgId]
+      );
+      if (alreadySaved.rows.length > 0) {
+        logger.info({ msgId }, "[ReservationScanner] Already in user_records — skipping");
         continue;
       }
 
@@ -371,64 +443,119 @@ export async function scanReservationEmails(
       const from = getHeader("From");
       const date = getHeader("Date");
 
+      const match = detectCategory(from, subject);
+      if (!match) {
+        logger.info({ msgId, subject, from }, "[ReservationScanner] No pattern match — skipping");
+        continue;
+      }
+
       let body = extractBodyFromPayload((detail.data.payload ?? {}) as GmailPart);
       if (body.includes("<")) body = stripHtml(body);
       if (body.length < 30) continue;
 
-      const parsed = await parseReservationFromEmail(subject, from, body, date);
-      if (!parsed) {
-        logger.info({ msgId, subject }, "[ReservationScanner] Not a reservation confirmation — skipping");
+      const extractPrompt = `You are extracting structured data from a ${match.label} confirmation email.
+
+From: ${from}
+Subject: ${subject}
+Date: ${date}
+Body (first 2000 chars):
+${body.slice(0, 2000)}
+
+Extract and return JSON only, no explanation:
+{
+  "vendor_name": "company or service name",
+  "confirmation_number": "confirmation/booking/reservation number or null",
+  "date_start": "YYYY-MM-DD or null",
+  "date_end": "YYYY-MM-DD or null (for multi-day bookings)",
+  "time": "HH:MM or null",
+  "address": "full address or null",
+  "phone": "phone number or null",
+  "website": "website or null",
+  "amount": "total amount with currency symbol or null",
+  "notes": "brief one-line summary of what this is"
+}`;
+
+      let extracted: {
+        vendor_name: string;
+        confirmation_number: string | null;
+        date_start: string | null;
+        date_end: string | null;
+        time: string | null;
+        address: string | null;
+        phone: string | null;
+        website: string | null;
+        amount: string | null;
+        notes: string | null;
+      } | null = null;
+
+      try {
+        const aiResp = await anthropic.messages.create({
+          model: MODEL_HAIKU,
+          max_tokens: 400,
+          messages: [{ role: "user", content: extractPrompt }],
+        });
+        const raw = aiResp.content[0]?.type === "text" ? aiResp.content[0].text.trim() : "";
+        const jsonMatch = raw.match(/\{[\s\S]*\}/);
+        if (jsonMatch) extracted = JSON.parse(jsonMatch[0]);
+      } catch (err) {
+        logger.warn({ err, msgId }, "[ReservationScanner] Claude extraction failed");
         continue;
       }
 
-      // ── Persist dedup record (no calendar event yet — user confirms in chat) ─
-      const calendarEventId: string | null = null;
-      await saveReservation(
-        userName, msgId,
-        parsed.restaurant_name, parsed.date, parsed.time,
-        parsed.party_size, parsed.confirmation_number,
-        parsed.address, calendarEventId
-      );
+      if (!extracted?.vendor_name) {
+        logger.info({ msgId }, "[ReservationScanner] No vendor_name extracted — skipping");
+        continue;
+      }
 
-      // ── Push notification — prompt user to add to calendar via chat ────────
-      const dateLabel = formatReservationDate(parsed.date);
-      const timeLabel = parsed.time ? ` at ${formatReservationTime(parsed.time)}` : "";
-      const partLabel = parsed.party_size ? `, party of ${parsed.party_size}` : "";
-      const pushBody = `${parsed.restaurant_name} — ${dateLabel}${timeLabel}${partLabel}. Tap to add it to your calendar.`;
+      await insertUserRecord(userName, {
+        category: match.category,
+        vendorName: extracted.vendor_name,
+        confirmationNumber: extracted.confirmation_number ?? null,
+        dateStart: extracted.date_start ?? null,
+        dateEnd: extracted.date_end ?? null,
+        time: extracted.time ?? null,
+        address: extracted.address ?? null,
+        phone: extracted.phone ?? null,
+        website: extracted.website ?? null,
+        amount: extracted.amount ?? null,
+        notes: extracted.notes ?? null,
+        rawSnippet: body.slice(0, 500),
+        gmailId: msgId,
+      });
+
+      const pushTitle = `${match.label} confirmed`;
+      const pushBody = [
+        extracted.vendor_name,
+        extracted.date_start,
+        extracted.time,
+        extracted.confirmation_number ? `#${extracted.confirmation_number}` : null,
+      ].filter(Boolean).join(" · ");
 
       await sendFcmNotification({
         userName,
         notificationType: "reservation",
-        title: "Reservation confirmed ✓",
-        body: pushBody,
+        title: pushTitle,
+        body: pushBody || `New ${match.label.toLowerCase()} saved to your records`,
         data: {
-          action: "send_message",
-          message: `Add my reservation at ${parsed.restaurant_name} on ${dateLabel}${timeLabel} to my calendar`,
+          action: "navigate",
+          screen: "/travel",
         },
       }).catch(() => {});
 
       results.push({
         gmailId: msgId,
-        restaurantName: parsed.restaurant_name,
-        date: parsed.date,
-        time: parsed.time,
-        partySize: parsed.party_size,
-        confirmationNumber: parsed.confirmation_number,
-        address: parsed.address,
-        calendarEventId,
+        restaurantName: extracted.vendor_name,
+        date: extracted.date_start ?? "",
+        time: extracted.time ?? null,
+        partySize: null,
+        confirmationNumber: extracted.confirmation_number ?? null,
+        address: extracted.address ?? null,
+        calendarEventId: null,
       });
 
       logger.info(
-        {
-          userName,
-          msgId,
-          restaurant: parsed.restaurant_name,
-          date: parsed.date,
-          time: parsed.time,
-          calendarEventId,
-          hasAddress: !!parsed.address,
-        },
-        "[ReservationScanner] Reservation confirmed — push sent, awaiting user to add to calendar"
+        { userName, msgId, category: match.category, vendor: extracted.vendor_name },
+        "[ReservationScanner] Saved confirmation to user_records"
       );
     } catch (err) {
       logger.warn({ err, msgId }, "[ReservationScanner] Failed to process email");

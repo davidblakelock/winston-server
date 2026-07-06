@@ -23,6 +23,7 @@ import type { ClassifiedEmail } from "../email/emailClassifier.js";
 import type { DetectedMeetingRequest } from "../email/emailMeetingManager.js";
 import { insertUserRecord, getLastSocialScanAt, updateLastSocialScanAt } from "../records/recordsManager.js";
 import { getEmailScanSettings } from "../email/emailScanSettings.js";
+import { scanReservationEmails } from "./reservationScanner.js";
 import { checkForConflict, addOneHour } from "../email/meetingScanner.js";
 import { query } from "../db.js";
 
@@ -378,6 +379,25 @@ async function runScan(userName: string): Promise<void> {
 
     await updateLastSocialScanAt(userName, scanStart);
     logger.info({ userName, meetings, records, socials, skipped: socialSkipped }, "[BgEmailScanner] Social scan complete");
+  }
+
+  // ── Reservation / confirmation scan ──────────────────────────────────────
+  // Runs on the same schedule as the social scan — scans for flight, hotel,
+  // restaurant, car rental, warranty, subscription, and home service
+  // confirmations and saves them to user_records (My Records screen).
+  if (shouldScanSocial) {
+    try {
+      const reservations = await scanReservationEmails(userName);
+      if (reservations.length > 0) {
+        filedRecordsCount += reservations.length;
+        logger.info(
+          { userName, count: reservations.length },
+          "[ReservationScanner] Confirmation records saved"
+        );
+      }
+    } catch (err) {
+      logger.warn({ err, userName }, "[ReservationScanner] Scan failed — skipping");
+    }
   }
 
   // ── Batch summary push ────────────────────────────────────────────────────
