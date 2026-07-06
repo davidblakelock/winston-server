@@ -716,9 +716,9 @@ WHAT YOU CAN DO — Answer naturally when __USER__ asks "What can you do?" or "W
 
 When answering "what can you do?" — pick 4–6 of the most relevant things based on what __USER__ has been talking about, and describe them in your voice, not as a bulleted list. Make it feel like a friend telling him what she's there for, not a software manual.`;
 
-function getCurrentDateTimeBlock(): string {
+function getCurrentDateTimeBlock(timezone: string): string {
   const now = new Date();
-  const tz = "America/Chicago";
+  const tz = timezone;
 
   const dayName = now.toLocaleDateString("en-US", { timeZone: tz, weekday: "long" });
   const monthName = now.toLocaleDateString("en-US", { timeZone: tz, month: "long" });
@@ -760,7 +760,10 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   if (!sessionUserName) return;
 
   // ── Auto-greeting: derive time-appropriate message ────────────────────────
-  const { message: rawMessage, history: rawHistory = [], isAutoGreeting = false, deviceId = null, winddownRequest = false, context: requestContext = null, tripId: rawTripId = null, timezone = "America/Chicago" } = req.body;
+  const { message: rawMessage, history: rawHistory = [], isAutoGreeting = false, deviceId = null, winddownRequest = false, context: requestContext = null, tripId: rawTripId = null, timezone: rawTimezone = null } = req.body;
+  const timezone: string = (typeof rawTimezone === 'string' && rawTimezone.trim().length > 0)
+    ? rawTimezone.trim()
+    : 'America/Chicago';
   // Isolated contexts: messages are NOT saved to chat_messages (main chat history).
   // trip-planning has its own trip_plans table.
   // journal entries belong on the My Life screen only, not the main chat.
@@ -782,7 +785,6 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
   if (history.length === 0 && !isAutoGreeting) {
     try {
-      // Include all alias names so legacy 'David' messages load until migration runs.
       const { rows: dbHistory } = await query<{ role: string; content: string }>(
         `SELECT role, content FROM chat_messages
          WHERE user_name = $1
@@ -809,9 +811,11 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     // Use Dallas local time (UTC-6 CDT). After noon, always use "good evening" so the
     // Evening Check-In button works at any time of day — "good afternoon" never triggered
     // evening check-in activation and had no useful function of its own.
-    const nowUtc = new Date();
-    const dallasHour = (nowUtc.getUTCHours() - 6 + 24) % 24;
-    message = dallasHour >= 5 && dallasHour < 12 ? "good morning" : "good evening";
+    const localHourForGreeting = parseInt(
+      new Date().toLocaleString("en-US", { timeZone: timezone, hour: "numeric", hour12: false }),
+      10
+    );
+    message = localHourForGreeting >= 5 && localHourForGreeting < 12 ? "good morning" : "good evening";
   } else {
     message = rawMessage;
   }
@@ -925,7 +929,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     "[DIAG:PERSONA] System prompt head"
   );
   // Dynamic: current time, recent memories, preference blocks — changes each request.
-  let systemPrompt = getCurrentDateTimeBlock() + "\n" + memoryBlock + dynamicProfileBlock + prefsBlock;
+  let systemPrompt = getCurrentDateTimeBlock(timezone) + "\n" + memoryBlock + dynamicProfileBlock + prefsBlock;
 
   // ── Always-on list & reminder context ────────────────────────────────────
   // Injected unconditionally so Claude always has current state without keyword
@@ -1240,8 +1244,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     : MODEL_SONNET;
 
   // ── Sleep reminder: gently note the time if after 11pm CT (once per night) ──
-  const chicagoHour = new Date().toLocaleString("en-US", { timeZone: timezone, hour: "numeric", hour12: false });
-  const currentHourCT = parseInt(chicagoHour, 10);
+  const localHourStr = new Date().toLocaleString("en-US", { timeZone: timezone, hour: "numeric", hour12: false });
+  const currentHourCT = parseInt(localHourStr, 10);
   let sleepReminderFired = false;
   if (currentHourCT >= 23 || currentHourCT === 0) {
     try {
@@ -1498,7 +1502,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     // The preamble was built at ~5 AM; the stale time block is stripped and replaced
     // with the current time so Claude reports the correct time when the user opens
     // the briefing at 7 AM (or any other hour).
-    const livePreamble = getCurrentDateTimeBlock() + "\n" +
+    const livePreamble = getCurrentDateTimeBlock(timezone) + "\n" +
       staticCtx.preamble.replace(/^\[Current date and time[^\[]+/, "");
 
     const deliverySuffix = staticCtx.suffix;
@@ -3407,7 +3411,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
           : "";
 
       const pendingRepliesBlock = buildPendingRepliesBlock(getPendingReplyEmails(), sessionUserName);
-      systemPrompt = getCurrentDateTimeBlock() + "\n" + corePrompt + memoryBlock + gmailBlock + onDemandMeetingBlock + pendingRepliesBlock + calendarBlock;
+      systemPrompt = getCurrentDateTimeBlock(timezone) + "\n" + corePrompt + memoryBlock + gmailBlock + onDemandMeetingBlock + pendingRepliesBlock + calendarBlock;
     } catch (err) {
       req.log.warn({ err }, "On-demand email/calendar fetch failed");
     }
@@ -3582,9 +3586,8 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
   const isGoodnightMessage = /\b(goodnight|good\s+night|good\s+nite|sweet\s+dreams|see\s+you\s+tomorrow|talk\s+tomorrow)\b/i.test(message);
 
   if (winddownActive) {
-    const tz = timezone;
     const now = new Date();
-    const dayName = now.toLocaleDateString("en-US", { timeZone: tz, weekday: "long" });
+    const dayName = now.toLocaleDateString("en-US", { timeZone: timezone, weekday: "long" });
 
     // ── Fetch today's calendar for context (reference what actually happened) ──
     let todayCalendarBlock = "";
