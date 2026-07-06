@@ -790,14 +790,13 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   if (history.length === 0 && !isAutoGreeting) {
     try {
       // Include all alias names so legacy 'David' messages load until migration runs.
-      const aliasNames = [sessionUserName, "David", "david"];
       const { rows: dbHistory } = await query<{ role: string; content: string }>(
         `SELECT role, content FROM chat_messages
-         WHERE user_name = ANY($1)
+         WHERE user_name = $1
            AND (message_id IS NULL OR message_id NOT LIKE 'goals:%')
          ORDER BY created_at DESC, id DESC
          LIMIT $2`,
-        [aliasNames, ACTIVE_CONTEXT_LIMIT]
+        [sessionUserName, ACTIVE_CONTEXT_LIMIT]
       );
       if (dbHistory.length > 0) {
         history = dbHistory.reverse(); // chronological order
@@ -5140,15 +5139,14 @@ router.get("/chat/history", async (req: Request, res: Response) => {
   if (!userName) return;
   const limit = Math.min(100, Math.max(1, parseInt((req.query as Record<string, string>).limit ?? "40", 10) || 40));
   try {
-    const aliasNames = [userName, "David", "david"];
     const { rows } = await query<{ role: string; content: string; created_at: string }>(
       `SELECT role, content, created_at
        FROM chat_messages
-       WHERE user_name = ANY($1)
+       WHERE user_name = $1
          AND (message_id IS NULL OR message_id NOT LIKE 'goals:%')
        ORDER BY created_at DESC, id DESC
        LIMIT $2`,
-      [aliasNames, limit]
+      [userName, limit]
     );
     // Return chronological order (oldest first) so clients can render top-to-bottom
     res.json({ messages: rows.reverse() });
