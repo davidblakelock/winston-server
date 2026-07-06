@@ -646,7 +646,7 @@ export async function findEventByKeywords(
  * Searches from 7 days ago through 60 days ahead — much broader than fetchWeekEvents().
  * This is the right function to use for move/reschedule operations.
  */
-export async function findEventForUpdate(keywords: string): Promise<CalendarEvent | null> {
+export async function findEventForUpdate(keywords: string): Promise<CalendarEvent[] | null> {
   const auth = await getAuthClient();
   if (!auth) {
     console.log("[CALENDAR] findEventForUpdate — no auth client");
@@ -691,28 +691,26 @@ export async function findEventForUpdate(keywords: string): Promise<CalendarEven
       const allItems = fallbackResponse.data.items ?? [];
       const kw = keywords.toLowerCase();
       const words = kw.split(/\s+/).filter((w) => w.length > 2);
-      let best: (typeof allItems)[0] | null = null;
-      let bestScore = 0;
+      const scored: Array<{ item: (typeof allItems)[0]; score: number }> = [];
       for (const item of allItems) {
         const haystack = `${item.summary ?? ""} ${item.location ?? ""} ${item.description ?? ""}`.toLowerCase();
         const score = words.reduce((n, w) => n + (haystack.includes(w) ? 1 : 0), 0);
-        if (score > bestScore) { bestScore = score; best = item; }
+        if (score > 0) scored.push({ item, score });
       }
-      if (!best || bestScore === 0) {
+      if (scored.length === 0) {
         console.log("[CALENDAR] findEventForUpdate — fallback scoring also found nothing");
         return null;
       }
-      console.log(`[CALENDAR] findEventForUpdate — fallback found: "${best.summary}" id=${best.id}`);
-      return mapGoogleEvent(best, todayStr);
+      scored.sort((a, b) => b.score - a.score);
+      const results = scored.slice(0, 5).map(({ item }) => mapGoogleEvent(item, todayStr));
+      console.log(`[CALENDAR] findEventForUpdate — fallback found ${results.length} candidate(s): ${results.map((e) => `"${e.summary}"`).join(", ")}`);
+      return results;
     }
 
-    // Take the first result from the Google text search
-    const item = items[0];
-    const isoDate = item.start?.date ?? item.start?.dateTime?.slice(0, 10) ?? todayStr;
-    const tomorrowStr = getLocalYMD(new Date(now.getTime() + 86400000));
-    const mapped = mapGoogleEvent(item, todayStr);
-    console.log(`[CALENDAR] found event id: ${mapped.id} — "${mapped.summary}" on ${mapped.isoDate}`);
-    return mapped;
+    // Return all results from the Google text search (cap at 5 for disambiguation)
+    const results = items.slice(0, 5).map((item) => mapGoogleEvent(item, todayStr));
+    console.log(`[CALENDAR] findEventForUpdate — returning ${results.length} candidate(s): ${results.map((e) => `"${e.summary}"`).join(", ")}`);
+    return results;
   } catch (err) {
     console.error("[CALENDAR] findEventForUpdate — error:", err);
     return null;

@@ -3357,8 +3357,11 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
 
       // On-demand meeting detection — mirrors the morning briefing pattern.
       // Runs whenever the user checks email and there are messages to scan.
+      // Gap 3 fix: skip detection if we already have fresh meeting requests
+      // for this user from this session — avoids redundant Haiku calls.
+      const hasFreshMeetingRequests = getPendingMeetingRequests(sessionUserName).length > 0;
       let onDemandMeetingBlock = "";
-      if (isEmailRequest && emails && emails.length > 0) {
+      if (isEmailRequest && emails && emails.length > 0 && !hasFreshMeetingRequests) {
         try {
           const emailsForDetection: EmailInput[] = emails.map((e) => ({
             gmailId: e.gmailId,
@@ -3419,8 +3422,10 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
 
   // ── Calendar write operations (create / modify / delete) ────────────────────
   if (isDeleteConfirm || isDeleteCancel) {
-    const pd = getPendingDelete(sessionUserName)!;
-    if (isDeleteConfirm) {
+    const pd = getPendingDelete(sessionUserName);
+    if (!pd) {
+      systemPrompt += `\n\n[Calendar Delete — Confirmation Expired]\nThe delete confirmation window has expired (5 minutes). Tell the user warmly: "That confirmation window has closed — if you still want to cancel that event, just ask me again and I'll pull it up."`;
+    } else if (isDeleteConfirm) {
       try {
         await deleteCalendarEvent(pd.eventId, sessionUserName);
         clearPendingDelete(sessionUserName);
@@ -3498,12 +3503,19 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
 
         // Use findEventForUpdate: server-side Google text search, timeMin 7 days ago,
         // timeMax 60 days ahead — much more reliable than the old client-side week window.
-        const event = await findEventForUpdate(parsed.searchKeywords);
+        const matchedEvents = await findEventForUpdate(parsed.searchKeywords);
 
-        if (!event) {
+        if (!matchedEvents || matchedEvents.length === 0) {
           console.log(`[CALENDAR] event not found for keywords: "${parsed.searchKeywords}" — telling user`);
           systemPrompt += `\n\n[Calendar Modify — Event Not Found]\nTell the user you couldn't find "${parsed.searchKeywords}" in their calendar. Ask them to double-check the event name or tell you the date it's on.`;
+        } else if (matchedEvents.length > 1) {
+          console.log(`[CALENDAR] multiple events matched "${parsed.searchKeywords}" — requesting disambiguation`);
+          const eventList = matchedEvents
+            .map((e, i) => `${i + 1}. "${e.summary}" on ${e.dateLabel}${e.start ? ` at ${e.start}` : ""}`)
+            .join("\n");
+          systemPrompt += `\n\n[Calendar Modify — Multiple Events Found]\nFound ${matchedEvents.length} events matching "${parsed.searchKeywords}":\n${eventList}\n\nAsk the user which one they mean — e.g. "I found a few events that could match — which one did you want to change?" and list them.`;
         } else {
+          const event = matchedEvents[0];
           console.log(`[CALENDAR] found event id: ${event.id} — "${event.summary}" on ${event.isoDate}`);
           console.log(`[CALENDAR] calling events.patch with new time: date=${parsed.newDate ?? "(unchanged)"} start=${parsed.newStartTime ?? "(unchanged)"} end=${parsed.newEndTime ?? "(unchanged)"}`);
 
