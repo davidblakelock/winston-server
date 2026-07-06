@@ -758,8 +758,6 @@ function getCurrentDateTimeBlock(): string {
 }
 
 const chatHandlerCore = async (req: Request, res: Response) => {
-  console.log('[REQUEST-BODY]', JSON.stringify(req.body).slice(0, 200));
-  console.log("CHAT HEADERS:", JSON.stringify(req.headers));
   // ── Auth ──────────────────────────────────────────────────────────────────
   // Two valid paths:
   //   1. x-api-key: winston-native-2026  →  native mobile app bypass, user = David
@@ -4686,7 +4684,6 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
         });
         const rawResponse = claudeResp.content[0]?.type === "text" ? claudeResp.content[0].text : "";
         req.log.info({ inputTokens: claudeResp.usage.input_tokens, outputTokens: claudeResp.usage.output_tokens }, "[TOKENS]");
-        req.log.info({ preview: rawResponse.slice(0, 500) }, "[PARSE DEBUG] raw Claude response");
 
         interface ParsedAction {
           type?: string;
