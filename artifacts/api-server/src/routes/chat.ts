@@ -4686,6 +4686,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
         });
         const rawResponse = claudeResp.content[0]?.type === "text" ? claudeResp.content[0].text : "";
         req.log.info({ inputTokens: claudeResp.usage.input_tokens, outputTokens: claudeResp.usage.output_tokens }, "[TOKENS]");
+        req.log.info({ preview: rawResponse.slice(0, 500) }, "[PARSE DEBUG] raw Claude response");
 
         interface ParsedAction {
           type?: string;
