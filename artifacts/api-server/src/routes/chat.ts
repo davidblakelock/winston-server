@@ -2352,13 +2352,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
               tone,
               composedBody: composed.body,
             });
-            systemPrompt +=
-              `\n\n[Text Message Composed for ${resolved.name}]\n` +
-              `Message body (${toneLabel(tone)} tone):\n"${composed.body}"\n\n` +
-              `Read this message back to ${displayName} word for word, then ask if it looks right. ` +
-              `Say something like: "Here's what I've got: [read message verbatim]. ` +
-              `Does that work? Just say yes and I'll hand it off to your Messages app so you can tap Send." ` +
-              `CRITICAL HONESTY RULES: (1) You are composing — NOT sending. (2) Messages app opens AFTER user says yes. (3) Never say "sending now" or "opening Messages".`;
+            (req as any)._hardcodedResponse =
+              `Here's what I've got for ${resolved.name}:\n\n"${composed.body}"\n\n` +
+              `Does that work? Say yes and I'll hand it off to your Messages app so you can tap Send.`;
           } catch (compErr) {
             req.log.warn({ compErr }, "[T006-DISAMBIG] Inline composition after disambiguation failed");
             setPendingText(sessionUserName, { phase: "awaiting_intent", recipientName: resolved.name, recipientPhone: resolved.phone, relationship: resolved.relationship, tone });
@@ -2408,15 +2404,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
             composedBody: composed.body,
           });
 
-          systemPrompt +=
-            `\n\n[Text Message Composed for ${pendingText.recipientName} — ${toneLabel(effectiveTone)} tone]\n` +
-            `Message body:\n"${composed.body}"\n\n` +
-            `Read this back to ${displayName} WORD FOR WORD — do not change, add, or remove anything. ` +
-            `Then ask: "Does that work? Say yes and I'll open Messages so you can tap Send." ` +
-            `CRITICAL HONESTY RULES: ` +
-            `(1) You are NOT sending it — you CANNOT send it. ` +
-            `(2) Messages only opens AFTER the user says yes. ` +
-            `(3) Never say "sending now", "opening Messages", or anything implying immediate action.`;
+          (req as any)._hardcodedResponse =
+            `Here's a ${toneLabel(effectiveTone)} version for ${pendingText.recipientName}:\n\n"${composed.body}"\n\n` +
+            `Does that work? Say yes and I'll hand it off to your Messages app.`;
 
           req.log.info({ recipient: pendingText.recipientName, tone: effectiveTone }, "[T006] Intent with tone — composed via Claude");
         } catch (err) {
@@ -2434,17 +2424,10 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           composedBody: body,
         });
 
-        systemPrompt +=
-          `\n\n[Text Message Ready for ${pendingText.recipientName}]\n` +
-          `Message body:\n"${body}"\n\n` +
-          `Read this back to ${displayName} WORD FOR WORD — do not change, add, or remove anything. ` +
-          `Then ask: "Does that look right? Say yes and I'll open Messages so you can tap Send." ` +
-          `If they want a different style, they can say "make it witty", "make it warmer", etc. ` +
-          `CRITICAL HONESTY RULES: ` +
-          `(1) You are NOT sending it — you CANNOT send it. ` +
-          `(2) Messages only opens AFTER the user says yes. ` +
-          `(3) Never say "sending now", "opening Messages", or anything implying immediate action. ` +
-          `(4) Read the message back VERBATIM — do not paraphrase, expand, or add to it.`;
+        (req as any)._hardcodedResponse =
+          `Here's what I've got for ${pendingText.recipientName}:\n\n"${body}"\n\n` +
+          `Does that look right? Say yes and I'll hand it off to your Messages app. ` +
+          `Or tell me if you'd like a different tone — warmer, more casual, more professional, etc.`;
 
         req.log.info({ recipient: pendingText.recipientName, body: body.slice(0, 80) }, "[T006] Intent received — using verbatim (no tone requested)");
       }
@@ -2491,7 +2474,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         // identical to what was read back — no markdown asterisks, no Unicode
         // punctuation (em-dash, ellipsis, curly quotes) that Android SMS apps
         // may silently drop or mangle.
-        const body = sanitizeSmsBody(pendingText.composedBody ?? "");
+        const body = pendingText.composedBody ?? "";
         const recipientName = pendingText.recipientName;
         setPendingText(sessionUserName, null);
 
