@@ -619,14 +619,7 @@ interface SavedLocation {
   keywords: string[];
 }
 
-const SAVED_LOCATIONS: SavedLocation[] = [
-  {
-    name: "Doctor Bonnet",
-    address: "403 West Campbell Road Richardson Texas",
-    keywords: ["doctor", "doc", "doctor bonnet", "bonnet", "physician", "my doctor", "the doctor"],
-  },
-
-];
+const SAVED_LOCATIONS: SavedLocation[] = [];
 
 function detectNavigation(
   message: string,
