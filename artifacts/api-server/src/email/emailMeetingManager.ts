@@ -47,56 +47,57 @@ export interface PendingEmailReply {
 
 // ── In-memory state ───────────────────────────────────────────────────────────
 
-let _pendingMeetingRequests: DetectedMeetingRequest[] = [];
-let _pendingMeetingRequestsAt = 0;
+const _pendingMeetingRequestsMap = new Map<string, { requests: DetectedMeetingRequest[]; storedAt: number }>();
 const MEETING_REQUEST_TTL_MS = 4 * 60 * 60 * 1000; // 4 hours
 
-let _pendingEmailReply: PendingEmailReply | null = null;
+const _pendingEmailReplyMap = new Map<string, PendingEmailReply>();
 const EMAIL_REPLY_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
 // ── State accessors ───────────────────────────────────────────────────────────
 
-export function getPendingMeetingRequests(): DetectedMeetingRequest[] {
-  if (_pendingMeetingRequests.length === 0) return [];
-  if (Date.now() - _pendingMeetingRequestsAt > MEETING_REQUEST_TTL_MS) {
-    _pendingMeetingRequests = [];
+export function getPendingMeetingRequests(userName: string): DetectedMeetingRequest[] {
+  const entry = _pendingMeetingRequestsMap.get(userName);
+  if (!entry || entry.requests.length === 0) return [];
+  if (Date.now() - entry.storedAt > MEETING_REQUEST_TTL_MS) {
+    _pendingMeetingRequestsMap.delete(userName);
     return [];
   }
-  return _pendingMeetingRequests;
+  return entry.requests;
 }
 
-export function setPendingMeetingRequests(requests: DetectedMeetingRequest[]): void {
-  _pendingMeetingRequests = requests;
-  _pendingMeetingRequestsAt = Date.now();
+export function setPendingMeetingRequests(userName: string, requests: DetectedMeetingRequest[]): void {
+  _pendingMeetingRequestsMap.set(userName, { requests, storedAt: Date.now() });
   if (requests.length > 0) {
     logger.info({ count: requests.length }, "[E007] Pending meeting requests stored");
   }
 }
 
-export function clearPendingMeetingRequests(): void {
-  _pendingMeetingRequests = [];
+export function clearPendingMeetingRequests(userName: string): void {
+  _pendingMeetingRequestsMap.delete(userName);
 }
 
-export function getPendingEmailReply(): PendingEmailReply | null {
-  if (!_pendingEmailReply) return null;
-  if (Date.now() - _pendingEmailReply.createdAt > EMAIL_REPLY_TTL_MS) {
-    _pendingEmailReply = null;
+export function getPendingEmailReply(userName: string): PendingEmailReply | null {
+  const reply = _pendingEmailReplyMap.get(userName) ?? null;
+  if (!reply) return null;
+  if (Date.now() - reply.createdAt > EMAIL_REPLY_TTL_MS) {
+    _pendingEmailReplyMap.delete(userName);
     return null;
   }
-  return _pendingEmailReply;
+  return reply;
 }
 
-export function setPendingEmailReply(reply: PendingEmailReply | null): void {
-  _pendingEmailReply = reply;
+export function setPendingEmailReply(userName: string, reply: PendingEmailReply | null): void {
   if (reply) {
+    _pendingEmailReplyMap.set(userName, reply);
     logger.info({ to: reply.to, subject: reply.subject }, "[E007] Email reply draft stored");
   } else {
+    _pendingEmailReplyMap.delete(userName);
     logger.info("[E007] Email reply draft cleared");
   }
 }
 
-export function clearPendingEmailReply(): void {
-  _pendingEmailReply = null;
+export function clearPendingEmailReply(userName: string): void {
+  _pendingEmailReplyMap.delete(userName);
 }
 
 // ── Pending reply emails (needs_reply action from background scanner) ─────────
@@ -112,26 +113,28 @@ export interface PendingReplyEmail {
   scannedAt: number;
 }
 
-let _pendingReplyEmails: PendingReplyEmail[] = [];
+const _pendingReplyEmailsMap = new Map<string, PendingReplyEmail[]>();
 
-export function getPendingReplyEmails(): PendingReplyEmail[] {
-  return _pendingReplyEmails;
+export function getPendingReplyEmails(userName: string): PendingReplyEmail[] {
+  return _pendingReplyEmailsMap.get(userName) ?? [];
 }
 
 // Merges new items by gmailId (no duplicates), keeps existing pending items indefinitely.
-export function addPendingReplyEmails(newEmails: PendingReplyEmail[]): void {
-  const existingIds = new Set(_pendingReplyEmails.map(e => e.gmailId));
+export function addPendingReplyEmails(userName: string, newEmails: PendingReplyEmail[]): void {
+  const existing = _pendingReplyEmailsMap.get(userName) ?? [];
+  const existingIds = new Set(existing.map(e => e.gmailId));
   const toAdd = newEmails.filter(e => !existingIds.has(e.gmailId));
-  _pendingReplyEmails = [..._pendingReplyEmails, ...toAdd];
+  _pendingReplyEmailsMap.set(userName, [...existing, ...toAdd]);
 }
 
 // Called when a specific email is handled (replied to, dismissed, or detected as no longer unread).
-export function clearPendingReplyEmail(gmailId: string): void {
-  _pendingReplyEmails = _pendingReplyEmails.filter(e => e.gmailId !== gmailId);
+export function clearPendingReplyEmail(userName: string, gmailId: string): void {
+  const existing = _pendingReplyEmailsMap.get(userName) ?? [];
+  _pendingReplyEmailsMap.set(userName, existing.filter(e => e.gmailId !== gmailId));
 }
 
-export function clearAllPendingReplyEmails(): void {
-  _pendingReplyEmails = [];
+export function clearAllPendingReplyEmails(userName: string): void {
+  _pendingReplyEmailsMap.delete(userName);
 }
 
 // ── Scan batch summary ────────────────────────────────────────────────────────

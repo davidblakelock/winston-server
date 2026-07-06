@@ -134,7 +134,7 @@ async function handleMeeting(
     return;
   }
 
-  const existing = getPendingMeetingRequests();
+  const existing = getPendingMeetingRequests(userName);
   const existingIds = new Set(existing.map((m) => m.gmailId));
   if (existingIds.has(msgId)) return;
 
@@ -167,20 +167,20 @@ async function handleMeeting(
     suggestedAlternative: null,
   };
 
-  setPendingMeetingRequests([...existing, newRequest]);
+  setPendingMeetingRequests(userName, [...existing, newRequest]);
   logger.info({ organizer: organizerName, proposedDateTimeStr: meeting?.proposedDateTimeStr }, "[BgEmailScanner] Meeting queued");
 }
 
 // ── Social handler ────────────────────────────────────────────────────────────
 
-async function handleSocial(_userName: string, msgId: string, from: string, result: ClassifiedEmail): Promise<void> {
+async function handleSocial(userName: string, msgId: string, from: string, result: ClassifiedEmail): Promise<void> {
   const fromMatch = from.match(/^(.*?)\s*<([^>]+)>$/);
   const displayName = fromMatch
     ? fromMatch[1].trim().replace(/^["']|["']$/g, "") || senderDisplayName(from)
     : senderDisplayName(from);
   const fromEmail = fromMatch ? fromMatch[2].trim() : from.trim();
 
-  addPendingReplyEmails([{
+  addPendingReplyEmails(userName, [{
     gmailId: msgId,
     from: displayName,
     fromEmail,
@@ -319,23 +319,23 @@ async function runScan(userName: string): Promise<void> {
   const gmail = google.gmail({ version: "v1", auth });
 
   // ── Auto-clear pending replies/meetings that are no longer unread or were deleted ──
-  const pendingReplies = getPendingReplyEmails();
+  const pendingReplies = getPendingReplyEmails(userName);
   for (const item of pendingReplies) {
     try {
       const detail = await gmail.users.messages.get({ userId: "me", id: item.gmailId, format: "minimal" });
       const isUnread = detail.data.labelIds?.includes("UNREAD") ?? false;
       if (!isUnread) {
-        clearPendingReplyEmail(item.gmailId);
+        clearPendingReplyEmail(userName, item.gmailId);
         logger.info({ gmailId: item.gmailId }, "[BgEmailScanner] Auto-cleared pending reply — no longer unread");
       }
     } catch (err) {
       // Message lookup failed — likely deleted entirely. Clear it; nothing to act on anymore.
-      clearPendingReplyEmail(item.gmailId);
+      clearPendingReplyEmail(userName, item.gmailId);
       logger.info({ gmailId: item.gmailId }, "[BgEmailScanner] Auto-cleared pending reply — message no longer exists");
     }
   }
 
-  const pendingMeetings = getPendingMeetingRequests();
+  const pendingMeetings = getPendingMeetingRequests(userName);
   const stillValidMeetings: DetectedMeetingRequest[] = [];
   for (const meeting of pendingMeetings) {
     try {
@@ -348,7 +348,7 @@ async function runScan(userName: string): Promise<void> {
     }
   }
   if (stillValidMeetings.length !== pendingMeetings.length) {
-    setPendingMeetingRequests(stillValidMeetings);
+    setPendingMeetingRequests(userName, stillValidMeetings);
   }
 
   let filedRecordsCount = 0;
@@ -381,8 +381,8 @@ async function runScan(userName: string): Promise<void> {
   }
 
   // ── Batch summary push ────────────────────────────────────────────────────
-  const scanReplies = getPendingReplyEmails();
-  const scanMeetings = getPendingMeetingRequests();
+  const scanReplies = getPendingReplyEmails(userName);
+  const scanMeetings = getPendingMeetingRequests(userName);
   logger.info(
     { userName, pendingRepliesCount: scanReplies.length, pendingMeetingsCount: scanMeetings.length, filedRecordsCount, urgentAlertCount: urgentAlerts.length, fyiCount: fyiItems.length, confirmedMeetingsCount: confirmedMeetings.length },
     "[BgEmailScanner] Pending state before summary"

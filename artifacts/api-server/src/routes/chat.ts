@@ -1207,8 +1207,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   let winddownActive = false;
 
   // E007: Email meeting reply flow
-  const pendingEmailReply = getPendingEmailReply();
-  const pendingMeetingRequests = getPendingMeetingRequests();
+  const pendingEmailReply = getPendingEmailReply(sessionUserName);
+  const pendingMeetingRequests = getPendingMeetingRequests(sessionUserName);
   const EMAIL_REPLY_ACCEPT = /^(?:(?:ok|okay|yeah|yep|yup|sure|alright)[,\s]+)*(yes|draft\s+(?:it|a\s+reply|the\s+reply)|yes\s+draft|do\s+it|sounds?\s+good|let.?s\s+do\s+it|go\s+ahead)(?:[,\s!.]|$)/i;
   const isEmailReplyAccepted =
     !isMorningGreeting && !isTextFlowActive &&
@@ -1472,14 +1472,14 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     try {
       detectedMeetings = detectedMeetingsRaw;
       if (detectedMeetings.length > 0) {
-        setPendingMeetingRequests(detectedMeetings);
+        setPendingMeetingRequests(sessionUserName, detectedMeetings);
         meetingRequestsBlock = buildMeetingRequestsBlock(detectedMeetings, sessionUserName);
         req.log.info({ count: detectedMeetings.length }, "[E007] Meeting requests detected in morning emails");
       }
     } catch (err) {
       req.log.warn({ err }, "[E007] Meeting detection failed — skipping");
     }
-    const pendingRepliesBlock = buildPendingRepliesBlock(getPendingReplyEmails(), sessionUserName);
+    const pendingRepliesBlock = buildPendingRepliesBlock(getPendingReplyEmails(sessionUserName), sessionUserName);
 
     // ── Morning Actions — SSE/web path only ──────────────────────────────────
     // Native no longer receives morningActions; fire the promise only for SSE.
@@ -1533,8 +1533,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           "Morning briefing fetched (native) and cached"
         );
         broadcastToUser(sessionUserName, "briefing_updated", {});
-        clearAllPendingReplyEmails();
-        clearPendingMeetingRequests();
+        clearAllPendingReplyEmails(sessionUserName);
+        clearPendingMeetingRequests(sessionUserName);
       }
       res.json({ response: nativeBriefingText });
 
@@ -1596,8 +1596,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       void logBriefingStories(sessionUserName, staticCtx.candidateStoryKeys);
       req.log.info({ chars: fullBriefingText.length }, "Morning briefing streamed and cached for follow-up context");
       broadcastToUser(sessionUserName, "briefing_updated", {});
-      clearAllPendingReplyEmails();
-      clearPendingMeetingRequests();
+      clearAllPendingReplyEmails(sessionUserName);
+      clearPendingMeetingRequests(sessionUserName);
     }
 
     return; // Morning greeting fully handled — skip generic handler below
@@ -2554,15 +2554,15 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
         body: pendingEmailReply.draftBody,
         mailtoUri,
       };
-      clearPendingEmailReply();
-      clearPendingMeetingRequests();
+      clearPendingEmailReply(sessionUserName);
+      clearPendingMeetingRequests(sessionUserName);
       (req as any)._emailPayload = emailPayload;
       broadcastToUser(sessionUserName, "email-compose", { type: "email_compose", ...emailPayload });
       const confirmText = `The reply is ready. Your email app should open with it pre-filled for ${pendingEmailReply.recipientName} — hit send when you're ready. I can't send it directly; that part's yours.`;
       (req as any)._hardcodedResponse = confirmText;
       req.log.info({ to: pendingEmailReply.to }, "[E007-CONF] Email packaged — hardcoded response");
     } else if (confirmIntent === "cancel") {
-      clearPendingEmailReply();
+      clearPendingEmailReply(sessionUserName);
       systemPrompt += `\n\n[Email Reply Cancelled]\nUser cancelled. Acknowledge: "No problem, I've dropped it."`;
     } else {
       // User wants to revise the draft
@@ -2578,7 +2578,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
           `Previous draft: "${pendingEmailReply.draftBody}". User's feedback: "${message}"`,
           displayName,
         );
-        setPendingEmailReply({ ...pendingEmailReply, draftBody: revised });
+        setPendingEmailReply(sessionUserName, { ...pendingEmailReply, draftBody: revised });
         systemPrompt +=
           `\n\n[Email Reply Revised]\nDraft:\n"${revised}"\n\n` +
           `Read the revised reply word for word, then ask: ` +
@@ -2606,7 +2606,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
     try {
       const draftBody = await composeEmailReply(request, intent, displayName);
       const replySubject = request.subject.startsWith("Re:") ? request.subject : `Re: ${request.subject}`;
-      setPendingEmailReply({
+      setPendingEmailReply(sessionUserName, {
         gmailId: request.gmailId,
         gmailThreadId: request.gmailThreadId,
         to: request.fromEmail,
@@ -3376,7 +3376,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
             ),
           ]);
           if (detected.length > 0) {
-            setPendingMeetingRequests(detected);
+            setPendingMeetingRequests(sessionUserName, detected);
             onDemandMeetingBlock = buildMeetingRequestsBlock(detected, sessionUserName);
             req.log.info({ count: detected.length }, "[E007] On-demand meeting requests detected");
           }
@@ -3410,7 +3410,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
           ? "\n\n[Google Calendar — not connected. Let the user know they can connect Google in the app header.]"
           : "";
 
-      const pendingRepliesBlock = buildPendingRepliesBlock(getPendingReplyEmails(), sessionUserName);
+      const pendingRepliesBlock = buildPendingRepliesBlock(getPendingReplyEmails(sessionUserName), sessionUserName);
       systemPrompt = getCurrentDateTimeBlock(timezone) + "\n" + corePrompt + memoryBlock + gmailBlock + onDemandMeetingBlock + pendingRepliesBlock + calendarBlock;
     } catch (err) {
       req.log.warn({ err }, "On-demand email/calendar fetch failed");
