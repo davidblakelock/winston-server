@@ -317,71 +317,6 @@ export interface ScannedReservation {
   calendarEventId: string | null;
 }
 
-const CONFIRMATION_PATTERNS = [
-  {
-    category: "trip" as const,
-    label: "Restaurant Reservation",
-    vendors: ["opentable.com", "resy.com", "tock.com", "yelp.com", "exploretock.com", "sevenrooms.com"],
-    subjects: ["reservation confirmed", "reservation confirmation", "your reservation", "booking confirmed", "table confirmed"],
-  },
-  {
-    category: "trip" as const,
-    label: "Flight",
-    vendors: ["aa.com", "united.com", "delta.com", "southwest.com", "jetblue.com", "alaskaair.com", "spirit.com", "frontier.com", "hawaiianairlines.com"],
-    subjects: ["flight confirmation", "itinerary", "e-ticket", "booking confirmation", "your flight"],
-  },
-  {
-    category: "trip" as const,
-    label: "Hotel",
-    vendors: ["marriott.com", "hilton.com", "hyatt.com", "ihg.com", "wyndham.com", "bestwestern.com", "hotels.com", "booking.com", "expedia.com", "airbnb.com", "vrbo.com"],
-    subjects: ["reservation confirmed", "booking confirmed", "hotel confirmation", "stay confirmed", "your reservation"],
-  },
-  {
-    category: "trip" as const,
-    label: "Car Rental",
-    vendors: ["enterprise.com", "hertz.com", "avis.com", "budget.com", "nationalcar.com", "alamo.com", "dollar.com", "thrifty.com"],
-    subjects: ["rental confirmation", "car rental confirmation", "reservation confirmed", "your rental"],
-  },
-  {
-    category: "warranty" as const,
-    label: "Warranty",
-    vendors: [],
-    subjects: ["warranty confirmation", "warranty registered", "product registration", "registration confirmed"],
-  },
-  {
-    category: "subscription" as const,
-    label: "Subscription",
-    vendors: [],
-    subjects: ["subscription confirmed", "subscription activated", "you're subscribed", "welcome to", "membership confirmed"],
-  },
-  {
-    category: "home_service" as const,
-    label: "Home Service",
-    vendors: [],
-    subjects: ["appointment confirmed", "service confirmed", "your appointment", "booking confirmed", "scheduled", "service scheduled"],
-  },
-  {
-    category: "vehicle" as const,
-    label: "Vehicle Service",
-    vendors: [],
-    subjects: ["service appointment", "vehicle service", "oil change", "auto service", "service reminder", "your vehicle"],
-  },
-] as const;
-
-type RecordCategory = "trip" | "warranty" | "home_service" | "subscription" | "vehicle" | "other";
-
-function detectCategory(from: string, subject: string): { category: RecordCategory; label: string } | null {
-  const fromLower = from.toLowerCase();
-  const subjectLower = subject.toLowerCase();
-  for (const pattern of CONFIRMATION_PATTERNS) {
-    const vendorMatch = pattern.vendors.some((v) => fromLower.includes(v));
-    const subjectMatch = pattern.subjects.some((s) => subjectLower.includes(s));
-    if (vendorMatch || subjectMatch) {
-      return { category: pattern.category as RecordCategory, label: pattern.label };
-    }
-  }
-  return null;
-}
 
 export async function scanReservationEmails(
   userName: string,
@@ -401,9 +336,18 @@ export async function scanReservationEmails(
 
   const gmail = google.gmail({ version: "v1", auth });
 
-  const cutoff = since ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-  const afterDate = Math.floor(cutoff.getTime() / 1000);
-  const q = `in:inbox -in:spam -in:trash after:${afterDate} (subject:(confirmation confirmed itinerary receipt booking reservation appointment scheduled warranty subscription))`;
+  // Broad query — Claude classifies each email, so we don't rely on subject keywords.
+  // This catches boutique hotels, local restaurants, independent service providers,
+  // and any other vendor that doesn't use standard subject line conventions.
+  const sinceDate = since ?? new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const afterEpoch = Math.floor(sinceDate.getTime() / 1000);
+  const q = [
+    "in:inbox",
+    "-in:spam",
+    "-in:trash",
+    "-from:me",
+    `after:${afterEpoch}`,
+  ].join(" ");
 
   logger.info({ userName, q }, "[ReservationScanner] Scanning Gmail");
 
@@ -443,99 +387,118 @@ export async function scanReservationEmails(
       const from = getHeader("From");
       const date = getHeader("Date");
 
-      const match = detectCategory(from, subject);
-      if (!match) {
-        logger.info({ msgId, subject, from }, "[ReservationScanner] No pattern match — skipping");
-        continue;
-      }
-
       let body = extractBodyFromPayload((detail.data.payload ?? {}) as GmailPart);
       if (body.includes("<")) body = stripHtml(body);
       if (body.length < 30) continue;
 
-      const extractPrompt = `You are extracting structured data from a ${match.label} confirmation email.
+      // Single Claude call: classify AND extract in one shot.
+      // No hardcoded vendor lists or subject keywords — Claude determines
+      // whether this is a confirmation worth saving and what category it belongs to.
+      // This handles boutique hotels, local restaurants, independent contractors,
+      // and any other vendor regardless of domain or subject line format.
+      const snippet = body.slice(0, 2000);
+      const extractResp = await anthropic.messages.create({
+        model: MODEL_HAIKU,
+        max_tokens: 500,
+        system: `You are reviewing an email to determine if it is a booking, reservation, or service confirmation worth saving to the user's personal records.
 
-From: ${from}
-Subject: ${subject}
-Date: ${date}
-Body (first 2000 chars):
-${body.slice(0, 2000)}
+First, decide if this email is a confirmation of one of these categories:
+- trip: restaurant reservation, flight, hotel, car rental, vacation rental, cruise, tour
+- warranty: product warranty, extended warranty, protection plan, service plan
+- subscription: software subscription, streaming service, membership, club
+- home_service: home repair, cleaning, HVAC, plumbing, electrical, pest control, lawn service
+- vehicle: car service, oil change, tire, auto repair, recall
+- other: any other confirmation worth keeping
 
-Extract and return JSON only, no explanation:
+If this email is NOT a confirmation (e.g. it's a newsletter, receipt for a small purchase, shipping notification, marketing email, or account notification), return exactly: {"skip": true}
+
+If it IS a confirmation, return ONLY this JSON — no explanation, no markdown:
 {
-  "vendor_name": "company or service name",
-  "confirmation_number": "confirmation/booking/reservation number or null",
-  "date_start": "YYYY-MM-DD or null",
-  "date_end": "YYYY-MM-DD or null (for multi-day bookings)",
-  "time": "HH:MM or null",
+  "skip": false,
+  "category": "trip|warranty|subscription|home_service|vehicle|other",
+  "label": "brief type label e.g. Hotel, Flight, Restaurant Reservation, Car Rental",
+  "vendorName": "business or vendor name",
+  "confirmationNumber": "confirmation/booking/reservation number or null",
+  "dateStart": "YYYY-MM-DD or null",
+  "dateEnd": "YYYY-MM-DD or null",
+  "time": "HH:MM 24h or null",
   "address": "full address or null",
   "phone": "phone number or null",
-  "website": "website or null",
+  "website": "website URL or null",
   "amount": "total amount with currency symbol or null",
-  "notes": "brief one-line summary of what this is"
-}`;
+  "notes": "one-line summary of what this is, or null"
+}
+Today is ${new Date().toISOString().slice(0, 10)}. Only use upcoming or recent dates — ignore dates clearly in the past.`,
+        messages: [{ role: "user", content: `Subject: ${subject}\nFrom: ${from}\n\n${snippet}` }],
+      });
 
-      let extracted: {
-        vendor_name: string;
-        confirmation_number: string | null;
-        date_start: string | null;
-        date_end: string | null;
-        time: string | null;
-        address: string | null;
-        phone: string | null;
-        website: string | null;
-        amount: string | null;
-        notes: string | null;
-      } | null = null;
+      const raw = extractResp.content[0]?.type === "text" ? extractResp.content[0].text.trim() : "";
+      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) continue;
 
+      let parsed: {
+        skip?: boolean;
+        category?: string;
+        label?: string;
+        vendorName?: string;
+        confirmationNumber?: string | null;
+        dateStart?: string | null;
+        dateEnd?: string | null;
+        time?: string | null;
+        address?: string | null;
+        phone?: string | null;
+        website?: string | null;
+        amount?: string | null;
+        notes?: string | null;
+      };
       try {
-        const aiResp = await anthropic.messages.create({
-          model: MODEL_HAIKU,
-          max_tokens: 400,
-          messages: [{ role: "user", content: extractPrompt }],
-        });
-        const raw = aiResp.content[0]?.type === "text" ? aiResp.content[0].text.trim() : "";
-        const jsonMatch = raw.match(/\{[\s\S]*\}/);
-        if (jsonMatch) extracted = JSON.parse(jsonMatch[0]);
-      } catch (err) {
-        logger.warn({ err, msgId }, "[ReservationScanner] Claude extraction failed");
+        parsed = JSON.parse(jsonMatch[0]);
+      } catch {
         continue;
       }
 
-      if (!extracted?.vendor_name) {
-        logger.info({ msgId }, "[ReservationScanner] No vendor_name extracted — skipping");
-        continue;
-      }
+      // Claude decided this isn't a confirmation worth saving
+      if (parsed.skip === true) continue;
+      if (!parsed.vendorName || !parsed.category) continue;
 
+      // Validate category is one we recognize — default to "other" if not
+      const validCategories = ["trip", "warranty", "home_service", "subscription", "vehicle", "other"] as const;
+      type RecordCategory = typeof validCategories[number];
+      const recordCategory: RecordCategory = validCategories.includes(parsed.category as RecordCategory)
+        ? (parsed.category as RecordCategory)
+        : "other";
+
+      const detectedLabel = parsed.label ?? parsed.category;
+
+      // Save to user_records via idempotent upsert
       await insertUserRecord(userName, {
-        category: match.category,
-        vendorName: extracted.vendor_name,
-        confirmationNumber: extracted.confirmation_number ?? null,
-        dateStart: extracted.date_start ?? null,
-        dateEnd: extracted.date_end ?? null,
-        time: extracted.time ?? null,
-        address: extracted.address ?? null,
-        phone: extracted.phone ?? null,
-        website: extracted.website ?? null,
-        amount: extracted.amount ?? null,
-        notes: extracted.notes ?? null,
+        category: recordCategory,
+        vendorName: parsed.vendorName,
+        confirmationNumber: parsed.confirmationNumber ?? null,
+        dateStart: parsed.dateStart ?? null,
+        dateEnd: parsed.dateEnd ?? null,
+        time: parsed.time ?? null,
+        address: parsed.address ?? null,
+        phone: parsed.phone ?? null,
+        website: parsed.website ?? null,
+        amount: parsed.amount ?? null,
+        notes: parsed.notes ?? null,
         rawSnippet: body.slice(0, 500),
         gmailId: msgId,
       });
 
-      const pushTitle = `${match.label} confirmed`;
       const pushBody = [
-        extracted.vendor_name,
-        extracted.date_start,
-        extracted.time,
-        extracted.confirmation_number ? `#${extracted.confirmation_number}` : null,
+        parsed.vendorName,
+        parsed.dateStart,
+        parsed.time,
+        parsed.confirmationNumber ? `#${parsed.confirmationNumber}` : null,
       ].filter(Boolean).join(" · ");
 
       await sendFcmNotification({
         userName,
         notificationType: "reservation",
-        title: pushTitle,
-        body: pushBody || `New ${match.label.toLowerCase()} saved to your records`,
+        title: `${detectedLabel} confirmed ✓`,
+        body: pushBody || `New ${detectedLabel.toLowerCase()} saved to your records`,
         data: {
           action: "navigate",
           screen: "/travel",
@@ -544,17 +507,17 @@ Extract and return JSON only, no explanation:
 
       results.push({
         gmailId: msgId,
-        restaurantName: extracted.vendor_name,
-        date: extracted.date_start ?? "",
-        time: extracted.time ?? null,
+        restaurantName: parsed.vendorName,
+        date: parsed.dateStart ?? "",
+        time: parsed.time ?? null,
         partySize: null,
-        confirmationNumber: extracted.confirmation_number ?? null,
-        address: extracted.address ?? null,
+        confirmationNumber: parsed.confirmationNumber ?? null,
+        address: parsed.address ?? null,
         calendarEventId: null,
       });
 
       logger.info(
-        { userName, msgId, category: match.category, vendor: extracted.vendor_name },
+        { userName, vendor: parsed.vendorName, category: recordCategory, label: detectedLabel, confirmationNumber: parsed.confirmationNumber },
         "[ReservationScanner] Saved confirmation to user_records"
       );
     } catch (err) {
