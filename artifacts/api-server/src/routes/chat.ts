@@ -1102,7 +1102,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const isCalendarModify = !isMorningGreeting && !isCalendarCreate && cls.calendar_modify;
   const isCalendarDelete = !isMorningGreeting && cls.calendar_delete;
   const isCalendarWriteOp = isCalendarCreate || isCalendarModify || isCalendarDelete;
-  const pendingDel = getPendingDelete();
+  const pendingDel = getPendingDelete(sessionUserName);
   const isDeleteConfirm = !!pendingDel && CALENDAR_CONFIRM_PATTERN.test(message.trim());
   const isDeleteCancel = !!pendingDel && CALENDAR_CANCEL_PATTERN.test(message.trim());
 
@@ -3419,21 +3419,21 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
 
   // ── Calendar write operations (create / modify / delete) ────────────────────
   if (isDeleteConfirm || isDeleteCancel) {
-    const pd = getPendingDelete()!;
+    const pd = getPendingDelete(sessionUserName)!;
     if (isDeleteConfirm) {
       try {
         await deleteCalendarEvent(pd.eventId, sessionUserName);
-        clearPendingDelete();
+        clearPendingDelete(sessionUserName);
         systemPrompt +=
           `\n\n[Calendar Event Deleted]\n"${pd.summary}" on ${pd.dateLabel} has been permanently removed from the user's Google Calendar.\nConfirm warmly and briefly — e.g. "Done — I've cancelled your ${pd.summary} on ${pd.dateLabel}."`;
         req.log.info({ eventId: pd.eventId, summary: pd.summary }, "Calendar event deleted");
       } catch (err) {
-        clearPendingDelete();
+        clearPendingDelete(sessionUserName);
         req.log.warn({ err }, "Calendar delete failed");
         systemPrompt += `\n\n[Calendar Delete Failed]\nTell the user the delete failed and they can try again or do it manually in Google Calendar.`;
       }
     } else {
-      clearPendingDelete();
+      clearPendingDelete(sessionUserName);
       systemPrompt += `\n\n[Calendar Delete Cancelled]\nDavid chose NOT to delete "${pd.summary}". Acknowledge warmly — e.g. "Got it, keeping your ${pd.summary} on the calendar."`;
     }
   } else if (isCalendarWriteOp) {
@@ -3545,7 +3545,7 @@ Return ONLY the JSON object or the string "null". No markdown fences, no explana
         if (!event) {
           systemPrompt += `\n\n[Calendar Delete — Event Not Found]\nTell the user you couldn't find "${parsed.searchKeywords}" in their calendar for the next 7 days.`;
         } else {
-          setPendingDelete({
+          setPendingDelete(sessionUserName, {
             eventId: event.id,
             summary: event.summary,
             dateLabel: event.dateLabel,

@@ -130,23 +130,24 @@ export interface PendingDelete {
   expiresAt: number;
 }
 
-let _pendingDelete: PendingDelete | null = null;
+const _pendingDeleteMap = new Map<string, PendingDelete>();
 
-export function setPendingDelete(op: PendingDelete): void {
-  _pendingDelete = op;
+export function setPendingDelete(userName: string, op: PendingDelete): void {
+  _pendingDeleteMap.set(userName, op);
 }
 
-export function getPendingDelete(): PendingDelete | null {
-  if (!_pendingDelete) return null;
-  if (Date.now() > _pendingDelete.expiresAt) {
-    _pendingDelete = null;
+export function getPendingDelete(userName: string): PendingDelete | null {
+  const op = _pendingDeleteMap.get(userName) ?? null;
+  if (!op) return null;
+  if (Date.now() > op.expiresAt) {
+    _pendingDeleteMap.delete(userName);
     return null;
   }
-  return _pendingDelete;
+  return op;
 }
 
-export function clearPendingDelete(): void {
-  _pendingDelete = null;
+export function clearPendingDelete(userName: string): void {
+  _pendingDeleteMap.delete(userName);
 }
 
 // ── Format created/updated event for confirmation ────────────────────────────
