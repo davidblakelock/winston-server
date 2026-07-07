@@ -4,36 +4,15 @@ import { fetchAndSummarizeEmails, formatEmailsForPrompt, buildImportantEmailInst
 import { estimateDriveTime, extractEventLocation } from "../departure/departureManager.js";
 import { getLastNightNotes, formatNotesForMorningBriefing } from "../winddown/winddownManager.js";
 import { getRecentMemories, formatMemoriesForContext } from "../memory/memoryManager.js";
-import { fetchMorningNews, fetchDailyMotivation } from "../news/newsManager.js";
+import { fetchMorningNews } from "../news/newsManager.js";
 import { getProfileItems, getProfilePlaces, formatProfileForContext } from "../profile/profileManager.js";
 import { getProfile, buildSystemPromptFromProfile, buildProfileContext, type PersonEntry } from "../onboarding/onboardingManager.js";
 import { getPeople } from "../people/peopleManager.js";
-import { getWatchedShows } from "../tv/showManager.js";
-import { fetchEpisodesForDate, formatEpisodeForPrompt } from "../tv/tvmaze.js";
 import { fetchSportsScores, formatSportsForPrompt } from "../sports/sportsManager.js";
-import { getUpcomingBills, formatBillsForPrompt } from "../bills/billManager.js";
-import { getUpcomingDates, formatDatesForPrompt } from "../dates/datesManager.js";
-import { getTodayTripDay, buildTripDayBlock } from "../travel/tripPlanningManager.js";
-import { getPendingFollowUps, buildRecommendationFollowUpBlock } from "../recommendations/recommendationsManager.js";
-import { collectSundayData, buildSundaySummaryBlock } from "../sundaySummary/sundaySummaryManager.js";
-import { getPendingPersonalFollowups, buildPersonalFollowupsBlock } from "../followups/followupManager.js";
 import { setStaticBriefingContext, setCachedBriefing } from "./briefingCache.js";
-import { runVenueScan, getVenueConcerts, buildVenueConcertsBlock } from "./venueMonitor.js";
-import {
-  getSeenHeadlines,
-  isDuplicate,
-  extractBoldHeadlines,
-  filterNewsBlock,
-} from "./storyDedup.js";
+import { getSeenHeadlines, extractBoldHeadlines, filterNewsBlock } from "./storyDedup.js";
 import { logger } from "../lib/logger.js";
 import { getBriefingPreferences, buildBriefingPrefsBlock } from "../briefingPreferences/briefingPreferencesManager.js";
-import { checkUpcomingDates } from "./morningActions.js";
-import { getMydayEntries, type MydayEntry } from "../myday/mydayManager.js";
-import {
-  getPendingSuggestion, markSuggestionSurfaced,
-  getPendingObservation, markObservationSurfaced,
-  getWeeklyGift, generateAndStoreAnnualLetter,
-} from "../lifeCaptures/lifeCapturesManager.js";
 import { buildCalendarEmailCorrelations, formatCorrelationNote, type CalendarEmailCorrelation } from "./calendarEmailIntelligence.js";
 import { getOrdersForBriefing } from "../orders/ordersManager.js";
 import { getCachedWeather } from "../weather/weatherCache.js";
@@ -365,16 +344,7 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
   const generationDateKey = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
   logger.info({ userName, generationDateKey }, "Pre-generating morning briefing");
   try {
-    const watchedShows = await getWatchedShows().catch((): Awaited<ReturnType<typeof getWatchedShows>> => []);
-    const watchedIds = watchedShows.filter((s) => s.tvmazeId).map((s) => s.tvmazeId!);
     const now = new Date();
-    const yesterday = new Date(now.getTime() - 86400000);
-    const isSunday = now.toLocaleDateString("en-US", { timeZone: "America/Chicago", weekday: "long" }) === "Sunday";
-
-    // Annual letter date — default Jan 1, or from user profile
-    const ctMonth  = now.toLocaleDateString("en-US", { timeZone: "America/Chicago", month: "numeric" });
-    const ctDay    = now.toLocaleDateString("en-US", { timeZone: "America/Chicago", day: "numeric" });
-    const isAnnualLetterDay = ctMonth === "1" && ctDay === "1"; // Jan 1 default
 
     // Rotating morning intention question (cycles every day)
     const dayOfYear = Math.floor(
@@ -387,13 +357,12 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
     ];
     const intentionQuestion = INTENTION_QUESTIONS[dayOfYear % 3]!;
 
-    const [recentMemories, allProfileItems, userProfile, keyPeople, seenHeadlines, seenVenueHeadlines, briefingPrefs, userSettings, stoicEntry] = await Promise.all([
+    const [recentMemories, allProfileItems, userProfile, keyPeople, seenHeadlines, briefingPrefs, userSettings, stoicEntry] = await Promise.all([
       getRecentMemories(7).catch(() => []),
       getProfileItems(undefined, userName).catch(() => []),
       getProfile(userName).catch(() => null),
       getPeople(userName).catch(() => [] as PersonEntry[]),
-      getSeenHeadlines(userName, 3).catch(() => new Set<string>()),    // news/Dallas: 3-day dedup window
-      getSeenHeadlines(userName, 14).catch(() => new Set<string>()),  // venue concerts: 14-day window (events repeat until show date)
+      getSeenHeadlines(userName, 3).catch(() => new Set<string>()),
       getBriefingPreferences(userName).catch(() => []),
       getUserSettings(userName).catch(() => null as UserSettings | null),
       getStoicForUser(userName).catch(() => null),
@@ -428,35 +397,15 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
     const homeAddress = userProfile?.homeAddress ?? "";
 
 
-    const [lastNightNotes, newsBlock, yesterdayEps, todayEps, sportsScores, upcomingBills, upcomingDates, sundayData, pendingFollowUps, venueConcertsBlock, dailyMotivation, personalFollowUps, outForDeliveryOrders, weeklyGift, pendingObservation, annualLetter] = await Promise.all([
+    const [lastNightNotes, newsBlock, sportsScores, outForDeliveryOrders] = await Promise.all([
       getLastNightNotes().catch(() => []),
       fetchMorningNews(userName).catch(() => ""),
-      fetchEpisodesForDate(yesterday, watchedIds).catch(() => []),
-      fetchEpisodesForDate(now, watchedIds).catch(() => []),
       fetchSportsScores(userName).catch(() => null),
-      getUpcomingBills(3, userName).catch(() => []),
-      getUpcomingDates(21, userName).catch(() => []),
-      isSunday ? collectSundayData(userName).catch(() => null) : Promise.resolve(null),
-      getPendingFollowUps(2, 14).catch(() => []),
-      runVenueScan().catch(() => ""),
-      fetchDailyMotivation(userName).catch(() => ""),
-      getPendingPersonalFollowups(userName).catch(() => []),
       getOrdersForBriefing(userName).catch(() => []),
-      isSunday ? getWeeklyGift(userName).catch(() => null) : Promise.resolve(null),
-      getPendingObservation(userName).catch(() => null),
-      isAnnualLetterDay
-        ? generateAndStoreAnnualLetter(userName).catch(() => null)
-        : Promise.resolve(null),
     ]);
 
-    // ── Weather context + To-Do list (fetched at pre-gen time) ───────────────
-    const [weatherData, todoItems] = await Promise.all([
-      getCachedWeather(primaryCity, primaryLat, primaryLon).catch(() => null),
-      query<{ item_text: string }>(
-        `SELECT item_text FROM list_items WHERE user_name = $1 AND list_name = 'to do' ORDER BY created_at ASC`,
-        [userName]
-      ).then((r) => r.rows).catch((): Array<{ item_text: string }> => []),
-    ]);
+    // ── Weather context (fetched at pre-gen time) ─────────────────────────────
+    const weatherData = await getCachedWeather(primaryCity, primaryLat, primaryLon).catch(() => null);
 
     const weatherContextBlock = weatherData
       ? `\n\n[VERIFIED — Weather — ${primaryCity}]\n` +
@@ -469,60 +418,20 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
           : "")
       : "";
 
-    const todoBlock = todoItems.length > 0
-      ? `\n\n[VERIFIED — To-Do List — ${todoItems.length} item${todoItems.length === 1 ? "" : "s"}]\n` +
-        todoItems.map((i) => `• ${i.item_text}`).join("\n") +
-        `\n\nTO-DO INSTRUCTION: Briefly mention the to-do list if items look actionable today — one natural sentence at most. ` +
-        `Example: "You've got ${todoItems.length > 2 ? `${todoItems.length} things on your list` : `a couple of things on your to-do list`}${todoItems[0] ? `, including ${todoItems[0].item_text}` : ""}." ` +
-        `Skip entirely if the list feels irrelevant to the rest of the briefing.`
-      : "";
-
-    // ── Story dedup — filter seen headlines from news, Dallas, venue concerts ──
-    // News: strip **bold headline** + sentence pairs that appeared in the last 3 days
+    // ── Story dedup — filter seen headlines ──────────────────────────────────
     const { filtered: dedupedNewsBlock, removed: removedNewsHeadlines } = filterNewsBlock(newsBlock, seenHeadlines);
     if (removedNewsHeadlines.length > 0) {
       logger.info({ userName, removed: removedNewsHeadlines }, "[StoryDedup] Filtered duplicate news headlines");
     }
 
 
-    // Venue concerts: filter by artistOrEvent + venue key, rebuild block.
-    // Uses 14-day window (seenVenueHeadlines) so upcoming concerts don't re-appear daily.
-    const rawVenueConcerts = getVenueConcerts();
-    const filteredVenueConcerts = rawVenueConcerts.filter(
-      (c) => !isDuplicate(`${c.artistOrEvent} ${c.venue}`, seenVenueHeadlines)
-    );
-    const dedupedVenueConcertsBlock = buildVenueConcertsBlock(filteredVenueConcerts);
-    logger.info(
-      {
-        userName,
-        rawCount: rawVenueConcerts.length,
-        filteredCount: filteredVenueConcerts.length,
-        removedByDedup: rawVenueConcerts.length - filteredVenueConcerts.length,
-      },
-      "[VenueMonitor] After dedup"
-    );
-
-    // Collect all candidate story keys to log after successful briefing generation
-    const candidateStoryKeys: string[] = [
-      ...extractBoldHeadlines(newsBlock),                               // news headlines (pre-filter — log all that were offered)
-      ...rawVenueConcerts.map((c) => `${c.artistOrEvent} ${c.venue}`), // venue concerts
-    ];
+    const candidateStoryKeys: string[] = extractBoldHeadlines(newsBlock);
 
     // Email and calendar are NOT fetched at pre-generation time.
     // They are fetched live at delivery time (when the user says "good morning")
     // so they always reflect the current moment.
 
     const notesBlock = formatNotesForMorningBriefing(lastNightNotes);
-
-    const newEps = [
-      ...yesterdayEps.map((ep) => ({ ...ep, when: "last night" })),
-      ...todayEps.map((ep) => ({ ...ep, when: "today" })),
-    ];
-    const tvMorningBlock = newEps.length > 0
-      ? `\n\n[TV Shows — New Episodes]\n` +
-        newEps.map((ep) => `• ${formatEpisodeForPrompt(ep)} (${ep.when})`).join("\n")
-      : "";
-
 
     const sportsBlock = sportsScores ? formatSportsForPrompt(sportsScores) : "";
 
@@ -532,22 +441,6 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
       const count = outForDeliveryOrders.length;
       return `\n\n[VERIFIED — Orders Out for Delivery Today]\n${items}\nCRITICAL: Mention this naturally near the start of the briefing. ${count === 1 ? `Say something like: "Your ${outForDeliveryOrders[0].item_name} from ${outForDeliveryOrders[0].retailer} is out for delivery today."` : `Say something like: "${count} packages arriving today — your ${outForDeliveryOrders.map((o) => o.item_name).join(" and ")}." `}Keep it brief — one sentence.`;
     })();
-
-    const billsMorningBlock = upcomingBills.length > 0
-      ? `\n\n[VERIFIED — Bills Database — Due in Next 3 Days]\n${formatBillsForPrompt(upcomingBills)}\nMention ONLY if due within 3 days, skip entirely otherwise.`
-      : "";
-
-    const datesBlock = upcomingDates.length > 0
-      ? `\n\n[VERIFIED — Dates Database — Upcoming Birthdays & Anniversaries]\n${formatDatesForPrompt(upcomingDates)}`
-      : "";
-
-    const sundaySummaryBlock = isSunday && sundayData ? buildSundaySummaryBlock(sundayData) : "";
-
-
-    const recFollowUpBlock = pendingFollowUps.length > 0
-      ? buildRecommendationFollowUpBlock(pendingFollowUps)
-      : "";
-
 
     const profileContextBlock = buildProfileContext(
       userProfile ?? null,
@@ -563,68 +456,8 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
     const preamble = getCurrentDateTimeBlock() + "\n" + corePrompt + profileContextBlock +
       memoryBlock + dynamicProfileBlock + prefsBlock + notesBlock + peopleContextBlock;
 
-    const personalFollowUpsBlock = buildPersonalFollowupsBlock(personalFollowUps);
-
-
-    // ── Recent [Name]'s Life entries (last 7 days) ───────────────────────────
-    const _briefingFirstName = userProfile?.name?.split(" ")[0] ?? "there";
-    const _lifeSectionName   = `${_briefingFirstName}'s Life`;
-    const [recentMydayEntries, pendingLifeSuggestion] = await Promise.all([
-      getMydayEntries(userName).catch((): MydayEntry[] => []),
-      getPendingSuggestion(userName).catch(() => null),
-    ]);
-    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    const mydayFiltered = recentMydayEntries
-      .filter((e) => new Date(e.entry_date) >= sevenDaysAgo)
-      .slice(0, 7);
-    const mydayBlock = mydayFiltered.length > 0
-      ? `\n\n[${_lifeSectionName} — Recent Entries]\n` +
-        mydayFiltered.map((e) => `• ${e.entry_date}: ${e.content}`).join("\n") +
-        `\nReference these naturally when they connect to something in today's news, calendar, or closing thought. Do not force them in.`
-      : "";
-
-    // ── Life suggestion from dot-connector (surface once, never repeat) ───────
-    let lifeSuggestionBlock = "";
-    if (pendingLifeSuggestion) {
-      lifeSuggestionBlock =
-        `\n\n[${_lifeSectionName} — Actionable Suggestion]\n` +
-        `After the thought of the day — ONLY ONCE — weave this single sentence in naturally before the closing question: ` +
-        `"${pendingLifeSuggestion.suggestion}"\n` +
-        `If the user responds positively, help them act on it. If they ignore or redirect, drop it permanently.`;
-      markSuggestionSurfaced(userName, pendingLifeSuggestion.id).catch(() => {});
-    }
-
-    // ── Socratic mirror — pattern observation (surface once, never repeat) ───
-    let observationBlock = "";
-    if (pendingObservation) {
-      observationBlock =
-        `\n\n[${_lifeSectionName} — Pattern Observation]\n` +
-        `After the thought of the day, weave this observation in naturally — ONCE, as part of the flow: ` +
-        `"${pendingObservation.observation}"\n` +
-        `Deliver it as a warm, curious friend noticing something — not as analysis. ` +
-        `If it lands, let the user respond. If they redirect, drop it completely.`;
-      markObservationSurfaced(userName, pendingObservation.id).catch(() => {});
-    }
-
-
-    // All data blocks assembled — build the suffix.
-    // The briefing instruction is the final element so Claude's marching orders
-    // are the last thing it reads before generating the response.
-    // News appears before Dallas local content and venue concerts so Claude gives it
-    // appropriate prominence — national/international news is mandatory in every briefing.
-    // ── Cross-domain intelligence (non-calendar checks — calendar runs live at delivery) ─
-    const upcomingDateActions = await checkUpcomingDates(userName).catch(() => []);
-    const crossDomainBlock = upcomingDateActions.length > 0
-      ? `\n\n[Upcoming Dates]\n` + upcomingDateActions.map((a) => `• ${a.title}: ${a.detail}`).join("\n")
-      : "";
-
-
-    const todayTrip = await getTodayTripDay(userName).catch(() => null);
-    const tripDayBlock = todayTrip ? buildTripDayBlock(todayTrip) : "";
-
     // ── Apply briefing toggle preferences ─────────────────────────────────────
     const _bWeather = userSettings?.briefingWeather !== false ? weatherContextBlock : "";
-    const _bTodos   = userSettings?.briefingTodos   !== false ? todoBlock : "";
     const _bNews    = userSettings?.briefingNews    !== false ? dedupedNewsBlock : "";
     const stoicBlock = userSettings?.briefingStoic !== false && stoicEntry
       ? buildStoicBlock(stoicEntry, intentionQuestion ?? `What's the one thing that would make today feel worthwhile?`)
@@ -632,42 +465,30 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
 
     const _bSports = sportsBlock || "";
 
-    const suffix =
-      _bWeather +
-      tripDayBlock +
-      ordersBlock +
-      _bTodos +
-      tvMorningBlock +
-      billsMorningBlock +
-      datesBlock +
-      sundaySummaryBlock +
-      recFollowUpBlock +
-      personalFollowUpsBlock +
-      mydayBlock +
-      lifeSuggestionBlock +
-      observationBlock +
-      crossDomainBlock +
-      _bNews +
-      _bSports +
-      dedupedVenueConcertsBlock +
-      onboardingNudgeBlock +
-      stoicBlock +
-      buildNarrativeBriefingInstruction(primaryCity, userProfile?.companionName ?? null, userProfile?.name ?? undefined, intentionQuestion, userSettings ?? undefined);
+    const suffix = [
+      _bWeather,
+      ordersBlock,
+      _bNews,
+      _bSports,
+      stoicBlock,
+      onboardingNudgeBlock,
+      buildNarrativeBriefingInstruction(
+        primaryCity,
+        userProfile?.companionName ?? null,
+        userProfile?.name ?? undefined,
+        intentionQuestion,
+        userSettings ?? undefined
+      ),
+    ].filter(Boolean).join("\n\n");
 
     // Log which static sections have data
     const sectionLog: Record<string, boolean | string> = {
       "weather": weatherContextBlock.length > 0 ? "context-included" : "unavailable",
-      "todo": todoItems.length > 0 ? `${todoItems.length} items` : false,
       "email": "live-at-delivery",
       "calendar": "live-at-delivery",
-
       "news": dedupedNewsBlock.length > 0,
       "sports": !!(sportsScores),
-      "music_events": filteredVenueConcerts.length > 0 ? `${filteredVenueConcerts.length} concerts` : "EMPTY",
-      "birthdays": upcomingDates.length > 0,
-      "bills_3day": upcomingBills.length > 0,
-      "my_day_entries": mydayFiltered.length > 0 ? `${mydayFiltered.length} entries` : false,
-      "sunday_special": isSunday,
+      "orders": outForDeliveryOrders.length > 0,
     };
     logger.info({ userName, sections: sectionLog }, "[BRIEFING SECTIONS] Static data availability per section (email+calendar fetched live at delivery)");
 
