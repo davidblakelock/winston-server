@@ -111,7 +111,7 @@ export function startJournalPatternScheduler(): void {
     } catch (err) {
       logger.error({ err }, "[JOURNAL INSIGHTS] Weekly scheduler error");
     }
-  }, { timezone: "America/Chicago" });
+  }, { timezone: "UTC" });
 
   logger.info("[JOURNAL INSIGHTS] Weekly scheduler started (Sundays 6 AM CT)");
 }

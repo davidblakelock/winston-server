@@ -750,7 +750,7 @@ router.post(["/lists/todo", "/lists/to do"], async (req: Request, res: Response)
   if (!resolvedReminderTime && /remind/i.test(resolvedItemText)) {
     try {
       const profile = await getProfile(userName).catch(() => null);
-      const tz = profile?.timezone ?? "America/Chicago";
+      const tz = profile?.timezone ?? "UTC";
       const extracted = await extractReminder(resolvedItemText, tz);
       if (extracted?.time) {
         const recurringPattern = extracted.recurring;

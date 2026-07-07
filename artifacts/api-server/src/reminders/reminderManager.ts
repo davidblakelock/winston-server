@@ -56,7 +56,7 @@ export interface ReminderRow {
  */
 export async function createReminder(input: ReminderInput): Promise<ReminderRow> {
   const resolvedUser = input.userName ?? NATIVE_STORED_NAME;
-  const resolvedTz   = input.timezone   ?? "America/Chicago";
+  const resolvedTz   = input.timezone   ?? "UTC";
 
   // ── Duplicate guard ──────────────────────────────────────────────────────────
   // Only block genuine double-submits: same user + text + fire_at created within

@@ -1,4 +1,5 @@
 import { query } from "../db.js";
+import { getUserLocationContext } from "../lib/userTimezone.js";
 import { NATIVE_USER } from "../auth/middleware.js";
 import { logger } from "../lib/logger.js";
 
@@ -129,7 +130,8 @@ export async function getOrders(userName = NATIVE_USER): Promise<Order[]> {
 }
 
 export async function getOrdersForBriefing(userName = NATIVE_USER): Promise<Order[]> {
-  const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+  // Use UTC for order date comparison — order dates are absolute dates
+  const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "UTC" });
   const { rows } = await query<Order>(
     `SELECT * FROM orders
      WHERE user_name = $1

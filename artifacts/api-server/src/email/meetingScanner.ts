@@ -3,6 +3,7 @@ import { getAuthClientForUser } from "../google/oauth.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { logger } from "../lib/logger.js";
 import { fetchEventsForDate } from "../google/calendar.js";
+import { getUserLocationContext } from "../lib/userTimezone.js";
 import { sendGmailReply } from "./draftScanner.js";
 import { createCalendarEvent } from "../google/calendar.js";
 
@@ -91,7 +92,7 @@ async function parseMeetingFromEmail(
 
   const prompt = `Extract meeting request details from this email. Return ONLY valid JSON or null if this is not a meeting/scheduling request.
 
-Today: ${today} (America/Chicago)
+Today: ${today} (user local time)
 From: ${from}
 Subject: ${subject}
 Date: ${emailDate}
@@ -141,6 +142,7 @@ export async function checkForConflict(
   endTime: string,
 ): Promise<{ hasConflict: boolean; conflictingEvent: string | null }> {
   try {
+    const { timezone: tz } = await getUserLocationContext(userName);
     const events = await fetchEventsForDate(date, userName);
     if (!events || events.length === 0) return { hasConflict: false, conflictingEvent: null };
 
@@ -154,14 +156,14 @@ export async function checkForConflict(
       if (!event.startIso) continue;
 
       const evStart = new Date(event.startIso);
-      const evStartH = evStart.toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "2-digit", minute: "2-digit", hour12: false });
+      const evStartH = evStart.toLocaleTimeString("en-US", { timeZone: tz, hour: "2-digit", minute: "2-digit", hour12: false });
       const [evSH, evSM] = evStartH.split(":").map(Number);
       const evStartMin = evSH * 60 + evSM;
 
       let evEndMin = evStartMin + 60; // default 1 hour
       if (event.endIso) {
         const evEnd = new Date(event.endIso);
-        const evEndStr = evEnd.toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "2-digit", minute: "2-digit", hour12: false });
+        const evEndStr = evEnd.toLocaleTimeString("en-US", { timeZone: tz, hour: "2-digit", minute: "2-digit", hour12: false });
         const [evEH, evEM] = evEndStr.split(":").map(Number);
         evEndMin = evEH * 60 + evEM;
       }

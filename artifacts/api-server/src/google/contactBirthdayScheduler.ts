@@ -13,7 +13,6 @@ import { logger } from "../lib/logger.js";
 import { getActiveUsers } from "../onboarding/onboardingManager.js";
 import { sendFcmNotification } from "../push/fcmSender.js";
 
-const TZ = "America/Chicago";
 
 interface ContactDateRow {
   display_name: string;
@@ -27,7 +26,7 @@ function daysUntilNextOccurrence(mmdd: string): number {
 
   const now = new Date();
   const todayCT = new Date(
-    now.toLocaleString("en-US", { timeZone: TZ })
+    now.toLocaleString("en-US", { timeZone: "UTC" })
   );
 
   const thisYear = new Date(todayCT.getFullYear(), mm - 1, dd);
@@ -116,11 +115,13 @@ let _lastCheckedDate: string | null = null;
 export function startContactBirthdayScheduler(): void {
   // Run at startup if it's already past 9 AM CT (and not already run today)
   const nowHour = parseInt(
-    new Date().toLocaleTimeString("en-US", { timeZone: TZ, hour: "2-digit", hour12: false }),
+    new Date().toLocaleTimeString("en-US", { timeZone: "UTC", hour: "2-digit", hour12: false }),
     10
   );
   if (nowHour >= 9) {
-    const today = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+    const profCB = await query<{ timezone: string | null }>(`SELECT timezone FROM user_profiles WHERE user_name = $1`, [userName]).catch(() => ({ rows: [] }));
+    const userTzCB = profCB.rows[0]?.timezone ?? "UTC";
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: userTzCB });
     if (_lastCheckedDate !== today) {
       _lastCheckedDate = today;
       setTimeout(() => checkContactBirthdays().catch(() => {}), 8000);
@@ -130,7 +131,9 @@ export function startContactBirthdayScheduler(): void {
   cron.schedule(
     "0 8 * * *",
     async () => {
-      const today = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+      const profCB = await query<{ timezone: string | null }>(`SELECT timezone FROM user_profiles WHERE user_name = $1`, [userName]).catch(() => ({ rows: [] }));
+    const userTzCB = profCB.rows[0]?.timezone ?? "UTC";
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: userTzCB });
       _lastCheckedDate = today;
       try { await checkContactBirthdays(); }
       catch (err) { logger.error({ err }, "[ContactBirthday] Scheduler error"); }

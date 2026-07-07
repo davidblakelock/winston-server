@@ -16,7 +16,7 @@ import { wasApifyDailyFlagSet, setApifyDailyFlag } from "../lib/apifyCache.js";
 import { getActiveUsers, type ActiveUser } from "../onboarding/onboardingManager.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
-const DEFAULT_TZ = "America/Chicago";
+const DEFAULT_TZ = "UTC"; // Scheduler runs in UTC; each user has their own timezone in profile
 const DEFAULT_WAKE_TIME = "06:00";
 
 // How many minutes before wake time to start pre-fetching.
@@ -238,7 +238,7 @@ async function startupPrefetch(): Promise<void> {
     users = await getActiveUsers();
   } catch (err) {
     logger.warn({ err }, "[MorningPush] Startup — failed to load users; defaulting to David");
-    users = [{ userName: NATIVE_STORED_NAME, name: NATIVE_STORED_NAME, city: "Dallas", timezone: DEFAULT_TZ, wakeTime: DEFAULT_WAKE_TIME, companionName: null }];
+    users = [{ userName: NATIVE_STORED_NAME, name: NATIVE_STORED_NAME, city: null, timezone: DEFAULT_TZ, wakeTime: DEFAULT_WAKE_TIME, companionName: null }];
   }
 
   for (const user of users) {

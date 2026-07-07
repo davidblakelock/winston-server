@@ -1,4 +1,5 @@
 import { query } from "../db.js";
+import { getUserLocationContext } from "../lib/userTimezone.js";
 
 export interface MydayEntry {
   id: number;
@@ -13,9 +14,10 @@ export async function saveMydayEntry(
   content: string,
   date?: string
 ): Promise<MydayEntry> {
+  const { timezone } = await getUserLocationContext(userName);
   const entryDate =
     date ??
-    new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+    new Date().toLocaleDateString("en-CA", { timeZone: timezone });
   const { rows } = await query<MydayEntry>(
     `INSERT INTO myday_entries (user_name, entry_date, content, updated_at)
      VALUES ($1, $2, $3, now())
@@ -30,9 +32,8 @@ export async function saveMydayEntry(
 export async function getTodayMydayEntry(
   userName: string
 ): Promise<MydayEntry | null> {
-  const today = new Date().toLocaleDateString("en-CA", {
-    timeZone: "America/Chicago",
-  });
+  const { timezone: tz2 } = await getUserLocationContext(userName);
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: tz2 });
   const { rows } = await query<MydayEntry>(
     `SELECT id, entry_date, content, created_at, updated_at
      FROM myday_entries

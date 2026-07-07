@@ -65,7 +65,7 @@ async function markAlertSent(eventTitle: string, eventDate: string, eventStartIs
 // ── Clear in-memory set at midnight ──────────────────────────────────────────
 let _lastDay: string | null = null;
 function clearIfNewDay() {
-  const today = localDateStr("America/Chicago");
+  const today = localDateStr("UTC");
   if (_lastDay !== today) {
     _alertedToday.clear();
     _lastDay = today;
@@ -75,19 +75,19 @@ function clearIfNewDay() {
 // ── Per-user check ────────────────────────────────────────────────────────────
 async function checkDepartureAlertsForUser(userName: string): Promise<void> {
   const profile = await getProfile(userName).catch(() => null);
-  const tz = profile?.timezone ?? "America/Chicago";
+  const tz = profile?.timezone ?? "UTC";
   const displayName = profile?.name ?? userName;
   const homeAddress = profile?.homeAddress ?? ((profile?.rawData as CollectedData)?.homeAddress) ?? "";
   const homeLat = (profile?.homeLatitude && profile.homeLatitude !== 0 ? profile.homeLatitude : null)
     ?? (profile?.latitude && profile.latitude !== 0 ? profile.latitude : null)
-    ?? 32.7767;
+    ?? null;
   const homeLon = (profile?.homeLongitude && profile.homeLongitude !== 0 ? profile.homeLongitude : null)
     ?? (profile?.longitude && profile.longitude !== 0 ? profile.longitude : null)
-    ?? -96.7970;
+    ?? null;
 
   // If no text address, fall back to "lat,lon" — Google Maps Directions API accepts coordinates as origin.
   // This unblocks users who have GPS coordinates saved but never filled in a street address.
-  const effectiveHomeAddress = homeAddress || `${homeLat},${homeLon}`;
+  const effectiveHomeAddress = homeAddress || (homeLat !== null && homeLon !== null ? `${homeLat},${homeLon}` : "");
   if (!effectiveHomeAddress) {
     logger.warn({ userName }, "Departure check skipped — no home address or coordinates in profile");
     return;
@@ -138,6 +138,10 @@ async function checkDepartureAlertsForUser(userName: string): Promise<void> {
       continue;
     }
 
+    if (homeLat === null || homeLon === null) {
+      logger.info({ userName }, "[DepartureAlert] Skipping — no home coordinates in profile");
+      continue;
+    }
     const drive = await estimateDriveTime(location, effectiveHomeAddress, homeLat, homeLon);
     if (!drive) {
       logger.info({ event: event.summary, origin: effectiveHomeAddress, destination: location, userName }, "[DepartureAlert] Skipping event — estimateDriveTime returned null");

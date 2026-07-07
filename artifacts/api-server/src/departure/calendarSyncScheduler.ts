@@ -14,15 +14,13 @@ import { setPendingDepartureTextOffer } from "../text/textMessageComposer.js";
 // Rate-limit the "Google disconnected" push to once per user per server lifecycle.
 const _invalidGrantNotifiedUsers = new Set<string>();
 
-const TZ = "America/Chicago";
-
 async function getCompanionName(userName: string): Promise<string> {
   const profile = await getProfile(userName).catch(() => null);
   return getCompanionDisplayName(profile?.companionPersona, profile?.companionName);
 }
 
-function localDateStr(): string {
-  return new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+function localDateStr(tz = "UTC"): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: tz });
 }
 
 // ── DB helpers ─────────────────────────────────────────────────────────────────
@@ -187,8 +185,10 @@ async function getLeaveByTime(
   const eventStart = new Date(event.startIso);
   const leaveAt = computeLeaveAt(eventStart, drive.durationMinutes);
 
+  const profile2 = await getProfile(userName).catch(() => null);
+  const userTz2 = profile2?.timezone ?? "UTC";
   const leaveTimeStr = leaveAt.toLocaleTimeString("en-US", {
-    timeZone: TZ,
+    timeZone: userTz2,
     hour: "numeric",
     minute: "2-digit",
     hour12: true,
@@ -229,7 +229,9 @@ async function sendNewEventAlert(event: CalendarEvent, userName: string): Promis
 
   // Store departure info so the leave-time scheduler can fire a reminder
   if (event.id) {
-    const today = localDateStr();
+    const profSN = await getProfile(userName).catch(() => null);
+    const userTzSN = profSN?.timezone ?? "UTC";
+    const today = localDateStr(userTzSN);
     const attendeesJson = (event.attendees && event.attendees.length > 0)
       ? JSON.stringify(event.attendees)
       : null;
@@ -269,8 +271,10 @@ async function sendMovedEventAlert(
   const companionName = await getCompanionName(userName);
   const eventName = event.summary;
   const newTimeStr = event.start || "a new time";
+  const profile3 = await getProfile(userName).catch(() => null);
+  const userTz3 = profile3?.timezone ?? "UTC";
   const oldTimeStr = new Date(oldStartIso).toLocaleTimeString("en-US", {
-    timeZone: TZ,
+    timeZone: userTz3,
     hour: "numeric",
     minute: "2-digit",
     hour12: true,
@@ -344,7 +348,9 @@ async function runCalendarSyncForUser(userName: string): Promise<void> {
     return;
   }
 
-  const today = localDateStr();
+  const profCS = await getProfile(userName).catch(() => null);
+  const userTzCS = profCS?.timezone ?? "UTC";
+  const today = localDateStr(userTzCS);
   const knownEvents = await getKnownEvents(today, userName);
 
   if (knownEvents === null) return;
@@ -415,7 +421,9 @@ export async function populateCalendarSyncState(
   events: CalendarEvent[],
   userName: string
 ): Promise<void> {
-  const today = localDateStr();
+  const profP = await getProfile(userName).catch(() => null);
+  const userTzP = profP?.timezone ?? "UTC";
+  const today = localDateStr(userTzP);
   for (const event of events) {
     if (!event.id) continue;
 
@@ -441,7 +449,7 @@ export async function populateCalendarSyncState(
 // ── Departure-time alert (fires when it's time to leave) ──────────────────────
 
 async function runDepartureAlertsForUser(userName: string): Promise<void> {
-  const today = localDateStr();
+  const today = localDateStr(userTzD);
   const now = new Date();
   const nowMs = now.getTime();
 
@@ -478,8 +486,10 @@ async function runDepartureAlertsForUser(userName: string): Promise<void> {
 
     const companionName = await getCompanionName(userName);
     const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(row.event_location)}`;
-    const leaveTimeStr = new Date(row.leave_time_iso).toLocaleTimeString("en-US", {
-      timeZone: TZ, hour: "numeric", minute: "2-digit", hour12: true,
+    const profD = await getProfile(userName).catch(() => null);
+  const userTzD = profD?.timezone ?? "UTC";
+  const leaveTimeStr = new Date(row.leave_time_iso).toLocaleTimeString("en-US", {
+      timeZone: userTzD, hour: "numeric", minute: "2-digit", hour12: true,
     });
 
     // ── Text offer: look up attendees and find one with a phone ───────────────

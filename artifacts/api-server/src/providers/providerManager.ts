@@ -366,7 +366,7 @@ export async function updateProvider(
 export async function touchLastContactDate(
   id: number,
   userName: string,
-  date: string = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" })
+  date: string = new Date().toLocaleDateString("en-CA", { timeZone: "UTC" })
 ): Promise<void> {
   await query(
     `UPDATE service_providers SET last_contact_date = $1 WHERE id = $2 AND user_name = $3`,

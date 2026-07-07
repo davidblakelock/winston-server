@@ -4,10 +4,10 @@ import { getActiveUsers } from "../onboarding/onboardingManager.js";
 import { sendFcmNotification } from "../push/fcmSender.js";
 import { getProvidersWithUpcomingDue } from "./providerManager.js";
 
-const TZ = "America/Chicago";
 
 function daysUntil(nextDueDateStr: string): number {
-  const tz = "America/Chicago";
+  const { rows: profProv } = await query<{ timezone: string | null }>(`SELECT timezone FROM user_profiles WHERE user_name = $1`, [userName]).catch(() => ({ rows: [] }));
+  const tz = profProv[0]?.timezone ?? "UTC";
   const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
   const [tY, tM, tD] = today.split("-").map(Number);
   const [nY, nM, nD] = nextDueDateStr.split("-").map(Number);

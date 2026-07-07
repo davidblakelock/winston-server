@@ -21,7 +21,8 @@ import { insertUserRecord } from "../records/recordsManager.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-const TZ = "America/Chicago";
+// TZ is UTC here — reservation dates are absolute, not user-timezone-relative
+const TZ = "UTC";
 
 // ── Gmail body extraction helpers ─────────────────────────────────────────────
 

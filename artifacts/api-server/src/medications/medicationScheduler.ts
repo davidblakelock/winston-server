@@ -11,19 +11,18 @@ import {
 import { getActiveUsers } from "../onboarding/onboardingManager.js";
 import { logger } from "../lib/logger.js";
 
-const TZ = "America/Chicago";
 
 const _takenLoggedToday = new Set<string>();
 let _takenLogDay: string | null = null;
 
 function clearTakenLogIfNewDay() {
-  const today = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: user?.timezone ?? "UTC" });
   if (_takenLogDay !== today) { _takenLoggedToday.clear(); _takenLogDay = today; }
 }
 
 function getCurrentLocalTime(): string {
   return new Date().toLocaleTimeString("en-US", {
-    timeZone: TZ,
+    timeZone: user?.timezone ?? "UTC",
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,

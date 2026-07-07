@@ -84,7 +84,7 @@ function isInBlockedTime(blocked_times: BlockedTime[], date: Date): boolean {
   const days = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
   const dayName = days[date.getDay()];
   const hhMM = date.toLocaleTimeString("en-US", {
-    timeZone: "America/Chicago",
+    timeZone: userProfile?.timezone ?? "UTC",
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,

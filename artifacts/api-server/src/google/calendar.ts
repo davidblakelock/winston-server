@@ -23,7 +23,9 @@ export interface CalendarEvent {
   attendees?: Array<{ name?: string; email?: string }>;
 }
 
-const TZ = "America/Chicago";
+// TZ is the fallback default for calendar functions — per-user timezone
+// is resolved via getUserLocationContext when userName is provided.
+const TZ = "UTC"; // Fallback: UTC until user timezone is known
 
 /**
  * Convert any UTC timestamp (ISO string or Date) to a Date whose

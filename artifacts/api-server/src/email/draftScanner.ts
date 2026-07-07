@@ -138,8 +138,9 @@ async function analyzeAndDraft(
   emailDate: string,
 ): Promise<HaikuDraftResult | null> {
   const truncated = body.slice(0, 4000);
+  // Use UTC for date context in email analysis (server-side, not user-specific)
   const today = new Date().toLocaleDateString("en-US", {
-    timeZone: "America/Chicago",
+    timeZone: "UTC",
     weekday: "long", month: "long", day: "numeric", year: "numeric",
   });
 

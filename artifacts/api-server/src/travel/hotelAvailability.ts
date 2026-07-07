@@ -37,7 +37,7 @@ export interface HotelAvailabilityMatch {
 // ── Date helpers (unchanged — still used by tripPlanningManager) ──────────────
 
 function currentYear(): number {
-  return parseInt(new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago", year: "numeric" }), 10);
+  return parseInt(new Date().toLocaleDateString("en-CA", { timeZone: "UTC", year: "numeric" }), 10);
 }
 
 export function parseToISODate(raw: string | undefined): string | null {

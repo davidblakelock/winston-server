@@ -80,6 +80,7 @@ interface NewsContext {
   sportsTeams:   string[];
   interests:     string[];
   musicGenres:   string[];
+  timezone:      string;
   partner:       ProfilePerson | null;
   family:        ProfilePerson[];
 }
@@ -90,12 +91,12 @@ const FAMILY_RELS  = /^(daughter|son|child|parent|mother|father|mom|dad|brother|
 async function resolveNewsContext(userName?: string): Promise<NewsContext> {
   if (!userName) return {
     displayName: "the listener", companionName: "your companion",
-    city: "Dallas", state: "Texas",
-    sportsTeams: [], interests: [], musicGenres: [],
+    city: "", state: "",
+    sportsTeams: [], interests: [], musicGenres: [], timezone: "UTC",
     partner: null, family: [],
   };
   const profile = await getProfile(userName).catch(() => null);
-  const city    = profile?.city ?? "Dallas";
+  const city    = profile?.city ?? "";
   const raw     = (profile?.rawData ?? {}) as Record<string, unknown>;
   const people  = (raw["people"] as ProfilePerson[] | undefined) ?? [];
   const partner = people.find((p) => PARTNER_RELS.test(p.relationship)) ?? null;
@@ -104,10 +105,11 @@ async function resolveNewsContext(userName?: string): Promise<NewsContext> {
     displayName:   (profile?.name ?? userName) as string,
     companionName: (profile?.companionName as string | undefined) ?? "your companion",
     city,
-    state:         (raw["state"] as string | undefined) ?? "Texas",
+    state:         (raw["state"] as string | undefined) ?? "",
     sportsTeams:   (raw["sportsTeams"] as string[] | undefined) ?? [],
     interests:     (raw["interests"]   as string[] | undefined) ?? [],
     musicGenres:   (raw["music"]       as string[] | undefined) ?? [],
+    timezone:      profile?.timezone ?? "UTC",
     partner,
     family,
   };
@@ -118,7 +120,7 @@ async function resolveNewsContext(userName?: string): Promise<NewsContext> {
 async function fetchWatercoolerViaApify(): Promise<string> {
   const now     = new Date();
   const todayStr = now.toLocaleDateString("en-US", {
-    timeZone: "America/Chicago", weekday: "long", month: "long", day: "numeric", year: "numeric",
+    timeZone: (ctx?.timezone ?? "UTC"), weekday: "long", month: "long", day: "numeric", year: "numeric",
   });
   const currentYear = now.getFullYear();
 
@@ -208,15 +210,15 @@ async function fetchEntertainmentNews(
 ): Promise<string> {
   const now       = new Date();
   const todayStr  = now.toLocaleDateString("en-US", {
-    timeZone: "America/Chicago", weekday: "long", month: "long", day: "numeric", year: "numeric",
+    timeZone: (ctx?.timezone ?? "UTC"), weekday: "long", month: "long", day: "numeric", year: "numeric",
   });
   const cutoff    = new Date(now.getTime() - 48 * 60 * 60 * 1000);
   const cutoffStr = cutoff.toLocaleDateString("en-US", {
-    timeZone: "America/Chicago", month: "long", day: "numeric",
+    timeZone: (ctx?.timezone ?? "UTC"), month: "long", day: "numeric",
   });
   const in30days  = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
   const futureStr = in30days.toLocaleDateString("en-US", {
-    timeZone: "America/Chicago", month: "long", day: "numeric",
+    timeZone: (ctx?.timezone ?? "UTC"), month: "long", day: "numeric",
   });
 
   const likedGenres = (userMusicGenres ?? []).join(", ") || "classic rock, jazz";
@@ -262,11 +264,11 @@ async function fetchTopStoriesViaApify(userName?: string): Promise<{ text: strin
   const ctx         = await resolveNewsContext(userName);
   const now         = new Date();
   const todayStr    = now.toLocaleDateString("en-US", {
-    timeZone: "America/Chicago", weekday: "long", month: "long", day: "numeric", year: "numeric",
+    timeZone: (ctx?.timezone ?? "UTC"), weekday: "long", month: "long", day: "numeric", year: "numeric",
   });
   const yesterday   = new Date(now.getTime() - 86400000);
   const yesterdayStr = yesterday.toLocaleDateString("en-US", {
-    timeZone: "America/Chicago", weekday: "long", month: "long", day: "numeric",
+    timeZone: (ctx?.timezone ?? "UTC"), weekday: "long", month: "long", day: "numeric",
   });
   const currentYear = now.getFullYear();
 
@@ -332,11 +334,11 @@ async function fetchTopStoriesViaNewsApi(userName?: string): Promise<{ text: str
   const ctx         = await resolveNewsContext(userName);
   const now         = new Date();
   const todayStr    = now.toLocaleDateString("en-US", {
-    timeZone: "America/Chicago", weekday: "long", month: "long", day: "numeric", year: "numeric",
+    timeZone: (ctx?.timezone ?? "UTC"), weekday: "long", month: "long", day: "numeric", year: "numeric",
   });
   const yesterday   = new Date(now.getTime() - 86400000);
   const yesterdayStr = yesterday.toLocaleDateString("en-US", {
-    timeZone: "America/Chicago", weekday: "long", month: "long", day: "numeric",
+    timeZone: (ctx?.timezone ?? "UTC"), weekday: "long", month: "long", day: "numeric",
   });
   const currentYear = now.getFullYear();
 
@@ -393,11 +395,11 @@ async function fetchTopStoriesViaWebSearch(userName?: string): Promise<string> {
   const ctx         = await resolveNewsContext(userName);
   const now         = new Date();
   const todayStr    = now.toLocaleDateString("en-US", {
-    timeZone: "America/Chicago", weekday: "long", month: "long", day: "numeric", year: "numeric",
+    timeZone: (ctx?.timezone ?? "UTC"), weekday: "long", month: "long", day: "numeric", year: "numeric",
   });
   const yesterday   = new Date(now.getTime() - 86400000);
   const yesterdayStr = yesterday.toLocaleDateString("en-US", {
-    timeZone: "America/Chicago", weekday: "long", month: "long", day: "numeric",
+    timeZone: (ctx?.timezone ?? "UTC"), weekday: "long", month: "long", day: "numeric",
   });
 
   const teamsLine = ctx.sportsTeams.length > 0
@@ -563,7 +565,7 @@ export async function checkMiddayNews(userName: string): Promise<string | null> 
 
   const now      = new Date();
   const todayStr = now.toLocaleDateString("en-US", {
-    timeZone: "America/Chicago", weekday: "long", month: "long", day: "numeric",
+    timeZone: (ctx?.timezone ?? "UTC"), weekday: "long", month: "long", day: "numeric",
   });
 
   const prompt =
@@ -706,7 +708,7 @@ function formatNewsBlock(rawText: string, fetchedAt: Date): string {
   }
 
   const fetchedStr = fetchedAt.toLocaleTimeString("en-US", {
-    timeZone: "America/Chicago", hour: "numeric", minute: "2-digit", hour12: true,
+    timeZone: (ctx?.timezone ?? "UTC"), hour: "numeric", minute: "2-digit", hour12: true,
   });
 
   const sections: string[] = [];
@@ -755,7 +757,7 @@ let _motivationCache: MotivationCache | null = null;
 
 async function fetchMotivationFromClaude(userName?: string): Promise<string> {
   const now       = new Date();
-  const tz        = "America/Chicago";
+  const tz        = ctx?.timezone ?? "UTC";
   const todayStr  = now.toLocaleDateString("en-US", {
     timeZone: tz, weekday: "long", month: "long", day: "numeric", year: "numeric",
   });

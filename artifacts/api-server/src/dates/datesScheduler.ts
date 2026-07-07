@@ -12,17 +12,15 @@ import {
 } from "./datesManager.js";
 import { query } from "../db.js";
 
-const TZ = "America/Chicago";
-
 const LEAD_DAYS = [7, 2, 0]; // reminder thresholds in days before event
 
-function localDateStr(): string {
-  return new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+function localDateStr(tz = "UTC"): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: tz });
 }
 
-function localTime(): string {
+function localTime(tz = "UTC"): string {
   return new Date().toLocaleTimeString("en-US", {
-    timeZone: TZ,
+    timeZone: tz,
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
@@ -69,7 +67,7 @@ async function ensureLogTable(): Promise<void> {
 let _lastChecked: string | null = null;
 
 async function checkDateReminders(): Promise<void> {
-  const today = localDateStr();
+  const today = localDateStr(userTz);
   if (_lastChecked === today) return;
   _lastChecked = today;
 
@@ -80,6 +78,8 @@ async function checkDateReminders(): Promise<void> {
 
   for (const user of users) {
     const { userName, name: displayName, companionName } = user;
+    const { rows: profRowsD } = await query<{ timezone: string | null }>(`SELECT timezone FROM user_profiles WHERE user_name = $1`, [userName]).catch(() => ({ rows: [] }));
+    const userTz = profRowsD[0]?.timezone ?? "UTC";
     const userDisplay = displayName ?? userName;
     const companion = companionName ?? "Winston";
 
@@ -159,7 +159,7 @@ export async function startDatesScheduler(): Promise<void> {
     if (_running) return;
     _running = true;
     try {
-      if (localTime() !== "09:00") return;
+      if (localTime("UTC") !== "09:00") return;
       await checkDateReminders();
     } catch (err) {
       logger.error({ err }, "Dates scheduler error");

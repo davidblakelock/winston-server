@@ -696,7 +696,7 @@ export async function getTodayTripDay(userName = NATIVE_USER): Promise<TodayTrip
   const plans = await getActiveTripPlans(userName).catch(() => []);
   if (!plans.length) return null;
 
-  const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+  const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "UTC" });
 
   for (const plan of plans) {
     if (!plan.itinerary || !plan.start_date) continue;
@@ -707,7 +707,7 @@ export async function getTodayTripDay(userName = NATIVE_USER): Promise<TodayTrip
     for (let i = 0; i <= nights; i++) {
       const dayDate = new Date(startDate);
       dayDate.setDate(dayDate.getDate() + i);
-      const dayStr = dayDate.toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+      const dayStr = dayDate.toLocaleDateString("en-CA", { timeZone: "UTC" });
       if (dayStr === todayStr && itinerary.days[i]) {
         return {
           planId:      plan.id,

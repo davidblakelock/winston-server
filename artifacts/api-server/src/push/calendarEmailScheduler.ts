@@ -58,7 +58,7 @@ function stripQuotes(s: string): string {
 // ── Waking-hours gate ─────────────────────────────────────────────────────────
 
 function isWakingHours(user: ActiveUser): boolean {
-  const tz = user.timezone ?? "America/Chicago";
+  const tz = user.timezone ?? "UTC";
   const local = new Date().toLocaleTimeString("en-US", {
     timeZone: tz, hour: "2-digit", minute: "2-digit", hour12: false,
   });
@@ -126,7 +126,7 @@ async function recordNotified(userName: string, msgId: string): Promise<void> {
 
 async function checkUserCalendarEmail(user: ActiveUser): Promise<void> {
   const { userName } = user;
-  const tz = user.timezone ?? "America/Chicago";
+  const tz = user.timezone ?? "UTC";
 
   // ── 1. Calendar events for the next 48 hours with attendees ─────────────────
   const allEvents = await fetchWeekEvents(false, userName).catch(() => null);

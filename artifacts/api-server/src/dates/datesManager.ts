@@ -29,8 +29,8 @@ const MONTH_NAMES = [
   "July", "August", "September", "October", "November", "December",
 ];
 
-function localDateStr(d: Date): string {
-  return d.toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+function localDateStr(d: Date, tz = "UTC"): string {
+  return d.toLocaleDateString("en-CA", { timeZone: tz });
 }
 
 function daysBetween(a: Date, b: Date): number {
@@ -39,9 +39,8 @@ function daysBetween(a: Date, b: Date): number {
   return Math.round((bDay.getTime() - aDay.getTime()) / 86400000);
 }
 
-export function nextOccurrence(month: number, day: number, from: Date = new Date()): Date {
-  const tz = "America/Chicago";
-  const todayStr = localDateStr(from);
+export function nextOccurrence(month: number, day: number, from: Date = new Date(), tz = "UTC"): Date {
+  const todayStr = localDateStr(from, tz);
   const [todayY] = todayStr.split("-").map(Number);
 
   function candidate(year: number): Date {
@@ -50,7 +49,7 @@ export function nextOccurrence(month: number, day: number, from: Date = new Date
   }
 
   const thisYear = candidate(todayY);
-  const thisYearStr = localDateStr(thisYear);
+  const thisYearStr = localDateStr(thisYear, tz);
   return thisYearStr >= todayStr ? thisYear : candidate(todayY + 1);
 }
 

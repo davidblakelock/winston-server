@@ -14,11 +14,10 @@ import { getTodayHighPriorityItems, getLocalContentCity } from "./dallasContent.
 import { query } from "../db.js";
 import { getActiveUsers, type ActiveUser } from "../onboarding/onboardingManager.js";
 
-const TZ = "America/Chicago";
 const DALLAS_CITY_PATTERN = /dallas|tx|texas/i;
 
 function todayStr(): string {
-  return new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+  return new Date().toLocaleDateString("en-CA", { timeZone: "UTC" });
 }
 
 async function hasBeenSentToday(userName: string, key: string): Promise<boolean> {
@@ -131,7 +130,7 @@ export function startDallasProactiveScheduler(): void {
   // so users aren't doubled-up with content right at wake-up.
   cron.schedule("15 9 * * *", () => {
     void runDallasProactiveCheck();
-  }, { timezone: TZ });
+  });
 
   logger.info("[Dallas Proactive] Scheduler started (runs daily 9:15 AM CT)");
 }

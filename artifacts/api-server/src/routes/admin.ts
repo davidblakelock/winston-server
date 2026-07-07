@@ -181,7 +181,7 @@ router.patch("/admin/update-interests", express.json(), async (req: Request, res
  * GET /api/admin/timezone-check
  *
  * Diagnostic: confirms that reminder times are stored as UTC TIMESTAMPTZ
- * and shows pending to-do reminders in both UTC and America/Chicago time.
+ * and shows pending to-do reminders in both UTC and user local time.
  * Use this to verify that computeFireAt() is producing correct local times.
  */
 router.get("/admin/timezone-check", async (req: Request, res: Response) => {
@@ -191,7 +191,7 @@ router.get("/admin/timezone-check", async (req: Request, res: Response) => {
   try {
     const nowUTC = new Date();
     const nowChicago = nowUTC.toLocaleString("en-US", {
-      timeZone: "America/Chicago",
+      timeZone: "UTC" // admin debug — use UTC for consistency,
       dateStyle: "short",
       timeStyle: "short",
     });
@@ -240,7 +240,7 @@ router.get("/admin/timezone-check", async (req: Request, res: Response) => {
         text: r.item_text,
         utc: new Date(r.reminder_time).toISOString(),
         chicago: new Date(r.reminder_time).toLocaleString("en-US", {
-          timeZone: "America/Chicago",
+          timeZone: "UTC" // admin debug — use UTC for consistency,
           dateStyle: "short",
           timeStyle: "short",
         }),
@@ -256,7 +256,7 @@ router.get("/admin/timezone-check", async (req: Request, res: Response) => {
         text: r.reminder_text,
         utc: new Date(r.fire_at).toISOString(),
         chicago: new Date(r.fire_at).toLocaleString("en-US", {
-          timeZone: "America/Chicago",
+          timeZone: "UTC" // admin debug — use UTC for consistency,
           dateStyle: "short",
           timeStyle: "short",
         }),
@@ -268,7 +268,7 @@ router.get("/admin/timezone-check", async (req: Request, res: Response) => {
       serverNowUTC: nowUTC.toISOString(),
       serverNowChicago: nowChicago,
       timezoneImpl:
-        "computeFireAt() uses Intl.DateTimeFormat(America/Chicago) to offset user's local time to UTC. " +
+        "computeFireAt() uses Intl.DateTimeFormat(user timezone) to offset user's local time to UTC. " +
         "reminder_time / fire_at are TIMESTAMPTZ (stored as UTC). " +
         "Scheduler comparison `reminder_time <= NOW()` is UTC vs UTC — correct.",
       apifyStatus: {

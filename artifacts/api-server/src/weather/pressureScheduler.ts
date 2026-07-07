@@ -7,10 +7,10 @@
 import cron from "node-cron";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
+import { getActiveUsers } from "../onboarding/onboardingManager.js";
+import { getActiveUsers } from "../onboarding/onboardingManager.js";
 
-// Dallas coordinates (matches the morning briefing primary location)
-const DALLAS_LAT = 32.7767;
-const DALLAS_LON = -96.797;
+// Coordinates are resolved per-user from their profile
 
 export interface PressureReading {
   pressureHpa: number;
@@ -43,14 +43,14 @@ export async function ensurePressureTable(): Promise<void> {
 
 // ── Fetch from Google Weather API ─────────────────────────────────────────────
 
-async function fetchCurrentPressure(): Promise<{ hpa: number; inHg: number } | null> {
+async function fetchCurrentPressure(lat: number, lon: number): Promise<{ hpa: number; inHg: number } | null> {
   const apiKey = process.env.GOOGLE_WEATHER_API;
   if (!apiKey) {
     logger.warn("[PRESSURE] GOOGLE_WEATHER_API not configured");
     return null;
   }
 
-  const url = `https://weather.googleapis.com/v1/currentConditions:lookup?key=${apiKey}&location.latitude=${DALLAS_LAT}&location.longitude=${DALLAS_LON}&unitsSystem=IMPERIAL`;
+  const url = `https://weather.googleapis.com/v1/currentConditions:lookup?key=${apiKey}&location.latitude=${lat}&location.longitude=${lon}&unitsSystem=IMPERIAL`;
 
   try {
     const resp = await fetch(url, { signal: AbortSignal.timeout(10000) });
@@ -81,15 +81,27 @@ async function fetchCurrentPressure(): Promise<{ hpa: number; inHg: number } | n
 // ── Store reading ─────────────────────────────────────────────────────────────
 
 async function recordPressure(): Promise<void> {
-  const reading = await fetchCurrentPressure();
-  if (!reading) return;
-
-  await query(
-    `INSERT INTO pressure_readings (pressure_hpa, pressure_inhg) VALUES ($1, $2) RETURNING id`,
-    [reading.hpa, reading.inHg]
-  );
-
-  logger.info({ hpa: reading.hpa, inHg: reading.inHg }, "[PRESSURE] Reading saved");
+  const users = await getActiveUsers().catch(() => []);
+  for (const user of users) {
+    const { rows } = await query<{ last_known_lat: number | null; last_known_lon: number | null }>(
+      `SELECT last_known_lat, last_known_lon FROM user_profiles WHERE user_name = $1`,
+      [user.userName]
+    ).catch(() => ({ rows: [] }));
+    const lat = rows[0]?.last_known_lat;
+    const lon = rows[0]?.last_known_lon;
+    if (lat == null || lon == null) {
+      logger.info({ userName: user.userName }, "[PRESSURE] Skipping — no coordinates in profile");
+      continue;
+    }
+    const reading = await fetchCurrentPressure(lat, lon);
+    if (!reading) continue;
+    await query(
+      `INSERT INTO pressure_readings (pressure_hpa, pressure_inhg) VALUES ($1, $2) RETURNING id`,
+      [reading.hpa, reading.inHg]
+    );
+    logger.info({ hpa: reading.hpa, inHg: reading.inHg, userName: user.userName }, "[PRESSURE] Reading saved");
+    break; // Only one reading needed for pressure delta (all users share atmospheric data)
+  }
 }
 
 // ── Scheduler (every 2 hours) ─────────────────────────────────────────────────

@@ -14,7 +14,7 @@ import cron from "node-cron";
 import { logger } from "../lib/logger.js";
 import { query } from "../db.js";
 
-const TZ = "America/Chicago";
+// Archiver uses UTC — archived record dates are absolute
 
 async function archiveOldRecords(): Promise<void> {
   try {
@@ -36,7 +36,7 @@ export function startRecordsArchiver(): void {
   cron.schedule("0 3 * * *", async () => {
     logger.info("[RecordsArchiver] Daily archive run triggered");
     await archiveOldRecords();
-  }, { timezone: TZ });
+  });
 
   logger.info("[RecordsArchiver] Scheduler started — daily at 3am CT");
 }

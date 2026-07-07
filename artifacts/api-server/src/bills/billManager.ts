@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
+import { getUserLocationContext } from "../lib/userTimezone.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -47,13 +48,12 @@ function defaultLeadDays(freq: Frequency): number {
 }
 
 // ── Next due date computation ─────────────────────────────────────────────────
-export function computeNextDueDate(bill: Bill, from: Date = new Date()): Date {
-  const tz = "America/Chicago";
+export function computeNextDueDate(bill: Bill, from: Date = new Date(), tz = "UTC"): Date {
   const todayStr = from.toLocaleDateString("en-CA", { timeZone: tz });
   const [todayY, todayM, todayD] = todayStr.split("-").map(Number);
 
   function clampDay(year: number, month: number, day: number): Date {
-    // Use noon UTC so that toLocaleDateString("America/Chicago") always returns
+    // Use noon UTC so that toLocaleDateString always returns
     // the correct calendar date — midnight UTC would be the previous evening CDT.
     const maxDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
     return new Date(Date.UTC(year, month - 1, Math.min(day, maxDay), 12));
@@ -93,17 +93,16 @@ export function computeNextDueDate(bill: Bill, from: Date = new Date()): Date {
   return clampDay(todayY, todayM, bill.dueDay);
 }
 
-function formatDueDateLabel(d: Date): string {
+function formatDueDateLabel(d: Date, tz = "UTC"): string {
   return d.toLocaleDateString("en-US", {
-    timeZone: "America/Chicago",
+    timeZone: tz,
     weekday: undefined,
     month: "long",
     day: "numeric",
   });
 }
 
-function daysBetween(a: Date, b: Date): number {
-  const tz = "America/Chicago";
+function daysBetween(a: Date, b: Date, tz = "UTC"): number {
   // Compare Chicago calendar dates, not raw UTC timestamps, so midnight-hour
   // wall-clock differences don't shift the count by ±1.
   const aStr = a.toLocaleDateString("en-CA", { timeZone: tz });
@@ -276,8 +275,7 @@ query(`ALTER TABLE financial_obligations ADD COLUMN IF NOT EXISTS paid_through_d
 
 // Returns the start of the current unpaid window: 7 days before the next
 // monthly due date. paidThroughDate >= this date means "paid this cycle."
-export function computeCycleStartDate(bill: Bill, now: Date = new Date()): string {
-  const tz = "America/Chicago";
+export function computeCycleStartDate(bill: Bill, now: Date = new Date(), tz = "UTC"): string {
   const todayStr = now.toLocaleDateString("en-CA", { timeZone: tz });
   const [todayY, todayM] = todayStr.split("-").map(Number);
 
@@ -321,7 +319,8 @@ export async function markBillPaid(
   billName: string,
   userName = NATIVE_STORED_NAME
 ): Promise<void> {
-  const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+  const { timezone: tz } = await getUserLocationContext(userName);
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
   // Log the payment
   await query(
     `INSERT INTO bill_payment_log (user_name, bill_id, bill_name, paid_date)
@@ -367,7 +366,8 @@ export interface ExtractedBill {
 export async function extractBillFromMessage(
   message: string
 ): Promise<ExtractedBill | null> {
-  const now = new Date().toLocaleString("en-US", { timeZone: "America/Chicago" });
+  // Use UTC for extraction context — timezone not user-specific here
+  const now = new Date().toLocaleString("en-US", { timeZone: "UTC" });
 
   const result = await anthropic.messages.create({
     model: "claude-haiku-4-5-20251001",

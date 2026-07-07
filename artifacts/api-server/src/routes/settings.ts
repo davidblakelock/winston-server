@@ -554,7 +554,8 @@ router.post("/briefing/refresh", async (req, res) => {
     // 2. Clear today's DB record — update rather than delete so push_sent_at is preserved.
     // Deleting the row would cause a server restart during/after refresh to re-send the
     // morning push notification (push_sent_at survives in memory but not across restarts).
-    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+    const settingsTz = (await import("../lib/userTimezone.js").then(m => m.getUserLocationContext(userName))).timezone;
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: settingsTz });
     await query(
       `UPDATE morning_static_context
           SET preamble = NULL, suffix = NULL, candidate_story_keys = NULL, briefing_text = NULL, built_at = NOW()

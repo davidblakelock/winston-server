@@ -15,7 +15,7 @@ import { fetchTodayEvents, fetchTomorrowEvents } from "../google/calendar.js";
 import { getMoodForToday } from "../mood/moodManager.js";
 import { logger } from "../lib/logger.js";
 
-const DEFAULT_TZ = "America/Chicago";
+const DEFAULT_TZ = "UTC";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -91,7 +91,7 @@ export async function generateOpeningMessage(
   const profile = await getProfile(userName).catch(() => null);
   const displayName = profile?.name ?? userName;
   const city = profile?.city ?? "your city";
-  const tz = profile?.timezone ?? "America/Chicago";
+  const tz = profile?.timezone ?? DEFAULT_TZ;
   const rawData = profile?.rawData as CollectedData | null;
   const people = (rawData?.people ?? []) as ProfilePerson[];
   const familyContext = buildFamilyContext(people);

@@ -300,11 +300,11 @@ router.post("/reminders/snooze", async (req: Request, res: Response) => {
 
     const amtPart = amount ? ` of ${amount}` : "";
     const tomorrowStr = new Date(Date.now() + 86_400_000)
-      .toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
-    // fireAtCT: resolve 8 AM America/Chicago → correct UTC instant (handles DST)
+      .toLocaleDateString("en-CA", { timeZone: userProfile?.timezone ?? "UTC" });
+    // fireAt: resolve 8 AM user-local → correct UTC instant (handles DST)
     const approxUtc = new Date(`${tomorrowStr}T08:00:00.000Z`);
     const ctHour = parseInt(
-      approxUtc.toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "2-digit", hour12: false }),
+      approxUtc.toLocaleTimeString("en-US", { timeZone: userProfile?.timezone ?? "UTC", hour: "2-digit", hour12: false }),
       10
     );
     const fireAt = new Date(approxUtc.getTime() + (8 - ctHour) * 3_600_000);
@@ -313,7 +313,7 @@ router.post("/reminders/snooze", async (req: Request, res: Response) => {
       userName: NATIVE_USER,
       reminderText: `Your ${billName}${amtPart} payment — have you paid it yet?`,
       fireAt,
-      timezone: "America/Chicago",
+      timezone: userProfile?.timezone ?? "UTC",
       pushCategoryId: "bill-action",
       pushData: {
         billId,

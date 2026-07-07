@@ -3,6 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { getAuthClientForUser } from "../google/oauth.js";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
+import { getUserLocationContext } from "../lib/userTimezone.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -274,21 +275,23 @@ interface AnomalyCache {
 
 let _anomalyCache: Map<string, AnomalyCache> = new Map();
 
-function todayKey(): string {
-  return new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+async function todayKey(userName: string): Promise<string> {
+  const { timezone } = await getUserLocationContext(userName);
+  return new Date().toLocaleDateString("en-CA", { timeZone: timezone });
 }
 
 export async function getBillAnomalies(userName: string): Promise<BillAnomaly[]> {
-  const key = `${userName}:${todayKey()}`;
+  const key = `${userName}:${await todayKey(userName)}`;
   const cached = _anomalyCache.get(key);
   if (cached) return cached.data;
 
   const data = await scanForBillAnomalies(userName).catch(() => [] as BillAnomaly[]);
-  _anomalyCache.set(key, { data, dateKey: todayKey() });
+  const tKey = await todayKey(userName);
+  _anomalyCache.set(key, { data, dateKey: tKey });
 
   // Evict old entries
   for (const [k, v] of _anomalyCache.entries()) {
-    if (v.dateKey !== todayKey()) _anomalyCache.delete(k);
+    if (v.dateKey !== tKey) _anomalyCache.delete(k);
   }
 
   return data;

@@ -382,7 +382,7 @@ router.post("/medications/snooze-reminder", express.json({ limit: "1mb" }), asyn
       userName,
       reminderText: "Have you taken your medications?",
       fireAt,
-      timezone: "America/Chicago",
+      timezone: userProfile?.timezone ?? "UTC",
       pushCategoryId: "medication-action",
       pushData: {
         notificationType: "medication",

@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { addProfileItem } from "../profile/profileManager.js";
+import { getUserLocationContext } from "../lib/userTimezone.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -79,7 +80,7 @@ export async function saveMemory(
   companionName?: string | null,
   userName?: string | null
 ): Promise<boolean> {
-  const tz = "America/Chicago";
+  const { timezone: tz } = userName ? await getUserLocationContext(userName) : { timezone: "UTC" };
   const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
 
   const summary = await generateMemorySummary(history, companionName, userName);
@@ -138,8 +139,7 @@ export async function getRecentMemories(days = 7): Promise<ConversationMemory[]>
 export function formatMemoriesForContext(memories: ConversationMemory[]): string {
   if (memories.length === 0) return "";
 
-  const tz = "America/Chicago";
-  const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "UTC" });
 
   const FOLLOWUP_CUTOFF_DAYS = 5; // 120 hours
 
@@ -235,7 +235,7 @@ export async function searchTranscripts(
 
     return rows.map((r) => ({
       date: r.created_at.toLocaleDateString("en-US", {
-        month: "short", day: "numeric", year: "numeric", timeZone: "America/Chicago",
+        month: "short", day: "numeric", year: "numeric", timeZone: "UTC",
       }),
       role: r.role,
       excerpt: r.content.slice(0, 350) + (r.content.length > 350 ? "…" : ""),

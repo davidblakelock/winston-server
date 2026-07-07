@@ -49,7 +49,7 @@ export function startTodoReminderScheduler(): void {
 
         // Timezone note: reminder_time is stored as TIMESTAMPTZ (UTC).
         // computeFireAt() in chat.ts uses Intl.DateTimeFormat to convert
-        // the user's local time (America/Chicago) to UTC before storing.
+        // the user's local time to UTC before storing.
         // The comparison `reminder_time <= NOW()` is therefore always in UTC
         // on both sides — timezone handling is correct.
         logger.info(
@@ -59,7 +59,7 @@ export function startTodoReminderScheduler(): void {
             user: item.user_name,
             reminderTimeUTC: new Date(item.reminder_time).toISOString(),
             reminderTimeChicago: new Date(item.reminder_time).toLocaleString("en-US", {
-              timeZone: "America/Chicago",
+              timeZone: reminder.timezone ?? "UTC",
               dateStyle: "short",
               timeStyle: "short",
             }),

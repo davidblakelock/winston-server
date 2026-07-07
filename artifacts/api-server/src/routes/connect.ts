@@ -729,12 +729,13 @@ router.post("/connect/groups/:id/find-time", async (req: Request, res: Response)
       cursor.setUTCDate(cursor.getUTCDate() + 1)
     ) {
       // Skip Sundays (0) — keep Mon–Sat; adjust to taste
-      const ctDate = new Date(cursor.toLocaleString("en-US", { timeZone: "America/Chicago" }));
+      const userTzConn = userProfile?.timezone ?? "UTC";
+      const ctDate = new Date(cursor.toLocaleString("en-US", { timeZone: userTzConn }));
       if (ctDate.getDay() === 0) continue;
 
       // CT midnight of this day
-      const ctDateStr = cursor.toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
-      const ctParts = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", timeZoneName: "shortOffset" })
+      const ctDateStr = cursor.toLocaleDateString("en-CA", { timeZone: (userProfile?.timezone ?? "UTC") });
+      const ctParts = new Intl.DateTimeFormat("en-US", { timeZone: userTzConn, timeZoneName: "shortOffset" })
         .formatToParts(cursor);
       const offsetStr = ctParts.find((p) => p.type === "timeZoneName")?.value ?? "GMT-5";
       const offsetHours = parseInt(offsetStr.replace("GMT", "") || "-5", 10);
@@ -764,7 +765,7 @@ router.post("/connect/groups/:id/find-time", async (req: Request, res: Response)
           const startDt = new Date(slotStart);
           const endDt = new Date(slotEnd);
           const label = startDt.toLocaleString("en-US", {
-            timeZone: "America/Chicago",
+            timeZone: (userProfile?.timezone ?? "UTC"),
             weekday: "long",
             month: "short",
             day: "numeric",
@@ -839,7 +840,7 @@ router.post("/connect/groups/:id/propose-time", async (req: Request, res: Respon
 
     const startDt = new Date(start);
     const label = startDt.toLocaleString("en-US", {
-      timeZone: "America/Chicago",
+      timeZone: (userProfile?.timezone ?? "UTC"),
       weekday: "long",
       month: "long",
       day: "numeric",
@@ -916,7 +917,7 @@ router.post("/connect/groups/:id/confirm-time", async (req: Request, res: Respon
     const startDt = new Date(start);
     const endDt = new Date(end);
     const label = startDt.toLocaleString("en-US", {
-      timeZone: "America/Chicago",
+      timeZone: (userProfile?.timezone ?? "UTC"),
       weekday: "long",
       month: "long",
       day: "numeric",

@@ -638,7 +638,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const { message: rawMessage, history: rawHistory = [], isAutoGreeting = false, deviceId = null, winddownRequest = false, context: requestContext = null, timezone: rawTimezone = null } = req.body;
   const timezone: string = (typeof rawTimezone === 'string' && rawTimezone.trim().length > 0)
     ? rawTimezone.trim()
-    : 'America/Chicago'; // Server-side fallback only — client always sends timezone via Intl.DateTimeFormat
+    : 'UTC'; // Server-side fallback only — client always sends timezone via Intl.DateTimeFormat
   // Isolated contexts: messages are NOT saved to chat_messages (main chat history).
   // trip-planning has its own trip_plans table.
   // journal entries belong on the My Life screen only, not the main chat.
@@ -1135,8 +1135,8 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     // Expected total delivery time: ~8-10 s (vs ~38 s before).
     const deliveryNow = new Date();
     const homeAddress = userProfile?.homeAddress ?? "";
-    const primaryLat = userProfile?.latitude ?? 32.7767;
-    const primaryLon = userProfile?.longitude ?? -96.7970;
+    const primaryLat = userProfile?.latitude ?? null;
+    const primaryLon = userProfile?.longitude ?? null;
     const t0 = Date.now();
 
     req.log.info("Fetching live email and calendar for morning briefing delivery");

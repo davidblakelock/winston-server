@@ -14,6 +14,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
+import { getUserLocationContext } from "../lib/userTimezone.js";
 import { logger } from "../lib/logger.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
 
@@ -172,7 +173,8 @@ export async function runDotConnector(userName: string): Promise<void> {
   if (dcRateRows.length > 0) return;
 
   const profile = await getProfile(userName).catch(() => null);
-  const city    = profile?.city ?? "Dallas";
+  const { timezone: lcTz, city: lcCity } = await getUserLocationContext(userName);
+  const city    = profile?.city ?? lcCity ?? "";
   const raw     = (profile?.rawData ?? {}) as Record<string, unknown>;
   const interests = (raw["interests"] as string[] | undefined) ?? [];
   const firstName = (profile?.name ?? userName).split(" ")[0];
@@ -204,7 +206,7 @@ export async function runDotConnector(userName: string): Promise<void> {
     .slice(0, 30)
     .map((c) => {
       const date = new Date(c.captured_at).toLocaleDateString("en-US", {
-        timeZone: "America/Chicago", month: "short", day: "numeric",
+        timeZone: lcTz, month: "short", day: "numeric",
       });
       return `• [${date}, ${c.context}] ${c.content}`;
     })
@@ -315,7 +317,7 @@ export async function runPatternObservation(userName: string): Promise<void> {
     .slice(0, 30)
     .map((c) => {
       const date = new Date(c.captured_at).toLocaleDateString("en-US", {
-        timeZone: "America/Chicago", month: "short", day: "numeric",
+        timeZone: lcTz, month: "short", day: "numeric",
       });
       return `• [${date}, ${c.context}] ${c.content}`;
     })
@@ -420,7 +422,7 @@ export async function getWeeklyGift(userName: string): Promise<string | null> {
   const captureLines = captures
     .map((c) => {
       const date = new Date(c.captured_at).toLocaleDateString("en-US", {
-        timeZone: "America/Chicago", weekday: "short", month: "short", day: "numeric",
+        timeZone: lcTz, weekday: "short", month: "short", day: "numeric",
       });
       return `• [${date}, ${c.context}] ${c.content}`;
     })
@@ -499,7 +501,7 @@ export async function generateAndStoreAnnualLetter(userName: string): Promise<st
   const captureLines = yearCaptures
     .map((c) => {
       const date = new Date(c.captured_at).toLocaleDateString("en-US", {
-        timeZone: "America/Chicago", month: "long", day: "numeric",
+        timeZone: lcTz, month: "long", day: "numeric",
       });
       return `• [${date}, ${c.context}] ${c.content}`;
     })

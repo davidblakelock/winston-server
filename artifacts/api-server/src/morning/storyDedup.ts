@@ -14,6 +14,7 @@
 
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
+import { getUserLocationContext } from "../lib/userTimezone.js";
 
 export async function initBriefingStoriesTable(): Promise<void> {
   await query(`
@@ -64,7 +65,8 @@ export async function getSeenHeadlines(userName: string, days = 3): Promise<Set<
 
 export async function logBriefingStories(userName: string, rawHeadlines: string[]): Promise<void> {
   if (!rawHeadlines.length) return;
-  const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+  const { timezone } = await getUserLocationContext(userName);
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: timezone });
   let logged = 0;
   for (const raw of rawHeadlines) {
     const key = normalizeKey(raw);

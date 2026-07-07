@@ -1,7 +1,7 @@
 import { query } from "../db.js";
 
-function ctDateKey(): string {
-  return new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+function ctDateKey(tz = "UTC"): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: tz });
 }
 
 // ── Startup migrations ─────────────────────────────────────────────────────────
@@ -299,7 +299,7 @@ export function clearStaticBriefingContext(userName: string): void {
 function isBuiltInMorningWindow(builtAtMs: number): boolean {
   const hourCT = parseInt(
     new Date(builtAtMs).toLocaleTimeString("en-US", {
-      timeZone: "America/Chicago",
+      timeZone: "America/Chicago", // Server process is in CT — briefing generation window
       hour: "2-digit",
       hour12: false,
     }),
@@ -341,7 +341,7 @@ export async function loadStaticContextFromDb(userName: string): Promise<boolean
     // ALWAYS restore push-sent state — this prevents double-sending regardless
     // of whether the briefing content itself is considered fresh.
     if (row.push_sent_at) {
-      const sentDate = new Date(row.push_sent_at).toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+      const sentDate = new Date(row.push_sent_at).toLocaleDateString("en-CA", { timeZone: "UTC" });
       if (sentDate === today) {
         _pushSentDone.set(userName, today);
         console.log(`[BriefingCache] Push already sent today for ${userName} — restored from DB`);
@@ -360,7 +360,7 @@ export async function loadStaticContextFromDb(userName: string): Promise<boolean
     // news; that stale content must not be cached as the morning briefing.
     // The morning scheduler will regenerate fresh content at 05:40 CT.
     if (!isBuiltInMorningWindow(builtAt)) {
-      console.log(`[BriefingCache] Briefing for ${userName} built outside morning window (${new Date(builtAt).toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour12: false })} CT) — discarding content, will regenerate`);
+      console.log(`[BriefingCache] Briefing for ${userName} built outside morning window (${new Date(builtAt).toLocaleTimeString("en-US", { timeZone: "UTC", hour12: false })} UTC) — discarding content, will regenerate`);
       return false;
     }
 

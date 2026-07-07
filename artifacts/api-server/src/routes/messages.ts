@@ -54,7 +54,7 @@ router.get("/messages/search", async (req: Request, res: Response) => {
       role: r.role,
       excerpt: r.content.slice(0, 400),
       date: r.created_at.toLocaleDateString("en-US", {
-        month: "short", day: "numeric", year: "numeric", timeZone: "America/Chicago",
+        month: "short", day: "numeric", year: "numeric", timeZone: "UTC",
       }),
     }));
 

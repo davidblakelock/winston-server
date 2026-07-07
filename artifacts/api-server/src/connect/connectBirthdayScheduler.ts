@@ -12,10 +12,8 @@ import { getActiveUsers } from "../onboarding/onboardingManager.js";
 import { sendFcmNotification } from "../push/fcmSender.js";
 import { query } from "../db.js";
 
-const TZ = "America/Chicago";
-
-function todayStr(): string {
-  return new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+function todayStr(tz = "UTC"): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: tz });
 }
 
 function parseMD(dateStr: string): { month: number; day: number } | null {
@@ -25,9 +23,8 @@ function parseMD(dateStr: string): { month: number; day: number } | null {
   return null;
 }
 
-function daysUntilAnnual(month: number, day: number): number {
-  const tz = "America/Chicago";
-  const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
+function daysUntilAnnual(month: number, day: number, tz = "UTC"): number {
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: tz }); // tz from param
   const [tY, tM, tD] = today.split("-").map(Number);
 
   const thisYear = new Date(Date.UTC(tY, month - 1, day, 12));
@@ -55,7 +52,7 @@ interface ConnectionRow {
 let _lastCheckedDate: string | null = null;
 
 async function checkBirthdayAlerts(): Promise<void> {
-  const today = todayStr();
+  const today = todayStr(userTz);
   if (_lastCheckedDate === today) return;
   _lastCheckedDate = today;
 
@@ -63,6 +60,8 @@ async function checkBirthdayAlerts(): Promise<void> {
 
   for (const { userName } of users) {
     try {
+      const { rows: profRows } = await query<{ timezone: string | null }>(`SELECT timezone FROM user_profiles WHERE user_name = $1`, [userName]).catch(() => ({ rows: [] }));
+      const userTz = profRows[0]?.timezone ?? "UTC";
       const { rows } = await query<ConnectionRow>(
         `SELECT
            wc.id,
@@ -89,7 +88,7 @@ async function checkBirthdayAlerts(): Promise<void> {
         if (row.date_of_birth) {
           const md = parseMD(row.date_of_birth);
           if (md) {
-            const days = daysUntilAnnual(md.month, md.day);
+            const days = daysUntilAnnual(md.month, md.day, userTz);
             if (days >= 0 && days <= 7) {
               const daysLabel =
                 days === 0 ? "today" : days === 1 ? "tomorrow" : `in ${days} days`;
@@ -113,7 +112,7 @@ async function checkBirthdayAlerts(): Promise<void> {
           if (!kd.date || !kd.label) continue;
           const md = parseMD(kd.date);
           if (!md) continue;
-          const days = daysUntilAnnual(md.month, md.day);
+          const days = daysUntilAnnual(md.month, md.day, userTz);
           if (days >= 0 && days <= 7) {
             const daysLabel =
               days === 0 ? "today" : days === 1 ? "tomorrow" : `in ${days} days`;
@@ -138,7 +137,7 @@ async function checkBirthdayAlerts(): Promise<void> {
 
 export function startConnectBirthdayScheduler(): void {
   const startHour = parseInt(
-    new Date().toLocaleTimeString("en-US", { timeZone: TZ, hour: "2-digit", hour12: false }),
+    new Date().toLocaleTimeString("en-US", { timeZone: "UTC", hour: "2-digit", hour12: false }),
     10
   );
   if (startHour >= 9) {
@@ -151,7 +150,6 @@ export function startConnectBirthdayScheduler(): void {
       try { await checkBirthdayAlerts(); }
       catch (err) { logger.error({ err }, "[ConnectBirthday] scheduler error"); }
     },
-    { timezone: TZ }
   );
 
   logger.info("[ConnectBirthday] Scheduler started (daily 9 AM CT)");

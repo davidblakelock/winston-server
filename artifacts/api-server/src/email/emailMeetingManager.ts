@@ -256,8 +256,9 @@ export async function detectMeetingRequests(
   if (candidates.length === 0) return [];
 
   const now = new Date();
+  // UTC date context for meeting detection (server-side scan, not user-timezone-specific)
   const todayStr = now.toLocaleDateString("en-US", {
-    timeZone: "America/Chicago",
+    timeZone: "UTC",
     weekday: "long",
     year: "numeric",
     month: "long",

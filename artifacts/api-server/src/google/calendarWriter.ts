@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { getUserLocationContext } from "../lib/userTimezone.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -34,28 +35,30 @@ export interface ParsedDeleteEvent {
 
 export type ParsedCalendarOp = ParsedCreateEvent | ParsedModifyEvent | ParsedDeleteEvent;
 
-function getTodayStr(): string {
+function getTodayStr(tz = "UTC"): string {
   return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Chicago",
+    timeZone: tz,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
   }).format(new Date());
 }
 
-function getDayOfWeek(): string {
+function getDayOfWeek(tz = "UTC"): string {
   return new Date().toLocaleDateString("en-US", {
-    timeZone: "America/Chicago",
+    timeZone: tz,
     weekday: "long",
   });
 }
 
 export async function parseCalendarOperation(
   message: string,
-  action: "create" | "modify" | "delete"
+  action: "create" | "modify" | "delete",
+  userName?: string
 ): Promise<ParsedCalendarOp | null> {
-  const today = getTodayStr();
-  const dayOfWeek = getDayOfWeek();
+  const { timezone } = userName ? await getUserLocationContext(userName) : { timezone: "UTC" };
+  const today = getTodayStr(timezone);
+  const dayOfWeek = getDayOfWeek(timezone);
 
   const schemaByAction: Record<string, string> = {
     create: `{
@@ -87,7 +90,7 @@ export async function parseCalendarOperation(
 }`,
   };
 
-  const prompt = `Today is ${dayOfWeek}, ${today} (America/Chicago timezone).
+  const prompt = `Today is ${dayOfWeek}, ${today} (user local time).
 
 The user wants to ${action} a calendar event. Extract the details from their message and return ONLY a valid JSON object matching this schema:
 

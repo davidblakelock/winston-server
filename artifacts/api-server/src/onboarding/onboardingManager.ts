@@ -762,7 +762,7 @@ export const VOICE_PREVIEW_TEXT =
 
 function getCurrentDateTimeBlock(): string {
   const now = new Date();
-  const tz = "America/Chicago";
+  const tz = "UTC"; // onboarding date tracking uses server UTC
   const dayName = now.toLocaleDateString("en-US", { timeZone: tz, weekday: "long" });
   const monthName = now.toLocaleDateString("en-US", { timeZone: tz, month: "long" });
   const day = now.toLocaleDateString("en-US", { timeZone: tz, day: "numeric" });

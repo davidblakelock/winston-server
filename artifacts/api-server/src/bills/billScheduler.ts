@@ -12,14 +12,13 @@ import {
   type UpcomingBill,
 } from "./billManager.js";
 
-const TZ = "America/Chicago";
+// TZ is resolved per-user from profile; UTC used for startup hour check
 
-function getLocalDateString(): string {
-  return new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+function getLocalDateString(tz = "UTC"): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: tz });
 }
 
-function daysBetween(a: Date, b: Date): number {
-  const tz = "America/Chicago";
+function daysBetween(a: Date, b: Date, tz = "UTC"): number {
   const aStr = a.toLocaleDateString("en-CA", { timeZone: tz });
   const bStr = b.toLocaleDateString("en-CA", { timeZone: tz });
   const [aY, aM, aD] = aStr.split("-").map(Number);
@@ -27,9 +26,9 @@ function daysBetween(a: Date, b: Date): number {
   return Math.round((Date.UTC(bY, bM - 1, bD) - Date.UTC(aY, aM - 1, aD)) / 86400000);
 }
 
-function formatDueDateLabel(d: Date): string {
+function formatDueDateLabel(d: Date, tz = "UTC"): string {
   return d.toLocaleDateString("en-US", {
-    timeZone: TZ,
+    timeZone: tz,
     month: "long",
     day: "numeric",
   });
@@ -38,7 +37,7 @@ function formatDueDateLabel(d: Date): string {
 let _lastCheckedDate: string | null = null;
 
 async function checkBillReminders(): Promise<void> {
-  const today = getLocalDateString();
+  const today = getLocalDateString(userTz);
   if (_lastCheckedDate === today) return;
   _lastCheckedDate = today;
 
@@ -49,6 +48,8 @@ async function checkBillReminders(): Promise<void> {
 
   for (const user of users) {
     const { userName } = user;
+    const profile2 = await getProfile(userName).catch(() => null);
+    const userTz = profile2?.timezone ?? "UTC";
     const bills = await getBills(userName).catch(() => []);
     if (!bills.length) continue;
 
@@ -72,7 +73,7 @@ async function checkBillReminders(): Promise<void> {
       }
 
       const nextDueDate = computeNextDueDate(bill, now);
-      const daysUntil = daysBetween(now, nextDueDate);
+      const daysUntil = daysBetween(now, nextDueDate, userTz);
 
       // Only notify within the lead window
       if (daysUntil < 0 || daysUntil > bill.reminderLeadDays) continue;
@@ -103,7 +104,7 @@ async function checkBillReminders(): Promise<void> {
         ...bill,
         nextDueDate,
         daysUntilDue: daysUntil,
-        dueDateLabel: formatDueDateLabel(nextDueDate),
+        dueDateLabel: formatDueDateLabel(nextDueDate, userTz),
         isPaid: false,
         isOverdue: daysUntil < 0,
       };
@@ -139,7 +140,7 @@ async function checkBillReminders(): Promise<void> {
 export function startBillScheduler(): void {
   // Run once at startup if already past 9 AM CT
   const startHour = parseInt(
-    new Date().toLocaleTimeString("en-US", { timeZone: TZ, hour: "2-digit", hour12: false }),
+    new Date().toLocaleTimeString("en-US", { timeZone: "UTC", hour: "2-digit", hour12: false }),
     10
   );
   if (startHour >= 9) {

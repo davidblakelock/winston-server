@@ -19,7 +19,7 @@ export interface ScheduledEpisode {
   airedAt?: string; // ISO timestamp from TVmaze airstamp — used for 48-hour staleness check
 }
 
-function localYMD(date: Date, tz = "America/Chicago"): string {
+function localYMD(date: Date, tz = "UTC"): string {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: tz,
     year: "numeric",

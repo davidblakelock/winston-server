@@ -131,15 +131,14 @@ export interface AssembleMorningActionsInput {
 
 // ── Upcoming dates check ───────────────────────────────────────────────────────
 
-const TZ = "America/Chicago";
-
-function nowInCT(): Date {
-  return new Date(new Date().toLocaleString("en-US", { timeZone: TZ }));
+function nowLocal(tz = "UTC"): Date {
+  return new Date(new Date().toLocaleString("en-US", { timeZone: tz }));
 }
 
 export async function checkUpcomingDates(userName: string): Promise<MorningAction[]> {
   try {
-    const today = nowInCT();
+    // Use server UTC for date comparison — birthday dates are calendar dates, not user-tz-specific
+  const today = nowLocal("UTC");
     const results: MorningAction[] = [];
 
     const { rows } = await query<{

@@ -6,10 +6,9 @@ import { logger } from "../lib/logger.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-const TZ = "America/Chicago";
 
 function nowInChicago(): Date {
-  return new Date(new Date().toLocaleString("en-US", { timeZone: TZ }));
+  return new Date(new Date().toLocaleString("en-US", { timeZone: user?.timezone ?? "UTC" }));
 }
 
 function getHourInChicago(): number {
@@ -21,7 +20,7 @@ function getDayNameInChicago(): string {
 }
 
 async function getStarterCountToday(userName: string): Promise<number> {
-  const today = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: user?.timezone ?? "UTC" });
   const { rows } = await query<{ count: string }>(
     `SELECT COALESCE(count, 0) as count FROM conversation_starter_log
      WHERE user_name = $1 AND starter_date = $2`,
@@ -31,7 +30,7 @@ async function getStarterCountToday(userName: string): Promise<number> {
 }
 
 async function incrementStarterCount(userName: string): Promise<void> {
-  const today = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: user?.timezone ?? "UTC" });
   await query(
     `INSERT INTO conversation_starter_log (user_name, starter_date, count, last_sent_at)
      VALUES ($1, $2, 1, NOW())
@@ -109,7 +108,7 @@ export function startConversationStarterScheduler(): void {
     } catch (err) {
       logger.warn({ err }, "Conversation starter scheduler error");
     }
-  }, { timezone: TZ });
+  });
 
   logger.info("Conversation starter scheduler started");
 }

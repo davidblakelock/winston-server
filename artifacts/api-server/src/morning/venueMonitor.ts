@@ -19,7 +19,7 @@ import { getActiveUsers, getProfile, type CollectedData } from "../onboarding/on
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
 const anthropic = new Anthropic();
-const TZ = "America/Chicago";
+// Venue monitor uses UTC for scheduling; city comes from user profile
 
 // ── Music-interest patterns (shared defaults — ideally stored in user profile) ─
 
@@ -400,7 +400,8 @@ export async function runVenueScan(userName = NATIVE_STORED_NAME): Promise<strin
   }
 
   const profile = await getProfile(userName).catch(() => null);
-  const city = profile?.city ?? "Dallas";
+  const city = profile?.city ?? null;
+  if (!city) { logger.info({ userName }, "[VenueMonitor] Skipping — no city in profile"); return ""; }
   const companionName = profile?.companionName ?? "Your Companion";
 
   logger.info("[VenueMonitor] Scanning venues for upcoming music events");
@@ -466,7 +467,7 @@ export function getVenueConcerts(): ConcertItem[] {
  * Build the briefing block from an already-filtered list of concerts.
  * Used by dedup integration to re-format after removing seen events.
  */
-export function buildVenueConcertsBlock(concerts: ConcertItem[], userName = NATIVE_STORED_NAME, city = "Dallas"): string {
+export function buildVenueConcertsBlock(concerts: ConcertItem[], userName = NATIVE_STORED_NAME, city = ""): string {
   return formatConcertsForBriefing(concerts, DEFAULT_VENUES, userName, city);
 }
 
@@ -481,7 +482,7 @@ export function startVenueMonitorScheduler(): void {
     } catch {
       void runVenueScan(NATIVE_STORED_NAME);
     }
-  }, { timezone: TZ });
+  });
 
   logger.info("[VenueMonitor] Scheduler started (runs daily 5:30 AM CT)");
 }

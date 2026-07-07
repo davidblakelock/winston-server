@@ -187,7 +187,7 @@ function formatPointChange(symbol: string, change: number): string {
 
 function formatFetchTime(date: Date): string {
   return date.toLocaleTimeString("en-US", {
-    timeZone: "America/Chicago",
+    timeZone: MARKETS_TZ,
     hour: "numeric",
     minute: "2-digit",
     hour12: true,
@@ -228,7 +228,7 @@ const FIXED_HOLIDAYS: Array<{ month: number; day: number; name: string }> = [
 ];
 
 function isFederalHoliday(date: Date): string | null {
-  const ct = new Date(date.toLocaleString("en-US", { timeZone: "America/Chicago" }));
+  const ct = new Date(date.toLocaleString("en-US", { timeZone: MARKETS_TZ }));
   for (const h of FIXED_HOLIDAYS) {
     if (ct.getMonth() === h.month && ct.getDate() === h.day) return h.name;
   }
@@ -236,7 +236,7 @@ function isFederalHoliday(date: Date): string | null {
 }
 
 function getPreviousTradingDayLabel(now: Date): { label: string; wasHoliday: boolean } {
-  const ct = new Date(now.toLocaleString("en-US", { timeZone: "America/Chicago" }));
+  const ct = new Date(now.toLocaleString("en-US", { timeZone: MARKETS_TZ }));
   const dow = ct.getDay(); // 0=Sun, 1=Mon...6=Sat
   let prevDate = new Date(ct);
 
@@ -263,7 +263,7 @@ function getPreviousTradingDayLabel(now: Date): { label: string; wasHoliday: boo
 
 export function buildMarketsBlock(snapshot: MarketSnapshot, now?: Date): string {
   const effectiveNow = now ?? new Date();
-  const ct = new Date(effectiveNow.toLocaleString("en-US", { timeZone: "America/Chicago" }));
+  const ct = new Date(effectiveNow.toLocaleString("en-US", { timeZone: MARKETS_TZ }));
   const dow = ct.getDay(); // 0=Sun, 6=Sat
   const isWeekend = dow === 0 || dow === 6;
 
