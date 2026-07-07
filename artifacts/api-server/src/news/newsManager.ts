@@ -317,7 +317,7 @@ async function fetchTopStoriesViaApify(userName?: string): Promise<{ text: strin
     `Today is ${todayStr}. Yesterday was ${yesterdayStr}. The current year is ${currentYear}.\n\n` +
     `Here are real, scraped headlines from Reuters and AP News:\n\n${headlinesBlock}\n\n` +
     `Select the 2 most genuinely important stories for a morning briefing. Prioritise:\n` +
-    `• Major world events, significant US political or economic developments, important technology or science news\n` +
+    `• Major world events, significant US political or economic developments, major business or economic news\n` +
     `• Broad relevance — NOT regional, NOT routine, NOT filler\n` +
     `• ${teamsLine}\n\n` +
     `NO LOCAL NEWS. NO WEATHER. NO STOCK MARKET. NO FILLER.\n\n` +
@@ -378,7 +378,7 @@ async function fetchTopStoriesViaNewsApi(userName?: string): Promise<{ text: str
     `Today is ${todayStr}. Yesterday was ${yesterdayStr}. The current year is ${currentYear}.\n\n` +
     `Here are real headlines from Reuters and AP News:\n\n${headlinesBlock}\n\n` +
     `Select the 2 most genuinely important stories for a morning briefing. Prioritise:\n` +
-    `• Major world events, significant US political or economic developments, important technology or science news\n` +
+    `• Major world events, significant US political or economic developments, major business or economic news\n` +
     `• Broad relevance — NOT regional, NOT routine, NOT filler\n` +
     `• ${teamsLine}\n\n` +
     `NO LOCAL NEWS. NO WEATHER. NO STOCK MARKET. NO FILLER.\n\n` +
@@ -435,11 +435,11 @@ async function fetchTopStoriesViaWebSearch(userName?: string): Promise<string> {
     `• REJECT any story from ${currentYear - 1} or earlier\n` +
     `• If you cannot confirm a publication date of ${todayStr} or ${yesterdayStr}, skip and find another\n\n` +
     `SELECTION CRITERIA — pick the 2 stories that are:\n` +
-    `• Genuinely on people's lips today — major world events, significant US political or economic developments, important technology or science news\n` +
+    `• Genuinely on people's lips today — major world events, significant US political or economic developments, major business or economic news\n` +
     `• Broad in relevance — NOT regional, NOT routine, NOT filler\n` +
     `• Stories that actually matter to an intelligent adult starting their day\n\n` +
     `${teamsLine}\n\n` +
-    `NO LOCAL NEWS. NO SPORTS. NO WEATHER. NO STOCK MARKET UPDATES. NO FILLER.\n\n` +
+    `NO LOCAL NEWS. NO SPORTS. NO WEATHER. NO STOCK MARKET UPDATES. NO AI COMPANY ANNOUNCEMENTS. NO TECH PRODUCT RELEASES. NO FILLER.\n\n` +
     `For EACH of the 2 stories, write exactly TWO sentences:\n` +
     `• Sentence 1: What happened — specific, factual, with names and numbers where relevant. Max 25 words.\n` +
     `• Sentence 2: Why it matters — the real-world consequence, what it signals, or why a listener should care. Max 25 words.\n\n` +

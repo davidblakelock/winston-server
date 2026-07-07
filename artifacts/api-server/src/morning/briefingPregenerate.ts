@@ -18,9 +18,7 @@ import { getPendingFollowUps, buildRecommendationFollowUpBlock } from "../recomm
 import { collectSundayData, buildSundaySummaryBlock } from "../sundaySummary/sundaySummaryManager.js";
 import { getPendingPersonalFollowups, buildPersonalFollowupsBlock } from "../followups/followupManager.js";
 import { setStaticBriefingContext, setCachedBriefing } from "./briefingCache.js";
-import { fetchDallasContent, getDallasItems, buildDallasBlock } from "./dallasContent.js";
-import { fetchBestLocalEvent } from "../events/apifyEventsManager.js";
-import { runVenueScan, getVenueConcerts, buildVenueConcertsBlock, getFavoriteVenueNames } from "./venueMonitor.js";
+import { runVenueScan, getVenueConcerts, buildVenueConcertsBlock } from "./venueMonitor.js";
 import {
   getSeenHeadlines,
   isDuplicate,
@@ -34,7 +32,7 @@ import { getMydayEntries, type MydayEntry } from "../myday/mydayManager.js";
 import {
   getPendingSuggestion, markSuggestionSurfaced,
   getPendingObservation, markObservationSurfaced,
-  getWeeklyGift, generateAndStoreAnnualLetter, getStoredAnnualLetter,
+  getWeeklyGift, generateAndStoreAnnualLetter,
 } from "../lifeCaptures/lifeCapturesManager.js";
 import { buildCalendarEmailCorrelations, formatCorrelationNote, type CalendarEmailCorrelation } from "./calendarEmailIntelligence.js";
 import { getOrdersForBriefing } from "../orders/ordersManager.js";
@@ -236,54 +234,83 @@ function buildPeopleContextBlock(people: PersonEntry[], displayName?: string): s
   );
 }
 
-function buildNarrativeBriefingInstruction(city: string, companionName: string | null, displayName?: string, intentionQuestion?: string, settings?: UserSettings): string {
-  const companion = companionName ?? "your companion";
-  const firstName = displayName?.split(" ")[0] ?? "there";
-  const closingQuestion = intentionQuestion ?? `What's the one thing that would make today feel worthwhile?`;
+function buildNarrativeBriefingInstruction(
+  city: string,
+  companionName: string | null,
+  displayName?: string,
+  intentionQuestion?: string,
+  settings?: { briefingStoic?: boolean; briefingWeather?: boolean; briefingCalendar?: boolean; briefingEmail?: boolean; briefingNews?: boolean }
+): string {
+  const name = displayName ?? "the user";
+  const companion = companionName ?? "Winston";
 
   return `
 
-[MORNING BRIEFING — DELIVERY INSTRUCTION]
+[MORNING RUN DOWN — DELIVERY INSTRUCTIONS]
 
-Write a morning briefing for ${firstName}. Deliver it as a knowledgeable, trusted AI companion who knows this person's life and has chosen the most relevant parts to surface this morning. Conversational, direct, and warm.
+You are ${companion}, delivering ${name}'s Morning Run Down. This is a spoken briefing — natural, warm, direct. Under 90 seconds total. No bullet points. No headers. Flowing conversational prose only.
 
-OPENING: Start with "Good morning, ${firstName}" and go directly into what leads this morning.
+Work through each section below IN ORDER. Skip any section where no data is present in your context.
 
-STRUCTURE — FOLLOW THIS ORDER EVERY MORNING: Cover each section below in the sequence listed.
+${settings?.briefingWeather !== false ? `
+SECTION 1 — WEATHER
+One sentence only. Current conditions and today's high. Example: "It's going to be a warm one — high of 89 and partly cloudy."
+Do NOT mention the forecast beyond today. Do NOT give rain percentages unless rain is likely.
+` : ""}
 
-SECTION 1 — WEATHER: ${settings?.briefingWeather === false ? "⚠ WEATHER TOGGLED OFF — Skip entirely, do not mention weather." : "Cover ONLY if the [VERIFIED — Weather] block exists AND conditions are genuinely actionable (severe weather, dangerous heat, high rain chance with outdoor plans). One sentence maximum. Skip entirely if conditions are unremarkable. Never list temperature, humidity, UV, AQI, pollen, or wind speed in isolation — one actionable sentence or nothing."}
+${settings?.briefingCalendar !== false ? `
+SECTION 2 — THE DAY AHEAD
+Speak the calendar naturally — what's on today, in order. No departure times. No traffic speculation.
+If the calendar is clear, say so warmly in one sentence and move on.
+Example: "You've got three things today — dentist at 10, lunch with Fred at noon, and your Cooper Fitness class at 4."
+` : ""}
 
-SECTION 2 — CALENDAR: ${settings?.briefingCalendar === false ? "⚠ CALENDAR TOGGLED OFF — Skip calendar entirely." : "Cover TODAY's events from the [VERIFIED — Google Calendar API] block. Quote event titles letter-for-letter exactly as written — no paraphrasing or enriching with profile context. Where a departure time is shown, state it directly. If calendar is NOT CONNECTED, say exactly: \"I can't pull your calendar right now — Google may need to be reconnected in the app settings.\" If there are no events today, say so briefly in one sentence. Never mention events on dates other than today."}
+${settings?.briefingEmail !== false ? `
+SECTION 3 — INBOX
+Give the shape of the inbox only — total count, how many are urgent, how many need replies.
+Do NOT read subjects. Do NOT summarize content. Do NOT name senders.
+Example: "Eight emails came in overnight. One looks urgent — flagged it for you. Two will probably need replies when you're ready."
+If the inbox is clear, say so in one sentence.
+` : ""}
 
-SECTION 3 — TO-DO: ${settings?.briefingTodos === false ? "⚠ TO-DO TOGGLED OFF — Skip entirely." : "If the [VERIFIED — To-Do List] block has items, mention the most actionable ones naturally. One sentence maximum. Skip if empty or irrelevant."}
+${settings?.briefingNews !== false ? `
+SECTION 4 — WHAT'S MAKING NEWS
+Deliver 3 to 4 headlines only. Network morning show style — what the major news programs are leading with right now.
+CRITICAL RULES — NO EXCEPTIONS:
+- State the headline only. No commentary. No analysis. No opinion.
+- No political framing. No editorializing. Just the fact of what happened.
+- No technology product announcements. No AI company news unless it is genuinely world-altering.
+- If a story requires context, give one neutral factual sentence max.
+Example: "Here's what's making news this morning: [headline]. [headline]. [headline]."
+` : ""}
 
-SECTION 4 — EMAIL: ${settings?.briefingEmail === false ? "⚠ EMAIL TOGGLED OFF — Skip entirely." : "Surface only what needs attention or action from the [VERIFIED — Gmail] block. Skip promotions, shipping notifications, auto-confirmations. If inbox is clear, one warm sentence. If Google is not connected, one brief sentence. Offer to help act on anything that matters."}
+SECTION 5 — SPORTS
+Only deliver this section if sports score data appears in your context above.
+Scores and results only. No analysis. No commentary.
+Example: "Cowboys beat the 49ers 34 to 17. Rangers lost to Houston 3 to 2."
+If no sports data is present, skip this section entirely and do not mention it.
 
-SECTION 5 — NEWS: ${settings?.briefingNews === false ? "⚠ NEWS TOGGLED OFF — Skip entirely, do not mention any news." : "CORE REQUIREMENT — cover exactly 2–3 significant national or international news stories from the [VERIFIED — Web Search News] block. For each: what happened (specific, factual) and why it matters. Never invent headlines — only use what is in the verified block. If the block is absent or empty, say exactly: \"I'm not seeing any news this morning — I'll check back in.\" Do not silently omit news. Local " + city + " news is Section 7 — do NOT repeat stories here."}
+SECTION 6 — THE STOIC CLOSE
+This is the most important part of the Morning Run Down. Deliver it with care and without rushing.
 
-SECTION 6 — FEEL-GOOD STORY: ${settings?.briefingFunny === false ? "⚠ FEEL-GOOD STORY TOGGLED OFF — Skip the Watercooler Story." : "MANDATORY, NON-NEGOTIABLE — The [Watercooler Story] block MUST appear in every briefing. No exceptions, regardless of length. Two beats: what happened, then what makes it remarkable. Genuine delight — not a throwaway line. If you are running long, cut from other sections — never this one."}
+Step A — Read the Stoic quote exactly as written in your context. Do not paraphrase.
+Attribute it: "Marcus Aurelius wrote..." or "Epictetus said..." or "Seneca wrote..."
 
-SECTION 7 — LOCAL EVENTS: ${settings?.briefingEvents === false ? "⚠ LOCAL EVENTS TOGGLED OFF — Skip entirely." : "From the [What's Happening in " + city + "] block only. If the block has real items, deliver them naturally. If it says no items found, say exactly: \"Nothing new on the " + city + " front this morning.\" Never use training data to supplement."}
+Step B — In one or two sentences, translate it into today's language.
+Not interpretation. Translation. Make it land in 2026.
+If there is something in ${name}'s day today that connects naturally to the quote, make that connection briefly.
+If there is no natural connection, do not force one. Just make the quote clear and relevant.
 
-AFTER SECTIONS 1–7 — ADDITIONAL CONTEXT (weave in naturally where relevant, before the closing):
-• Bills — if [VERIFIED — Bills Database — Due in Next 3 Days] block has items, name them. Skip entirely if absent.
-• Birthdays and dates — if any birthday or anniversary is within 7 days, mention it specifically. Skip if none.
-• TV shows — ONLY if [TV Shows — New Episodes] block is present. Never reference any show from memory or profile if that block is absent.
-• ${firstName}'s Life — if [${firstName}'s Life — Recent Entries] has entries, reference them naturally when they connect to something in today's briefing.
-• Concerts and venue events — from venue concerts block if present. Skip if nothing upcoming.
-• Sunday summary — if [Sunday Summary] block is present, weave in briefly.
-• Packages/orders — mention any out-for-delivery items from the [VERIFIED — Orders Out for Delivery Today] block.
+Step C — The invitation. Speak it warmly and without hurry:
+"Take a few minutes before your day starts. Your My Life screen is there if you want to capture anything — a thought, an intention, something worth remembering. Or just be still for a moment."
 
-DATA ACCURACY RULES — NO EXCEPTIONS:
-• VERIFIED blocks are ground truth. State their content as fact without softening or hedging.
-• Calendar: reproduce event titles letter-for-letter exactly as written. NEVER infer who an event is with or enrich it with profile context. If you want to connect profile context, frame it as a question, never a statement.
-• Sports: ONLY from a [VERIFIED — Live Sports] block. If absent, do not guess or reference any score.
-• News: ONLY from verified news blocks. Never invent.
-• If data is not in a verified block, do not reference it.
+Then stop. Do not add anything after the invitation. No sign-off. No "Have a great day." The silence is intentional.
 
-CLOSING — THE STOIC MOMENT: ${settings?.briefingStoic === false ? "⚠ STOIC MOMENT TOGGLED OFF — End the briefing after the additional context with one warm, brief closing sentence. No thought of the day. No question." : "After covering all sections and additional context above, close the briefing using the [VERIFIED — Stoic Moment] block. Follow that block's delivery instructions exactly. Do not add any other closing element, question, or commentary after the Stoic Moment instruction has been completed."}
-
-  `;
+TONE THROUGHOUT:
+Warm but not effusive. Direct but not cold. Like a trusted friend who has done their homework and respects your time.
+Never say "Good morning" — start directly with weather or whatever the first available section is.
+Never end with "Have a great day" or any generic sign-off. The Stoic close is the ending.
+`;
 }
 
 // In-flight dedup for preFetchMorningBriefing — prevents multiple concurrent
@@ -400,73 +427,8 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
     const primaryLon = userProfile?.longitude ?? -96.7970;
     const homeAddress = userProfile?.homeAddress ?? "";
 
-    // ── Build city-aware local content context from profile ──────────────────
-    // Pull preferences from structured profile columns + profile_items (ongoing).
-    const VENUE_KEYWORDS = /theater|theatre|pavilion|amphitheater|arena|concert hall|performing arts|venue|auditorium|ballroom/i;
-    const RESTAURANT_KEYWORDS = /restaurant|bar|cafe|coffee|diner|bistro|grill|kitchen|eatery|cantina|pub/i;
-    const NOT_NEIGHBORHOOD = new RegExp([VENUE_KEYWORDS.source, RESTAURANT_KEYWORDS.source].join("|"), "i");
 
-    // Venues: use the authoritative in-memory list from venueMonitor (avoids startup
-    // race where briefing pre-gen runs before the DB seeding of favorite_venues completes),
-    // then supplement with any additional venue-like places saved by the user at runtime.
-    const runtimeVenuePlaces = allProfileItems
-      .filter((p) => p.category === "places" && VENUE_KEYWORDS.test(p.name + " " + (p.detail ?? "")))
-      .map((p) => p.name);
-    const profileVenues = [
-      ...getFavoriteVenueNames(),
-      ...runtimeVenuePlaces,
-    ].filter((v, i, a) => a.indexOf(v) === i); // dedupe
-
-    // Artists: profile_items.music category (individual artist entries)
-    const profileArtists = allProfileItems
-      .filter((p) => p.category === "interests")
-      .map((p) => p.name);
-
-    // Neighborhoods: profile places that are NOT venues or restaurants
-    const profileNeighborhoods = allProfileItems
-      .filter((p) => p.category === "places" && !NOT_NEIGHBORHOOD.test(p.name + " " + (p.detail ?? "")))
-      .map((p) => p.name);
-
-    // Favorite restaurants: structured column + profile_items.restaurants
-    const profileRestaurants = allProfileItems
-      .filter((p) => p.category === "restaurants")
-      .map((p) => p.name);
-    const structuredRestaurants = userProfile?.favoriteRestaurants
-      ? userProfile.favoriteRestaurants.split(",").map((s) => s.trim()).filter(Boolean)
-      : [];
-    const favoriteRestaurants = [
-      ...structuredRestaurants,
-      ...profileRestaurants,
-    ].filter((v, i, a) => a.indexOf(v) === i); // dedupe
-
-    // Interests/hobbies: structured column + profile_items.interests
-    const profileInterests = allProfileItems
-      .filter((p) => p.category === "interests")
-      .map((p) => p.name);
-    const allInterests = [
-      ...(userProfile?.hobbies ?? []),
-      ...profileInterests,
-    ].filter((v, i, a) => a.indexOf(v) === i);
-
-    // Sports teams: structured column (string) → split to array
-    const structuredSportsTeams = userProfile?.sportsTeams
-      ? userProfile.sportsTeams.split(",").map((s) => s.trim()).filter(Boolean)
-      : [];
-
-    const localCtx = {
-      city: primaryCity,
-      userName,
-      venues: profileVenues.slice(0, 8),
-      artists: profileArtists.slice(0, 10),
-      neighborhoods: profileNeighborhoods.slice(0, 6),
-      musicGenres: userProfile?.musicGenres ?? [],
-      interests: allInterests.slice(0, 12),
-      favoriteRestaurants: favoriteRestaurants.slice(0, 12),
-      sportsTeams: structuredSportsTeams,
-      dietaryRestrictions: [],
-    };
-
-    const [lastNightNotes, newsBlock, yesterdayEps, todayEps, sportsScores, upcomingBills, upcomingDates, sundayData, pendingFollowUps, dallasEvents, venueConcertsBlock, dailyMotivation, personalFollowUps, outForDeliveryOrders, apifyEventResult, weeklyGift, pendingObservation, annualLetter] = await Promise.all([
+    const [lastNightNotes, newsBlock, yesterdayEps, todayEps, sportsScores, upcomingBills, upcomingDates, sundayData, pendingFollowUps, venueConcertsBlock, dailyMotivation, personalFollowUps, outForDeliveryOrders, weeklyGift, pendingObservation, annualLetter] = await Promise.all([
       getLastNightNotes().catch(() => []),
       fetchMorningNews(userName).catch(() => ""),
       fetchEpisodesForDate(yesterday, watchedIds).catch(() => []),
@@ -476,12 +438,10 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
       getUpcomingDates(21, userName).catch(() => []),
       isSunday ? collectSundayData(userName).catch(() => null) : Promise.resolve(null),
       getPendingFollowUps(2, 14).catch(() => []),
-      fetchDallasContent(localCtx).catch(() => ""),
       runVenueScan().catch(() => ""),
       fetchDailyMotivation(userName).catch(() => ""),
       getPendingPersonalFollowups(userName).catch(() => []),
       getOrdersForBriefing(userName).catch(() => []),
-      fetchBestLocalEvent(primaryCity, allInterests.slice(0, 10), userName).catch(() => ({ event: null, block: "" })),
       isSunday ? getWeeklyGift(userName).catch(() => null) : Promise.resolve(null),
       getPendingObservation(userName).catch(() => null),
       isAnnualLetterDay
@@ -524,36 +484,6 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
       logger.info({ userName, removed: removedNewsHeadlines }, "[StoryDedup] Filtered duplicate news headlines");
     }
 
-    // Dallas local content: filter by headline field, rebuild block
-    const rawDallasItems = getDallasItems();
-    logger.info(
-      {
-        userName,
-        rawCount: rawDallasItems.length,
-        rawHeadlines: rawDallasItems.map((i) => i.headline).slice(0, 10),
-        dallasBlockChars: dallasEvents?.length ?? 0,
-      },
-      "[Dallas] fetchDallasContent result"
-    );
-    const filteredDallasItems = rawDallasItems.filter((item) => !isDuplicate(item.headline, seenHeadlines));
-    const removedDallasCount = rawDallasItems.length - filteredDallasItems.length;
-    logger.info(
-      {
-        userName,
-        rawCount: rawDallasItems.length,
-        filteredCount: filteredDallasItems.length,
-        removedByDedup: removedDallasCount,
-        remainingHeadlines: filteredDallasItems.map((i) => i.headline),
-      },
-      "[Dallas] After dedup"
-    );
-    const dedupedDallasBlock = buildDallasBlock(filteredDallasItems, primaryCity);
-    if (dedupedDallasBlock.trim().length === 0) {
-      console.log(`[Dallas:briefing] ✗ Block EMPTY after dedup — raw:${rawDallasItems.length}, dedup-removed:${removedDallasCount}, filtered:${filteredDallasItems.length} → injecting fallback line`);
-      logger.warn({ userName, rawCount: rawDallasItems.length, removedByDedup: removedDallasCount }, "[Dallas] Block is EMPTY after dedup — injecting fallback");
-    } else {
-      console.log(`[Dallas:briefing] ✓ Block OK — ${filteredDallasItems.length} items going into briefing`);
-    }
 
     // Venue concerts: filter by artistOrEvent + venue key, rebuild block.
     // Uses 14-day window (seenVenueHeadlines) so upcoming concerts don't re-appear daily.
@@ -575,7 +505,6 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
     // Collect all candidate story keys to log after successful briefing generation
     const candidateStoryKeys: string[] = [
       ...extractBoldHeadlines(newsBlock),                               // news headlines (pre-filter — log all that were offered)
-      ...rawDallasItems.map((i) => i.headline),                        // Dallas local
       ...rawVenueConcerts.map((c) => `${c.artistOrEvent} ${c.venue}`), // venue concerts
     ];
 
@@ -619,33 +548,6 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
       ? buildRecommendationFollowUpBlock(pendingFollowUps)
       : "";
 
-    // Use dedup-filtered Dallas block. If empty (all filtered or fetch failed),
-    // inject a fallback marker so Claude delivers the "no events" line rather than silently skipping.
-    const dallasEventsBlock = dedupedDallasBlock.trim().length > 0
-      ? dedupedDallasBlock
-      : `\n\n[What's Happening in ${primaryCity}]\nNo new local events found for today.\nCRITICAL — NO HALLUCINATION RULE: There are ZERO verified local items to report. Say exactly one sentence: "Nothing new on the ${primaryCity} front this morning." Then move on immediately. Do NOT list any restaurants, events, news stories, or local content — your training data about ${primaryCity} is NOT verified and must never be used here. Do NOT say "however" or "but" and then list anything. Zero items means zero items.`;
-
-    // morningWorkoutDone is always false at pre-generation time (5 AM) — no workout
-    // has completed yet. This is computed from live calendar at delivery time if needed.
-    const morningWorkoutDone = false;
-
-    const motivationContextBlock = (() => {
-      const tz = "America/Chicago";
-      const dayName = now.toLocaleDateString("en-US", { timeZone: tz, weekday: "long" });
-      let block = `\n\n[Morning Motivation Context]\n`;
-      block += `• Today is ${dayName}\n`;
-      if (morningWorkoutDone) block += `• MORNING WORKOUT ALREADY DONE — do NOT suggest exercise, a walk, or outdoor activity in the closing. Reference what is ahead instead.\n`;
-
-      if (dailyMotivation) {
-        // dailyMotivation is either a [Personal Override — Morning Note] block,
-        // a [VERIFIED — ZenQuotes — Today's Wisdom] block, or a plain fallback thought.
-        // Section 14 in the briefing instruction knows how to handle each.
-        block += `\n${dailyMotivation}\n`;
-      } else {
-        block += `No external quote or personal override today — generate a warm, specific 2-3 sentence motivating thought from scratch. Reference the user's interests or something from their day.`;
-      }
-      return block;
-    })();
 
     const profileContextBlock = buildProfileContext(
       userProfile ?? null,
@@ -704,24 +606,6 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
       markObservationSurfaced(userName, pendingObservation.id).catch(() => {});
     }
 
-    // ── Weekly gift — Sunday morning reflection ──────────────────────────────
-    const weeklyGiftBlock = isSunday && weeklyGift
-      ? `\n\n[${_lifeSectionName} — Weekly Reflection]\n` +
-        `At the very end of the Sunday briefing, after the thought of the day and before the closing question, ` +
-        `deliver this as one warm flowing paragraph — word for word:\n"${weeklyGift}"\n` +
-        `Deliver it as a thoughtful friend sharing what they noticed. No commentary. Just the paragraph.`
-      : "";
-
-    // ── Annual letter — Jan 1 (or configured date) ───────────────────────────
-    let annualLetterBlock = "";
-    if (isAnnualLetterDay && annualLetter) {
-      annualLetterBlock =
-        `\n\n[${_lifeSectionName} — Annual Letter]\n` +
-        `Before the thought of the day, tell ${_briefingFirstName} you have something for them. ` +
-        `Then deliver this letter — reading it warmly and naturally, as if you wrote it yourself:\n\n${annualLetter}\n\n` +
-        `Pause briefly after. Then continue to the thought of the day.`;
-    }
-
 
     // All data blocks assembled — build the suffix.
     // The briefing instruction is the final element so Claude's marching orders
@@ -734,11 +618,6 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
       ? `\n\n[Upcoming Dates]\n` + upcomingDateActions.map((a) => `• ${a.title}: ${a.detail}`).join("\n")
       : "";
 
-    // Apify event discovery block (one curated local event from Eventbrite/Ticketmaster)
-    const apifyEventBlock = apifyEventResult.block ?? "";
-    if (apifyEventBlock) {
-      logger.info({ userName, event: apifyEventResult.event?.name }, "[Briefing] Apify local event included");
-    }
 
     const todayTrip = await getTodayTripDay(userName).catch(() => null);
     const tripDayBlock = todayTrip ? buildTripDayBlock(todayTrip) : "";
@@ -747,16 +626,32 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
     const _bWeather = userSettings?.briefingWeather !== false ? weatherContextBlock : "";
     const _bTodos   = userSettings?.briefingTodos   !== false ? todoBlock : "";
     const _bNews    = userSettings?.briefingNews    !== false ? dedupedNewsBlock : "";
-    const _bEvents  = userSettings?.briefingEvents  !== false ? dallasEventsBlock : "";
     const stoicBlock = userSettings?.briefingStoic !== false && stoicEntry
       ? buildStoicBlock(stoicEntry, intentionQuestion ?? `What's the one thing that would make today feel worthwhile?`)
       : "";
 
-    const suffix = _bWeather + tripDayBlock + ordersBlock + _bTodos + tvMorningBlock + billsMorningBlock + datesBlock +
-      sundaySummaryBlock + recFollowUpBlock + personalFollowUpsBlock +
-      mydayBlock + lifeSuggestionBlock + observationBlock + weeklyGiftBlock + annualLetterBlock + crossDomainBlock +
-      _bNews + _bEvents + apifyEventBlock + dedupedVenueConcertsBlock + motivationContextBlock +
-      onboardingNudgeBlock + stoicBlock +
+    const _bSports = sportsBlock || "";
+
+    const suffix =
+      _bWeather +
+      tripDayBlock +
+      ordersBlock +
+      _bTodos +
+      tvMorningBlock +
+      billsMorningBlock +
+      datesBlock +
+      sundaySummaryBlock +
+      recFollowUpBlock +
+      personalFollowUpsBlock +
+      mydayBlock +
+      lifeSuggestionBlock +
+      observationBlock +
+      crossDomainBlock +
+      _bNews +
+      _bSports +
+      dedupedVenueConcertsBlock +
+      onboardingNudgeBlock +
+      stoicBlock +
       buildNarrativeBriefingInstruction(primaryCity, userProfile?.companionName ?? null, userProfile?.name ?? undefined, intentionQuestion, userSettings ?? undefined);
 
     // Log which static sections have data
@@ -768,12 +663,10 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
 
       "news": dedupedNewsBlock.length > 0,
       "sports": !!(sportsScores),
-      "local_dallas": filteredDallasItems.length > 0 ? `${filteredDallasItems.length} items` : `EMPTY (fallback — raw:${rawDallasItems.length})`,
       "music_events": filteredVenueConcerts.length > 0 ? `${filteredVenueConcerts.length} concerts` : "EMPTY",
       "birthdays": upcomingDates.length > 0,
       "bills_3day": upcomingBills.length > 0,
       "my_day_entries": mydayFiltered.length > 0 ? `${mydayFiltered.length} entries` : false,
-      "motivation": true,
       "sunday_special": isSunday,
     };
     logger.info({ userName, sections: sectionLog }, "[BRIEFING SECTIONS] Static data availability per section (email+calendar fetched live at delivery)");

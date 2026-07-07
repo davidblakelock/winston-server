@@ -1,4 +1,16 @@
 /**
+ * dallasContent.ts — MARKED FOR REPLACEMENT
+ *
+ * This module is no longer called from the morning briefing pipeline.
+ * Local content is now handled by src/localContent/localContentScanner.ts
+ * which is city-agnostic and delivers content as proactive push notifications
+ * rather than embedding it in the morning briefing.
+ *
+ * This file is kept for reference during the full local content rebuild.
+ * Do not add new features here. Do not call fetchDallasContent() from new code.
+ */
+
+/**
  * Local content system — fetches city-specific news and events for any user.
  *
  * City is passed in from the briefing pre-generator via UserLocalContext, pulled
