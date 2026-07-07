@@ -19,6 +19,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { getProfile } from "../onboarding/onboardingManager.js";
+import { getUserLocationContext } from "../lib/userTimezone.js";
 import { getPeople, type KeyPerson } from "../people/peopleManager.js";
 import { getCachedWeather } from "../weather/weatherCache.js";
 import { fetchTodayEvents, chicagoDateStr, toChicagoTime } from "../google/calendar.js";
@@ -126,7 +127,8 @@ async function fetchGoodStory(seenFg: Set<string>): Promise<GoodStory | null> {
 
 async function logFgStory(userName: string, title: string): Promise<void> {
   try {
-    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+    const { timezone } = await getUserLocationContext(userName);
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: timezone });
     const key = FG_PREFIX + normalizeKey(title);
     await query(
       `INSERT INTO daily_briefing_stories (user_name, headline, story_date)
@@ -140,7 +142,8 @@ async function logFgStory(userName: string, title: string): Promise<void> {
 
 async function getSeenFgStories(userName: string): Promise<Set<string>> {
   try {
-    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+    const { timezone } = await getUserLocationContext(userName);
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: timezone });
     const { rows } = await query<{ headline: string }>(
       `SELECT headline FROM daily_briefing_stories
        WHERE user_name = $1
@@ -217,15 +220,15 @@ async function getUpcomingTrips(userName: string): Promise<TripInfo[]> {
 async function buildCalendarData(
   userName: string,
   homeAddress: string,
-  primaryLat: number,
-  primaryLon: number
+  primaryLat: number | null,
+  primaryLon: number | null
 ): Promise<{ events: Array<{ time: string; title: string; leaveBy?: string }>; }> {
+  const { timezone: TZ } = await getUserLocationContext(userName);
   const events = await fetchTodayEvents(userName).catch(() => null);
   if (!events || events.length === 0) return { events: [] };
 
   const now = new Date();
   const twoHoursOut = new Date(now.getTime() + 2 * 60 * 60 * 1000);
-  const TZ = "America/Chicago";
 
   const result: Array<{ time: string; title: string; leaveBy?: string }> = [];
 
@@ -246,7 +249,7 @@ async function buildCalendarData(
           location: event.location,
           description: event.description,
         });
-        if (location) {
+        if (location && primaryLat !== null && primaryLon !== null) {
           try {
             const drive = await Promise.race([
               estimateDriveTime(location, homeAddress, primaryLat, primaryLon),
@@ -294,10 +297,11 @@ export async function generateFreshBriefing(userName: string): Promise<string> {
   // ── Step 1: Profile (needed first to drive parallel fetches) ─────────────
   const profile = await getProfile(userName).catch(() => null);
 
+  const timezone     = profile?.timezone ?? "UTC";
   const firstName    = profile?.name?.split(" ")[0] ?? "there";
-  const primaryCity  = (profile?.city ?? "Dallas").trim();
-  const primaryLat   = profile?.latitude  ?? 32.7767;
-  const primaryLon   = profile?.longitude ?? -96.7970;
+  const primaryCity  = profile?.city?.trim() ?? "";
+  const primaryLat   = profile?.latitude  ?? null;
+  const primaryLon   = profile?.longitude ?? null;
   const homeAddress     = profile?.homeAddress ?? "";
   const hobbies         = profile?.hobbies ?? [];
   const musicGenres     = profile?.musicGenres ?? [];
@@ -337,7 +341,7 @@ export async function generateFreshBriefing(userName: string): Promise<string> {
     serpEventsResult,
     goodStoryFetchReady,  // placeholder — needs seenFg first
   ] = await Promise.allSettled([
-    getCachedWeather(primaryCity, primaryLat, primaryLon),
+    getCachedWeather(primaryCity, primaryLat, primaryLon, timezone),
     fetchAndSummarizeEmails(10, undefined, userName),
     getOrdersForBriefing(userName),
     getStoicForUser(userName),
@@ -367,7 +371,7 @@ export async function generateFreshBriefing(userName: string): Promise<string> {
   const [goodStoryResult, newsResult, ...familyWeatherResults] = await Promise.allSettled([
     fetchGoodStory(seenFg),
     // News: fresh fetch via web_search (handled in Claude call below)
-    fetchNewsViaWebSearch(),
+    fetchNewsViaWebSearch(timezone),
     // Family city weather
     ...familyCityEntries.map(async (fc) => {
       const coords = await geocodeCity(fc.city);
@@ -415,7 +419,7 @@ export async function generateFreshBriefing(userName: string): Promise<string> {
       if (fw.startDate) {
         // Trip destination
         const dateLabel = new Date(fw.startDate + "T12:00:00").toLocaleDateString("en-US", {
-          timeZone: "America/Chicago", month: "long", day: "numeric",
+          timeZone: timezone, month: "long", day: "numeric",
         });
         lines.push(`TRIP: In ${fw.city} where you're headed ${dateLabel}, it's ${fw.weather.temp}° and ${fw.weather.condition}.`);
       } else if (fw.name) {
@@ -512,7 +516,7 @@ export async function generateFreshBriefing(userName: string): Promise<string> {
 
   const now = new Date();
   const todayLabel = now.toLocaleDateString("en-US", {
-    timeZone: "America/Chicago", weekday: "long", month: "long", day: "numeric", year: "numeric",
+    timeZone: timezone, weekday: "long", month: "long", day: "numeric", year: "numeric",
   });
 
   const dataSections = [
@@ -609,10 +613,10 @@ function filterActionableEmails(emails: EmailSummary[]): EmailSummary[] {
 
 // ── News via Claude web_search ────────────────────────────────────────────────
 
-async function fetchNewsViaWebSearch(): Promise<string> {
+async function fetchNewsViaWebSearch(tz = "UTC"): Promise<string> {
   try {
     const today = new Date().toLocaleDateString("en-US", {
-      timeZone: "America/Chicago", weekday: "long", month: "long", day: "numeric", year: "numeric",
+      timeZone: tz, weekday: "long", month: "long", day: "numeric", year: "numeric",
     });
     const resp = await anthropic.messages.create({
       model: MODEL_HAIKU,

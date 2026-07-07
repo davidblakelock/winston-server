@@ -316,10 +316,11 @@ export function buildDepartureAlertMessage(
   driveMinutes: number,
   destination: string,
   hasTrafficData: boolean,
-  displayName = "there"
+  displayName = "there",
+  tz = "UTC"
 ): string {
   const eventTimeStr = eventStart.toLocaleTimeString("en-US", {
-    timeZone: "America/Chicago",
+    timeZone: tz,
     hour: "numeric",
     minute: "2-digit",
     hour12: true,
@@ -327,7 +328,7 @@ export function buildDepartureAlertMessage(
 
   const leaveAt = computeLeaveAt(eventStart, driveMinutes);
   const leaveTimeStr = leaveAt.toLocaleTimeString("en-US", {
-    timeZone: "America/Chicago",
+    timeZone: tz,
     hour: "numeric",
     minute: "2-digit",
     hour12: true,

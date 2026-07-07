@@ -1,4 +1,5 @@
 import { query } from "../db.js";
+import { getUserLocationContext } from "../lib/userTimezone.js";
 
 export interface WinddownSettings {
   enabled: boolean;
@@ -116,7 +117,7 @@ export async function updateSettings(
 }
 
 export async function hasFiredToday(userName: string): Promise<boolean> {
-  const tz = "America/Chicago";
+  const { timezone: tz } = await getUserLocationContext(userName);
   const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
   const { rows } = await query(
     `SELECT 1 FROM winddown_state WHERE user_name = $1 AND trigger_date = $2`,
@@ -126,7 +127,7 @@ export async function hasFiredToday(userName: string): Promise<boolean> {
 }
 
 export async function markFiredToday(userName: string): Promise<void> {
-  const tz = "America/Chicago";
+  const { timezone: tz } = await getUserLocationContext(userName);
   const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
   // RETURNING is required so this routes through exec_dml_ret (not exec_sql which can't handle DML).
   await query(
@@ -140,7 +141,7 @@ export async function markFiredToday(userName: string): Promise<void> {
 }
 
 export async function isWinddownActive(userName: string): Promise<boolean> {
-  const tz = "America/Chicago";
+  const { timezone: tz } = await getUserLocationContext(userName);
   const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
   const { rows } = await query<{ active: boolean }>(
     `SELECT active FROM winddown_state WHERE user_name = $1 AND trigger_date = $2`,
@@ -150,7 +151,7 @@ export async function isWinddownActive(userName: string): Promise<boolean> {
 }
 
 export async function setWinddownActive(userName: string, active: boolean): Promise<void> {
-  const tz = "America/Chicago";
+  const { timezone: tz } = await getUserLocationContext(userName);
   const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
   await query(
     `UPDATE winddown_state SET active = $1 WHERE user_name = $2 AND trigger_date = $3 RETURNING id`,
@@ -194,7 +195,7 @@ export function formatNotesForMorningBriefing(notes: WinddownNote[]): string {
 }
 
 export async function saveTonightMessage(userName: string, message: string): Promise<void> {
-  const tz = "America/Chicago";
+  const { timezone: tz } = await getUserLocationContext(userName);
   const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
   await query(
     `UPDATE winddown_state SET tonight_message = $1 WHERE user_name = $2 AND trigger_date = $3 RETURNING id`,
@@ -203,7 +204,7 @@ export async function saveTonightMessage(userName: string, message: string): Pro
 }
 
 export async function getTonightMessage(userName: string): Promise<string | null> {
-  const tz = "America/Chicago";
+  const { timezone: tz } = await getUserLocationContext(userName);
   const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
   const { rows } = await query<{ tonight_message: string | null }>(
     `SELECT tonight_message FROM winddown_state WHERE user_name = $1 AND trigger_date = $2`,
@@ -213,7 +214,7 @@ export async function getTonightMessage(userName: string): Promise<string | null
 }
 
 export async function setJournalOfferPending(userName: string, pending: boolean): Promise<void> {
-  const tz = "America/Chicago";
+  const { timezone: tz } = await getUserLocationContext(userName);
   const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
   await query(
     `UPDATE winddown_state SET journal_offer_pending = $1 WHERE user_name = $2 AND trigger_date = $3 RETURNING id`,
@@ -222,7 +223,7 @@ export async function setJournalOfferPending(userName: string, pending: boolean)
 }
 
 export async function isJournalOfferPending(userName: string): Promise<boolean> {
-  const tz = "America/Chicago";
+  const { timezone: tz } = await getUserLocationContext(userName);
   const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
   const { rows } = await query<{ journal_offer_pending: boolean }>(
     `SELECT journal_offer_pending FROM winddown_state WHERE user_name = $1 AND trigger_date = $2`,
@@ -232,7 +233,7 @@ export async function isJournalOfferPending(userName: string): Promise<boolean> 
 }
 
 export async function setJournalCaptured(userName: string, captured: boolean): Promise<void> {
-  const tz = "America/Chicago";
+  const { timezone: tz } = await getUserLocationContext(userName);
   const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
   await query(
     `UPDATE winddown_state SET journal_captured = $1 WHERE user_name = $2 AND trigger_date = $3 RETURNING id`,
@@ -241,7 +242,7 @@ export async function setJournalCaptured(userName: string, captured: boolean): P
 }
 
 export async function hasJournalCapturedTonight(userName: string): Promise<boolean> {
-  const tz = "America/Chicago";
+  const { timezone: tz } = await getUserLocationContext(userName);
   const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
   const { rows } = await query<{ journal_captured: boolean }>(
     `SELECT journal_captured FROM winddown_state WHERE user_name = $1 AND trigger_date = $2`,

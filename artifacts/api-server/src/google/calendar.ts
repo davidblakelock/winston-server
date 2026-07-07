@@ -1,6 +1,7 @@
 import { google } from "googleapis";
 import { getAuthClient, getAuthClientForUser, isInvalidGrant, GoogleInvalidGrantError } from "./oauth.js";
 import { logger } from "../lib/logger.js";
+import { getUserLocationContext } from "../lib/userTimezone.js";
 
 async function resolveAuthClient(userName?: string) {
   if (userName) return getAuthClientForUser(userName);
@@ -92,12 +93,11 @@ function isEventInPast(event: { startIso?: string; allDay: boolean }): boolean {
   return eventCT.getTime() < nowCT.getTime();
 }
 
-function formatTime(dateTime: string | null | undefined, date: string | null | undefined): string {
+function formatTime(dateTime: string | null | undefined, date: string | null | undefined, tz = TZ): string {
   if (date && !dateTime) return "all day";
   if (!dateTime) return "";
-  // Always display in 12-hour CT format (e.g. "10:30 AM")
   return new Date(dateTime).toLocaleTimeString("en-US", {
-    timeZone: TZ,
+    timeZone: tz,
     hour: "numeric",
     minute: "2-digit",
     hour12: true,
@@ -111,13 +111,22 @@ function getDayLabel(isoDate: string, todayStr: string, tomorrowStr: string): st
   return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
 }
 
-function getLocalYMD(date: Date): string {
+function getLocalYMD(date: Date, tz = TZ): string {
   return new Intl.DateTimeFormat("en-CA", {
-    timeZone: TZ,
+    timeZone: tz,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
   }).format(date);
+}
+
+function localMidnightOf(date: Date, tz: string): Date {
+  const localDateStr = getLocalYMD(date, tz);
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: tz, timeZoneName: "shortOffset" }).formatToParts(date);
+  const offsetStr = parts.find((p) => p.type === "timeZoneName")?.value ?? "GMT+0";
+  const offsetHours = parseInt(offsetStr.replace("GMT", "") || "0", 10);
+  const utcHour = String(-offsetHours).padStart(2, "0");
+  return new Date(`${localDateStr}T${utcHour}:00:00.000Z`);
 }
 
 /**
@@ -157,7 +166,8 @@ async function fetchEventsFromAllCalendars(
   timeMax: string,
   todayStr: string,
   tomorrowStr: string,
-  maxPerCalendar = 50
+  maxPerCalendar = 50,
+  tz = TZ
 ): Promise<CalendarEvent[]> {
   // getAllCalendarIds throws Error("invalid_grant") when the token is revoked.
   const calendarIds = await getAllCalendarIds(calendar);
@@ -188,8 +198,8 @@ async function fetchEventsFromAllCalendars(
           allEvents.push({
             id,
             summary: event.summary ?? "(no title)",
-            start: formatTime(event.start?.dateTime, event.start?.date),
-            end: formatTime(event.end?.dateTime, event.end?.date),
+            start: formatTime(event.start?.dateTime, event.start?.date, tz),
+            end: formatTime(event.end?.dateTime, event.end?.date, tz),
             startIso: event.start?.dateTime ?? undefined,
             endIso: event.end?.dateTime ?? undefined,
             dateLabel: getDayLabel(isoDate, todayStr, tomorrowStr),
@@ -228,24 +238,24 @@ async function fetchEventsFromAllCalendars(
 }
 
 export async function fetchTodayEvents(userName?: string): Promise<CalendarEvent[] | null> {
+  const { timezone: tz } = userName ? await getUserLocationContext(userName) : { timezone: TZ };
   const auth = await resolveAuthClient(userName);
   if (!auth) return null;
 
   const calendar = google.calendar({ version: "v3", auth });
   const now = new Date();
 
-  const todayStr = getLocalYMD(now);
-  const tomorrowStr = getLocalYMD(new Date(now.getTime() + 86400000));
+  const todayStr = getLocalYMD(now, tz);
+  const tomorrowStr = getLocalYMD(new Date(now.getTime() + 86400000), tz);
 
-  const midnight = ctMidnightOf(now);
+  const midnight = localMidnightOf(now, tz);
   const timeMin = midnight.toISOString();
   const timeMax = new Date(midnight.getTime() + 86399999).toISOString();
 
   try {
-    const events = await fetchEventsFromAllCalendars(calendar, timeMin, timeMax, todayStr, tomorrowStr, 20);
+    const events = await fetchEventsFromAllCalendars(calendar, timeMin, timeMax, todayStr, tomorrowStr, 20, tz);
     return events.filter((event) => !isEventInPast(event));
   } catch (err) {
-    // Convert generic invalid_grant signal to typed error so scheduler can self-heal
     if ((err as Error)?.message === "invalid_grant") {
       throw new GoogleInvalidGrantError(userName ?? "unknown");
     }
@@ -254,22 +264,22 @@ export async function fetchTodayEvents(userName?: string): Promise<CalendarEvent
 }
 
 export async function fetchTomorrowEvents(userName?: string): Promise<CalendarEvent[] | null> {
+  const { timezone: tz } = userName ? await getUserLocationContext(userName) : { timezone: TZ };
   const auth = await resolveAuthClient(userName);
   if (!auth) return null;
 
   const calendar = google.calendar({ version: "v3", auth });
   const now = new Date();
 
-  // Compute tomorrow's midnight and end-of-day in CT
-  const todayStr = getLocalYMD(now);
+  const todayStr = getLocalYMD(now, tz);
   const tomorrowDate = new Date(now.getTime() + 86400000);
-  const tomorrowStr = getLocalYMD(tomorrowDate);
+  const tomorrowStr = getLocalYMD(tomorrowDate, tz);
 
-  const midnightTomorrow = ctMidnightOf(tomorrowDate);
+  const midnightTomorrow = localMidnightOf(tomorrowDate, tz);
   const timeMin = midnightTomorrow.toISOString();
   const timeMax = new Date(midnightTomorrow.getTime() + 86399999).toISOString();
 
-  return fetchEventsFromAllCalendars(calendar, timeMin, timeMax, todayStr, tomorrowStr, 20);
+  return fetchEventsFromAllCalendars(calendar, timeMin, timeMax, todayStr, tomorrowStr, 20, tz);
   // Note: do NOT filter with isEventInPast — all tomorrow events are future events
 }
 
@@ -305,20 +315,21 @@ export async function fetchEventsForDate(
 }
 
 export async function fetchWeekEvents(filterPast = true, userName?: string): Promise<CalendarEvent[] | null> {
+  const { timezone: tz } = userName ? await getUserLocationContext(userName) : { timezone: TZ };
   const auth = await resolveAuthClient(userName);
   if (!auth) return null;
 
   const calendar = google.calendar({ version: "v3", auth });
   const now = new Date();
 
-  const todayStr = getLocalYMD(now);
-  const tomorrowStr = getLocalYMD(new Date(now.getTime() + 86400000));
+  const todayStr = getLocalYMD(now, tz);
+  const tomorrowStr = getLocalYMD(new Date(now.getTime() + 86400000), tz);
 
-  const midnight = ctMidnightOf(now);
+  const midnight = localMidnightOf(now, tz);
   const timeMin = midnight.toISOString();
   const timeMax = new Date(midnight.getTime() + 7 * 86400000).toISOString();
 
-  const events = await fetchEventsFromAllCalendars(calendar, timeMin, timeMax, todayStr, tomorrowStr, 50);
+  const events = await fetchEventsFromAllCalendars(calendar, timeMin, timeMax, todayStr, tomorrowStr, 50, tz);
   return filterPast ? events.filter((event) => !isEventInPast(event)) : events;
 }
 

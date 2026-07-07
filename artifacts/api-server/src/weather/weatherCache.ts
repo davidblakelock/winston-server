@@ -10,7 +10,7 @@ export interface ForecastDay {
   low: number;
   precipChance: number;
   condition: string;
-  /** True for the entry representing today in the user's local timezone (America/Chicago) */
+  /** True for the entry representing today in the user's local timezone */
   isToday?: boolean;
 }
 
@@ -78,7 +78,7 @@ interface GoogleForecastDay {
   };
 }
 
-async function fetchFromGoogle(city: string, lat: number, lon: number): Promise<CachedWeather> {
+async function fetchFromGoogle(city: string, lat: number, lon: number, tz = "UTC"): Promise<CachedWeather> {
   const apiKey = process.env.GOOGLE_WEATHER_API;
   if (!apiKey) throw new Error("GOOGLE_WEATHER_API not configured");
 
@@ -126,7 +126,7 @@ async function fetchFromGoogle(city: string, lat: number, lon: number): Promise<
 
   // Compute today's date in CT — used to set isToday on the rare case the API
   // shifts days, but the first entry will always be tomorrow (day 1).
-  const todayCT = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(new Date());
+  const todayCT = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(new Date());
 
   const mappedForecastDays: ForecastDay[] = upcoming.map((day, index) => {
     const d = day.displayDate;
@@ -142,7 +142,7 @@ async function fetchFromGoogle(city: string, lat: number, lon: number): Promise<
       // native app doesn't have to translate the weekday name itself.
       dayName = index === 0
         ? "Tomorrow"
-        : dateObj.toLocaleDateString("en-US", { timeZone: "America/Chicago", weekday: "long" });
+        : dateObj.toLocaleDateString("en-US", { timeZone: tz, weekday: "long" });
     }
     return {
       dayName,
@@ -173,7 +173,7 @@ async function fetchFromGoogle(city: string, lat: number, lon: number): Promise<
   };
 }
 
-export async function getCachedWeather(city: string, lat: number | null, lon: number | null): Promise<CachedWeather> {
+export async function getCachedWeather(city: string, lat: number | null, lon: number | null, tz = "UTC"): Promise<CachedWeather> {
   if (lat === null || lon === null) throw new Error(`[WeatherCache] No coordinates for "${city}" — skipping`);
   const key = cacheKey(lat, lon);
   const entry = weatherCache.get(key);
@@ -186,7 +186,7 @@ export async function getCachedWeather(city: string, lat: number | null, lon: nu
   }
 
   console.log(`[WeatherCache] MISS for ${city} — fetching from Google Weather API`);
-  const data = await fetchFromGoogle(city, lat, lon);
+  const data = await fetchFromGoogle(city, lat, lon, tz);
   weatherCache.set(key, { data, expiresAt: now + TTL_MS });
   return data;
 }

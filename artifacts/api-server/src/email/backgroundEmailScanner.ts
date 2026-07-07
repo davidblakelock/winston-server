@@ -27,7 +27,7 @@ import { scanReservationEmails } from "./reservationScanner.js";
 import { checkForConflict, addOneHour } from "../email/meetingScanner.js";
 import { query } from "../db.js";
 
-const TZ = "America/Chicago";
+const TZ = "UTC";
 
 // Social scan last-scan is DB-backed via social_scan_state (mirrors order_sync_state).
 // Previously in-memory, which caused re-insertion of the same emails after every restart.

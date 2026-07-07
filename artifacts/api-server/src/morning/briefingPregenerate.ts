@@ -18,6 +18,7 @@ import { getOrdersForBriefing } from "../orders/ordersManager.js";
 import { getCachedWeather } from "../weather/weatherCache.js";
 import { query } from "../db.js";
 import { getUserSettings, getStoicForUser, incrementStoicDay, buildStoicBlock, type UserSettings } from "../stoic/stoicManager.js";
+import { getUserLocationContext } from "../lib/userTimezone.js";
 
 // ── Smart calendar block with integrated departure times ──────────────────────
 // Builds a TODAY / TOMORROW / LATER THIS WEEK block where each event with a
@@ -27,14 +28,15 @@ import { getUserSettings, getStoicForUser, incrementStoicDay, buildStoicBlock, t
 export async function buildSmartCalendarBlock(
   allEvents: CalendarEvent[],
   homeAddress: string,
-  homeLat: number,
-  homeLon: number,
+  homeLat: number | null,
+  homeLon: number | null,
   emailCorrelations?: Map<string, CalendarEmailCorrelation>,
+  tz = "UTC",
 ): Promise<string> {
   if (!allEvents || allEvents.length === 0) return "";
 
   const now = new Date();
-  const TZ_LOCAL = "America/Chicago";
+  const TZ_LOCAL = tz;
   const todayStr    = chicagoDateStr(now);
   const tomorrowStr = chicagoDateStr(new Date(now.getTime() + 86_400_000));
 
@@ -53,7 +55,7 @@ export async function buildSmartCalendarBlock(
       location: event.location,
       description: event.description,
     });
-    if (!location || !homeAddress) return null;
+    if (!location || !homeAddress || homeLat === null || homeLon === null) return null;
 
     try {
       const drive = await Promise.race([
@@ -142,9 +144,8 @@ When __USER__ asks about something not in a verified block, say so in one senten
 
 `;
 
-function getCurrentDateTimeBlock(): string {
+function getCurrentDateTimeBlock(tz: string): string {
   const now = new Date();
-  const tz = "America/Chicago";
   const dayName = now.toLocaleDateString("en-US", { timeZone: tz, weekday: "long" });
   const monthName = now.toLocaleDateString("en-US", { timeZone: tz, month: "long" });
   const day = now.toLocaleDateString("en-US", { timeZone: tz, day: "numeric" });
@@ -311,9 +312,9 @@ export async function preFetchMorningBriefing(userName: string): Promise<void> {
 }
 
 // ── Onboarding nudge helpers — once per day if profile not yet complete ───────
-async function shouldShowOnboardingNudge(userName: string): Promise<boolean> {
+async function shouldShowOnboardingNudge(userName: string, tz: string): Promise<boolean> {
   try {
-    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
     const result = await query<{ last_mention_date: string }>(
       `SELECT last_mention_date::text AS last_mention_date FROM onboarding_nudge_log WHERE user_name = $1`,
       [userName]
@@ -325,9 +326,9 @@ async function shouldShowOnboardingNudge(userName: string): Promise<boolean> {
   }
 }
 
-async function markOnboardingNudgeShown(userName: string): Promise<void> {
+async function markOnboardingNudgeShown(userName: string, tz: string): Promise<void> {
   try {
-    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
     await query(
       `INSERT INTO onboarding_nudge_log (user_name, last_mention_date)
        VALUES ($1, $2)
@@ -338,10 +339,8 @@ async function markOnboardingNudgeShown(userName: string): Promise<void> {
 }
 
 async function _doBriefingPrefetch(userName: string): Promise<void> {
-  // Capture the CT date NOW, before any async work. setCachedBriefing receives this
-  // key explicitly so a briefing that starts on April 6 and finishes after midnight
-  // is NOT cached with April 7's key while containing April 6 calendar data.
-  const generationDateKey = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+  const { timezone, city: locationCity, lat: locationLat, lon: locationLon } = await getUserLocationContext(userName);
+  const generationDateKey = new Date().toLocaleDateString("en-CA", { timeZone: timezone });
   logger.info({ userName, generationDateKey }, "Pre-generating morning briefing");
   try {
     const now = new Date();
@@ -377,9 +376,9 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
     // ── Onboarding nudge — inject once per day if profile not yet complete ────
     let onboardingNudgeBlock = "";
     if (userProfile && !userProfile.onboardingCompleted) {
-      const nudgeShouldShow = await shouldShowOnboardingNudge(userName);
+      const nudgeShouldShow = await shouldShowOnboardingNudge(userName, timezone);
       if (nudgeShouldShow) {
-        await markOnboardingNudgeShown(userName);
+        await markOnboardingNudgeShown(userName, timezone);
         onboardingNudgeBlock =
           `\n\n[Onboarding Reminder — Weave in naturally near the end of briefing]\n` +
           `This user has not yet completed their profile setup. Near the end of the briefing, ` +
@@ -391,9 +390,9 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
       }
     }
 
-    const primaryCity = (userProfile?.city ?? "Dallas").trim();
-    const primaryLat = userProfile?.latitude ?? 32.7767;
-    const primaryLon = userProfile?.longitude ?? -96.7970;
+    const primaryCity = (userProfile?.city?.trim() ?? locationCity ?? "").trim();
+    const primaryLat = userProfile?.latitude ?? locationLat ?? null;
+    const primaryLon = userProfile?.longitude ?? locationLon ?? null;
     const homeAddress = userProfile?.homeAddress ?? "";
 
 
@@ -405,7 +404,7 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
     ]);
 
     // ── Weather context (fetched at pre-gen time) ─────────────────────────────
-    const weatherData = await getCachedWeather(primaryCity, primaryLat, primaryLon).catch(() => null);
+    const weatherData = await getCachedWeather(primaryCity, primaryLat, primaryLon, timezone).catch(() => null);
 
     const weatherContextBlock = weatherData
       ? `\n\n[VERIFIED — Weather — ${primaryCity}]\n` +
@@ -453,7 +452,7 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
     // and suffix (after email+calendar slot, through MASTER_BRIEFING_INSTRUCTION).
     // At delivery time, chat.ts inserts live gmailBlock + calendarBlock between them.
     const prefsBlock = buildBriefingPrefsBlock(briefingPrefs, userName);
-    const preamble = getCurrentDateTimeBlock() + "\n" + corePrompt + profileContextBlock +
+    const preamble = getCurrentDateTimeBlock(timezone) + "\n" + corePrompt + profileContextBlock +
       memoryBlock + dynamicProfileBlock + prefsBlock + notesBlock + peopleContextBlock;
 
     // ── Apply briefing toggle preferences ─────────────────────────────────────
@@ -525,7 +524,7 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
       }) ?? null;
 
       // Identify today's events for the email-to-calendar correlation search
-      const todayStr = chicagoDateStr(preNow);
+      const todayStr = new Intl.DateTimeFormat("en-CA", { timeZone: timezone }).format(preNow);
       const preTodayEvents = (preLiveEvents ?? []).filter((e) => e.isoDate === todayStr);
 
       // Launch email correlation search in parallel — capped at 10 s internally
@@ -540,7 +539,7 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
       const preSmartCalPromise: Promise<string> = preLiveEvents !== null
         ? Promise.race([
             emailCorrelationsPromise.then((correlations) =>
-              buildSmartCalendarBlock(preLiveEvents, homeAddress, primaryLat, primaryLon, correlations),
+              buildSmartCalendarBlock(preLiveEvents, homeAddress, primaryLat, primaryLon, correlations, timezone),
             ),
             new Promise<string>((resolve) => setTimeout(() => resolve(""), 10_000)),
           ])

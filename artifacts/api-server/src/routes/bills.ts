@@ -5,30 +5,26 @@ import { markBillPaid, clearBillPaid, getBills, addBill, computeNextDueDate, com
 
 import { createReminder } from "../reminders/reminderManager.js";
 import { scanForBillAnomalies } from "../bills/billAnomalyScanner.js";
+import { getUserLocationContext } from "../lib/userTimezone.js";
 
 const router: IRouter = Router();
 
 // ── Timezone helper ───────────────────────────────────────────────────────────
-// Returns a UTC Date that represents `hourCT:00:00` in America/Chicago on `dateStr`.
-// Works correctly for both CDT (UTC-5) and CST (UTC-6) by probing the actual
-// Intl offset rather than hardcoding it — immune to DST transitions.
-function fireAtCT(dateStr: string, hourCT: number): Date {
-  // Start with a naive UTC guess (treat CT time as UTC).
-  const approxUtc = new Date(`${dateStr}T${String(hourCT).padStart(2, "0")}:00:00.000Z`);
-  // Ask Intl what CT hour that UTC moment corresponds to.
-  const ctHour = parseInt(
-    approxUtc.toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "2-digit", hour12: false }),
+// Returns a UTC Date that represents `hourLocal:00:00` in the given timezone on `dateStr`.
+// Probes the actual Intl offset rather than hardcoding it — immune to DST transitions.
+function computeFireAt(dateStr: string, hourLocal: number, tz: string): Date {
+  const approxUtc = new Date(`${dateStr}T${String(hourLocal).padStart(2, "0")}:00:00.000Z`);
+  const localHour = parseInt(
+    approxUtc.toLocaleTimeString("en-US", { timeZone: tz, hour: "2-digit", hour12: false }),
     10
   );
-  // Shift by the difference to land on the correct UTC equivalent.
-  return new Date(approxUtc.getTime() + (hourCT - ctHour) * 3_600_000);
+  return new Date(approxUtc.getTime() + (hourLocal - localHour) * 3_600_000);
 }
 
 // ── Shared bill enrichment ────────────────────────────────────────────────────
 // Adds computed display fields to a raw Bill. Used by GET /bills and all paid
 // endpoints so the native app can update local state without a re-fetch.
-function enrichBill(b: Awaited<ReturnType<typeof getBills>>[number], now = new Date()) {
-  const TZ = "America/Chicago";
+function enrichBill(b: Awaited<ReturnType<typeof getBills>>[number], now = new Date(), TZ = "UTC") {
   const nextDueDate = computeNextDueDate(b, now);
   const nextDueDateISO = nextDueDate.toLocaleDateString("en-CA", { timeZone: TZ });
   const nextDueDateLabel = nextDueDate.toLocaleDateString("en-US", { timeZone: TZ, month: "long", day: "numeric" });
@@ -134,17 +130,17 @@ router.post("/bills/remind-tomorrow", express.json({ limit: "1mb" }), async (req
   try {
     const name = billName?.trim() || `Bill #${billId}`;
     const amtPart = amount ? ` of ${amount}` : "";
+    const { timezone } = await getUserLocationContext(userName);
 
-    // Schedule for 8 AM tomorrow (Central Time)
     const tomorrowDateStr = new Date(Date.now() + 86_400_000)
-      .toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
-    const fireAt = fireAtCT(tomorrowDateStr, 8);
+      .toLocaleDateString("en-CA", { timeZone: timezone });
+    const fireAt = computeFireAt(tomorrowDateStr, 8, timezone);
 
     const reminder = await createReminder({
       userName,
       reminderText: `Your ${name}${amtPart} payment — have you paid it yet?`,
       fireAt,
-      timezone: "America/Chicago",
+      timezone,
       pushCategoryId: "bill-action",
       pushData: {
         billId,
@@ -186,13 +182,14 @@ router.post("/bills/:id/paid", async (req, res) => {
   }
 
   try {
+    const { timezone } = await getUserLocationContext(userName);
     const bills = await getBills(userName);
     const bill = bills.find((b) => b.id === id);
     const name = bill?.name ?? `Bill #${id}`;
     await markBillPaid(id, name, userName);
     const updatedBills = await getBills(userName);
     const updatedBill = updatedBills.find((b) => b.id === id);
-    const enriched = updatedBill ? enrichBill(updatedBill) : null;
+    const enriched = updatedBill ? enrichBill(updatedBill, new Date(), timezone) : null;
     req.log.info({ userName, billId: id, billName: name }, "[BILLS] Marked paid via REST action button");
     res.json({ ok: true, dismissed: true, dismissTag: `bill-${id}`, bill: enriched });
   } catch (err) {
@@ -223,20 +220,20 @@ router.post("/bills/:id/remind-tomorrow", async (req, res) => {
       return;
     }
 
+    const { timezone } = await getUserLocationContext(userName);
     const nextDueDate = computeNextDueDate(bill);
-    const dueDateStr = nextDueDate.toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+    const dueDateStr = nextDueDate.toLocaleDateString("en-CA", { timeZone: timezone });
 
-    // Schedule for 8 AM tomorrow (Central Time)
     const tomorrowDateStr2 = new Date(Date.now() + 86_400_000)
-      .toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
-    const fireAt = fireAtCT(tomorrowDateStr2, 8);
+      .toLocaleDateString("en-CA", { timeZone: timezone });
+    const fireAt = computeFireAt(tomorrowDateStr2, 8, timezone);
 
     const amtPart = bill.amount ? ` of ${bill.amount}` : "";
     const reminder = await createReminder({
       userName,
       reminderText: `Your ${bill.name}${amtPart} payment — have you paid it yet?`,
       fireAt,
-      timezone: "America/Chicago",
+      timezone,
       pushCategoryId: "bill-action",
       pushData: {
         companionMessage: JSON.stringify({ billId: id, billName: bill.name, amount: bill.amount ?? "" }),
@@ -280,19 +277,18 @@ router.post("/bills/:id/remind-due-date", async (req, res) => {
       return;
     }
 
-    // Compute the next due date in Central Time
+    const { timezone } = await getUserLocationContext(userName);
     const nextDueDate = computeNextDueDate(bill);
-    const dueDateStr = nextDueDate.toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+    const dueDateStr = nextDueDate.toLocaleDateString("en-CA", { timeZone: timezone });
 
-    // Build a fire time of 9 AM CT on the due date.
-    const fireAt = fireAtCT(dueDateStr, 9);
+    const fireAt = computeFireAt(dueDateStr, 9, timezone);
 
     const amtPart = bill.amount ? ` of ${bill.amount}` : "";
     const reminder = await createReminder({
       userName,
       reminderText: `Your ${bill.name}${amtPart} payment — have you paid it yet?`,
       fireAt,
-      timezone: "America/Chicago",
+      timezone,
       pushCategoryId: "bill-action",
       pushData: {
         companionMessage: JSON.stringify({
@@ -326,10 +322,11 @@ router.post("/bills/:id/clear-paid", async (req, res) => {
   const billId = parseInt(req.params.id, 10);
   if (isNaN(billId)) { res.status(400).json({ error: "Invalid bill id" }); return; }
   try {
+    const { timezone } = await getUserLocationContext(userName);
     await clearBillPaid(billId, userName);
     const bills = await getBills(userName);
     const bill = bills.find((b) => b.id === billId);
-    const enriched = bill ? enrichBill(bill) : null;
+    const enriched = bill ? enrichBill(bill, new Date(), timezone) : null;
     req.log.info({ userName, billId }, "[BILLS] Cleared paid_through_date");
     res.json({ ok: true, bill: enriched });
   } catch (err) {
@@ -349,9 +346,10 @@ router.get("/bills", express.json({ limit: "1mb" }), async (req, res) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
   try {
+    const { timezone } = await getUserLocationContext(userName);
     const bills = await getBills(userName);
     const now = new Date();
-    const enriched = bills.map((b) => enrichBill(b, now));
+    const enriched = bills.map((b) => enrichBill(b, now, timezone));
     res.json({ bills: enriched });
   } catch (err) {
     res.status(500).json({ error: String(err) });

@@ -1,4 +1,5 @@
 import { getProfile } from "../onboarding/onboardingManager.js";
+import { getUserLocationContext } from "../lib/userTimezone.js";
 
 export interface GameResult {
   status: "final" | "in_progress" | "scheduled" | "off_season";
@@ -166,9 +167,10 @@ async function fetchTeamSchedule(
 async function fetchTodayScoreboard(
   sport: string,
   league: string,
-  teamAbbr: string
+  teamAbbr: string,
+  tz: string
 ): Promise<EspnEvent | null> {
-  const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" }).replace(/-/g, "");
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: tz }).replace(/-/g, "");
   const url = `https://site.api.espn.com/apis/site/v2/sports/${sport}/${league}/scoreboard?dates=${today}`;
   const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
   if (!resp.ok) return null;
@@ -179,10 +181,10 @@ async function fetchTodayScoreboard(
   ) ?? null;
 }
 
-function formatGameTime(isoDate: string): string {
+function formatGameTime(isoDate: string, tz: string): string {
   const d = new Date(isoDate);
   return d.toLocaleTimeString("en-US", {
-    timeZone: "America/Chicago",
+    timeZone: tz,
     hour: "numeric",
     minute: "2-digit",
     hour12: true,
@@ -194,17 +196,17 @@ function formatGameDate(iso: string): string {
   return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 }
 
-function isToday(iso: string): boolean {
-  const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+function isToday(iso: string, tz: string): boolean {
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
   return iso === today;
 }
 
-function isYesterday(iso: string): boolean {
-  const yd = new Date(Date.now() - 86400000).toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+function isYesterday(iso: string, tz: string): boolean {
+  const yd = new Date(Date.now() - 86400000).toLocaleDateString("en-CA", { timeZone: tz });
   return iso === yd;
 }
 
-function parseGameResult(event: EspnEvent, teamAbbr: string, teamName: string): GameResult {
+function parseGameResult(event: EspnEvent, teamAbbr: string, teamName: string, tz: string): GameResult {
   const comp = event.competitions[0];
   const status = comp.status;
   const team = comp.competitors.find((c) => c.team.abbreviation === teamAbbr)!;
@@ -214,7 +216,7 @@ function parseGameResult(event: EspnEvent, teamAbbr: string, teamName: string): 
   const teamScore = extractScore(team.score);
   const oppScore = opp ? extractScore(opp.score) : undefined;
   const gameDate = event.date.substring(0, 10);
-  const gameTime = formatGameTime(event.date);
+  const gameTime = formatGameTime(event.date, tz);
 
   const inningOrQuarter =
     status.type.state === "in"
@@ -234,12 +236,12 @@ function parseGameResult(event: EspnEvent, teamAbbr: string, teamName: string): 
 
 // ── Generic single-team fetch ─────────────────────────────────────────────────
 
-async function fetchTeamScore(def: TeamDef): Promise<GameResult> {
+async function fetchTeamScore(def: TeamDef, tz = "UTC"): Promise<GameResult> {
   const { sport, league, abbr, id, fullName } = def;
 
-  const todayEvent = await fetchTodayScoreboard(sport, league, abbr);
+  const todayEvent = await fetchTodayScoreboard(sport, league, abbr, tz);
   if (todayEvent) {
-    const result = parseGameResult(todayEvent, abbr, fullName);
+    const result = parseGameResult(todayEvent, abbr, fullName, tz);
     if (result.status === "final" || result.status === "in_progress") return result;
   }
 
@@ -248,14 +250,14 @@ async function fetchTeamScore(def: TeamDef): Promise<GameResult> {
   const inProgress = events.find((e) => e.competitions?.[0]?.status?.type?.state === "in");
   const upcoming = events.find((e) => !e.competitions?.[0]?.status?.type?.completed && new Date(e.date) > new Date());
 
-  if (inProgress) return parseGameResult(inProgress, abbr, fullName);
+  if (inProgress) return parseGameResult(inProgress, abbr, fullName, tz);
 
   const last = completed[completed.length - 1];
   if (!last) return { status: "off_season", teamAbbr: abbr, teamName: fullName };
 
-  const result = parseGameResult(last, abbr, fullName);
+  const result = parseGameResult(last, abbr, fullName, tz);
   if (upcoming) {
-    const upNext = parseGameResult(upcoming, abbr, fullName);
+    const upNext = parseGameResult(upcoming, abbr, fullName, tz);
     result.nextGame = {
       date: formatGameDate(upcoming.date.substring(0, 10)),
       time: upNext.gameTime,
@@ -278,7 +280,7 @@ export async function fetchCowboysScore(): Promise<GameResult> {
 
 // ── Result description ────────────────────────────────────────────────────────
 
-function describeResult(g: GameResult): string {
+function describeResult(g: GameResult, tz: string): string {
   const name = g.teamName;
   if (g.status === "in_progress") {
     const loc = g.isHome ? "hosting" : "at";
@@ -290,22 +292,22 @@ function describeResult(g: GameResult): string {
     const score = g.teamScore !== undefined && g.opponentScore !== undefined
       ? won ? `${g.teamScore}–${g.opponentScore}` : `${g.opponentScore}–${g.teamScore}`
       : "";
-    const when = isToday(g.gameDate!) ? "today" : isYesterday(g.gameDate!) ? "yesterday" : `on ${formatGameDate(g.gameDate!)}`;
+    const when = isToday(g.gameDate!, tz) ? "today" : isYesterday(g.gameDate!, tz) ? "yesterday" : `on ${formatGameDate(g.gameDate!)}`;
     const scoreStr = score ? ` ${score}` : "";
     const next = g.nextGame
-      ? ` Next up: ${g.nextGame.isHome ? "home vs" : "at"} ${g.nextGame.opponent} on ${g.nextGame.date}${g.nextGame.time ? ` at ${g.nextGame.time} CT` : ""}.`
+      ? ` Next up: ${g.nextGame.isHome ? "home vs" : "at"} ${g.nextGame.opponent} on ${g.nextGame.date}${g.nextGame.time ? ` at ${g.nextGame.time}` : ""}.`
       : "";
     return `${name} ${verb} the ${g.opponentAbbr}${scoreStr} ${when}.${next}`;
   }
   if (g.status === "scheduled") {
     const loc = g.isHome ? "host" : "visit";
-    const when = isToday(g.gameDate!)
-      ? g.gameTime ? `today at ${g.gameTime} CT` : "today"
+    const when = isToday(g.gameDate!, tz)
+      ? g.gameTime ? `today at ${g.gameTime}` : "today"
       : formatGameDate(g.gameDate!);
     return `${name} ${loc} the ${g.opponentAbbr} ${when}.`;
   }
   if (g.nextGame) {
-    return `${name} are in the off-season. Next game: ${g.nextGame.isHome ? "home vs" : "at"} ${g.nextGame.opponent} on ${g.nextGame.date}${g.nextGame.time ? ` at ${g.nextGame.time} CT` : ""}.`;
+    return `${name} are in the off-season. Next game: ${g.nextGame.isHome ? "home vs" : "at"} ${g.nextGame.opponent} on ${g.nextGame.date}${g.nextGame.time ? ` at ${g.nextGame.time}` : ""}.`;
   }
   return `${name} are in the off-season — no upcoming games on the schedule yet.`;
 }
@@ -316,6 +318,7 @@ export interface SportsScores {
   rangers: GameResult;
   cowboys: GameResult;
   extra?: GameResult[];
+  timezone?: string;
 }
 
 /**
@@ -324,6 +327,10 @@ export interface SportsScores {
  * Falls back to Rangers + Cowboys if no profile / no recognized teams.
  */
 export async function fetchSportsScores(userName?: string): Promise<SportsScores> {
+  const { timezone } = userName
+    ? await getUserLocationContext(userName)
+    : { timezone: "UTC" };
+
   let teamNames: string[] = [];
 
   if (userName) {
@@ -350,28 +357,30 @@ export async function fetchSportsScores(userName?: string): Promise<SportsScores
   }
 
   const [rangers, cowboys, ...extraResults] = await Promise.all([
-    fetchTeamScore(defaultDefs[0]).catch(() => ({ status: "off_season" as const, teamAbbr: "TEX", teamName: "Texas Rangers" })),
-    fetchTeamScore(defaultDefs[1]).catch(() => ({ status: "off_season" as const, teamAbbr: "DAL", teamName: "Dallas Cowboys" })),
-    ...extraDefs.map((def) => fetchTeamScore(def).catch(() => ({ status: "off_season" as const, teamAbbr: def.abbr, teamName: def.fullName }))),
+    fetchTeamScore(defaultDefs[0], timezone).catch(() => ({ status: "off_season" as const, teamAbbr: "TEX", teamName: "Texas Rangers" })),
+    fetchTeamScore(defaultDefs[1], timezone).catch(() => ({ status: "off_season" as const, teamAbbr: "DAL", teamName: "Dallas Cowboys" })),
+    ...extraDefs.map((def) => fetchTeamScore(def, timezone).catch(() => ({ status: "off_season" as const, teamAbbr: def.abbr, teamName: def.fullName }))),
   ]);
 
   return {
     rangers,
     cowboys,
     ...(extraResults.length > 0 ? { extra: extraResults } : {}),
+    timezone,
   };
 }
 
 export function formatSportsForPrompt(scores: SportsScores): string {
-  const rangersLine = describeResult(scores.rangers);
-  const cowboysLine = describeResult(scores.cowboys);
+  const tz = scores.timezone ?? "UTC";
+  const rangersLine = describeResult(scores.rangers, tz);
+  const cowboysLine = describeResult(scores.cowboys, tz);
 
   const baseLines = [
     `• ${scores.rangers.teamName} (${scores.rangers.teamAbbr === "TEX" ? "MLB" : ""}): ${rangersLine}`,
     `• ${scores.cowboys.teamName} (${scores.cowboys.teamAbbr === "DAL" ? "NFL" : ""}): ${cowboysLine}`,
   ];
 
-  const extraLines = (scores.extra ?? []).map((g) => `• ${g.teamName}: ${describeResult(g)}`);
+  const extraLines = (scores.extra ?? []).map((g) => `• ${g.teamName}: ${describeResult(g, tz)}`);
 
   return (
     `\n\n[VERIFIED — Sports API — Live Scores, fetched just now]\n` +

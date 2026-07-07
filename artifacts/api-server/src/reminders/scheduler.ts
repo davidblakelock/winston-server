@@ -144,7 +144,7 @@ export function startScheduler(): void {
           const nextFire = nextOccurrenceForPattern(
             reminder.recurring,
             reminder.recurring_time,
-            reminder.timezone || "America/Chicago",
+            reminder.timezone || "UTC",
             new Date() // compute from now so we always get the truly next occurrence
           );
 

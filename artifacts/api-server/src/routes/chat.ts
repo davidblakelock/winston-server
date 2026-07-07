@@ -1157,7 +1157,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     // Smart calendar block (today+tomorrow w/ departure times) — capped at 6 s, runs while Gmail is still in flight.
     const smartCalPromise: Promise<string> = liveEvents !== null
       ? Promise.race([
-          buildSmartCalendarBlock(liveEvents, homeAddress, primaryLat, primaryLon),
+          buildSmartCalendarBlock(liveEvents, homeAddress, primaryLat, primaryLon, undefined, timezone),
           new Promise<string>((resolve) => setTimeout(() => resolve(""), 6000)),
         ])
       : Promise.resolve("");
