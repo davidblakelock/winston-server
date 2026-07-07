@@ -173,7 +173,8 @@ async function fetchFromGoogle(city: string, lat: number, lon: number): Promise<
   };
 }
 
-export async function getCachedWeather(city: string, lat: number, lon: number): Promise<CachedWeather> {
+export async function getCachedWeather(city: string, lat: number | null, lon: number | null): Promise<CachedWeather> {
+  if (lat === null || lon === null) throw new Error(`[WeatherCache] No coordinates for "${city}" — skipping`);
   const key = cacheKey(lat, lon);
   const entry = weatherCache.get(key);
   const now = Date.now();

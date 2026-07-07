@@ -306,7 +306,7 @@ function findCalendarLocationMatches(message: string, events: CalendarEvent[]): 
   return matches;
 }
 
-function buildCalendarLocationBlock(events: CalendarEvent[]): string {
+function buildCalendarLocationBlock(events: CalendarEvent[], timezone: string): string {
   const lines = events.map((e) => {
     const time = e.allDay
       ? "all day"
@@ -314,7 +314,7 @@ function buildCalendarLocationBlock(events: CalendarEvent[]): string {
         ? new Date(e.startIso).toLocaleTimeString("en-US", {
             hour: "numeric",
             minute: "2-digit",
-            timeZone: "America/Chicago",
+            timeZone: timezone,
           })
         : "";
     const loc = e.location ? ` — at ${e.location}` : "";
@@ -425,9 +425,9 @@ function buildSystemBlocks(stable: string, dynamic: string): SystemBlock[] {
 async function resolveWeatherLocation(
   message: string,
   profileCity: string,
-  profileLat: number,
-  profileLon: number
-): Promise<{ city: string; lat: number; lon: number }> {
+  profileLat: number | null,
+  profileLon: number | null
+): Promise<{ city: string; lat: number | null; lon: number | null }> {
   // Pattern 1: preposition — "weather in Houston", "forecast for New York", "raining in San Diego", etc.
   const m1 = /\b(?:in|for|at|near)\s+([A-Za-z][A-Za-z\s\-]{1,30}?)(?:\s+(?:today|tomorrow|right\s+now|this\s+week|this\s+weekend|on\s+\w+|\?)|[?,.]|$)/i.exec(message);
   // Pattern 2: "weather Houston" / "forecast London" — city directly after keyword (case-sensitive: city must start uppercase)
@@ -638,7 +638,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   const { message: rawMessage, history: rawHistory = [], isAutoGreeting = false, deviceId = null, winddownRequest = false, context: requestContext = null, timezone: rawTimezone = null } = req.body;
   const timezone: string = (typeof rawTimezone === 'string' && rawTimezone.trim().length > 0)
     ? rawTimezone.trim()
-    : 'America/Chicago';
+    : 'America/Chicago'; // Server-side fallback only — client always sends timezone via Intl.DateTimeFormat
   // Isolated contexts: messages are NOT saved to chat_messages (main chat history).
   // trip-planning has its own trip_plans table.
   // journal entries belong on the My Life screen only, not the main chat.
@@ -728,7 +728,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
 
       // One focused follow-up question — grounded in exactly what was just said
       const journalSystemPrompt =
-        `You are ${sessionUserName === "david" || sessionUserName === "David" ? "Rosie, David's" : "a"} warm, perceptive journaling companion. ` +
+        `You are a warm, perceptive journaling companion. ` +
         `Your only job right now is to ask ONE follow-up question that draws the person deeper into what they just shared. ` +
         `Rules:\n` +
         `• One question only — never two, never a list.\n` +
@@ -1459,9 +1459,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   // Fires any time the user asks about weather outside of the wind-down session.
   // The wind-down flow already injects weather separately (lines further below).
   if (isWeatherRequest) {
-    const _wxProfileCity = userProfile?.city ?? "Dallas";
-    const _wxProfileLat = userProfile?.latitude ?? 32.7767;
-    const _wxProfileLon = userProfile?.longitude ?? -96.7970;
+    const _wxProfileCity = userProfile?.city ?? "";
+    const _wxProfileLat = userProfile?.latitude ?? null;
+    const _wxProfileLon = userProfile?.longitude ?? null;
     const { city: _wxCity, lat: _wxLat, lon: _wxLon } = await resolveWeatherLocation(
       message, _wxProfileCity, _wxProfileLat, _wxProfileLon
     );
@@ -1871,9 +1871,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   // ── Google Places — live restaurant search ────────────────────────────────
   if (isRestaurantReco) {
     try {
-      const city = userProfile?.city ?? "Dallas";
+      const city = userProfile?.city ?? "";
       const cuisine = extractCuisineFromMessage(message);
-      const apifyQuery = `${cuisine || "restaurant"} ${city} TX`;
+      const apifyQuery = `${cuisine || "restaurant"} ${city}`.trim();
 
       // Run Apify (rich live data) and Google Places (fast fallback) in parallel.
       // Apify wins if it returns in time — it provides real hours, price, phone, open/closed status.
@@ -1902,7 +1902,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   // ── Google Places — nearby essential places (pharmacy, urgent care, etc.) ──
   if (isNearbyPlaces) {
     try {
-      const city = userProfile?.city ?? "Dallas";
+      const city = userProfile?.city ?? "";
       const placeType = extractNearbyPlaceType(message);
       if (placeType) {
         const places = await searchNearbyPlaces(placeType, city, 3);
@@ -2072,7 +2072,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
         if (city) req.log.info({ lat: bodyLat, lng: bodyLng, city }, "[R001] City from GPS");
       } catch { /* fall through to next priority */ }
     }
-    if (!city) city = userProfile?.city;
+    if (!city) city = userProfile?.city ?? undefined;
     const needsCityFromUser = !city;
     const todayISO = chicagoDateStr();
 
@@ -2643,7 +2643,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     try {
       const cachedItems = getDallasItems();
       const contentCity = getLocalContentCity();
-      const userCity = userProfile?.city ?? "Dallas";
+      const userCity = userProfile?.city ?? "";
 
       if (cachedItems.length > 0 && contentCity.trim().toLowerCase() === userCity.trim().toLowerCase()) {
         // Fast path: use today's in-memory cached items (populated at briefing pre-gen)
@@ -2703,7 +2703,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       if (todayEvts && todayEvts.length > 0) {
         const locationMatches = findCalendarLocationMatches(message, todayEvts);
         if (locationMatches.length > 0) {
-          systemPrompt += buildCalendarLocationBlock(locationMatches);
+          systemPrompt += buildCalendarLocationBlock(locationMatches, timezone);
           req.log.info(
             { matchCount: locationMatches.length, summaries: locationMatches.map((e) => e.summary) },
             "[CalendarCtx] Injected matching today events into prompt"
@@ -2857,9 +2857,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     let tomorrowWeatherBlock = "";
     let tomorrowHasOutdoor = false;
     let tomorrowWeatherData: { high: number | null; condition: string | null; precip: number; tonightLow: string } | null = null;
-    const _weatherCity = userProfile?.city ?? "Dallas";
-    const _weatherLat = userProfile?.latitude ?? 32.7767;
-    const _weatherLon = userProfile?.longitude ?? -96.7970;
+    const _weatherCity = userProfile?.city ?? "";
+    const _weatherLat = userProfile?.latitude ?? null;
+    const _weatherLon = userProfile?.longitude ?? null;
     try {
       const weatherData = await getCachedWeather(_weatherCity, _weatherLat, _weatherLon);
       const tonightLow = `${weatherData.low}°F`;
@@ -3054,7 +3054,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       await saveWinddownNote(message);
       req.log.info({ note: message.substring(0, 60) }, "Evening check-in note saved");
       systemPrompt +=
-        `\n\n[Check-In Note Saved]\nDavid's note has been saved and will appear in tomorrow's morning briefing: "${message.substring(0, 120)}"\nAcknowledge warmly that you've got it noted for tomorrow morning.`;
+        `\n\n[Check-In Note Saved]\n${userProfile?.name ?? sessionUserName}'s note has been saved and will appear in tomorrow's morning briefing: "${message.substring(0, 120)}"\nAcknowledge warmly that you've got it noted for tomorrow morning.`;
     } catch (err) {
       req.log.warn({ err }, "Evening check-in note save failed");
     }
@@ -3215,7 +3215,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
           .join("; ");
         const showNames = watchedShowsNow.map((s) => s.showName).join(", ");
         systemPrompt +=
-          `\n\n[TV Recommendation Request]\nDavid watches: ${showNames || "no shows saved yet"}.\nGenres: ${genresSummary || "unknown"}.\nSuggest 2–3 shows he'd likely enjoy based on these patterns. Be specific — name shows, where to stream them, and why they'd suit his taste. Speak conversationally, not as a list.`;
+          `\n\n[TV Recommendation Request]\n${userProfile?.name ?? sessionUserName} watches: ${showNames || "no shows saved yet"}.\nGenres: ${genresSummary || "unknown"}.\nSuggest 2–3 shows they'd likely enjoy based on these patterns. Be specific — name shows, where to stream them, and why they'd suit their taste. Speak conversationally, not as a list.`;
       }
     } catch (err) {
       req.log.warn({ err }, "TV on-demand query failed");
@@ -3227,16 +3227,16 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     try {
       const alreadyTaken = await hasTakenMedicationsToday(sessionUserName);
       if (alreadyTaken) {
-        systemPrompt += `\n\n[Medications — Already Confirmed Today]\nDavid already confirmed he took his medications today. Acknowledge warmly — maybe "Got it, already logged — you're all set."`;
+        systemPrompt += `\n\n[Medications — Already Confirmed Today]\n${userProfile?.name ?? sessionUserName} already confirmed they took their medications today. Acknowledge warmly — maybe "Got it, already logged — you're all set."`;
       } else {
         const meds = await getMedications(sessionUserName);
         if (meds.length > 0) {
           await logMedicationsTaken(meds, sessionUserName);
           const medText = buildMedReminderText(meds);
-          systemPrompt += `\n\n[Medications — Confirmed Taken]\nDavid has confirmed he took ${medText} today. It's been logged. Respond with brief warm acknowledgment — something like "Logged! ${meds.length === 1 ? "That's" : "Both are"} done for today." Keep it short and natural.`;
+          systemPrompt += `\n\n[Medications — Confirmed Taken]\n${userProfile?.name ?? sessionUserName} has confirmed they took ${medText} today. It's been logged. Respond with brief warm acknowledgment — something like "Logged! ${meds.length === 1 ? "That's" : "Both are"} done for today." Keep it short and natural.`;
           req.log.info({ meds: meds.map((m) => m.name) }, "Medications confirmed taken");
         } else {
-          systemPrompt += `\n\n[Medications — None Set Up]\nDavid said his meds are taken but no medications are configured. Acknowledge warmly.`;
+          systemPrompt += `\n\n[Medications — None Set Up]\n${userProfile?.name ?? sessionUserName} said their meds are taken but no medications are configured. Acknowledge warmly.`;
         }
       }
     } catch (err) {
@@ -3309,7 +3309,7 @@ const chatHandlerCore = async (req: Request, res: Response) => {
   if (isMedMute && !isMedTaken && !isMedAdd && !isMedRemove) {
     try {
       await setMedicationRemindersEnabled(false, sessionUserName);
-      systemPrompt += `\n\n[Medications — Reminders Muted]\nDavid has asked to stop receiving medication reminder notifications. It's been saved. Acknowledge naturally and warmly — something like "Got it — I'll stop reminding you about your medications. Just let me know if you'd like them turned back on." Keep it brief.`;
+      systemPrompt += `\n\n[Medications — Reminders Muted]\n${userProfile?.name ?? sessionUserName} has asked to stop receiving medication reminder notifications. It's been saved. Acknowledge naturally and warmly — something like "Got it — I'll stop reminding you about your medications. Just let me know if you'd like them turned back on." Keep it brief.`;
       req.log.info({ userName: sessionUserName }, "Medication reminders muted");
     } catch (err) {
       req.log.warn({ err }, "Medication mute failed");
@@ -3322,9 +3322,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       const meds = await getMedications(sessionUserName).catch(() => []);
       if (meds.length > 0) {
         const medText = buildMedReminderText(meds);
-        systemPrompt += `\n\n[Medications — Reminders Re-enabled]\nDavid has re-enabled medication reminders. Confirm warmly — something like "Back on — I'll remind you about ${medText} as usual." Keep it brief.`;
+        systemPrompt += `\n\n[Medications — Reminders Re-enabled]\n${userProfile?.name ?? sessionUserName} has re-enabled medication reminders. Confirm warmly — something like "Back on — I'll remind you about ${medText} as usual." Keep it brief.`;
       } else {
-        systemPrompt += `\n\n[Medications — Reminders Re-enabled]\nDavid has re-enabled medication reminders. Confirm warmly.`;
+        systemPrompt += `\n\n[Medications — Reminders Re-enabled]\n${userProfile?.name ?? sessionUserName} has re-enabled medication reminders. Confirm warmly.`;
       }
       req.log.info({ userName: sessionUserName }, "Medication reminders re-enabled");
     } catch (err) {
