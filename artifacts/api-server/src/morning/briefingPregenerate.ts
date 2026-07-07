@@ -275,13 +275,13 @@ If the inbox is clear, say so in one sentence.
 
 ${settings?.briefingNews !== false ? `
 SECTION 4 — WHAT'S MAKING NEWS
-Deliver 3 to 4 headlines only. Network morning show style — what the major news programs are leading with right now.
-CRITICAL RULES — NO EXCEPTIONS:
-- State the headline only. No commentary. No analysis. No opinion.
-- No political framing. No editorializing. Just the fact of what happened.
-- No technology product announcements. No AI company news unless it is genuinely world-altering.
-- If a story requires context, give one neutral factual sentence max.
-Example: "Here's what's making news this morning: [headline]. [headline]. [headline]."
+The [VERIFIED — Reuters + AP News] block above contains three subsections. Deliver them in this order:
+
+4A — TOP STORIES: Deliver the [Top Stories] subsection. State what happened and why it matters for each story. No commentary, no political framing, no opinion. Two stories, each two sentences max. Lead with: "Here's what's making news this morning:"
+
+4B — ENTERTAINMENT: Only if the [Entertainment] subsection has content. One brief sentence per item. Skip if empty.
+
+4C — CONVERSATION STARTER: This is the [Conversation Starter] subsection. Deliver it naturally after the news — something like "And here's something you can share today:" then the two sentences. This should land as genuinely surprising or funny. If the subsection is absent, skip entirely — do not invent one.
 ` : ""}
 
 SECTION 5 — SPORTS

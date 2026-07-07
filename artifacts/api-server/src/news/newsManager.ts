@@ -134,17 +134,24 @@ async function fetchWatercoolerViaApify(): Promise<string> {
   const headlinesBlock = formatArticlesForClaude(combined, "Feel-Good / Bizarre Stories — Reuters Oddly Enough + AP Oddities", 15);
 
   const prompt =
-    `Today is ${todayStr}. The current year is ${currentYear}.\n\n` +
-    `Here are scraped headlines from Reuters "Oddly Enough" and AP Oddities:\n\n${headlinesBlock}\n\n` +
-    `Select ONE feel-good, bizarre, or delightfully unexpected story from this list. ` +
-    `STRICTLY AVOID: politics, crime, violence, tragedy, death, accidents, disasters, controversy.\n\n` +
-    `Focus on: record-breaking feats, bizarre but charming events, unusual animal behavior, ` +
-    `unexpected human-interest moments, quirky cultural happenings, heartwarming community stories, ` +
-    `or genuinely surprising scientific discoveries. Rotate across categories — do NOT default to science every time.\n\n` +
-    `Return EXACTLY ONE story in TWO sentences:\n` +
-    `Sentence 1: What happened — specific, vivid, surprising.\n` +
-    `Sentence 2: Why it's remarkable or what makes it delightful.\n` +
-    `No headers, no bullet points, no source attribution — just the two sentences.`;
+    `Here are scraped news articles. Find ONE that would genuinely make someone laugh, ` +
+    `say "no way", or immediately want to share it. ` +
+    `It should be the kind of story a person could mention at lunch and get a reaction.\n\n` +
+    `What we want:\n` +
+    `• Specific person, place, or situation — not a general fact\n` +
+    `• Unexpected twist, irony, or absurdity\n` +
+    `• Completely apolitical — no politicians, no policy, no crime, no death\n` +
+    `• Makes a normal person say "wait, what?"\n\n` +
+    `NOT what we want:\n` +
+    `• Heartwarming but not surprising ("community comes together")\n` +
+    `• Trivia facts with no narrative\n` +
+    `• Celebrity gossip\n` +
+    `• Anything upsetting\n\n` +
+    `Articles:\n${headlinesBlock}\n\n` +
+    `Write exactly TWO sentences about the best story you found:\n` +
+    `• Sentence 1: What happened — specific, with names and place. Max 25 words.\n` +
+    `• Sentence 2: The twist or why it's remarkable. Max 20 words.\n\n` +
+    `Return ONLY the two sentences. No headline. No label.`;
 
   logger.info("[News] Claude (watercooler-apify) — selecting from Apify headlines");
 
@@ -178,19 +185,31 @@ async function fetchWatercoolerViaWebSearch(): Promise<string> {
   const currentYear = now.getFullYear();
 
   const prompt =
-    `Today is ${todayStr}. The current year is ${currentYear}. ` +
-    `Use web search to find ONE feel-good, bizarre, or delightfully unexpected story from the last 24 hours. ` +
-    `Search these sources first: Reuters "Oddly Enough" section (reuters.com/oddly-enough), AP Oddities, and similar quirky wire feeds. ` +
-    `If those are thin, broaden to any story published after ${cutoffStr} that qualifies. ` +
-    `The story must be from ${currentYear} — REJECT any story from ${currentYear - 1} or earlier.\n\n` +
-    `Focus on: record-breaking feats, bizarre but charming events, unusual animal behavior, ` +
-    `unexpected human-interest moments, quirky cultural happenings, heartwarming community stories, ` +
-    `or genuinely surprising scientific discoveries. Rotate across categories.\n\n` +
-    `STRICTLY AVOID: politics, crime, violence, tragedy, death, accidents, disasters, controversy.\n\n` +
-    `Return EXACTLY ONE story in TWO sentences:\n` +
-    `Sentence 1: What happened — specific, vivid, surprising.\n` +
-    `Sentence 2: Why it's remarkable or what makes it delightful.\n` +
-    `No headers, no bullet points, no commentary — just the two sentences.`;
+    `Search for ONE story from today or yesterday that would genuinely make someone laugh, ` +
+    `say "no way", or immediately want to share it with someone else. ` +
+    `This is for a morning briefing — the user should be able to say "did you hear about this?" at lunch and get a reaction.\n\n` +
+    `What we want — ALL criteria must be true:\n` +
+    `• Involves a specific person, place, or situation — not a general fact or statistic\n` +
+    `• Has an unexpected twist, irony, or absurdity that provokes a reaction\n` +
+    `• Completely apolitical — no politicians, no policy, no social issues, no crime\n` +
+    `• Recent — from the last 48 hours if possible, last 7 days at most\n` +
+    `• The kind of thing that makes a normal person say "wait, what?"\n\n` +
+    `Good types of stories:\n` +
+    `• Someone did something ridiculous and got caught or celebrated for it\n` +
+    `• An unexpected world record broken in a funny or weird way\n` +
+    `• An animal did something that has no business happening\n` +
+    `• A local story so bizarre it went national\n` +
+    `• A company or organization did something so unexpected it's almost impressive\n\n` +
+    `NOT what we want:\n` +
+    `• Heartwarming stories ("dog reunited with owner after 10 years")\n` +
+    `• Trivia facts with no narrative ("did you know the Eiffel Tower...")\n` +
+    `• Anything requiring political context to understand\n` +
+    `• Celebrity gossip or entertainment news — that has its own section\n` +
+    `• Crime, death, or anything upsetting\n\n` +
+    `Write exactly TWO sentences:\n` +
+    `• Sentence 1: What happened — specific, with names and place. Max 25 words.\n` +
+    `• Sentence 2: The twist or why it's remarkable — what makes someone say "wait, what?" Max 20 words.\n\n` +
+    `Return ONLY the two sentences. No headline. No label. No commentary.`;
 
   const response = await anthropic.messages.create({
     model:      "claude-haiku-4-5-20251001",
@@ -423,7 +442,7 @@ async function fetchTopStoriesViaWebSearch(userName?: string): Promise<string> {
 
   const teamsLine = ctx.sportsTeams.length > 0
     ? `The listener follows these teams: ${ctx.sportsTeams.join(", ")}. Always include a story about one of them if there is relevant news from the last 48 hours.`
-    : `No specific sports teams on file — use the most significant US sports story.`;
+    : `No specific sports teams configured — omit sports entirely from this section`;
 
   const currentYear = now.getFullYear();
 
@@ -733,14 +752,14 @@ function formatNewsBlock(rawText: string, fetchedAt: Date): string {
   const sections: string[] = [];
   if (mainText) {
     sections.push(
-      `[Top Stories — 2 stories, bold title + what happened + why it matters]\n\n` + mainText
+      `[Top Stories — major news from the past 24 hours]\n\n` + mainText
     );
   }
   if (entertainment && !/^none$/i.test(entertainment)) {
-    sections.push(`[Entertainment & Pop Culture]\n${entertainment}`);
+    sections.push(`[Entertainment — notable deaths, major releases, cultural moments]\n${entertainment}`);
   }
   if (watercooler) {
-    sections.push(`[Watercooler Story — one fascinating story to share]\n${watercooler}`);
+    sections.push(`[Conversation Starter — share this at lunch today]\n${watercooler}`);
   }
 
   const body = sections.length > 0 ? sections.join("\n\n") : rawText;
