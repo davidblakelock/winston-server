@@ -134,24 +134,13 @@ async function fetchWatercoolerViaApify(): Promise<string> {
   const headlinesBlock = formatArticlesForClaude(combined, "Feel-Good / Bizarre Stories — Reuters Oddly Enough + AP Oddities", 15);
 
   const prompt =
-    `Here are scraped news articles. Find ONE that would genuinely make someone laugh, ` +
-    `say "no way", or immediately want to share it. ` +
-    `It should be the kind of story a person could mention at lunch and get a reaction.\n\n` +
-    `What we want:\n` +
-    `• Specific person, place, or situation — not a general fact\n` +
-    `• Unexpected twist, irony, or absurdity\n` +
-    `• Completely apolitical — no politicians, no policy, no crime, no death\n` +
-    `• Makes a normal person say "wait, what?"\n\n` +
-    `NOT what we want:\n` +
-    `• Heartwarming but not surprising ("community comes together")\n` +
-    `• Trivia facts with no narrative\n` +
-    `• Celebrity gossip\n` +
-    `• Anything upsetting\n\n` +
+    `Here are scraped news articles. Find one that a person could mention at lunch ` +
+    `and get a genuine reaction — laughter, disbelief, or "wait, what?".\n\n` +
+    `Not politics. Not crime. Not heartwarming. Not celebrity gossip. Not trivia facts.\n` +
+    `A real story with a specific person or place and an unexpected twist.\n\n` +
     `Articles:\n${headlinesBlock}\n\n` +
-    `Write exactly TWO sentences about the best story you found:\n` +
-    `• Sentence 1: What happened — specific, with names and place. Max 25 words.\n` +
-    `• Sentence 2: The twist or why it's remarkable. Max 20 words.\n\n` +
-    `Return ONLY the two sentences. No headline. No label.`;
+    `Write exactly two sentences about the best story: what happened, and why it's remarkable.\n` +
+    `Return only the two sentences — no headline, no label.`;
 
   logger.info("[News] Claude (watercooler-apify) — selecting from Apify headlines");
 
@@ -174,42 +163,13 @@ async function fetchWatercoolerViaApify(): Promise<string> {
 // ── Watercooler via web_search (fallback) ─────────────────────────────────────
 
 async function fetchWatercoolerViaWebSearch(): Promise<string> {
-  const now       = new Date();
-  const todayStr  = now.toLocaleDateString("en-US", {
-    timeZone: "America/Chicago", weekday: "long", month: "long", day: "numeric", year: "numeric",
-  });
-  const cutoff    = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-  const cutoffStr = cutoff.toLocaleDateString("en-US", {
-    timeZone: "America/Chicago", month: "long", day: "numeric",
-  });
-  const currentYear = now.getFullYear();
-
   const prompt =
-    `Search for ONE story from today or yesterday that would genuinely make someone laugh, ` +
-    `say "no way", or immediately want to share it with someone else. ` +
-    `This is for a morning briefing — the user should be able to say "did you hear about this?" at lunch and get a reaction.\n\n` +
-    `What we want — ALL criteria must be true:\n` +
-    `• Involves a specific person, place, or situation — not a general fact or statistic\n` +
-    `• Has an unexpected twist, irony, or absurdity that provokes a reaction\n` +
-    `• Completely apolitical — no politicians, no policy, no social issues, no crime\n` +
-    `• Recent — from the last 48 hours if possible, last 7 days at most\n` +
-    `• The kind of thing that makes a normal person say "wait, what?"\n\n` +
-    `Good types of stories:\n` +
-    `• Someone did something ridiculous and got caught or celebrated for it\n` +
-    `• An unexpected world record broken in a funny or weird way\n` +
-    `• An animal did something that has no business happening\n` +
-    `• A local story so bizarre it went national\n` +
-    `• A company or organization did something so unexpected it's almost impressive\n\n` +
-    `NOT what we want:\n` +
-    `• Heartwarming stories ("dog reunited with owner after 10 years")\n` +
-    `• Trivia facts with no narrative ("did you know the Eiffel Tower...")\n` +
-    `• Anything requiring political context to understand\n` +
-    `• Celebrity gossip or entertainment news — that has its own section\n` +
-    `• Crime, death, or anything upsetting\n\n` +
-    `Write exactly TWO sentences:\n` +
-    `• Sentence 1: What happened — specific, with names and place. Max 25 words.\n` +
-    `• Sentence 2: The twist or why it's remarkable — what makes someone say "wait, what?" Max 20 words.\n\n` +
-    `Return ONLY the two sentences. No headline. No label. No commentary.`;
+    `Search for one story from the last 48 hours that a person could mention at lunch ` +
+    `and get a genuine reaction — laughter, disbelief, or "wait, what?".\n\n` +
+    `Not politics. Not crime. Not heartwarming. Not celebrity gossip. Not trivia facts.\n` +
+    `A real story with a specific person or place and an unexpected twist.\n\n` +
+    `Write exactly two sentences: what happened, and why it's remarkable.\n` +
+    `Return only the two sentences — no headline, no label.`;
 
   const response = await anthropic.messages.create({
     model:      "claude-haiku-4-5-20251001",
@@ -458,7 +418,7 @@ async function fetchTopStoriesViaWebSearch(userName?: string): Promise<string> {
     `• Broad in relevance — NOT regional, NOT routine, NOT filler\n` +
     `• Stories that actually matter to an intelligent adult starting their day\n\n` +
     `${teamsLine}\n\n` +
-    `NO LOCAL NEWS. NO SPORTS. NO WEATHER. NO STOCK MARKET UPDATES. NO AI COMPANY ANNOUNCEMENTS. NO TECH PRODUCT RELEASES. NO FILLER.\n\n` +
+    `NO local news. NO sports scores. NO weather. NO tech product announcements. NO AI company news unless genuinely historic. Lead with what matters to a general audience.\n\n` +
     `For EACH of the 2 stories, write exactly TWO sentences:\n` +
     `• Sentence 1: What happened — specific, factual, with names and numbers where relevant. Max 25 words.\n` +
     `• Sentence 2: Why it matters — the real-world consequence, what it signals, or why a listener should care. Max 25 words.\n\n` +
