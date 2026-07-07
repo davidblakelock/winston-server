@@ -105,14 +105,19 @@ router.post("/location/ping", authenticate, async (req: Request, res: Response) 
       geoData.address?.county ??
       null;
 
+    const tz = typeof req.body.timezone === "string" && req.body.timezone.trim().length > 0
+      ? req.body.timezone.trim()
+      : null;
+
     await query(
       `UPDATE user_profiles
        SET last_known_lat = $2, last_known_lon = $3,
-           last_known_city = $4, last_location_at = NOW()
+           last_known_city = $4, last_location_at = NOW(),
+           timezone = COALESCE($5, timezone)
        WHERE user_name = $1`,
-      [userName, lat, lon, city]
+      [userName, lat, lon, city, tz]
     );
-    res.json({ ok: true, city });
+    res.json({ ok: true, city, timezone: tz });
   } catch (err) {
     req.log.warn({ err }, "[Location] Ping failed");
     res.status(500).json({ error: "Location update failed" });
