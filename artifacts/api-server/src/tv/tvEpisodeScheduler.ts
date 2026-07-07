@@ -28,7 +28,7 @@ async function wasNotifiedToday(
   tvmazeId: number,
   episodeLabel: string
 ): Promise<boolean> {
-  const today = new Date().toLocaleDateString("en-CA", { timeZone: user?.timezone ?? "UTC" });
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "UTC" });
   const { rows } = await query<{ id: number }>(
     `SELECT id FROM tv_episode_notifications
      WHERE user_name = $1 AND tvmaze_id = $2 AND episode_label = $3 AND notified_date = $4`,
@@ -42,7 +42,7 @@ async function markNotified(
   tvmazeId: number,
   episodeLabel: string
 ): Promise<void> {
-  const today = new Date().toLocaleDateString("en-CA", { timeZone: user?.timezone ?? "UTC" });
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "UTC" });
   await query(
     `INSERT INTO tv_episode_notifications (user_name, tvmaze_id, episode_label, notified_date)
      VALUES ($1, $2, $3, $4)
@@ -129,7 +129,7 @@ export async function startTvEpisodeScheduler(): Promise<void> {
   // Startup catch-up: if the server starts after 9 AM CT and today's check hasn't run yet,
   // fire it now. Dedup prevents double-sends if it already ran in an earlier instance.
   const nowHour = parseInt(
-    new Date().toLocaleTimeString("en-US", { timeZone: user?.timezone ?? "UTC", hour: "2-digit", hour12: false }),
+    new Date().toLocaleTimeString("en-US", { timeZone: "UTC", hour: "2-digit", hour12: false }),
     10
   );
   if (nowHour >= 9 && nowHour < 20) {
