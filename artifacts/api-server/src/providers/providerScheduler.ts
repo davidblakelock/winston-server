@@ -4,11 +4,8 @@ import { getActiveUsers } from "../onboarding/onboardingManager.js";
 import { sendFcmNotification } from "../push/fcmSender.js";
 import { getProvidersWithUpcomingDue } from "./providerManager.js";
 
-
 function daysUntil(nextDueDateStr: string): number {
-  const { rows: profProv } = await query<{ timezone: string | null }>(`SELECT timezone FROM user_profiles WHERE user_name = $1`, [userName]).catch(() => ({ rows: [] }));
-  const tz = profProv[0]?.timezone ?? "UTC";
-  const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "UTC" });
   const [tY, tM, tD] = today.split("-").map(Number);
   const [nY, nM, nD] = nextDueDateStr.split("-").map(Number);
   return Math.round(
@@ -19,7 +16,7 @@ function daysUntil(nextDueDateStr: string): number {
 let _lastCheckedDate: string | null = null;
 
 async function checkProviderDueAlerts(): Promise<void> {
-  const today = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "UTC" });
   if (_lastCheckedDate === today) return;
   _lastCheckedDate = today;
 
@@ -31,9 +28,7 @@ async function checkProviderDueAlerts(): Promise<void> {
         if (!provider.nextDueDate) continue;
         const days = daysUntil(provider.nextDueDate);
         if (days < 0 || days > 7) continue;
-
         const daysLabel = days === 0 ? "today" : days === 1 ? "tomorrow" : `in ${days} days`;
-
         await sendFcmNotification({
           userName,
           notificationType: "provider-reminder",
@@ -41,7 +36,6 @@ async function checkProviderDueAlerts(): Promise<void> {
           body: `Your appointment with ${provider.name}${provider.company ? ` (${provider.company})` : ""} is ${daysLabel}. Want me to help schedule it?`,
           data: { action: "navigate", screen: "/providers" },
         });
-
         logger.info(
           { userName, providerId: provider.id, name: provider.name, daysLabel },
           "[Providers] Due-date push sent"
@@ -55,7 +49,7 @@ async function checkProviderDueAlerts(): Promise<void> {
 
 export function startProviderScheduler(): void {
   const startHour = parseInt(
-    new Date().toLocaleTimeString("en-US", { timeZone: TZ, hour: "2-digit", hour12: false }),
+    new Date().toLocaleTimeString("en-US", { timeZone: "UTC", hour: "2-digit", hour12: false }),
     10
   );
   if (startHour >= 9) {
@@ -67,9 +61,8 @@ export function startProviderScheduler(): void {
     async () => {
       try { await checkProviderDueAlerts(); }
       catch (err) { logger.error({ err }, "[Providers] scheduler error"); }
-    },
-    { timezone: TZ }
+    }
   );
 
-  logger.info("[Providers] Due-date scheduler started (daily 9 AM CT)");
+  logger.info("[Providers] Due-date scheduler started (daily 9 AM UTC)");
 }

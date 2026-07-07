@@ -191,7 +191,7 @@ router.get("/admin/timezone-check", async (req: Request, res: Response) => {
   try {
     const nowUTC = new Date();
     const nowChicago = nowUTC.toLocaleString("en-US", {
-      timeZone: "UTC" // admin debug — use UTC for consistency,
+      timeZone: "UTC",// admin debug — use UTC for consistency,
       dateStyle: "short",
       timeStyle: "short",
     });
@@ -240,7 +240,7 @@ router.get("/admin/timezone-check", async (req: Request, res: Response) => {
         text: r.item_text,
         utc: new Date(r.reminder_time).toISOString(),
         chicago: new Date(r.reminder_time).toLocaleString("en-US", {
-          timeZone: "UTC" // admin debug — use UTC for consistency,
+          timeZone: "UTC", // admin debug — use UTC for consistency,
           dateStyle: "short",
           timeStyle: "short",
         }),
@@ -256,7 +256,7 @@ router.get("/admin/timezone-check", async (req: Request, res: Response) => {
         text: r.reminder_text,
         utc: new Date(r.fire_at).toISOString(),
         chicago: new Date(r.fire_at).toLocaleString("en-US", {
-          timeZone: "UTC" // admin debug — use UTC for consistency,
+          timeZone: "UTC", // admin debug — use UTC for consistency,
           dateStyle: "short",
           timeStyle: "short",
         }),
@@ -413,7 +413,7 @@ router.delete("/admin/delete-memory/:id", async (req: Request, res: Response) =>
   const userName = await authenticate(req, res);
   if (!userName) return;
 
-  const id = parseInt(req.params["id"] ?? "", 10);
+  const id = parseInt(String(req.params["id"] ?? ""), 10);
   if (isNaN(id)) { res.status(400).json({ error: "invalid id" }); return; }
 
   try {
@@ -432,7 +432,7 @@ router.delete("/admin/delete-profile-item/:id", async (req: Request, res: Respon
   const userName = await authenticate(req, res);
   if (!userName) return;
 
-  const id = parseInt(req.params["id"] ?? "", 10);
+  const id = parseInt(String(req.params["id"] ?? ""), 10);
   if (isNaN(id)) { res.status(400).json({ error: "invalid id" }); return; }
 
   try {
