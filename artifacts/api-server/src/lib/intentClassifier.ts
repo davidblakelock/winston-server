@@ -103,7 +103,6 @@ export interface MessageClassification {
 
 export interface ClassificationContext {
   requestContext: string;
-  hasActiveTripPlan: boolean;
   hasStoredHeadlines: boolean;
   hasCachedBriefing: boolean;
 }
