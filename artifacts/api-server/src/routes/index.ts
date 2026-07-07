@@ -1,4 +1,6 @@
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, type Request, type Response } from "express";
+import { authenticate } from "../auth/middleware.js";
+import { query } from "../db.js";
 import healthRouter from "./health";
 import chatRouter from "./chat";
 import remindersRouter from "./reminders";
@@ -78,5 +80,43 @@ router.use(stoicRouter);
 router.use(profileRouter);
 router.use(inboundEmailRouter);
 router.use(userRecordsRouter);
+
+// ── Location ping — native app sends current GPS on foreground ──────────────
+router.post("/location/ping", authenticate, async (req: Request, res: Response) => {
+  const userName = (req as any).userName as string;
+  const { lat, lon } = req.body as { lat?: number; lon?: number };
+  if (typeof lat !== "number" || typeof lon !== "number") {
+    res.status(400).json({ error: "lat and lon required" });
+    return;
+  }
+  try {
+    // Reverse geocode to city name
+    const geoRes = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`,
+      { headers: { "User-Agent": "WinstonApp/1.0" }, signal: AbortSignal.timeout(5000) }
+    );
+    const geoData = await geoRes.json() as {
+      address?: { city?: string; town?: string; village?: string; county?: string }
+    };
+    const city =
+      geoData.address?.city ??
+      geoData.address?.town ??
+      geoData.address?.village ??
+      geoData.address?.county ??
+      null;
+
+    await query(
+      `UPDATE user_profiles
+       SET last_known_lat = $2, last_known_lon = $3,
+           last_known_city = $4, last_location_at = NOW()
+       WHERE user_name = $1`,
+      [userName, lat, lon, city]
+    );
+    res.json({ ok: true, city });
+  } catch (err) {
+    req.log.warn({ err }, "[Location] Ping failed");
+    res.status(500).json({ error: "Location update failed" });
+  }
+});
 
 export default router;

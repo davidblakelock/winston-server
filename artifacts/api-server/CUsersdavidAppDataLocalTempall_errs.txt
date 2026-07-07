@@ -1,0 +1,286 @@
+src/profile/profileManager.ts(399,9): error TS2741: Property 'pets' is missing in type '{ places: string; shows: string; restaurants: string; people: string; interests: string; other: string; }' but required in type 'Record<ProfileCategory, string>'.
+src/routes/admin.ts(416,23): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+src/routes/admin.ts(435,23): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+src/routes/auth.ts(88,37): error TS2339: Property 'sub' does not exist on type 'Schema$Userinfo'.
+src/routes/auth.ts(98,37): error TS2339: Property 'sub' does not exist on type 'Schema$Userinfo'.
+src/routes/auth.ts(912,53): error TS2345: Argument of type 'string | undefined' is not assignable to parameter of type 'string'.
+src/routes/chat.ts(634,46): error TS2345: Argument of type 'Request' is not assignable to parameter of type 'Request<ParamsDictionary, any, any, ParsedQs, Record<string, any>>'.
+src/routes/chat.ts(638,11): error TS2339: Property 'message' does not exist on type 'ReadableStream<any> | null'.
+src/routes/chat.ts(638,32): error TS2339: Property 'history' does not exist on type 'ReadableStream<any> | null'.
+src/routes/chat.ts(638,58): error TS2339: Property 'isAutoGreeting' does not exist on type 'ReadableStream<any> | null'.
+src/routes/chat.ts(638,82): error TS2339: Property 'deviceId' does not exist on type 'ReadableStream<any> | null'.
+src/routes/chat.ts(638,99): error TS2339: Property 'winddownRequest' does not exist on type 'ReadableStream<any> | null'.
+src/routes/chat.ts(638,124): error TS2339: Property 'context' does not exist on type 'ReadableStream<any> | null'.
+src/routes/chat.ts(638,156): error TS2339: Property 'timezone' does not exist on type 'ReadableStream<any> | null'.
+src/routes/chat.ts(671,13): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(674,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(697,9): error TS2349: This expression is not callable.
+src/routes/chat.ts(752,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(754,16): error TS2554: Expected 0 arguments, but got 1.
+src/routes/chat.ts(758,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(759,11): error TS2349: This expression is not callable.
+src/routes/chat.ts(800,7): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(849,46): error TS2345: Argument of type '{ requestContext: any; hasStoredHeadlines: boolean; hasCachedBriefing: boolean; }' is not assignable to parameter of type 'ClassificationContext'.
+src/routes/chat.ts(858,7): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(948,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(955,65): error TS2339: Property 'relationship' does not exist on type 'never'.
+src/routes/chat.ts(1053,13): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1055,13): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1059,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1061,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1070,18): error TS2554: Expected 0 arguments, but got 1.
+src/routes/chat.ts(1074,11): error TS2339: Property 'setHeader' does not exist on type 'Response'.
+src/routes/chat.ts(1075,11): error TS2339: Property 'setHeader' does not exist on type 'Response'.
+src/routes/chat.ts(1076,11): error TS2339: Property 'setHeader' does not exist on type 'Response'.
+src/routes/chat.ts(1077,11): error TS2339: Property 'setHeader' does not exist on type 'Response'.
+src/routes/chat.ts(1078,11): error TS2339: Property 'write' does not exist on type 'Response'.
+src/routes/chat.ts(1079,11): error TS2339: Property 'write' does not exist on type 'Response'.
+src/routes/chat.ts(1080,11): error TS2339: Property 'end' does not exist on type 'Response'.
+src/routes/chat.ts(1092,11): error TS2339: Property 'setHeader' does not exist on type 'Response'.
+src/routes/chat.ts(1093,11): error TS2339: Property 'setHeader' does not exist on type 'Response'.
+src/routes/chat.ts(1094,11): error TS2339: Property 'setHeader' does not exist on type 'Response'.
+src/routes/chat.ts(1095,11): error TS2339: Property 'setHeader' does not exist on type 'Response'.
+src/routes/chat.ts(1098,16): error TS2339: Property 'writableEnded' does not exist on type 'Response'.
+src/routes/chat.ts(1098,35): error TS2339: Property 'write' does not exist on type 'Response'.
+src/routes/chat.ts(1108,13): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1111,13): error TS2339: Property 'end' does not exist on type 'Response'.
+src/routes/chat.ts(1120,13): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1121,18): error TS2554: Expected 0 arguments, but got 1.
+src/routes/chat.ts(1124,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1142,9): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1172,9): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1228,9): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1252,13): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1255,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1272,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1286,9): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1306,13): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1314,16): error TS2554: Expected 0 arguments, but got 1.
+src/routes/chat.ts(1325,28): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1331,28): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1366,9): error TS2339: Property 'end' does not exist on type 'Response'.
+src/routes/chat.ts(1372,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1386,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1387,31): error TS7052: Element implicitly has an 'any' type because type 'Headers' has no index signature. Did you mean to call 'req.headers.get'?
+src/routes/chat.ts(1415,20): error TS2554: Expected 0 arguments, but got 1.
+src/routes/chat.ts(1417,15): error TS2339: Property 'setHeader' does not exist on type 'Response'.
+src/routes/chat.ts(1418,15): error TS2339: Property 'setHeader' does not exist on type 'Response'.
+src/routes/chat.ts(1419,15): error TS2339: Property 'setHeader' does not exist on type 'Response'.
+src/routes/chat.ts(1420,67): error TS2339: Property 'writableEnded' does not exist on type 'Response'.
+src/routes/chat.ts(1420,86): error TS2339: Property 'write' does not exist on type 'Response'.
+src/routes/chat.ts(1424,56): error TS2339: Property 'end' does not exist on type 'Response'.
+src/routes/chat.ts(1427,13): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1429,41): error TS2554: Expected 0 arguments, but got 1.
+src/routes/chat.ts(1429,82): error TS2554: Expected 0 arguments, but got 1.
+src/routes/chat.ts(1442,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1453,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1469,50): error TS2345: Argument of type 'number | null' is not assignable to parameter of type 'number'.
+src/routes/chat.ts(1487,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1499,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1517,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1521,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1544,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1551,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1576,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1596,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1602,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1637,19): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1677,17): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1711,13): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1717,13): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1725,9): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1735,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1756,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1772,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1774,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1801,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1805,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1822,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1836,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1842,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1890,13): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1893,13): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1895,13): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1898,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1911,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1913,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1917,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1925,30): error TS2339: Property 'city' does not exist on type 'KeyPerson'.
+src/routes/chat.ts(1925,62): error TS2339: Property 'city' does not exist on type 'KeyPerson'.
+src/routes/chat.ts(1926,32): error TS2339: Property 'details' does not exist on type 'KeyPerson'.
+src/routes/chat.ts(1926,54): error TS2339: Property 'details' does not exist on type 'KeyPerson'.
+src/routes/chat.ts(1974,13): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1977,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(1996,9): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2007,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2013,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2047,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2049,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2072,23): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2095,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2101,13): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2103,13): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2110,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2125,17): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2130,19): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2158,17): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2165,17): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2170,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2256,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2261,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2359,17): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2368,13): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2380,13): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2411,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2413,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2432,13): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2464,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2529,13): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2562,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2578,9): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2628,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2630,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2676,13): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2689,13): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2692,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2707,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2737,16): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2769,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2771,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2775,7): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(2864,64): error TS2345: Argument of type 'number | null' is not assignable to parameter of type 'number'.
+src/routes/chat.ts(2969,53): error TS2769: No overload matches this call.
+src/routes/chat.ts(3041,9): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3055,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3059,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3083,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3093,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3107,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3122,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3132,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3137,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3141,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3148,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3163,13): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3166,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3181,13): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3184,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3221,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3237,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3243,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3259,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3265,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3281,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3301,13): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3304,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3313,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3315,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3329,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3331,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3350,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3358,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3375,29): error TS2559: Type 'string' has no properties in common with type 'Partial<CollectedData>'.
+src/routes/chat.ts(3380,13): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3385,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3451,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3460,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3466,13): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3469,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3576,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3616,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3635,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3642,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3711,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3744,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3750,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3753,13): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3780,17): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3820,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3827,16): error TS2554: Expected 0 arguments, but got 1.
+src/routes/chat.ts(3869,13): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3934,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3945,13): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3965,37): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3972,19): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3983,37): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3984,21): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(3996,37): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(4008,37): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(4009,21): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(4021,37): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(4025,39): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(4033,23): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(4052,19): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(4066,62): error TS2339: Property 'name' does not exist on type 'never'.
+src/routes/chat.ts(4076,19): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(4088,19): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(4105,16): error TS2554: Expected 0 arguments, but got 1.
+src/routes/chat.ts(4109,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(4121,26): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(4122,28): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(4124,13): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(4132,26): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(4133,28): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(4135,13): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(4139,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(4140,16): error TS2339: Property 'headersSent' does not exist on type 'Response'.
+src/routes/chat.ts(4141,13): error TS2349: This expression is not callable.
+src/routes/chat.ts(4148,13): error TS2339: Property 'end' does not exist on type 'Response'.
+src/routes/chat.ts(4155,12): error TS2339: Property 'headersSent' does not exist on type 'Response'.
+src/routes/chat.ts(4156,9): error TS2339: Property 'setHeader' does not exist on type 'Response'.
+src/routes/chat.ts(4157,9): error TS2339: Property 'setHeader' does not exist on type 'Response'.
+src/routes/chat.ts(4158,9): error TS2339: Property 'setHeader' does not exist on type 'Response'.
+src/routes/chat.ts(4159,9): error TS2339: Property 'setHeader' does not exist on type 'Response'.
+src/routes/chat.ts(4163,9): error TS2339: Property 'write' does not exist on type 'Response'.
+src/routes/chat.ts(4192,9): error TS2339: Property 'end' does not exist on type 'Response'.
+src/routes/chat.ts(4220,9): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(4230,7): error TS2339: Property 'end' does not exist on type 'Response'.
+src/routes/chat.ts(4282,11): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(4291,15): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(4334,17): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(4342,22): error TS2769: No overload matches this call.
+src/routes/chat.ts(4343,7): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(4352,29): error TS2769: No overload matches this call.
+src/routes/chat.ts(4353,39): error TS2345: Argument of type 'Request' is not assignable to parameter of type 'Request<ParamsDictionary, any, any, ParsedQs, Record<string, any>>'.
+src/routes/chat.ts(4355,57): error TS2339: Property 'query' does not exist on type 'Request'.
+src/routes/chat.ts(4367,14): error TS2554: Expected 0 arguments, but got 1.
+src/routes/chat.ts(4369,9): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(4370,9): error TS2349: This expression is not callable.
+src/routes/chat.ts(4378,28): error TS2769: No overload matches this call.
+src/routes/chat.ts(4379,12): error TS2554: Expected 0 arguments, but got 1.
+src/routes/chat.ts(4381,29): error TS2769: No overload matches this call.
+src/routes/chat.ts(4383,7): error TS2339: Property 'log' does not exist on type 'Request'.
+src/routes/chat.ts(4386,41): error TS2345: Argument of type 'Request' is not assignable to parameter of type 'Request<ParamsDictionary, any, any, ParsedQs, Record<string, any>>'.
+src/routes/chat.ts(4391,14): error TS2554: Expected 0 arguments, but got 1.
+src/routes/chat.ts(4484,54): error TS2769: No overload matches this call.
+src/routes/chat.ts(4488,14): error TS2554: Expected 0 arguments, but got 1.
+src/routes/chat.ts(4491,12): error TS2554: Expected 0 arguments, but got 1.
+src/routes/chat.ts(4499,55): error TS2769: No overload matches this call.
+src/routes/chat.ts(4513,14): error TS2554: Expected 0 arguments, but got 1.
+src/routes/chat.ts(4517,12): error TS2554: Expected 0 arguments, but got 1.
+src/routes/connect.ts(222,33): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+src/routes/connect.ts(248,33): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+src/routes/connect.ts(276,33): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+src/routes/connect.ts(277,27): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+src/routes/connect.ts(308,33): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+src/routes/connect.ts(309,27): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+src/routes/connect.ts(376,28): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+src/routes/connect.ts(406,28): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+src/routes/connect.ts(439,28): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+src/routes/connect.ts(466,28): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+src/routes/connect.ts(492,28): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+src/routes/connect.ts(524,28): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+src/routes/connect.ts(580,28): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+src/routes/connect.ts(637,28): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+src/routes/connect.ts(810,28): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+src/routes/connect.ts(885,28): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+src/routes/connect.ts(933,13): error TS2353: Object literal may only specify known properties, and 'summary' does not exist in type '{ title: string; date: string; startTime: string; endTime?: string | undefined; location?: string | undefined; description?: string | undefined; allDay?: boolean | undefined; attendees?: { ...; }[] | undefined; }'.
+src/routes/conversation.ts(89,19): error TS2322: Type 'Buffer<ArrayBufferLike>' is not assignable to type 'BlobPart'.
+src/routes/journal.ts(132,25): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+src/routes/journal.ts(179,25): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+src/routes/lists.ts(335,35): error TS7030: Not all code paths return a value.
+src/routes/lists.ts(999,65): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+src/routes/lists.ts(1015,56): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+src/routes/myday.ts(153,35): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+src/routes/reminders.ts(174,26): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+src/routes/reminders.ts(206,26): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
