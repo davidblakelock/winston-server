@@ -449,6 +449,9 @@ export async function populateCalendarSyncState(
 // ── Departure-time alert (fires when it's time to leave) ──────────────────────
 
 async function runDepartureAlertsForUser(userName: string): Promise<void> {
+
+  const profD = await getProfile(userName).catch(() => null);
+  const userTzD = profD?.timezone ?? "UTC";
   const today = localDateStr(userTzD);
   const now = new Date();
   const nowMs = now.getTime();
@@ -486,8 +489,7 @@ async function runDepartureAlertsForUser(userName: string): Promise<void> {
 
     const companionName = await getCompanionName(userName);
     const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(row.event_location)}`;
-    const profD = await getProfile(userName).catch(() => null);
-  const userTzD = profD?.timezone ?? "UTC";
+    
   const leaveTimeStr = new Date(row.leave_time_iso).toLocaleTimeString("en-US", {
       timeZone: userTzD, hour: "numeric", minute: "2-digit", hour12: true,
     });
@@ -595,8 +597,7 @@ export function startCalendarSyncScheduler(): void {
       } finally {
         _syncRunning = false;
       }
-    },
-    { timezone: TZ }
+    }
   );
 
   // Departure-time alerts — every 2 minutes (finer resolution so we don't miss the window)
@@ -613,8 +614,7 @@ export function startCalendarSyncScheduler(): void {
       } finally {
         _departRunning = false;
       }
-    },
-    { timezone: TZ }
+    }
   );
 
   logger.info("Calendar sync scheduler (hourly) + departure alert scheduler (every 10 min) started");
