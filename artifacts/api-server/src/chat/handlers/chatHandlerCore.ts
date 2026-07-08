@@ -436,12 +436,15 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     model:      MODEL_SONNET,
     max_tokens: 1024,
     system:     systemBlocks as Anthropic.TextBlockParam[],
+    tools:      [{ type: "web_search_20250305" as const, name: "web_search" }],
     messages,
   });
 
-  const claudeReply = primaryResponse.content[0]?.type === "text"
-    ? primaryResponse.content[0].text.trim()
-    : "";
+  const claudeReply = primaryResponse.content
+    .filter((b) => b.type === "text")
+    .map((b) => (b as { type: "text"; text: string }).text)
+    .join("")
+    .trim();
 
   if (!claudeReply) {
     const fallback = "Sorry, I had trouble with that. Can you try again?";
