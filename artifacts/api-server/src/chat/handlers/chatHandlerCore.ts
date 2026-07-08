@@ -234,74 +234,6 @@ function buildCalendarBlock(events: CalendarEvent[], timezone: string): string {
   return `\n\n[Today's Calendar]\n` + lines.join("\n");
 }
 
-// ── Tool definition for structured output ─────────────────────────────────────
-
-const RESPOND_TOOL: Anthropic.Tool = {
-  name: "respond",
-  description: "Always use this tool to respond to the user.",
-  input_schema: {
-    type: "object",
-    properties: {
-      reply: {
-        type: "string",
-        description: "Your natural language response to the user. Plain conversational text only.",
-      },
-      action: {
-        type: "object",
-        description: "The action to execute, if any.",
-        properties: {
-          type: {
-            type: "string",
-            enum: [
-              "none", "add_todo", "add_reminder", "add_todo_with_reminder",
-              "remind_contact", "save_to_attic", "search_contact", "save_contact",
-              "make_reservation", "send_sms", "make_call", "navigate",
-              "update_calendar", "check_email", "add_bill", "log_medication"
-            ],
-            description: `Action type:
-- none: general conversation, weather, sports, markets, news, questions
-- add_todo: adding item(s) to any list
-- add_reminder: timed reminder only, no list item
-- add_todo_with_reminder: item on to-do list AND timed reminder (e.g. "remind me to call Olivia at 2pm")
-- remind_contact: reminder FOR another person
-- send_sms: user wants to send a text message
-- make_call: user wants to make a phone call
-- navigate: user wants directions to a place
-- update_calendar: read, create, modify or delete calendar events
-- check_email: check, read, delete, archive email
-- search_contact: look up a contact
-- save_contact: save a new contact
-- make_reservation: restaurant reservation
-- add_bill: track a manual bill (monthly payments only)
-- log_medication: user took their medication`,
-          },
-          listName: { type: "string" },
-          itemText: { type: "string" },
-          reminderTime: { type: "string", description: "ISO 8601 datetime with timezone offset" },
-          forContact: { type: "string" },
-          content: { type: "string" },
-          searchQuery: { type: "string" },
-          contactName: { type: "string" },
-          contactPhone: { type: "string" },
-          contactEmail: { type: "string" },
-          saveDestination: { type: "string", enum: ["my_people", "service_providers", "curated"] },
-          restaurantName: { type: "string" },
-          recipientName: { type: "string" },
-          smsBody: { type: "string" },
-          phone: { type: "string" },
-          navigationTarget: { type: "string" },
-          calendarIntent: { type: "string", enum: ["read", "create", "modify", "delete"] },
-          billName: { type: "string" },
-          billDueDay: { type: "number" },
-          billAmount: { type: "string" },
-          billNotes: { type: "string" },
-        },
-        required: ["type"],
-      },
-    },
-    required: ["reply", "action"],
-  },
-};
 
 // ── History helpers ───────────────────────────────────────────────────────────
 
@@ -498,29 +430,79 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     { role: "user", content: message },
   ];
 
-  // ── Primary Claude call — tool_choice forces structured output ────────────────
+  // ── Primary Claude call — plain natural language response ───────────────────
   const systemBlocks = buildSystemBlocks(stableSystem, dynamicPrompt);
   const primaryResponse = await anthropic.messages.create({
-    model:       MODEL_SONNET,
-    max_tokens:  1024,
-    system:      systemBlocks as Anthropic.TextBlockParam[],
-    tools:       [RESPOND_TOOL],
-    tool_choice: { type: "tool", name: "respond" },
+    model:      MODEL_SONNET,
+    max_tokens: 1024,
+    system:     systemBlocks as Anthropic.TextBlockParam[],
     messages,
   });
 
-  // Extract tool_use block — guaranteed present due to tool_choice
-  const toolUse = primaryResponse.content.find((b) => b.type === "tool_use") as
-    { type: "tool_use"; input: { reply: string; action: ClaudeAction } } | undefined;
+  const claudeReply = primaryResponse.content[0]?.type === "text"
+    ? primaryResponse.content[0].text.trim()
+    : "";
 
-  if (!toolUse) {
-    log.warn({}, "[chatHandlerCore] No tool_use block in response");
+  if (!claudeReply) {
     const fallback = "Sorry, I had trouble with that. Can you try again?";
     runPostProcessing(sessionUserName, message, fallback, history, userProfile, deviceId);
     return { reply: fallback, action: { type: "none" } };
   }
 
-  const { reply: claudeReply, action } = toolUse.input;
+  log.info({ replyPreview: claudeReply.slice(0, 80) }, "[chatHandlerCore] Reply received");
+
+  // ── Action classification — separate Haiku call ───────────────────────────
+  const now = new Date();
+  const todayDate    = now.toISOString().slice(0, 10);
+  const tomorrowDate = new Date(now.getTime() + 86400000).toISOString().slice(0, 10);
+
+  let action: ClaudeAction = { type: "none" };
+  try {
+    const actionResponse = await anthropic.messages.create({
+      model:      MODEL_HAIKU,
+      max_tokens: 150,
+      messages:   [{
+        role: "user",
+        content: `Today: ${todayDate}. Tomorrow: ${tomorrowDate}. Timezone: ${timezone}.
+User said: "${message.slice(0, 200)}"
+
+Return ONLY a JSON object classifying the action. Examples:
+"add milk to shopping list" → {"type":"add_todo","listName":"shopping","itemText":"milk"}
+"remind me to call Olivia tomorrow at 2pm" → {"type":"add_todo_with_reminder","listName":"to do","itemText":"call Olivia","reminderTime":"${tomorrowDate}T14:00:00"}
+"set a reminder at 9am" → {"type":"add_reminder","itemText":"reminder","reminderTime":"${todayDate}T09:00:00"}
+"text Susan" → {"type":"send_sms","recipientName":"Susan"}
+"call David" → {"type":"make_call","recipientName":"David"}
+"take me to Home Depot" → {"type":"navigate","navigationTarget":"Home Depot"}
+"add dentist to calendar Thursday 10am" → {"type":"update_calendar","calendarIntent":"create"}
+"what's on my calendar" → {"type":"update_calendar","calendarIntent":"read"}
+"check email" → {"type":"check_email"}
+"find John's number" → {"type":"search_contact","searchQuery":"John"}
+"make reservation at Hillstone" → {"type":"make_reservation","restaurantName":"Hillstone"}
+"add Amex bill due 15th $500" → {"type":"add_bill","billName":"Amex","billDueDay":15,"billAmount":"$500"}
+"I took my meds" → {"type":"log_medication"}
+"what's the weather" → {"type":"none"}
+"how did Rangers do" → {"type":"none"}
+"tell me a joke" → {"type":"none"}
+
+Rules:
+- "remind me to X at Y" → add_todo_with_reminder
+- navigation/directions → navigate not add_todo
+- email actions → check_email
+- weather/sports/news/markets → none
+
+Return JSON only:`,
+      }],
+    });
+    const raw = actionResponse.content[0]?.type === "text" ? actionResponse.content[0].text.trim() : "";
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (match) {
+      const parsed = JSON.parse(match[0]) as ClaudeAction;
+      if (parsed.type) action = parsed;
+    }
+  } catch (err) {
+    log.warn({ err }, "[chatHandlerCore] Action classification failed — none");
+  }
+
   log.info({ actionType: action.type }, "[chatHandlerCore] Action resolved");
 
   // ── Execute action ───────────────────────────────────────────────────────────
