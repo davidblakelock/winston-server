@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { NATIVE_STORED_NAME, NATIVE_API_KEY, authenticate } from "../auth/middleware.js";
+import { NATIVE_STORED_NAME, authenticate } from "../auth/middleware.js";
 import {
   getProfile,
   upsertProfile,
@@ -201,25 +201,13 @@ router.post("/onboarding/complete", async (req, res) => {
   if (!userName) return;
 
   try {
+    // Native app sends flat fields (firstName, lastName, hobbies, …)
+    // Web onboarding sends { collectedData: CollectedData }
     const body = req.body as Record<string, unknown>;
-    // Use the API key header — not body field inspection — to identify native requests.
-    const isNative = req.headers["x-api-key"] === NATIVE_API_KEY;
+    const isNativeFormat = "firstName" in body || "lastName" in body || "hobbies" in body;
 
-    if (isNative) {
-      // Explicitly extract and type-validate each field so no silent drops occur.
-      const data: NativeOnboardingData = {
-        firstName:           typeof body.firstName === "string"           ? body.firstName           : undefined,
-        lastName:            typeof body.lastName === "string"            ? body.lastName            : undefined,
-        wakeTime:            typeof body.wakeTime === "string"            ? body.wakeTime            : undefined,
-        city:                typeof body.city === "string"                ? body.city                : undefined,
-        hobbies:             Array.isArray(body.hobbies)                  ? (body.hobbies as string[])                                              : undefined,
-        musicGenres:         Array.isArray(body.musicGenres)              ? (body.musicGenres as string[])                                          : undefined,
-        tvGenres:            Array.isArray(body.tvGenres)                 ? (body.tvGenres as string[])                                             : undefined,
-        sportsTeams:         typeof body.sportsTeams === "string"         ? body.sportsTeams         : undefined,
-        keyPeople:           Array.isArray(body.keyPeople)                ? (body.keyPeople as Array<{ name: string; relationship: string }>)        : undefined,
-        favoriteRestaurants: typeof body.favoriteRestaurants === "string" ? body.favoriteRestaurants : undefined,
-        favoritePodcasts:    typeof body.favoritePodcasts === "string"    ? body.favoritePodcasts    : undefined,
-      };
+    if (isNativeFormat) {
+      const data = body as NativeOnboardingData;
       await upsertNativeOnboardingData(data, userName);
       req.log.info({ userName }, "[ONBOARDING] Completed via native format");
       res.json({ success: true });

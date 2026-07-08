@@ -1,6 +1,5 @@
 import { Router, type IRouter } from "express";
 import express from "express";
-import { randomUUID } from "node:crypto";
 import { logger } from "../lib/logger.js";
 import {
   getProfile,
@@ -13,9 +12,6 @@ import { authenticate, tryAuthenticate, NATIVE_USER } from "../auth/middleware.j
 import { getProfilePlaces, getProfileItems } from "../profile/profileManager.js";
 import { getCuratedContacts } from "../google/contacts.js";
 import { query } from "../db.js";
-import { clearStaticBriefingContext, clearCachedBriefing } from "../morning/briefingCache.js";
-import { preFetchMorningBriefing } from "../morning/briefingPregenerate.js";
-import { generateFreshBriefing } from "../morning/briefingFresh.js";
 import { getUserSettings, upsertUserSettings } from "../stoic/stoicManager.js";
 import { getEmailScanSettings, setEmailScanSettings } from "../email/emailScanSettings.js";
 import { getVoiceOptions } from "../voices/voiceOptionsManager.js";
@@ -292,27 +288,9 @@ router.get("/voices/:voiceId/preview", async (req, res) => {
 });
 
 // ── GET /api/navigation/places ────────────────────────────────────────────────
-// Returns hardcoded saved locations merged with profile_items places.
+// Returns home address merged with profile_items places.
 // Frontend uses this to detect navigation intent in the user-gesture context
 // (so window.open() is never blocked by popup blockers).
-const HARDCODED_PLACES = [
-  {
-    name: "Doctor Bonnet",
-    address: "403 West Campbell Road Richardson Texas",
-    keywords: ["doctor", "doc", "doctor bonnet", "bonnet", "physician", "my doctor", "the doctor"],
-  },
-  {
-    name: "Moody YMCA",
-    address: "6000 Preston Road Dallas Texas 75205",
-    keywords: ["moody", "moody ymca", "moody y"],
-  },
-  {
-    name: "Semones YMCA",
-    address: "4332 Northaven Road Dallas Texas 75229",
-    keywords: ["semones", "semones ymca", "semones y", "the gym", "gym", "the y", "ymca"],
-  },
-];
-
 router.get("/navigation/places", async (req, res) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
@@ -332,11 +310,10 @@ router.get("/navigation/places", async (req, res) => {
         ]
       : [];
     const extra = profilePlaces
-      .filter((p) => !HARDCODED_PLACES.some((h) => h.name.toLowerCase() === p.name.toLowerCase()))
       .map((p) => ({ name: p.name, address: p.address, keywords: [p.name.toLowerCase()] }));
-    res.json({ places: [...homePlaces, ...HARDCODED_PLACES, ...extra] });
+    res.json({ places: [...homePlaces, ...extra] });
   } catch {
-    res.json({ places: HARDCODED_PLACES });
+    res.json({ places: [] });
   }
 });
 
@@ -537,67 +514,6 @@ router.get("/emergency/info", async (req, res) => {
   } catch (err) {
     logger.error({ msg: "[emergency/info] unhandled error", err: String(err) });
     res.status(500).json({ error: "Failed to load emergency info" });
-  }
-});
-
-// ── POST /api/briefing/refresh ────────────────────────────────────────────────
-// Clears today's cached static context and briefing text, then re-generates
-// fresh (including a new news fetch). Use after prompt changes to test immediately.
-router.post("/briefing/refresh", async (req, res) => {
-  const userName = await authenticate(req, res);
-  if (!userName) return;
-  try {
-    // 1. Clear in-memory caches immediately
-    clearStaticBriefingContext(userName);
-    clearCachedBriefing(userName);
-
-    // 2. Clear today's DB record — update rather than delete so push_sent_at is preserved.
-    // Deleting the row would cause a server restart during/after refresh to re-send the
-    // morning push notification (push_sent_at survives in memory but not across restarts).
-    const settingsTz = (await import("../lib/userTimezone.js").then(m => m.getUserLocationContext(userName))).timezone;
-    const today = new Date().toLocaleDateString("en-CA", { timeZone: settingsTz });
-    await query(
-      `UPDATE morning_static_context
-          SET preamble = NULL, suffix = NULL, candidate_story_keys = NULL, briefing_text = NULL, built_at = NOW()
-        WHERE user_name = $1 AND date_key = $2
-        RETURNING user_name`,
-      [userName, today]
-    ).catch(() => null);
-
-    // 3. Fire re-generation asynchronously — takes 60–90s, don't block the response
-    req.log.info({ userName }, "[BriefingRefresh] Starting async re-generation");
-    preFetchMorningBriefing(userName)
-      .then(() => req.log.info({ userName }, "[BriefingRefresh] Re-generation complete"))
-      .catch((err: unknown) => req.log.error({ err }, "[BriefingRefresh] Re-generation failed"));
-
-    res.json({ ok: true, message: "Cache cleared — re-generation running in background (60–90s). Check server logs for completion." });
-  } catch (err) {
-    req.log.error({ err }, "[BriefingRefresh] Failed to clear cache");
-    res.status(500).json({ error: "Cache clear failed — check server logs." });
-  }
-});
-
-// ── GET /api/briefing/morning ─────────────────────────────────────────────────
-// Generates the morning briefing FRESH on every call — no pre-caching.
-// Live: sleep (Google Fit), weather, calendar, email, news, events, feel-good.
-router.get("/briefing/morning", async (req, res) => {
-  const userName = await authenticate(req, res);
-  if (!userName) return;
-  try {
-    req.log.info({ userName }, "[FreshBriefing] Generating on-demand");
-    const text = await generateFreshBriefing(userName);
-    res.json({ ok: true, text });
-    // Save to chat_messages so it appears in the main chat history (fire-and-forget).
-    const msgId = randomUUID();
-    query(
-      `INSERT INTO chat_messages (user_name, role, content, message_id)
-       VALUES ($1, 'assistant', $2, $3)
-       ON CONFLICT (message_id) WHERE message_id IS NOT NULL DO NOTHING`,
-      [userName, text.slice(0, 8000), msgId]
-    ).catch((e) => req.log.warn({ e }, "[FreshBriefing] chat_messages save failed"));
-  } catch (err) {
-    req.log.error({ err }, "[FreshBriefing] Generation failed");
-    res.status(500).json({ error: "Briefing generation failed — please try again." });
   }
 });
 

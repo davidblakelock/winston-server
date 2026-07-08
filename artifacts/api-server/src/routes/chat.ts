@@ -1,9 +1,8 @@
 import { Router, type IRouter } from "express";
 import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
-import OpenAI from "openai";
 import { query } from "../db.js";
-import { fetchAndSummarizeEmails, formatEmailsForPrompt, buildImportantEmailInstruction, getEmailLastChecked, updateEmailLastChecked } from "../google/gmail.js";
+import { fetchAndSummarizeEmails, formatEmailsForPrompt, buildImportantEmailInstruction, updateEmailLastChecked } from "../google/gmail.js";
 import {
   fetchTodayEvents,
   fetchWeekEvents,
@@ -148,11 +147,6 @@ import {
   searchGoogleMapsPlaces,
   formatGoogleMapsPlacesForPrompt,
 } from "../maps/googleMapsIntel.js";
-import {
-  collectSundayData,
-  buildSundaySummaryBlock,
-} from "../sundaySummary/sundaySummaryManager.js";
-import { validateSession } from "../auth/sessionAuth.js";
 import { authenticate, tryAuthenticate } from "../auth/middleware.js";
 import { normalizeTtsText } from "../lib/ttsNormalize.js";
 import {
@@ -228,7 +222,6 @@ import { populateCalendarSyncState } from "../departure/calendarSyncScheduler.js
 import { createPerson } from "../people/peopleManager.js";
 import { createProvider } from "../providers/providerManager.js";
 import { logBriefingStories } from "../morning/storyDedup.js";
-import { getDallasItems, getLocalContentCity, type LocalContentItem } from "../morning/dallasContent.js";
 import { createReminder } from "../reminders/reminderManager.js";
 import { broadcastToUser } from "../reminders/sseStore.js";
 import { saveMoodCheckin } from "../mood/moodManager.js";
@@ -258,10 +251,8 @@ import {
   markObservationSurfaced,
 } from "../lifeCaptures/lifeCapturesManager.js";
 import { handleEmailCalendar, type EmailCalendarResult } from "../chat/handlers/emailCalendarHandler.js";
-import { handleText } from "../chat/handlers/textHandler.js";
-import { handleReservation } from "../chat/handlers/reservationHandler.js";
 import { getCurrentDateTimeBlock as _getCurrentDateTimeBlock } from "../chat/getCurrentDateTimeBlock.js";
-
+import { handleContact, type ContactHandlerResult } from "../chat/handlers/contactHandler.js";
 // ── Calendar location context helpers ──────────────────────────────────────
 // Short-lived per-user cache of today's events so we don't hit the Google API
 // on every single message turn.
@@ -337,15 +328,9 @@ const router: IRouter = Router();
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-function formatWeatherBlock(w: CachedWeather): string {
-  return (
-    `${w.city}: ${w.temp}°F (feels like ${w.feelsLike}°F), ${w.condition}` +
-    ` — high ${w.high}°F / low ${w.low}°F` +
-    ` | ${w.precipChance}% precip | humidity ${w.humidity}%`
-  );
-}
+
+
 
 /** Detect the forecast scope the user is asking about.
  *  Returns the days to include and how Claude should respond. */
@@ -2054,54 +2039,590 @@ const chatHandlerCore = async (req: Request, res: Response) => {
     }
   }
 
-  // ── Restaurant / reservation flow ──────────────────────────────────────────
-  if (isRestaurantIntelRequest || isReservationFlowActive || isReservationCalAdd) {
-    const resResult = await handleReservation({
-      message,
-      sessionUserName,
-      bodyLat:                 typeof (req.body as any).lat === "number" ? (req.body as any).lat as number : null,
-      bodyLng:                 typeof (req.body as any).lng === "number" ? (req.body as any).lng as number : null,
-      isRestaurantIntelRequest,
-      isReservationFlowActive,
-      isReservationCancel,
-      isReservationCalAdd:     !isMorningGreeting && cls.reservation_cal_add,
-      isMorningGreeting,
-      pendingReservation,
-      userProfile,
-      history,
-      log: req.log,
-    });
-    systemPrompt += resResult.contextBlock;
-    if (resResult.hardcodedResponse !== undefined) {
-      (req as any)._hardcodedResponse = resResult.hardcodedResponse;
+  // ── Restaurant reservation / directions / info ───────────────────────────────
+  // Fires when classifier sets restaurant_intel. City priority: GPS reverse geocode → userProfile.city.
+  if (isRestaurantIntelRequest) {
+    // A new request always resets any stale pending state.
+    if (pendingReservation) clearPendingReservation(sessionUserName);
+    clearPendingBookingConfirmation(sessionUserName);
+    const bodyLat = typeof (req.body as any).lat === "number" ? (req.body as any).lat as number : null;
+    const bodyLng = typeof (req.body as any).lng === "number" ? (req.body as any).lng as number : null;
+    let city: string | undefined;
+    if (!city && bodyLat !== null && bodyLng !== null) {
+      try {
+        const geoRes = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?lat=${bodyLat}&lon=${bodyLng}&format=json`,
+          { headers: { "User-Agent": "WinstonCompanion/1.0" }, signal: AbortSignal.timeout(5000) }
+        );
+        const geoData = await geoRes.json() as { address?: { city?: string; town?: string; village?: string; county?: string } };
+        city = geoData.address?.city ?? geoData.address?.town ?? geoData.address?.village ?? geoData.address?.county;
+        if (city) req.log.info({ lat: bodyLat, lng: bodyLng, city }, "[R001] City from GPS");
+      } catch { /* fall through to next priority */ }
     }
-    if (resResult.reservationPayload) {
-      (req as any)._reservationPayload = resResult.reservationPayload;
+    if (!city) city = userProfile?.city ?? undefined;
+    const needsCityFromUser = !city;
+    const todayISO = chicagoDateStr();
+
+    try {
+      let intent = await parseReservationIntent(message, todayISO);
+
+      if (!intent) {
+        const lastAssistantMsg = [...history].reverse().find((h) => h.role === "assistant")?.content ?? "";
+        const historyContext = lastAssistantMsg || history.slice(-8).map((h) => h.content).join("\n") + "\n" + message;
+
+        const nameResp = await anthropic.messages.create({
+          model: MODEL_HAIKU,
+          max_tokens: 60,
+          system: `Extract the restaurant name the user wants to make a reservation at. Return ONLY the restaurant name — nothing else. Return null if no specific restaurant is named.`,
+          messages: [{ role: "user", content: historyContext }],
+        });
+        const extracted = nameResp.content[0]?.type === "text" ? nameResp.content[0].text.trim() : "";
+        if (extracted && extracted.toLowerCase() !== "null" && !extracted.includes("\n") && extracted.length < 100) {
+          intent = { restaurantName: extracted, action: "reservation", dateISO: null, dateLabel: null, timeISO: null, timeLabel: null, partySize: null } satisfies RestaurantIntent;
+          req.log.info({ restaurantName: extracted }, "[R001] Restaurant name extracted from history");
+        }
+      }
+
+      if (intent && needsCityFromUser) {
+        systemPrompt += `\n\n[Restaurant Reservation — Location Unavailable] The user wants a reservation at ${intent.restaurantName} but their city is unknown. Ask them what city they are in before you can look up the restaurant.`;
+        req.log.info({ restaurantName: intent.restaurantName }, "[R001] No city available — asking user");
+      } else if (intent) {
+        req.log.info({ restaurantName: intent.restaurantName, action: intent.action, city }, "[R001] Intent parsed");
+
+        if (intent.action === "directions") {
+          const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(city ? intent.restaurantName + " " + city : intent.restaurantName)}`;
+          (req as any)._reservationPayload = { url, openTableUrl: url, type: "maps", restaurantName: intent.restaurantName };
+          (req as any)._hardcodedResponse = `Opening Google Maps for ${intent.restaurantName}.`;
+          broadcastToUser(sessionUserName, "reservation-link", { url, openTableUrl: url, type: "maps", restaurantName: intent.restaurantName });
+          req.log.info({ restaurantName: intent.restaurantName, url }, "[R001] Directions dispatched");
+
+        } else if (intent.action === "info") {
+          systemPrompt += `\n\n[Restaurant Info Request — ${intent.restaurantName}] The user wants info about this restaurant${city ? ` in ${city}` : ""}. Answer from your knowledge.`;
+
+        } else {
+          // Unified booking path — all contexts (trip-planning and general)
+          const partySize = intent.partySize ?? 2;
+
+          // In trip-planning context, derive the date from the trip plan when the
+          // user didn't specify one — find the day whose location matches the city
+          // being discussed and offset from the trip's start date.
+
+          let details = await getCachedRestaurantDetails(sessionUserName, intent.restaurantName);
+          if (details) {
+            req.log.info({ restaurantName: intent.restaurantName, platform: details.platform }, "[R001] Cache hit");
+          } else {
+            details = await lookupRestaurantDetails(intent.restaurantName, city ?? "");
+            if (details) {
+              await cacheRestaurantDetails(sessionUserName, intent.restaurantName, details).catch(() => {});
+              req.log.info({ restaurantName: intent.restaurantName, platform: details.platform }, "[R001] Places lookup complete");
+            }
+          }
+
+          const bookingUrl = details ? buildReservationUrl(details, intent.dateISO, intent.timeISO, partySize) : null;
+
+          const conflict = intent.dateISO && intent.timeISO
+            ? await checkCalendarConflict(sessionUserName, intent.dateISO, intent.timeISO).catch(() => null)
+            : null;
+          const conflictNote = conflict ? ` Heads up — you've got a possible conflict: ${conflict}.` : "";
+
+          const dateTimeStr = [
+            intent.dateLabel,
+            intent.timeLabel ? `at ${intent.timeLabel}` : null,
+            `for ${partySize}`,
+          ].filter(Boolean).join(" ");
+
+          if (bookingUrl && details && details.platform !== "phone") {
+            const platformLabel = details.platform === "opentable" ? "OpenTable" : details.platform === "resy" ? "Resy" : "Yelp";
+            (req as any)._reservationPayload = {
+              type: details.platform,
+              restaurantName: details.name,
+              openTableUrl: details.platform === "opentable" ? bookingUrl : undefined,
+              resyUrl: details.platform === "resy" ? bookingUrl : undefined,
+              yelpUrl: details.platform === "yelp" ? bookingUrl : undefined,
+            };
+            (req as any)._hardcodedResponse =
+              `I've found ${details.name}${dateTimeStr ? ` — ${dateTimeStr}` : ""} on ${platformLabel}.${conflictNote} Tap to book.`;
+            req.log.info({ restaurantName: details.name, platform: details.platform, bookingUrl }, "[R001] Direct booking URL dispatched");
+          } else {
+            if (details?.phone) {
+              systemPrompt += `\n\n[Restaurant Reservation — Phone Only] ${details.name} is not on OpenTable, Resy, or Yelp. Their phone number is ${details.phone}. Tell the user to call to make a reservation.`;
+            } else {
+              systemPrompt += `\n\n[Restaurant Reservation — Not Found] Could not find ${intent.restaurantName}${city ? ` in ${city}` : ""} on OpenTable, Resy, or Yelp. Let the user know and suggest they search directly.`;
+            }
+            req.log.info({ restaurantName: intent.restaurantName, hasPhone: !!details?.phone }, "[R001] No booking platform — falling through to Claude");
+          }
+        }
+      }
+    } catch (err) {
+      req.log.warn({ err }, "[R001] Restaurant intelligence failed — falling through to Claude");
     }
   }
 
-  // ── T006: Text message flow ─────────────────────────────────────────────
-  if (isTextFlowActive || isSmsRetryRequest || isSmsEditAfterSend) {
-    const textResult = await handleText({
-      message,
-      sessionUserName,
-      deviceId,
-      isTextFlowActive,
-      pendingText,
-      isSmsRetryRequest,
-      isSmsEditAfterSend,
-      lastSmsPayload,
-      userProfile,
-      log: req.log,
-    });
-    systemPrompt += textResult.contextBlock;
-    if (textResult.hardcodedResponse !== undefined) {
-      (req as any)._hardcodedResponse = textResult.hardcodedResponse;
+  // ── R001-CONFIRM: User wants to add a confirmed reservation to calendar ───────
+  // Triggered when user says "add it to my calendar" / "yes add it" / etc.
+  // after receiving the push notification from the email scanner.
+  // The ACTUAL confirmed time comes from the email, not the originally-requested time.
+  // Intent detected by classifier (reservation_cal_add) — no regex needed.
+  if (!isRestaurantIntelRequest && !isMorningGreeting && cls.reservation_cal_add) {
+    const pendingRes = await getLatestUnscheduledReservation(sessionUserName).catch(() => null);
+
+    if (pendingRes) {
+      const _user = sessionUserName;
+      // Extract any guest name from the message — e.g. "add it and invite Susan"
+      const guestMatch = message.match(
+        /\b(?:with|invite|for|include|and|also\s+(?:tell|let|send|notify))\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/
+      );
+      const rawGuestName = guestMatch?.[1] ?? null;
+
+      // Cross-reference with My People to find email for calendar invite
+      const allPeople = await getPeople(_user).catch((): KeyPerson[] => []);
+      const calAttendees: Array<{ name: string; email: string }> = [];
+      const notifiedNames: string[] = [];
+
+      if (rawGuestName) {
+        const lower = rawGuestName.toLowerCase();
+        const match = allPeople.find((p) => {
+          const first = p.name.split(" ")[0]?.toLowerCase() ?? "";
+          const full  = p.name.toLowerCase();
+          return first === lower || full === lower || full.includes(lower);
+        });
+        if (match?.email) {
+          calAttendees.push({ name: match.name, email: match.email });
+          notifiedNames.push(match.name.split(" ")[0] ?? match.name);
+        }
+      }
+
+      // Format confirmed date/time for response
+      const startTime = pendingRes.time ?? "19:00";
+      const [rH, rM] = startTime.split(":").map(Number);
+      const rAmPm = (rH ?? 0) >= 12 ? "PM" : "AM";
+      const rHour = (rH ?? 0) % 12 === 0 ? 12 : (rH ?? 0) % 12;
+      const rMin  = rM === 0 ? "" : `:${String(rM).padStart(2, "0")}`;
+      const timeStr = `${rHour}${rMin} ${rAmPm}`;
+
+      const dateStr = (() => {
+        const d = new Date(pendingRes.date + "T12:00:00");
+        return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+      })();
+
+      const guestNote = notifiedNames.length
+        ? ` Sending ${notifiedNames[0]} a calendar invite too.`
+        : rawGuestName
+          ? ` (I don't have ${rawGuestName}'s email — you can forward the confirmation to them.)`
+          : "";
+
+      (req as any)._hardcodedResponse =
+        `Done! Added ${pendingRes.restaurantName} to your calendar for ${dateStr} at ${timeStr}` +
+        `${pendingRes.partySize ? `, party of ${pendingRes.partySize}` : ""}.${guestNote}`;
+
+      // Create event + update DB in background
+      Promise.resolve().then(async () => {
+        try {
+          const endH = ((rH ?? 19) + 2) % 24;
+          const endTime = `${String(endH).padStart(2, "0")}:${String(rM ?? 0).padStart(2, "0")}`;
+          const descParts: string[] = [];
+          if (pendingRes.confirmationNumber) descParts.push(`Confirmation: ${pendingRes.confirmationNumber}`);
+          if (pendingRes.partySize) descParts.push(`Party of ${pendingRes.partySize}`);
+          if (notifiedNames.length) descParts.push(`Guest: ${notifiedNames.join(", ")}`);
+
+          const calResult = await createCalendarEvent({
+            title:       `Dinner at ${pendingRes.restaurantName}`,
+            date:        pendingRes.date,
+            startTime,
+            endTime,
+            location:    pendingRes.address ?? pendingRes.restaurantName,
+            description: descParts.join("\n") || undefined,
+            allDay:      false,
+            attendees:   calAttendees.length ? calAttendees : undefined,
+          }, _user).catch(() => null);
+
+          if (calResult?.id) {
+            await markReservationCalendarCreated(pendingRes.id, calResult.id).catch(() => {});
+          }
+
+          req.log.info(
+            { restaurant: pendingRes.restaurantName, date: pendingRes.date, time: startTime, calId: calResult?.id, guests: notifiedNames },
+            "[R001-CONFIRM] Email-driven calendar event created"
+          );
+        } catch (err) {
+          req.log.warn({ err }, "[R001-CONFIRM] Email-driven calendar creation failed");
+        }
+      }).catch(() => {});
     }
-    if (textResult.smsPayload) {
-      (req as any)._smsPayload = textResult.smsPayload;
+    // If no pending reservation found, fall through to Claude — it will handle gracefully
+  }
+
+  // R001 Phase 2 — legacy stale-state cleanup only
+  if (isReservationFlowActive && pendingReservation) {
+    if (isReservationCancel) {
+      clearPendingReservation(sessionUserName);
+      systemPrompt += `\n\n[Reservation Cancelled]\nAcknowledge briefly and warmly — "No problem, I've dropped it."`;
+    } else {
+      clearPendingReservation(sessionUserName);
     }
   }
+
+  // ── Last booking attempt — inject so Claude answers follow-ups correctly ──────
+  if (!isRestaurantIntelRequest) {
+    const lastBooking = getLastBookingAttempt(sessionUserName);
+    if (lastBooking) {
+      let bookingStatusNote = "";
+      if (lastBooking.status === "calendar_created") {
+        bookingStatusNote =
+          `\n\n[Reservation Status — Recent]\n` +
+          `${lastBooking.restaurantName} — ${lastBooking.dateLabel}${lastBooking.timeLabel ? ` at ${lastBooking.timeLabel}` : ""}, ` +
+          `party of ${lastBooking.partySize}. User confirmed the booking. A Google Calendar event was created.`;
+      } else {
+        // link_opened — booking page was opened but user hasn't confirmed yet
+        bookingStatusNote =
+          `\n\n[Reservation Status — Recent]\n` +
+          `Opened the booking page for ${lastBooking.restaurantName} ` +
+          `(${lastBooking.dateLabel}${lastBooking.timeLabel ? ` at ${lastBooking.timeLabel}` : ""}, party of ${lastBooking.partySize}). ` +
+          `The user is completing the reservation on the platform. ` +
+          `${lastBooking.phone ? `Phone: ${lastBooking.phone}.` : ""}`;
+      }
+      systemPrompt += bookingStatusNote;
+    }
+  }
+
+  // ── T006: Text message composition flow ────────────────────────────────────
+  if (isTextFlowActive && pendingText) {
+    const displayName = userProfile?.name ?? sessionUserName;
+    const toneOverride = detectToneOverride(message);
+
+    // ── T006-DISAMBIG: User is choosing which person to text ─────────────────
+    if (pendingText.phase === "awaiting_disambiguation" && pendingText.candidates) {
+      const candidates = pendingText.candidates;
+      const lowerMsg = message.toLowerCase().trim();
+
+      // Try to resolve the candidate the user picked.
+      // Match by: ordinal ("first", "second"), name fragment, or relationship.
+      let resolved: TextContactCandidate | null = null;
+
+      // Ordinal: "the first one", "first", "#1", "1st"
+      const ordinalMatch = lowerMsg.match(/\b(?:the\s+)?(first|1st|second|2nd|third|3rd|fourth|4th)\b/);
+      if (ordinalMatch) {
+        const ordMap: Record<string, number> = { first: 0, "1st": 0, second: 1, "2nd": 1, third: 2, "3rd": 2, fourth: 3, "4th": 3 };
+        const idx = ordMap[ordinalMatch[1]!] ?? -1;
+        if (idx >= 0 && idx < candidates.length) resolved = candidates[idx]!;
+      }
+
+      // Name or relationship fragment match
+      if (!resolved) {
+        resolved = candidates.find((c) =>
+          lowerMsg.includes(c.name.toLowerCase()) ||
+          (c.name.split(" ")[1] && lowerMsg.includes((c.name.split(" ")[1] ?? "").toLowerCase())) ||
+          (c.relationship && lowerMsg.includes(c.relationship.toLowerCase()))
+        ) ?? null;
+      }
+
+      if (resolved) {
+        // Resolved — transition to the appropriate next phase
+        const inlineIntent = pendingText.inlineIntent;
+        const hasInline = (inlineIntent?.length ?? 0) >= 10;
+        const tone: MessageTone = detectToneFromRelationship(resolved.relationship ?? resolved.name);
+
+        if (hasInline && inlineIntent) {
+          try {
+            const composed = await composeTextMessage({
+              recipientName: resolved.name,
+              relationship: resolved.relationship,
+              tone,
+              userIntent: inlineIntent,
+              senderName: displayName,
+            });
+            setPendingText(sessionUserName, {
+              phase: "awaiting_confirmation",
+              recipientName: resolved.name,
+              recipientPhone: resolved.phone,
+              relationship: resolved.relationship,
+              tone,
+              composedBody: composed.body,
+            });
+            (req as any)._hardcodedResponse =
+              `Here's what I've got for ${resolved.name}:\n\n"${composed.body}"\n\n` +
+              `Does that work? Say yes and I'll hand it off to your Messages app so you can tap Send.`;
+          } catch (compErr) {
+            req.log.warn({ compErr }, "[T006-DISAMBIG] Inline composition after disambiguation failed");
+            setPendingText(sessionUserName, { phase: "awaiting_intent", recipientName: resolved.name, recipientPhone: resolved.phone, relationship: resolved.relationship, tone });
+            systemPrompt += `\n\n[Text Message Flow — ${resolved.name} selected]\nAsk ${displayName} what they'd like to say to ${resolved.name}.`;
+          }
+        } else {
+          setPendingText(sessionUserName, { phase: "awaiting_intent", recipientName: resolved.name, recipientPhone: resolved.phone, relationship: resolved.relationship, tone });
+          const phoneNote = resolved.phone ? `Got ${resolved.name}'s number.` : `I don't have a number for ${resolved.name}, but I'll compose it and you can fill that in.`;
+          systemPrompt += `\n\n[Text Message Flow — ${resolved.name} selected]\n${phoneNote} Ask ${displayName} what they'd like to say.`;
+        }
+        req.log.info({ resolved: resolved.name, phone: !!resolved.phone }, "[T006-DISAMBIG] Candidate resolved");
+      } else {
+        // Couldn't figure out which one — re-ask more specifically
+        const list = candidates.map((c, i) => {
+          const rel = c.relationship ? ` (${c.relationship})` : "";
+          const src = c.source === "key_people" ? " — from your key people" : "";
+          return `${i + 1}. ${c.name}${rel}${src}`;
+        }).join("\n");
+        systemPrompt +=
+          `\n\n[Text Message — Disambiguation Needed Again]\n` +
+          `Could not determine which person ${displayName} means. Options:\n${list}\n\n` +
+          `Ask them to say the first name, last name, or "the first one" / "the second one".`;
+        req.log.info("[T006-DISAMBIG] Could not resolve — re-asking");
+      }
+    } else if (pendingText.phase === "awaiting_intent") {
+      // User has told us what they want to say.
+      // If they included a style/tone request ("make it witty", "keep it professional"),
+      // call Claude to rewrite in that style — but Claude must NOT add greetings or closings.
+      // If no style was requested, use their exact words verbatim.
+      const effectiveTone: MessageTone = toneOverride ?? pendingText.tone;
+
+      if (toneOverride !== null) {
+        // Style requested — let Claude rephrase in the requested tone
+        try {
+          const composed = await composeTextMessage({
+            recipientName: pendingText.recipientName,
+            relationship: pendingText.relationship,
+            tone: effectiveTone,
+            userIntent: message,
+            senderName: displayName,
+          });
+
+          setPendingText(sessionUserName, {
+            ...pendingText,
+            phase: "awaiting_confirmation",
+            tone: effectiveTone,
+            composedBody: composed.body,
+          });
+
+          (req as any)._hardcodedResponse =
+            `Here's a ${toneLabel(effectiveTone)} version for ${pendingText.recipientName}:\n\n"${composed.body}"\n\n` +
+            `Does that work? Say yes and I'll hand it off to your Messages app.`;
+
+          req.log.info({ recipient: pendingText.recipientName, tone: effectiveTone }, "[T006] Intent with tone — composed via Claude");
+        } catch (err) {
+          req.log.warn({ err }, "[T006] Tone compose failed");
+          setPendingText(sessionUserName, null);
+          systemPrompt += `\n\n[Text Message — Composition Error]\nTell ${displayName} you had trouble with that and ask them to try again.`;
+        }
+      } else {
+        // No style request — use the user's exact words verbatim
+        const body = sanitizeSmsBody(message);
+
+        setPendingText(sessionUserName, {
+          ...pendingText,
+          phase: "awaiting_confirmation",
+          composedBody: body,
+        });
+
+        (req as any)._hardcodedResponse =
+          `Here's what I've got for ${pendingText.recipientName}:\n\n"${body}"\n\n` +
+          `Does that look right? Say yes and I'll hand it off to your Messages app. ` +
+          `Or tell me if you'd like a different tone — warmer, more casual, more professional, etc.`;
+
+        req.log.info({ recipient: pendingText.recipientName, body: body.slice(0, 80) }, "[T006] Intent received — using verbatim (no tone requested)");
+      }
+    } else if (pendingText.phase === "awaiting_confirmation") {
+      if (toneOverride !== null) {
+        // User wants to change the tone — re-compose with existing body as base
+        const effectiveTone = toneOverride;
+        try {
+          const recomposed = await composeTextMessage({
+            recipientName: pendingText.recipientName,
+            relationship: pendingText.relationship,
+            tone: effectiveTone,
+            userIntent: pendingText.composedBody ?? message,
+            senderName: displayName,
+          });
+
+          setPendingText(sessionUserName, {
+            ...pendingText,
+            tone: effectiveTone,
+            composedBody: recomposed.body,
+          });
+
+          const toneNote = toneLabel(effectiveTone);
+          systemPrompt +=
+            `\n\n[Text Message Revised — ${toneNote} tone]\n` +
+            `Message body:\n"${recomposed.body}"\n\n` +
+            `Read the revised message back word for word, then ask: ` +
+            `"Does that work? Say yes and I'll hand it off to your Messages app." ` +
+            `CRITICAL HONESTY RULES: ` +
+            `(1) You are composing — you are NOT sending it and you CANNOT send it. ` +
+            `(2) The Messages app only opens AFTER the user says yes. Do NOT say it is opening now. ` +
+            `(3) Never say "sending now", "opening Messages", or imply immediate action.`;
+        } catch (err) {
+          req.log.warn({ err }, "[T006] Tone re-compose failed");
+        }
+      } else {
+        const confirmIntent = await classifyConfirmationIntent(message);
+        if (confirmIntent === "send") {
+        // User confirmed — package SMS data and bypass Claude entirely.
+        // Claude cannot reliably be instructed not to claim it sent the message,
+        // so we hardcode the confirmation response server-side.
+        const phone = pendingText.recipientPhone ?? "";
+        // sanitizeSmsBody ensures the body that lands in the Messages app is
+        // identical to what was read back — no markdown asterisks, no Unicode
+        // punctuation (em-dash, ellipsis, curly quotes) that Android SMS apps
+        // may silently drop or mangle.
+        const body = pendingText.composedBody ?? "";
+        const recipientName = pendingText.recipientName;
+        setPendingText(sessionUserName, null);
+
+        // Sanitize phone number into E.164-like format for the sms: URI.
+        // Google Contacts stores numbers with formatting chars like "(972) 555-0123"
+        // or "972-555-0123". iOS ignores those and falls back to showing the inbox
+        // rather than opening the right thread. Strip everything except digits and
+        // a leading +, then normalise 10-digit US numbers to +1XXXXXXXXXX.
+        const sanitizePhone = (raw: string): string => {
+          const stripped = raw.replace(/[^\d+]/g, "");
+          if (/^\d{10}$/.test(stripped)) return `+1${stripped}`;
+          if (/^1\d{10}$/.test(stripped)) return `+${stripped}`;
+          return stripped; // already has + prefix or is international
+        };
+        const cleanPhone = phone ? sanitizePhone(phone) : "";
+
+        // Build an sms: URI appropriate for the device platform.
+        // iOS requires & (not ?) to separate the phone from the body — using ?
+        // causes some iOS versions to fall back to the conversation list.
+        // Android requires ? (not &) — & is treated as part of the phone number
+        // string, so the URI is malformed and Linking.openURL does nothing.
+        // sms:<phone>&body=<encoded> — iOS: opens directly to that contact's thread.
+        // sms:<phone>?body=<encoded> — Android: opens to that contact's thread.
+        // sms:?body=<encoded>        — fallback (no phone): new-compose with body.
+        const isAndroid = typeof deviceId === "string" && /android/i.test(deviceId);
+        const bodySep = isAndroid ? "?" : "&";
+        const encodedBody = encodeURIComponent(body);
+        const smsUri = cleanPhone
+          ? `sms:${cleanPhone}${bodySep}body=${encodedBody}`
+          : `sms:?body=${encodedBody}`;
+
+        const smsPayload = {
+          phone: cleanPhone,  // always sanitised E.164-like number
+          body,
+          recipient: recipientName,
+          smsUri,
+          relationship: pendingText.relationship,
+          tone: pendingText.tone,
+        };
+        (req as any)._smsPayload = smsPayload;
+        setLastSmsPayload(sessionUserName, smsPayload); // persist for edit/retry within 30 min
+        broadcastToUser(sessionUserName, "sms-compose", { type: "sms_compose", ...smsPayload });
+
+        // Hardcode the verbal response — do NOT call Claude for this turn.
+        // HONESTY: Winston composes and hands off — he does NOT send. The native
+        // app opens the SMS composer; the user taps Send themselves.
+        const confirmationText = phone
+          ? `The message is composed and ready. Your Messages app should open now with it pre-filled for ${recipientName} — tap Send when you're ready. I can't send it directly; that part is yours.`
+          : `The message is composed and ready. Your Messages app should open now — add ${recipientName}'s number and tap Send. I can't send it directly; that part is yours.`;
+        (req as any)._hardcodedResponse = confirmationText;
+
+        req.log.info({ recipient: recipientName, hasPhone: !!phone }, "[T006] SMS packaged — hardcoded response, skipping Claude");
+        } else if (confirmIntent === "cancel") {
+        // User cancelled
+        setPendingText(sessionUserName, null);
+        systemPrompt +=
+          `\n\n[Text Message Cancelled]\nThe user decided not to send the message. ` +
+          `Acknowledge warmly and briefly — "No problem, I've dropped it."`;
+        } else {
+        // Some other response — user might be editing the content
+        try {
+          const revised = await composeTextMessage({
+            recipientName: pendingText.recipientName,
+            relationship: pendingText.relationship,
+            tone: pendingText.tone,
+            userIntent: `Previous draft: "${pendingText.composedBody}". User's feedback/edit: "${message}"`,
+            senderName: displayName,
+          });
+
+          setPendingText(sessionUserName, {
+            ...pendingText,
+            composedBody: revised.body,
+          });
+
+          systemPrompt +=
+            `\n\n[Text Message Revised]\n` +
+            `Message body:\n"${revised.body}"\n\n` +
+            `Read the revised message back word for word, then ask: ` +
+            `"Does that work? Say yes and I'll hand it off to your Messages app." ` +
+            `CRITICAL HONESTY RULES: ` +
+            `(1) You are composing — you are NOT sending it and you CANNOT send it. ` +
+            `(2) The Messages app only opens AFTER the user says yes. Do NOT say it is opening now. ` +
+            `(3) Never say "sending now", "opening Messages", or imply immediate action.`;
+        } catch (err) {
+          req.log.warn({ err }, "[T006] Revision failed");
+        }
+        }
+      }
+    }
+  }
+
+
+  // ── T006-retry: user says "it didn't open" / "try again" after SMS dispatch ──
+  if (isSmsRetryRequest && lastSmsPayload) {
+    (req as any)._smsPayload = lastSmsPayload;
+    const retryText = lastSmsPayload.phone
+      ? `Trying again — your Messages app should open now with the text ready for ${lastSmsPayload.recipient}. Tap Send when it opens. I can't send it directly; that part is yours.`
+      : `Trying again — your Messages app should open now with the text ready. Add ${lastSmsPayload.recipient}'s number and tap Send. I can't send it directly; that part is yours.`;
+    (req as any)._hardcodedResponse = retryText;
+    broadcastToUser(sessionUserName, "sms-compose", { type: "sms_compose", ...lastSmsPayload });
+    req.log.info({ recipient: lastSmsPayload.recipient }, "[T006-retry] Re-firing last SMS payload");
+  }
+
+  // ── T006-edit-after-send: user wants to edit the message after it was dispatched ──
+  // Restart the flow in awaiting_confirmation with the existing draft body so the
+  // user can edit it and re-confirm without starting over from scratch.
+  if (isSmsEditAfterSend && lastSmsPayload) {
+    const displayName = userProfile?.name ?? sessionUserName;
+    // Rehydrate pending state from the stored payload
+    setPendingText(sessionUserName, {
+      phase: "awaiting_confirmation",
+      recipientName: lastSmsPayload.recipient,
+      recipientPhone: lastSmsPayload.phone || null,
+      relationship: lastSmsPayload.relationship,
+      tone: lastSmsPayload.tone ?? "casual",
+      composedBody: lastSmsPayload.body,
+    });
+
+    // Now process the edit request exactly like an in-flow edit —
+    // compose a revised version using the user's feedback
+    const displayTone = lastSmsPayload.tone ?? "casual";
+    try {
+      const revised = await composeTextMessage({
+        recipientName: lastSmsPayload.recipient,
+        relationship: lastSmsPayload.relationship,
+        tone: displayTone,
+        userIntent: `Previous draft: "${lastSmsPayload.body}". User's edit request: "${message}"`,
+        senderName: displayName,
+      });
+
+      setPendingText(sessionUserName, {
+        phase: "awaiting_confirmation",
+        recipientName: lastSmsPayload.recipient,
+        recipientPhone: lastSmsPayload.phone || null,
+        relationship: lastSmsPayload.relationship,
+        tone: displayTone,
+        composedBody: revised.body,
+      });
+
+      systemPrompt +=
+        `\n\n[Text Message Revised — edit after send]\n` +
+        `Previous draft was already handed off to Messages app. User asked to edit it.\n` +
+        `Revised message body:\n"${revised.body}"\n\n` +
+        `Read the revised message back word for word, then ask: ` +
+        `"Does that work? Say yes and I'll hand it off to your Messages app again." ` +
+        `CRITICAL HONESTY RULES: ` +
+        `(1) You are composing — you are NOT sending it and you CANNOT send it. ` +
+        `(2) The Messages app only opens AFTER the user says yes. Do NOT say it is opening now. ` +
+        `(3) Never say "sending now", "opening Messages", or imply immediate action.`;
+
+      req.log.info({ recipient: lastSmsPayload.recipient }, "[T006-edit-after-send] Revised draft, restarted flow");
+    } catch (err) {
+      req.log.warn({ err }, "[T006-edit-after-send] Revision failed");
+      // Reset state on failure — don't leave a corrupted flow
+      setPendingText(sessionUserName, null);
+      systemPrompt +=
+        `\n\n[Text Message Edit Failed]\n` +
+        `Tell ${displayName} honestly: "I had trouble revising that. Just say 'text ${lastSmsPayload.recipient}' and I'll start fresh."`;
+    }
+  }
+
   // ── Local events injection ──────────────────────────────────────────────────
   // When the user asks "what's happening in Dallas this weekend" or similar,
   // inject the in-memory cached RSS items so Claude can answer with real data.
@@ -2851,331 +3372,9 @@ const chatHandlerCore = async (req: Request, res: Response) => {
       req.log.warn({ err }, "[WAKE TIME] Update failed");
     }
   }
-
-  // ── Google Contacts search ────────────────────────────────────────────────
-  if (isContactRequest) {
-    console.log(`[CONTACT INTENT DETECTED] message="${message}" compound=${isCompoundContactAndSave}`);
-    // Prevent profile "People" items from bleeding into this response.
-    // formatProfileForContext includes all profile_items["people"] in every system prompt;
-    // when saving/searching a contact the AI sees those entries and volunteers info about them.
-    // This override tells Claude to ignore that section for this single response.
-    systemPrompt += `\n\n[Contact Operation — People-Profile Suppression]\nThe profile context above may list saved "People" entries. For THIS response, completely disregard that "People" section. Do NOT volunteer, summarise, or reference any person from the profile items list. Your response must address ONLY the specific contact name mentioned in the user's current message.`;
-    try {
-      // Name extraction — tried in priority order (most specific → most general)
-      const nameMatch =
-        // P0a (compound find+save without "in my contacts"):
-        //   "Find [Name] and add/save him/her to my profile/contacts/Winston"
-        //   Must come before P0 so it wins when there's no "in my contacts" phrase
-        message.match(/(?:find|look\s+up|search(?:\s+for)?|get|pull\s+up|add|save|remember)\s+((?:[A-Za-z'.]+\s+){0,3}[A-Za-z'.]+?)\s+and\s+(?:add|save|put)\s+(?:him|her|them)\b/i) ??
-        // P0 (compound): "Find/Add [Name] in/from my contacts and add him to my profile"
-        //   → extract the name that comes between the action verb and "in/from my contacts"
-        //   Allows periods so "Dr. John Smith", "Mr. Jones" etc. are captured correctly
-        message.match(/(?:find|look\s+up|search(?:\s+for)?|get|pull\s+up|add|save|remember)\s+((?:[A-Za-z'.]+\s+){0,3}[A-Za-z'.]+)\s+(?:in|from)\s+(?:my\s+)?contacts?/i) ??
-        // P1: "Do you have NAME's phone/email/number"
-        message.match(/do\s+you\s+have\s+((?:\w+\s+){0,3}\w+)['']s\s+(?:phone|number|email|contact|info(?:rmation)?|address)/i) ??
-        // P2: "Get me / Find me NAME's phone/email/information"
-        message.match(/(?:get|find)\s+me\s+((?:\w+\s+){0,3}\w+)['']s\s+(?:phone|number|email|contact|info(?:rmation)?|address)/i) ??
-        // P3: "What's / What is NAME's phone/email"
-        message.match(/what(?:['']s?|\s+is)\s+((?:\w+\s+){0,3}\w+)['']s\s+(?:phone|number|email|contact|info(?:rmation)?|address)/i) ??
-        // P4: "find/look up/get NAME's phone" — action verb + possessive
-        message.match(/(?:find|look\s+up|search(?:\s+for)?|get|pull\s+up|add|save)\s+((?:\w+\s+){0,3}\w+)['']s\s+(?:phone|number|email|contact|info(?:rmation)?|address)/i) ??
-        // P5: "find/look up/add NAME" — action verb + plain name at end of message
-        message.match(/(?:find|look\s+up|search(?:\s+for)?|get|pull\s+up|add|save|remember)\s+((?:\w+\s+){0,2}\w+)\s*$/i) ??
-        // P6: "NAME's phone" at the very start of the message
-        message.match(/^((?:\w+\s+){0,3}\w+?)['']s\s+(?:phone|number|email|contact|info(?:rmation)?|address)/i);
-      const rawQuery = (
-        (nameMatch?.[1])?.trim() ??
-        message.replace(/\b(find|look\s+up|search(\s+for)?|get|pull\s+up|add|save|remember|in\s+my\s+contacts?|from\s+my\s+contacts?|to\s+my\s+(?:winston\s+)?contacts?|my\s+contacts?|their?\s+(phone|email|number|contact)|please|for\s+me)\b/gi, "").trim()
-      ).replace(/\b(please|for\s+me|thanks?|thank\s+you|can\s+you|could\s+you)\b/gi, "").replace(/\s+/g, " ").trim();
-      const searchQuery = rawQuery.slice(0, 60).trim();
-      console.log(`[CONTACT SEARCH] rawQuery="${rawQuery}" finalQuery="${searchQuery}"`);
-      if (searchQuery.length > 1) {
-        console.log(`[CONTACT SEARCH] Calling Google People API live for: "${searchQuery}"`);
-        const result = await searchContacts(searchQuery, sessionUserName).catch(() => ({ contacts: [], needsReauth: false, source: "none" as const }));
-        console.log(`[CONTACT SEARCH] Returned ${(result as {contacts:unknown[]}).contacts?.length ?? 0} result(s) from People API`);
-
-        // ── Compound intent: find AND save in one request ────────────────────
-        // If the user said "find X in my contacts and add him to my profile",
-        // we already have the contact data — save it now without a follow-up turn.
-        if (isCompoundContactAndSave && result.contacts && result.contacts.length === 1) {
-          const found = result.contacts[0];
-          await saveCuratedContact(found, sessionUserName);
-          // Also add to profile_items under "people" so it appears in David's profile
-          await addProfileItem("people", found.name, [found.phone, found.email, found.address].filter(Boolean).join(" | ") || null, sessionUserName)
-            .catch(() => { /* already exists — fine */ });
-          systemPrompt += (
-            `\n\n[Compound Contact Request — Lookup + Save Complete]\n` +
-            `Found in Google Contacts: ${found.name}` +
-            (found.phone ? ` | Phone: ${found.phone}` : "") +
-            (found.email ? ` | Email: ${found.email}` : "") +
-            (found.address ? ` | Address: ${found.address}` : "") + "\n" +
-            `Action taken: Saved to the user's ${userProfile?.companionName ?? "Winston"} contacts AND added to their profile.\n` +
-            `Respond with: "Found [Name] in your contacts — I've added them to your ${userProfile?.companionName ?? "Winston"} profile. ` +
-            `[Share phone/email if present.] Just ask next time and I'll have the info ready."\n` +
-            `CRITICAL: Mention ONLY ${found.name} in your response. Do NOT mention or reference any other contacts from earlier in this conversation.`
-          );
-          req.log.info({ name: found.name }, "[CONTACTS] Compound lookup+save complete");
-        } else if (isCompoundContactAndSave && (!result.contacts || result.contacts.length === 0)) {
-          // Compound intent but no contact found
-          systemPrompt += (
-            `\n\n[Compound Contact Request — Contact Not Found]\n` +
-            `Searched Google Contacts for "${searchQuery}" — no results.\n` +
-            `Tell the user: "I searched your contacts but couldn't find anyone named ${searchQuery}. ` +
-            `Want me to add them manually? Just give me their name and any details you have."`
-          );
-          req.log.info({ query: searchQuery }, "[CONTACTS] Compound lookup — not found");
-        } else {
-          // Standard (non-compound) contact lookup
-          systemPrompt += formatContactsForPrompt(result, searchQuery, userProfile?.companionName ?? undefined);
-        }
-
-        req.log.info({ query: searchQuery, found: result.contacts?.length ?? 0, needsReauth: result.needsReauth, compound: isCompoundContactAndSave }, "[CONTACTS] Search complete");
-      }
-    } catch (err) {
-      req.log.warn({ err }, "[CONTACTS] Search failed, continuing without");
-    }
-  }
-
-  // ── Save contact — routes to My People, Service Providers, or curated list ──
-  if (isSaveContactRequest) {
-    systemPrompt += `\n\n[Contact Operation — People-Profile Suppression]\nThe profile context above may list saved "People" entries. For THIS response, completely disregard that "People" section. Do NOT volunteer, summarise, or reference any person from the profile items list. Your response must address ONLY the specific contact name mentioned in the user's current message.`;
-    try {
-      // Detect save destination from the current message
-      const msgLower = message.toLowerCase();
-      const saveDestination: "my_people" | "service_providers" | "curated" =
-        /\bservice\s+providers?\b/.test(msgLower) ? "service_providers" :
-        /\bmy\s+people\b/.test(msgLower) ? "my_people" :
-        "curated";
-
-      // Collect recent context — last 6 messages give Haiku enough signal to extract
-      // the contact info that Winston surfaced in the previous turn.
-      const recentContext = [...history]
-        .slice(-6)
-        .map((m: { role: string; content: string }) => `${m.role === "assistant" ? "Winston" : "User"}: ${m.content}`)
-        .join("\n");
-
-      // Use Haiku to extract structured contact data from the conversation context
-      const extractionResp = await anthropic.messages.create({
-        model: MODEL_HAIKU,
-        max_tokens: 400,
-        messages: [{
-          role: "user",
-          content:
-            `Extract the contact's information from this conversation. Return ONLY valid JSON, no explanation.\n\n` +
-            `Conversation:\n${recentContext}\n\nCurrent message: "${message}"\n\n` +
-            `Return JSON:\n` +
-            `{\n` +
-            `  "name": "<full name or null>",\n` +
-            `  "phone": "<phone or null>",\n` +
-            `  "email": "<email or null>",\n` +
-            `  "relationship": "<e.g. friend, neighbor, colleague, or null>",\n` +
-            `  "specialty": "<e.g. cardiologist, plumber, financial advisor, or null>",\n` +
-            `  "company": "<company or practice name or null>",\n` +
-            `  "address": "<address or null>",\n` +
-            `  "website": "<website or null>",\n` +
-            `  "notes": "<any other relevant info or null>"\n` +
-            `}`,
-        }],
-      }).catch(() => null);
-
-      let extracted: {
-        name?: string | null; phone?: string | null; email?: string | null;
-        relationship?: string | null; specialty?: string | null; company?: string | null;
-        address?: string | null; website?: string | null; notes?: string | null;
-      } = {};
-      if (extractionResp) {
-        const raw = extractionResp.content[0]?.type === "text" ? extractionResp.content[0].text.trim() : "";
-        const jsonMatch = raw.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          try { extracted = JSON.parse(jsonMatch[0]); } catch { /* ignore */ }
-        }
-      }
-
-      // Fall back to Google Contacts search if Haiku couldn't extract a name
-      let gcContact: GoogleContact | null = null;
-      if (!extracted.name) {
-        const emptyContacts: GoogleContact[] = [];
-        const explicitNameMatch =
-          message.match(/\b(?:save|add|remember)\s+((?:[A-Z]\w*\s+){1,2}[A-Z]\w*)\s+(?:to|in)\b/i) ??
-          message.match(/\b(?:save|add|remember)\s+((?:\w+\s+){1,3}\w+)\s+(?:to|in)\b/i);
-        if (explicitNameMatch?.[1]) {
-          const { contacts } = await searchContacts(explicitNameMatch[1].trim(), sessionUserName).catch(() => ({ contacts: emptyContacts, needsReauth: false, source: "none" as const }));
-          if (contacts.length > 0) gcContact = contacts[0];
-        } else {
-          const lastAssistant = [...history].reverse().find((m: { role: string; content: string }) => m.role === "assistant");
-          if (lastAssistant) {
-            const bulletMatch = lastAssistant.content.match(/•\s+([\w\s]+?)(?:\s+—|\n|$)/);
-            const verifiedMatch = lastAssistant.content.match(/(?:found|here(?:'s|\s+is))\s+([\w\s]+?)(?:'s|\s+in\s+your\s+contacts|\s+—|\.|,)/i);
-            const candidateName = (bulletMatch?.[1] ?? verifiedMatch?.[1] ?? "").trim();
-            if (candidateName.length > 2) {
-              const { contacts } = await searchContacts(candidateName, sessionUserName).catch(() => ({ contacts: emptyContacts, needsReauth: false, source: "none" as const }));
-              if (contacts.length > 0) gcContact = contacts[0];
-            }
-          }
-        }
-        if (gcContact) extracted.name = gcContact.name;
-        if (gcContact?.phone && !extracted.phone) extracted.phone = gcContact.phone;
-        if (gcContact?.email && !extracted.email) extracted.email = gcContact.email;
-        if (gcContact?.address && !extracted.address) extracted.address = gcContact.address;
-      }
-
-      const contactName = extracted.name?.trim() ?? null;
-
-      if (contactName) {
-        const cName = userProfile?.companionName ?? "Winston";
-
-        if (saveDestination === "my_people") {
-          // ── Save to key_people (My People) ──────────────────────────────────
-          const person = await createPerson(sessionUserName, {
-            name: contactName,
-            relationship: extracted.relationship ?? null,
-            phone: extracted.phone ?? null,
-            email: extracted.email ?? null,
-            address: extracted.address ?? null,
-            notes: [extracted.specialty, extracted.company, extracted.notes].filter(Boolean).join(" · ") || null,
-          });
-          systemPrompt +=
-            `\n\n[Contact Saved — My People]\n"${person.name}" has been saved to My People.` +
-            (person.phone ? ` Phone: ${person.phone}.` : "") +
-            (person.email ? ` Email: ${person.email}.` : "") +
-            `\nConfirm naturally: "Done — I've added ${person.name} to your People." Do NOT list out every field. Keep it brief.`;
-          req.log.info({ name: person.name, id: person.id }, "[CONTACTS] Saved to key_people");
-
-        } else if (saveDestination === "service_providers") {
-          // ── Save to service_providers ─────────────────────────────────────
-          // Infer category from specialty/relationship hint, default Personal
-          const categoryHint = (extracted.specialty ?? extracted.relationship ?? "").trim();
-          // AI-based category classification — no hardcoded keyword lists.
-          const category = await (async (): Promise<string> => {
-            if (!categoryHint) return "Personal";
-            try {
-              const catResp = await anthropic.messages.create({
-                model: MODEL_HAIKU,
-                max_tokens: 10,
-                system: "Classify this professional role or specialty into exactly one category. Reply with ONLY that word — no punctuation, no explanation: Medical, Legal, Financial, Home, Auto, or Personal.",
-                messages: [{ role: "user", content: categoryHint }],
-              });
-              const result = (catResp.content[0]?.type === "text" ? catResp.content[0].text.trim() : "Personal").replace(/[^A-Za-z]/g, "");
-              const valid = ["Medical", "Legal", "Financial", "Home", "Auto", "Personal"];
-              return valid.includes(result) ? result : "Personal";
-            } catch {
-              return "Personal";
-            }
-          })();
-
-          const provider = await createProvider(sessionUserName, {
-            name: contactName,
-            category,
-            specialty: extracted.specialty ?? null,
-            phone: extracted.phone ?? null,
-            email: extracted.email ?? null,
-            address: extracted.address ?? null,
-            website: extracted.website ?? null,
-            company: extracted.company ?? null,
-            notes: extracted.notes ?? null,
-          });
-          systemPrompt +=
-            `\n\n[Contact Saved — Service Providers]\n"${provider.name}" has been saved to Service Providers under ${provider.category}.` +
-            (provider.phone ? ` Phone: ${provider.phone}.` : "") +
-            (provider.email ? ` Email: ${provider.email}.` : "") +
-            `\nConfirm naturally: "Got it — ${provider.name} is now in your Service Providers." Keep it brief.`;
-          req.log.info({ name: provider.name, id: provider.id, category: provider.category }, "[CONTACTS] Saved to service_providers");
-
-        } else {
-          // ── Save to curated google_contacts list (original behavior) ─────
-          const contactData: GoogleContact = {
-            name: contactName,
-            phone: extracted.phone ?? gcContact?.phone ?? undefined,
-            email: extracted.email ?? gcContact?.email ?? undefined,
-            address: extracted.address ?? gcContact?.address ?? undefined,
-            resourceName: gcContact?.resourceName,
-            photoUrl: gcContact?.photoUrl ?? undefined,
-          };
-          await saveCuratedContact(contactData, sessionUserName);
-          systemPrompt +=
-            `\n\n[Contact Saved to ${cName} Curated List]\n"${contactName}" has been saved to your ${cName} contacts.` +
-            (contactData.phone ? ` Phone: ${contactData.phone}.` : "") +
-            (contactData.email ? ` Email: ${contactData.email}.` : "") +
-            `\nConfirm naturally: "Got it — I've saved ${contactName} to your ${cName} contacts. I'll remember them for next time."` +
-            `\nCRITICAL: Mention ONLY "${contactName}" in your response. Do NOT mention or reference any other contacts from earlier in this conversation.`;
-          req.log.info({ name: contactName }, "[CONTACTS] Contact saved to curated list");
-        }
-      } else {
-        const cName = userProfile?.companionName ?? "Winston";
-        systemPrompt += `\n\n[Contact Save — Name Not Found]\nWas unable to identify which contact to save from this message. Ask the user who specifically they'd like to save: "Who would you like me to add?"`;
-      }
-    } catch (err) {
-      req.log.warn({ err }, "[CONTACTS] Save contact failed");
-    }
-  }
-
-  // ── Google Contact write — create or update a contact ────────────────────────
-  // Detects "Add [name] to my Google Contacts with number [phone]",
-  // "Update [name]'s email in Google Contacts to [email]", etc.
-  // Uses Claude Haiku to extract structured contact info, then calls the Google API.
-  if (isGoogleContactWrite) {
-    try {
-      const extractionResp = await anthropic.messages.create({
-        model: MODEL_HAIKU,
-        max_tokens: 300,
-        messages: [{
-          role: "user",
-          content:
-            `Extract contact write intent from this message. Return ONLY valid JSON, no other text.\n\n` +
-            `Message: "${message}"\n\n` +
-            `Return JSON in this exact format:\n` +
-            `{ "action": "create" | "update", "name": "<full name>", "phone": "<phone or null>", "email": "<email or null>", "address": "<address or null>" }\n\n` +
-            `If action is "update", also return "resourceName": null (caller will look it up by name).`,
-        }],
-      });
-
-      const raw = extractionResp.content[0]?.type === "text" ? extractionResp.content[0].text.trim() : "";
-      const jsonMatch = raw.match(/\{[\s\S]*\}/);
-      const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) as { action?: string; name?: string; phone?: string | null; email?: string | null; address?: string | null } : null;
-
-      if (parsed?.name) {
-        const contactName = parsed.name.trim();
-        if (parsed.action === "update") {
-          const searchResult = await searchContacts(contactName, sessionUserName).catch(() => ({ contacts: [], needsReauth: false, source: "none" as const }));
-          const found = searchResult.contacts[0];
-          if (found?.resourceName) {
-            const updates: { phone?: string; email?: string; address?: string } = {};
-            if (parsed.phone) updates.phone = parsed.phone;
-            if (parsed.email) updates.email = parsed.email;
-            if (parsed.address) updates.address = parsed.address;
-            const result = await updateGoogleContact(sessionUserName, found.resourceName, updates);
-            if (result.ok) {
-              systemPrompt += `\n\n[Google Contact Updated]\nSuccessfully updated ${contactName}'s contact in Google Contacts.${parsed.phone ? ` Phone: ${parsed.phone}.` : ""}${parsed.email ? ` Email: ${parsed.email}.` : ""}\nConfirm naturally: "Done — I've updated ${contactName}'s info in your Google Contacts."`;
-            } else if (result.needsReauth) {
-              systemPrompt += `\n\n[Google Contact Update — Reconnect Required]\nGoogle Contacts write access needs a fresh authorization. Tell the user: "To write to your Google Contacts, you'll need to reconnect Google in the app settings — the scope for editing contacts was recently added."`;
-            } else {
-              systemPrompt += `\n\n[Google Contact Update — Failed]\nError: ${result.error ?? "Unknown error"}. Let the user know: "I wasn't able to update ${contactName}'s contact — ${result.error ?? "something went wrong"}."`;
-            }
-          } else {
-            systemPrompt += `\n\n[Google Contact Update — Not Found]\nCould not find "${contactName}" in Google Contacts. Tell the user: "I couldn't find ${contactName} in your Google Contacts — make sure the name matches exactly."`;
-          }
-        } else {
-          // Create
-          const result = await createGoogleContact({
-            name: contactName,
-            phone: parsed.phone ?? undefined,
-            email: parsed.email ?? undefined,
-            address: parsed.address ?? undefined,
-          }, sessionUserName);
-          if (result.ok) {
-            systemPrompt += `\n\n[Google Contact Created]\nSuccessfully created a new Google Contact for ${contactName}.${parsed.phone ? ` Phone: ${parsed.phone}.` : ""}${parsed.email ? ` Email: ${parsed.email}.` : ""}\nConfirm naturally: "Done — I've added ${contactName} to your Google Contacts."`;
-          } else if (result.needsReauth) {
-            systemPrompt += `\n\n[Google Contact Create — Reconnect Required]\nGoogle Contacts write access needs a fresh authorization. Tell the user: "To add contacts to Google, you'll need to reconnect Google in the app settings — the contacts write scope was recently added."`;
-          } else {
-            systemPrompt += `\n\n[Google Contact Create — Failed]\nError: ${result.error ?? "Unknown error"}. Let the user know: "I wasn't able to add ${contactName} to your Google Contacts — ${result.error ?? "something went wrong"}."`;
-          }
-        }
-      } else {
-        systemPrompt += `\n\n[Google Contact Write — Parse Failed]\nCould not extract contact info from the message. Ask the user: "Could you give me the full name and details you'd like to save?"`;
-      }
-    } catch (err) {
-      req.log.warn({ err }, "[CONTACTS] Google contact write failed");
-    }
+if (isContactRequest || isSaveContactRequest || isGoogleContactWrite) {
+    const contactResult = await handleContact({ message, sessionUserName, isContactRequest, isCompoundContactAndSave, isSaveContactRequest, isGoogleContactWrite, history, userProfile, log: req.log });
+    systemPrompt += contactResult.contextBlock;
   }
 
   let navigationUrl: string | undefined;
