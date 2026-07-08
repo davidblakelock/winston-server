@@ -529,20 +529,16 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
 
   // ── Primary Claude call ──────────────────────────────────────────────────────
   const systemBlocks = buildSystemBlocks(stableSystem, dynamicPrompt);
-  const messagesWithPrefill = [
-    ...messages,
-    { role: "assistant" as const, content: "{" },
-  ];
   const primaryResponse = await anthropic.messages.create({
     model:      MODEL_SONNET,
     max_tokens: 1024,
     system:     systemBlocks as Anthropic.TextBlockParam[],
     tools:      [{ type: "web_search_20250305" as const, name: "web_search" }],
-    messages:   messagesWithPrefill,
+    messages,
   });
 
   const textBlock = primaryResponse.content.find((b) => b.type === "text") as { type: "text"; text: string } | undefined;
-  const rawText = "{" + (textBlock?.text ?? "");
+  const rawText = textBlock?.text ?? "";
 
   log.info(
     { inputTokens: primaryResponse.usage.input_tokens, outputTokens: primaryResponse.usage.output_tokens },
