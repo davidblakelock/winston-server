@@ -77,7 +77,8 @@ export type ActionType =
   | "get_markets"
   | "update_calendar"
   | "add_bill"
-  | "log_medication";
+  | "log_medication"
+  | "check_email";
 
 export interface ClaudeAction {
   type: ActionType;
@@ -277,10 +278,14 @@ AVAILABLE ACTION TYPES:
 - "update_calendar"       → calendarIntent ("read"|"create"|"modify"|"delete")
 - "add_bill"              → billName, billDueDay (number 1-31), billAmount (string like "$500" or null), billNotes (or null)
 - "log_medication"        — User is saying they took their medications today
+- "check_email"           — User wants to check, read, or review their email
 
 RULES:
 - Use "add_todo" whenever the user adds anything to any list. Always emit this action.
+- Use "add_todo_with_reminder" when the user wants BOTH a list item AND a timed reminder (e.g. "remind me to call Olivia tomorrow at 2pm" → add to to-do list AND set reminder).
+- Use "add_reminder" ONLY for timed reminders with no list item.
 - Use "add_bill" ONLY for bills that require manual payment. Default frequency is monthly.
+- Use "check_email" when the user asks to check, read, or review their email.
 - Use "none" for weather, sports, markets, news — answer these directly using your knowledge and web search.
 - reminderTime must be ISO 8601 with timezone offset. Infer the date if not explicit.
 - Your reply should sound natural and acknowledge what you're doing inline.
@@ -524,15 +529,20 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
 
   // ── Primary Claude call ──────────────────────────────────────────────────────
   const systemBlocks = buildSystemBlocks(stableSystem, dynamicPrompt);
+  const messagesWithPrefill = [
+    ...messages,
+    { role: "assistant" as const, content: "{" },
+  ];
   const primaryResponse = await anthropic.messages.create({
     model:      MODEL_SONNET,
     max_tokens: 1024,
     system:     systemBlocks as Anthropic.TextBlockParam[],
-    messages,
+    tools:      [{ type: "web_search_20250305" as const, name: "web_search" }],
+    messages:   messagesWithPrefill,
   });
 
-  const rawText =
-    primaryResponse.content[0]?.type === "text" ? primaryResponse.content[0].text : "";
+  const textBlock = primaryResponse.content.find((b) => b.type === "text") as { type: "text"; text: string } | undefined;
+  const rawText = "{" + (textBlock?.text ?? "");
 
   log.info(
     { inputTokens: primaryResponse.usage.input_tokens, outputTokens: primaryResponse.usage.output_tokens },
@@ -821,6 +831,48 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     // Markets handled naturally by Claude using web search.
     case "get_markets":
       break;
+
+    // ── check_email ───────────────────────────────────────────────────────────
+    case "check_email": {
+      const emailResult = await handleEmailCalendar({
+        message,
+        sessionUserName,
+        timezone,
+        corePrompt,
+        memoryBlock:            "",
+        isDinnerTonightQuery:   false,
+        isEmailRequest:         true,
+        isCalendarRequest:      false,
+        isCalendarWriteOp:      false,
+        isDeleteConfirm:        false,
+        isDeleteCancel:         false,
+        isCalendarCreate:       false,
+        isCalendarModify:       false,
+        isCalendarDelete:       false,
+        isEmailReplyFlowActive: false,
+        isEmailReplyAccepted:   false,
+        pendingMeetingRequests: [],
+        pendingEmailReply:      null,
+        userProfile,
+        log,
+      });
+      if (emailResult.hardcodedResponse) {
+        finalReply = emailResult.hardcodedResponse;
+      } else if (emailResult.contextBlock) {
+        const emailDynamic = dynamicPrompt.replace(ACTION_SCHEMA_BLOCK, "") +
+          emailResult.contextBlock +
+          `\n\nRespond in plain conversational text — no JSON. Summarize the email naturally.`;
+        const emailReply = await anthropic.messages.create({
+          model:      MODEL_HAIKU,
+          max_tokens: 600,
+          system:     buildSystemBlocks(stableSystem, emailDynamic) as Anthropic.TextBlockParam[],
+          messages,
+        });
+        const emailText = emailReply.content[0]?.type === "text" ? emailReply.content[0].text.trim() : "";
+        if (emailText) finalReply = emailText;
+      }
+      break;
+    }
 
     // ── update_calendar ───────────────────────────────────────────────────────
     case "update_calendar": {
