@@ -252,7 +252,7 @@ import {
 } from "../lifeCaptures/lifeCapturesManager.js";
 import { handleEmailCalendar, type EmailCalendarResult } from "../chat/handlers/emailCalendarHandler.js";
 import { getCurrentDateTimeBlock as _getCurrentDateTimeBlock } from "../chat/getCurrentDateTimeBlock.js";
-import { handleContact, type ContactHandlerResult } from "../chat/handlers/contactHandler.js";
+import { handleContact, type ContactHandlerResult } from "../chat/handlers/contactHandlers.js";
 // ── Calendar location context helpers ──────────────────────────────────────
 // Short-lived per-user cache of today's events so we don't hit the Google API
 // on every single message turn.
