@@ -135,12 +135,21 @@ Your name is __COMPANION__. If your name is M.A.C.C., it is pronounced "MACC" (l
 CONVERSATION:
 You remember context from this conversation and weave it in naturally when relevant. Pay attention. Connect things when natural. Don't volunteer profile facts unprompted — but use them when genuinely relevant.
 
-LISTS — AUTHORITATIVE STATE:
-The [list name] blocks injected into your context show the EXACT current state of each list, pulled live from the database at the start of this request. This is the ground truth.
-- NEVER use conversation history to determine what is or is not on a list
-- NEVER say an item is already on a list unless it appears in the current list block
-- NEVER skip adding an item because a previous message mentioned it was added — always emit the add_todo action and let the database handle deduplication
-- If no list block appears for a given list, say you had trouble reading it
+LISTS:
+The list blocks in your context show the exact current lists and their contents pulled live from the database. Use the exact list name as shown in those blocks when appending action tags.
+
+At the end of EVERY response append exactly one action tag on a new line:
+[ACTION:add_list_item|list=<exact list name>|items=<comma separated items>] — adding to any list
+[ACTION:add_todo|task=<task>] — to-do task with no time
+[ACTION:add_reminder|task=<task>|time=<ISO 8601 with tz offset>] — timed reminder only
+[ACTION:add_todo_with_reminder|task=<task>|time=<ISO 8601 with tz offset>] — to-do AND timed reminder
+[ACTION:send_sms|recipient=<name>] — text message
+[ACTION:make_call|recipient=<name>] — phone call
+[ACTION:navigate|target=<place>] — directions
+[ACTION:update_calendar|intent=<read|create|modify|delete>] — calendar
+[ACTION:check_email] — email
+[ACTION:make_reservation|restaurant=<name>] — reservation
+[ACTION:none] — everything else including weather, sports, markets, news
 
 TEXT MESSAGES:
 You can COMPOSE text messages for __USER__ but you CANNOT send them. You have zero ability to send any message or touch __USER__'s phone. Draft the message, read it back, and when __USER__ confirms, the app will open the Messages app with the text pre-filled. NEVER claim to have sent a message.
@@ -445,53 +454,56 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
 
   log.info({ replyPreview: claudeReply.slice(0, 80) }, "[chatHandlerCore] Reply received");
 
-  // ── Action classification — separate Haiku call ───────────────────────────
-  const now          = new Date();
-  const todayDate    = now.toISOString().slice(0, 10);
-  const tomorrowDate = new Date(now.getTime() + 86400000).toISOString().slice(0, 10);
+  // ── Action tag parsing — extracted from Claude's reply ───────────────────
+  const tagMatch  = claudeReply.match(/\[ACTION:([^\]]+)\][\s]*$/);
+  let finalReply  = claudeReply.replace(/\n?\[ACTION:[^\]]+\][\s]*$/, "").trim();
 
   let action: ClaudeAction = { type: "none" };
-  try {
-    const classifyResponse = await anthropic.messages.create({
-      model:      MODEL_HAIKU,
-      max_tokens: 150,
-      messages: [{
-        role: "user",
-        content: `Today: ${todayDate}. Tomorrow: ${tomorrowDate}. Timezone: ${timezone}.
-User message: "${message.slice(0, 200)}"
-Assistant reply: "${claudeReply.slice(0, 200)}"
-
-Which handler should be called? Return ONLY a JSON object.
-
-- Email (check, read, delete, archive, reply) → {"type":"check_email"}
-- Calendar (add, show, delete, modify events) → {"type":"update_calendar","calendarIntent":"read|create|modify|delete"}
-- Text message (text, message someone) → {"type":"send_sms","recipientName":"<name>"}
-- Phone call → {"type":"make_call","recipientName":"<name>"}
-- Restaurant reservation → {"type":"make_reservation","restaurantName":"<name>"}
-- Directions/navigation → {"type":"navigate","navigationTarget":"<place>"}
-- Adding to a list → {"type":"add_todo","listName":"<list>","itemText":"<items>"}
-- Reminder WITH to-do list entry ("remind me to X") → {"type":"add_todo_with_reminder","listName":"to do","itemText":"<task>","reminderTime":"${todayDate}T<HH:MM:00><tz offset e.g. -05:00>"}
-- Reminder only, no list entry ("set a reminder at X") → {"type":"add_reminder","itemText":"<task>","reminderTime":"${todayDate}T<HH:MM:00><tz offset e.g. -05:00>"}
-- Everything else (weather, sports, news, markets, general questions) → {"type":"none"}
-
-Return JSON only:`,
-      }],
+  if (tagMatch) {
+    const tagContent = tagMatch[1];
+    const parts: Record<string, string> = {};
+    tagContent.split("|").forEach((p) => {
+      const eq = p.indexOf("=");
+      if (eq === -1) parts["_type"] = p;
+      else { parts["_type"] = parts["_type"] || p.slice(0, eq); parts[p.slice(0, eq)] = p.slice(eq + 1); }
     });
-    const raw   = classifyResponse.content[0]?.type === "text" ? classifyResponse.content[0].text.trim() : "";
-    const match = raw.match(/\{[\s\S]*\}/);
-    if (match) {
-      const parsed = JSON.parse(match[0]) as ClaudeAction;
-      if (parsed.type) action = parsed;
-      log.info({ actionType: action.type, itemText: action.itemText, reminderTime: action.reminderTime, listName: action.listName }, "[chatHandlerCore] Action classified");
+    const tagType = parts["_type"] ?? "none";
+    switch (tagType) {
+      case "add_list_item":
+        action = { type: "add_todo", listName: parts.list ?? "", itemText: parts.items ?? "" };
+        break;
+      case "add_todo":
+        action = { type: "add_todo", listName: "reminders", itemText: parts.task ?? "" };
+        break;
+      case "add_reminder":
+        action = { type: "add_reminder", itemText: parts.task ?? "", reminderTime: parts.time ?? null };
+        break;
+      case "add_todo_with_reminder":
+        action = { type: "add_todo_with_reminder", itemText: parts.task ?? "", reminderTime: parts.time ?? null };
+        break;
+      case "send_sms":
+        action = { type: "send_sms", recipientName: parts.recipient ?? "" };
+        break;
+      case "make_call":
+        action = { type: "make_call", recipientName: parts.recipient ?? "" };
+        break;
+      case "navigate":
+        action = { type: "navigate", navigationTarget: parts.target ?? "" };
+        break;
+      case "update_calendar":
+        action = { type: "update_calendar", calendarIntent: (parts.intent ?? "read") as "read"|"create"|"modify"|"delete" };
+        break;
+      case "check_email":
+        action = { type: "check_email" };
+        break;
+      case "make_reservation":
+        action = { type: "make_reservation", restaurantName: parts.restaurant ?? "" };
+        break;
     }
-  } catch (err) {
-    log.warn({ err }, "[chatHandlerCore] Action classification failed — none");
   }
-
-  log.info({ actionType: action.type }, "[chatHandlerCore] Action resolved");
+  log.info({ actionType: action.type, tag: tagMatch?.[1] ?? "none" }, "[chatHandlerCore] Action parsed");
 
   // ── Execute action ───────────────────────────────────────────────────────────
-  let finalReply          = claudeReply;
   let smsPayload:         SmsPayload | undefined          = undefined;
   let reservationPayload: ReservationPayload | undefined  = undefined;
   let navigationUrl:      string | undefined              = undefined;
@@ -503,16 +515,20 @@ Return JSON only:`,
 
     // ── add_todo ──────────────────────────────────────────────────────────────
     case "add_todo": {
-      const listName = normalizeListName(action.listName?.trim() || requestContext || "to do");
+      const listName = action.listName?.trim() ?? "";
       const items    = (action.itemText ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-      if (items.length > 0) {
+      if (listName === "reminders") {
+        for (const item of items) {
+          await createReminder({ userName: sessionUserName, reminderText: item, fireAt: null as any, timezone })
+            .catch((err: unknown) => log.warn({ err }, "[chatHandlerCore] add_todo failed"));
+        }
+        log.info({ items }, "[chatHandlerCore] To-do items added");
+      } else if (listName) {
         try {
           const inserted = await addItems(listName, items, sessionUserName);
-          if (listName.toLowerCase() === "shopping" && inserted.length > 0) {
-            batchCategorizeAndUpdateItems(inserted).catch(() => {});
-          }
+          if (inserted.length > 0) batchCategorizeAndUpdateItems(inserted).catch(() => {});
           await syncListItemToConnections(listName, items, sessionUserName).catch(() => {});
-          log.info({ listName, items }, "[chatHandlerCore] Items added");
+          log.info({ listName, items }, "[chatHandlerCore] List items added");
         } catch (err) {
           log.warn({ err }, "[chatHandlerCore] addItems failed");
         }
