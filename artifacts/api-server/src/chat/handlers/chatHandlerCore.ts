@@ -532,7 +532,7 @@ Return JSON only:`,
       const items    = itemText.split(",").map((s) => s.trim()).filter(Boolean);
       if (items.length > 0) {
         try {
-          const inserted = await addItems(listName, items, sessionUserName);
+          const inserted = await addItems(listName, items, sessionUserName, undefined, action.reminderTime ?? undefined);
           if (listName.toLowerCase() === "shopping" && inserted.length > 0) {
             batchCategorizeAndUpdateItems(inserted).catch(() => {});
           }
