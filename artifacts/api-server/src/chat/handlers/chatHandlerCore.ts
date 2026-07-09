@@ -28,8 +28,6 @@ import {
 } from "../../lists/listManager.js";
 import { createReminder } from "../../reminders/reminderManager.js";
 import { fetchTodayEvents, type CalendarEvent } from "../../google/calendar.js";
-import { addBill } from "../../bills/billManager.js";
-import { logMedicationsTaken, getMedications, hasTakenMedicationsToday } from "../../medications/medicationManager.js";
 import {
   getPendingText,
   setPendingText,
@@ -42,13 +40,11 @@ import {
   getPendingMeetingRequests,
 } from "../../email/emailMeetingManager.js";
 import { getPendingDelete } from "../../google/calendarWriter.js";
-import { findConnectionByLabel } from "../../connect/connectManager.js";
 import { broadcastToUser } from "../../reminders/sseStore.js";
 import { searchContacts } from "../../google/contacts.js";
 import { handleText } from "./textHandler.js";
 import { handleEmailCalendar } from "./emailCalendarHandler.js";
 import { handleReservation, type ReservationPayload } from "./reservationHandler.js";
-import { handleContact } from "./contactHandlers.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -64,41 +60,24 @@ export type ActionType =
   | "add_todo"
   | "add_reminder"
   | "add_todo_with_reminder"
-  | "remind_contact"
-  | "save_to_attic"
-  | "search_contact"
-  | "save_contact"
   | "make_reservation"
   | "send_sms"
   | "make_call"
   | "navigate"
   | "update_calendar"
-  | "check_email"
-  | "add_bill"
-  | "log_medication";
+  | "check_email";
 
 export interface ClaudeAction {
   type: ActionType;
   listName?: string | null;
   itemText?: string | null;
   reminderTime?: string | null;
-  forContact?: string | null;
-  content?: string | null;
-  searchQuery?: string | null;
-  contactName?: string | null;
-  contactPhone?: string | null;
-  contactEmail?: string | null;
-  saveDestination?: "my_people" | "service_providers" | "curated" | null;
   restaurantName?: string | null;
   recipientName?: string | null;
   smsBody?: string | null;
   phone?: string | null;
   navigationTarget?: string | null;
   calendarIntent?: "read" | "create" | "modify" | "delete" | null;
-  billName?: string | null;
-  billDueDay?: number | null;
-  billAmount?: string | null;
-  billNotes?: string | null;
 }
 
 export interface NewChatRequest {
@@ -455,48 +434,38 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
   log.info({ replyPreview: claudeReply.slice(0, 80) }, "[chatHandlerCore] Reply received");
 
   // ── Action classification — separate Haiku call ───────────────────────────
-  const now = new Date();
+  const now          = new Date();
   const todayDate    = now.toISOString().slice(0, 10);
   const tomorrowDate = new Date(now.getTime() + 86400000).toISOString().slice(0, 10);
 
   let action: ClaudeAction = { type: "none" };
   try {
-    const actionResponse = await anthropic.messages.create({
+    const classifyResponse = await anthropic.messages.create({
       model:      MODEL_HAIKU,
       max_tokens: 150,
-      messages:   [{
+      messages: [{
         role: "user",
         content: `Today: ${todayDate}. Tomorrow: ${tomorrowDate}. Timezone: ${timezone}.
-User said: "${message.slice(0, 200)}"
+User message: "${message.slice(0, 200)}"
+Assistant reply: "${claudeReply.slice(0, 200)}"
 
-Return ONLY a JSON object classifying the action. Examples:
-"add milk to shopping list" → {"type":"add_todo","listName":"shopping","itemText":"milk"}
-"remind me to call Olivia tomorrow at 2pm" → {"type":"add_todo_with_reminder","listName":"to do","itemText":"call Olivia","reminderTime":"${tomorrowDate}T14:00:00"}
-"set a reminder at 9am" → {"type":"add_reminder","itemText":"reminder","reminderTime":"${todayDate}T09:00:00"}
-"text Susan" → {"type":"send_sms","recipientName":"Susan"}
-"call David" → {"type":"make_call","recipientName":"David"}
-"take me to Home Depot" → {"type":"navigate","navigationTarget":"Home Depot"}
-"add dentist to calendar Thursday 10am" → {"type":"update_calendar","calendarIntent":"create"}
-"what's on my calendar" → {"type":"update_calendar","calendarIntent":"read"}
-"check email" → {"type":"check_email"}
-"find John's number" → {"type":"search_contact","searchQuery":"John"}
-"make reservation at Hillstone" → {"type":"make_reservation","restaurantName":"Hillstone"}
-"add Amex bill due 15th $500" → {"type":"add_bill","billName":"Amex","billDueDay":15,"billAmount":"$500"}
-"I took my meds" → {"type":"log_medication"}
-"what's the weather" → {"type":"none"}
-"how did Rangers do" → {"type":"none"}
-"tell me a joke" → {"type":"none"}
+Which handler should be called? Return ONLY a JSON object.
 
-Rules:
-- "remind me to X at Y" → add_todo_with_reminder
-- navigation/directions → navigate not add_todo
-- email actions → check_email
-- weather/sports/news/markets → none
+- Email (check, read, delete, archive, reply) → {"type":"check_email"}
+- Calendar (add, show, delete, modify events) → {"type":"update_calendar","calendarIntent":"read|create|modify|delete"}
+- Text message (text, message someone) → {"type":"send_sms","recipientName":"<name>"}
+- Phone call → {"type":"make_call","recipientName":"<name>"}
+- Restaurant reservation → {"type":"make_reservation","restaurantName":"<name>"}
+- Directions/navigation → {"type":"navigate","navigationTarget":"<place>"}
+- Adding to a list → {"type":"add_todo","listName":"<list>","itemText":"<items>"}
+- Reminder WITH to-do list entry ("remind me to X") → {"type":"add_todo_with_reminder","listName":"to do","itemText":"<task>","reminderTime":"${todayDate}T<HH:MM:00><tz offset e.g. -05:00>"}
+- Reminder only, no list entry ("set a reminder at X") → {"type":"add_reminder","itemText":"<task>","reminderTime":"${todayDate}T<HH:MM:00><tz offset e.g. -05:00>"}
+- Everything else (weather, sports, news, markets, general questions) → {"type":"none"}
 
 Return JSON only:`,
       }],
     });
-    const raw = actionResponse.content[0]?.type === "text" ? actionResponse.content[0].text.trim() : "";
+    const raw   = classifyResponse.content[0]?.type === "text" ? classifyResponse.content[0].text.trim() : "";
     const match = raw.match(/\{[\s\S]*\}/);
     if (match) {
       const parsed = JSON.parse(match[0]) as ClaudeAction;
@@ -582,81 +551,6 @@ Return JSON only:`,
           log.warn({ err }, "[chatHandlerCore] add_todo_with_reminder reminder failed");
         }
       }
-      break;
-    }
-
-    // ── remind_contact ────────────────────────────────────────────────────────
-    case "remind_contact": {
-      const itemText   = action.itemText?.trim() ?? "";
-      const forContact = action.forContact?.trim() ?? null;
-      if (itemText && action.reminderTime && forContact) {
-        try {
-          const fireAt = new Date(action.reminderTime);
-          if (!isNaN(fireAt.getTime())) {
-            await createReminder({ userName: sessionUserName, reminderText: itemText, fireAt, timezone, forContact });
-            const connection = await findConnectionByLabel(sessionUserName, forContact).catch(() => null);
-            if (connection?.recipientUserName) {
-              await createReminder({
-                userName:     connection.recipientUserName,
-                reminderText: `A message from ${connection.senderLabel}: ${itemText}`,
-                fireAt,
-                timezone,
-              }).catch(() => {});
-            }
-          }
-        } catch (err) {
-          log.warn({ err }, "[chatHandlerCore] remind_contact failed");
-        }
-      }
-      break;
-    }
-
-    // ── save_to_attic ─────────────────────────────────────────────────────────
-    case "save_to_attic": {
-      const content = action.content?.trim() ?? message.trim();
-      log.info({ content: content.slice(0, 100) }, "[chatHandlerCore] save_to_attic (pending Attic build)");
-      break;
-    }
-
-    // ── search_contact ────────────────────────────────────────────────────────
-    case "search_contact": {
-      const contactResult = await handleContact({
-        message,
-        sessionUserName,
-        isContactRequest:         true,
-        isCompoundContactAndSave: /\b(?:and\s+)?(?:save|add)\b/i.test(message),
-        isSaveContactRequest:     false,
-        isGoogleContactWrite:     false,
-        history,
-        userProfile,
-        log,
-      });
-      if (contactResult.contextBlock) {
-        const contactReply = await anthropic.messages.create({
-          model:      MODEL_HAIKU,
-          max_tokens: 300,
-          system:     buildSystemBlocks(stableSystem, dynamicPrompt + contactResult.contextBlock) as Anthropic.TextBlockParam[],
-          messages,
-        });
-        const contactText = contactReply.content[0]?.type === "text" ? contactReply.content[0].text.trim() : "";
-        if (contactText) finalReply = contactText;
-      }
-      break;
-    }
-
-    // ── save_contact ──────────────────────────────────────────────────────────
-    case "save_contact": {
-      await handleContact({
-        message,
-        sessionUserName,
-        isContactRequest:         false,
-        isCompoundContactAndSave: false,
-        isSaveContactRequest:     true,
-        isGoogleContactWrite:     /google|contacts app/i.test(message),
-        history,
-        userProfile,
-        log,
-      });
       break;
     }
 
@@ -853,42 +747,6 @@ Return JSON only:`,
       break;
     }
 
-    // ── add_bill ──────────────────────────────────────────────────────────────
-    case "add_bill": {
-      const billName   = action.billName?.trim();
-      const billDueDay = action.billDueDay;
-      if (billName && billDueDay && billDueDay >= 1 && billDueDay <= 31) {
-        try {
-          await addBill(
-            billName, "other", "monthly", billDueDay, null,
-            action.billAmount ?? undefined,
-            action.billNotes ?? undefined,
-            sessionUserName
-          );
-          log.info({ billName, billDueDay }, "[chatHandlerCore] Bill added");
-        } catch (err) {
-          log.warn({ err }, "[chatHandlerCore] add_bill failed");
-        }
-      }
-      break;
-    }
-
-    // ── log_medication ────────────────────────────────────────────────────────
-    case "log_medication": {
-      try {
-        const alreadyTaken = await hasTakenMedicationsToday(sessionUserName);
-        if (!alreadyTaken) {
-          const meds = await getMedications(sessionUserName);
-          if (meds.length > 0) {
-            await logMedicationsTaken(meds, sessionUserName);
-            log.info({ count: meds.length }, "[chatHandlerCore] Medications logged");
-          }
-        }
-      } catch (err) {
-        log.warn({ err }, "[chatHandlerCore] log_medication failed");
-      }
-      break;
-    }
   }
 
   // ── Post-processing ──────────────────────────────────────────────────────────
