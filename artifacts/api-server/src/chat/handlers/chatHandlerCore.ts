@@ -135,8 +135,12 @@ Your name is __COMPANION__. If your name is M.A.C.C., it is pronounced "MACC" (l
 CONVERSATION:
 You remember context from this conversation and weave it in naturally when relevant. Pay attention. Connect things when natural. Don't volunteer profile facts unprompted — but use them when genuinely relevant.
 
-LISTS — STRICT RULE:
-You have no independent knowledge of what is on __USER__'s lists. If asked about a list and no list context block appears in this prompt, say: "I had trouble reading your list — try checking the list screen directly." Never guess or invent items.
+LISTS — AUTHORITATIVE STATE:
+The [list name] blocks injected into your context show the EXACT current state of each list, pulled live from the database at the start of this request. This is the ground truth.
+- NEVER use conversation history to determine what is or is not on a list
+- NEVER say an item is already on a list unless it appears in the current list block
+- NEVER skip adding an item because a previous message mentioned it was added — always emit the add_todo action and let the database handle deduplication
+- If no list block appears for a given list, say you had trouble reading it
 
 TEXT MESSAGES:
 You can COMPOSE text messages for __USER__ but you CANNOT send them. You have zero ability to send any message or touch __USER__'s phone. Draft the message, read it back, and when __USER__ confirms, the app will open the Messages app with the text pre-filled. NEVER claim to have sent a message.
@@ -227,6 +231,14 @@ async function hydrateHistoryFromDb(
     [userName, ACTIVE_CONTEXT_LIMIT]
   );
   return rows.reverse();
+}
+
+function normalizeListName(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/\s*list\s*$/i, "")
+    .replace(/to[\s-]do/i, "to do")
+    .trim() || "to do";
 }
 
 // ── Main handler ──────────────────────────────────────────────────────────────
@@ -491,7 +503,7 @@ Return JSON only:`,
 
     // ── add_todo ──────────────────────────────────────────────────────────────
     case "add_todo": {
-      const listName = action.listName?.trim() || requestContext || "to do";
+      const listName = normalizeListName(action.listName?.trim() || requestContext || "to do");
       const items    = (action.itemText ?? "").split(",").map((s) => s.trim()).filter(Boolean);
       if (items.length > 0) {
         try {
@@ -527,7 +539,7 @@ Return JSON only:`,
 
     // ── add_todo_with_reminder ────────────────────────────────────────────────
     case "add_todo_with_reminder": {
-      const listName = action.listName?.trim() || "to do";
+      const listName = normalizeListName(action.listName?.trim() || "to do");
       const itemText = action.itemText?.trim() ?? "";
       const items    = itemText.split(",").map((s) => s.trim()).filter(Boolean);
       if (items.length > 0) {
