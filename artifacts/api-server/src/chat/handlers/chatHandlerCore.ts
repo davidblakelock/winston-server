@@ -470,6 +470,7 @@ Return JSON only:`,
     if (match) {
       const parsed = JSON.parse(match[0]) as ClaudeAction;
       if (parsed.type) action = parsed;
+      log.info({ actionType: action.type, itemText: action.itemText, reminderTime: action.reminderTime, listName: action.listName }, "[chatHandlerCore] Action classified");
     }
   } catch (err) {
     log.warn({ err }, "[chatHandlerCore] Action classification failed — none");
