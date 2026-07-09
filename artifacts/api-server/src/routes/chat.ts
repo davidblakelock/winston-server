@@ -77,7 +77,7 @@ router.post("/chat-native", async (req: Request, res: Response) => {
       log:            req.log,
     });
 
-    const responseBody: Record<string, unknown> = { response: result.reply };
+    const responseBody: Record<string, unknown> = { response: result.reply, actionType: result.action.type };
     if (result.navigationUrl)      responseBody.navigationUrl      = result.navigationUrl;
     if (result.smsPayload)         responseBody.smsPayload         = result.smsPayload;
     if (result.reservationPayload) responseBody.reservationPayload = result.reservationPayload;

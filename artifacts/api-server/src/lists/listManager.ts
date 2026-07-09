@@ -257,24 +257,16 @@ export async function addItems(
   listName: string,
   items: string[],
   userName: string,
-  addedBy?: string,
-  reminderTime?: string
+  addedBy?: string
 ): Promise<Array<{ id: number; item_text: string }>> {
   const inserted: Array<{ id: number; item_text: string }> = [];
   for (const item of items) {
     const { rows } = await query<{ id: number; item_text: string }>(
-      reminderTime
-        ? `INSERT INTO list_items (user_name, list_name, item_text, added_by, reminder_time)
-           VALUES ($1, $2, $3, $4, $5)
-           ON CONFLICT (user_name, list_name, lower(item_text)) DO NOTHING
-           RETURNING id, item_text`
-        : `INSERT INTO list_items (user_name, list_name, item_text, added_by)
-           VALUES ($1, $2, $3, $4)
-           ON CONFLICT (user_name, list_name, lower(item_text)) DO NOTHING
-           RETURNING id, item_text`,
-      reminderTime
-        ? [userName, listName, item.trim(), addedBy ?? null, reminderTime]
-        : [userName, listName, item.trim(), addedBy ?? null]
+      `INSERT INTO list_items (user_name, list_name, item_text, added_by)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (user_name, list_name, lower(item_text)) DO NOTHING
+       RETURNING id, item_text`,
+      [userName, listName, item.trim(), addedBy ?? null]
     );
     if (rows[0]) inserted.push(rows[0]);
   }
