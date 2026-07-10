@@ -382,6 +382,7 @@ router.post("/lists/restaurants", async (req: Request, res: Response) => {
     req.log.warn({ err }, "Restaurants list POST error");
     res.status(500).json({ error: "Failed to add restaurant" });
   }
+  return;
 });
 
 // DELETE /api/lists/restaurants/:id
@@ -996,7 +997,7 @@ router.post("/lists/:listName", async (req: Request, res: Response) => {
 
   const manualUrl = url?.trim() || null;
   const notes = rawNotes?.trim() || null;
-  const isAutoLookupList = !manualUrl && !!detectAutoLookupType(listName);
+  const isAutoLookupList = !manualUrl && !!detectAutoLookupType(typeof listName === 'string' ? listName : listName[0]);
 
   try {
     const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string; notes: string | null }>(
@@ -1012,7 +1013,7 @@ router.post("/lists/:listName", async (req: Request, res: Response) => {
     const newItem = rows[0];
 
     if (newItem && isAutoLookupList) {
-      autoUpdateItemUrl(newItem.id, newItem.item_text, listName).catch(() => {});
+      autoUpdateItemUrl(newItem.id, newItem.item_text, typeof listName === 'string' ? listName : listName[0]).catch(() => {});
     }
 
     req.log.info({ userName, listName, item: item.trim(), manualUrl, isAutoLookupList }, "[Lists] Item added");
