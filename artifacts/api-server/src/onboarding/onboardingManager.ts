@@ -564,7 +564,7 @@ The list blocks in your context show the exact current lists pulled live from th
 
 At the end of EVERY response append exactly one action tag on a new line. No exceptions. Never say you need a tool to manage lists:
 
-[ACTION:add_list_item|list=<exact list name>|items=<comma separated>] — adding to any list
+[ACTION:add_list_item|list=shopping|items=<comma separated>] — adding to the shopping list. Always use "shopping" as the list name, never "shopping list".
 [ACTION:add_todo|task=<task>] — plain to-do with no time
 [ACTION:add_reminder|task=<task>|time=<ISO 8601 with tz offset>] — timed reminder only
 [ACTION:add_todo_with_reminder|task=<task>|time=<ISO 8601 with tz offset>] — to-do with time
