@@ -22,6 +22,7 @@ import { sendPushToAll } from "../push/pushManager.js";
 import { extractReminder, computeFireAt, resolveNextDayOfWeek } from "../reminders/reminderParser.js";
 import { nextOccurrenceForPattern } from "../reminders/recurringUtils.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
+import { createReminder } from "../reminders/reminderManager.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -672,9 +673,12 @@ router.get(["/lists/todo", "/lists/to do"], async (req: Request, res: Response) 
   if (!userName) return;
   res.setHeader("Cache-Control", "no-store");
   try {
-    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string; reminder_time: string | null; notes: string | null }>(
-      `SELECT id, item_text, added_by, url, created_at, reminder_time, notes FROM list_items
-       WHERE user_name = $1 AND list_name = 'to do'
+    const { rows } = await query<{ id: number; item_text: string; created_at: string }>(
+      `SELECT id, reminder_text AS item_text, created_at
+       FROM reminders
+       WHERE user_name = $1
+         AND status = 'pending'
+         AND fire_at IS NULL
        ORDER BY created_at ASC`,
       [userName]
     );
@@ -688,10 +692,7 @@ router.get(["/lists/todo", "/lists/to do"], async (req: Request, res: Response) 
 router.post(["/lists/todo", "/lists/to do"], async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
-  const { item, url: rawTodoUrl, ownerUserName, reminder_time: rawReminderTime, notes: rawNotes } = req.body as { item?: string; url?: string; ownerUserName?: string; reminder_time?: string; notes?: string };
-  const manualUrl = rawTodoUrl?.trim() || null;
-  const reminderTime = rawReminderTime?.trim() || null;
-  const todoNotes = rawNotes?.trim() || null;
+  const { item, ownerUserName } = req.body as { item?: string; ownerUserName?: string };
   if (!item?.trim()) { res.status(400).json({ error: "item is required" }); return; }
 
   const targetUser = ownerUserName?.trim() ?? userName;
@@ -703,8 +704,8 @@ router.post(["/lists/todo", "/lists/to do"], async (req: Request, res: Response)
       return;
     }
     const { rows: existing } = await query<{ id: number }>(
-      `SELECT id FROM list_items
-       WHERE user_name = $1 AND list_name = 'to do' AND lower(item_text) = lower($2)`,
+      `SELECT id FROM reminders
+       WHERE user_name = $1 AND status = 'pending' AND fire_at IS NULL AND lower(reminder_text) = lower($2)`,
       [targetUser, item.trim()]
     );
     if (existing.length > 0) {
@@ -721,34 +722,31 @@ router.post(["/lists/todo", "/lists/to do"], async (req: Request, res: Response)
       return;
     }
     const addedByLabel = await getRequesterLabel(targetUser, userName).catch(() => userName);
-    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string; reminder_time: string | null; notes: string | null }>(
-      `INSERT INTO list_items (user_name, list_name, item_text, added_by, url, reminder_time, notes)
-       VALUES ($1, 'to do', $2, $3, $4, $5, $6)
-       ON CONFLICT (user_name, list_name, lower(item_text)) DO NOTHING
-       RETURNING id, item_text, added_by, url, created_at, reminder_time, notes`,
-      [targetUser, item.trim(), addedByLabel, manualUrl, reminderTime, todoNotes]
-    );
-    const newItem = rows[0];
-    if (newItem) {
-      await sendPushToAll(
-        {
-          title: `${addedByLabel} added to your to-do list`,
-          body: item.trim(),
-          tag: `list-shared-add-${newItem.id}`,
-          notificationType: "list-sync",
-          deepLink: "winston://lists?tab=todo",
-          companionMessage: `${addedByLabel} added "${item.trim()}" to your to-do list.`,
-        },
-        targetUser
-      ).catch(() => {});
-    }
-    res.json({ item: newItem ?? null });
+    const targetProfile = await getProfile(targetUser).catch(() => null);
+    const newItem = await createReminder({
+      userName: targetUser,
+      reminderText: item.trim(),
+      fireAt: null as any,
+      timezone: targetProfile?.timezone ?? "UTC",
+    });
+    await sendPushToAll(
+      {
+        title: `${addedByLabel} added to your to-do list`,
+        body: item.trim(),
+        tag: `list-shared-add-${newItem.id}`,
+        notificationType: "list-sync",
+        deepLink: "winston://lists?tab=todo",
+        companionMessage: `${addedByLabel} added "${item.trim()}" to your to-do list.`,
+      },
+      targetUser
+    ).catch(() => {});
+    res.json({ item: { id: newItem.id, item_text: newItem.reminder_text, created_at: newItem.created_at } });
     return;
   }
 
   let resolvedItemText = item.trim();
-  let resolvedReminderTime = reminderTime;
-  if (!resolvedReminderTime && /remind/i.test(resolvedItemText)) {
+  let resolvedFireAt: Date | null = null;
+  if (/remind/i.test(resolvedItemText)) {
     try {
       const profile = await getProfile(userName).catch(() => null);
       const tz = profile?.timezone ?? "UTC";
@@ -759,34 +757,28 @@ router.post(["/lists/todo", "/lists/to do"], async (req: Request, res: Response)
           extracted.isRecurring &&
           recurringPattern &&
           (recurringPattern.startsWith("weekly:") || recurringPattern.startsWith("monthly:"));
-        const fireAt = needsPatternScheduling
+        resolvedFireAt = needsPatternScheduling
           ? nextOccurrenceForPattern(recurringPattern!, extracted.time, tz)
           : extracted.dayOfWeek && !extracted.isRecurring
             ? resolveNextDayOfWeek(extracted.dayOfWeek, extracted.time, tz, extracted.nextWeek ?? false)
             : computeFireAt(extracted.time, tz);
-        resolvedReminderTime = fireAt.toISOString();
         resolvedItemText = extracted.reminderText || resolvedItemText;
       }
     } catch {
-      // extraction failed — store as plain item
+      // extraction failed — store as plain to-do
     }
   }
 
   try {
-    const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string; reminder_time: string | null; notes: string | null }>(
-      `INSERT INTO list_items (user_name, list_name, item_text, url, reminder_time, notes)
-       VALUES ($1, 'to do', $2, $3, $4, $5)
-       ON CONFLICT (user_name, list_name, lower(item_text))
-       DO UPDATE SET item_text     = EXCLUDED.item_text,
-                     url           = CASE WHEN EXCLUDED.url IS NOT NULL THEN EXCLUDED.url ELSE list_items.url END,
-                     reminder_time = CASE WHEN EXCLUDED.reminder_time IS NOT NULL THEN EXCLUDED.reminder_time ELSE list_items.reminder_time END,
-                     reminder_fired = CASE WHEN EXCLUDED.reminder_time IS NOT NULL THEN FALSE ELSE list_items.reminder_fired END,
-                     notes         = CASE WHEN EXCLUDED.notes IS NOT NULL THEN EXCLUDED.notes ELSE list_items.notes END
-       RETURNING id, item_text, added_by, url, created_at, reminder_time, notes`,
-      [userName, resolvedItemText, manualUrl, resolvedReminderTime, todoNotes]
-    );
+    const profile = await getProfile(userName).catch(() => null);
+    const newItem = await createReminder({
+      userName,
+      reminderText: resolvedItemText,
+      fireAt: (resolvedFireAt ?? null) as any,
+      timezone: profile?.timezone ?? "UTC",
+    });
     syncListItemToConnections("to do", [resolvedItemText], userName).catch(() => {});
-    res.json({ item: rows[0] });
+    res.json({ item: { id: newItem.id, item_text: newItem.reminder_text, created_at: newItem.created_at } });
   } catch (err) {
     req.log.warn({ err }, "To Do POST error");
     res.status(500).json({ error: "Failed to add item" });
@@ -799,7 +791,7 @@ router.delete(["/lists/todo/:id", "/lists/to do/:id"], async (req: Request, res:
   const { id } = req.params;
   try {
     await query(
-      `DELETE FROM list_items WHERE id = $1 AND user_name = $2 AND list_name = 'to do' RETURNING id`,
+      `DELETE FROM reminders WHERE id = $1 AND user_name = $2 AND fire_at IS NULL RETURNING id`,
       [id, userName]
     );
     res.json({ deleted: true });
