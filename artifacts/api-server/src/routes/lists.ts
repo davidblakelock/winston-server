@@ -81,7 +81,7 @@ router.get("/lists", async (req: Request, res: Response) => {
 
   try {
     // Run all count queries + list metadata in parallel
-    const [listItemsRes, wsCountRes, piShowsRes, piRestRes, listMetaRes] = await Promise.all([
+    const [listItemsRes, wsCountRes, piShowsRes, piRestRes, listMetaRes, todoCount] = await Promise.all([
       query<{ list_name: string; item_count: string }>(
         `SELECT lower(list_name) AS list_name, COUNT(*) AS item_count
          FROM list_items WHERE user_name = $1
@@ -109,6 +109,11 @@ router.get("/lists", async (req: Request, res: Response) => {
         `SELECT lower(list_name) AS list_name, list_type FROM lists WHERE user_name = $1`,
         [userName]
       ).catch((): { rows: Array<{ list_name: string; list_type: string }> } => ({ rows: [] })),
+      query<{ count: string }>(
+        `SELECT COUNT(*) AS count FROM reminders
+         WHERE user_name = $1 AND status = 'pending'`,
+        [userName]
+      ),
     ]);
 
     const listCounts: Record<string, number> = {};
@@ -144,7 +149,7 @@ router.get("/lists", async (req: Request, res: Response) => {
     res.json({
       lists: [
         { listName: "shopping",    displayName: "Shopping",    itemCount: listCounts["shopping"] ?? 0, listType: "checklist" },
-        { listName: "to do",       displayName: "To Do",       itemCount: listCounts["to do"] ?? 0,    listType: "checklist" },
+        { listName: "to do",       displayName: "To Do",       itemCount: Number(todoCount.rows[0]?.count ?? 0), listType: "checklist" },
         { listName: "tv-shows",    displayName: "TV Shows",    itemCount: tvCount,                      listType: "checklist" },
         { listName: "restaurants", displayName: "Restaurants", itemCount: restCount,                    listType: "checklist" },
         ...customLists,
