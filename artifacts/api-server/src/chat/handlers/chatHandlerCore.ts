@@ -517,22 +517,29 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
 
     // ── add_todo ──────────────────────────────────────────────────────────────
     case "add_todo": {
-      const listName = action.listName?.trim() ?? "";
+      const listName = requestContext?.trim() || action.listName?.trim() || "";
       const items    = (action.itemText ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-      if (listName === "reminders") {
+
+      if (!listName || listName === "to do" || listName === "reminders") {
+        // Plain to-do — write to reminders table with no fire_at
         for (const item of items) {
-          await createReminder({ userName: sessionUserName, reminderText: item, fireAt: null as any, timezone })
-            .catch((err: unknown) => log.warn({ err }, "[chatHandlerCore] add_todo failed"));
+          try {
+            await createReminder({ userName: sessionUserName, reminderText: item, fireAt: null as any, timezone });
+            log.info({ item }, "[chatHandlerCore] To-do added to reminders");
+          } catch (err) {
+            log.warn({ err }, "[chatHandlerCore] To-do add failed");
+          }
         }
-        log.info({ items }, "[chatHandlerCore] To-do items added");
-      } else if (listName) {
-        try {
-          const inserted = await addItems(listName, items, sessionUserName);
-          if (inserted.length > 0) batchCategorizeAndUpdateItems(inserted).catch(() => {});
-          await syncListItemToConnections(listName, items, sessionUserName).catch(() => {});
-          log.info({ listName, items }, "[chatHandlerCore] List items added");
-        } catch (err) {
-          log.warn({ err }, "[chatHandlerCore] addItems failed");
+      } else {
+        if (items.length > 0) {
+          try {
+            const inserted = await addItems(listName, items, sessionUserName);
+            if (inserted.length > 0) batchCategorizeAndUpdateItems(inserted).catch(() => {});
+            await syncListItemToConnections(listName, items, sessionUserName).catch(() => {});
+            log.info({ listName, items }, "[chatHandlerCore] List items added");
+          } catch (err) {
+            log.warn({ err }, "[chatHandlerCore] addItems failed");
+          }
         }
       }
       break;
