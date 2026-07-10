@@ -6,6 +6,7 @@ import { addClient, removeClient, broadcast, registerClientUser } from "../remin
 import { createReminder, markReminderDone } from "../reminders/reminderManager.js";
 import { validateSession } from "../auth/sessionAuth.js";
 import { authenticate, NATIVE_USER } from "../auth/middleware.js";
+import { getProfile } from "../onboarding/onboardingManager.js";
 
 const router: IRouter = Router();
 
@@ -58,12 +59,18 @@ router.get("/reminders/stream", async (req: Request, res: Response) => {
 });
 
 // ── GET /api/reminders — all reminders (for settings/display) ─────────────────
-router.get("/reminders", async (_req: Request, res: Response) => {
+router.get("/reminders", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
   const { rows } = await query(
-    `SELECT id, user_name, reminder_text, fire_at, recurring, recurring_time,
-            timezone, status, last_fired_at, created_at
+    `SELECT id, user_name, reminder_text, fire_at, recurring, recurring_time, timezone, status, created_at
        FROM reminders
-      ORDER BY fire_at ASC`
+      WHERE user_name = $1
+        AND status = 'pending'
+        AND fire_at IS NULL
+      ORDER BY created_at ASC`,
+    [userName]
   );
   res.json(rows);
 });
@@ -220,7 +227,7 @@ router.post("/reminders/:id/acknowledge", async (req: Request, res: Response) =>
 // Also handles synthetic string IDs gracefully.
 router.post("/reminders/:id/complete", async (req: Request, res: Response) => {
   const rawId = req.params.id;
-  const numId = parseInt(rawId, 10);
+  const numId = parseInt(typeof req.params.id === 'string' ? req.params.id : req.params.id[0], 10);
 
   // Non-numeric ID — synthetic reminder with no DB row; return 200 immediately.
   if (isNaN(numId) || rawId !== String(numId)) {
@@ -301,6 +308,7 @@ router.post("/reminders/snooze", async (req: Request, res: Response) => {
     (notifData.data as { billId?: number } | undefined)?.billId;
 
   if (billId) {
+    const userProfile = await getProfile(NATIVE_USER);
     let billName = `Bill #${billId}`;
     let amount = "";
     try {
