@@ -794,7 +794,7 @@ router.delete(["/lists/todo/:id", "/lists/to do/:id", "/lists/to%20do/:id"], asy
   const { id } = req.params;
   try {
     await query(
-      `DELETE FROM reminders WHERE id = $1 AND user_name = $2 AND fire_at IS NULL RETURNING id`,
+      `DELETE FROM reminders WHERE id = $1 AND user_name = $2 AND status = 'pending' RETURNING id`,
       [id, userName]
     );
     res.json({ deleted: true });
