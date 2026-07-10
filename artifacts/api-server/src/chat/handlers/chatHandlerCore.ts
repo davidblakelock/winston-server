@@ -433,6 +433,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
 
   // ── Primary Claude call — plain natural language response ───────────────────
   const systemBlocks = buildSystemBlocks(stableSystem, dynamicPrompt);
+  log.info({ fullSystem: (stableSystem + dynamicPrompt).slice(0, 2000) }, "[chatHandlerCore] Full system prompt");
   const primaryResponse = await anthropic.messages.create({
     model:      MODEL_SONNET,
     max_tokens: 1024,
