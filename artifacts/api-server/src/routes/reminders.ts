@@ -80,14 +80,18 @@ router.get("/reminders", async (req: Request, res: Response) => {
 // fire_at time.  Past-due pending rows (scheduler was down during their window)
 // are excluded — they will be fired the moment the scheduler next runs, which
 // sends the push/SSE immediately, so there is no value showing them in the pill.
-router.get("/reminders/list", async (_req: Request, res: Response) => {
+router.get("/reminders/list", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
   const { rows } = await query(
     `SELECT id, user_name, reminder_text, fire_at, recurring, recurring_time,
             timezone, status, last_fired_at, created_at
        FROM reminders
-      WHERE status = 'pending'
+      WHERE user_name = $1
+        AND status = 'pending'
         AND (fire_at > NOW() OR fire_at IS NULL)
-      ORDER BY fire_at ASC`
+      ORDER BY fire_at ASC NULLS LAST`,
+    [userName]
   );
   res.json(rows);
 });
