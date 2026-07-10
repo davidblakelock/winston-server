@@ -195,7 +195,7 @@ router.post("/reminders/:id/snooze", async (req: Request, res: Response) => {
 // that have no row in the reminders table — those are acknowledged with 200 immediately.
 router.post("/reminders/:id/acknowledge", async (req: Request, res: Response) => {
   const rawId = req.params.id;
-  const numId = parseInt(rawId, 10);
+  const numId = parseInt(typeof req.params.id === 'string' ? req.params.id : req.params.id[0], 10);
 
   // Non-numeric ID — synthetic reminder (medication init, briefing, etc.) with no DB row.
   // Nothing to update; just return 200 so the frontend can clear it cleanly.
