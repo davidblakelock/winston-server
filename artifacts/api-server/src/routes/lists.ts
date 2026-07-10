@@ -673,12 +673,11 @@ router.get(["/lists/todo", "/lists/to do", "/lists/to%20do"], async (req: Reques
   if (!userName) return;
   res.setHeader("Cache-Control", "no-store");
   try {
-    const { rows } = await query<{ id: number; item_text: string; created_at: string }>(
-      `SELECT id, reminder_text AS item_text, created_at
+    const { rows } = await query<{ id: number; item_text: string; fire_at: string | null; created_at: string }>(
+      `SELECT id, reminder_text AS item_text, fire_at, created_at
        FROM reminders
        WHERE user_name = $1
          AND status = 'pending'
-         AND fire_at IS NULL
        ORDER BY created_at ASC`,
       [userName]
     );
