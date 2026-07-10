@@ -86,7 +86,7 @@ router.get("/reminders/list", async (_req: Request, res: Response) => {
             timezone, status, last_fired_at, created_at
        FROM reminders
       WHERE status = 'pending'
-        AND fire_at > NOW()
+        AND (fire_at > NOW() OR fire_at IS NULL)
       ORDER BY fire_at ASC`
   );
   res.json(rows);
