@@ -85,6 +85,23 @@ router.get("/reminders/list", async (_req: Request, res: Response) => {
   res.json(rows);
 });
 
+// ── GET /api/reminders/todos — returns plain to-do items (no fire_at) ─────────
+router.get("/reminders/todos", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const { rows } = await query(
+    `SELECT id, user_name, reminder_text, fire_at, status, created_at
+     FROM reminders
+     WHERE user_name = $1
+       AND status = 'pending'
+       AND fire_at IS NULL
+     ORDER BY created_at ASC`,
+    [userName]
+  );
+  res.json({ todos: rows });
+});
+
 // ── GET /api/reminders/due ────────────────────────────────────────────────────
 // Returns reminders completed in the last 10 minutes (status = 'completed').
 // The frontend polls this every 20 s as a reliable fallback for when the SSE
