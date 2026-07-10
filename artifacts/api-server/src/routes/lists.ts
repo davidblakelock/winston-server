@@ -673,11 +673,10 @@ router.get(["/lists/todo", "/lists/to do", "/lists/to%20do"], async (req: Reques
   if (!userName) return;
   res.setHeader("Cache-Control", "no-store");
   try {
-    const { rows } = await query<{ id: number; item_text: string; fire_at: string | null; created_at: string }>(
-      `SELECT id, reminder_text AS item_text, fire_at, created_at
+    const { rows } = await query<{ id: number; item_text: string; reminder_time: string | null; created_at: string }>(
+      `SELECT id, reminder_text AS item_text, fire_at AS reminder_time, created_at
        FROM reminders
-       WHERE user_name = $1
-         AND status = 'pending'
+       WHERE user_name = $1 AND status = 'pending'
        ORDER BY created_at ASC`,
       [userName]
     );
@@ -1046,6 +1045,30 @@ router.put("/lists/:listName/content", async (req: Request, res: Response) => {
   } catch (err) {
     req.log.warn({ err }, "Lists PUT /content error");
     res.status(500).json({ error: "Failed to save notepad content" });
+  }
+});
+
+// PUT /api/lists/todo/:id — update a to-do item's text and/or fire_at (reminders table).
+// MUST appear before the /lists/:listName/:id wildcard.
+router.put(["/lists/todo/:id", "/lists/to do/:id", "/lists/to%20do/:id"], async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const { id } = req.params;
+  const { item, reminder_time } = req.body as { item?: string; reminder_time?: string | null };
+  try {
+    const { rows } = await query<{ id: number; item_text: string; reminder_time: string | null; created_at: string }>(
+      `UPDATE reminders
+       SET reminder_text = COALESCE($1, reminder_text),
+           fire_at = $2
+       WHERE id = $3 AND user_name = $4 AND status = 'pending'
+       RETURNING id, reminder_text AS item_text, fire_at AS reminder_time, created_at`,
+      [item?.trim() ?? null, reminder_time ?? null, id, userName]
+    );
+    if (!rows[0]) { res.status(404).json({ error: "Item not found" }); return; }
+    res.json({ item: rows[0] });
+  } catch (err) {
+    req.log.warn({ err }, "To Do PUT error");
+    res.status(500).json({ error: "Failed to update item" });
   }
 });
 
