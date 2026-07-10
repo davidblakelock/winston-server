@@ -1,3 +1,4 @@
+import Anthropic from "@anthropic-ai/sdk";
 import {
   fetchAndSummarizeEmails,
   formatEmailsForPrompt,
@@ -48,6 +49,8 @@ import type { UserProfile } from "../../onboarding/onboardingManager.js";
 import { getCurrentDateTimeBlock } from "../getCurrentDateTimeBlock.js";
 import { classifyConfirmationIntent } from "../../text/textMessageComposer.js";
 
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
 export interface EmailCalendarResult {
   contextBlock: string;
   hardcodedResponse?: string;
@@ -83,44 +86,39 @@ export interface HandleEmailCalendarParams {
   log: { warn: (obj: object, msg?: string) => void; info: (obj: object, msg?: string) => void };
 }
 
-function detectEmailAction(message: string, emails: EmailSummary[]): {
-  action: "trash" | "archive" | "markRead" | null;
-  email: EmailSummary | null;
-} {
-  const isTrash = /\b(trash|delete)\b/i.test(message) && /\bemail\b/i.test(message);
-  const isArchive = /\barchive\b/i.test(message) && /\bemail\b/i.test(message);
-  const isMarkRead = /\bmark\b.*\bread\b|\bread\b.*\bemail\b/i.test(message);
+async function detectEmailAction(
+  message: string,
+  emails: EmailSummary[]
+): Promise<{ action: "trash" | "archive" | "markRead" | null; email: EmailSummary | null }> {
+  if (!emails.length) return { action: null, email: null };
 
-  if (!isTrash && !isArchive && !isMarkRead) return { action: null, email: null };
+  const emailList = emails
+    .map((e, i) => `${i}: gmailId=${e.gmailId} | from=${e.from} | subject=${e.subject}`)
+    .join("\n");
 
-  const action = isTrash ? "trash" : isArchive ? "archive" : "markRead";
+  const prompt =
+    `The user is managing their email inbox. Their message is: "${message}"\n\n` +
+    `Available emails (index | gmailId | from | subject):\n${emailList}\n\n` +
+    `If the user wants to trash/delete, archive, or mark as read a specific email, respond with JSON only:\n` +
+    `{"action":"trash"|"archive"|"markRead","gmailId":"<id>"}\n` +
+    `If the message is not an email action or you cannot identify which email, respond with:\n` +
+    `{"action":null,"gmailId":null}\n` +
+    `JSON only. No explanation.`;
 
-  const idMatch = message.match(/gmailId:([A-Za-z0-9_-]+)/);
-  if (idMatch) {
-    const found = emails.find(e => e.gmailId === idMatch[1]) ?? null;
-    return { action, email: found };
+  try {
+    const result = await anthropic.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 60,
+      messages: [{ role: "user", content: prompt }],
+    });
+    const text = result.content[0]?.type === "text" ? result.content[0].text.trim() : "";
+    const parsed = JSON.parse(text) as { action: string | null; gmailId: string | null };
+    if (!parsed.action) return { action: null, email: null };
+    const email = emails.find(e => e.gmailId === parsed.gmailId) ?? null;
+    return { action: parsed.action as "trash" | "archive" | "markRead", email };
+  } catch {
+    return { action: null, email: null };
   }
-
-  const ordinal =
-    /\b(first|1st)\b/i.test(message) ? 0 :
-    /\b(second|2nd)\b/i.test(message) ? 1 :
-    /\b(third|3rd)\b/i.test(message) ? 2 :
-    /\b(fourth|4th)\b/i.test(message) ? 3 :
-    null;
-  if (ordinal !== null && emails[ordinal]) {
-    return { action, email: emails[ordinal] };
-  }
-
-  const fromMatch = message.match(/from\s+([A-Za-z]+)/i);
-  if (fromMatch) {
-    const needle = fromMatch[1].toLowerCase();
-    const found = emails.find(e =>
-      e.from.toLowerCase().includes(needle) || e.fromEmail.toLowerCase().includes(needle)
-    ) ?? null;
-    return { action, email: found };
-  }
-
-  return { action, email: null };
 }
 
 export async function handleEmailCalendar(params: HandleEmailCalendarParams): Promise<EmailCalendarResult> {
@@ -263,7 +261,7 @@ export async function handleEmailCalendar(params: HandleEmailCalendarParams): Pr
 
       // ── Gmail action detection (trash / archive / mark-read) ───────────────
       if (isEmailRequest && Array.isArray(emails) && emails.length > 0) {
-        const { action, email: targetEmail } = detectEmailAction(message, emails);
+        const { action, email: targetEmail } = await detectEmailAction(message, emails);
         if (action && targetEmail) {
           const gmailId = targetEmail.gmailId;
           if (action === "trash") {
