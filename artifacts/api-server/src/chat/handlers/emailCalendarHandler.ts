@@ -93,6 +93,7 @@ export interface HandleEmailCalendarParams {
   pendingEmailReply: PendingEmailReply | null;
   userProfile: UserProfile | null;
   log: { warn: (obj: object, msg?: string) => void; info: (obj: object, msg?: string) => void };
+  sessionEmails?: EmailSummary[] | null;
 }
 
 async function detectEmailAction(
@@ -257,7 +258,7 @@ export async function handleEmailCalendar(params: HandleEmailCalendarParams): Pr
     try {
       const [emails, events] = await Promise.all([
         isEmailRequest
-          ? fetchAndSummarizeEmails(15, undefined, sessionUserName).catch(() => null)
+          ? (params.sessionEmails ?? fetchAndSummarizeEmails(15, undefined, sessionUserName).catch(() => null))
           : Promise.resolve(undefined),
         (isEmailRequest || isCalendarRequest)
           ? fetchWeekEvents(true, sessionUserName).catch(() => null)

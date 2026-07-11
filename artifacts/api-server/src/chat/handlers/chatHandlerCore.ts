@@ -431,13 +431,42 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
   if (activeEmailSession !== null) {
     const currentEmail = getCurrentEmail(sessionUserName);
     if (currentEmail) {
-      // Inject current email context directly — no Gmail re-fetch needed
-      dynamicPrompt += `\n\n[Active Email Triage Session — Email ${activeEmailSession.currentIndex + 1} of ${activeEmailSession.emails.length}]\nFrom: ${currentEmail.from} (${currentEmail.fromEmail})\nSubject: ${currentEmail.subject}\nSummary: ${currentEmail.snippet}\n\nThe user is responding to this email. Based on their message, determine the action (reply, done/mark-read, skip, delete, archive) and execute it. If they say "check email" or "start over", clear this session and do a fresh fetch.`;
-
       // Check if user wants to restart
       if (/check.*email|start over|refresh/i.test(message)) {
         setEmailSession(sessionUserName, null);
         dynamicPrompt += `\n\n[Email Session Reset]\nUser requested fresh email check. Proceed normally.`;
+      } else {
+        // Execute action using stored session emails — no re-fetch
+        const emailResult = await handleEmailCalendar({
+          message,
+          sessionUserName,
+          timezone,
+          corePrompt,
+          memoryBlock: "",
+          isDinnerTonightQuery: false,
+          isEmailRequest: true,
+          isCalendarRequest: false,
+          isCalendarWriteOp: false,
+          isDeleteConfirm: false,
+          isDeleteCancel: false,
+          isCalendarCreate: false,
+          isCalendarModify: false,
+          isCalendarDelete: false,
+          isEmailReplyFlowActive: false,
+          isEmailReplyAccepted: false,
+          pendingMeetingRequests: [],
+          pendingEmailReply: null,
+          sessionEmails: activeEmailSession.emails,
+          userProfile,
+          log,
+        });
+        if (emailResult.hardcodedResponse) {
+          runPostProcessing(sessionUserName, message, emailResult.hardcodedResponse, history, userProfile, deviceId);
+          return { reply: emailResult.hardcodedResponse, action: { type: "none" } };
+        }
+        dynamicPrompt += emailResult.contextBlock;
+        // Also inject current email context
+        dynamicPrompt += `\n\n[Active Email Triage Session — Email ${activeEmailSession.currentIndex + 1} of ${activeEmailSession.emails.length}]\nFrom: ${currentEmail.from} (${currentEmail.fromEmail})\nSubject: ${currentEmail.subject}\nSummary: ${currentEmail.snippet}`;
       }
     }
   }
