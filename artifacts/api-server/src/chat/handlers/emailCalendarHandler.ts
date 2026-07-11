@@ -98,17 +98,19 @@ export interface HandleEmailCalendarParams {
 
 async function detectEmailAction(
   message: string,
-  emails: EmailSummary[]
+  emails: EmailSummary[],
+  currentGmailId?: string | null
 ): Promise<{ action: "trash" | "archive" | "markRead" | null; email: EmailSummary | null }> {
   if (!emails.length) return { action: null, email: null };
 
   const emailList = emails
-    .map((e, i) => `${i}: gmailId=${e.gmailId} | from=${e.from} | subject=${e.subject}`)
+    .map((e, i) => `${i}: gmailId=${e.gmailId} | from=${e.from} | subject=${e.subject}${e.gmailId === currentGmailId ? ' ← CURRENT EMAIL (user is referring to this one)' : ''}`)
     .join("\n");
 
   const prompt =
     `The user is managing their email inbox. Their message is: "${message}"\n\n` +
     `Available emails (index | gmailId | from | subject):\n${emailList}\n\n` +
+    `If the user says "it", "that one", "this one", "done", "mark it read", "delete it", or any pronoun — they are referring to the CURRENT EMAIL marked above.\n` +
     `If the user wants to trash/delete, archive, or mark as read a specific email, respond with JSON only:\n` +
     `{"action":"trash"|"archive"|"markRead","gmailId":"<id>"}\n` +
     `If the message is not an email action or you cannot identify which email, respond with:\n` +
@@ -300,7 +302,12 @@ export async function handleEmailCalendar(params: HandleEmailCalendarParams): Pr
 
       // ── Gmail action detection (trash / archive / mark-read) ───────────────
       if (isEmailRequest && Array.isArray(emails) && emails.length > 0) {
-        const { action, email: targetEmail } = await detectEmailAction(message, emails);
+        const currentSessionEmail = getCurrentEmail(sessionUserName);
+        const { action, email: targetEmail } = await detectEmailAction(
+          message,
+          emails,
+          currentSessionEmail?.gmailId ?? null
+        );
         if (action && targetEmail) {
           const gmailId = targetEmail.gmailId;
           if (action === "trash") {
