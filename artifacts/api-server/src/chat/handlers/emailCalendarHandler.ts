@@ -48,6 +48,15 @@ import {
 import type { UserProfile } from "../../onboarding/onboardingManager.js";
 import { getCurrentDateTimeBlock } from "../getCurrentDateTimeBlock.js";
 import { classifyConfirmationIntent } from "../../text/textMessageComposer.js";
+import { logger } from "../../lib/logger.js";
+import {
+  getEmailSession,
+  setEmailSession,
+  getCurrentEmail,
+  advanceEmailSession,
+  markEmailHandled,
+  type EmailSession,
+} from "../../email/emailSessionManager.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -259,6 +268,30 @@ export async function handleEmailCalendar(params: HandleEmailCalendarParams): Pr
         updateEmailLastChecked().catch(() => {});
       }
 
+      // Store emails in session for multi-turn triage
+      if (isEmailRequest && Array.isArray(emails) && emails.length > 0) {
+        const existingSession = getEmailSession(sessionUserName);
+        if (!existingSession) {
+          // New email check — start fresh session
+          setEmailSession(sessionUserName, {
+            emails,
+            currentIndex: 0,
+            handledIds: new Set(),
+            createdAt: Date.now(),
+          });
+          logger.info({ userName: sessionUserName, count: emails.length }, "[EmailSession] New session started");
+        }
+      }
+
+      // Builds the [Next Email] / [Email Triage Complete] block after an action fires,
+      // shared by all three branches below.
+      const appendNextEmailPrompt = (): string => {
+        const nextEmail = advanceEmailSession(sessionUserName);
+        return nextEmail
+          ? `\n\n[Next Email]\nFrom: ${nextEmail.from} | Subject: ${nextEmail.subject}\nSummary: ${nextEmail.snippet}\n\nPresent this email to the user and ask what they'd like to do: reply, done, or skip.`
+          : `\n\n[Email Triage Complete]\nAll emails have been handled. Tell the user warmly they're all caught up.`;
+      };
+
       // ── Gmail action detection (trash / archive / mark-read) ───────────────
       if (isEmailRequest && Array.isArray(emails) && emails.length > 0) {
         const { action, email: targetEmail } = await detectEmailAction(message, emails);
@@ -269,11 +302,19 @@ export async function handleEmailCalendar(params: HandleEmailCalendarParams): Pr
             contextBlock += r.ok
               ? `\n\n[Email Trashed]\n"${targetEmail.subject}" from ${targetEmail.from} has been moved to trash.\nConfirm warmly and briefly — e.g. "Done — that email from ${targetEmail.from} is in the trash."`
               : `\n\n[Email Trash Failed]\nCould not trash "${targetEmail.subject}". Tell the user it didn't work and they can try from Gmail directly.`;
+            if (r.ok) {
+              markEmailHandled(sessionUserName, gmailId);
+              contextBlock += appendNextEmailPrompt();
+            }
           } else if (action === "archive") {
             const r = await archiveEmail(gmailId, sessionUserName).catch(() => ({ ok: false as const }));
             contextBlock += r.ok
               ? `\n\n[Email Archived]\n"${targetEmail.subject}" from ${targetEmail.from} has been archived.\nConfirm warmly.`
               : `\n\n[Email Archive Failed]\nCould not archive "${targetEmail.subject}". Tell the user it didn't work.`;
+            if (r.ok) {
+              markEmailHandled(sessionUserName, gmailId);
+              contextBlock += appendNextEmailPrompt();
+            }
           } else if (action === "markRead") {
             const doneAction = userProfile?.emailDoneAction ?? 'mark_read';
             await markEmailRead(gmailId, sessionUserName).catch(() => {});
@@ -281,6 +322,8 @@ export async function handleEmailCalendar(params: HandleEmailCalendarParams): Pr
               await archiveEmail(gmailId, sessionUserName).catch(() => {});
             }
             contextBlock += `\n\n[Email Marked Done]\n"${targetEmail.subject}" from ${targetEmail.from} has been ${doneAction === 'archive' ? 'marked read and archived' : 'marked as read'}.\nConfirm warmly and briefly.`;
+            markEmailHandled(sessionUserName, gmailId);
+            contextBlock += appendNextEmailPrompt();
           }
         }
       }

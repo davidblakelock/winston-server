@@ -45,6 +45,7 @@ import { searchContacts } from "../../google/contacts.js";
 import { handleText } from "./textHandler.js";
 import { handleEmailCalendar } from "./emailCalendarHandler.js";
 import { handleReservation, type ReservationPayload } from "./reservationHandler.js";
+import { getEmailSession, getCurrentEmail } from "../../email/emailSessionManager.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -419,6 +420,39 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       if (emailResult.emailPayload) {
         broadcastToUser(sessionUserName, "email-compose", { type: "email_compose", ...emailResult.emailPayload });
       }
+      runPostProcessing(sessionUserName, message, emailResult.hardcodedResponse, history, userProfile, deviceId);
+      return { reply: emailResult.hardcodedResponse, action: { type: "none" } };
+    }
+    dynamicPrompt += emailResult.contextBlock;
+  }
+
+  // Email triage session in progress
+  const activeEmailSession = getEmailSession(sessionUserName);
+  if (activeEmailSession !== null) {
+    const currentEmail = getCurrentEmail(sessionUserName);
+    const emailResult = await handleEmailCalendar({
+      message,
+      sessionUserName,
+      timezone,
+      corePrompt,
+      memoryBlock: "",
+      isDinnerTonightQuery: false,
+      isEmailRequest: true,
+      isCalendarRequest: false,
+      isCalendarWriteOp: false,
+      isDeleteConfirm: false,
+      isDeleteCancel: false,
+      isCalendarCreate: false,
+      isCalendarModify: false,
+      isCalendarDelete: false,
+      isEmailReplyFlowActive: false,
+      isEmailReplyAccepted: false,
+      pendingMeetingRequests: [],
+      pendingEmailReply: null,
+      userProfile,
+      log,
+    });
+    if (emailResult.hardcodedResponse) {
       runPostProcessing(sessionUserName, message, emailResult.hardcodedResponse, history, userProfile, deviceId);
       return { reply: emailResult.hardcodedResponse, action: { type: "none" } };
     }

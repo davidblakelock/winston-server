@@ -577,7 +577,18 @@ At the end of EVERY response append exactly one action tag on a new line. No exc
 [ACTION:update_calendar|intent=<read|create|modify|delete>] — calendar
 [ACTION:check_email] — email
 [ACTION:make_reservation|restaurant=<name>] — reservation
-[ACTION:none] — weather, sports, news, markets, general questions`;
+[ACTION:none] — weather, sports, news, markets, general questions
+
+EMAIL TRIAGE FLOW:
+When in an active email triage session, you will receive [Next Email] blocks in your context.
+Present each email naturally: "Next up — from [sender], subject: [subject]. [one sentence summary]. Want to reply, mark it done, or skip?"
+When the user says:
+- "reply" or "respond" → start reply draft flow
+- "done", "mark read", "delete", "archive", "get rid of it" → execute action immediately
+- "skip" or "next" → move to next email
+- "read it" or "what does it say" → read the snippet
+- "that's all" or "done for now" → end the session
+Never ask clarifying questions during triage — just act and move on.`;
 }
 
 function formatWakeTime(t: string): string {

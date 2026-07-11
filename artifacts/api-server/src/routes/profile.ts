@@ -68,6 +68,7 @@ type ProfileRow = {
   favorite_restaurants: string | null;
   favorite_podcasts:    string | null;
   favorite_artists:     string[] | null;
+  email_done_action:    string | null;
 };
 
 async function fetchProfileRow(userName: string): Promise<ProfileRow | null> {
@@ -118,6 +119,7 @@ async function fetchProfileRow(userName: string): Promise<ProfileRow | null> {
     favorite_restaurants: str("favorite_restaurants"),
     favorite_podcasts:    str("favorite_podcasts"),
     favorite_artists:     Array.isArray(r["favorite_artists"]) ? (r["favorite_artists"] as string[]) : null,
+    email_done_action:    str("email_done_action"),
   };
 }
 
@@ -150,6 +152,7 @@ function rowToResponse(row: ProfileRow, settings: UserSettings) {
     favoriteRestaurants: row.favorite_restaurants,
     favoritePodcasts:    row.favorite_podcasts,
     favoriteArtists:     row.favorite_artists ?? [],
+    emailDoneAction:     row.email_done_action,
     settings: {
       briefingWeather:  settings.briefingWeather,
       briefingCalendar: settings.briefingCalendar,
