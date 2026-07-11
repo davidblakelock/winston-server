@@ -227,6 +227,7 @@ const TEXT_COLS: Record<string, string> = {
   sportsTeams:         "sports_teams",
   favoriteRestaurants: "favorite_restaurants",
   favoritePodcasts:    "favorite_podcasts",
+  emailDoneAction:     "email_done_action",
 };
 
 // Numeric/integer columns (coerced from string or number, nullable)

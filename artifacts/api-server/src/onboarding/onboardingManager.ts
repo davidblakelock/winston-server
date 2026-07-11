@@ -39,6 +39,7 @@ export interface UserProfile {
   favoriteArtists: string[];
   rosieVoiceId: string | null;
   maccVoiceId: string | null;
+  emailDoneAction?: 'mark_read' | 'archive' | null;
 }
 
 // ── Data shape accepted by POST /api/onboarding/complete (native app) ─────────
@@ -172,6 +173,7 @@ type ProfileRow = {
   favorite_artists: string[] | null;
   rosie_voice_id: string | null;
   macc_voice_id: string | null;
+  email_done_action: string | null;
 };
 
 function rowToProfile(r: ProfileRow): UserProfile {
@@ -213,6 +215,7 @@ function rowToProfile(r: ProfileRow): UserProfile {
     favoriteArtists: r.favorite_artists ?? [],
     rosieVoiceId: r.rosie_voice_id ?? null,
     maccVoiceId: r.macc_voice_id ?? null,
+    emailDoneAction: (r.email_done_action as 'mark_read' | 'archive' | null) ?? 'mark_read',
   };
 }
 

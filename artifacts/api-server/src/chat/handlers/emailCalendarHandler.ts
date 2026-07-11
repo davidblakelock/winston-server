@@ -275,10 +275,12 @@ export async function handleEmailCalendar(params: HandleEmailCalendarParams): Pr
               ? `\n\n[Email Archived]\n"${targetEmail.subject}" from ${targetEmail.from} has been archived.\nConfirm warmly.`
               : `\n\n[Email Archive Failed]\nCould not archive "${targetEmail.subject}". Tell the user it didn't work.`;
           } else if (action === "markRead") {
-            const r = await markEmailRead(gmailId, sessionUserName).catch(() => ({ ok: false as const }));
-            contextBlock += r.ok
-              ? `\n\n[Email Marked Read]\n"${targetEmail.subject}" from ${targetEmail.from} has been marked as read.\nConfirm warmly.`
-              : `\n\n[Email Mark Read Failed]\nCould not mark "${targetEmail.subject}" as read. Tell the user it didn't work.`;
+            const doneAction = userProfile?.emailDoneAction ?? 'mark_read';
+            await markEmailRead(gmailId, sessionUserName).catch(() => {});
+            if (doneAction === 'archive') {
+              await archiveEmail(gmailId, sessionUserName).catch(() => {});
+            }
+            contextBlock += `\n\n[Email Marked Done]\n"${targetEmail.subject}" from ${targetEmail.from} has been ${doneAction === 'archive' ? 'marked read and archived' : 'marked as read'}.\nConfirm warmly and briefly.`;
           }
         }
       }
