@@ -308,7 +308,6 @@ export async function handleEmailCalendar(params: HandleEmailCalendarParams): Pr
           emails,
           currentSessionEmail?.gmailId ?? null
         );
-        logger.info({ action, targetEmailGmailId: targetEmail?.gmailId ?? null, targetEmailSubject: targetEmail?.subject ?? null, currentSessionEmailGmailId: currentSessionEmail?.gmailId ?? null }, "[TEMP-DEBUG] detectEmailAction result");
         if (action && targetEmail) {
           const gmailId = targetEmail.gmailId;
           if (action === "trash") {
@@ -331,8 +330,7 @@ export async function handleEmailCalendar(params: HandleEmailCalendarParams): Pr
             }
           } else if (action === "markRead") {
             const doneAction = userProfile?.emailDoneAction ?? 'mark_read';
-            const markResult = await markEmailRead(gmailId, sessionUserName).catch((err) => ({ ok: false as const, error: String(err) }));
-            logger.info({ gmailId, sessionUserName, markResult }, "[TEMP-DEBUG] markEmailRead result");
+            await markEmailRead(gmailId, sessionUserName).catch(() => {});
             if (doneAction === 'archive') {
               await archiveEmail(gmailId, sessionUserName).catch(() => {});
             }
