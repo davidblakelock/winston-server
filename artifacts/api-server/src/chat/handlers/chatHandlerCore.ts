@@ -45,7 +45,7 @@ import { searchContacts } from "../../google/contacts.js";
 import { handleText } from "./textHandler.js";
 import { handleEmailCalendar } from "./emailCalendarHandler.js";
 import { handleReservation, type ReservationPayload } from "./reservationHandler.js";
-import { getEmailSession, getCurrentEmail } from "../../email/emailSessionManager.js";
+import { getEmailSession, getCurrentEmail, setEmailSession } from "../../email/emailSessionManager.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -430,33 +430,16 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
   const activeEmailSession = getEmailSession(sessionUserName);
   if (activeEmailSession !== null) {
     const currentEmail = getCurrentEmail(sessionUserName);
-    const emailResult = await handleEmailCalendar({
-      message,
-      sessionUserName,
-      timezone,
-      corePrompt,
-      memoryBlock: "",
-      isDinnerTonightQuery: false,
-      isEmailRequest: true,
-      isCalendarRequest: false,
-      isCalendarWriteOp: false,
-      isDeleteConfirm: false,
-      isDeleteCancel: false,
-      isCalendarCreate: false,
-      isCalendarModify: false,
-      isCalendarDelete: false,
-      isEmailReplyFlowActive: false,
-      isEmailReplyAccepted: false,
-      pendingMeetingRequests: [],
-      pendingEmailReply: null,
-      userProfile,
-      log,
-    });
-    if (emailResult.hardcodedResponse) {
-      runPostProcessing(sessionUserName, message, emailResult.hardcodedResponse, history, userProfile, deviceId);
-      return { reply: emailResult.hardcodedResponse, action: { type: "none" } };
+    if (currentEmail) {
+      // Inject current email context directly — no Gmail re-fetch needed
+      dynamicPrompt += `\n\n[Active Email Triage Session — Email ${activeEmailSession.currentIndex + 1} of ${activeEmailSession.emails.length}]\nFrom: ${currentEmail.from} (${currentEmail.fromEmail})\nSubject: ${currentEmail.subject}\nSummary: ${currentEmail.snippet}\n\nThe user is responding to this email. Based on their message, determine the action (reply, done/mark-read, skip, delete, archive) and execute it. If they say "check email" or "start over", clear this session and do a fresh fetch.`;
+
+      // Check if user wants to restart
+      if (/check.*email|start over|refresh/i.test(message)) {
+        setEmailSession(sessionUserName, null);
+        dynamicPrompt += `\n\n[Email Session Reset]\nUser requested fresh email check. Proceed normally.`;
+      }
     }
-    dynamicPrompt += emailResult.contextBlock;
   }
 
   // ── Build messages array ─────────────────────────────────────────────────────
@@ -492,7 +475,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
 
   // ── Action tag parsing — extracted from Claude's reply ───────────────────
   const tagMatch  = claudeReply.match(/\[ACTION:([^\]]+)\][\s]*$/);
-  let finalReply  = claudeReply.replace(/\n?\[ACTION:[^\]]+\][\s]*$/, "").trim();
+  let finalReply  = claudeReply.replace(/\n?\[ACTION:[^\]]+\]/g, "").trim();
 
   let action: ClaudeAction = { type: "none" };
   if (tagMatch) {

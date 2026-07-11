@@ -273,13 +273,18 @@ export async function handleEmailCalendar(params: HandleEmailCalendarParams): Pr
         const existingSession = getEmailSession(sessionUserName);
         if (!existingSession) {
           // New email check — start fresh session
-          setEmailSession(sessionUserName, {
+          const session: EmailSession = {
             emails,
             currentIndex: 0,
             handledIds: new Set(),
             createdAt: Date.now(),
-          });
+          };
+          setEmailSession(sessionUserName, session);
           logger.info({ userName: sessionUserName, count: emails.length }, "[EmailSession] New session started");
+
+          // Immediately present the first email
+          const firstEmail = session.emails[0];
+          contextBlock += `\n\n[Email Triage — Starting Session]\n${session.emails.length} unread email${session.emails.length === 1 ? '' : 's'} found.\nFirst email:\nFrom: ${firstEmail.from}\nSubject: ${firstEmail.subject}\nSummary: ${firstEmail.snippet}\n\nGive the user a brief digest of how many emails there are, then present the first one and ask: reply, done, or skip?`;
         }
       }
 
