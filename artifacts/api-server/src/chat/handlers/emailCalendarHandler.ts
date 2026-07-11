@@ -108,14 +108,19 @@ async function detectEmailAction(
     .join("\n");
 
   const prompt =
-    `The user is managing their email inbox. Their message is: "${message}"\n\n` +
+    `The user is in an email triage session. Their message is: "${message}"\n\n` +
     `Available emails (index | gmailId | from | subject):\n${emailList}\n\n` +
-    `If the user says "it", "that one", "this one", "done", "mark it read", "delete it", or any pronoun — they are referring to the CURRENT EMAIL marked above.\n` +
-    `If the user wants to trash/delete, archive, or mark as read a specific email, respond with JSON only:\n` +
-    `{"action":"trash"|"archive"|"markRead","gmailId":"<id>"}\n` +
-    `If the message is not an email action or you cannot identify which email, respond with:\n` +
+    `CURRENT EMAIL is marked above with ← CURRENT EMAIL. When the user uses pronouns ("it", "that", "this") or vague references, they mean the CURRENT EMAIL.\n\n` +
+    `ACTION MAPPINGS — classify the user's message:\n` +
+    `- "markRead": done, mark it done, mark read, got it, finished with it, mark it read\n` +
+    `- "trash": delete, trash, get rid of it, remove it, delete that, throw it away\n` +
+    `- "archive": archive, file it, put it away\n` +
+    `- null (just advance, no action): skip, next, move on, pass, not interested\n\n` +
+    `If the message matches one of the above actions, respond with JSON only:\n` +
+    `{"action":"trash"|"archive"|"markRead","gmailId":"<id of the CURRENT EMAIL>"}\n` +
+    `If the message is a reply request ("reply", "respond", "write back") or is not an email action, respond with:\n` +
     `{"action":null,"gmailId":null}\n` +
-    `JSON only. No explanation.`;
+    `JSON only. No explanation. No markdown.`;
 
   try {
     const result = await anthropic.messages.create({
@@ -337,6 +342,17 @@ export async function handleEmailCalendar(params: HandleEmailCalendarParams): Pr
             contextBlock += `\n\n[Email Marked Done]\n"${targetEmail.subject}" from ${targetEmail.from} has been ${doneAction === 'archive' ? 'marked read and archived' : 'marked as read'}.\nConfirm warmly and briefly.`;
             markEmailHandled(sessionUserName, gmailId);
             contextBlock += appendNextEmailPrompt();
+          }
+        }
+
+        // Handle skip/next — advance session without taking action
+        if (!action) {
+          const isSkip = /\b(skip|next|pass|move on|not interested)\b/i.test(message);
+          if (isSkip) {
+            const nextEmail = advanceEmailSession(sessionUserName);
+            contextBlock += nextEmail
+              ? `\n\n[Email Skipped — Next Email]\nFrom: ${nextEmail.from} | Subject: ${nextEmail.subject}\nSummary: ${nextEmail.snippet}\n\nPresent this email and ask: reply, done, or skip?`
+              : `\n\n[Email Triage Complete]\nAll emails reviewed. Tell the user warmly they're all caught up.`;
           }
         }
       }
