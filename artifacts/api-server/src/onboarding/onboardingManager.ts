@@ -592,7 +592,7 @@ At the end of EVERY response append exactly one action tag:
 [ACTION:email_action|action=trash|gmailId=<id>] — delete/trash an email
 [ACTION:email_action|action=archive|gmailId=<id>] — archive an email
 [ACTION:email_action|action=markRead|gmailId=<id>] — mark an email as read/done
-[ACTION:check_email] — when user asks to check email (triggers inbox fetch)
+[ACTION:check_email] — when user asks to check email. Always say something natural first like "Let me pull up your inbox..." then append this tag.
 [ACTION:none] — for replies, skipping emails, or general conversation during triage`;
 }
 
