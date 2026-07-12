@@ -731,6 +731,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       if (emailResult.hardcodedResponse) {
         finalReply = emailResult.hardcodedResponse;
       } else if (emailResult.contextBlock) {
+        log.info({ contextBlockLength: emailResult.contextBlock.length }, "[chatHandlerCore] check_email: running Haiku call with email context");
         const emailReply = await anthropic.messages.create({
           model:      MODEL_HAIKU,
           max_tokens: 600,
@@ -738,6 +739,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
           messages,
         });
         const emailText = emailReply.content[0]?.type === "text" ? emailReply.content[0].text.trim() : "";
+        log.info({ emailTextLength: emailText.length, preview: emailText.slice(0, 80) }, "[chatHandlerCore] check_email: Haiku reply received");
         if (emailText) finalReply = emailText;
       }
       if (emailResult.emailPayload) {
