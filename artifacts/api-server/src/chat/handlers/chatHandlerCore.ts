@@ -344,6 +344,21 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     buildCalendarBlock(todayEvents, timezone) +
     activeScreenBlock;
 
+  // Inject active email triage context so Claude has gmailIds for actions
+  const activeTriageSession = getTriageSession(sessionUserName);
+  if (activeTriageSession) {
+    const currentEmail = activeTriageSession.emails[activeTriageSession.currentIndex];
+    if (currentEmail) {
+      dynamicPrompt += `\n\n[Active Email Triage — Email ${activeTriageSession.currentIndex + 1} of ${activeTriageSession.emails.length}]\n` +
+        `Current email:\n` +
+        `From: ${currentEmail.from}\n` +
+        `Subject: ${currentEmail.subject}\n` +
+        `gmailId: ${currentEmail.gmailId}\n` +
+        `Preview: ${currentEmail.snippet}\n\n` +
+        `If the user wants to reply, delete, archive, or mark this email done, use this gmailId in the action tag.`;
+    }
+  }
+
   // ── Pre-flight: handle active multi-turn flows ───────────────────────────────
 
   // SMS flow in progress
