@@ -247,8 +247,8 @@ async function checkDepartureAlertsForUser(userName: string): Promise<void> {
       body: pushBody,
       data: {
         action: "open_url",
-        url: mapsUrl,
-        mapsDeepLink,
+        url: mapsDeepLink,        // HTTPS URL — works on all platforms as primary
+        mapsDeepLink: mapsUrl,    // google.navigation: intent — Android fallback
         destination: location,
       },
     }).catch(() => {});
