@@ -1,4 +1,3 @@
-import Anthropic from "@anthropic-ai/sdk";
 import {
   fetchAndSummarizeEmails,
   formatEmailsForPrompt,
@@ -48,17 +47,6 @@ import {
 import type { UserProfile } from "../../onboarding/onboardingManager.js";
 import { getCurrentDateTimeBlock } from "../getCurrentDateTimeBlock.js";
 import { classifyConfirmationIntent } from "../../text/textMessageComposer.js";
-import { logger } from "../../lib/logger.js";
-import {
-  getEmailSession,
-  setEmailSession,
-  getCurrentEmail,
-  advanceEmailSession,
-  markEmailHandled,
-  type EmailSession,
-} from "../../email/emailSessionManager.js";
-
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 export interface EmailCalendarResult {
   contextBlock: string;
@@ -93,49 +81,6 @@ export interface HandleEmailCalendarParams {
   pendingEmailReply: PendingEmailReply | null;
   userProfile: UserProfile | null;
   log: { warn: (obj: object, msg?: string) => void; info: (obj: object, msg?: string) => void };
-  sessionEmails?: EmailSummary[] | null;
-}
-
-async function detectEmailAction(
-  message: string,
-  emails: EmailSummary[],
-  currentGmailId?: string | null
-): Promise<{ action: "trash" | "archive" | "markRead" | null; email: EmailSummary | null }> {
-  if (!emails.length) return { action: null, email: null };
-
-  const emailList = emails
-    .map((e, i) => `${i}: gmailId=${e.gmailId} | from=${e.from} | subject=${e.subject}${e.gmailId === currentGmailId ? ' ← CURRENT EMAIL (user is referring to this one)' : ''}`)
-    .join("\n");
-
-  const prompt =
-    `The user is in an email triage session. Their message is: "${message}"\n\n` +
-    `Available emails (index | gmailId | from | subject):\n${emailList}\n\n` +
-    `CURRENT EMAIL is marked above with ← CURRENT EMAIL. When the user uses pronouns ("it", "that", "this") or vague references, they mean the CURRENT EMAIL.\n\n` +
-    `ACTION MAPPINGS — classify the user's message:\n` +
-    `- "markRead": done, mark it done, mark read, got it, finished with it, mark it read\n` +
-    `- "trash": delete, trash, get rid of it, remove it, delete that, throw it away\n` +
-    `- "archive": archive, file it, put it away\n` +
-    `- null (just advance, no action): skip, next, move on, pass, not interested\n\n` +
-    `If the message matches one of the above actions, respond with JSON only:\n` +
-    `{"action":"trash"|"archive"|"markRead","gmailId":"<id of the CURRENT EMAIL>"}\n` +
-    `If the message is a reply request ("reply", "respond", "write back") or is not an email action, respond with:\n` +
-    `{"action":null,"gmailId":null}\n` +
-    `JSON only. No explanation. No markdown.`;
-
-  try {
-    const result = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 60,
-      messages: [{ role: "user", content: prompt }],
-    });
-    const text = result.content[0]?.type === "text" ? result.content[0].text.trim() : "";
-    const parsed = JSON.parse(text) as { action: string | null; gmailId: string | null };
-    if (!parsed.action) return { action: null, email: null };
-    const email = emails.find(e => e.gmailId === parsed.gmailId) ?? null;
-    return { action: parsed.action as "trash" | "archive" | "markRead", email };
-  } catch {
-    return { action: null, email: null };
-  }
 }
 
 export async function handleEmailCalendar(params: HandleEmailCalendarParams): Promise<EmailCalendarResult> {
@@ -265,7 +210,7 @@ export async function handleEmailCalendar(params: HandleEmailCalendarParams): Pr
     try {
       const [emails, events] = await Promise.all([
         isEmailRequest
-          ? (params.sessionEmails ?? fetchAndSummarizeEmails(15, undefined, sessionUserName).catch(() => null))
+          ? fetchAndSummarizeEmails(15, undefined, sessionUserName).catch(() => null)
           : Promise.resolve(undefined),
         (isEmailRequest || isCalendarRequest)
           ? fetchWeekEvents(true, sessionUserName).catch(() => null)
@@ -274,87 +219,6 @@ export async function handleEmailCalendar(params: HandleEmailCalendarParams): Pr
 
       if (isEmailRequest && emails !== null) {
         updateEmailLastChecked().catch(() => {});
-      }
-
-      // Store emails in session for multi-turn triage
-      if (isEmailRequest && Array.isArray(emails) && emails.length > 0) {
-        const existingSession = getEmailSession(sessionUserName);
-        if (!existingSession) {
-          // New email check — start fresh session
-          const session: EmailSession = {
-            emails,
-            currentIndex: 0,
-            handledIds: new Set(),
-            createdAt: Date.now(),
-          };
-          setEmailSession(sessionUserName, session);
-          logger.info({ userName: sessionUserName, count: emails.length }, "[EmailSession] New session started");
-
-          // Immediately present the first email
-          const firstEmail = session.emails[0];
-          contextBlock += `\n\n[Email Triage — Starting Session]\n${session.emails.length} unread email${session.emails.length === 1 ? '' : 's'} found.\nFirst email:\nFrom: ${firstEmail.from}\nSubject: ${firstEmail.subject}\nSummary: ${firstEmail.snippet}\n\nGive the user a brief digest of how many emails there are, then present the first one and ask: reply, done, or skip?`;
-        }
-      }
-
-      // Builds the [Next Email] / [Email Triage Complete] block after an action fires,
-      // shared by all three branches below.
-      const appendNextEmailPrompt = (): string => {
-        const nextEmail = advanceEmailSession(sessionUserName);
-        return nextEmail
-          ? `\n\n[Next Email]\nFrom: ${nextEmail.from} | Subject: ${nextEmail.subject}\nSummary: ${nextEmail.snippet}\n\nPresent this email to the user and ask what they'd like to do: reply, done, or skip.`
-          : `\n\n[Email Triage Complete]\nAll emails have been handled. Tell the user warmly they're all caught up.`;
-      };
-
-      // ── Gmail action detection (trash / archive / mark-read) ───────────────
-      if (isEmailRequest && Array.isArray(emails) && emails.length > 0) {
-        const currentSessionEmail = getCurrentEmail(sessionUserName);
-        const { action, email: targetEmail } = await detectEmailAction(
-          message,
-          emails,
-          currentSessionEmail?.gmailId ?? null
-        );
-        if (action && targetEmail) {
-          const gmailId = targetEmail.gmailId;
-          if (action === "trash") {
-            const r = await trashEmail(gmailId, sessionUserName).catch(() => ({ ok: false as const }));
-            contextBlock += r.ok
-              ? `\n\n[Email Trashed]\n"${targetEmail.subject}" from ${targetEmail.from} has been moved to trash.\nConfirm warmly and briefly — e.g. "Done — that email from ${targetEmail.from} is in the trash."`
-              : `\n\n[Email Trash Failed]\nCould not trash "${targetEmail.subject}". Tell the user it didn't work and they can try from Gmail directly.`;
-            if (r.ok) {
-              markEmailHandled(sessionUserName, gmailId);
-              contextBlock += appendNextEmailPrompt();
-            }
-          } else if (action === "archive") {
-            const r = await archiveEmail(gmailId, sessionUserName).catch(() => ({ ok: false as const }));
-            contextBlock += r.ok
-              ? `\n\n[Email Archived]\n"${targetEmail.subject}" from ${targetEmail.from} has been archived.\nConfirm warmly.`
-              : `\n\n[Email Archive Failed]\nCould not archive "${targetEmail.subject}". Tell the user it didn't work.`;
-            if (r.ok) {
-              markEmailHandled(sessionUserName, gmailId);
-              contextBlock += appendNextEmailPrompt();
-            }
-          } else if (action === "markRead") {
-            const doneAction = userProfile?.emailDoneAction ?? 'mark_read';
-            await markEmailRead(gmailId, sessionUserName).catch(() => {});
-            if (doneAction === 'archive') {
-              await archiveEmail(gmailId, sessionUserName).catch(() => {});
-            }
-            contextBlock += `\n\n[Email Marked Done]\n"${targetEmail.subject}" from ${targetEmail.from} has been ${doneAction === 'archive' ? 'marked read and archived' : 'marked as read'}.\nConfirm warmly and briefly.`;
-            markEmailHandled(sessionUserName, gmailId);
-            contextBlock += appendNextEmailPrompt();
-          }
-        }
-
-        // Handle skip/next — advance session without taking action
-        if (!action) {
-          const isSkip = /\b(skip|next|pass|move on|not interested)\b/i.test(message);
-          if (isSkip) {
-            const nextEmail = advanceEmailSession(sessionUserName);
-            contextBlock += nextEmail
-              ? `\n\n[Email Skipped — Next Email]\nFrom: ${nextEmail.from} | Subject: ${nextEmail.subject}\nSummary: ${nextEmail.snippet}\n\nPresent this email and ask: reply, done, or skip?`
-              : `\n\n[Email Triage Complete]\nAll emails reviewed. Tell the user warmly they're all caught up.`;
-          }
-        }
       }
 
       // ── On-demand meeting detection ────────────────────────────────────────

@@ -576,19 +576,24 @@ At the end of EVERY response append exactly one action tag on a new line. No exc
 [ACTION:navigate|target=<place>] — directions
 [ACTION:update_calendar|intent=<read|create|modify|delete>] — calendar
 [ACTION:check_email] — email
+[ACTION:email_action|action=trash|gmailId=<id>] — delete/trash an email
+[ACTION:email_action|action=archive|gmailId=<id>] — archive an email
+[ACTION:email_action|action=markRead|gmailId=<id>] — mark an email as read/done
 [ACTION:make_reservation|restaurant=<name>] — reservation
 [ACTION:none] — weather, sports, news, markets, general questions
 
-EMAIL TRIAGE FLOW:
-When in an active email triage session, you will receive [Next Email] blocks in your context.
-Present each email naturally: "Next up — from [sender], subject: [subject]. [one sentence summary]. Want to reply, mark it done, or skip?"
-When the user says:
-- "reply" or "respond" → start reply draft flow
-- "done", "mark read", "delete", "archive", "get rid of it" → execute action immediately
-- "skip" or "next" → move to next email
-- "read it" or "what does it say" → read the snippet
-- "that's all" or "done for now" → end the session
-Never ask clarifying questions during triage — just act and move on.`;
+EMAIL:
+When the user asks to check email, you will receive their inbox in your context with gmailIds.
+Present a natural digest — who emailed, what it's about, anything urgent.
+Then go through emails one at a time naturally in conversation.
+When the user wants to act on an email, emit the appropriate action tag with the gmailId.
+
+At the end of EVERY response append exactly one action tag:
+[ACTION:email_action|action=trash|gmailId=<id>] — delete/trash an email
+[ACTION:email_action|action=archive|gmailId=<id>] — archive an email
+[ACTION:email_action|action=markRead|gmailId=<id>] — mark an email as read/done
+[ACTION:check_email] — when user asks to check email (triggers inbox fetch)
+[ACTION:none] — for replies, skipping emails, or general conversation during triage`;
 }
 
 function formatWakeTime(t: string): string {

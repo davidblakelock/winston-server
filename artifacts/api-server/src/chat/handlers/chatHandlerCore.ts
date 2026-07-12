@@ -45,8 +45,7 @@ import { searchContacts } from "../../google/contacts.js";
 import { handleText } from "./textHandler.js";
 import { handleEmailCalendar } from "./emailCalendarHandler.js";
 import { handleReservation, type ReservationPayload } from "./reservationHandler.js";
-import { getEmailSession, getCurrentEmail, setEmailSession } from "../../email/emailSessionManager.js";
-import { fetchAndSummarizeEmails } from "../../google/gmail.js";
+import { fetchAndSummarizeEmails, trashEmail, archiveEmail, markEmailRead } from "../../google/gmail.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -67,7 +66,8 @@ export type ActionType =
   | "make_call"
   | "navigate"
   | "update_calendar"
-  | "check_email";
+  | "check_email"
+  | "email_action";
 
 export interface ClaudeAction {
   type: ActionType;
@@ -80,6 +80,8 @@ export interface ClaudeAction {
   phone?: string | null;
   navigationTarget?: string | null;
   calendarIntent?: "read" | "create" | "modify" | "delete" | null;
+  emailAction?: "trash" | "archive" | "markRead" | null;
+  gmailId?: string | null;
 }
 
 export interface NewChatRequest {
@@ -427,83 +429,6 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     dynamicPrompt += emailResult.contextBlock;
   }
 
-  // Email triage session in progress
-  const activeEmailSession = getEmailSession(sessionUserName);
-  if (activeEmailSession !== null) {
-    // If user is explicitly requesting a new email check, clear stale session
-    if (/check.*email|my email|new email/i.test(message)) {
-      setEmailSession(sessionUserName, null);
-      // Fall through to normal flow — check_email action tag will handle it
-    } else {
-      const currentEmail = getCurrentEmail(sessionUserName);
-      if (currentEmail) {
-        // Execute action using stored session emails — no re-fetch
-        const emailResult = await handleEmailCalendar({
-          message,
-          sessionUserName,
-          timezone,
-          corePrompt,
-          memoryBlock: "",
-          isDinnerTonightQuery: false,
-          isEmailRequest: true,
-          isCalendarRequest: false,
-          isCalendarWriteOp: false,
-          isDeleteConfirm: false,
-          isDeleteCancel: false,
-          isCalendarCreate: false,
-          isCalendarModify: false,
-          isCalendarDelete: false,
-          isEmailReplyFlowActive: false,
-          isEmailReplyAccepted: false,
-          pendingMeetingRequests: [],
-          pendingEmailReply: null,
-          sessionEmails: activeEmailSession.emails,
-          userProfile,
-          log,
-        });
-        if (emailResult.hardcodedResponse) {
-          runPostProcessing(sessionUserName, message, emailResult.hardcodedResponse, history, userProfile, deviceId);
-          return { reply: emailResult.hardcodedResponse, action: { type: "none" } };
-        }
-        dynamicPrompt += emailResult.contextBlock;
-        // Also inject current email context
-        dynamicPrompt += `\n\n[Active Email Triage Session — Email ${activeEmailSession.currentIndex + 1} of ${activeEmailSession.emails.length}]\nFrom: ${currentEmail.from} (${currentEmail.fromEmail})\nSubject: ${currentEmail.subject}\nSummary: ${currentEmail.snippet}`;
-      }
-    }
-  }
-
-  // ── Email pre-fetch — fetch before primary Claude call if email intent detected ──
-  const hasActiveEmailSession = getEmailSession(sessionUserName) !== null;
-  const isEmailIntent = /check.*email|my email|new email|any.*email|what.*email/i.test(message);
-
-  if (isEmailIntent && !hasActiveEmailSession) {
-    try {
-      const preEmails = await fetchAndSummarizeEmails(15, undefined, sessionUserName).catch(() => null);
-      if (preEmails && preEmails.length > 0) {
-        // Start session immediately
-        setEmailSession(sessionUserName, {
-          emails: preEmails,
-          currentIndex: 0,
-          handledIds: new Set(),
-          createdAt: Date.now(),
-        });
-        const firstEmail = preEmails[0];
-        dynamicPrompt +=
-          `\n\n[Email Triage — ${preEmails.length} unread email${preEmails.length === 1 ? '' : 's'}]\n` +
-          preEmails.map((e, i) =>
-            `${i + 1}. From: ${e.from} | Subject: ${e.subject} | Preview: ${e.snippet}`
-          ).join('\n') +
-          `\n\nPresent a brief digest of these emails to the user, then present email #1 and ask: reply, mark it done, or skip?`;
-        log.info({ count: preEmails.length }, "[chatHandlerCore] Email pre-fetched before primary call");
-      } else {
-        dynamicPrompt += `\n\n[Email Check]\nNo unread emails in inbox. Tell the user warmly their inbox is clear.`;
-        log.info("[chatHandlerCore] Email pre-fetch — inbox clear");
-      }
-    } catch (err) {
-      log.warn({ err }, "[chatHandlerCore] Email pre-fetch failed");
-    }
-  }
-
   // ── Build messages array ─────────────────────────────────────────────────────
   const messages: Array<{ role: "user" | "assistant"; content: string }> = [
     ...history.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
@@ -576,6 +501,13 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
         break;
       case "check_email":
         action = { type: "check_email" };
+        break;
+      case "email_action":
+        action = {
+          type: "email_action",
+          emailAction: (parts.action ?? null) as "trash" | "archive" | "markRead" | null,
+          gmailId: parts.gmailId ?? null,
+        };
         break;
       case "make_reservation":
         action = { type: "make_reservation", restaurantName: parts.restaurant ?? "" };
@@ -809,6 +741,30 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       }
       if (emailResult.emailPayload) {
         broadcastToUser(sessionUserName, "email-compose", { type: "email_compose", ...emailResult.emailPayload });
+      }
+      break;
+    }
+
+    // ── email_action ─────────────────────────────────────────────────────────
+    case "email_action": {
+      if (action.gmailId && action.emailAction) {
+        const doneAction = action.emailAction === "markRead"
+          ? (userProfile?.emailDoneAction ?? "mark_read")
+          : action.emailAction;
+
+        if (doneAction === "trash") {
+          await trashEmail(action.gmailId, sessionUserName).catch(() => {});
+          log.info({ gmailId: action.gmailId }, "[chatHandlerCore] Email trashed");
+        } else if (doneAction === "archive") {
+          await archiveEmail(action.gmailId, sessionUserName).catch(() => {});
+          log.info({ gmailId: action.gmailId }, "[chatHandlerCore] Email archived");
+        } else {
+          await markEmailRead(action.gmailId, sessionUserName).catch(() => {});
+          if (userProfile?.emailDoneAction === "archive") {
+            await archiveEmail(action.gmailId, sessionUserName).catch(() => {});
+          }
+          log.info({ gmailId: action.gmailId }, "[chatHandlerCore] Email marked read");
+        }
       }
       break;
     }
