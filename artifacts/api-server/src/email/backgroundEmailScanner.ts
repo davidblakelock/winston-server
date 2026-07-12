@@ -353,8 +353,8 @@ async function runScan(userName: string): Promise<void> {
   }
 
   let filedRecordsCount = 0;
-  const urgentAlerts: { subject: string; summary: string }[] = [];
-  const fyiItems: { subject: string; summary: string }[] = [];
+  const urgentAlerts: { subject: string; summary: string; gmailId: string }[] = [];
+  const fyiItems: { subject: string; summary: string; gmailId: string }[] = [];
   const confirmedMeetings: { from: string; subject: string; proposedDateTimeStr: string | null }[] = [];
   let meetings = 0, records = 0, socials = 0;
 
@@ -370,8 +370,8 @@ async function runScan(userName: string): Promise<void> {
         if (res.action === "meeting_request") { await handleMeeting(u, id, from, subject, res, confirmedMeetings); meetings++; }
         else if (res.action === "save_to_records") { await handleRecord(u, id, body, res); records++; filedRecordsCount++; }
         else if (res.action === "needs_reply") { await handleSocial(u, id, from, res); socials++; }
-        else if (res.action === "urgent_alert") { urgentAlerts.push({ subject, summary: res.summary ?? subject }); }
-        else if (res.action === "fyi") { fyiItems.push({ subject, summary: res.summary ?? subject }); }
+        else if (res.action === "urgent_alert") { urgentAlerts.push({ subject, summary: res.summary ?? subject, gmailId: id }); }
+        else if (res.action === "fyi") { fyiItems.push({ subject, summary: res.summary ?? subject, gmailId: id }); }
       },
       "social",
       vacationMode,
@@ -408,7 +408,16 @@ async function runScan(userName: string): Promise<void> {
     "[BgEmailScanner] Pending state before summary"
   );
 
-  const totalEmails = meetings + records + socials + urgentAlerts.length + fyiItems.length + confirmedMeetings.length;
+  // Exclude already-notified emails from count and notification
+  const { rows: alreadyNotified } = await query<{ email_id: string }>(
+    `SELECT email_id FROM email_scan_log WHERE user_name = $1`,
+    [userName]
+  ).catch(() => ({ rows: [] as { email_id: string }[] }));
+  const notifiedIds = new Set(alreadyNotified.map(r => r.email_id));
+
+  const newUrgentAlerts = urgentAlerts.filter(e => !notifiedIds.has(e.gmailId));
+  const newFyiItems = fyiItems.filter(e => !notifiedIds.has(e.gmailId));
+  const totalEmails = meetings + records + socials + newUrgentAlerts.length + newFyiItems.length + confirmedMeetings.length;
   const actionableCount = scanReplies.length + scanMeetings.length + urgentAlerts.length;
 
   if (totalEmails > 0) {
@@ -428,6 +437,23 @@ async function runScan(userName: string): Promise<void> {
       },
     });
     logger.info({ userName, totalEmails, actionableCount }, "[BgEmailScanner] Email scan push sent");
+
+    // Log newly notified email IDs to prevent re-notification
+    const newIds = [...newUrgentAlerts, ...newFyiItems]
+      .map(e => e.gmailId)
+      .filter(Boolean);
+
+    if (newIds.length > 0) {
+      await Promise.all(newIds.map(id =>
+        query(
+          `INSERT INTO email_scan_log (user_name, email_id, tier, surfaced_at)
+           VALUES ($1, $2, 1, NOW())
+           ON CONFLICT DO NOTHING`,
+          [userName, id]
+        ).catch(() => {})
+      ));
+      logger.info({ count: newIds.length }, "[BgEmailScanner] Logged notified email IDs");
+    }
   }
 }
 
