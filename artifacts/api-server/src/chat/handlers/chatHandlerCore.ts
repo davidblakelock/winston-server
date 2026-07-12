@@ -281,7 +281,6 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     pendingReminderRows,
     todayEvents,
     dbHistory,
-    preFetchedEmails,
   ] = await Promise.all([
     getProfile(sessionUserName).catch(() => null),
     getProfileItems(undefined, sessionUserName).catch(() => []),
@@ -297,9 +296,6 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     ),
     getTodayEventsCached(sessionUserName),
     history.length === 0 ? hydrateHistoryFromDb(sessionUserName).catch(() => []) : Promise.resolve(null),
-    /check.*email|my email|any.*email/i.test(message)
-      ? fetchAndSummarizeEmails(15, undefined, sessionUserName).catch(() => null)
-      : Promise.resolve(null),
   ]);
 
   if (dbHistory !== null && history.length === 0) {
@@ -342,16 +338,6 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     buildRemindersBlock(pendingReminderRows, timezone) +
     buildCalendarBlock(todayEvents, timezone) +
     activeScreenBlock;
-
-  if (preFetchedEmails && preFetchedEmails.length > 0) {
-    dynamicPrompt += `\n\n[Gmail Inbox — ${preFetchedEmails.length} unread emails]\n` +
-      preFetchedEmails.map((e, i) =>
-        `${i + 1}. gmailId:${e.gmailId} | From: ${e.from} | Subject: ${e.subject} | Preview: ${e.snippet}`
-      ).join('\n') +
-      `\n\nPresent these emails naturally. For each one the user wants to act on, emit the appropriate email_action tag with the exact gmailId shown above.`;
-  } else if (preFetchedEmails !== null && preFetchedEmails.length === 0) {
-    dynamicPrompt += `\n\n[Gmail Inbox]\nNo unread emails.`;
-  }
 
   // ── Pre-flight: handle active multi-turn flows ───────────────────────────────
 
@@ -719,11 +705,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
 
     // ── check_email ───────────────────────────────────────────────────────────
     case "check_email": {
-      // Emails already in context from pre-fetch — skip redundant fetch
-      if (preFetchedEmails !== null) {
-        log.info("[chatHandlerCore] check_email: emails already pre-fetched, skipping handleEmailCalendar");
-        break;
-      }
+      log.info("[chatHandlerCore] check_email: fetching emails via handleEmailCalendar");
       const emailResult = await handleEmailCalendar({
         message,
         sessionUserName,
