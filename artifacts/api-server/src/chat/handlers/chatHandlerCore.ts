@@ -69,7 +69,8 @@ export type ActionType =
   | "update_calendar"
   | "check_email"
   | "email_action"
-  | "email_next";
+  | "email_next"
+  | "email_reply";
 
 export interface ClaudeAction {
   type: ActionType;
@@ -522,6 +523,9 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       case "email_next":
         action = { type: "email_next" };
         break;
+      case "email_reply":
+        action = { type: "email_reply", gmailId: parts.gmailId ?? null };
+        break;
       case "make_reservation":
         action = { type: "make_reservation", restaurantName: parts.restaurant ?? "" };
         break;
@@ -850,6 +854,42 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
             messageId: `email-done-${Date.now()}`,
             initiated_by: null,
           });
+        }
+      }
+      break;
+    }
+
+    // ── email_reply ───────────────────────────────────────────────────────────
+    case "email_reply": {
+      if (action.gmailId) {
+        const emailResult = await handleEmailCalendar({
+          message,
+          sessionUserName,
+          timezone,
+          corePrompt,
+          memoryBlock: "",
+          isDinnerTonightQuery: false,
+          isEmailRequest: true,
+          isCalendarRequest: false,
+          isCalendarWriteOp: false,
+          isDeleteConfirm: false,
+          isDeleteCancel: false,
+          isCalendarCreate: false,
+          isCalendarModify: false,
+          isCalendarDelete: false,
+          isEmailReplyFlowActive: false,
+          isEmailReplyAccepted: false,
+          pendingMeetingRequests: [],
+          pendingEmailReply: null,
+          userProfile,
+          log,
+        });
+        if (emailResult.hardcodedResponse) finalReply = emailResult.hardcodedResponse;
+        else if (emailResult.contextBlock) {
+          dynamicPrompt += emailResult.contextBlock;
+        }
+        if (emailResult.emailPayload) {
+          broadcastToUser(sessionUserName, "email-compose", { type: "email_compose", ...emailResult.emailPayload });
         }
       }
       break;
