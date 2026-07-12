@@ -782,6 +782,13 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
             index: 1,
             total: emails.length,
           });
+          query(
+            `INSERT INTO chat_messages (user_name, role, content, message_id)
+             VALUES ($1, 'assistant', $2, $3)`,
+            [sessionUserName,
+             `[Email Card — 1 of ${emails.length}]\nFrom: ${firstEmail.from}\nSubject: ${firstEmail.subject}\ngmailId: ${firstEmail.gmailId}`,
+             `email-card-${Date.now()}`]
+          ).catch(() => {});
 
           log.info({ count: emails.length }, "[check_email] Digest and first card pushed via SSE");
         } catch (err) {
@@ -822,15 +829,24 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
         const nextEmail = advanceTriageSession(sessionUserName);
         if (nextEmail) {
           const session = getTriageSession(sessionUserName);
+          const cardIndex = (session?.currentIndex ?? 0) + 1;
+          const cardTotal = session ? session.emails.length : 0;
           broadcastToUser(sessionUserName, "email_card", {
             type: "email_card",
             gmailId: nextEmail.gmailId,
             from: nextEmail.from,
             subject: nextEmail.subject,
             snippet: nextEmail.snippet,
-            index: (session?.currentIndex ?? 0) + 1,
-            total: session ? session.emails.length : 0,
+            index: cardIndex,
+            total: cardTotal,
           });
+          query(
+            `INSERT INTO chat_messages (user_name, role, content, message_id)
+             VALUES ($1, 'assistant', $2, $3)`,
+            [sessionUserName,
+             `[Email Card — ${cardIndex} of ${cardTotal}]\nFrom: ${nextEmail.from}\nSubject: ${nextEmail.subject}\ngmailId: ${nextEmail.gmailId}`,
+             `email-card-${Date.now()}`]
+          ).catch(() => {});
         } else {
           broadcastToUser(sessionUserName, "email_done", {
             type: "email_done",
@@ -851,15 +867,24 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       const nextEmail = advanceTriageSession(sessionUserName);
       if (nextEmail) {
         const session = getTriageSession(sessionUserName);
+        const cardIndex = (session?.currentIndex ?? 0) + 1;
+        const cardTotal = session ? session.emails.length : 0;
         broadcastToUser(sessionUserName, "email_card", {
           type: "email_card",
           gmailId: nextEmail.gmailId,
           from: nextEmail.from,
           subject: nextEmail.subject,
           snippet: nextEmail.snippet,
-          index: (session?.currentIndex ?? 0) + 1,
-          total: session ? session.emails.length : 0,
+          index: cardIndex,
+          total: cardTotal,
         });
+        query(
+          `INSERT INTO chat_messages (user_name, role, content, message_id)
+           VALUES ($1, 'assistant', $2, $3)`,
+          [sessionUserName,
+           `[Email Card — ${cardIndex} of ${cardTotal}]\nFrom: ${nextEmail.from}\nSubject: ${nextEmail.subject}\ngmailId: ${nextEmail.gmailId}`,
+           `email-card-${Date.now()}`]
+        ).catch(() => {});
         log.info({ gmailId: nextEmail.gmailId }, "[email_next] Next card pushed");
       } else {
         broadcastToUser(sessionUserName, "email_done", {
