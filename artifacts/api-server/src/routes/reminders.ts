@@ -17,7 +17,7 @@ let dueCache: { data: unknown[]; expiry: number } | null = null;
 const DUE_CACHE_TTL_MS = 10_000;
 
 // ── SSE stream ────────────────────────────────────────────────────────────────
-router.get("/reminders/stream", async (req: Request, res: Response) => {
+const sseHandler = async (req: Request, res: Response) => {
   const clientId = randomUUID();
 
   res.setHeader("Content-Type", "text/event-stream");
@@ -56,7 +56,10 @@ router.get("/reminders/stream", async (req: Request, res: Response) => {
   }, 25000); // 25s — safely under any 30s proxy idle timeout
 
   req.on("close", () => { clearInterval(heartbeat); removeClient(clientId); });
-});
+};
+
+router.get("/reminders/stream", sseHandler);
+router.get("/sse", sseHandler);
 
 // ── GET /api/reminders — all reminders (for settings/display) ─────────────────
 router.get("/reminders", async (req: Request, res: Response) => {
