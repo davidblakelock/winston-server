@@ -108,6 +108,7 @@ export interface NewChatResponse {
   smsPayload?: SmsPayload;
   reservationPayload?: ReservationPayload;
   navigationUrl?: string;
+  messageId?: string;
 }
 
 // ── Per-user calendar cache ───────────────────────────────────────────────────
@@ -358,11 +359,13 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       log,
     });
     if (textResult.hardcodedResponse) {
-      runPostProcessing(sessionUserName, message, textResult.hardcodedResponse, history, userProfile, deviceId);
+      const messageId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      runPostProcessing(sessionUserName, message, textResult.hardcodedResponse, history, userProfile, deviceId, messageId);
       return {
         reply:      textResult.hardcodedResponse,
         action:     { type: "send_sms" },
         smsPayload: textResult.smsPayload,
+        messageId,
       };
     }
     dynamicPrompt += textResult.contextBlock;
@@ -386,11 +389,13 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       log,
     });
     if (resResult.hardcodedResponse) {
-      runPostProcessing(sessionUserName, message, resResult.hardcodedResponse, history, userProfile, deviceId);
+      const messageId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      runPostProcessing(sessionUserName, message, resResult.hardcodedResponse, history, userProfile, deviceId, messageId);
       return {
         reply:              resResult.hardcodedResponse,
         action:             { type: "make_reservation" },
         reservationPayload: resResult.reservationPayload,
+        messageId,
       };
     }
     dynamicPrompt += resResult.contextBlock;
@@ -425,8 +430,9 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       if (emailResult.emailPayload) {
         broadcastToUser(sessionUserName, "email-compose", { type: "email_compose", ...emailResult.emailPayload });
       }
-      runPostProcessing(sessionUserName, message, emailResult.hardcodedResponse, history, userProfile, deviceId);
-      return { reply: emailResult.hardcodedResponse, action: { type: "none" } };
+      const messageId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      runPostProcessing(sessionUserName, message, emailResult.hardcodedResponse, history, userProfile, deviceId, messageId);
+      return { reply: emailResult.hardcodedResponse, action: { type: "none" }, messageId };
     }
     dynamicPrompt += emailResult.contextBlock;
   }
@@ -456,8 +462,9 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
 
   if (!claudeReply) {
     const fallback = "Sorry, I had trouble with that. Can you try again?";
-    runPostProcessing(sessionUserName, message, fallback, history, userProfile, deviceId);
-    return { reply: fallback, action: { type: "none" } };
+    const messageId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    runPostProcessing(sessionUserName, message, fallback, history, userProfile, deviceId, messageId);
+    return { reply: fallback, action: { type: "none" }, messageId };
   }
 
   log.info({ replyPreview: claudeReply.slice(0, 80) }, "[chatHandlerCore] Reply received");
@@ -955,9 +962,10 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
   }
 
   // ── Post-processing ──────────────────────────────────────────────────────────
-  runPostProcessing(sessionUserName, message, finalReply, history, userProfile, deviceId);
+  const messageId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  runPostProcessing(sessionUserName, message, finalReply, history, userProfile, deviceId, messageId);
 
-  return { reply: finalReply, action, smsPayload, reservationPayload, navigationUrl };
+  return { reply: finalReply, action, smsPayload, reservationPayload, navigationUrl, messageId };
 }
 
 // ── Post-processing ───────────────────────────────────────────────────────────
@@ -968,14 +976,13 @@ function runPostProcessing(
   aiReply:     string,
   history:     Array<{ role: string; content: string }>,
   userProfile: UserProfile | null,
-  deviceId:    string | null
+  deviceId:    string | null,
+  msgId:       string
 ): void {
   const companionName = getCompanionDisplayName(
     userProfile?.companionPersona ?? null,
     userProfile?.companionName ?? null
   );
-
-  const msgId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
   query(
     `INSERT INTO chat_messages (user_name, role, content, message_id)
