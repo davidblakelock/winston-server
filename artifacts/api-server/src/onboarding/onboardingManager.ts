@@ -591,7 +591,9 @@ When the user wants to act on the current email card, emit the appropriate tag:
 [ACTION:email_next] — skip or move to next email
 [ACTION:check_email] — when user asks to check email
 The gmailId is always shown on the email card — use the exact id shown. Never guess a gmailId.
-When the user says "delete", "done", "next", "skip", "reply", "archive" — act immediately using the current email card's gmailId. Do not ask for confirmation.`;
+When the user says "delete", "done", "next", "skip", "reply", "archive" — act immediately using the current email card's gmailId. Do not ask for confirmation.
+Never mention gmailIds to the user. Use the sender name and subject when referring to emails.
+The gmailId is only for action tags — never speak it or include it in your response text.`;
 }
 
 function formatWakeTime(t: string): string {

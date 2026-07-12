@@ -244,6 +244,7 @@ async function hydrateHistoryFromDb(
     `SELECT role, content FROM chat_messages
      WHERE user_name = $1
        AND (message_id IS NULL OR message_id NOT LIKE 'goals:%')
+       AND content NOT LIKE '[Email Card —%'
      ORDER BY created_at DESC LIMIT $2`,
     [userName, ACTIVE_CONTEXT_LIMIT]
   );
@@ -789,14 +790,6 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
             index: 1,
             total: emails.length,
           });
-          query(
-            `INSERT INTO chat_messages (user_name, role, content, message_id)
-             VALUES ($1, 'assistant', $2, $3)`,
-            [sessionUserName,
-             `[Email Card — 1 of ${emails.length}]\nFrom: ${firstEmail.from}\nSubject: ${firstEmail.subject}\ngmailId: ${firstEmail.gmailId}`,
-             `email-card-${Date.now()}`]
-          ).catch(() => {});
-
           log.info({ count: emails.length }, "[check_email] Digest and first card pushed via SSE");
         } catch (err) {
           log.warn({ err }, "[check_email] Failed");
@@ -847,13 +840,6 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
             index: cardIndex,
             total: cardTotal,
           });
-          query(
-            `INSERT INTO chat_messages (user_name, role, content, message_id)
-             VALUES ($1, 'assistant', $2, $3)`,
-            [sessionUserName,
-             `[Email Card — ${cardIndex} of ${cardTotal}]\nFrom: ${nextEmail.from}\nSubject: ${nextEmail.subject}\ngmailId: ${nextEmail.gmailId}`,
-             `email-card-${Date.now()}`]
-          ).catch(() => {});
         } else {
           broadcastToUser(sessionUserName, "email_done", {
             type: "email_done",
@@ -885,13 +871,6 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
           index: cardIndex,
           total: cardTotal,
         });
-        query(
-          `INSERT INTO chat_messages (user_name, role, content, message_id)
-           VALUES ($1, 'assistant', $2, $3)`,
-          [sessionUserName,
-           `[Email Card — ${cardIndex} of ${cardTotal}]\nFrom: ${nextEmail.from}\nSubject: ${nextEmail.subject}\ngmailId: ${nextEmail.gmailId}`,
-           `email-card-${Date.now()}`]
-        ).catch(() => {});
         log.info({ gmailId: nextEmail.gmailId }, "[email_next] Next card pushed");
       } else {
         broadcastToUser(sessionUserName, "email_done", {
