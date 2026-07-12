@@ -46,6 +46,7 @@ import { handleText } from "./textHandler.js";
 import { handleEmailCalendar } from "./emailCalendarHandler.js";
 import { handleReservation, type ReservationPayload } from "./reservationHandler.js";
 import { fetchAndSummarizeEmails, trashEmail, archiveEmail, markEmailRead } from "../../google/gmail.js";
+import { getTriageSession, setTriageSession, getCurrentTriageEmail, advanceTriageSession } from "../../email/emailTriageSession.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -67,7 +68,8 @@ export type ActionType =
   | "navigate"
   | "update_calendar"
   | "check_email"
-  | "email_action";
+  | "email_action"
+  | "email_next";
 
 export interface ClaudeAction {
   type: ActionType;
@@ -509,6 +511,9 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
           gmailId: parts.gmailId ?? null,
         };
         break;
+      case "email_next":
+        action = { type: "email_next" };
+        break;
       case "make_reservation":
         action = { type: "make_reservation", restaurantName: parts.restaurant ?? "" };
         break;
@@ -705,7 +710,6 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
 
     // ── check_email ───────────────────────────────────────────────────────────
     case "check_email": {
-      // Return immediately — email digest will arrive via SSE
       finalReply = "Let me pull up your inbox...";
 
       const companionDisplayName = getCompanionDisplayName(
@@ -713,66 +717,79 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
         userProfile?.companionName ?? null
       );
 
-      // Fire and forget — fetch emails and push via SSE
       (async () => {
         try {
           const emails = await fetchAndSummarizeEmails(15, undefined, sessionUserName);
 
-          let digestText: string;
           if (!emails || emails.length === 0) {
-            digestText = "Your inbox is clear — no unread emails right now.";
-          } else {
-            const emailContext = emails.map((e, i) =>
-              `${i + 1}. gmailId:${e.gmailId} | From: ${e.from} | Subject: ${e.subject} | Preview: ${e.snippet}`
-            ).join('\n');
-
-            const digestReply = await anthropic.messages.create({
-              model: MODEL_HAIKU,
-              max_tokens: 800,
-              system: `You are ${companionDisplayName}, the user's personal AI companion. Present their email inbox naturally and conversationally. Go through emails one at a time. Mention the sender and subject naturally. Do not emit any [ACTION:...] tags. Do not use bullet points.`,
-              messages: [{
-                role: "user",
-                content: `Here are my unread emails:\n${emailContext}\n\nPlease give me a natural conversational digest, going through them one at a time.`
-              }],
+            broadcastToUser(sessionUserName, "email_digest", {
+              type: "email_digest",
+              text: "Your inbox is clear — no unread emails right now.",
+              totalCount: 0,
             });
-
-            digestText = digestReply.content[0]?.type === "text"
-              ? digestReply.content[0].text.replace(/\n?\[ACTION:[^\]]+\]/g, "").trim()
-              : "I had trouble reading your emails. Try again in a moment.";
+            broadcastToUser(sessionUserName, "speak_sync", {
+              text: "Your inbox is clear — no unread emails right now.",
+              messageId: `email-${Date.now()}`,
+              initiated_by: null,
+            });
+            return;
           }
 
-          const msgId = `email-${Date.now()}`;
+          // Build digest summary via Haiku
+          const emailList = emails.map((e, i) =>
+            `${i + 1}. From: ${e.from} | Subject: ${e.subject}`
+          ).join('\n');
 
-          // Save to chat history
-          query(
-            `INSERT INTO chat_messages (user_name, role, content, message_id)
-             VALUES ($1, 'assistant', $2, $3)`,
-            [sessionUserName, digestText, msgId]
-          ).catch(() => {});
+          const digestReply = await anthropic.messages.create({
+            model: MODEL_HAIKU,
+            max_tokens: 150,
+            system: `You are ${companionDisplayName}. Give a very brief, warm, natural summary of the user's inbox — just the count and whether anything looks important. 2 sentences maximum. No bullet points. No action tags.`,
+            messages: [{ role: "user", content: `My unread emails:\n${emailList}` }],
+          });
 
-          // Push to app via SSE
-          broadcastToUser(sessionUserName, "chat_sync", {
-            role: "assistant",
-            content: digestText,
-            messageId: msgId,
-            createdAt: new Date().toISOString(),
-            senderDeviceId: null,
+          const digestText = digestReply.content[0]?.type === "text"
+            ? digestReply.content[0].text.replace(/\n?\[ACTION:[^\]]+\]/g, "").trim()
+            : `You've got ${emails.length} unread emails.`;
+
+          // Start triage session
+          setTriageSession(sessionUserName, {
+            emails,
+            currentIndex: 0,
+            createdAt: Date.now(),
+          });
+
+          const firstEmail = emails[0];
+
+          // Push digest
+          broadcastToUser(sessionUserName, "email_digest", {
+            type: "email_digest",
+            text: digestText,
+            totalCount: emails.length,
           });
           broadcastToUser(sessionUserName, "speak_sync", {
             text: digestText,
-            messageId: msgId,
+            messageId: `email-digest-${Date.now()}`,
             initiated_by: null,
           });
 
-          log.info({ emailCount: emails?.length ?? 0 }, "[check_email] Email digest pushed via SSE");
+          // Push first email card
+          broadcastToUser(sessionUserName, "email_card", {
+            type: "email_card",
+            gmailId: firstEmail.gmailId,
+            from: firstEmail.from,
+            subject: firstEmail.subject,
+            snippet: firstEmail.snippet,
+            index: 1,
+            total: emails.length,
+          });
+
+          log.info({ count: emails.length }, "[check_email] Digest and first card pushed via SSE");
         } catch (err) {
-          log.warn({ err }, "[check_email] Background email fetch/digest failed");
-          broadcastToUser(sessionUserName, "chat_sync", {
-            role: "assistant",
-            content: "I had trouble checking your email. Please try again.",
-            messageId: `email-error-${Date.now()}`,
-            createdAt: new Date().toISOString(),
-            senderDeviceId: null,
+          log.warn({ err }, "[check_email] Failed");
+          broadcastToUser(sessionUserName, "email_digest", {
+            type: "email_digest",
+            text: "I had trouble checking your email. Please try again.",
+            totalCount: 0,
           });
         }
       })();
@@ -800,6 +817,61 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
           }
           log.info({ gmailId: action.gmailId }, "[chatHandlerCore] Email marked read");
         }
+
+        // Advance to next email after action
+        const nextEmail = advanceTriageSession(sessionUserName);
+        if (nextEmail) {
+          const session = getTriageSession(sessionUserName);
+          broadcastToUser(sessionUserName, "email_card", {
+            type: "email_card",
+            gmailId: nextEmail.gmailId,
+            from: nextEmail.from,
+            subject: nextEmail.subject,
+            snippet: nextEmail.snippet,
+            index: (session?.currentIndex ?? 0) + 1,
+            total: session ? session.emails.length : 0,
+          });
+        } else {
+          broadcastToUser(sessionUserName, "email_done", {
+            type: "email_done",
+            text: "You're all caught up — inbox handled!",
+          });
+          broadcastToUser(sessionUserName, "speak_sync", {
+            text: "You're all caught up — inbox handled!",
+            messageId: `email-done-${Date.now()}`,
+            initiated_by: null,
+          });
+        }
+      }
+      break;
+    }
+
+    // ── email_next ────────────────────────────────────────────────────────────
+    case "email_next": {
+      const nextEmail = advanceTriageSession(sessionUserName);
+      if (nextEmail) {
+        const session = getTriageSession(sessionUserName);
+        broadcastToUser(sessionUserName, "email_card", {
+          type: "email_card",
+          gmailId: nextEmail.gmailId,
+          from: nextEmail.from,
+          subject: nextEmail.subject,
+          snippet: nextEmail.snippet,
+          index: (session?.currentIndex ?? 0) + 1,
+          total: session ? session.emails.length : 0,
+        });
+        log.info({ gmailId: nextEmail.gmailId }, "[email_next] Next card pushed");
+      } else {
+        broadcastToUser(sessionUserName, "email_done", {
+          type: "email_done",
+          text: "You're all caught up — inbox handled!",
+        });
+        broadcastToUser(sessionUserName, "speak_sync", {
+          text: "You're all caught up — inbox handled!",
+          messageId: `email-done-${Date.now()}`,
+          initiated_by: null,
+        });
+        log.info("[email_next] Triage complete");
       }
       break;
     }

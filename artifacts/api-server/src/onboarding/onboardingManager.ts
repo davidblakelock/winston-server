@@ -582,18 +582,16 @@ At the end of EVERY response append exactly one action tag on a new line. No exc
 [ACTION:make_reservation|restaurant=<name>] — reservation
 [ACTION:none] — weather, sports, news, markets, general questions
 
-EMAIL:
-When the user asks to check email, you will receive their inbox in your context with gmailIds.
-Present a natural digest — who emailed, what it's about, anything urgent.
-Then go through emails one at a time naturally in conversation.
-When the user wants to act on an email, emit the appropriate action tag with the gmailId.
-
-At the end of EVERY response append exactly one action tag:
-[ACTION:email_action|action=trash|gmailId=<id>] — delete/trash an email
-[ACTION:email_action|action=archive|gmailId=<id>] — archive an email
-[ACTION:email_action|action=markRead|gmailId=<id>] — mark an email as read/done
-[ACTION:check_email] — when user asks to check email. Always say something natural first like "Let me pull up your inbox..." then append this tag.
-[ACTION:none] — for replies, skipping emails, or general conversation during triage`;
+EMAIL TRIAGE:
+When the user checks email, you will see email cards in the conversation context showing gmailId, from, subject, and snippet.
+When the user wants to act on the current email card, emit the appropriate tag:
+[ACTION:email_action|action=trash|gmailId=<id>] — delete/trash
+[ACTION:email_action|action=archive|gmailId=<id>] — archive
+[ACTION:email_action|action=markRead|gmailId=<id>] — mark done/read
+[ACTION:email_next] — skip or move to next email
+[ACTION:check_email] — when user asks to check email
+The gmailId is always shown on the email card — use the exact id shown. Never guess a gmailId.
+When the user says "delete", "done", "next", "skip", "reply", "archive" — act immediately using the current email card's gmailId. Do not ask for confirmation.`;
 }
 
 function formatWakeTime(t: string): string {
