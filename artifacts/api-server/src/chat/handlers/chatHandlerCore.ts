@@ -735,7 +735,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
         const emailReply = await anthropic.messages.create({
           model:      MODEL_HAIKU,
           max_tokens: 600,
-          system:     buildSystemBlocks(stableSystem, emailResult.contextBlock) as Anthropic.TextBlockParam[],
+          system:     `You are a helpful email assistant. The user's inbox data is below. Present a natural, conversational digest of their emails. Go through them one at a time. For each email include the gmailId in your response so actions can be taken. Do not append any [ACTION:...] tags.\n\n${emailResult.contextBlock}`,
           messages,
         });
         const emailText = emailReply.content[0]?.type === "text" ? emailReply.content[0].text.trim() : "";
