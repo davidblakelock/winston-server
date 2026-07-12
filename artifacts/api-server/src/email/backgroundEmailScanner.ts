@@ -460,11 +460,19 @@ async function runScan(userName: string): Promise<void> {
 // ── Scheduler ─────────────────────────────────────────────────────────────────
 
 export function startBackgroundEmailScanner(userName = NATIVE_USER): void {
+  let _running = false;
   cron.schedule("*/15 * * * *", async () => {
+    if (_running) {
+      logger.info("[BgEmailScanner] Skipping tick — previous scan still running");
+      return;
+    }
+    _running = true;
     try {
       await runScan(userName);
     } catch (err) {
       logger.error({ err }, "[BgEmailScanner] Unhandled error in scan");
+    } finally {
+      _running = false;
     }
   }, { timezone: TZ });
 
