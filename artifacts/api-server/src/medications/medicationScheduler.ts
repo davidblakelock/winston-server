@@ -16,13 +16,13 @@ const _takenLoggedToday = new Set<string>();
 let _takenLogDay: string | null = null;
 
 function clearTakenLogIfNewDay() {
-  const today = new Date().toLocaleDateString("en-CA", { timeZone: user?.timezone ?? "UTC" });
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "UTC" });
   if (_takenLogDay !== today) { _takenLoggedToday.clear(); _takenLogDay = today; }
 }
 
 function getCurrentLocalTime(): string {
   return new Date().toLocaleTimeString("en-US", {
-    timeZone: user?.timezone ?? "UTC",
+    timeZone: "UTC",
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
