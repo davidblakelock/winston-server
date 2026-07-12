@@ -734,7 +734,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
         const emailReply = await anthropic.messages.create({
           model:      MODEL_HAIKU,
           max_tokens: 600,
-          system:     buildSystemBlocks(stableSystem, dynamicPrompt + emailResult.contextBlock) as Anthropic.TextBlockParam[],
+          system:     buildSystemBlocks(stableSystem, emailResult.contextBlock) as Anthropic.TextBlockParam[],
           messages,
         });
         const emailText = emailReply.content[0]?.type === "text" ? emailReply.content[0].text.trim() : "";
