@@ -46,6 +46,7 @@ import { handleText } from "./textHandler.js";
 import { handleEmailCalendar } from "./emailCalendarHandler.js";
 import { handleReservation, type ReservationPayload } from "./reservationHandler.js";
 import { getEmailSession, getCurrentEmail, setEmailSession } from "../../email/emailSessionManager.js";
+import { fetchAndSummarizeEmails } from "../../google/gmail.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -429,13 +430,13 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
   // Email triage session in progress
   const activeEmailSession = getEmailSession(sessionUserName);
   if (activeEmailSession !== null) {
-    const currentEmail = getCurrentEmail(sessionUserName);
-    if (currentEmail) {
-      // Check if user wants to restart
-      if (/check.*email|start over|refresh/i.test(message)) {
-        setEmailSession(sessionUserName, null);
-        dynamicPrompt += `\n\n[Email Session Reset]\nUser requested fresh email check. Proceed normally.`;
-      } else {
+    // If user is explicitly requesting a new email check, clear stale session
+    if (/check.*email|my email|new email/i.test(message)) {
+      setEmailSession(sessionUserName, null);
+      // Fall through to normal flow — check_email action tag will handle it
+    } else {
+      const currentEmail = getCurrentEmail(sessionUserName);
+      if (currentEmail) {
         // Execute action using stored session emails — no re-fetch
         const emailResult = await handleEmailCalendar({
           message,
@@ -468,6 +469,38 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
         // Also inject current email context
         dynamicPrompt += `\n\n[Active Email Triage Session — Email ${activeEmailSession.currentIndex + 1} of ${activeEmailSession.emails.length}]\nFrom: ${currentEmail.from} (${currentEmail.fromEmail})\nSubject: ${currentEmail.subject}\nSummary: ${currentEmail.snippet}`;
       }
+    }
+  }
+
+  // ── Email pre-fetch — fetch before primary Claude call if email intent detected ──
+  const hasActiveEmailSession = getEmailSession(sessionUserName) !== null;
+  const isEmailIntent = /check.*email|my email|new email|any.*email|what.*email/i.test(message);
+
+  if (isEmailIntent && !hasActiveEmailSession) {
+    try {
+      const preEmails = await fetchAndSummarizeEmails(15, undefined, sessionUserName).catch(() => null);
+      if (preEmails && preEmails.length > 0) {
+        // Start session immediately
+        setEmailSession(sessionUserName, {
+          emails: preEmails,
+          currentIndex: 0,
+          handledIds: new Set(),
+          createdAt: Date.now(),
+        });
+        const firstEmail = preEmails[0];
+        dynamicPrompt +=
+          `\n\n[Email Triage — ${preEmails.length} unread email${preEmails.length === 1 ? '' : 's'}]\n` +
+          preEmails.map((e, i) =>
+            `${i + 1}. From: ${e.from} | Subject: ${e.subject} | Preview: ${e.snippet}`
+          ).join('\n') +
+          `\n\nPresent a brief digest of these emails to the user, then present email #1 and ask: reply, mark it done, or skip?`;
+        log.info({ count: preEmails.length }, "[chatHandlerCore] Email pre-fetched before primary call");
+      } else {
+        dynamicPrompt += `\n\n[Email Check]\nNo unread emails in inbox. Tell the user warmly their inbox is clear.`;
+        log.info("[chatHandlerCore] Email pre-fetch — inbox clear");
+      }
+    } catch (err) {
+      log.warn({ err }, "[chatHandlerCore] Email pre-fetch failed");
     }
   }
 
