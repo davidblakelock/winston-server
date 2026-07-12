@@ -705,46 +705,78 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
 
     // ── check_email ───────────────────────────────────────────────────────────
     case "check_email": {
-      log.info("[chatHandlerCore] check_email: fetching emails via handleEmailCalendar");
-      const emailResult = await handleEmailCalendar({
-        message,
-        sessionUserName,
-        timezone,
-        corePrompt,
-        memoryBlock:            "",
-        isDinnerTonightQuery:   false,
-        isEmailRequest:         true,
-        isCalendarRequest:      false,
-        isCalendarWriteOp:      false,
-        isDeleteConfirm:        false,
-        isDeleteCancel:         false,
-        isCalendarCreate:       false,
-        isCalendarModify:       false,
-        isCalendarDelete:       false,
-        isEmailReplyFlowActive: false,
-        isEmailReplyAccepted:   false,
-        pendingMeetingRequests: [],
-        pendingEmailReply:      null,
-        userProfile,
-        log,
-      });
-      if (emailResult.hardcodedResponse) {
-        finalReply = emailResult.hardcodedResponse;
-      } else if (emailResult.contextBlock) {
-        log.info({ contextBlockLength: emailResult.contextBlock.length }, "[chatHandlerCore] check_email: running Haiku call with email context");
-        const emailReply = await anthropic.messages.create({
-          model: MODEL_HAIKU,
-          max_tokens: 600,
-          system: `You are a helpful email assistant. Present a natural conversational summary of the user's inbox. Go through emails one at a time. Include the gmailId for each email mentioned so actions can be taken. Do not append any [ACTION:...] tags.\n\n${emailResult.contextBlock}`,
-          messages: [{ role: "user", content: "Please summarize my inbox and go through my emails." }],
-        });
-        const emailText = emailReply.content[0]?.type === "text" ? emailReply.content[0].text.trim() : "";
-        log.info({ emailTextLength: emailText.length, preview: emailText.slice(0, 80) }, "[chatHandlerCore] check_email: Haiku reply received");
-        if (emailText) finalReply = emailText;
-      }
-      if (emailResult.emailPayload) {
-        broadcastToUser(sessionUserName, "email-compose", { type: "email_compose", ...emailResult.emailPayload });
-      }
+      // Return immediately — email digest will arrive via SSE
+      finalReply = "Let me pull up your inbox...";
+
+      const companionDisplayName = getCompanionDisplayName(
+        userProfile?.companionPersona ?? null,
+        userProfile?.companionName ?? null
+      );
+
+      // Fire and forget — fetch emails and push via SSE
+      (async () => {
+        try {
+          const emails = await fetchAndSummarizeEmails(15, undefined, sessionUserName);
+
+          let digestText: string;
+          if (!emails || emails.length === 0) {
+            digestText = "Your inbox is clear — no unread emails right now.";
+          } else {
+            const emailContext = emails.map((e, i) =>
+              `${i + 1}. gmailId:${e.gmailId} | From: ${e.from} | Subject: ${e.subject} | Preview: ${e.snippet}`
+            ).join('\n');
+
+            const digestReply = await anthropic.messages.create({
+              model: MODEL_HAIKU,
+              max_tokens: 800,
+              system: `You are ${companionDisplayName}, the user's personal AI companion. Present their email inbox naturally and conversationally. Go through emails one at a time. Mention the sender and subject naturally. Do not emit any [ACTION:...] tags. Do not use bullet points.`,
+              messages: [{
+                role: "user",
+                content: `Here are my unread emails:\n${emailContext}\n\nPlease give me a natural conversational digest, going through them one at a time.`
+              }],
+            });
+
+            digestText = digestReply.content[0]?.type === "text"
+              ? digestReply.content[0].text.replace(/\n?\[ACTION:[^\]]+\]/g, "").trim()
+              : "I had trouble reading your emails. Try again in a moment.";
+          }
+
+          const msgId = `email-${Date.now()}`;
+
+          // Save to chat history
+          query(
+            `INSERT INTO chat_messages (user_name, role, content, message_id)
+             VALUES ($1, 'assistant', $2, $3)`,
+            [sessionUserName, digestText, msgId]
+          ).catch(() => {});
+
+          // Push to app via SSE
+          broadcastToUser(sessionUserName, "chat_sync", {
+            role: "assistant",
+            content: digestText,
+            messageId: msgId,
+            createdAt: new Date().toISOString(),
+            senderDeviceId: null,
+          });
+          broadcastToUser(sessionUserName, "speak_sync", {
+            text: digestText,
+            messageId: msgId,
+            initiated_by: null,
+          });
+
+          log.info({ emailCount: emails?.length ?? 0 }, "[check_email] Email digest pushed via SSE");
+        } catch (err) {
+          log.warn({ err }, "[check_email] Background email fetch/digest failed");
+          broadcastToUser(sessionUserName, "chat_sync", {
+            role: "assistant",
+            content: "I had trouble checking your email. Please try again.",
+            messageId: `email-error-${Date.now()}`,
+            createdAt: new Date().toISOString(),
+            senderDeviceId: null,
+          });
+        }
+      })();
+
       break;
     }
 
