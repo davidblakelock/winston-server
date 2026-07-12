@@ -371,7 +371,7 @@ export async function handleEmailCalendar(params: HandleEmailCalendarParams): Pr
                 `2. SAVED PLACE: "Want me to save ${parsed.location} to your saved places so you don't need the address next time?" If they say yes, save the location name and address to their Winston profile.\n` +
                 `Offer BOTH options in a single natural sentence, e.g. "Want me to set a departure alert and save ${parsed.location.split(",")[0]} to your saved places?"`;
             } else {
-              calendarCreateMsg += ` Then ask if they'd also like a reminder for it.`;
+              calendarCreateMsg += ` Then ask if there's a location — "Is there an address or location for this? I can set a departure alert and save it to your places for next time."`;
             }
             calendarCreateMsg += conflictWarning;
             contextBlock += calendarCreateMsg;
