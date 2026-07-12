@@ -30,8 +30,11 @@ const sseHandler = async (req: Request, res: Response) => {
   addClient(clientId, res);
 
   // Identify the connected user so we can route user-specific events (e.g. chat_sync).
-  // The token is passed as a query param because EventSource doesn't support custom headers.
-  const token = req.query.token as string | undefined;
+  // Check query param first (standard EventSource), then Authorization header (react-native-sse)
+  const token = (req.query.token as string | undefined) ??
+    (req.headers.authorization?.startsWith('Bearer ')
+      ? req.headers.authorization.slice(7)
+      : undefined);
   if (token) {
     try {
       const session = await validateSession(token);
