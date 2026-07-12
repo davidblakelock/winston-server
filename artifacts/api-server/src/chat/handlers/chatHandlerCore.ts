@@ -733,10 +733,10 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       } else if (emailResult.contextBlock) {
         log.info({ contextBlockLength: emailResult.contextBlock.length }, "[chatHandlerCore] check_email: running Haiku call with email context");
         const emailReply = await anthropic.messages.create({
-          model:      MODEL_HAIKU,
+          model: MODEL_HAIKU,
           max_tokens: 600,
-          system:     `You are a helpful email assistant. The user's inbox data is below. Present a natural, conversational digest of their emails. Go through them one at a time. For each email include the gmailId in your response so actions can be taken. Do not append any [ACTION:...] tags.\n\n${emailResult.contextBlock}`,
-          messages,
+          system: `You are a helpful email assistant. Present a natural conversational summary of the user's inbox. Go through emails one at a time. Include the gmailId for each email mentioned so actions can be taken. Do not append any [ACTION:...] tags.\n\n${emailResult.contextBlock}`,
+          messages: [{ role: "user", content: "Please summarize my inbox and go through my emails." }],
         });
         const emailText = emailReply.content[0]?.type === "text" ? emailReply.content[0].text.trim() : "";
         log.info({ emailTextLength: emailText.length, preview: emailText.slice(0, 80) }, "[chatHandlerCore] check_email: Haiku reply received");
