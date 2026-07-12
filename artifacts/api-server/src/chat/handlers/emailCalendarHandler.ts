@@ -324,7 +324,7 @@ export async function handleEmailCalendar(params: HandleEmailCalendarParams): Pr
         `\n\n[Calendar Write — Insufficient Permission]\nThe user's current Google connection only has read-only calendar access. To create, edit, or delete events, they need to reconnect Google to grant the updated permission. Tell them this warmly — e.g. "I'd love to add that for you, but I need a quick update to my Google permissions first. Just tap the Google button in the header to reconnect — it only takes a second."`;
     } else if (isCalendarCreate) {
       try {
-        const parsed = await parseCalendarOperation(message, "create") as ParsedCreateEvent | null;
+        const parsed = await parseCalendarOperation(message, "create", sessionUserName) as ParsedCreateEvent | null;
         if (!parsed) throw new Error("parse failed");
 
         if (parsed.ambiguous && parsed.clarificationNeeded) {
@@ -386,7 +386,7 @@ export async function handleEmailCalendar(params: HandleEmailCalendarParams): Pr
       }
     } else if (isCalendarModify) {
       try {
-        const parsed = await parseCalendarOperation(message, "modify") as ParsedModifyEvent | null;
+        const parsed = await parseCalendarOperation(message, "modify", sessionUserName) as ParsedModifyEvent | null;
         if (!parsed) throw new Error("parse failed");
 
         // Gap 5: findEventForUpdate returns CalendarEvent[] | null for disambiguation
@@ -430,7 +430,7 @@ export async function handleEmailCalendar(params: HandleEmailCalendarParams): Pr
       }
     } else if (isCalendarDelete) {
       try {
-        const parsed = await parseCalendarOperation(message, "delete") as ParsedDeleteEvent | null;
+        const parsed = await parseCalendarOperation(message, "delete", sessionUserName) as ParsedDeleteEvent | null;
         if (!parsed) throw new Error("parse failed");
 
         const event = await findEventByKeywords(parsed.searchKeywords, parsed.searchDate);
