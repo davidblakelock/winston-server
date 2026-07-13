@@ -1235,7 +1235,9 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
   if (getPendingEmailReply(sessionUserName) !== null && finalReply) {
     const current = getPendingEmailReply(sessionUserName);
     if (current) {
-      setPendingEmailReply(sessionUserName, { ...current, draftBody: finalReply });
+      const draftMatch = finalReply.match(/<draft>([\s\S]*?)<\/draft>/i);
+      const draftBody = draftMatch ? draftMatch[1].trim() : current.draftBody;
+      setPendingEmailReply(sessionUserName, { ...current, draftBody });
     }
   }
 
