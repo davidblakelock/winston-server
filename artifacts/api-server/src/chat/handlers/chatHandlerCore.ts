@@ -428,7 +428,6 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
 
   // Email reply flow in progress
   if (pendingEmailReply !== null || pendingMeetingReqs.length > 0) {
-    const EMAIL_REPLY_ACCEPT = /^(yes|yeah|sure|go ahead|do it|sounds good|draft it|let's do it)[\s.!]*$/i;
     const emailResult = await handleEmailCalendar({
       message,
       sessionUserName,
@@ -445,7 +444,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       isCalendarModify:       false,
       isCalendarDelete:       false,
       isEmailReplyFlowActive: true,
-      isEmailReplyAccepted:   EMAIL_REPLY_ACCEPT.test(message.trim()),
+      isEmailReplyAccepted:   true,
       pendingMeetingRequests: pendingMeetingReqs,
       pendingEmailReply,
       userProfile,
