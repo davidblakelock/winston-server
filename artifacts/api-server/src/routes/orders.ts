@@ -3,7 +3,6 @@ import express from "express";
 import { authenticate } from "../auth/middleware.js";
 import {
   getOrders,
-  upsertOrder,
   deleteOrder,
   getLastOrderScanAt,
   updateLastOrderScanAt,
@@ -11,7 +10,6 @@ import {
 } from "../orders/ordersManager.js";
 import { scanOrderEmails } from "../orders/gmailOrderScanner.js";
 import { logger } from "../lib/logger.js";
-import { query } from "../db.js";
 
 const router: IRouter = Router();
 
@@ -55,29 +53,12 @@ router.post("/orders/sync", express.json({ limit: "1mb" }), async (req, res) => 
     if (force) req.log.info({ userName, since }, "[Orders] Force sync — using 90-day lookback");
     else if (!hasAnyOrders) req.log.info({ userName, since }, "[Orders] No orders on record — using 90-day lookback");
 
-    const scanned = await scanOrderEmails(userName, since);
-    let newCount = 0;
-
-    for (const order of scanned) {
-      const inserted = await upsertOrder(userName, order);
-      if (inserted) newCount++;
-
-      // Create EasyPost tracker if a tracking number exists and one hasn't been created yet
-      if (inserted?.tracking_number && !inserted.easypost_tracker_id) {
-        const { createTracker } = await import("../orders/easypostManager.js");
-        const tracker = await createTracker(inserted.tracking_number, inserted.carrier ?? undefined);
-        if (tracker) {
-          await query(
-            `UPDATE orders SET easypost_tracker_id = $1 WHERE user_name = $2 AND tracking_number = $3`,
-            [tracker.trackerId, userName, inserted.tracking_number]
-          ).catch((err) => logger.warn({ err }, "[Orders] Failed to store EasyPost tracker ID"));
-          logger.info({ trackerId: tracker.trackerId, trackingNumber: inserted.tracking_number }, "[Orders] EasyPost tracker created");
-        }
-      }
-    }
+    // scanOrderEmails now handles insertion + EasyPost tracker creation internally
+    // (minimal tracking-number-only pipeline) and returns the count of new rows.
+    const newCount = await scanOrderEmails(userName, since);
 
     await updateLastOrderScanAt(userName);
-    req.log.info({ userName, scanned: scanned.length, newOrUpdated: newCount }, "[Orders] Gmail scan complete");
+    req.log.info({ userName, newOrUpdated: newCount }, "[Orders] Gmail scan complete");
 
     // ── Step 2: Consolidate duplicates from this scan and any previous scans ─
     // Merges rows that share the same tracking_number or order_number so the

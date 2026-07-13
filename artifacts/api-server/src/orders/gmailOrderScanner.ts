@@ -2,7 +2,8 @@ import { google } from "googleapis";
 import { getAuthClientForUser } from "../google/oauth.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { logger } from "../lib/logger.js";
-import type { NewOrder } from "./ordersManager.js";
+import { query } from "../db.js";
+import { createTracker } from "./easypostManager.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -144,18 +145,6 @@ function extractRawHtmlFromPayload(payload: GmailPart): string {
 
 // ── Claude Haiku extraction ───────────────────────────────────────────────────
 
-interface ParsedOrder {
-  retailer: string | null;
-  item_name: string | null;
-  order_number: string | null;
-  tracking_number: string | null;
-  carrier: string | null;
-  expected_date: string | null;
-  order_total: string | null;
-  order_url: string | null;
-  status: "ordered" | "shipped" | "in_transit" | "out_for_delivery" | "delivered" | null;
-}
-
 // ── Pre-extraction: pull tracking numbers from URLs before Claude sees the body ─
 // Amazon embeds TBA numbers in URLs (track.amazon.com/tracking/TBAxxxxxxxxx).
 // Claude may miss these if they're only in href attributes after HTML stripping.
@@ -179,103 +168,71 @@ function preExtractTrackingNumber(body: string): string | null {
   return null;
 }
 
-async function parseOrderFromEmail(
+async function extractTrackingNumber(
   subject: string,
   from: string,
   body: string,
-  emailDate: string,
   preExtractedTracking?: string | null
-): Promise<ParsedOrder | null> {
+): Promise<string | null> {
   const truncatedBody = body.slice(0, 6000);
-  const today = new Date().toISOString().split("T")[0];
 
   // Use the caller-provided pre-extracted value (from raw HTML) or fall back to
   // scanning the already-stripped body as a secondary attempt.
   const preExtracted = preExtractedTracking ?? preExtractTrackingNumber(body);
 
-  const prompt = `Extract order/shipping information from this email. Return ONLY valid JSON or the literal null if this is NOT a real order/shipping email.
+  const prompt = `Does this email contain a shipping tracking number from a carrier like UPS, FedEx, USPS, DHL, Amazon Logistics? If yes, extract just the tracking number. If no, return none.
 
 Email subject: ${subject}
-Email from: ${from}
-Email date: ${emailDate}
-Today's date: ${today}${preExtracted ? `\nPre-extracted tracking number found in email URLs: ${preExtracted} — use this as tracking_number` : ""}
+Email from: ${from}${preExtracted ? `\nPre-extracted tracking number found in email URLs: ${preExtracted}` : ""}
 
 Email body:
 ${truncatedBody}
 
-Return JSON with exactly these fields (null for any not found):
-{
-  "retailer": retailer/sender name — for carrier notification emails (FedEx, UPS, USPS, DHL) use the shipper name from the email or the carrier name itself,
-  "item_name": product name if listed, otherwise use "Package" for carrier shipping notifications,
-  "order_number": order/confirmation number as string (Amazon order numbers look like 111-1234567-1234567),
-  "tracking_number": carrier tracking number (NOT order number). For Amazon: TBA numbers like TBA123456789000 found in track.amazon.com URLs. For UPS: starts with 1Z. For FedEx: 12 or 15 digits. For USPS: 22 digits starting with 9.
-  "carrier": "UPS" | "FedEx" | "USPS" | "DHL" | "Amazon" | null,
-  "expected_date": "YYYY-MM-DD" delivery date or null,
-  "order_total": dollar amount as string e.g. "$149.99" or null,
-  "order_url": URL to track order on retailer site or null,
-  "status": "ordered" | "shipped" | "in_transit" | "out_for_delivery" | "delivered"
-}
-
-Rules:
-- tracking_number: CRITICAL — scan the full email body including any URLs for tracking numbers. Amazon TBA tracking numbers appear in URLs like track.amazon.com/tracking/TBA123456789000 — extract just the TBA number (e.g. "TBA123456789000"). Never confuse the order number (111-xxxxxxx-xxxxxxx) with the tracking number.
-- item_name: use the exact product name if listed. For carrier shipping notifications without a product name, use "Package" — never return null for carrier emails.
-- retailer: for FedEx/UPS/USPS/DHL/Amazon shipping notifications, use the shipper name if shown, otherwise use the carrier name.
-- If this is a shipping notification → status is "shipped" or "in_transit"
-- If "out for delivery" → status is "out_for_delivery"
-- If delivered confirmation → status is "delivered"
-- If just an order confirmation (no tracking yet) → status is "ordered"
-- Only return null if this is clearly NOT order or shipping related (e.g. a newsletter, marketing promo with no actual shipment, account alert)
-- Digital purchases (movies, music, software) are NOT physical orders — return null for those`;
+Reply with ONLY the tracking number, or the literal word "none" — nothing else.`;
 
   try {
     const resp = await anthropic.messages.create({
       model: "claude-haiku-4-5",
-      max_tokens: 400,
+      max_tokens: 40,
       messages: [{ role: "user", content: prompt }],
     });
     const text = resp.content[0].type === "text" ? resp.content[0].text.trim() : "";
-    if (!text || text === "null") {
-      logger.info({ subject, from }, "[OrderScanner] Claude returned null — not an order email");
+    if (!text || text.toLowerCase() === "none") {
       return null;
     }
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      logger.warn({ subject, from, text }, "[OrderScanner] Claude response had no JSON");
-      return null;
-    }
-    const parsed = JSON.parse(jsonMatch[0]) as ParsedOrder;
-    if (!parsed.retailer || !parsed.item_name) {
-      logger.info({ subject, from, parsed }, "[OrderScanner] Missing retailer or item_name — skipping");
-      return null;
-    }
-    return parsed;
+    return text;
   } catch (err) {
-    logger.warn({ err, subject, from }, "[OrderScanner] Claude Haiku parse failed");
+    logger.warn({ err, subject, from }, "[OrderScanner] Claude Haiku tracking extraction failed");
     return null;
   }
 }
 
 // ── Main scanner ──────────────────────────────────────────────────────────────
+// Minimal pipeline: extract a tracking number, skip if already on file,
+// insert a bare-bones row, then create an EasyPost tracker for it.
+// No other order fields (order_number, carrier, expected_date, order_total,
+// order_url) are parsed — EasyPost webhooks fill in status/tracking_events.
 
-export interface ScannedOrder extends NewOrder {
-  email_id: string;
+function senderDisplayName(from: string): string {
+  const match = from.match(/^(.*?)\s*<[^>]+>/);
+  return match ? match[1].trim().replace(/^"|"$/g, "") : from.trim();
 }
 
 export async function scanOrderEmails(
   userName: string,
   since?: Date
-): Promise<ScannedOrder[]> {
+): Promise<number> {
   const auth = await getAuthClientForUser(userName);
   if (!auth) {
     logger.warn({ userName }, "[OrderScanner] No auth client — Google not connected");
-    return [];
+    return 0;
   }
 
   try {
     await auth.getAccessToken();
   } catch (err) {
     logger.warn({ err }, "[OrderScanner] Token refresh failed");
-    return [];
+    return 0;
   }
 
   const gmail = google.gmail({ version: "v1", auth });
@@ -293,12 +250,12 @@ export async function scanOrderEmails(
     messageIds = (list.data.messages ?? []).map((m) => m.id!).filter(Boolean);
   } catch (err) {
     logger.warn({ err }, "[OrderScanner] Gmail list failed");
-    return [];
+    return 0;
   }
 
   logger.info({ userName, count: messageIds.length }, "[OrderScanner] Found order emails");
 
-  const results: ScannedOrder[] = [];
+  let newCount = 0;
 
   for (const msgId of messageIds.slice(0, 50)) {
     try {
@@ -314,7 +271,6 @@ export async function scanOrderEmails(
 
       const subject = getHeader("Subject");
       const from = getHeader("From");
-      const date = getHeader("Date");
       const rawPayload = (detail.data.payload ?? {}) as GmailPart;
       // Pre-extract from raw HTML BEFORE stripping so TBA numbers in href
       // attributes (track.amazon.com/tracking/TBAxxxxxxx) are captured.
@@ -324,30 +280,42 @@ export async function scanOrderEmails(
 
       if (!body || body.length < 50) continue;
 
-      const parsed = await parseOrderFromEmail(subject, from, body, date, preExtractedTracking);
-      if (!parsed) continue;
+      const trackingNumber = await extractTrackingNumber(subject, from, body, preExtractedTracking);
+      if (!trackingNumber) continue;
 
-      results.push({
-        email_id: msgId,
-        retailer: parsed.retailer!,
-        item_name: parsed.item_name!,
-        order_number: parsed.order_number,
-        tracking_number: parsed.tracking_number,
-        carrier: parsed.carrier,
-        status: parsed.status ?? "ordered",
-        expected_date: parsed.expected_date,
-        order_total: parsed.order_total,
-        order_url: parsed.order_url,
-      });
-
-      logger.info(
-        { emailId: msgId, retailer: parsed.retailer, item: parsed.item_name, status: parsed.status },
-        "[OrderScanner] Parsed order from email"
+      // Check if tracking number already exists in orders table — skip if yes
+      const { rows: existing } = await query<{ id: number }>(
+        `SELECT id FROM orders WHERE user_name = $1 AND tracking_number = $2`,
+        [userName, trackingNumber]
       );
+      if (existing.length > 0) {
+        logger.info({ trackingNumber }, "[OrderScanner] Tracking number already on file — skipping");
+        continue;
+      }
+
+      // Insert minimal row
+      const { rows: inserted } = await query<{ id: number }>(
+        `INSERT INTO orders (user_name, tracking_number, retailer, item_name, status, created_at)
+         VALUES ($1, $2, $3, $4, 'pre_transit', NOW())
+         RETURNING id`,
+        [userName, trackingNumber, senderDisplayName(from), subject]
+      );
+      newCount++;
+      logger.info({ emailId: msgId, trackingNumber }, "[OrderScanner] Minimal order row inserted");
+
+      // Create EasyPost tracker
+      const tracker = await createTracker(trackingNumber);
+      if (tracker && inserted[0]) {
+        await query(
+          `UPDATE orders SET easypost_tracker_id = $1 WHERE id = $2`,
+          [tracker.trackerId, inserted[0].id]
+        ).catch((err) => logger.warn({ err }, "[OrderScanner] Failed to store EasyPost tracker ID"));
+        logger.info({ trackerId: tracker.trackerId, trackingNumber }, "[OrderScanner] EasyPost tracker created");
+      }
     } catch (err) {
       logger.warn({ err, msgId }, "[OrderScanner] Failed to process email");
     }
   }
 
-  return results;
+  return newCount;
 }

@@ -4,6 +4,7 @@ import { NATIVE_USER } from "../auth/middleware.js";
 import { logger } from "../lib/logger.js";
 
 export type OrderStatus =
+  | "pre_transit"
   | "ordered"
   | "shipped"
   | "in_transit"
