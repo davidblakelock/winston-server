@@ -69,6 +69,9 @@ const prefetchDone: Map<string, string>     = new Map();
 const newsPrefetchDone: Map<string, string> = new Map();
 const middayCheckDone: Map<string, string>  = new Map();
 
+const _retryCount = new Map<string, number>();
+const MAX_PUSH_RETRIES = 5;
+
 // ── Push body ──────────────────────────────────────────────────────────────────
 
 async function buildMorningBody(user: ActiveUser): Promise<string> {
@@ -126,22 +129,41 @@ async function sendMorningPush(user: ActiveUser, wakeTime: string): Promise<void
 
     if (result.sent === 0) {
       // Push failed (network error, no valid tokens, etc.) — release the slot
-      // so the next scheduler tick retries rather than silently giving up.
-      logger.warn(
-        { userName, wakeTime, sent: result.sent, failed: result.failed },
-        "[MorningPush] Push delivery failed — releasing slot for retry next tick"
-      );
-      await releaseMorningPushSlot(userName).catch(() => {});
+      // so the next scheduler tick retries rather than silently giving up,
+      // unless we've already hit the max retry limit for today.
+      const retries = (_retryCount.get(userName) ?? 0) + 1;
+      if (retries >= MAX_PUSH_RETRIES) {
+        logger.warn({ userName, retries }, "[MorningPush] Max retries reached — giving up for today");
+        _retryCount.delete(userName);
+        // Don't release slot — leave push_sent_at set so we don't retry again today
+      } else {
+        _retryCount.set(userName, retries);
+        logger.info(
+          { userName, wakeTime, sent: result.sent, failed: result.failed, retries },
+          "[MorningPush] Push delivery failed — releasing slot for retry next tick"
+        );
+        await releaseMorningPushSlot(userName).catch(() => {});
+      }
       return;
     }
 
+    _retryCount.delete(userName);
     logger.info(
       { userName, wakeTime, briefingReady: !!staticCtx },
       "[MorningPush] Morning push sent"
     );
   } catch (err) {
     logger.error({ err, userName }, "[MorningPush] Failed to send morning push");
-    await releaseMorningPushSlot(userName).catch(() => {});
+    const retries = (_retryCount.get(userName) ?? 0) + 1;
+    if (retries >= MAX_PUSH_RETRIES) {
+      logger.warn({ userName, retries }, "[MorningPush] Max retries reached — giving up for today");
+      _retryCount.delete(userName);
+      // Don't release slot — leave push_sent_at set so we don't retry again today
+    } else {
+      _retryCount.set(userName, retries);
+      logger.info({ userName, retries }, "[MorningPush] Push delivery failed — releasing slot for retry next tick");
+      await releaseMorningPushSlot(userName).catch(() => {});
+    }
     return;
   }
 
