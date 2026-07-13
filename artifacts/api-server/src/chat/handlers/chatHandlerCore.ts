@@ -78,7 +78,8 @@ export type ActionType =
   | "email_reply"
   | "email_send"
   | "email_revise"
-  | "email_cancel";
+  | "email_cancel"
+  | "email_compose";
 
 export interface ClaudeAction {
   type: ActionType;
@@ -585,6 +586,9 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       case "email_cancel":
         action = { type: "email_cancel" };
         break;
+      case "email_compose":
+        action = { type: "email_compose", recipientName: parts.to ?? null };
+        break;
       case "make_reservation":
         action = { type: "make_reservation", restaurantName: parts.restaurant ?? "" };
         break;
@@ -993,14 +997,16 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     // ── email_send ────────────────────────────────────────────────────────────
     case "email_send": {
       if (pendingEmailReply) {
+        const subject = pendingEmailReply.subject ||
+          `Following up — ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
         const mailtoUri =
           `mailto:${encodeURIComponent(pendingEmailReply.to)}` +
-          `?subject=${encodeURIComponent(pendingEmailReply.subject)}` +
+          `?subject=${encodeURIComponent(subject)}` +
           `&body=${encodeURIComponent(pendingEmailReply.draftBody)}`;
         emailPayload = {
           to: pendingEmailReply.to,
           recipientName: pendingEmailReply.recipientName,
-          subject: pendingEmailReply.subject,
+          subject,
           body: pendingEmailReply.draftBody,
           mailtoUri,
         };
@@ -1072,6 +1078,36 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       if (pendingEmailReply) {
         clearPendingEmailReply(sessionUserName);
         finalReply = "No problem, I've dropped it.";
+      }
+      break;
+    }
+
+    // ── email_compose ─────────────────────────────────────────────────────────
+    case "email_compose": {
+      const recipientName = action.recipientName?.trim() ?? "";
+      if (recipientName) {
+        const searchResult = await searchContacts(recipientName, sessionUserName)
+          .catch(() => ({ contacts: [], needsReauth: false, source: "none" as const }));
+        const contact = searchResult.contacts[0] ?? null;
+        const email = contact?.email ?? null;
+        const name = contact?.name ?? recipientName;
+
+        if (email) {
+          // Store pending reply context so draft/confirm/send flow works
+          setPendingEmailReply(sessionUserName, {
+            gmailId: '',
+            gmailThreadId: '',
+            to: email,
+            recipientName: name,
+            subject: '',
+            draftBody: '',
+            userName: sessionUserName,
+            createdAt: Date.now(),
+          });
+          dynamicPrompt += `\n\n[Email Compose — ${name} (${email})]\nThe user wants to compose a new email to ${name}. Ask them what they'd like to say, or offer to draft something based on context. Once you have the content, compose a draft and present it. Then handle confirmation naturally — emit [ACTION:email_send] when approved.`;
+        } else {
+          finalReply = `I couldn't find an email address for ${name} in your contacts. Can you provide their email address?`;
+        }
       }
       break;
     }

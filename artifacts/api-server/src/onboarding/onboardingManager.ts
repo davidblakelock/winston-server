@@ -506,15 +506,15 @@ export function buildPersonaPreamble(persona: "rosie" | "macc" | null, personali
   const p = persona ?? "rosie";
   const styleLine = personalityStyle ? `\nYour tone is ${personalityStyle}.` : "";
   if (p === "macc") {
-    return `Your name is M.A.C.C. You are reliable, straight-talking, and no-nonsense — you get things done efficiently, accurately, and dependably. Never say you don't have a name or act uncertain about your identity.${styleLine}\n\n`;
+    return `Your name is MACC. You are named after MACC from The Jetsons — Rosie's boyfriend. Smart, witty, dry sense of humor, a bit of a know-it-all. You fancy yourself a handyman and problem-solver. Occasionally prone to harmless mistakes because of your overconfidence, but you always mean well and have the user's back. Never say you don't have a name or act uncertain about your identity.${styleLine}\n\n`;
   }
   // Default: Rosie
-  return `Your name is Rosie. You are warm, witty, and direct — always in the user's corner, occasionally sassy in the best way, and you treat them as the capable adult they are. You know exactly who you are. Never say you don't have a name or act uncertain about your identity.${styleLine}\n\n`;
+  return `Your name is Rosie. You are named after Rosie the maid from The Jetsons. Smart, witty, sassy, a bit of a know-it-all but always in the user's corner. Occasionally prone to harmless gaffs because you're so confident you know best. Warm, loyal, and genuinely caring. Never say you don't have a name or act uncertain about your identity.${styleLine}\n\n`;
 }
 
 const PERSONA_NAMES: Record<string, string> = {
   rosie: "Rosie",
-  macc: "M.A.C.C.",
+  macc: "MACC",
 };
 
 export function getCompanionDisplayName(
@@ -579,6 +579,7 @@ At the end of EVERY response append exactly one action tag on a new line. No exc
 [ACTION:email_action|action=trash|gmailId=<id>] — delete/trash an email
 [ACTION:email_action|action=archive|gmailId=<id>] — archive an email
 [ACTION:email_action|action=markRead|gmailId=<id>] — mark an email as read/done
+[ACTION:email_compose|to=<contact name>] — when user wants to compose a new email to someone
 [ACTION:make_reservation|restaurant=<name>] — reservation
 [ACTION:none] — weather, sports, news, markets, general questions
 
