@@ -37,6 +37,7 @@ import {
 import { getPendingReservation } from "../../restaurants/restaurantIntelligence.js";
 import {
   getPendingEmailReply,
+  setPendingEmailReply,
   getPendingMeetingRequests,
 } from "../../email/emailMeetingManager.js";
 import { getPendingDelete } from "../../google/calendarWriter.js";
@@ -877,34 +878,23 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     // ── email_reply ───────────────────────────────────────────────────────────
     case "email_reply": {
       if (action.gmailId) {
-        const emailResult = await handleEmailCalendar({
-          message,
-          sessionUserName,
-          timezone,
-          corePrompt,
-          memoryBlock: "",
-          isDinnerTonightQuery: false,
-          isEmailRequest: true,
-          isCalendarRequest: false,
-          isCalendarWriteOp: false,
-          isDeleteConfirm: false,
-          isDeleteCancel: false,
-          isCalendarCreate: false,
-          isCalendarModify: false,
-          isCalendarDelete: false,
-          isEmailReplyFlowActive: false,
-          isEmailReplyAccepted: false,
-          pendingMeetingRequests: [],
-          pendingEmailReply: null,
-          userProfile,
-          log,
-        });
-        if (emailResult.hardcodedResponse) finalReply = emailResult.hardcodedResponse;
-        else if (emailResult.contextBlock) {
-          dynamicPrompt += emailResult.contextBlock;
-        }
-        if (emailResult.emailPayload) {
-          broadcastToUser(sessionUserName, "email-compose", { type: "email_compose", ...emailResult.emailPayload });
+        const session = getTriageSession(sessionUserName);
+        const emailToReply = session?.emails.find(e => e.gmailId === action.gmailId)
+          ?? session?.emails[session.currentIndex];
+
+        if (emailToReply) {
+          finalReply = `What would you like to say to ${emailToReply.from}?`;
+          // Store pending reply context for next turn
+          setPendingEmailReply(sessionUserName, {
+            gmailId: emailToReply.gmailId,
+            gmailThreadId: emailToReply.gmailThreadId,
+            to: emailToReply.fromEmail,
+            recipientName: emailToReply.from,
+            subject: emailToReply.subject.startsWith('Re:') ? emailToReply.subject : `Re: ${emailToReply.subject}`,
+            draftBody: '',
+            userName: sessionUserName,
+            createdAt: Date.now(),
+          });
         }
       }
       break;
