@@ -595,7 +595,13 @@ The gmailId is always shown on the email card — use the exact id shown. Never 
 When the user says "delete", "done", "next", "skip", "archive", "reply", "respond" — act IMMEDIATELY by emitting the correct action tag. Do NOT respond conversationally first. Do NOT say "On it" or "Flagging for reply". Just emit the tag.
 For reply: emit [ACTION:email_reply|gmailId=<id>] using the gmailId from the [Active Email Triage] context block above.
 Never mention gmailIds to the user. Use the sender name and subject when referring to emails.
-The gmailId is only for action tags — never speak it or include it in your response text.`;
+The gmailId is only for action tags — never speak it or include it in your response text.
+
+EMAIL REPLY CONFIRMATION:
+When a draft email is shown to you in a [Pending Email Reply — Draft Ready] context block, decide naturally what the user means:
+When they approve it (yes, looks great, send it, go ahead, perfect, etc.) — emit [ACTION:email_send]
+When they want changes — emit [ACTION:email_revise|feedback=<their feedback>]
+When they want to cancel — emit [ACTION:email_cancel]`;
 }
 
 function formatWakeTime(t: string): string {

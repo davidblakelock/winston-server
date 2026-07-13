@@ -39,7 +39,10 @@ import { getPendingReservation } from "../../restaurants/restaurantIntelligence.
 import {
   getPendingEmailReply,
   setPendingEmailReply,
+  clearPendingEmailReply,
   getPendingMeetingRequests,
+  clearPendingMeetingRequests,
+  composeEmailReply,
 } from "../../email/emailMeetingManager.js";
 import { getPendingDelete } from "../../google/calendarWriter.js";
 import { broadcastToUser } from "../../reminders/sseStore.js";
@@ -72,7 +75,10 @@ export type ActionType =
   | "check_email"
   | "email_action"
   | "email_next"
-  | "email_reply";
+  | "email_reply"
+  | "email_send"
+  | "email_revise"
+  | "email_cancel";
 
 export interface ClaudeAction {
   type: ActionType;
@@ -87,6 +93,7 @@ export interface ClaudeAction {
   calendarIntent?: "read" | "create" | "modify" | "delete" | null;
   emailAction?: "trash" | "archive" | "markRead" | null;
   gmailId?: string | null;
+  feedback?: string | null;
 }
 
 export interface NewChatRequest {
@@ -427,12 +434,19 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     dynamicPrompt += resResult.contextBlock;
   }
 
-  // Email reply flow in progress
-  if (pendingEmailReply !== null || pendingMeetingReqs.length > 0) {
-    // Let Claude classify whether user is confirming or providing content
-    const isEmailReplyAccepted = pendingEmailReply?.draftBody
-      ? await classifyConfirmationIntent(message).then(r => r === 'send').catch(() => false)
-      : false; // No draft yet — can't confirm something that doesn't exist
+  // Email reply flow in progress — inject draft context so Claude can decide
+  // naturally via email_send / email_revise / email_cancel action tags.
+  if (pendingEmailReply !== null) {
+    dynamicPrompt += `\n\n[Pending Email Reply — Draft Ready]\n` +
+      `To: ${pendingEmailReply.recipientName} <${pendingEmailReply.to}>\n` +
+      `Subject: ${pendingEmailReply.subject}\n` +
+      `Draft:\n${pendingEmailReply.draftBody}\n\n` +
+      `If the user approves this draft, emit [ACTION:email_send]. If they want changes, emit [ACTION:email_revise|feedback=<their feedback>]. If they want to cancel, emit [ACTION:email_cancel].`;
+  }
+
+  // Meeting request flow in progress — separate from reply drafts (E007-MEET), unchanged.
+  if (pendingMeetingReqs.length > 0) {
+    const isEmailReplyAccepted = await classifyConfirmationIntent(message).then(r => r === 'send').catch(() => false);
     const emailResult = await handleEmailCalendar({
       message,
       sessionUserName,
@@ -448,10 +462,10 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       isCalendarCreate:       false,
       isCalendarModify:       false,
       isCalendarDelete:       false,
-      isEmailReplyFlowActive: true,
+      isEmailReplyFlowActive: false,
       isEmailReplyAccepted,
       pendingMeetingRequests: pendingMeetingReqs,
-      pendingEmailReply,
+      pendingEmailReply: null,
       userProfile,
       log,
     });
@@ -558,6 +572,15 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       case "email_reply":
         action = { type: "email_reply", gmailId: parts.gmailId ?? null };
         break;
+      case "email_send":
+        action = { type: "email_send" };
+        break;
+      case "email_revise":
+        action = { type: "email_revise", feedback: parts.feedback ?? null };
+        break;
+      case "email_cancel":
+        action = { type: "email_cancel" };
+        break;
       case "make_reservation":
         action = { type: "make_reservation", restaurantName: parts.restaurant ?? "" };
         break;
@@ -569,6 +592,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
   let smsPayload:         SmsPayload | undefined          = undefined;
   let reservationPayload: ReservationPayload | undefined  = undefined;
   let navigationUrl:      string | undefined              = undefined;
+  let emailPayload:       NewChatResponse["emailPayload"] = undefined;
 
   switch (action.type) {
 
@@ -916,6 +940,64 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       break;
     }
 
+    // ── email_send ────────────────────────────────────────────────────────────
+    case "email_send": {
+      if (pendingEmailReply) {
+        const mailtoUri =
+          `mailto:${encodeURIComponent(pendingEmailReply.to)}` +
+          `?subject=${encodeURIComponent(pendingEmailReply.subject)}` +
+          `&body=${encodeURIComponent(pendingEmailReply.draftBody)}`;
+        emailPayload = {
+          to: pendingEmailReply.to,
+          recipientName: pendingEmailReply.recipientName,
+          subject: pendingEmailReply.subject,
+          body: pendingEmailReply.draftBody,
+          mailtoUri,
+        };
+        broadcastToUser(sessionUserName, "email-compose", { type: "email_compose", ...emailPayload });
+        clearPendingEmailReply(sessionUserName);
+        clearPendingMeetingRequests(sessionUserName);
+        finalReply = `The reply is ready. Your email app should open with it pre-filled for ${pendingEmailReply.recipientName} — hit send when you're ready. I can't send it directly; that part's yours.`;
+        log.info({ to: pendingEmailReply.to }, "[chatHandlerCore] Email packaged for send");
+      }
+      break;
+    }
+
+    // ── email_revise ──────────────────────────────────────────────────────────
+    case "email_revise": {
+      if (pendingEmailReply) {
+        const displayName = userProfile?.name ?? sessionUserName;
+        try {
+          const revised = await composeEmailReply(
+            {
+              from: pendingEmailReply.recipientName,
+              fromEmail: pendingEmailReply.to,
+              subject: pendingEmailReply.subject,
+              proposedDateTimeStr: null,
+              isOpenEnded: true,
+            },
+            `Previous draft: "${pendingEmailReply.draftBody}". User's feedback: "${action.feedback ?? message}"`,
+            displayName,
+          );
+          setPendingEmailReply(sessionUserName, { ...pendingEmailReply, draftBody: revised });
+          finalReply = `Here's the revised version: "${revised}" — does that work?`;
+        } catch (err) {
+          log.warn({ err }, "[chatHandlerCore] Email revision failed");
+          finalReply = "Sorry, I had trouble revising that. Can you try again?";
+        }
+      }
+      break;
+    }
+
+    // ── email_cancel ──────────────────────────────────────────────────────────
+    case "email_cancel": {
+      if (pendingEmailReply) {
+        clearPendingEmailReply(sessionUserName);
+        finalReply = "No problem, I've dropped it.";
+      }
+      break;
+    }
+
     // ── email_next ────────────────────────────────────────────────────────────
     case "email_next": {
       const nextEmail = advanceTriageSession(sessionUserName);
@@ -1005,7 +1087,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
   const messageId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   runPostProcessing(sessionUserName, message, finalReply, history, userProfile, deviceId, messageId);
 
-  return { reply: finalReply, action, smsPayload, reservationPayload, navigationUrl, messageId };
+  return { reply: finalReply, action, smsPayload, reservationPayload, navigationUrl, messageId, emailPayload };
 }
 
 // ── Post-processing ───────────────────────────────────────────────────────────
