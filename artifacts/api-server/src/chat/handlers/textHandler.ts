@@ -221,8 +221,7 @@ export async function handleText(params: HandleTextParams): Promise<TextResult> 
 
           const cleanPhone = phone ? sanitizePhone(phone) : "";
 
-          const isAndroid = typeof deviceId === "string" && /android/i.test(deviceId);
-          const bodySep = isAndroid ? "?" : "&";
+          const bodySep = "?";
           const encodedBody = encodeURIComponent(body);
           const smsUri = cleanPhone
             ? `sms:${cleanPhone}${bodySep}body=${encodedBody}`
