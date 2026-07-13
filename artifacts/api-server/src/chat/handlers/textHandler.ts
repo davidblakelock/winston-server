@@ -221,6 +221,7 @@ export async function handleText(params: HandleTextParams): Promise<TextResult> 
 
           const cleanPhone = phone ? sanitizePhone(phone) : "";
 
+          // TODO: When iOS is added, send platform: 'ios'|'android' in request body and use that instead
           const bodySep = "?";
           const encodedBody = encodeURIComponent(body);
           const smsUri = cleanPhone
