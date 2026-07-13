@@ -32,6 +32,7 @@ import {
   getPendingText,
   setPendingText,
   getLastSmsPayload,
+  classifyConfirmationIntent,
   type SmsPayload,
 } from "../../text/textMessageComposer.js";
 import { getPendingReservation } from "../../restaurants/restaurantIntelligence.js";
@@ -428,6 +429,10 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
 
   // Email reply flow in progress
   if (pendingEmailReply !== null || pendingMeetingReqs.length > 0) {
+    // Let Claude classify whether user is confirming or providing content
+    const isEmailReplyAccepted = pendingEmailReply?.draftBody
+      ? await classifyConfirmationIntent(message).then(r => r === 'send').catch(() => false)
+      : false; // No draft yet — can't confirm something that doesn't exist
     const emailResult = await handleEmailCalendar({
       message,
       sessionUserName,
@@ -444,7 +449,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       isCalendarModify:       false,
       isCalendarDelete:       false,
       isEmailReplyFlowActive: true,
-      isEmailReplyAccepted:   true,
+      isEmailReplyAccepted,
       pendingMeetingRequests: pendingMeetingReqs,
       pendingEmailReply,
       userProfile,
