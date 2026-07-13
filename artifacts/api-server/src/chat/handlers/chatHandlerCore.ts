@@ -47,7 +47,7 @@ import {
 import { getPendingDelete } from "../../google/calendarWriter.js";
 import { broadcastToUser } from "../../reminders/sseStore.js";
 import { searchContacts } from "../../google/contacts.js";
-import { handleText } from "./textHandler.js";
+import { handleText, sanitizePhone } from "./textHandler.js";
 import { handleEmailCalendar } from "./emailCalendarHandler.js";
 import { handleReservation, type ReservationPayload } from "./reservationHandler.js";
 import { fetchAndSummarizeEmails, trashEmail, archiveEmail, markEmailRead } from "../../google/gmail.js";
@@ -79,7 +79,8 @@ export type ActionType =
   | "email_send"
   | "email_revise"
   | "email_cancel"
-  | "email_compose";
+  | "email_compose"
+  | "sms_send";
 
 export interface ClaudeAction {
   type: ActionType;
@@ -380,29 +381,32 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
 
   // SMS flow in progress
   if (pendingText !== null) {
-    const textResult = await handleText({
-      message,
-      sessionUserName,
-      deviceId,
-      isTextFlowActive:     true,
-      pendingText,
-      isSmsRetryRequest:    /\bretry\b|\btry again\b/i.test(message),
-      isSmsEditAfterSend:   /\bchange\b|\bedit\b|\bactually\b/i.test(message),
-      lastSmsPayload:       getLastSmsPayload(sessionUserName),
-      userProfile,
-      log,
-    });
-    if (textResult.hardcodedResponse) {
-      const messageId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      runPostProcessing(sessionUserName, message, textResult.hardcodedResponse, history, userProfile, deviceId, messageId);
-      return {
-        reply:      textResult.hardcodedResponse,
-        action:     { type: "send_sms" },
-        smsPayload: textResult.smsPayload,
-        messageId,
-      };
+    if (pendingText.phase === 'awaiting_confirmation') {
+      dynamicPrompt += `\n\n[Pending SMS Draft]\nTo: ${pendingText.recipientName}\nDraft: "${pendingText.composedBody}"\n\nIf the user approves, emit [ACTION:sms_send]. If they want changes, revise and present the new draft. If they cancel, emit [ACTION:none] and clear the draft.`;
+    } else {
+      const textResult = await handleText({
+        message,
+        sessionUserName,
+        deviceId,
+        isTextFlowActive: true,
+        pendingText,
+        isSmsRetryRequest: /\bretry\b|\btry again\b/i.test(message),
+        isSmsEditAfterSend: /\bchange\b|\bedit\b|\bactually\b/i.test(message),
+        lastSmsPayload: getLastSmsPayload(sessionUserName),
+        userProfile,
+        log,
+      });
+      if (textResult.hardcodedResponse) {
+        runPostProcessing(sessionUserName, message, textResult.hardcodedResponse, history, userProfile, deviceId, `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+        return {
+          reply: textResult.hardcodedResponse,
+          action: { type: "send_sms" },
+          smsPayload: textResult.smsPayload,
+          messageId: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        };
+      }
+      dynamicPrompt += textResult.contextBlock;
     }
-    dynamicPrompt += textResult.contextBlock;
   }
 
   // Reservation flow in progress
@@ -589,6 +593,9 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       case "email_compose":
         action = { type: "email_compose", recipientName: parts.to ?? null };
         break;
+      case "sms_send":
+        action = { type: "sms_send" };
+        break;
       case "make_reservation":
         action = { type: "make_reservation", restaurantName: parts.restaurant ?? "" };
         break;
@@ -753,6 +760,32 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
           finalReply = `What would you like to say to ${name}?`;
         }
         log.info({ recipientName: name, hasPhone: !!phone }, "[chatHandlerCore] SMS flow started");
+      }
+      break;
+    }
+
+    // ── sms_send ──────────────────────────────────────────────────────────────
+    case "sms_send": {
+      const pending = getPendingText(sessionUserName);
+      if (pending?.composedBody) {
+        const phone = pending.recipientPhone ?? "";
+        const body = pending.composedBody;
+        const cleanPhone = phone ? sanitizePhone(phone) : "";
+        const bodySep = "?";
+        const encodedBody = encodeURIComponent(body);
+        const smsUri = cleanPhone
+          ? `sms:${cleanPhone}${bodySep}body=${encodedBody}`
+          : `sms:?body=${encodedBody}`;
+        smsPayload = {
+          phone: cleanPhone,
+          body,
+          recipient: pending.recipientName,
+          smsUri,
+          relationship: pending.relationship,
+          tone: pending.tone,
+        };
+        setPendingText(sessionUserName, null);
+        log.info({ recipient: pending.recipientName }, "[chatHandlerCore] SMS confirmed and built");
       }
       break;
     }

@@ -34,7 +34,7 @@ export interface HandleTextParams {
   log: { warn: (obj: object, msg?: string) => void; info: (obj: object, msg?: string) => void };
 }
 
-function sanitizePhone(raw: string): string {
+export function sanitizePhone(raw: string): string {
   const stripped = raw.replace(/[^\d+]/g, "");
   if (/^\d{10}$/.test(stripped)) return `+1${stripped}`;
   if (/^1\d{10}$/.test(stripped)) return `+${stripped}`;
