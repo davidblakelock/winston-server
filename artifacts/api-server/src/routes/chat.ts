@@ -81,6 +81,7 @@ router.post("/chat-native", async (req: Request, res: Response) => {
     if (result.navigationUrl)      responseBody.navigationUrl      = result.navigationUrl;
     if (result.smsPayload)         responseBody.smsPayload         = result.smsPayload;
     if (result.reservationPayload) responseBody.reservationPayload = result.reservationPayload;
+    if (result.emailPayload) responseBody.emailPayload = result.emailPayload;
 
     res.json(responseBody);
   } catch (err: unknown) {

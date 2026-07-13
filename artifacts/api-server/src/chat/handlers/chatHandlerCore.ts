@@ -111,6 +111,13 @@ export interface NewChatResponse {
   reservationPayload?: ReservationPayload;
   navigationUrl?: string;
   messageId?: string;
+  emailPayload?: {
+    to: string;
+    recipientName: string;
+    subject: string;
+    body: string;
+    mailtoUri: string;
+  };
 }
 
 // ── Per-user calendar cache ───────────────────────────────────────────────────
@@ -450,7 +457,12 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       }
       const messageId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
       runPostProcessing(sessionUserName, message, emailResult.hardcodedResponse, history, userProfile, deviceId, messageId);
-      return { reply: emailResult.hardcodedResponse, action: { type: "none" }, messageId };
+      return {
+        reply: emailResult.hardcodedResponse,
+        action: { type: "none" },
+        messageId,
+        emailPayload: emailResult.emailPayload,
+      };
     }
     dynamicPrompt += emailResult.contextBlock;
   }
