@@ -437,30 +437,15 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
   // Email reply flow in progress — inject draft context so Claude can decide
   // naturally via email_send / email_revise / email_cancel action tags.
   if (pendingEmailReply !== null) {
-    if (!pendingEmailReply.draftBody) {
-      // No draft yet — compose one from user's message
-      try {
-        const displayName = userProfile?.name ?? sessionUserName;
-        const draft = await composeEmailReply(
-          {
-            from: pendingEmailReply.recipientName,
-            fromEmail: pendingEmailReply.to,
-            subject: pendingEmailReply.subject,
-            proposedDateTimeStr: null,
-            isOpenEnded: true,
-          },
-          message,
-          displayName
-        );
-        setPendingEmailReply(sessionUserName, { ...pendingEmailReply, draftBody: draft });
-        dynamicPrompt += `\n\n[Email Draft Composed for ${pendingEmailReply.recipientName}]\nDraft:\n"${draft}"\n\nRead this draft word for word to the user, then ask if it works. If they approve emit [ACTION:email_send]. If they want changes emit [ACTION:email_revise]. If they want to cancel emit [ACTION:email_cancel].`;
-      } catch (err) {
-        log.warn({ err }, "[email_reply] Draft composition failed");
-      }
-    } else {
-      // Draft exists — inject it so Claude can handle confirmation/revision naturally
-      dynamicPrompt += `\n\n[Pending Email Draft for ${pendingEmailReply.recipientName}]\nTo: ${pendingEmailReply.to}\nSubject: ${pendingEmailReply.subject}\nDraft:\n"${pendingEmailReply.draftBody}"\n\nIf user approves emit [ACTION:email_send]. If they want changes emit [ACTION:email_revise]. If they want to cancel emit [ACTION:email_cancel].`;
-    }
+    dynamicPrompt += `\n\n[Pending Email Draft for ${pendingEmailReply.recipientName}]\n` +
+      `To: ${pendingEmailReply.to}\n` +
+      `Subject: ${pendingEmailReply.subject}\n` +
+      `Current draft:\n"${pendingEmailReply.draftBody}"\n\n` +
+      `Handle the user's response naturally:\n` +
+      `- If they approve (yes, looks good, send it, perfect, etc.) → emit [ACTION:email_send]\n` +
+      `- If they give direction or want changes → compose updated draft, call setPendingEmailReply with new draftBody, present it\n` +
+      `- If they say 'send that word for word' → emit [ACTION:email_send] but first update draftBody to their exact typed text\n` +
+      `- If they cancel → emit [ACTION:email_cancel]`;
   }
 
   // Meeting request flow in progress — separate from reply drafts (E007-MEET), unchanged.
@@ -939,21 +924,65 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       if (action.gmailId) {
         const session = getTriageSession(sessionUserName);
         const emailToReply = session?.emails.find(e => e.gmailId === action.gmailId)
-          ?? session?.emails[session.currentIndex];
+          ?? session?.emails[session?.currentIndex ?? 0]
+          ?? null;
 
         if (emailToReply) {
-          finalReply = `What would you like to say to ${emailToReply.from}?`;
-          // Store pending reply context for next turn
-          setPendingEmailReply(sessionUserName, {
-            gmailId: emailToReply.gmailId,
-            gmailThreadId: emailToReply.gmailThreadId,
-            to: emailToReply.fromEmail,
-            recipientName: emailToReply.from,
-            subject: emailToReply.subject.startsWith('Re:') ? emailToReply.subject : `Re: ${emailToReply.subject}`,
-            draftBody: '',
-            userName: sessionUserName,
-            createdAt: Date.now(),
-          });
+          const displayName = userProfile?.name ?? sessionUserName;
+          const companionDisplay = getCompanionDisplayName(
+            userProfile?.companionPersona ?? null,
+            userProfile?.companionName ?? null
+          );
+
+          // Auto-draft immediately from email context
+          try {
+            const autoDraft = await composeEmailReply(
+              {
+                from: emailToReply.from,
+                fromEmail: emailToReply.fromEmail,
+                subject: emailToReply.subject,
+                proposedDateTimeStr: null,
+                isOpenEnded: true,
+              },
+              `Read this email and draft the most appropriate, natural reply on behalf of ${displayName}: "${emailToReply.snippet}"`,
+              displayName
+            );
+
+            setPendingEmailReply(sessionUserName, {
+              gmailId: emailToReply.gmailId,
+              gmailThreadId: emailToReply.gmailThreadId,
+              to: emailToReply.fromEmail,
+              recipientName: emailToReply.from,
+              subject: emailToReply.subject.startsWith('Re:') ? emailToReply.subject : `Re: ${emailToReply.subject}`,
+              draftBody: autoDraft,
+              userName: sessionUserName,
+              createdAt: Date.now(),
+            });
+
+            dynamicPrompt += `\n\n[Email Reply Draft for ${emailToReply.from}]\n` +
+              `Subject: ${emailToReply.subject}\n` +
+              `Auto-draft based on email context:\n"${autoDraft}"\n\n` +
+              `Present this draft to ${displayName} naturally. Read it back. Then say:\n` +
+              `"Does that work? You can also tell me what you'd like to say instead, or type your exact reply and say 'send that word for word'."\n` +
+              `If they approve → emit [ACTION:email_send]\n` +
+              `If they give direction or feedback → compose a new draft incorporating their input, update and present it\n` +
+              `If they say 'send that word for word' or 'use exactly what I typed' → emit [ACTION:email_send] using their typed text as the body\n` +
+              `If they cancel → emit [ACTION:email_cancel]`;
+
+          } catch (err) {
+            log.warn({ err }, "[email_reply] Auto-draft failed");
+            dynamicPrompt += `\n\n[Email Reply — Draft Failed]\nTell ${displayName} you had trouble drafting a reply and ask what they'd like to say to ${emailToReply.from}.`;
+            setPendingEmailReply(sessionUserName, {
+              gmailId: emailToReply.gmailId,
+              gmailThreadId: emailToReply.gmailThreadId,
+              to: emailToReply.fromEmail,
+              recipientName: emailToReply.from,
+              subject: emailToReply.subject.startsWith('Re:') ? emailToReply.subject : `Re: ${emailToReply.subject}`,
+              draftBody: '',
+              userName: sessionUserName,
+              createdAt: Date.now(),
+            });
+          }
         }
       }
       break;
