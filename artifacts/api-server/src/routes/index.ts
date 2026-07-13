@@ -39,6 +39,7 @@ import stoicRouter from "./stoic";
 import profileRouter from "./profile";
 import inboundEmailRouter from "./inboundEmail";
 import userRecordsRouter from "./userRecords";
+import easypostRouter from "./easypost";
 
 const router: IRouter = Router();
 
@@ -80,6 +81,7 @@ router.use(stoicRouter);
 router.use(profileRouter);
 router.use(inboundEmailRouter);
 router.use(userRecordsRouter);
+router.use(easypostRouter);
 
 // ── Location ping — native app sends current GPS on foreground ──────────────
 router.post("/location/ping", authenticate, async (req: Request, res: Response) => {

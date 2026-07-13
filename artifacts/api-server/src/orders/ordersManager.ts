@@ -36,6 +36,7 @@ export interface Order {
   order_url: string | null;
   tracking_events: TrackingEvent[];
   last_tracked_at: string | null;
+  easypost_tracker_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -95,6 +96,7 @@ export async function ensureOrdersTable(): Promise<void> {
     // Add direct-carrier tracking columns (idempotent)
     await query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS status_color text`).catch(() => {});
     await query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS status_detail text`).catch(() => {});
+    await query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS easypost_tracker_id text`).catch(() => {});
     logger.info("[Orders] Table and sync state ready");
   } catch (err) {
     logger.warn({ err }, "[Orders] Startup migration warning");
