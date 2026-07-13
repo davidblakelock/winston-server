@@ -1161,6 +1161,14 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
 
   }
 
+  // If email reply is pending, keep draftBody in sync with what Claude just showed the user
+  if (getPendingEmailReply(sessionUserName) !== null && finalReply) {
+    const current = getPendingEmailReply(sessionUserName);
+    if (current) {
+      setPendingEmailReply(sessionUserName, { ...current, draftBody: finalReply });
+    }
+  }
+
   // ── Post-processing ──────────────────────────────────────────────────────────
   const messageId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   runPostProcessing(sessionUserName, message, finalReply, history, userProfile, deviceId, messageId);
