@@ -1,11 +1,7 @@
 import EasyPost from "@easypost/api";
 import { logger } from "../lib/logger.js";
 
-const apiKey =
-  process.env.EASYPOST_API_KEY_TEST ??
-  process.env.EASYPOST_API_KEY_PRODUCTION ??
-  process.env.EASYPOST_API_KEY ??
-  "";
+const apiKey = process.env.EASYPOST_API_KEY ?? "";
 const client = new EasyPost(apiKey);
 
 export interface TrackingEvent {
