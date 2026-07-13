@@ -437,11 +437,30 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
   // Email reply flow in progress — inject draft context so Claude can decide
   // naturally via email_send / email_revise / email_cancel action tags.
   if (pendingEmailReply !== null) {
-    dynamicPrompt += `\n\n[Pending Email Reply — Draft Ready]\n` +
-      `To: ${pendingEmailReply.recipientName} <${pendingEmailReply.to}>\n` +
-      `Subject: ${pendingEmailReply.subject}\n` +
-      `Draft:\n${pendingEmailReply.draftBody}\n\n` +
-      `If the user approves this draft, emit [ACTION:email_send]. If they want changes, emit [ACTION:email_revise|feedback=<their feedback>]. If they want to cancel, emit [ACTION:email_cancel].`;
+    if (!pendingEmailReply.draftBody) {
+      // No draft yet — compose one from user's message
+      try {
+        const displayName = userProfile?.name ?? sessionUserName;
+        const draft = await composeEmailReply(
+          {
+            from: pendingEmailReply.recipientName,
+            fromEmail: pendingEmailReply.to,
+            subject: pendingEmailReply.subject,
+            proposedDateTimeStr: null,
+            isOpenEnded: true,
+          },
+          message,
+          displayName
+        );
+        setPendingEmailReply(sessionUserName, { ...pendingEmailReply, draftBody: draft });
+        dynamicPrompt += `\n\n[Email Draft Composed for ${pendingEmailReply.recipientName}]\nDraft:\n"${draft}"\n\nRead this draft word for word to the user, then ask if it works. If they approve emit [ACTION:email_send]. If they want changes emit [ACTION:email_revise]. If they want to cancel emit [ACTION:email_cancel].`;
+      } catch (err) {
+        log.warn({ err }, "[email_reply] Draft composition failed");
+      }
+    } else {
+      // Draft exists — inject it so Claude can handle confirmation/revision naturally
+      dynamicPrompt += `\n\n[Pending Email Draft for ${pendingEmailReply.recipientName}]\nTo: ${pendingEmailReply.to}\nSubject: ${pendingEmailReply.subject}\nDraft:\n"${pendingEmailReply.draftBody}"\n\nIf user approves emit [ACTION:email_send]. If they want changes emit [ACTION:email_revise]. If they want to cancel emit [ACTION:email_cancel].`;
+    }
   }
 
   // Meeting request flow in progress — separate from reply drafts (E007-MEET), unchanged.
