@@ -10,12 +10,15 @@ router.post("/easypost/webhook", async (req: Request, res: Response) => {
   // Respond immediately — EasyPost requires 2XX within 30 seconds
   res.status(200).json({ received: true });
 
-  try {
-    const parsed = parseWebhookEvent(req.body);
-    if (!parsed) {
-      logger.info("[EasyPost] Webhook ignored — not a tracker.updated event");
-      return;
-    }
+  // Process in background
+  (async () => {
+    logger.info({ body: JSON.stringify(req.body).slice(0, 200) }, "[EasyPost] Webhook received");
+    try {
+      const parsed = parseWebhookEvent(req.body);
+      if (!parsed) {
+        logger.info("[EasyPost] Webhook ignored — not a tracker.updated event");
+        return;
+      }
 
     const { trackerId, status, carrier, estDeliveryDate, trackingEvents } = parsed;
 
@@ -99,9 +102,10 @@ router.post("/easypost/webhook", async (req: Request, res: Response) => {
         }).catch((err) => logger.warn({ err }, "[EasyPost] FCM push failed"));
       }
     }
-  } catch (err) {
-    logger.error({ err }, "[EasyPost] Webhook processing failed");
-  }
+    } catch (err) {
+      logger.error({ err }, "[EasyPost] Webhook processing failed");
+    }
+  })();
 });
 
 export default router;
