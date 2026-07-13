@@ -959,6 +959,8 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
               createdAt: Date.now(),
             });
 
+            finalReply = `Here's a draft reply to ${emailToReply.from}:\n\n"${autoDraft}"\n\nDoes that work? Tell me if you'd like any changes, or say yes to send it.`;
+
             dynamicPrompt += `\n\n[Email Reply Draft for ${emailToReply.from}]\n` +
               `Subject: ${emailToReply.subject}\n` +
               `Auto-draft based on email context:\n"${autoDraft}"\n\n` +
@@ -1004,6 +1006,34 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
         };
         broadcastToUser(sessionUserName, "email-compose", { type: "email_compose", ...emailPayload });
         clearPendingEmailReply(sessionUserName);
+
+        // Advance triage to next email
+        const nextEmail = advanceTriageSession(sessionUserName);
+        if (nextEmail) {
+          const session = getTriageSession(sessionUserName);
+          broadcastToUser(sessionUserName, "email_card", {
+            type: "email_card",
+            gmailId: nextEmail.gmailId,
+            from: nextEmail.from,
+            subject: nextEmail.subject,
+            snippet: nextEmail.snippet,
+            index: (session?.currentIndex ?? 0) + 1,
+            total: session ? session.emails.length : 0,
+          });
+          log.info({ gmailId: nextEmail.gmailId }, "[email_send] Advanced to next email card");
+        } else {
+          broadcastToUser(sessionUserName, "email_done", {
+            type: "email_done",
+            text: "You're all caught up — inbox handled!",
+          });
+          broadcastToUser(sessionUserName, "speak_sync", {
+            text: "You're all caught up — inbox handled!",
+            messageId: `email-done-${Date.now()}`,
+            initiated_by: null,
+          });
+          log.info("[email_send] Triage complete");
+        }
+
         clearPendingMeetingRequests(sessionUserName);
         finalReply = `The reply is ready. Your email app should open with it pre-filled for ${pendingEmailReply.recipientName} — hit send when you're ready. I can't send it directly; that part's yours.`;
         log.info({ to: pendingEmailReply.to }, "[chatHandlerCore] Email packaged for send");
