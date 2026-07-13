@@ -450,7 +450,8 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       `- If they approve (yes, looks good, send it, perfect, etc.) → emit [ACTION:email_send]\n` +
       `- If they give direction or want changes → compose updated draft, call setPendingEmailReply with new draftBody, present it\n` +
       `- If they say 'send that word for word' → emit [ACTION:email_send] but first update draftBody to their exact typed text\n` +
-      `- If they cancel → emit [ACTION:email_cancel]`;
+      `- If they cancel → emit [ACTION:email_cancel]\n` +
+      `After making ANY changes to the draft, always present the COMPLETE updated email in full and ask for confirmation again. Never just say "done" or "on it" without showing the full revised draft.`;
   }
 
   // Meeting request flow in progress — separate from reply drafts (E007-MEET), unchanged.
