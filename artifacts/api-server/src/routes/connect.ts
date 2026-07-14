@@ -30,7 +30,7 @@ import {
   renameGroup,
   saveGroupMessage,
 } from "../connect/groupManager.js";
-import { sendPushToAll } from "../push/pushManager.js";
+import { sendFcmNotification } from "../push/fcmSender.js";
 import { fetchEventsForDateRange, createCalendarEvent } from "../google/calendar.js";
 
 const router = Router();
@@ -93,14 +93,17 @@ router.post("/connect/accept", async (req: Request, res: Response) => {
     const requesterProfile = await getProfile(connection.requester_user_name).catch(() => null);
     const connectName = `${requesterProfile?.companionName ?? "Winston"} Connect`;
 
-    await sendPushToAll({
+    await sendFcmNotification({
+      userName: connection.requester_user_name,
+      notificationType: "connect-accepted",
       title: connectName,
       body: `${yourName} accepted your ${connectName} invite!`,
-      tag: "connect-accepted",
-      notificationType: "connect-accepted",
-      companionMessage: `${yourName} has joined your ${connectName}! You can now send each other reminders, messages, and share a shopping list through your companions.`,
-      requireInteraction: true,
-    }, connection.requester_user_name).catch(() => {});
+      data: {
+        companionMessage: `${yourName} has joined your ${connectName}! You can now send each other reminders, messages, and share a shopping list through your companions.`,
+        tag: "connect-accepted",
+        requireInteraction: "true",
+      },
+    }).catch(() => {});
 
     res.json({ success: true, connection });
   } catch (err) {
@@ -149,14 +152,17 @@ router.post("/connect/message", async (req: Request, res: Response) => {
     const msgId = await saveConnectMessage(userName, recipientUserName, "message", messageText);
     const companionMessage = `Message from ${displayName}: "${messageText}"`;
 
-    const result = await sendPushToAll({
+    const result = await sendFcmNotification({
+      userName: recipientUserName,
+      notificationType: "connect-message",
       title: `Message from ${displayName}`,
       body: messageText,
-      tag: `connect-message-${msgId}`,
-      notificationType: "connect-message",
-      companionMessage,
-      requireInteraction: true,
-    }, recipientUserName);
+      data: {
+        companionMessage,
+        tag: `connect-message-${msgId}`,
+        requireInteraction: "true",
+      },
+    });
 
     if (result.sent > 0) {
       await markMessageDelivered(msgId);
@@ -192,14 +198,17 @@ router.post("/connect/reminder", async (req: Request, res: Response) => {
     const msgId = await saveConnectMessage(userName, recipientUserName, "reminder", reminderText);
     const companionMessage = `Reminder from ${displayName}: ${reminderText}`;
 
-    const result = await sendPushToAll({
+    const result = await sendFcmNotification({
+      userName: recipientUserName,
+      notificationType: "connect-reminder",
       title: `Reminder from ${displayName}`,
       body: reminderText,
-      tag: `connect-reminder-${msgId}`,
-      notificationType: "connect-reminder",
-      companionMessage,
-      requireInteraction: true,
-    }, recipientUserName);
+      data: {
+        companionMessage,
+        tag: `connect-reminder-${msgId}`,
+        requireInteraction: "true",
+      },
+    });
 
     if (result.sent > 0) {
       await markMessageDelivered(msgId);
@@ -550,14 +559,17 @@ router.post("/connect/groups/:id/message", async (req: Request, res: Response) =
     const recipients = group.members.filter((m) => m !== userName);
     const results = await Promise.allSettled(
       recipients.map((r) =>
-        sendPushToAll({
+        sendFcmNotification({
+          userName: r,
+          notificationType: "connect-message",
           title: `Group message: ${group.name}`,
           body: messageText,
-          tag: `group-${groupId}-msg-${Date.now()}`,
-          notificationType: "connect-message",
-          companionMessage: `Group message from ${userName} in "${group.name}": "${messageText}"`,
-          requireInteraction: false,
-        }, r)
+          data: {
+            companionMessage: `Group message from ${userName} in "${group.name}": "${messageText}"`,
+            tag: `group-${groupId}-msg-${Date.now()}`,
+            requireInteraction: "false",
+          },
+        })
       )
     );
 
@@ -606,14 +618,17 @@ router.post("/connect/groups/:id/reminder", async (req: Request, res: Response) 
     const recipients = group.members.filter((m) => m !== userName);
     const results = await Promise.allSettled(
       recipients.map((r) =>
-        sendPushToAll({
+        sendFcmNotification({
+          userName: r,
+          notificationType: "connect-reminder",
           title: `Reminder from ${group.name}`,
           body: reminderText,
-          tag: `group-${groupId}-reminder-${Date.now()}`,
-          notificationType: "connect-reminder",
-          companionMessage: `Group reminder from "${group.name}": ${reminderText}`,
-          requireInteraction: true,
-        }, r)
+          data: {
+            companionMessage: `Group reminder from "${group.name}": ${reminderText}`,
+            tag: `group-${groupId}-reminder-${Date.now()}`,
+            requireInteraction: "true",
+          },
+        })
       )
     );
 
@@ -699,17 +714,17 @@ router.post("/connect/groups/:id/find-time", async (req: Request, res: Response)
         withoutCalendar
           .filter((m) => m !== userName)
           .map((m) =>
-            sendPushToAll(
-              {
-                title: `${group.name} — Scheduling`,
-                body: `${requesterName} is looking for a time that works for everyone. Please reply with your availability for ${startDate} – ${endDate}.`,
-                tag: `group-${groupId}-findtime-${Date.now()}`,
-                notificationType: "connect-message",
+            sendFcmNotification({
+              userName: m,
+              notificationType: "connect-message",
+              title: `${group.name} — Scheduling`,
+              body: `${requesterName} is looking for a time that works for everyone. Please reply with your availability for ${startDate} – ${endDate}.`,
+              data: {
                 companionMessage: `${requesterName} wants to find a meeting time for "${group.name}" (${startDate} – ${endDate}). Check with them directly about your availability.`,
-                requireInteraction: true,
+                tag: `group-${groupId}-findtime-${Date.now()}`,
+                requireInteraction: "true",
               },
-              m
-            )
+            })
           )
       );
     }
@@ -854,14 +869,17 @@ router.post("/connect/groups/:id/propose-time", async (req: Request, res: Respon
     const recipients = group.members.filter((m) => m !== userName);
     const results = await Promise.allSettled(
       recipients.map((r) =>
-        sendPushToAll({
+        sendFcmNotification({
+          userName: r,
+          notificationType: "connect-message",
           title: `Time Proposal: ${group.name}`,
           body: `${title} — ${label}`,
-          tag: `group-${groupId}-proposal-${Date.now()}`,
-          notificationType: "connect-message",
-          companionMessage: proposalText,
-          requireInteraction: true,
-        }, r)
+          data: {
+            companionMessage: proposalText,
+            tag: `group-${groupId}-proposal-${Date.now()}`,
+            requireInteraction: "true",
+          },
+        })
       )
     );
 
@@ -952,14 +970,17 @@ router.post("/connect/groups/:id/confirm-time", async (req: Request, res: Respon
     const recipients = group.members.filter((m) => m !== userName);
     await Promise.allSettled(
       recipients.map((r) =>
-        sendPushToAll({
+        sendFcmNotification({
+          userName: r,
+          notificationType: "connect-message",
           title: `Confirmed: ${group.name}`,
           body: `${title} — ${label}`,
-          tag: `group-${groupId}-confirm-${Date.now()}`,
-          notificationType: "connect-message",
-          companionMessage: `${confirmText}. It's been added to your calendar.`,
-          requireInteraction: true,
-        }, r)
+          data: {
+            companionMessage: `${confirmText}. It's been added to your calendar.`,
+            tag: `group-${groupId}-confirm-${Date.now()}`,
+            requireInteraction: "true",
+          },
+        })
       )
     );
 
