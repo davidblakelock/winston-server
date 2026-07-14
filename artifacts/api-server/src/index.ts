@@ -25,6 +25,7 @@ import { startDepartureScheduler } from "./departure/departureScheduler";
 import { startCalendarSyncScheduler, ensureCalendarSyncTable } from "./departure/calendarSyncScheduler";
 import { ensureRelationshipTable } from "./relationships/relationshipManager";
 import { initDallasContentTable } from "./morning/dallasContent";
+import { startProactiveEventScheduler } from "./morning/proactiveEventScheduler";
 import { initConcertsTable, startVenueMonitorScheduler } from "./morning/venueMonitor";
 import { initBriefingStoriesTable } from "./morning/storyDedup";
 import { runBriefingCacheMigrations } from "./morning/briefingCache";
@@ -470,6 +471,7 @@ app.listen(port, async (err) => {
     startDepartureScheduler();
     startCalendarSyncScheduler();
     startVenueMonitorScheduler();
+    startProactiveEventScheduler();
     startJournalPatternScheduler();
     startTodoReminderScheduler();
     startBackgroundEmailScanner();

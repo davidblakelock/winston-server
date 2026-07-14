@@ -61,13 +61,14 @@ async function runActor(
 // ── Shared event type ─────────────────────────────────────────────────────────
 
 export interface LocalEvent {
-  name:        string;
-  date:        string;    // Human-readable: "Saturday, June 14"
-  dateISO:     string;    // YYYY-MM-DD
-  venue:       string;
-  url:         string;
-  description: string;
-  source:      "ticketmaster";
+  name:           string;
+  date:           string;    // Human-readable: "Saturday, June 14"
+  dateISO:        string;    // YYYY-MM-DD
+  venue:          string;
+  url:            string;
+  description:    string;
+  source:         "ticketmaster";
+  ticketSaleDate: string | null; // Public on-sale date (ISO), if known
 }
 
 export interface ApifyEventResult {
@@ -93,6 +94,9 @@ function parseTmEvents(events: Array<Record<string, unknown>>, city: string): Lo
     const embedded = e["_embedded"] as Record<string, unknown> | undefined;
     const venues   = embedded?.["venues"] as Array<Record<string, unknown>> | undefined;
     const classif  = (e["classifications"] as Array<Record<string, unknown>> | undefined)?.[0];
+    const sales    = (e["sales"] as Record<string, unknown> | undefined);
+    const salesPublic = (sales?.["public"] as Record<string, unknown> | undefined);
+    const ticketSaleDate = salesPublic?.["startDateTime"] ? String(salesPublic["startDateTime"]).slice(0, 10) : null;
     return {
       name:        String(e["name"] ?? ""),
       date:        dateLabel,
@@ -101,6 +105,7 @@ function parseTmEvents(events: Array<Record<string, unknown>>, city: string): Lo
       url:         String(e["url"] ?? ""),
       description: String((classif?.["segment"] as Record<string, unknown> | undefined)?.["name"] ?? ""),
       source:      "ticketmaster",
+      ticketSaleDate,
     };
   }).filter((e) => e.name.length > 3 && e.dateISO.length === 10);
 }
@@ -236,6 +241,8 @@ async function fetchTicketmasterViaApify(city: string): Promise<LocalEvent[]> {
         url:         String(item["url"]   ?? ""),
         description: String(item["segment"] ?? item["genre"] ?? item["category"] ?? ""),
         source:      "ticketmaster",
+        // Not in this actor's documented field set — always null for the Apify fallback path.
+        ticketSaleDate: null,
       };
     })
     .filter((e) => e.name.length > 3);
