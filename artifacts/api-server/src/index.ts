@@ -25,7 +25,6 @@ import { startDepartureScheduler } from "./departure/departureScheduler";
 import { startCalendarSyncScheduler, ensureCalendarSyncTable } from "./departure/calendarSyncScheduler";
 import { ensureRelationshipTable } from "./relationships/relationshipManager";
 import { initDallasContentTable } from "./morning/dallasContent";
-import { startDallasProactiveScheduler } from "./morning/dallasProactiveScheduler";
 import { initConcertsTable, startVenueMonitorScheduler } from "./morning/venueMonitor";
 import { initBriefingStoriesTable } from "./morning/storyDedup";
 import { runBriefingCacheMigrations } from "./morning/briefingCache";
@@ -45,7 +44,6 @@ import { ensureOrdersTable } from "./orders/ordersManager";
 import { ensureUserRecordsColumns, ensureSocialScanStateTable } from "./records/recordsManager";
 import { ensureGoalsTables } from "./goals/goalsManager";
 import { startTodoReminderScheduler } from "./lists/todoReminderScheduler";
-import { ensureTripPlansTable } from "./travel/tripPlanningManager";
 
 import cron from "node-cron";
 import { startBackgroundEmailScanner } from "./email/backgroundEmailScanner";
@@ -357,12 +355,6 @@ app.listen(port, async (err) => {
   }
 
   try {
-    await ensureTripPlansTable();
-  } catch (e) {
-    logger.warn({ err: e }, "Trip plans table initialization warning");
-  }
-
-  try {
     await ensureListItemColumns();
     logger.info("[startup] list_items columns ready (added_by, category, url)");
   } catch (e) {
@@ -477,7 +469,6 @@ app.listen(port, async (err) => {
     });
     startDepartureScheduler();
     startCalendarSyncScheduler();
-    startDallasProactiveScheduler();
     startVenueMonitorScheduler();
     startJournalPatternScheduler();
     startTodoReminderScheduler();
