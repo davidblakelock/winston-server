@@ -857,7 +857,7 @@ router.post("/connect/groups/:id/propose-time", async (req: Request, res: Respon
 
     const startDt = new Date(start);
     const label = startDt.toLocaleString("en-US", {
-      timeZone: (userProfile?.timezone ?? "UTC"),
+      timeZone: "UTC",
       weekday: "long",
       month: "long",
       day: "numeric",
@@ -937,7 +937,7 @@ router.post("/connect/groups/:id/confirm-time", async (req: Request, res: Respon
     const startDt = new Date(start);
     const endDt = new Date(end);
     const label = startDt.toLocaleString("en-US", {
-      timeZone: (userProfile?.timezone ?? "UTC"),
+      timeZone: "UTC",
       weekday: "long",
       month: "long",
       day: "numeric",
