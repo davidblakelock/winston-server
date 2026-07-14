@@ -317,7 +317,7 @@ export async function runPatternObservation(userName: string): Promise<void> {
     .slice(0, 30)
     .map((c) => {
       const date = new Date(c.captured_at).toLocaleDateString("en-US", {
-        timeZone: lcTz, month: "short", day: "numeric",
+        timeZone: profile?.timezone ?? "UTC", month: "short", day: "numeric",
       });
       return `• [${date}, ${c.context}] ${c.content}`;
     })
@@ -422,7 +422,7 @@ export async function getWeeklyGift(userName: string): Promise<string | null> {
   const captureLines = captures
     .map((c) => {
       const date = new Date(c.captured_at).toLocaleDateString("en-US", {
-        timeZone: lcTz, weekday: "short", month: "short", day: "numeric",
+        timeZone: profile?.timezone ?? "UTC", weekday: "short", month: "short", day: "numeric",
       });
       return `• [${date}, ${c.context}] ${c.content}`;
     })
@@ -501,7 +501,7 @@ export async function generateAndStoreAnnualLetter(userName: string): Promise<st
   const captureLines = yearCaptures
     .map((c) => {
       const date = new Date(c.captured_at).toLocaleDateString("en-US", {
-        timeZone: lcTz, month: "long", day: "numeric",
+        timeZone: profile?.timezone ?? "UTC", month: "long", day: "numeric",
       });
       return `• [${date}, ${c.context}] ${c.content}`;
     })

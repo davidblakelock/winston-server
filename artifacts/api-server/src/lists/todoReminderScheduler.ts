@@ -59,7 +59,7 @@ export function startTodoReminderScheduler(): void {
             user: item.user_name,
             reminderTimeUTC: new Date(item.reminder_time).toISOString(),
             reminderTimeChicago: new Date(item.reminder_time).toLocaleString("en-US", {
-              timeZone: reminder.timezone ?? "UTC",
+              timeZone: "America/Chicago",
               dateStyle: "short",
               timeStyle: "short",
             }),

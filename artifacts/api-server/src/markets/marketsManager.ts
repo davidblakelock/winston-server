@@ -18,6 +18,9 @@ export interface MarketSnapshot {
   marketStatus: string;
 }
 
+// US markets (NYSE/NASDAQ) always operate on Eastern Time, regardless of user location
+const MARKETS_TZ = "America/New_York";
+
 // ETF proxies — tradeable symbols Alpha Vantage supports well
 const SYMBOLS: Record<"sp500" | "dow" | "nasdaq" | "oil", { symbol: string; name: string }> = {
   sp500:  { symbol: "SPY", name: "S&P 500 (SPY)" },
