@@ -52,7 +52,7 @@ interface ConnectionRow {
 let _lastCheckedDate: string | null = null;
 
 async function checkBirthdayAlerts(): Promise<void> {
-  const today = todayStr(userTz);
+  const today = todayStr("UTC");
   if (_lastCheckedDate === today) return;
   _lastCheckedDate = today;
 

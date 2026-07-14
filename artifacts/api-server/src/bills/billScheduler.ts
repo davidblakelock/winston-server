@@ -37,7 +37,7 @@ function formatDueDateLabel(d: Date, tz = "UTC"): string {
 let _lastCheckedDate: string | null = null;
 
 async function checkBillReminders(): Promise<void> {
-  const today = getLocalDateString(userTz);
+  const today = getLocalDateString("UTC");
   if (_lastCheckedDate === today) return;
   _lastCheckedDate = today;
 

@@ -67,7 +67,7 @@ async function ensureLogTable(): Promise<void> {
 let _lastChecked: string | null = null;
 
 async function checkDateReminders(): Promise<void> {
-  const today = localDateStr(userTz);
+  const today = localDateStr("UTC");
   if (_lastChecked === today) return;
   _lastChecked = today;
 
