@@ -19,6 +19,7 @@ import {
   deleteSharedListItem,
   createSharedList,
   updateConnectionProfile,
+  deleteConnection,
 } from "../connect/connectManager.js";
 import {
   createGroup,
@@ -1078,6 +1079,31 @@ router.patch(
     }
   }
 );
+
+// ── DELETE /api/connect/:id ───────────────────────────────────────────────────
+router.delete('/connect/:id', async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const connectionId = parseInt(String(req.params.id ?? ''), 10);
+  if (isNaN(connectionId)) {
+    res.status(400).json({ error: 'Invalid connection id' });
+    return;
+  }
+
+  try {
+    const deleted = await deleteConnection(connectionId, userName);
+    if (!deleted) {
+      res.status(404).json({ error: 'Connection not found' });
+      return;
+    }
+    req.log.info({ userName, connectionId }, '[Connect] Connection deleted');
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error({ err }, '[Connect] Failed to delete connection');
+    res.status(500).json({ error: 'Failed to delete connection' });
+  }
+});
 
 export { logger };
 export default router;

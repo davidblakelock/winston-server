@@ -215,6 +215,20 @@ export async function getMessages(
   return rows;
 }
 
+export async function deleteConnection(
+  connectionId: number,
+  userName: string
+): Promise<boolean> {
+  const { rows } = await query(
+    `DELETE FROM winston_connections
+     WHERE id = $1
+       AND (requester_user_name = $2 OR recipient_user_name = $2)
+     RETURNING id`,
+    [connectionId, userName]
+  );
+  return (rows.length ?? 0) > 0;
+}
+
 export async function getPendingInvites(userName: string): Promise<WinstonConnection[]> {
   const { rows } = await query<WinstonConnection>(
     `SELECT * FROM winston_connections
