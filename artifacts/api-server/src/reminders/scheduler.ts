@@ -1,7 +1,6 @@
 import cron from "node-cron";
 import { query } from "../db.js";
 import { broadcast, broadcastToUser } from "./sseStore.js";
-import { sendPushToAll } from "../push/pushManager.js";
 import { sendFcmNotification } from "../push/fcmSender.js";
 import { getProfile, getCompanionDisplayName } from "../onboarding/onboardingManager.js";
 import { logger } from "../lib/logger.js";
@@ -88,17 +87,17 @@ export function startScheduler(): void {
                 { contactName: link.contact_name, linkedUser: link.linked_user_name },
                 "[Scheduler] Sending contact reminder push"
               );
-              await sendPushToAll(
-                {
-                  title: `${companionName}`,
-                  body: contactBody,
+              await sendFcmNotification({
+                userName: link.linked_user_name,
+                notificationType: 'contact-reminder',
+                title: `${companionName}`,
+                body: contactBody,
+                data: {
                   tag: `contact-reminder-${reminder.id}`,
-                  reminderId: reminder.id,
-                  notificationType: "contact-reminder",
-                  requireInteraction: true,
+                  reminderId: String(reminder.id),
+                  requireInteraction: 'true',
                 },
-                link.linked_user_name
-              );
+              });
               logger.info(
                 { id: reminder.id, forContact: reminder.for_contact, linkedUser: link.linked_user_name },
                 "[Scheduler] Contact reminder sent"

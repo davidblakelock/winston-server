@@ -18,7 +18,7 @@ import {
   getRequesterLabel,
 } from "../lists/listShareManager.js";
 import { autoUpdateItemUrl, autoUpdateRestaurantUrl, detectAutoLookupType, lookupRestaurantUrl, isBookingPlatformUrl, detectBookingPlatform } from "../lists/autoUrlLookup.js";
-import { sendPushToAll } from "../push/pushManager.js";
+import { sendFcmNotification } from "../push/fcmSender.js";
 import { extractReminder, computeFireAt, resolveNextDayOfWeek } from "../reminders/reminderParser.js";
 import { nextOccurrenceForPattern } from "../reminders/recurringUtils.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
@@ -550,15 +550,13 @@ router.post("/lists/shopping", async (req: Request, res: Response) => {
       [targetUser, item.trim()]
     );
     if (existing.length > 0) {
-      await sendPushToAll(
-        {
-          title: "Already on the list",
-          body: `"${item.trim()}" is already on ${targetUser}'s shopping list`,
-          tag: `list-dup-${userName}`,
-          notificationType: "list-sync",
-        },
-        userName
-      ).catch(() => {});
+      await sendFcmNotification({
+        userName,
+        notificationType: 'list-sync',
+        title: 'Already on the list',
+        body: `"${item.trim()}" is already on ${targetUser}'s shopping list`,
+        data: { tag: `list-dup-${userName}` },
+      }).catch(() => {});
       res.json({ item: null, duplicate: true, message: `"${item.trim()}" is already on that list` });
       return;
     }
@@ -573,17 +571,17 @@ router.post("/lists/shopping", async (req: Request, res: Response) => {
     const newItem = rows[0];
     if (newItem) {
       categorizeAndUpdateItem(newItem.id, newItem.item_text).catch(() => {});
-      await sendPushToAll(
-        {
-          title: `${addedByLabel} added to your shopping list`,
-          body: item.trim(),
+      await sendFcmNotification({
+        userName: targetUser,
+        notificationType: 'list-sync',
+        title: `${addedByLabel} added to your shopping list`,
+        body: item.trim(),
+        data: {
           tag: `list-shared-add-${newItem.id}`,
-          notificationType: "list-sync",
-          deepLink: "winston://lists?tab=shopping",
+          deepLink: 'winston://lists?tab=shopping',
           companionMessage: `${addedByLabel} added "${item.trim()}" to your shopping list.`,
         },
-        targetUser
-      ).catch(() => {});
+      }).catch(() => {});
     }
     res.json({ item: newItem ?? null });
     return;
@@ -712,15 +710,13 @@ router.post(["/lists/todo", "/lists/to do", "/lists/to%20do"], async (req: Reque
       [targetUser, item.trim()]
     );
     if (existing.length > 0) {
-      await sendPushToAll(
-        {
-          title: "Already on the list",
-          body: `"${item.trim()}" is already on ${targetUser}'s to-do list`,
-          tag: `list-dup-${userName}`,
-          notificationType: "list-sync",
-        },
-        userName
-      ).catch(() => {});
+      await sendFcmNotification({
+        userName,
+        notificationType: 'list-sync',
+        title: 'Already on the list',
+        body: `"${item.trim()}" is already on ${targetUser}'s to-do list`,
+        data: { tag: `list-dup-${userName}` },
+      }).catch(() => {});
       res.json({ item: null, duplicate: true, message: `"${item.trim()}" is already on that list` });
       return;
     }
@@ -732,17 +728,17 @@ router.post(["/lists/todo", "/lists/to do", "/lists/to%20do"], async (req: Reque
       fireAt: null as any,
       timezone: targetProfile?.timezone ?? "UTC",
     });
-    await sendPushToAll(
-      {
-        title: `${addedByLabel} added to your to-do list`,
-        body: item.trim(),
+    await sendFcmNotification({
+      userName: targetUser,
+      notificationType: 'list-sync',
+      title: `${addedByLabel} added to your to-do list`,
+      body: item.trim(),
+      data: {
         tag: `list-shared-add-${newItem.id}`,
-        notificationType: "list-sync",
-        deepLink: "winston://lists?tab=todo",
+        deepLink: 'winston://lists?tab=todo',
         companionMessage: `${addedByLabel} added "${item.trim()}" to your to-do list.`,
       },
-      targetUser
-    ).catch(() => {});
+    }).catch(() => {});
     res.json({ item: { id: newItem.id, item_text: newItem.reminder_text, created_at: newItem.created_at } });
     return;
   }
