@@ -62,6 +62,7 @@ export async function sendFcmNotification(
           await removeFcmToken(token, code).catch((e) =>
             logger.warn({ e }, "[FCM] removeFcmToken threw during cleanup")
           );
+          logger.warn({ userName, code }, "[FCM] Stale token removed — user may need to relaunch app to re-register");
         }
       }
     })
