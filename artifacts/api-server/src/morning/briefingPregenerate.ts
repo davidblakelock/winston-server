@@ -459,7 +459,7 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
     const _bWeather = userSettings?.briefingWeather !== false ? weatherContextBlock : "";
     const _bNews    = userSettings?.briefingNews    !== false ? dedupedNewsBlock : "";
     const stoicBlock = userSettings?.briefingStoic !== false && stoicEntry
-      ? buildStoicBlock(stoicEntry, intentionQuestion ?? `What's the one thing that would make today feel worthwhile?`)
+      ? buildStoicBlock(stoicEntry)
       : "";
 
     const _bSports = sportsBlock || "";

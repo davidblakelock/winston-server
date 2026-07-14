@@ -702,28 +702,27 @@ export async function incrementStoicDay(userName: string): Promise<void> {
 
 // ── Stoic Block Builder ───────────────────────────────────────────────────────
 
-export function buildStoicBlock(entry: StoicEntry, intentionQuestion: string): string {
-  const phaseName = PHASE_NAMES[entry.phase] ?? "";
-  const dayLabel = `Day ${entry.dayNumber} of 365`;
-  const phaseLabel = `Phase ${entry.phase}: ${phaseName}`;
+export function buildStoicBlock(entry: StoicEntry): string {
   const isIntroDay = entry.dayNumber <= 7;
 
-  let block = `\n\n[VERIFIED — Stoic Moment — ${dayLabel} | ${phaseLabel}]\n`;
+  let block = `\n\n[VERIFIED — Stoic Close]\n`;
   block += `Quote: "${entry.quote}"\n`;
   block += `— ${entry.author}, ${entry.source}\n`;
   block += `Theme: ${entry.theme}\n`;
 
   if (isIntroDay && entry.introContext) {
-    block += `\nINTRO CONTEXT (deliver this BEFORE the quote — one to two sentences, warm and brief):\n${entry.introContext}\n`;
+    block += `\nINTRO CONTEXT (deliver this BEFORE the quote — one to two sentences, warm and conversational):\n${entry.introContext}\n`;
   }
 
   block += `
-STOIC MOMENT DELIVERY — HOW TO CLOSE THE BRIEFING:
-1. TRANSITION naturally into this closing — do not say "here is your thought of the day" or any similar announcement.
-2. QUOTE: Deliver the quote above word-for-word, attributed naturally (e.g., "As Marcus Aurelius wrote..." or "Seneca put it simply:"). No embellishment.
-3. CONNECTION: In exactly ONE sentence, connect this quote to something specific that appeared earlier in today's briefing — a calendar event, a news item, the weather, something on the to-do list. If nothing connects naturally, skip this step.
-4. INTENTION: End with exactly this question — word-for-word, nothing else after: "${intentionQuestion}"
-FORBIDDEN for the Stoic Moment: Do not interpret or explain the quote beyond the one connection sentence. Do not add more questions. Do not reference the phase or curriculum. Do not announce it as a "Stoic moment."
+STOIC CLOSE DELIVERY INSTRUCTIONS:
+1. TRANSITION naturally into this closing — no announcement. Do not say "here is your Stoic quote" or "here is your thought for the day."
+2. If this is an intro day and INTRO CONTEXT is provided, deliver it first in one to two sentences — warm, like sharing something interesting with a friend.
+3. QUOTE: Deliver the quote word-for-word, attributed naturally. Examples: "As Marcus Aurelius wrote..." or "Seneca put it simply:" or "Epictetus said it plainly:"
+4. TRANSLATION: In exactly ONE sentence, say what the quote means in plain everyday language. No philosophy jargon. No references to ancient Rome. Just what it means for a person waking up today.
+5. INVITATION: End with one gentle open line inviting the user to open their Life screen and sit with it. Keep it natural — not a call to action, more like leaving a door open. Example: "If that lands for you this morning, your Life is a good place to let it breathe." Do not say "Have a great day" or any generic sign-off. This line is the end of the briefing.
+
+FORBIDDEN: Do not connect the quote to anything else in the briefing — no calendar events, no news stories, no weather. The connection is the user's job, not yours. Do not add questions. Do not explain the philosophy beyond the one translation sentence. Do not reference the phase or curriculum number.
 `;
 
   return block;
