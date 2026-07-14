@@ -1,6 +1,6 @@
 import cron from "node-cron";
 import { broadcast } from "../reminders/sseStore.js";
-import { sendPushToAll } from "../push/pushManager.js";
+import { sendFcmNotification } from "../push/fcmSender.js";
 import { logger } from "../lib/logger.js";
 import { getActiveUsers } from "../onboarding/onboardingManager.js";
 import {
@@ -132,15 +132,18 @@ async function checkDateReminders(): Promise<void> {
         isDateReminder: true,
       });
 
-      await sendPushToAll({
-        title: `${isBirthday ? "🎂" : "💍"} Important Date — ${companion}`,
+      await sendFcmNotification({
+        userName,
+        notificationType: 'date-reminder',
+        title: `${isBirthday ? '🎂' : '💍'} Important Date — ${companion}`,
         body: message,
-        tag: `date-${d.id}-${daysUntil}`,
-        notificationType: "date-reminder",
-        requireInteraction: daysUntil <= 3,
-        action: "send_message",
-        message: autoSendMessage,
-      }, userName).catch(() => {});
+        data: {
+          tag: `date-${d.id}-${daysUntil}`,
+          requireInteraction: String(daysUntil <= 3),
+          action: 'send_message',
+          message: autoSendMessage,
+        },
+      }).catch(() => {});
 
       await markReminderSent(d.id, daysUntil, today);
 

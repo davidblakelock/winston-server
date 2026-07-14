@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { getConnections } from "../connect/connectManager.js";
-import { sendPushToAll } from "../push/pushManager.js";
+import { sendFcmNotification } from "../push/fcmSender.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -184,17 +184,17 @@ export async function syncListItemToConnections(
     const listDisplayName = listName === "shopping" ? "shopping" : "to-do";
     const deepLink = listName === "shopping" ? "winston://lists?tab=shopping" : "winston://lists?tab=todo";
 
-    await sendPushToAll(
-      {
-        title: `${senderLabel} added to your ${listDisplayName} list`,
-        body: items.length === 1 ? items[0] : `${items[0]} + ${items.length - 1} more`,
+    await sendFcmNotification({
+      userName: connectedUserName,
+      notificationType: 'list-sync',
+      title: `${senderLabel} added to your ${listDisplayName} list`,
+      body: items.length === 1 ? items[0] : `${items[0]} + ${items.length - 1} more`,
+      data: {
         tag: `list-sync-${listName}`,
-        notificationType: "list-sync",
-        url: deepLink,
+        deepLink,
         companionMessage: `${senderLabel} just added ${items.length === 1 ? `"${items[0]}"` : `${items.length} items`} to your ${listDisplayName} list.`,
       },
-      connectedUserName
-    ).catch((err) => logger.warn({ err, connectedUserName }, "[Lists] Sync push failed"));
+    }).catch((err) => logger.warn({ err, connectedUserName }, '[Lists] Sync push failed'));
 
     logger.info({ senderUserName, connectedUserName, listName, count: items.length }, "[Lists] Synced to connection");
   }));
