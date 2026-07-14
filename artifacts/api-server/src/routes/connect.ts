@@ -11,6 +11,7 @@ import {
   getPendingInvites,
   saveConnectMessage,
   markMessageDelivered,
+  getMessages,
   getSharedListForConnection,
   getSharedListItems,
   addSharedListItem,
@@ -219,6 +220,42 @@ router.post("/connect/reminder", async (req: Request, res: Response) => {
   } catch (err) {
     req.log.error({ err }, "[Connect] Failed to send reminder");
     res.status(500).json({ error: "Failed to send reminder" });
+  }
+});
+
+// ── GET /api/connect/messages/:connectionId ───────────────────────────────────
+router.get('/connect/messages/:connectionId', async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const connectionId = parseInt(String(req.params.connectionId ?? ''), 10);
+  if (isNaN(connectionId)) {
+    res.status(400).json({ error: 'Invalid connectionId' });
+    return;
+  }
+
+  try {
+    const connections = await getConnections(userName);
+    const conn = connections.find(c => c.id === connectionId);
+    if (!conn) {
+      res.status(404).json({ error: 'Connection not found' });
+      return;
+    }
+
+    const otherUserName = conn.requester_user_name === userName
+      ? conn.recipient_user_name
+      : conn.requester_user_name;
+
+    if (!otherUserName) {
+      res.status(400).json({ error: 'Connection not yet accepted' });
+      return;
+    }
+
+    const messages = await getMessages(userName, otherUserName);
+    res.json({ messages });
+  } catch (err) {
+    req.log.error({ err }, '[Connect] Failed to get messages');
+    res.status(500).json({ error: 'Failed to get messages' });
   }
 });
 

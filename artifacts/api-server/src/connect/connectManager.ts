@@ -182,6 +182,39 @@ export async function getConnections(userName: string): Promise<WinstonConnectio
   return rows;
 }
 
+export async function getMessages(
+  userNameA: string,
+  userNameB: string,
+  limit = 50
+): Promise<Array<{
+  id: number;
+  sender_user_name: string;
+  recipient_user_name: string;
+  message_type: string;
+  message_text: string;
+  delivered: boolean;
+  created_at: string;
+}>> {
+  const { rows } = await query<{
+    id: number;
+    sender_user_name: string;
+    recipient_user_name: string;
+    message_type: string;
+    message_text: string;
+    delivered: boolean;
+    created_at: string;
+  }>(
+    `SELECT id, sender_user_name, recipient_user_name, message_type, message_text, delivered, created_at
+     FROM connect_messages
+     WHERE (sender_user_name = $1 AND recipient_user_name = $2)
+        OR (sender_user_name = $2 AND recipient_user_name = $1)
+     ORDER BY created_at DESC
+     LIMIT $3`,
+    [userNameA, userNameB, limit]
+  );
+  return rows;
+}
+
 export async function getPendingInvites(userName: string): Promise<WinstonConnection[]> {
   const { rows } = await query<WinstonConnection>(
     `SELECT * FROM winston_connections
