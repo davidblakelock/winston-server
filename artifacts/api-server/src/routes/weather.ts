@@ -3,7 +3,6 @@ import { authenticate } from "../auth/middleware.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
 import { getPeople, type KeyPerson } from "../people/peopleManager.js";
 import { getCachedWeather } from "../weather/weatherCache.js";
-import { analyzePressureDelta } from "../weather/pressureScheduler.js";
 
 const router = Router();
 
@@ -192,25 +191,19 @@ router.get("/weather/morning", async (req: Request, res: Response) => {
     );
     const validPeople = geocodedPeople.filter(Boolean) as Array<{ name: string; relationship: string; city: string; lat: number; lon: number }>;
 
-    // Fetch weather, pollen, secondary weather, and pressure trend in parallel
-    const [primaryWeather, pollenData, pressureDelta, ...secondaryWeathers] = await Promise.all([
+    // Fetch weather, pollen, and secondary weather in parallel
+    const [primaryWeather, pollenData, ...secondaryWeathers] = await Promise.all([
       getCachedWeather(primaryCity, primaryLat, primaryLon).catch(() => null),
       fetchPollen(primaryLat, primaryLon),
-      analyzePressureDelta(6).catch(() => null),
       ...validPeople.map((p) => getCachedWeather(p.city, p.lat, p.lon).catch(() => null)),
     ]);
 
-    // Determine pressure trend from 6-hour delta
-    let pressureTrend: "rising" | "falling" | "steady" = "steady";
-    let pressureInHg: number | null = null;
-    if (pressureDelta) {
-      pressureInHg = parseFloat(pressureDelta.latestReading.pressureInHg.toFixed(2));
-      if (pressureDelta.deltaInHg >= 0.06) pressureTrend = "rising";
-      else if (pressureDelta.deltaInHg <= -0.06) pressureTrend = "falling";
-    } else if (primaryWeather?.pressureHpa) {
-      // Fallback: convert from CachedWeather if no DB reading
-      pressureInHg = parseFloat((primaryWeather.pressureHpa * 0.02953).toFixed(2));
-    }
+    // No trend history tracked anymore (barometric pressure scheduler removed) —
+    // current reading only, converted from the cached weather data if available.
+    const pressureTrend: "rising" | "falling" | "steady" = "steady";
+    const pressureInHg: number | null = primaryWeather?.pressureHpa
+      ? parseFloat((primaryWeather.pressureHpa * 0.02953).toFixed(2))
+      : null;
 
     const secondary = validPeople.map((p, i) => {
       const w = secondaryWeathers[i];

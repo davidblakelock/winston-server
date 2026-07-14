@@ -33,7 +33,6 @@ import { addProfileItem } from "./profile/profileManager";
 import { syncPeopleDatesToImportantDates } from "./people/peopleManager.js";
 import { ensureContactsTable } from "./google/contacts";
 import { ensureJournalInsightsTable, startJournalPatternScheduler } from "./journal/journalPatternAnalyzer";
-import { ensurePressureTable, startPressureScheduler } from "./weather/pressureScheduler";
 import { ensureMoodTable } from "./mood/moodManager";
 import { ensureFollowupsTable } from "./followups/followupManager";
 import { ensureMemoryArchiveTable } from "./memory/memoryArchiveManager";
@@ -318,13 +317,6 @@ app.listen(port, async (err) => {
   }
 
   try {
-    await ensurePressureTable();
-    logger.info("[startup] pressure_readings table ready");
-  } catch (e) {
-    logger.warn({ err: e }, "Pressure readings table initialization warning");
-  }
-
-  try {
     await ensureConnectTables();
   } catch (e) {
     logger.warn({ err: e }, "Winston Connect table initialization warning");
@@ -488,7 +480,6 @@ app.listen(port, async (err) => {
     startDallasProactiveScheduler();
     startVenueMonitorScheduler();
     startJournalPatternScheduler();
-    startPressureScheduler();
     startTodoReminderScheduler();
     startBackgroundEmailScanner();
     // ── Local content scanner — finds personalized events for user's current city ──
