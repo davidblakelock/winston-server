@@ -1,5 +1,8 @@
+import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
+
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -726,4 +729,24 @@ FORBIDDEN: Do not connect the quote to anything else in the briefing — no cale
 `;
 
   return block;
+}
+
+export async function isStoicQuoteAccessible(quote: string): Promise<boolean> {
+  try {
+    const response = await anthropic.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 5,
+      messages: [{
+        role: "user",
+        content: `Is this quote immediately clear and uplifting to someone who just woke up, with no historical knowledge required? Answer YES or NO only.\n\nQuote: "${quote}"`,
+      }],
+    });
+    const text = response.content
+      .filter((b) => b.type === "text")
+      .map((b) => (b as { type: "text"; text: string }).text)
+      .join("").trim().toUpperCase();
+    return text.startsWith("YES");
+  } catch {
+    return true; // default to accessible on error — never skip the Stoic Close
+  }
 }

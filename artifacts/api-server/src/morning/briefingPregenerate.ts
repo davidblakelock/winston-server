@@ -17,7 +17,7 @@ import { buildCalendarEmailCorrelations, formatCorrelationNote, type CalendarEma
 import { getOrdersForBriefing } from "../orders/ordersManager.js";
 import { getCachedWeather } from "../weather/weatherCache.js";
 import { query } from "../db.js";
-import { getUserSettings, getStoicForUser, incrementStoicDay, buildStoicBlock, type UserSettings } from "../stoic/stoicManager.js";
+import { getUserSettings, getStoicForUser, incrementStoicDay, buildStoicBlock, isStoicQuoteAccessible, getAlternativeStoicQuote, type UserSettings } from "../stoic/stoicManager.js";
 import { getUserLocationContext } from "../lib/userTimezone.js";
 
 // ── Smart calendar block with integrated departure times ──────────────────────
@@ -356,7 +356,7 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
     ];
     const intentionQuestion = INTENTION_QUESTIONS[dayOfYear % 3]!;
 
-    const [recentMemories, allProfileItems, userProfile, keyPeople, seenHeadlines, briefingPrefs, userSettings, stoicEntry] = await Promise.all([
+    const [recentMemories, allProfileItems, userProfile, keyPeople, seenHeadlines, briefingPrefs, userSettings] = await Promise.all([
       getRecentMemories(7).catch(() => []),
       getProfileItems(undefined, userName).catch(() => []),
       getProfile(userName).catch(() => null),
@@ -364,7 +364,6 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
       getSeenHeadlines(userName, 3).catch(() => new Set<string>()),
       getBriefingPreferences(userName).catch(() => []),
       getUserSettings(userName).catch(() => null as UserSettings | null),
-      getStoicForUser(userName).catch(() => null),
     ]);
     const memoryBlock = formatMemoriesForContext(recentMemories);
     const dynamicProfileBlock = formatProfileForContext(allProfileItems);
@@ -458,9 +457,30 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
     // ── Apply briefing toggle preferences ─────────────────────────────────────
     const _bWeather = userSettings?.briefingWeather !== false ? weatherContextBlock : "";
     const _bNews    = userSettings?.briefingNews    !== false ? dedupedNewsBlock : "";
-    const stoicBlock = userSettings?.briefingStoic !== false && stoicEntry
-      ? buildStoicBlock(stoicEntry)
-      : "";
+    let stoicEntry = userSettings?.briefingStoic !== false
+      ? await getStoicForUser(userName).catch(() => null)
+      : null;
+
+    // If the quote is dense or inaccessible, swap in an alternative
+    if (stoicEntry) {
+      const accessible = await isStoicQuoteAccessible(stoicEntry.quote);
+      if (!accessible) {
+        const alt = await getAlternativeStoicQuote().catch(() => null);
+        if (alt) {
+          stoicEntry = {
+            dayNumber: stoicEntry.dayNumber,
+            quote: alt.quote,
+            author: alt.author,
+            source: alt.source,
+            theme: alt.theme,
+            phase: stoicEntry.phase,
+          };
+          logger.info({ theme: alt.theme, author: alt.author }, "[Stoic] Dense quote detected — using alternative");
+        }
+      }
+    }
+
+    const stoicBlock = stoicEntry ? buildStoicBlock(stoicEntry) : "";
 
     const _bSports = sportsBlock || "";
 
