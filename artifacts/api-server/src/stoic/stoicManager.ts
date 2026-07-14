@@ -424,6 +424,98 @@ export const STOIC_CURRICULUM: StoicEntry[] = [
   { dayNumber: 365, quote: "We have lived. We have done our work. We have loved. We will be remembered. We will return to the whole from which we came.", author: "Marcus Aurelius", source: "Meditations, 9.3", theme: "The Full Circle", phase: 6 },
 ];
 
+// ── Alternative Morning Quote Track ────────────────────────────────────────────
+
+const ALTERNATIVE_QUOTES = [
+  { quote: "The present moment always will have been.", author: "Marcus Aurelius", source: "Meditations", theme: "Presence" },
+  { quote: "You have power over your mind, not outside events. Realize this, and you will find strength.", author: "Marcus Aurelius", source: "Meditations", theme: "Inner Strength" },
+  { quote: "The happiness of your life depends upon the quality of your thoughts.", author: "Marcus Aurelius", source: "Meditations", theme: "Mindset" },
+  { quote: "Very little is needed to make a happy life; it is all within yourself, in your way of thinking.", author: "Marcus Aurelius", source: "Meditations", theme: "Simplicity" },
+  { quote: "Waste no more time arguing about what a good man should be. Be one.", author: "Marcus Aurelius", source: "Meditations", theme: "Action" },
+  { quote: "When you arise in the morning, think of what a precious privilege it is to be alive — to breathe, to think, to enjoy, to love.", author: "Marcus Aurelius", source: "Meditations", theme: "Gratitude" },
+  { quote: "He who is not a good servant will not be a good master.", author: "Plato", source: "Laws", theme: "Leadership" },
+  { quote: "We are what we repeatedly do. Excellence, then, is not an act but a habit.", author: "Aristotle", source: "Nicomachean Ethics", theme: "Habit" },
+  { quote: "Knowing yourself is the beginning of all wisdom.", author: "Aristotle", source: "Nicomachean Ethics", theme: "Self-Knowledge" },
+  { quote: "It is not enough to do good; one must do it the right way.", author: "John Morley", source: "On Compromise", theme: "Integrity" },
+  { quote: "In the middle of difficulty lies opportunity.", author: "Albert Einstein", source: "Letter, 1945", theme: "Resilience" },
+  { quote: "Do what you can, with what you have, where you are.", author: "Theodore Roosevelt", source: "Autobiography", theme: "Action" },
+  { quote: "It does not matter how slowly you go as long as you do not stop.", author: "Confucius", source: "Analects", theme: "Persistence" },
+  { quote: "Our greatest glory is not in never falling, but in rising every time we fall.", author: "Confucius", source: "Analects", theme: "Resilience" },
+  { quote: "Before you embark on a journey of revenge, dig two graves.", author: "Confucius", source: "Analects", theme: "Letting Go" },
+  { quote: "The man who moves a mountain begins by carrying away small stones.", author: "Confucius", source: "Analects", theme: "Persistence" },
+  { quote: "Life is really simple, but we insist on making it complicated.", author: "Confucius", source: "Analects", theme: "Simplicity" },
+  { quote: "Not all those who wander are lost.", author: "J.R.R. Tolkien", source: "The Fellowship of the Ring", theme: "Purpose" },
+  { quote: "The secret of getting ahead is getting started.", author: "Mark Twain", source: "Notebook", theme: "Action" },
+  { quote: "The two most important days in your life are the day you are born and the day you find out why.", author: "Mark Twain", source: "Notebook", theme: "Purpose" },
+  { quote: "Courage is not the absence of fear but the judgment that something else is more important than fear.", author: "Ambrose Redmoon", source: "No Peaceful Warriors", theme: "Courage" },
+  { quote: "Start where you are. Use what you have. Do what you can.", author: "Arthur Ashe", source: "Speech, 1992", theme: "Action" },
+  { quote: "You miss 100% of the shots you don't take.", author: "Wayne Gretzky", source: "Interview", theme: "Courage" },
+  { quote: "Whether you think you can or think you can't, you're right.", author: "Henry Ford", source: "Interview", theme: "Mindset" },
+  { quote: "The only way to do great work is to love what you do.", author: "Steve Jobs", source: "Stanford Commencement, 2005", theme: "Purpose" },
+  { quote: "In three words I can sum up everything I've learned about life: it goes on.", author: "Robert Frost", source: "Interview", theme: "Resilience" },
+  { quote: "To be yourself in a world that is constantly trying to make you something else is the greatest accomplishment.", author: "Ralph Waldo Emerson", source: "Self-Reliance", theme: "Authenticity" },
+  { quote: "What lies behind us and what lies before us are tiny matters compared to what lies within us.", author: "Ralph Waldo Emerson", source: "Essays", theme: "Inner Strength" },
+  { quote: "The only person you are destined to become is the person you decide to be.", author: "Ralph Waldo Emerson", source: "Essays", theme: "Self-Determination" },
+  { quote: "Nothing is particularly hard if you divide it into small jobs.", author: "Henry Ford", source: "My Life and Work", theme: "Persistence" },
+  { quote: "A year from now you may wish you had started today.", author: "Karen Lamb", source: "Essays", theme: "Action" },
+  { quote: "The mind is everything. What you think you become.", author: "Buddha", source: "Dhammapada", theme: "Mindset" },
+  { quote: "Three things cannot be long hidden: the sun, the moon, and the truth.", author: "Buddha", source: "Dhammapada", theme: "Truth" },
+  { quote: "Peace comes from within. Do not seek it without.", author: "Buddha", source: "Dhammapada", theme: "Inner Peace" },
+  { quote: "Do not dwell in the past, do not dream of the future, concentrate the mind on the present moment.", author: "Buddha", source: "Dhammapada", theme: "Presence" },
+  { quote: "Health is the greatest gift, contentment the greatest wealth, faithfulness the best relationship.", author: "Buddha", source: "Dhammapada", theme: "Gratitude" },
+  { quote: "The journey of a thousand miles begins with one step.", author: "Lao Tzu", source: "Tao Te Ching", theme: "Action" },
+  { quote: "Nature does not hurry, yet everything is accomplished.", author: "Lao Tzu", source: "Tao Te Ching", theme: "Patience" },
+  { quote: "Simplicity is the ultimate sophistication.", author: "Leonardo da Vinci", source: "Notebooks", theme: "Simplicity" },
+  { quote: "You cannot step into the same river twice.", author: "Heraclitus", source: "Fragments", theme: "Change" },
+  { quote: "Character is destiny.", author: "Heraclitus", source: "Fragments", theme: "Character" },
+  { quote: "Big things are accomplished only through the perfection of minor details.", author: "John Wooden", source: "They Call Me Coach", theme: "Excellence" },
+  { quote: "It's what you learn after you know it all that counts.", author: "John Wooden", source: "They Call Me Coach", theme: "Humility" },
+  { quote: "Make each day your masterpiece.", author: "John Wooden", source: "They Call Me Coach", theme: "Presence" },
+  { quote: "Talent is God-given. Be humble. Fame is man-given. Be grateful. Conceit is self-given. Be careful.", author: "John Wooden", source: "They Call Me Coach", theme: "Humility" },
+  { quote: "Things which matter most must never be at the mercy of things which matter least.", author: "Johann Wolfgang von Goethe", source: "Faust", theme: "Priorities" },
+  { quote: "Knowing is not enough; we must apply. Willing is not enough; we must do.", author: "Johann Wolfgang von Goethe", source: "Wilhelm Meister", theme: "Action" },
+  { quote: "We know what we are, but know not what we may be.", author: "William Shakespeare", source: "Hamlet", theme: "Potential" },
+  { quote: "This above all: to thine own self be true.", author: "William Shakespeare", source: "Hamlet", theme: "Authenticity" },
+  { quote: "How sharper than a serpent's tooth it is to have a thankless child.", author: "William Shakespeare", source: "King Lear", theme: "Gratitude" },
+];
+
+async function seedStoicAlternatives(): Promise<void> {
+  await query(`CREATE UNIQUE INDEX IF NOT EXISTS stoic_alternatives_quote_uidx ON stoic_alternatives (quote)`);
+
+  const values = ALTERNATIVE_QUOTES.map((_, i) => {
+    const offset = i * 4;
+    return `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4})`;
+  }).join(", ");
+  const params = ALTERNATIVE_QUOTES.flatMap((q) => [q.quote, q.author, q.source, q.theme]);
+
+  await query(
+    `INSERT INTO stoic_alternatives (quote, author, source, theme)
+     VALUES ${values}
+     ON CONFLICT (quote) DO NOTHING`,
+    params
+  );
+}
+
+export async function getAlternativeStoicQuote(): Promise<{
+  quote: string;
+  author: string;
+  source: string;
+  theme: string;
+} | null> {
+  const { rows } = await query<{
+    quote: string;
+    author: string;
+    source: string;
+    theme: string;
+  }>(
+    `SELECT quote, author, source, theme
+     FROM stoic_alternatives
+     ORDER BY RANDOM()
+     LIMIT 1`
+  );
+  return rows[0] ?? null;
+}
+
 // ── DB Setup ──────────────────────────────────────────────────────────────────
 
 export async function ensureStoicTables(): Promise<void> {
@@ -439,6 +531,18 @@ export async function ensureStoicTables(): Promise<void> {
       intro_context TEXT
     )
   `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS stoic_alternatives (
+      id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      quote text NOT NULL,
+      author text NOT NULL,
+      source text NOT NULL,
+      theme text NOT NULL,
+      created_at timestamptz DEFAULT now()
+    )
+  `);
+  await seedStoicAlternatives();
 
   await query(`
     CREATE TABLE IF NOT EXISTS user_settings (
