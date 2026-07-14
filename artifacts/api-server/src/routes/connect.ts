@@ -655,16 +655,19 @@ router.post("/connect/groups/:id/find-time", async (req: Request, res: Response)
     return;
   }
 
-  const { startDate, endDate, durationMinutes = 60 } = req.body as {
+  const { startDate, endDate, durationMinutes = 60, timeZone } = req.body as {
     startDate?: string;
     endDate?: string;
     durationMinutes?: number;
+    timeZone?: string;
   };
 
   if (!startDate || !endDate) {
     res.status(400).json({ error: "startDate and endDate (YYYY-MM-DD) are required" });
     return;
   }
+
+  const tz = (typeof timeZone === 'string' && timeZone.trim()) ? timeZone.trim() : 'UTC';
 
   try {
     const group = await getGroupWithMemberDetails(groupId);
@@ -729,7 +732,7 @@ router.post("/connect/groups/:id/find-time", async (req: Request, res: Response)
       );
     }
 
-    // Generate candidate slots (9am–6pm CT, every 30 min) across the date range
+    // Generate candidate slots (9am–6pm in the requested timezone, every 30 min) across the date range
     const dur = (durationMinutes ?? 60) * 60 * 1000;
     const participatingMembers = [...memberBusyMap.keys()];
     const allSlots: Array<{ start: string; end: string; label: string }> = [];
@@ -744,20 +747,19 @@ router.post("/connect/groups/:id/find-time", async (req: Request, res: Response)
       cursor.setUTCDate(cursor.getUTCDate() + 1)
     ) {
       // Skip Sundays (0) — keep Mon–Sat; adjust to taste
-      const userTzConn = userProfile?.timezone ?? "UTC";
-      const ctDate = new Date(cursor.toLocaleString("en-US", { timeZone: userTzConn }));
+      const ctDate = new Date(cursor.toLocaleString("en-US", { timeZone: tz }));
       if (ctDate.getDay() === 0) continue;
 
-      // CT midnight of this day
-      const ctDateStr = cursor.toLocaleDateString("en-CA", { timeZone: (userProfile?.timezone ?? "UTC") });
-      const ctParts = new Intl.DateTimeFormat("en-US", { timeZone: userTzConn, timeZoneName: "shortOffset" })
+      // Local midnight of this day, in the requested timezone
+      const ctDateStr = cursor.toLocaleDateString("en-CA", { timeZone: tz });
+      const ctParts = new Intl.DateTimeFormat("en-US", { timeZone: tz, timeZoneName: "shortOffset" })
         .formatToParts(cursor);
       const offsetStr = ctParts.find((p) => p.type === "timeZoneName")?.value ?? "GMT-5";
       const offsetHours = parseInt(offsetStr.replace("GMT", "") || "-5", 10);
       const utcHour = String(-offsetHours).padStart(2, "0");
       const ctMidnight = new Date(`${ctDateStr}T${utcHour}:00:00.000Z`);
 
-      // 9am CT = ctMidnight + 9h, 6pm CT = ctMidnight + 18h
+      // 9am = ctMidnight + 9h, 6pm = ctMidnight + 18h (in the requested timezone)
       const dayStart = ctMidnight.getTime() + 9 * 3600000;
       const dayEnd = ctMidnight.getTime() + 18 * 3600000;
 
@@ -780,7 +782,7 @@ router.post("/connect/groups/:id/find-time", async (req: Request, res: Response)
           const startDt = new Date(slotStart);
           const endDt = new Date(slotEnd);
           const label = startDt.toLocaleString("en-US", {
-            timeZone: (userProfile?.timezone ?? "UTC"),
+            timeZone: tz,
             weekday: "long",
             month: "short",
             day: "numeric",
