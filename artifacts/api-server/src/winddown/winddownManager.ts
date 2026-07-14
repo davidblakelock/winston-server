@@ -29,8 +29,8 @@ export async function ensureWinddownTables(): Promise<void> {
     ALTER TABLE winddown_settings ADD COLUMN IF NOT EXISTS story_day_of_week varchar(10) NOT NULL DEFAULT 'sunday'
   `).catch(() => {});
   await query(`
-    INSERT INTO winddown_settings (id, enabled, scheduled_time, story_day_of_week)
-    VALUES (1, true, '21:00', 'sunday')
+    INSERT INTO winddown_settings (enabled, scheduled_time, story_day_of_week)
+    VALUES (true, '21:00', 'sunday')
     ON CONFLICT (id) DO NOTHING
     RETURNING id
   `);
