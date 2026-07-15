@@ -581,6 +581,7 @@ At the end of EVERY response append exactly one action tag on a new line. No exc
 [ACTION:email_action|action=markRead|gmailId=<id>] — mark an email as read/done
 [ACTION:email_compose|to=<contact name>] — when user wants to compose a new email to someone
 [ACTION:make_reservation|restaurant=<name>] — reservation
+[ACTION:morning_rundown] — when user explicitly asks for their morning run down, morning briefing, or daily briefing
 [ACTION:none] — weather, sports, news, markets, general questions
 
 EMAIL TRIAGE:

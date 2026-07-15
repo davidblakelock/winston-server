@@ -80,7 +80,8 @@ export type ActionType =
   | "email_revise"
   | "email_cancel"
   | "email_compose"
-  | "sms_send";
+  | "sms_send"
+  | "morning_rundown";
 
 export interface ClaudeAction {
   type: ActionType;
@@ -599,6 +600,9 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
         break;
       case "make_reservation":
         action = { type: "make_reservation", restaurantName: parts.restaurant ?? "" };
+        break;
+      case "morning_rundown":
+        action = { type: "morning_rundown" };
         break;
     }
   }
