@@ -2,7 +2,7 @@ import { getProfile } from "../onboarding/onboardingManager.js";
 import { getUserLocationContext } from "../lib/userTimezone.js";
 
 export interface GameResult {
-  status: "final" | "in_progress" | "scheduled" | "off_season";
+  status: "final" | "in_progress" | "scheduled" | "off_season" | "none";
   teamAbbr: string;
   teamName: string;
   teamScore?: number;
@@ -255,6 +255,12 @@ async function fetchTeamScore(def: TeamDef, tz = "UTC"): Promise<GameResult> {
   const last = completed[completed.length - 1];
   if (!last) return { status: "off_season", teamAbbr: abbr, teamName: fullName };
 
+  const lastGameDate = last.date.substring(0, 10);
+  if (!isYesterday(lastGameDate, tz)) {
+    // Most recent completed game wasn't yesterday — nothing worth reporting today.
+    return { status: "none", teamAbbr: abbr, teamName: fullName };
+  }
+
   const result = parseGameResult(last, abbr, fullName, tz);
   if (upcoming) {
     const upNext = parseGameResult(upcoming, abbr, fullName, tz);
@@ -282,6 +288,7 @@ export async function fetchCowboysScore(): Promise<GameResult> {
 
 function describeResult(g: GameResult, tz: string): string {
   const name = g.teamName;
+  if (g.status === "none") return "";
   if (g.status === "in_progress") {
     const loc = g.isHome ? "hosting" : "at";
     return `${name} are currently ${loc} the ${g.opponentAbbr} — score ${g.teamScore}–${g.opponentScore}${g.inningOrQuarter ? ` (${g.inningOrQuarter})` : ""}.`;
@@ -376,15 +383,20 @@ export function formatSportsForPrompt(scores: SportsScores): string {
   const cowboysLine = describeResult(scores.cowboys, tz);
 
   const baseLines = [
-    `• ${scores.rangers.teamName} (${scores.rangers.teamAbbr === "TEX" ? "MLB" : ""}): ${rangersLine}`,
-    `• ${scores.cowboys.teamName} (${scores.cowboys.teamAbbr === "DAL" ? "NFL" : ""}): ${cowboysLine}`,
-  ];
+    scores.rangers.status !== "none" ? `• ${scores.rangers.teamName} (${scores.rangers.teamAbbr === "TEX" ? "MLB" : ""}): ${rangersLine}` : null,
+    scores.cowboys.status !== "none" ? `• ${scores.cowboys.teamName} (${scores.cowboys.teamAbbr === "DAL" ? "NFL" : ""}): ${cowboysLine}` : null,
+  ].filter((line): line is string => line !== null);
 
-  const extraLines = (scores.extra ?? []).map((g) => `• ${g.teamName}: ${describeResult(g, tz)}`);
+  const extraLines = (scores.extra ?? [])
+    .filter((g) => g.status !== "none")
+    .map((g) => `• ${g.teamName}: ${describeResult(g, tz)}`);
+
+  const allLines = [...baseLines, ...extraLines];
+  if (allLines.length === 0) return "";
 
   return (
     `\n\n[VERIFIED — Sports API — Live Scores, fetched just now]\n` +
-    [...baseLines, ...extraLines].join("\n") +
+    allLines.join("\n") +
     `\n\nThis is VERIFIED data. Use ONLY these exact scores. Do NOT add, invent, or recall any other scores. ` +
     `Report exactly what the data says — final score and result, or the exact start time if scheduled. ` +
     `Mention them naturally if the user's briefing or question calls for it.`
