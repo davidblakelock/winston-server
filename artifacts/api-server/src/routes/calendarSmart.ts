@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import express from "express";
 import { authenticate } from "../auth/middleware.js";
+import { getProfile } from "../onboarding/onboardingManager.js";
 import {
   scanEmailsForMeetings,
   acceptMeetingRequest,
@@ -80,11 +81,11 @@ async function getSettings(userName: string): Promise<CalendarSmartSettings> {
   };
 }
 
-function isInBlockedTime(blocked_times: BlockedTime[], date: Date): boolean {
+function isInBlockedTime(blocked_times: BlockedTime[], date: Date, timezone: string): boolean {
   const days = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
   const dayName = days[date.getDay()];
   const hhMM = date.toLocaleTimeString("en-US", {
-    timeZone: userProfile?.timezone ?? "UTC",
+    timeZone: timezone,
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
@@ -207,10 +208,12 @@ router.post("/calendar/smart/auto-process", express.json({ limit: "256kb" }), as
   const since = sinceParam ? new Date(sinceParam) : undefined;
 
   try {
-    const [meetings, settings] = await Promise.all([
+    const [meetings, settings, profile] = await Promise.all([
       scanEmailsForMeetings(userName, since),
       getSettings(userName),
+      getProfile(userName),
     ]);
+    const timezone = profile?.timezone ?? "UTC";
 
     if (settings.default_response === "ask") {
       res.json({ processed: 0, message: "Auto-processing is disabled — default_response is 'ask'", actions: [] });
@@ -245,7 +248,7 @@ router.post("/calendar/smart/auto-process", express.json({ limit: "256kb" }), as
       // Check blocked times
       if (m.proposedDate && m.proposedStartTime) {
         const proposedDt = new Date(`${m.proposedDate}T${m.proposedStartTime}:00-06:00`);
-        if (isInBlockedTime(settings.blocked_times, proposedDt)) {
+        if (isInBlockedTime(settings.blocked_times, proposedDt, timezone)) {
           actions.push({ emailId: m.emailId, organizer: m.organizer, subject: m.subject, action: "skipped_blocked" });
           continue;
         }

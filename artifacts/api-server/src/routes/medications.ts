@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import express from "express";
 import { authenticate } from "../auth/middleware.js";
+import { getProfile } from "../onboarding/onboardingManager.js";
 import { query } from "../db.js";
 import {
   getMedications,
@@ -373,6 +374,7 @@ router.post("/medications/snooze-reminder", express.json({ limit: "1mb" }), asyn
       ? Math.max(1, Math.min(rawSnooze, 480))
       : 60;
     const fireAt = new Date(Date.now() + snoozeMinutes * 60 * 1000);
+    const profile = await getProfile(userName).catch(() => null);
     // Pass pushCategoryId so the re-fired reminder retains the medication action buttons
     // ("Taken ✓" and "Remind in 30 min") instead of firing as a generic reminder-action.
     // actionTaken / actionSnooze must be in pushData so the scheduler spreads them into
@@ -382,7 +384,7 @@ router.post("/medications/snooze-reminder", express.json({ limit: "1mb" }), asyn
       userName,
       reminderText: "Have you taken your medications?",
       fireAt,
-      timezone: userProfile?.timezone ?? "UTC",
+      timezone: profile?.timezone ?? "UTC",
       pushCategoryId: "medication-action",
       pushData: {
         notificationType: "medication",

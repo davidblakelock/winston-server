@@ -84,8 +84,7 @@ router.get("/auth/callback", async (req: Request, res: Response) => {
     const userInfo = await oauth2.userinfo.get();
 
     const email = (userInfo.data.email ?? "").trim().toLowerCase();
-    // Prefer `sub` (OpenID Connect) then fall back to `id` (v2 field)
-    const googleId = (userInfo.data.sub ?? userInfo.data.id ?? "").trim();
+    const googleId = (userInfo.data.id ?? "").trim();
     const fullName = (userInfo.data.name ?? email.split("@")[0]).trim();
     const picture = (userInfo.data.picture ?? "").trim() || undefined;
 
@@ -95,7 +94,6 @@ router.get("/auth/callback", async (req: Request, res: Response) => {
         googleId: googleId || "MISSING",
         googleIdLength: googleId.length,
         fullName,
-        subPresent: !!userInfo.data.sub,
         idPresent: !!userInfo.data.id,
         emailVerified: userInfo.data.verified_email,
       },
@@ -900,7 +898,7 @@ router.post("/auth/apple/callback", express.urlencoded({ extended: true }), asyn
     user?: string;   // JSON string — only on first sign-in
   };
 
-  if (error || (!code && !id_token)) {
+  if (error || !id_token) {
     res.redirect(`${appUrl}/?auth=error`);
     return;
   }

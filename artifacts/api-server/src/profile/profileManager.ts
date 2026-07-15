@@ -310,6 +310,7 @@ export function formatProfileForContext(items: ProfileItem[], userName = "the us
     restaurants: "Favorite Restaurants",
     people: "People",
     interests: "Interests",
+    pets: "Pets",
     other: "Other",
   };
 
@@ -402,6 +403,7 @@ function getCategoryLabel(category: ProfileCategory): string {
     restaurants: "Restaurants",
     people: "People",
     interests: "Interests",
+    pets: "Pets",
     other: "Other",
   };
   return labels[category] ?? category;
