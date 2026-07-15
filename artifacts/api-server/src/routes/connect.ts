@@ -266,7 +266,7 @@ router.get("/connect/shared-list/:connectionId", async (req: Request, res: Respo
   const userName = await authenticate(req, res);
   if (!userName) return;
 
-  const connectionId = parseInt(req.params.connectionId ?? "", 10);
+  const connectionId = parseInt(String(req.params.connectionId ?? ""), 10);
   if (isNaN(connectionId)) {
     res.status(400).json({ error: "Invalid connectionId" });
     return;
@@ -292,7 +292,7 @@ router.post("/connect/shared-list/:connectionId/items", async (req: Request, res
   const userName = await authenticate(req, res);
   if (!userName) return;
 
-  const connectionId = parseInt(req.params.connectionId ?? "", 10);
+  const connectionId = parseInt(String(req.params.connectionId ?? ""), 10);
   const { text } = req.body as { text?: string };
 
   if (isNaN(connectionId) || !text) {
@@ -320,8 +320,8 @@ router.patch("/connect/shared-list/:connectionId/items/:itemId", async (req: Req
   const userName = await authenticate(req, res);
   if (!userName) return;
 
-  const connectionId = parseInt(req.params.connectionId ?? "", 10);
-  const itemId = parseInt(req.params.itemId ?? "", 10);
+  const connectionId = parseInt(String(req.params.connectionId ?? ""), 10);
+  const itemId = parseInt(String(req.params.itemId ?? ""), 10);
 
   if (isNaN(connectionId) || isNaN(itemId)) {
     res.status(400).json({ error: "Invalid IDs" });
@@ -352,8 +352,8 @@ router.delete("/connect/shared-list/:connectionId/items/:itemId", async (req: Re
   const userName = await authenticate(req, res);
   if (!userName) return;
 
-  const connectionId = parseInt(req.params.connectionId ?? "", 10);
-  const itemId = parseInt(req.params.itemId ?? "", 10);
+  const connectionId = parseInt(String(req.params.connectionId ?? ""), 10);
+  const itemId = parseInt(String(req.params.itemId ?? ""), 10);
 
   if (isNaN(connectionId) || isNaN(itemId)) {
     res.status(400).json({ error: "Invalid IDs" });
@@ -420,7 +420,7 @@ router.get("/connect/groups/:id", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
 
-  const groupId = parseInt(req.params.id ?? "", 10);
+  const groupId = parseInt(String(req.params.id ?? ""), 10);
   if (isNaN(groupId)) {
     res.status(400).json({ error: "Invalid group id" });
     return;
@@ -450,7 +450,7 @@ router.post("/connect/groups/:id/add-member", async (req: Request, res: Response
   const currentUser = await authenticate(req, res);
   if (!currentUser) return;
 
-  const groupId = parseInt(req.params.id ?? "", 10);
+  const groupId = parseInt(String(req.params.id ?? ""), 10);
   if (isNaN(groupId)) {
     res.status(400).json({ error: "Invalid group id" });
     return;
@@ -483,7 +483,7 @@ router.delete("/connect/groups/:id/remove-member", async (req: Request, res: Res
   const currentUser = await authenticate(req, res);
   if (!currentUser) return;
 
-  const groupId = parseInt(req.params.id ?? "", 10);
+  const groupId = parseInt(String(req.params.id ?? ""), 10);
   if (isNaN(groupId)) {
     res.status(400).json({ error: "Invalid group id" });
     return;
@@ -510,7 +510,7 @@ router.delete("/connect/groups/:id", async (req: Request, res: Response) => {
   const currentUser = await authenticate(req, res);
   if (!currentUser) return;
 
-  const groupId = parseInt(req.params.id ?? "", 10);
+  const groupId = parseInt(String(req.params.id ?? ""), 10);
   if (isNaN(groupId)) {
     res.status(400).json({ error: "Invalid group id" });
     return;
@@ -536,7 +536,7 @@ router.put("/connect/groups/:id/rename", async (req: Request, res: Response) => 
   const currentUser = await authenticate(req, res);
   if (!currentUser) return;
 
-  const groupId = parseInt(req.params.id ?? "", 10);
+  const groupId = parseInt(String(req.params.id ?? ""), 10);
   if (isNaN(groupId)) {
     res.status(400).json({ error: "Invalid group id" });
     return;
@@ -568,7 +568,7 @@ router.post("/connect/groups/:id/message", async (req: Request, res: Response) =
   const userName = await authenticate(req, res);
   if (!userName) return;
 
-  const groupId = parseInt(req.params.id ?? "", 10);
+  const groupId = parseInt(String(req.params.id ?? ""), 10);
   if (isNaN(groupId)) {
     res.status(400).json({ error: "Invalid group id" });
     return;
@@ -627,7 +627,7 @@ router.post("/connect/groups/:id/reminder", async (req: Request, res: Response) 
   const userName = await authenticate(req, res);
   if (!userName) return;
 
-  const groupId = parseInt(req.params.id ?? "", 10);
+  const groupId = parseInt(String(req.params.id ?? ""), 10);
   if (isNaN(groupId)) {
     res.status(400).json({ error: "Invalid group id" });
     return;
@@ -687,7 +687,7 @@ router.post("/connect/groups/:id/find-time", async (req: Request, res: Response)
   const userName = await authenticate(req, res);
   if (!userName) return;
 
-  const groupId = parseInt(req.params.id ?? "", 10);
+  const groupId = parseInt(String(req.params.id ?? ""), 10);
   if (isNaN(groupId)) {
     res.status(400).json({ error: "Invalid group id" });
     return;
@@ -863,7 +863,7 @@ router.post("/connect/groups/:id/propose-time", async (req: Request, res: Respon
   const userName = await authenticate(req, res);
   if (!userName) return;
 
-  const groupId = parseInt(req.params.id ?? "", 10);
+  const groupId = parseInt(String(req.params.id ?? ""), 10);
   if (isNaN(groupId)) {
     res.status(400).json({ error: "Invalid group id" });
     return;
@@ -941,7 +941,7 @@ router.post("/connect/groups/:id/confirm-time", async (req: Request, res: Respon
   const userName = await authenticate(req, res);
   if (!userName) return;
 
-  const groupId = parseInt(req.params.id ?? "", 10);
+  const groupId = parseInt(String(req.params.id ?? ""), 10);
   if (isNaN(groupId)) {
     res.status(400).json({ error: "Invalid group id" });
     return;
@@ -974,6 +974,9 @@ router.post("/connect/groups/:id/confirm-time", async (req: Request, res: Respon
 
     const startDt = new Date(start);
     const endDt = new Date(end);
+    const eventDate = startDt.toISOString().slice(0, 10);
+    const eventStartTime = startDt.toISOString().slice(11, 16);
+    const eventEndTime = endDt.toISOString().slice(11, 16);
     const label = startDt.toLocaleString("en-US", {
       timeZone: "UTC",
       weekday: "long",
@@ -989,13 +992,13 @@ router.post("/connect/groups/:id/confirm-time", async (req: Request, res: Respon
       group.members.map(async (member) => {
         try {
           const result = await createCalendarEvent({
-            summary: title,
+            title,
+            date: eventDate,
+            startTime: eventStartTime,
+            endTime: eventEndTime,
             description: description ?? `Group event: ${group.name}`,
             location: location ?? "",
-            startIso: startDt.toISOString(),
-            endIso: endDt.toISOString(),
-            userName: member,
-          });
+          }, member);
           calendarResults.push({ member, eventId: result?.id ?? undefined, ok: !!result });
         } catch {
           calendarResults.push({ member, ok: false });

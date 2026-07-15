@@ -148,7 +148,7 @@ router.get("/weather/morning", async (req: Request, res: Response) => {
       primaryLon = qLon!;
       primaryCity = qCity ?? await reverseGeocodeCity(primaryLat, primaryLon) ?? "Current Location";
     } else {
-      primaryCity = profile?.city ?? null;
+      primaryCity = profile?.city ?? "Current Location";
       primaryLat = profile?.latitude ?? 0;
       primaryLon = profile?.longitude ?? 0;
 
@@ -157,9 +157,6 @@ router.get("/weather/morning", async (req: Request, res: Response) => {
         if (coords) {
           primaryLat = coords.lat;
           primaryLon = coords.lon;
-        } else {
-          primaryLat = null;
-          primaryLon = null;
         }
       }
     }

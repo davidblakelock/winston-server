@@ -86,7 +86,7 @@ router.post(
       const formData = new FormData();
       formData.append(
         "file",
-        new Blob([audioFile.buffer], { type: mime }),
+        new Blob([new Uint8Array(audioFile.buffer)], { type: mime }),
         audioFile.originalname || "audio.m4a"
       );
       formData.append("model_id", "scribe_v1");

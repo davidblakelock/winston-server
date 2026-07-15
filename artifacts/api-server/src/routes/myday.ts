@@ -148,7 +148,7 @@ router.get("/myday/:date", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
 
-  const { date } = req.params;
+  const date = String(req.params.date ?? "");
 
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     res.status(400).json({ error: "date must be in YYYY-MM-DD format" });

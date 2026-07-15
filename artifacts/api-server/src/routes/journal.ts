@@ -129,7 +129,7 @@ router.put("/journal/:id", async (req: Request, res: Response) => {
   if (!userName) return;
 
   try {
-    const id = parseInt(req.params.id, 10);
+    const id = parseInt(String(req.params.id ?? ""), 10);
     const { text } = req.body as { text?: string };
 
     if (!text?.trim()) {
@@ -176,7 +176,7 @@ router.delete("/journal/:id", async (req: Request, res: Response) => {
   if (!userName) return;
 
   try {
-    const id = parseInt(req.params.id, 10);
+    const id = parseInt(String(req.params.id ?? ""), 10);
     const { rowCount } = await query(
       `DELETE FROM journal_entries WHERE id = $1 AND user_name = $2 RETURNING id`,
       [id, userName]
