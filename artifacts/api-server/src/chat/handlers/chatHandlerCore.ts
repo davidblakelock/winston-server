@@ -27,6 +27,7 @@ import {
   syncListItemToConnections,
 } from "../../lists/listManager.js";
 import { createReminder } from "../../reminders/reminderManager.js";
+import { getPersistedBriefingText } from "../../morning/briefingCache.js";
 import { fetchTodayEvents, type CalendarEvent } from "../../google/calendar.js";
 import {
   getPendingText,
@@ -1229,6 +1230,14 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
         });
         const calText = calReply.content[0]?.type === "text" ? calReply.content[0].text.trim() : "";
         if (calText) finalReply = calText;
+      }
+      break;
+    }
+
+    case "morning_rundown": {
+      const cached = await getPersistedBriefingText(sessionUserName).catch(() => null);
+      if (cached) {
+        finalReply = cached;
       }
       break;
     }
