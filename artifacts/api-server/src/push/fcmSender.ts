@@ -40,6 +40,14 @@ export async function sendFcmNotification(
         const messageId = await messaging.send({
           token,
           data: dataPayload,
+          android: {
+            priority: "high",
+          },
+          apns: {
+            headers: {
+              "apns-priority": "10",
+            },
+          },
         });
         sent++;
         logger.info(
