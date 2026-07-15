@@ -297,18 +297,21 @@ async function fetchTopStoriesViaApify(userName?: string): Promise<{ text: strin
   const prompt =
     `Today is ${todayStr}. Yesterday was ${yesterdayStr}. The current year is ${currentYear}.\n\n` +
     `Here are real, scraped headlines from Reuters and AP News:\n\n${headlinesBlock}\n\n` +
-    `Select the 2 most genuinely important stories for a morning briefing. Prioritise:\n` +
+    `Select 4 to 5 of the most genuinely important stories for a morning briefing. Prioritise:\n` +
     `• Major world events, significant US political or economic developments, major business or economic news\n` +
     `• Broad relevance — NOT regional, NOT routine, NOT filler\n` +
     `• ${teamsLine}\n\n` +
-    `NO LOCAL NEWS. NO WEATHER. NO STOCK MARKET. NO FILLER.\n\n` +
-    `For EACH of the 2 selected stories, write exactly TWO sentences:\n` +
+    `NO LOCAL NEWS. NO WEATHER. NO STOCK MARKET. NO FILLER. NO AI industry/tech company news (product launches, funding rounds, model releases, AI competition) unless it is genuinely historic — this listener does not follow the AI industry as a topic.\n\n` +
+    `For EACH of the 4 to 5 selected stories, write exactly TWO sentences:\n` +
     `• Sentence 1: What happened — specific, factual, with names and numbers. Max 25 words.\n` +
     `• Sentence 2: Why it matters — real-world consequence or why a listener should care. Max 25 words.\n\n` +
     `OUTPUT FORMAT (follow exactly):\n` +
     `1. **[Bold Title — 4–6 words]** — [What happened.] [Why it matters.]\n\n` +
     `2. **[Bold Title — 4–6 words]** — [What happened.] [Why it matters.]\n\n` +
-    `RULES: Exactly 2 stories. No two stories on the same topic. Never fabricate — only use headlines from the list above.`;
+    `3. **[Bold Title — 4–6 words]** — [What happened.] [Why it matters.]\n\n` +
+    `4. **[Bold Title — 4–6 words]** — [What happened.] [Why it matters.]\n\n` +
+    `5. **[Bold Title — 4–6 words]** — [What happened.] [Why it matters.] (omit if only 4 stories selected)\n\n` +
+    `RULES: Exactly 4 to 5 stories. No two stories on the same topic. Never fabricate — only use headlines from the list above.`;
 
   logger.info("[News] Claude (top-stories-apify) — curating from Apify headlines");
 
@@ -358,18 +361,21 @@ async function fetchTopStoriesViaNewsApi(userName?: string): Promise<{ text: str
   const prompt =
     `Today is ${todayStr}. Yesterday was ${yesterdayStr}. The current year is ${currentYear}.\n\n` +
     `Here are real headlines from Reuters and AP News:\n\n${headlinesBlock}\n\n` +
-    `Select the 2 most genuinely important stories for a morning briefing. Prioritise:\n` +
+    `Select 4 to 5 of the most genuinely important stories for a morning briefing. Prioritise:\n` +
     `• Major world events, significant US political or economic developments, major business or economic news\n` +
     `• Broad relevance — NOT regional, NOT routine, NOT filler\n` +
     `• ${teamsLine}\n\n` +
-    `NO LOCAL NEWS. NO WEATHER. NO STOCK MARKET. NO FILLER.\n\n` +
-    `For EACH of the 2 selected stories, write exactly TWO sentences:\n` +
+    `NO LOCAL NEWS. NO WEATHER. NO STOCK MARKET. NO FILLER. NO AI industry/tech company news (product launches, funding rounds, model releases, AI competition) unless it is genuinely historic — this listener does not follow the AI industry as a topic.\n\n` +
+    `For EACH of the 4 to 5 selected stories, write exactly TWO sentences:\n` +
     `• Sentence 1: What happened — specific, factual, with names and numbers. Max 25 words.\n` +
     `• Sentence 2: Why it matters — real-world consequence or why a listener should care. Max 25 words.\n\n` +
     `OUTPUT FORMAT (follow exactly):\n` +
     `1. **[Bold Title — 4–6 words]** — [What happened.] [Why it matters.]\n\n` +
     `2. **[Bold Title — 4–6 words]** — [What happened.] [Why it matters.]\n\n` +
-    `RULES: Exactly 2 stories. No two stories on the same topic. Never fabricate — only use headlines from the list above.`;
+    `3. **[Bold Title — 4–6 words]** — [What happened.] [Why it matters.]\n\n` +
+    `4. **[Bold Title — 4–6 words]** — [What happened.] [Why it matters.]\n\n` +
+    `5. **[Bold Title — 4–6 words]** — [What happened.] [Why it matters.] (omit if only 4 stories selected)\n\n` +
+    `RULES: Exactly 4 to 5 stories. No two stories on the same topic. Never fabricate — only use headlines from the list above.`;
 
   logger.info("[News] Claude (top-stories-newsapi) — curating from NewsAPI headlines");
 
@@ -410,25 +416,28 @@ async function fetchTopStoriesViaWebSearch(userName?: string): Promise<string> {
 
   const mainPrompt =
     `Today is ${todayStr}. Yesterday was ${yesterdayStr}. The current year is ${currentYear}.\n\n` +
-    `You are selecting the 2 most genuinely important news stories for a morning briefing. Use web search to find real, current breaking news. RECENCY IS CRITICAL — every story must be from ${todayStr} or ${yesterdayStr} only.\n\n` +
+    `You are selecting 4 to 5 of the most genuinely important news stories for a morning briefing. Use web search to find real, current breaking news. RECENCY IS CRITICAL — every story must be from ${todayStr} or ${yesterdayStr} only.\n\n` +
     `MANDATORY DATE VALIDATION — before including ANY story you MUST verify its publication date via web search:\n` +
     `• REJECT any story published before ${yesterdayStr} — no exceptions\n` +
     `• REJECT any story from ${currentYear - 1} or earlier\n` +
     `• If you cannot confirm a publication date of ${todayStr} or ${yesterdayStr}, skip and find another\n\n` +
-    `SELECTION CRITERIA — pick the 2 stories that are:\n` +
+    `SELECTION CRITERIA — pick the 4 to 5 stories that are:\n` +
     `• Genuinely on people's lips today — major world events, significant US political or economic developments, major business or economic news\n` +
     `• Broad in relevance — NOT regional, NOT routine, NOT filler\n` +
     `• Stories that actually matter to an intelligent adult starting their day\n\n` +
     `${teamsLine}\n\n` +
     `NO local news. NO sports scores. NO weather. NO tech product announcements. NO AI company news unless genuinely historic. Lead with what matters to a general audience.\n\n` +
-    `For EACH of the 2 stories, write exactly TWO sentences:\n` +
+    `For EACH of the 4 to 5 stories, write exactly TWO sentences:\n` +
     `• Sentence 1: What happened — specific, factual, with names and numbers where relevant. Max 25 words.\n` +
     `• Sentence 2: Why it matters — the real-world consequence, what it signals, or why a listener should care. Max 25 words.\n\n` +
     `OUTPUT FORMAT (follow exactly — no deviations):\n` +
     `1. **[Bold Title — 4–6 words]** — [What happened, one sentence.] [Why it matters, one sentence.]\n\n` +
     `2. **[Bold Title — 4–6 words]** — [What happened, one sentence.] [Why it matters, one sentence.]\n\n` +
+    `3. **[Bold Title — 4–6 words]** — [What happened, one sentence.] [Why it matters, one sentence.]\n\n` +
+    `4. **[Bold Title — 4–6 words]** — [What happened, one sentence.] [Why it matters, one sentence.]\n\n` +
+    `5. **[Bold Title — 4–6 words]** — [What happened, one sentence.] [Why it matters, one sentence.] (omit if only 4 stories selected)\n\n` +
     `RULES:\n` +
-    `• Exactly 2 stories — no more, no less\n` +
+    `• Exactly 4 to 5 stories — no more, no less\n` +
     `• Stories from ${todayStr} or ${yesterdayStr} only — publication year must be ${currentYear}\n` +
     `• No local news, no sports, no weather, no stock market, no entertainment — those have their own sections\n` +
     `• No two stories on the same topic or person\n` +

@@ -723,7 +723,7 @@ STOIC CLOSE DELIVERY INSTRUCTIONS:
 2. If this is an intro day and INTRO CONTEXT is provided, deliver it first in one to two sentences — warm, like sharing something interesting with a friend.
 3. QUOTE: Deliver the quote word-for-word, attributed naturally. Examples: "As Marcus Aurelius wrote..." or "Seneca put it simply:" or "Epictetus said it plainly:"
 4. TRANSLATION: In exactly ONE sentence, say what the quote means in plain everyday language. No philosophy jargon. No references to ancient Rome. Just what it means for a person waking up today.
-5. INVITATION: End with one gentle open line inviting the user to open their Life screen and sit with it. Keep it natural — not a call to action, more like leaving a door open. Example: "If that lands for you this morning, your Life is a good place to let it breathe." Do not say "Have a great day" or any generic sign-off. This line is the end of the briefing.
+5. INVITATION: End with a genuine, varying offer to open their Life screen to write down a thought — this should read as a real, specific offer, not a poetic aside. Vary the phrasing every time; never reuse the same sentence twice. Do not say "Have a great day" or any generic sign-off. This line is the end of the briefing.
 
 FORBIDDEN: Do not connect the quote to anything else in the briefing — no calendar events, no news stories, no weather. The connection is the user's job, not yours. Do not add questions. Do not explain the philosophy beyond the one translation sentence. Do not reference the phase or curriculum number.
 `;
