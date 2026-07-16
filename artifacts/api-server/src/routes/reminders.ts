@@ -5,8 +5,7 @@ import { query } from "../db.js";
 import { addClient, removeClient, broadcast, registerClientUser } from "../reminders/sseStore.js";
 import { createReminder, markReminderDone } from "../reminders/reminderManager.js";
 import { validateSession } from "../auth/sessionAuth.js";
-import { authenticate, NATIVE_USER } from "../auth/middleware.js";
-import { getProfile } from "../onboarding/onboardingManager.js";
+import { authenticate } from "../auth/middleware.js";
 
 const router: IRouter = Router();
 
@@ -299,107 +298,6 @@ router.post("/reminders/done", async (req: Request, res: Response) => {
   console.log(`[REMINDERS/DONE] id=${id} found=${found}`);
   res.json({ success: true, found });
   if (found) broadcast("reminder_sync", { action: "completed", id });
-});
-
-// ── POST /api/reminders/snooze — body-based snooze from notification action ───
-// Called by the native app when the user taps "Snooze" on a reminder push,
-// or "Remind Tomorrow" on a bill push (which has billId but no reminderId).
-// Body: { reminderId?, id?, minutes?, notificationData? }
-// Bill case: { minutes: 1440, notificationData: { billId, companionMessage, ... } }
-router.post("/reminders/snooze", async (req: Request, res: Response) => {
-  const body = req.body ?? {};
-  const notifData = body.notificationData ?? {};
-
-  // ── Bill case: REMIND_TOMORROW sends billId but no reminderId ────────────────
-  // Parse companionMessage for bill name/amount, then schedule for 8 AM tomorrow CT.
-  const billId =
-    body.billId ??
-    notifData.billId ??
-    (notifData.data as { billId?: number } | undefined)?.billId;
-
-  if (billId) {
-    const userProfile = await getProfile(NATIVE_USER);
-    let billName = `Bill #${billId}`;
-    let amount = "";
-    try {
-      const cm = notifData.companionMessage ?? body.companionMessage;
-      if (cm) {
-        const parsed = JSON.parse(typeof cm === "string" ? cm : JSON.stringify(cm)) as {
-          billName?: string;
-          amount?: string;
-        };
-        if (parsed.billName) billName = parsed.billName;
-        if (parsed.amount) amount = parsed.amount;
-      }
-    } catch { /* ignore parse errors — fall back to Bill #id */ }
-
-    const amtPart = amount ? ` of ${amount}` : "";
-    const tomorrowStr = new Date(Date.now() + 86_400_000)
-      .toLocaleDateString("en-CA", { timeZone: userProfile?.timezone ?? "UTC" });
-    // fireAt: resolve 8 AM user-local → correct UTC instant (handles DST)
-    const approxUtc = new Date(`${tomorrowStr}T08:00:00.000Z`);
-    const ctHour = parseInt(
-      approxUtc.toLocaleTimeString("en-US", { timeZone: userProfile?.timezone ?? "UTC", hour: "2-digit", hour12: false }),
-      10
-    );
-    const fireAt = new Date(approxUtc.getTime() + (8 - ctHour) * 3_600_000);
-
-    const reminder = await createReminder({
-      userName: NATIVE_USER,
-      reminderText: `Your ${billName}${amtPart} payment — have you paid it yet?`,
-      fireAt,
-      timezone: userProfile?.timezone ?? "UTC",
-      pushCategoryId: "bill-action",
-      pushData: {
-        billId,
-        billName,
-        amount,
-        actionTaken: "/api/bills/paid",
-        actionSnooze: "/api/bills/remind-tomorrow",
-        categoryIdentifier: "bill-action",
-        companionMessage: {
-          billId,
-          billName,
-          amount,
-          actionTaken: "/api/bills/paid",
-          actionSnooze: "/api/bills/remind-tomorrow",
-        },
-      },
-    });
-    req.log?.info?.({ billId, billName, fireAt, reminderId: reminder.id }, "[REMINDERS/SNOOZE] Bill remind-tomorrow created");
-    res.json({ success: true, reminderId: reminder.id, scheduledFor: fireAt });
-    return;
-  }
-
-  // ── Standard reminder snooze ─────────────────────────────────────────────────
-  const raw =
-    body.reminderId ??
-    body.id ??
-    notifData.reminderId ??
-    (notifData.data as { reminderId?: number } | undefined)?.reminderId;
-
-  if (!raw) {
-    res.status(400).json({ error: "reminderId required" });
-    return;
-  }
-  const id = parseInt(String(raw), 10);
-  if (isNaN(id)) {
-    res.status(400).json({ error: "reminderId must be numeric" });
-    return;
-  }
-
-  const minutes = typeof body.minutes === "number" ? body.minutes : 10;
-  const snoozeUntil = new Date(Date.now() + minutes * 60 * 1000);
-
-  await query(
-    `UPDATE reminders
-        SET fire_at = $1, status = 'pending', last_fired_at = NULL
-      WHERE id = $2
-      RETURNING id`,
-    [snoozeUntil, id]
-  );
-  req.log?.info?.({ id, minutes, snoozeUntil }, "[REMINDERS/SNOOZE] Reminder snoozed");
-  res.json({ success: true, snoozedUntil: snoozeUntil });
 });
 
 export default router;
