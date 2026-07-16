@@ -2,7 +2,7 @@ import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 
 export interface NewUserRecord {
-  category: "trip" | "warranty" | "home_service" | "subscription" | "vehicle" | "other";
+  category: "trip" | "warranty" | "home_service" | "subscription" | "vehicle" | "order" | "other";
   vendorName: string;
   confirmationNumber: string | null;
   dateStart: string | null;

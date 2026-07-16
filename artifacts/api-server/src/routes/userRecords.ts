@@ -52,6 +52,7 @@ router.get("/records", async (req, res) => {
       home_service: [],
       subscription: [],
       vehicle: [],
+      order: [],
       other: [],
     };
 

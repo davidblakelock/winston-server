@@ -409,14 +409,17 @@ First, decide if this email is a confirmation of one of these categories:
 - subscription: software subscription, streaming service, membership, club
 - home_service: home repair, cleaning, HVAC, plumbing, electrical, pest control, lawn service
 - vehicle: car service, oil change, tire, auto repair, recall
+- order: online retail purchase confirmation with an order number or confirmation number (e.g. King Arthur, any online store)
 - other: any other confirmation worth keeping
 
-If this email is NOT a confirmation (e.g. it's a newsletter, receipt for a small purchase, shipping notification, marketing email, or account notification), return exactly: {"skip": true}
+If this email is NOT a confirmation (e.g. it's a newsletter, marketing email, account notification, or a bare shipping/tracking notification with no order or confirmation number), return exactly: {"skip": true}
+
+An email IS a confirmation worth saving if it contains a genuine order number, confirmation number, or booking reference — regardless of purchase size. Do not skip a legitimate retail order confirmation just because the purchase amount is small.
 
 If it IS a confirmation, return ONLY this JSON — no explanation, no markdown:
 {
   "skip": false,
-  "category": "trip|warranty|subscription|home_service|vehicle|other",
+  "category": "trip|warranty|subscription|home_service|vehicle|order|other",
   "label": "brief type label e.g. Hotel, Flight, Restaurant Reservation, Car Rental",
   "vendorName": "business or vendor name",
   "confirmationNumber": "confirmation/booking/reservation number or null",
@@ -463,7 +466,7 @@ Today is ${new Date().toISOString().slice(0, 10)}. Only use upcoming or recent d
       if (!parsed.vendorName || !parsed.category) continue;
 
       // Validate category is one we recognize — default to "other" if not
-      const validCategories = ["trip", "warranty", "home_service", "subscription", "vehicle", "other"] as const;
+      const validCategories = ["trip", "warranty", "home_service", "subscription", "vehicle", "order", "other"] as const;
       type RecordCategory = typeof validCategories[number];
       const recordCategory: RecordCategory = validCategories.includes(parsed.category as RecordCategory)
         ? (parsed.category as RecordCategory)

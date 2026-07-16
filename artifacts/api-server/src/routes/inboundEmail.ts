@@ -17,7 +17,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 const EXTRACTION_SYSTEM_PROMPT = `Extract structured booking/confirmation information from this forwarded email. Return ONLY valid JSON, no markdown fences, no explanation.
 
 {
-  "category": "trip" | "warranty" | "home_service" | "subscription" | "vehicle" | "other" | "skip",
+  "category": "trip" | "warranty" | "home_service" | "subscription" | "vehicle" | "order" | "other" | "skip",
   "vendor_name": "business or company name, or null",
   "confirmation_number": "string or null",
   "date_start": "YYYY-MM-DD or null",
@@ -37,7 +37,7 @@ CRITICAL BOUNDARIES:
 - Extract only logistics: confirmation numbers, vendor names, dates, times, addresses, phone numbers, websites. If a field isn't present, use null. Never guess or infer.`;
 
 interface ExtractionResult {
-  category: "trip" | "warranty" | "home_service" | "subscription" | "vehicle" | "other" | "skip";
+  category: "trip" | "warranty" | "home_service" | "subscription" | "vehicle" | "order" | "other" | "skip";
   vendor_name: string | null;
   confirmation_number: string | null;
   date_start: string | null;
