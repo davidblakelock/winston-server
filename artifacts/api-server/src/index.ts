@@ -56,8 +56,6 @@ import { ensureListShareTable } from "./lists/listShareManager";
 import { ensureBookingColumns } from "./restaurants/bookingCredentialsManager";
 import { ensureServiceProvidersTable, ensureProviderCategoriesTable } from "./providers/providerManager";
 import { startProviderScheduler } from "./providers/providerScheduler";
-import { startConnectBirthdayScheduler } from "./connect/connectBirthdayScheduler";
-import { startContactBirthdayScheduler } from "./google/contactBirthdayScheduler";
 import { startTvEpisodeScheduler } from "./tv/tvEpisodeScheduler";
 import { startCalendarEmailScheduler } from "./push/calendarEmailScheduler";
 import { ensureStoicTables } from "./stoic/stoicManager";
@@ -490,8 +488,6 @@ app.listen(port, async (err) => {
     });
     startRecordsArchiver();
     startProviderScheduler();
-    startConnectBirthdayScheduler();
-    startContactBirthdayScheduler();
     void startTvEpisodeScheduler();
     startCalendarEmailScheduler();
     setSchedulersEnabled();
