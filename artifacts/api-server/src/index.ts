@@ -56,7 +56,6 @@ import { ensureBookingColumns } from "./restaurants/bookingCredentialsManager";
 import { ensureServiceProvidersTable, ensureProviderCategoriesTable } from "./providers/providerManager";
 import { startProviderScheduler } from "./providers/providerScheduler";
 import { startTvEpisodeScheduler } from "./tv/tvEpisodeScheduler";
-import { startCalendarEmailScheduler } from "./push/calendarEmailScheduler";
 import { ensureStoicTables } from "./stoic/stoicManager";
 import { ensureEmailScanSettingsTable } from "./email/emailScanSettings";
 import { ensureVoiceOptionsTable, seedVoiceOptions } from "./voices/voiceOptionsManager";
@@ -487,7 +486,6 @@ app.listen(port, async (err) => {
     startRecordsArchiver();
     startProviderScheduler();
     void startTvEpisodeScheduler();
-    startCalendarEmailScheduler();
     setSchedulersEnabled();
     logger.info("[startup] ✅ All schedulers started");
   } else {
