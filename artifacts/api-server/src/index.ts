@@ -21,7 +21,6 @@ import { initMedicationReminderLogTable } from "./medications/medicationManager"
 import { startMorningPushScheduler } from "./push/morningPushScheduler";
 import { startBillScheduler } from "./bills/billScheduler";
 import { startDatesScheduler } from "./dates/datesScheduler";
-import { startDepartureScheduler } from "./departure/departureScheduler";
 import { startCalendarSyncScheduler, ensureCalendarSyncTable } from "./departure/calendarSyncScheduler";
 import { ensureRelationshipTable } from "./relationships/relationshipManager";
 import { initDallasContentTable } from "./morning/dallasContent";
@@ -466,7 +465,6 @@ app.listen(port, async (err) => {
     await startDatesScheduler().catch((err: unknown) => {
       logger.warn({ err }, "Dates scheduler startup failed — server continues normally");
     });
-    startDepartureScheduler();
     startCalendarSyncScheduler();
     startVenueMonitorScheduler();
     startProactiveEventScheduler();

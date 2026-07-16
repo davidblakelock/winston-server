@@ -10,6 +10,7 @@ import { query } from "../db.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 import { searchContacts } from "../google/contacts.js";
 import { setPendingDepartureTextOffer } from "../text/textMessageComposer.js";
+import { searchNearbyVenueTypes, buildNeighborhoodBrief } from "../maps/googleMapsIntel.js";
 
 // Rate-limit the "Google disconnected" push to once per user per server lifecycle.
 const _invalidGrantNotifiedUsers = new Set<string>();
@@ -456,16 +457,17 @@ async function runDepartureAlertsForUser(userName: string): Promise<void> {
   const now = new Date();
   const nowMs = now.getTime();
 
-  let rows: { event_id: string; event_summary: string; event_location: string; leave_time_iso: string; event_attendees: string | null }[];
+  let rows: { event_id: string; event_summary: string; event_location: string; leave_time_iso: string; event_start_iso: string | null; event_attendees: string | null }[];
   try {
     const res = await query<{
       event_id: string;
       event_summary: string;
       event_location: string;
       leave_time_iso: string;
+      event_start_iso: string | null;
       event_attendees: string | null;
     }>(
-      `SELECT event_id, event_summary, event_location, leave_time_iso, event_attendees
+      `SELECT event_id, event_summary, event_location, leave_time_iso, event_start_iso, event_attendees
          FROM calendar_sync_state
         WHERE event_date = $1
           AND user_name = $2
@@ -488,11 +490,58 @@ async function runDepartureAlertsForUser(userName: string): Promise<void> {
     if (diffMs < 0 || diffMs > 5 * 60 * 1000) continue;
 
     const companionName = await getCompanionName(userName);
-    const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(row.event_location)}`;
-    
-  const leaveTimeStr = new Date(row.leave_time_iso).toLocaleTimeString("en-US", {
+    const mapsDeepLink = `https://maps.google.com/?daddr=${encodeURIComponent(row.event_location)}&dirflg=d`;
+    const mapsIntentUrl = `google.navigation:q=${encodeURIComponent(row.event_location)}`;
+
+    const leaveAt = new Date(row.leave_time_iso);
+    const leaveTimeStr = leaveAt.toLocaleTimeString("en-US", {
       timeZone: userTzD, hour: "numeric", minute: "2-digit", hour12: true,
     });
+    const eventTimeStr = row.event_start_iso
+      ? new Date(row.event_start_iso).toLocaleTimeString("en-US", {
+          timeZone: userTzD, hour: "numeric", minute: "2-digit", hour12: true,
+        })
+      : leaveTimeStr;
+    const driveDurationMinutes = row.event_start_iso
+      ? Math.round((new Date(row.event_start_iso).getTime() - leaveAt.getTime()) / 60000)
+      : 0;
+
+    // ── Neighborhood intelligence — parking + nearby spots ──────────────────
+    let neighborhoodBrief: string | null = null;
+    try {
+      const userPrefs = (profD?.hobbies ?? [])
+        .filter((i) => /bar|cocktail|coffee|wine|drink|whiskey/i.test(i))
+        .slice(0, 4);
+
+      // Pick the most relevant nearby category based on event time
+      const eventHour = row.event_start_iso
+        ? new Date(row.event_start_iso).toLocaleString("en-US", { timeZone: userTzD, hour: "numeric", hour12: false })
+        : new Date().toLocaleString("en-US", { timeZone: userTzD, hour: "numeric", hour12: false });
+      const nearbyType = parseInt(eventHour, 10) >= 17 ? "cocktail bar" : "coffee shop";
+
+      const nearbyData = await searchNearbyVenueTypes(row.event_location, ["parking", nearbyType], 2);
+
+      const hasParking = (nearbyData.get("parking") ?? []).length > 0;
+      const hasNearby = (nearbyData.get(nearbyType) ?? []).length > 0;
+
+      if (hasParking || hasNearby) {
+        neighborhoodBrief = await buildNeighborhoodBrief(
+          row.event_summary,
+          eventTimeStr,
+          leaveTimeStr,
+          driveDurationMinutes,
+          row.event_location,
+          nearbyData,
+          userPrefs
+        );
+        logger.info(
+          { event: row.event_summary, hasParking, hasNearby, hasBrief: !!neighborhoodBrief },
+          "[NeighborhoodIntel] Brief built"
+        );
+      }
+    } catch (err) {
+      logger.warn({ err }, "[NeighborhoodIntel] Failed to build neighborhood brief — using base alert");
+    }
 
     // ── Text offer: look up attendees and find one with a phone ───────────────
     let textOfferRecipient: { name: string; phone: string | null } | null = null;
@@ -513,16 +562,19 @@ async function runDepartureAlertsForUser(userName: string): Promise<void> {
       }
     }
 
-    // Build messages — with or without text offer
+    // Build messages — with or without text offer, and with or without neighborhood intel
     const firstName = textOfferRecipient?.name.split(" ")[0] ?? null;
     const offerSuffix = firstName
       ? ` Want me to text ${firstName} you're on your way?`
       : "";
 
-    const speakText = `Time to leave for ${row.event_summary} — leave by ${leaveTimeStr}.${offerSuffix}`;
+    const baseMessage = `Time to leave for ${row.event_summary} — leave by ${leaveTimeStr}.${offerSuffix}`;
+    const speakText = neighborhoodBrief ? `${neighborhoodBrief}${offerSuffix}` : baseMessage;
     const pushBody = textOfferRecipient
       ? `Time to leave — ${leaveTimeStr}. Open Winston to text ${firstName} you're on your way.`
-      : `Time to leave for ${row.event_summary} — ${leaveTimeStr}. Tap to open Maps.`;
+      : neighborhoodBrief
+        ? neighborhoodBrief.replace(/\n+/g, " ").slice(0, 160)
+        : `Time to leave for ${row.event_summary} — ${leaveTimeStr}. Tap to open Maps.`;
 
     // Store offer state so the next chat message can pick it up
     if (textOfferRecipient) {
@@ -544,7 +596,9 @@ async function runDepartureAlertsForUser(userName: string): Promise<void> {
       body: pushBody,
       data: {
         action: "open_url",
-        url: mapsUrl,
+        url: mapsDeepLink,
+        mapsDeepLink: mapsIntentUrl,
+        destination: row.event_location,
         eventSummary: row.event_summary,
       },
     }).catch(() => {});
@@ -555,7 +609,7 @@ async function runDepartureAlertsForUser(userName: string): Promise<void> {
       reminderText: speakText,
       speakText,
       isCalendarAlert: true,
-      mapsUrl,
+      mapsUrl: mapsDeepLink,
       ...(textOfferRecipient ? {
         offerText: true,
         textRecipientName: textOfferRecipient.name,
