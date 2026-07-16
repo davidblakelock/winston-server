@@ -88,7 +88,8 @@ router.post(
     if (!userName) return;
 
     const body = req.body as Record<string, unknown>;
-    const { name, category, specialty, phone, email, address, website, company, notes, lastContactDate, nextDueDate, googleContactId } = body;
+    const { name, category, specialty, phone, email, address, website, company, notes, lastContactDate, googleContactId } = body;
+    const nextDueDate = body["nextDueDate"] ?? body["next_due_date"];
 
     if (!name || typeof name !== "string" || name.trim().length === 0) {
       res.status(400).json({ error: "name is required" });
@@ -148,7 +149,8 @@ router.put(
     if (body["company"] !== undefined)         updates.company         = body["company"] ? String(body["company"]) : null;
     if (body["notes"] !== undefined)           updates.notes           = body["notes"] ? String(body["notes"]) : null;
     if (body["lastContactDate"] !== undefined) updates.lastContactDate = body["lastContactDate"] ? String(body["lastContactDate"]) : null;
-    if (body["nextDueDate"] !== undefined)     updates.nextDueDate     = body["nextDueDate"] ? String(body["nextDueDate"]) : null;
+    const nextDueRaw = body["nextDueDate"] !== undefined ? body["nextDueDate"] : body["next_due_date"];
+    if (nextDueRaw !== undefined)              updates.nextDueDate     = nextDueRaw ? String(nextDueRaw) : null;
     if (body["googleContactId"] !== undefined) updates.googleContactId = body["googleContactId"] ? String(body["googleContactId"]) : null;
 
     try {
