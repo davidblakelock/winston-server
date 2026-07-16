@@ -800,6 +800,84 @@ router.delete(["/lists/todo/:id", "/lists/to do/:id", "/lists/to%20do/:id"], asy
   }
 });
 
+// ── POST /api/lists/todo/done — clear a to-do reminder without deleting the item ──
+// Called by the native app when the user taps "Done ✓" on a to-do reminder
+// notification. Clears reminder_time (the field the list screen checks to
+// decide whether an item still has an active reminder) so the alarm badge
+// disappears and todoReminderScheduler.ts never picks this row up again.
+// Body: { itemId: number }
+// Response: { ok: true }
+router.post("/lists/todo/done", express.json({ limit: "1mb" }), async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const rawId = (req.body as { itemId?: number | string })?.itemId;
+  const itemId = typeof rawId === "string" ? parseInt(rawId, 10) : rawId;
+  if (!itemId || typeof itemId !== "number" || isNaN(itemId)) {
+    res.status(400).json({ error: "itemId (number) is required" });
+    return;
+  }
+
+  try {
+    const { rows } = await query<{ id: number }>(
+      `UPDATE list_items
+          SET reminder_time  = NULL,
+              reminder_fired = TRUE
+        WHERE id = $1 AND user_name = $2
+        RETURNING id`,
+      [itemId, userName]
+    );
+    if (!rows.length) {
+      res.status(404).json({ error: "Item not found" });
+      return;
+    }
+    req.log.info({ userName, itemId }, "[Lists] To-do reminder cleared via notification action");
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error({ err }, "[Lists] POST /lists/todo/done error");
+    res.status(500).json({ error: "Failed to clear to-do reminder" });
+  }
+});
+
+// ── POST /api/lists/todo/snooze — reschedule a to-do reminder 30 minutes out ─────
+// Called by the native app when the user taps "Remind in 30 min" on a to-do
+// reminder notification. todoReminderScheduler.ts's normal polling picks the
+// item back up once reminder_time elapses.
+// Body: { itemId: number }
+// Response: { ok: true }
+router.post("/lists/todo/snooze", express.json({ limit: "1mb" }), async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const rawId = (req.body as { itemId?: number | string })?.itemId;
+  const itemId = typeof rawId === "string" ? parseInt(rawId, 10) : rawId;
+  if (!itemId || typeof itemId !== "number" || isNaN(itemId)) {
+    res.status(400).json({ error: "itemId (number) is required" });
+    return;
+  }
+
+  try {
+    const snoozeUntil = new Date(Date.now() + 30 * 60 * 1000);
+    const { rows } = await query<{ id: number }>(
+      `UPDATE list_items
+          SET reminder_time  = $1,
+              reminder_fired = FALSE
+        WHERE id = $2 AND user_name = $3
+        RETURNING id`,
+      [snoozeUntil, itemId, userName]
+    );
+    if (!rows.length) {
+      res.status(404).json({ error: "Item not found" });
+      return;
+    }
+    req.log.info({ userName, itemId, snoozeUntil }, "[Lists] To-do reminder snoozed via notification action");
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error({ err }, "[Lists] POST /lists/todo/snooze error");
+    res.status(500).json({ error: "Failed to snooze to-do reminder" });
+  }
+});
+
 // ── List sharing management ───────────────────────────────────────────────────
 // MUST be before the /lists/:listName wildcard.
 

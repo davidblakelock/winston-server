@@ -39,10 +39,10 @@ export function startTodoReminderScheduler(): void {
 
         sendFcmNotification({
           userName: item.user_name,
-          notificationType: "reminder",
+          notificationType: "todo-reminder",
           title: "Reminder",
           body: `Just a reminder — ${item.item_text}`,
-          data: { screen: "/lists?list=to+do", action: "navigate" },
+          data: { itemId: String(item.id) },
         }).catch((err: unknown) => {
           logger.error({ err, id: item.id }, "[TodoReminder] FCM push delivery failed");
         });
