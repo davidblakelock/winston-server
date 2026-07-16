@@ -20,9 +20,9 @@ function clearTakenLogIfNewDay() {
   if (_takenLogDay !== today) { _takenLoggedToday.clear(); _takenLogDay = today; }
 }
 
-function getCurrentLocalTime(): string {
+function getCurrentLocalTime(timezone: string): string {
   return new Date().toLocaleTimeString("en-US", {
-    timeZone: "UTC",
+    timeZone: timezone,
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
@@ -35,13 +35,13 @@ export function startMedicationScheduler(): void {
     if (_running) return;
     _running = true;
     try {
-      const localTime = getCurrentLocalTime();
       clearTakenLogIfNewDay();
       const users = await getActiveUsers().catch(() => []);
       if (!users.length) return;
 
       for (const user of users) {
         const { userName } = user;
+        const localTime = getCurrentLocalTime(user.timezone ?? "UTC");
 
         const remindersEnabled = await getMedicationRemindersEnabled(userName).catch(() => true);
         if (!remindersEnabled) continue;
@@ -92,7 +92,11 @@ export function startMedicationScheduler(): void {
             continue;
           }
 
-          sendFcmNotification({
+          await logMedicationReminderSent(userName, reminderKey).catch((err: unknown) => {
+            logger.warn({ err, userName, time }, "[MED] logMedicationReminderSent failed");
+          });
+
+          await sendFcmNotification({
             userName,
             notificationType: "medication",
             title: "Time for your medications 💊",
@@ -102,10 +106,6 @@ export function startMedicationScheduler(): void {
             logger.error({ err, userName, time }, "[MED] FCM push delivery failed");
           });
           logger.info({ time, userName }, "[MED] Reminder fired");
-
-          await logMedicationReminderSent(userName, reminderKey).catch((err: unknown) => {
-            logger.warn({ err, userName, time }, "[MED] logMedicationReminderSent failed");
-          });
         }
       }
     } catch (err) {
