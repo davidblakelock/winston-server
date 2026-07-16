@@ -136,7 +136,7 @@ export async function scanLocalContent(
   // Load user profile for personalization
   const [profile, profileItems] = await Promise.all([
     getProfile(userName).catch(() => null),
-    getProfileItems(undefined, userName).catch(() => []),
+    getProfileItems(undefined, userName).catch((): Awaited<ReturnType<typeof getProfileItems>> => []),
   ]);
 
   // Build interest context from profile
