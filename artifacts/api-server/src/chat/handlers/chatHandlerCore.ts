@@ -1235,37 +1235,40 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     }
 
     // TEMPORARY TEST WIRING — fires generateDailyBriefDeepResearch in the
-    // background and delivers the result via SSE once ready, since deep
-    // research takes several minutes and both client and server infrastructure
-    // abort HTTP requests around 38-60 seconds. Revert to the cached/scheduled
-    // pre-generation version (getPersistedBriefingText) once the deep research
-    // approach is fully approved for the live 5:40 AM schedule.
+    // background and delivers the result via a durable cache write + push
+    // notification instead of a live SSE connection, since SSE connections
+    // reliably die after ~20-30 seconds when the app is backgrounded (deep
+    // research takes 5-6 minutes). Revert to — or promote this into — the
+    // real cached/scheduled 5:40 AM pre-generation path once the deep
+    // research approach is fully approved for production.
     case "morning_rundown": {
-      finalReply = "Give me a few minutes to put together your full briefing — I'll have it ready for you shortly.";
+      finalReply = "Give me a few minutes to put together your full briefing — I'll send you a notification when it's ready.";
 
-      import("../../morning/briefingPregenerate.js").then(({ generateDailyBriefDeepResearch }) => {
+      import("../../morning/briefingPregenerate.js").then(async ({ generateDailyBriefDeepResearch }) => {
+        const { setCachedBriefing } = await import("../../morning/briefingCache.js");
+        const { sendFcmNotification } = await import("../../push/fcmSender.js");
+
         generateDailyBriefDeepResearch(sessionUserName)
-          .then((result) => {
+          .then(async (result) => {
             if (!result) {
-              broadcastToUser(sessionUserName, "chat_sync", {
-                role: "assistant",
-                content: "Sorry — I had trouble putting your briefing together. Try asking again in a bit.",
-                messageId: `briefing-fail-${Date.now()}`,
-                createdAt: new Date().toISOString(),
-              });
+              await sendFcmNotification({
+                userName: sessionUserName,
+                notificationType: "morning-briefing",
+                title: "Briefing ready — with an issue",
+                body: "I had trouble putting your briefing together. Ask me again when you get a chance.",
+                data: { action: "send_message", message: "Morning Run Down" },
+              }).catch(() => {});
               return;
             }
-            const msgId = `briefing-${Date.now()}`;
-            broadcastToUser(sessionUserName, "chat_sync", {
-              role: "assistant",
-              content: result,
-              messageId: msgId,
-              createdAt: new Date().toISOString(),
-            });
-            broadcastToUser(sessionUserName, "speak_sync", {
-              text: result,
-              messageId: msgId,
-              initiated_by: null,
+            setCachedBriefing(sessionUserName, result);
+            await sendFcmNotification({
+              userName: sessionUserName,
+              notificationType: "morning-briefing",
+              title: "Your Morning Run Down is ready ☕",
+              body: "Tap to read today's briefing.",
+              data: { action: "send_message", message: "Morning Run Down" },
+            }).catch((err) => {
+              log.warn({ err }, "[chatHandlerCore] morning-briefing ready push failed");
             });
           })
           .catch((err) => {
