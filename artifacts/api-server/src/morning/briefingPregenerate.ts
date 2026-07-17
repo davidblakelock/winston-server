@@ -444,7 +444,9 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
 // Build-only step — call manually to test before it replaces the existing
 // news/weather/sports/local-content pipeline in a later pass.
 
-const DAILY_BRIEF_INSTRUCTION = `Do several real web searches — don't stop after one. Search for: today's top news headlines (aim for at least 5 real stories worth knowing, not just one), today's weather for this person's city, market/investing news, sports scores for their teams, and one or two genuinely funny or delightful "you won't believe this" news stories from today. Then write them a genuinely enjoyable five-minute morning brief covering all of that. Also search for real local events happening today or this weekend near their city that match their actual interests or goals (concerts, tastings, exhibits, etc.) — mention one or two if you find something genuinely worth it, skip entirely if nothing good turns up. Use only real, current, verified information from your searches — never invent facts, venues, dates, scores, or weather. Style it however reads best for a five-minute morning read — sections, headers, or flowing prose, your call, and vary the structure day to day rather than repeating an identical template every time. Don't hold back on length or detail — a good five-minute read has real substance, not just one or two lines per topic. For loose style reference only (not a required template), here are two briefings this person said they liked:
+const DAILY_BRIEF_INSTRUCTION = `Do several real web searches — don't stop after one. Search for: today's top news headlines (aim for at least 5 real stories worth knowing, not just one), today's current weather conditions only for this person's city — do not include a multi-day forecast, market/investing news, sports scores for their teams, and one or two genuinely funny or delightful "you won't believe this" news stories from today. Then write them a genuinely enjoyable five-minute morning brief covering all of that. Also search for real local events happening today or this weekend near their city — but only recommend things that genuinely connect to what you know about this specific person from everything above (their real interests, goals, and recent context) — never recommend something generic or popular just because it's happening; if nothing in your search actually connects to who this person is, skip the local section entirely rather than filling it with unrelated events. Use only real, current, verified information from your searches — never invent facts, venues, dates, scores, or weather. Style it however reads best for a five-minute morning read — sections, headers, or flowing prose, your call, and vary the structure day to day rather than repeating an identical template every time. Don't hold back on length or detail — a good five-minute read has real substance, not just one or two lines per topic. For loose style reference only (not a required template), here are two briefings this person said they liked:
+
+(These examples are for tone, structure, and format only — any place names, cities, or venues in brackets are placeholders. Never use a real place name from these examples in your actual output. All real content — including location — must come from your own search and from the person's actual current city given above.)
 
 [EXAMPLE 1]
 ☕ David's Daily Brief
@@ -467,7 +469,7 @@ After several quarters dominated by AI enthusiasm, investors are paying closer a
 Before the opening bell: Dow futures lower, S&P 500 futures lower, Nasdaq futures sharply lower. The main story is a broad technology and semiconductor pullback. Even strong earnings from some chip companies haven't reassured investors, who are becoming more selective about AI-related valuations. Netflix is also under pressure after issuing weaker guidance. Investor takeaway: if you're a long-term investor, this looks more like a valuation reset than a sign that AI itself is losing importance.
 
 🏈🏀⚾ Pro Sports
-A relatively quiet morning for the Dallas teams: Cowboys training camp storylines are beginning to build as preseason approaches. Rangers continuing their push through the regular season with the trade deadline approaching. Mavericks offseason roster development remains the focus. Stars quiet offseason as preparations continue for training camp. Internationally, the biggest sports story is the buildup to the upcoming World Cup Final.
+A relatively quiet morning for [this person's home teams]: Cowboys training camp storylines are beginning to build as preseason approaches. Rangers continuing their push through the regular season with the trade deadline approaching. Mavericks offseason roster development remains the focus. Stars quiet offseason as preparations continue for training camp. Internationally, the biggest sports story is the buildup to the upcoming World Cup Final.
 
 🤖 AI & Technology
 The biggest AI story today isn't a new model — it's the market. Investors are asking whether the hundreds of billions being spent on AI chips, data centers, and infrastructure will generate enough profits to justify current valuations. That debate is driving today's technology selloff.
@@ -487,11 +489,11 @@ Every dramatic prediction that "AI is over" — the technology continues to adva
 Have a great Friday!
 
 [EXAMPLE 2]
-📍 Around Dallas
-Smooth jazz tonight at The Balcony Club. Free evening at the Nasher Sculpture Center's 'til Midnight at the Nasher with live music, food, and late-night access to the museum. If you're looking for a Saturday outing, the Dallas Farmers Market and the Deep Ellum Outdoor Market are both great options.
+📍 Around [Your City]
+Live music tonight at [a local venue]. A free evening event at [a local museum or park] with music, food, and late access. If you're looking for a weekend outing, [a local market or outdoor spot] is a great option.
 
 🗓️ If I Were You Today…
-Grab coffee, head to the Farmers Market, then catch a jazz set at Revelers Hall tonight. It's less about listing events and more about giving one enjoyable way to spend the day.
+Grab coffee, explore [a local morning spot], then catch a show at [a local evening venue] tonight. It's less about listing events and more about giving one enjoyable way to spend the day.
 
 End with today's Stoic quote provided above, woven in naturally as a closing thought, not just pasted verbatim.`;
 
@@ -504,15 +506,17 @@ interface OpenAiResponsesResult {
 
 export async function generateDailyBrief(userName: string): Promise<string | null> {
   try {
-    const [profile, goals, memories, stoic] = await Promise.all([
+    const [profile, goals, profileItems, memories, stoic] = await Promise.all([
       getProfile(userName).catch(() => null),
       getGoals(userName).catch((): Awaited<ReturnType<typeof getGoals>> => []),
+      getProfileItems(undefined, userName).catch((): Awaited<ReturnType<typeof getProfileItems>> => []),
       getRecentMemories(7).catch(() => []),
       getStoicForUser(userName).catch(() => null),
     ]);
 
     const name = profile?.name ?? userName;
-    const city = profile?.city ?? "an unknown city";
+    const locationContext = await getUserLocationContext(userName).catch(() => null);
+    const city = locationContext?.city ?? profile?.city ?? "an unknown city";
 
     const interestParts: string[] = [];
     if (profile?.hobbies?.length)        interestParts.push(`hobbies: ${profile.hobbies.join(", ")}`);
@@ -520,6 +524,8 @@ export async function generateDailyBrief(userName: string): Promise<string | nul
     if (profile?.favoriteArtists?.length) interestParts.push(`favorite artists: ${profile.favoriteArtists.join(", ")}`);
     if (profile?.sportsTeams)            interestParts.push(`sports teams: ${profile.sportsTeams}`);
     const interestsLine = interestParts.length > 0 ? interestParts.join("; ") : "no specific interests on file";
+
+    const profileItemsBlock = formatProfileForContext(profileItems);
 
     const activeGoals = goals.filter((g) => !g.completed_at);
     const goalsLine = activeGoals.length > 0
@@ -546,6 +552,7 @@ Name: ${name}
 City: ${city}
 Interests: ${interestsLine}
 Active goals: ${goalsLine}
+${profileItemsBlock}
 Recent context: ${memoriesBlock || "no recent conversation memories"}
 Today's reflection: ${stoicLine}`;
 
