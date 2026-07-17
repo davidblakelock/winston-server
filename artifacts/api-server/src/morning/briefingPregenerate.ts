@@ -498,55 +498,57 @@ Grab coffee, explore [a local morning spot], then catch a show at [a local eveni
 End with today's Stoic quote provided above, woven in naturally as a closing thought, not just pasted verbatim.`;
 
 interface OpenAiResponsesResult {
+  status?: string;
   output?: Array<{
     type?: string;
     content?: Array<{ type?: string; text?: string }>;
   }>;
 }
 
-export async function generateDailyBrief(userName: string): Promise<string | null> {
-  try {
-    const [profile, goals, profileItems, memories, stoic] = await Promise.all([
-      getProfile(userName).catch(() => null),
-      getGoals(userName).catch((): Awaited<ReturnType<typeof getGoals>> => []),
-      getProfileItems(undefined, userName).catch((): Awaited<ReturnType<typeof getProfileItems>> => []),
-      getRecentMemories(7).catch(() => []),
-      getStoicForUser(userName).catch(() => null),
-    ]);
+// ── Shared context-gathering — used by both generateDailyBrief and
+// generateDailyBriefDeepResearch so the two don't duplicate this logic ──────
+async function buildDailyBriefContext(userName: string): Promise<string> {
+  const [profile, goals, profileItems, memories, stoic] = await Promise.all([
+    getProfile(userName).catch(() => null),
+    getGoals(userName).catch((): Awaited<ReturnType<typeof getGoals>> => []),
+    getProfileItems(undefined, userName).catch((): Awaited<ReturnType<typeof getProfileItems>> => []),
+    getRecentMemories(7).catch(() => []),
+    getStoicForUser(userName).catch(() => null),
+  ]);
 
-    const name = profile?.name ?? userName;
-    const locationContext = await getUserLocationContext(userName).catch(() => null);
-    const city = locationContext?.city ?? profile?.city ?? "an unknown city";
+  const name = profile?.name ?? userName;
+  const locationContext = await getUserLocationContext(userName).catch(() => null);
+  const city = locationContext?.city ?? profile?.city ?? "an unknown city";
 
-    const interestParts: string[] = [];
-    if (profile?.hobbies?.length)        interestParts.push(`hobbies: ${profile.hobbies.join(", ")}`);
-    if (profile?.musicGenres?.length)    interestParts.push(`music genres: ${profile.musicGenres.join(", ")}`);
-    if (profile?.favoriteArtists?.length) interestParts.push(`favorite artists: ${profile.favoriteArtists.join(", ")}`);
-    if (profile?.sportsTeams)            interestParts.push(`sports teams: ${profile.sportsTeams}`);
-    const interestsLine = interestParts.length > 0 ? interestParts.join("; ") : "no specific interests on file";
+  const interestParts: string[] = [];
+  if (profile?.hobbies?.length)        interestParts.push(`hobbies: ${profile.hobbies.join(", ")}`);
+  if (profile?.musicGenres?.length)    interestParts.push(`music genres: ${profile.musicGenres.join(", ")}`);
+  if (profile?.favoriteArtists?.length) interestParts.push(`favorite artists: ${profile.favoriteArtists.join(", ")}`);
+  if (profile?.sportsTeams)            interestParts.push(`sports teams: ${profile.sportsTeams}`);
+  const interestsLine = interestParts.length > 0 ? interestParts.join("; ") : "no specific interests on file";
 
-    const profileItemsBlock = formatProfileForContext(profileItems);
+  const profileItemsBlock = formatProfileForContext(profileItems);
 
-    const activeGoals = goals.filter((g) => !g.completed_at);
-    const goalsLine = activeGoals.length > 0
-      ? activeGoals.map((g) => {
-          const incompleteSteps = g.steps.filter((s) => !s.completed_at);
-          const stepsText = incompleteSteps.length > 0
-            ? incompleteSteps.map((s) => s.step_text).join("; ")
-            : "no open steps";
-          const desc = g.description ? ` — ${g.description}` : "";
-          return `"${g.title}"${desc} (next steps: ${stepsText})`;
-        }).join(" | ")
-      : "no active goals";
+  const activeGoals = goals.filter((g) => !g.completed_at);
+  const goalsLine = activeGoals.length > 0
+    ? activeGoals.map((g) => {
+        const incompleteSteps = g.steps.filter((s) => !s.completed_at);
+        const stepsText = incompleteSteps.length > 0
+          ? incompleteSteps.map((s) => s.step_text).join("; ")
+          : "no open steps";
+        const desc = g.description ? ` — ${g.description}` : "";
+        return `"${g.title}"${desc} (next steps: ${stepsText})`;
+      }).join(" | ")
+    : "no active goals";
 
-    const memoriesBlock = formatMemoriesForContext(memories);
-    const stoicLine = stoic ? `"${stoic.quote}" — ${stoic.author} (${stoic.source})` : "none available today";
+  const memoriesBlock = formatMemoriesForContext(memories);
+  const stoicLine = stoic ? `"${stoic.quote}" — ${stoic.author} (${stoic.source})` : "none available today";
 
-    const today = new Date().toLocaleDateString("en-US", {
-      weekday: "long", year: "numeric", month: "long", day: "numeric",
-    });
+  const today = new Date().toLocaleDateString("en-US", {
+    weekday: "long", year: "numeric", month: "long", day: "numeric",
+  });
 
-    const contextBlock =
+  return (
 `Today's date: ${today}
 Name: ${name}
 City: ${city}
@@ -554,7 +556,13 @@ Interests: ${interestsLine}
 Active goals: ${goalsLine}
 ${profileItemsBlock}
 Recent context: ${memoriesBlock || "no recent conversation memories"}
-Today's reflection: ${stoicLine}`;
+Today's reflection: ${stoicLine}`
+  );
+}
+
+export async function generateDailyBrief(userName: string): Promise<string | null> {
+  try {
+    const contextBlock = await buildDailyBriefContext(userName);
 
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
@@ -614,6 +622,134 @@ Today's reflection: ${stoicLine}`;
     return textItem.text;
   } catch (err) {
     logger.warn({ err, userName }, "[DailyBrief] generateDailyBrief failed");
+    return null;
+  }
+}
+
+// ── Deep-research alternative — o4-mini-deep-research via background mode + polling ──
+// NOT wired into _doBriefingPrefetch, the cron schedule, or the chatHandlerCore.ts
+// morning_rundown test case. Manually test-callable only, for comparison against
+// generateDailyBrief above.
+
+const DEEP_RESEARCH_POLL_INTERVAL_MS = 15_000;
+const DEEP_RESEARCH_MAX_POLLS = 20; // 20 * 15s = 5 minutes total
+
+export async function generateDailyBriefDeepResearch(userName: string): Promise<string | null> {
+  try {
+    const contextBlock = await buildDailyBriefContext(userName);
+
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      logger.warn({ userName }, "[DailyBriefDeepResearch] OPENAI_API_KEY not configured — skipping");
+      return null;
+    }
+
+    const submitResp = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "o4-mini-deep-research",
+        background: true,
+        tools: [{ type: "web_search_preview" }],
+        input: `${contextBlock}\n\n${DAILY_BRIEF_INSTRUCTION}`,
+      }),
+    });
+
+    if (!submitResp.ok) {
+      const errText = await submitResp.text().catch(() => "");
+      logger.warn(
+        { userName, status: submitResp.status, errText: errText.slice(0, 500) },
+        "[DailyBriefDeepResearch] Submission returned non-OK status"
+      );
+      return null;
+    }
+
+    const submitData = await submitResp.json() as { id?: string; status?: string };
+    const responseId = submitData.id;
+    if (!responseId) {
+      logger.warn(
+        { userName, raw: JSON.stringify(submitData).slice(0, 500) },
+        "[DailyBriefDeepResearch] No response id in submission — cannot poll"
+      );
+      return null;
+    }
+
+    logger.info(
+      { userName, responseId, initialStatus: submitData.status },
+      "[DailyBriefDeepResearch] Background request submitted — polling for completion"
+    );
+
+    for (let poll = 0; poll < DEEP_RESEARCH_MAX_POLLS; poll++) {
+      await new Promise<void>((resolve) => setTimeout(resolve, DEEP_RESEARCH_POLL_INTERVAL_MS));
+
+      const pollResp = await fetch(`https://api.openai.com/v1/responses/${responseId}`, {
+        method: "GET",
+        headers: { "Authorization": `Bearer ${apiKey}` },
+      });
+
+      if (!pollResp.ok) {
+        const errText = await pollResp.text().catch(() => "");
+        logger.warn(
+          { userName, responseId, status: pollResp.status, errText: errText.slice(0, 500) },
+          "[DailyBriefDeepResearch] Poll returned non-OK status"
+        );
+        continue;
+      }
+
+      const pollData = await pollResp.json() as OpenAiResponsesResult;
+
+      if (pollData.status === "completed") {
+        logger.info(
+          { userName, responseId, fullRawResponse: JSON.stringify(pollData) },
+          "[DailyBriefDeepResearch] DIAGNOSTIC — full raw completed response"
+        );
+        if (Array.isArray(pollData.output)) {
+          pollData.output.forEach((item, i) => {
+            logger.info(
+              { userName, responseId, index: i, itemType: item.type, itemSummary: JSON.stringify(item).slice(0, 2000) },
+              "[DailyBriefDeepResearch] DIAGNOSTIC — output item"
+            );
+          });
+        }
+
+        const messageItem = pollData.output?.find((item) => item.type === "message");
+        const textItem = messageItem?.content?.find((c) => c.type === "output_text" || c.type === "text");
+
+        if (!textItem?.text) {
+          logger.warn(
+            { userName, responseId, raw: JSON.stringify(pollData).slice(0, 500) },
+            "[DailyBriefDeepResearch] Unexpected Responses API shape — no output_text found"
+          );
+          return null;
+        }
+
+        return textItem.text;
+      }
+
+      if (pollData.status === "failed" || pollData.status === "cancelled") {
+        logger.warn(
+          { userName, responseId, status: pollData.status, raw: JSON.stringify(pollData).slice(0, 500) },
+          "[DailyBriefDeepResearch] Background request did not complete successfully"
+        );
+        return null;
+      }
+
+      logger.info(
+        { userName, responseId, status: pollData.status ?? "unknown", poll: poll + 1 },
+        "[DailyBriefDeepResearch] Still in progress — polling again"
+      );
+    }
+
+    logger.warn(
+      { userName, responseId },
+      "[DailyBriefDeepResearch] Timed out after 5 minutes of polling — giving up"
+    );
+    return null;
+  } catch (err) {
+    logger.warn({ err, userName }, "[DailyBriefDeepResearch] generateDailyBriefDeepResearch failed");
     return null;
   }
 }
