@@ -15,6 +15,7 @@ import { getCachedWeather } from "../weather/weatherCache.js";
 import { query } from "../db.js";
 import { getUserSettings, getStoicForUser, incrementStoicDay, buildStoicBlock, isStoicQuoteAccessible, getAlternativeStoicQuote, type UserSettings } from "../stoic/stoicManager.js";
 import { getUserLocationContext } from "../lib/userTimezone.js";
+import { getGoals } from "../goals/goalsManager.js";
 
 // Dallas local content is now handled by dallasContent.ts (RSS feeds + web search fallback).
 // Imported below alongside other module imports.
@@ -435,5 +436,162 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
     }
   } catch (err) {
     logger.error({ err }, "Failed to pre-generate morning briefing static context");
+  }
+}
+
+// ── Experimental: single-call GPT-4o daily brief via Responses API + web search ──
+// NOT wired into _doBriefingPrefetch, the cron schedule, or any other live path.
+// Build-only step — call manually to test before it replaces the existing
+// news/weather/sports/local-content pipeline in a later pass.
+
+const DAILY_BRIEF_INSTRUCTION = `Search for today's real news, markets, and sports scores relevant to this person, then write them a genuinely enjoyable five-minute morning brief. Also search for real local events happening today or this weekend near their city that match their actual interests or goals (concerts, tastings, exhibits, etc.) — mention one or two if you find something genuinely worth it, skip entirely if nothing good turns up. Use only real, current, verified information from your search — never invent facts, venues, dates, or events. Style it however reads best for a five-minute morning read — sections, headers, or flowing prose, your call, and vary the structure day to day rather than repeating an identical template every time. For loose style reference only (not a required template), here are two briefings this person said they liked:
+
+[EXAMPLE 1]
+☕ David's Daily Brief
+Friday, July 17, 2026
+Good morning! Here's your five-minute briefing.
+
+🌎 The 5 Stories That Matter
+1. U.S.–Iran conflict remains the dominant global story
+The conflict continued overnight with additional U.S. strikes and Iranian retaliation against U.S. facilities in the region. Markets remain focused on whether the fighting expands and what it could mean for global energy supplies.
+2. AI stock selloff is accelerating
+Investors are questioning whether the enormous spending on AI infrastructure will translate into profits. Semiconductor stocks were hit across Asia, Europe, and U.S. premarket trading despite strong earnings from some chipmakers.
+3. Oil remains elevated
+Crude prices continue to trade at relatively high levels because of Middle East tensions. While supplies have not been significantly disrupted, energy markets remain sensitive to any escalation.
+4. Air quality concerns across parts of the U.S.
+Smoke from wildfires is affecting air quality in portions of the Midwest and Northeast, leading to health advisories in several areas.
+5. Earnings season is shifting market leadership
+After several quarters dominated by AI enthusiasm, investors are paying closer attention to whether companies can actually convert AI investments into sustained profits.
+
+📈 Markets & Investing
+Before the opening bell: Dow futures lower, S&P 500 futures lower, Nasdaq futures sharply lower. The main story is a broad technology and semiconductor pullback. Even strong earnings from some chip companies haven't reassured investors, who are becoming more selective about AI-related valuations. Netflix is also under pressure after issuing weaker guidance. Investor takeaway: if you're a long-term investor, this looks more like a valuation reset than a sign that AI itself is losing importance.
+
+🏈🏀⚾ Pro Sports
+A relatively quiet morning for the Dallas teams: Cowboys training camp storylines are beginning to build as preseason approaches. Rangers continuing their push through the regular season with the trade deadline approaching. Mavericks offseason roster development remains the focus. Stars quiet offseason as preparations continue for training camp. Internationally, the biggest sports story is the buildup to the upcoming World Cup Final.
+
+🤖 AI & Technology
+The biggest AI story today isn't a new model — it's the market. Investors are asking whether the hundreds of billions being spent on AI chips, data centers, and infrastructure will generate enough profits to justify current valuations. That debate is driving today's technology selloff.
+
+😂 No Politics, Just Weird
+A Labrador had to be rescued from Britain's highest mountain after apparently eating marijuana during a hike. Mountain rescuers carried the very relaxed dog back down. Also, authorities are still trying to capture a wandering emu that has become something of a local celebrity by calmly strolling through neighborhoods while avoiding capture.
+
+🍷 Daily Discovery
+Wine Tip of the Day: If you enjoy Cabernet Sauvignon, try a Bordeaux blend from France. Unlike many California Cabernets, Bordeaux often blends Cabernet Sauvignon with Merlot and Cabernet Franc, producing a more restrained, food-friendly style. It's an excellent comparison tasting that helps develop your palate.
+
+💬 Quote of the Day
+"The important thing is not to stop questioning." — Albert Einstein
+
+👍 Things You Can Safely Ignore
+Every dramatic prediction that "AI is over" — the technology continues to advance, even if the stocks experience periods of volatility. Also, hour-by-hour market swings — if you're investing for years rather than days, today's headlines are usually much less important than they seem.
+
+Have a great Friday!
+
+[EXAMPLE 2]
+📍 Around Dallas
+Smooth jazz tonight at The Balcony Club. Free evening at the Nasher Sculpture Center's 'til Midnight at the Nasher with live music, food, and late-night access to the museum. If you're looking for a Saturday outing, the Dallas Farmers Market and the Deep Ellum Outdoor Market are both great options.
+
+🗓️ If I Were You Today…
+Grab coffee, head to the Farmers Market, then catch a jazz set at Revelers Hall tonight. It's less about listing events and more about giving one enjoyable way to spend the day.
+
+End with today's Stoic quote provided above, woven in naturally as a closing thought, not just pasted verbatim.`;
+
+interface OpenAiResponsesResult {
+  output?: Array<{
+    type?: string;
+    content?: Array<{ type?: string; text?: string }>;
+  }>;
+}
+
+export async function generateDailyBrief(userName: string): Promise<string | null> {
+  try {
+    const [profile, goals, memories, stoic] = await Promise.all([
+      getProfile(userName).catch(() => null),
+      getGoals(userName).catch((): Awaited<ReturnType<typeof getGoals>> => []),
+      getRecentMemories(7).catch(() => []),
+      getStoicForUser(userName).catch(() => null),
+    ]);
+
+    const name = profile?.name ?? userName;
+    const city = profile?.city ?? "an unknown city";
+
+    const interestParts: string[] = [];
+    if (profile?.hobbies?.length)        interestParts.push(`hobbies: ${profile.hobbies.join(", ")}`);
+    if (profile?.musicGenres?.length)    interestParts.push(`music genres: ${profile.musicGenres.join(", ")}`);
+    if (profile?.favoriteArtists?.length) interestParts.push(`favorite artists: ${profile.favoriteArtists.join(", ")}`);
+    if (profile?.sportsTeams)            interestParts.push(`sports teams: ${profile.sportsTeams}`);
+    const interestsLine = interestParts.length > 0 ? interestParts.join("; ") : "no specific interests on file";
+
+    const activeGoals = goals.filter((g) => !g.completed_at);
+    const goalsLine = activeGoals.length > 0
+      ? activeGoals.map((g) => {
+          const incompleteSteps = g.steps.filter((s) => !s.completed_at);
+          const stepsText = incompleteSteps.length > 0
+            ? incompleteSteps.map((s) => s.step_text).join("; ")
+            : "no open steps";
+          const desc = g.description ? ` — ${g.description}` : "";
+          return `"${g.title}"${desc} (next steps: ${stepsText})`;
+        }).join(" | ")
+      : "no active goals";
+
+    const memoriesBlock = formatMemoriesForContext(memories);
+    const stoicLine = stoic ? `"${stoic.quote}" — ${stoic.author} (${stoic.source})` : "none available today";
+
+    const today = new Date().toLocaleDateString("en-US", {
+      weekday: "long", year: "numeric", month: "long", day: "numeric",
+    });
+
+    const contextBlock =
+`Today's date: ${today}
+Name: ${name}
+City: ${city}
+Interests: ${interestsLine}
+Active goals: ${goalsLine}
+Recent context: ${memoriesBlock || "no recent conversation memories"}
+Today's reflection: ${stoicLine}`;
+
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      logger.warn({ userName }, "[DailyBrief] OPENAI_API_KEY not configured — skipping");
+      return null;
+    }
+
+    const resp = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gpt-4o",
+        tools: [{ type: "web_search_preview" }],
+        input: `${contextBlock}\n\n${DAILY_BRIEF_INSTRUCTION}`,
+      }),
+    });
+
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => "");
+      logger.warn(
+        { userName, status: resp.status, errText: errText.slice(0, 500) },
+        "[DailyBrief] OpenAI Responses API returned non-OK status"
+      );
+      return null;
+    }
+
+    const data = await resp.json() as OpenAiResponsesResult;
+    const messageItem = data.output?.find((item) => item.type === "message");
+    const textItem = messageItem?.content?.find((c) => c.type === "output_text" || c.type === "text");
+
+    if (!textItem?.text) {
+      logger.warn(
+        { userName, raw: JSON.stringify(data).slice(0, 500) },
+        "[DailyBrief] Unexpected Responses API shape — no output_text found"
+      );
+      return null;
+    }
+
+    return textItem.text;
+  } catch (err) {
+    logger.warn({ err, userName }, "[DailyBrief] generateDailyBrief failed");
+    return null;
   }
 }
