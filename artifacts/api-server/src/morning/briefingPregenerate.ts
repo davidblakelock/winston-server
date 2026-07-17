@@ -583,6 +583,7 @@ export async function generateDailyBrief(userName: string): Promise<string | nul
       body: JSON.stringify({
         model: "gpt-4o",
         tools: [{ type: "web_search_preview" }],
+        tool_choice: "required",
         input: `${contextBlock}\n\n${DAILY_BRIEF_INSTRUCTION}`,
         max_output_tokens: 4000,
       }),
@@ -598,6 +599,24 @@ export async function generateDailyBrief(userName: string): Promise<string | nul
     }
 
     const data = await resp.json() as OpenAiResponsesResult;
+
+    const searchCallCount = Array.isArray(data.output)
+      ? data.output.filter((item) => item.type === "web_search_call").length
+      : 0;
+    logger.info(
+      { userName, searchCallCount, totalOutputItems: Array.isArray(data.output) ? data.output.length : 0 },
+      "[DailyBrief] Search call count for this run"
+    );
+    if (Array.isArray(data.output)) {
+      data.output.forEach((item, i) => {
+        if (item.type === "web_search_call") {
+          logger.info(
+            { userName, index: i, querySummary: JSON.stringify(item).slice(0, 500) },
+            "[DailyBrief] Search call detail"
+          );
+        }
+      });
+    }
 
     logger.info(
       { userName, fullRawResponse: JSON.stringify(data) },
