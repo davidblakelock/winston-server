@@ -632,7 +632,7 @@ export async function generateDailyBrief(userName: string): Promise<string | nul
 // generateDailyBrief above.
 
 const DEEP_RESEARCH_POLL_INTERVAL_MS = 15_000;
-const DEEP_RESEARCH_MAX_POLLS = 20; // 20 * 15s = 5 minutes total
+const DEEP_RESEARCH_MAX_POLLS = 80; // 80 * 15s = 20 minutes total
 
 export async function generateDailyBriefDeepResearch(userName: string): Promise<string | null> {
   try {
@@ -701,6 +701,12 @@ export async function generateDailyBriefDeepResearch(userName: string): Promise<
 
       const pollData = await pollResp.json() as OpenAiResponsesResult;
 
+      const pollCount = poll + 1;
+      logger.info(
+        { userName, responseId, status: pollData.status, poll: pollCount },
+        "[DailyBriefDeepResearch] Poll status"
+      );
+
       if (pollData.status === "completed") {
         logger.info(
           { userName, responseId, fullRawResponse: JSON.stringify(pollData) },
@@ -745,7 +751,7 @@ export async function generateDailyBriefDeepResearch(userName: string): Promise<
 
     logger.warn(
       { userName, responseId },
-      "[DailyBriefDeepResearch] Timed out after 5 minutes of polling — giving up"
+      "[DailyBriefDeepResearch] Timed out after 20 minutes of polling — giving up"
     );
     return null;
   } catch (err) {
