@@ -1238,9 +1238,9 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     // directly against live chat traffic. Revert to the cached/scheduled
     // version (getPersistedBriefingText) once the new generator is approved.
     case "morning_rundown": {
-      const { generateDailyBrief } = await import("../../morning/briefingPregenerate.js");
-      const fresh = await generateDailyBrief(sessionUserName).catch((err) => {
-        log.warn({ err }, "[chatHandlerCore] generateDailyBrief failed");
+      const { generateDailyBriefDeepResearch } = await import("../../morning/briefingPregenerate.js");
+      const fresh = await generateDailyBriefDeepResearch(sessionUserName).catch((err) => {
+        log.warn({ err }, "[chatHandlerCore] generateDailyBriefDeepResearch failed");
         return null;
       });
       if (fresh) {
