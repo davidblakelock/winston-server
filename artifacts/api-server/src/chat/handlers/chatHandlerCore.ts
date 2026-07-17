@@ -1234,10 +1234,19 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       break;
     }
 
+    // TEMPORARY TEST WIRING — bypasses the cache to test generateDailyBrief
+    // directly against live chat traffic. Revert to the cached/scheduled
+    // version (getPersistedBriefingText) once the new generator is approved.
     case "morning_rundown": {
-      const cached = await getPersistedBriefingText(sessionUserName).catch(() => null);
-      if (cached) {
-        finalReply = cached;
+      const { generateDailyBrief } = await import("../../morning/briefingPregenerate.js");
+      const fresh = await generateDailyBrief(sessionUserName).catch((err) => {
+        log.warn({ err }, "[chatHandlerCore] generateDailyBrief failed");
+        return null;
+      });
+      if (fresh) {
+        finalReply = fresh;
+      } else {
+        finalReply = "I had trouble putting together your briefing just now — give it another try in a moment.";
       }
       break;
     }
