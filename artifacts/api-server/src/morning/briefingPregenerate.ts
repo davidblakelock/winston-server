@@ -783,3 +783,83 @@ export async function generateDailyBriefDeepResearch(userName: string): Promise<
     return null;
   }
 }
+
+// ── gpt-5-search-api alternative — Chat Completions API, always searches ──────
+// A third, separate function for comparison against generateDailyBrief and
+// generateDailyBriefDeepResearch above. Unlike the Responses API's
+// web_search_preview tool used elsewhere in this file, gpt-5-search-api always
+// retrieves web information before responding — no tool_choice needed.
+// Not wired into chatHandlerCore.ts yet — manually test-callable only, via
+// /api/admin/test-daily-brief-searchapi.
+
+interface ChatCompletionsResult {
+  choices?: Array<{
+    message?: {
+      content?: string;
+      annotations?: unknown;
+    };
+  }>;
+}
+
+export async function generateDailyBriefSearchApi(userName: string): Promise<string | null> {
+  try {
+    const contextBlock = await buildDailyBriefContext(userName);
+
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      logger.warn({ userName }, "[DailyBriefSearchApi] OPENAI_API_KEY not configured — skipping");
+      return null;
+    }
+
+    const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gpt-5-search-api",
+        web_search_options: {},
+        messages: [
+          { role: "user", content: `${contextBlock}\n\n${DAILY_BRIEF_INSTRUCTION}` },
+        ],
+      }),
+    });
+
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => "");
+      logger.warn(
+        { userName, status: resp.status, errText: errText.slice(0, 1000) },
+        "[DailyBriefSearchApi] OpenAI Chat Completions API returned non-OK status"
+      );
+      return null;
+    }
+
+    const data = await resp.json() as ChatCompletionsResult;
+
+    logger.info(
+      { userName, fullRawResponse: JSON.stringify(data) },
+      "[DailyBriefSearchApi] DIAGNOSTIC — full raw Chat Completions output"
+    );
+
+    const message = data.choices?.[0]?.message;
+    logger.info(
+      { userName, hasAnnotations: message?.annotations !== undefined, annotations: JSON.stringify(message?.annotations ?? null).slice(0, 1000) },
+      "[DailyBriefSearchApi] DIAGNOSTIC — search evidence on message"
+    );
+
+    const text = message?.content;
+    if (!text) {
+      logger.warn(
+        { userName, raw: JSON.stringify(data).slice(0, 1000) },
+        "[DailyBriefSearchApi] Unexpected Chat Completions shape — no message content found"
+      );
+      return null;
+    }
+
+    return text;
+  } catch (err) {
+    logger.warn({ err, userName }, "[DailyBriefSearchApi] generateDailyBriefSearchApi failed");
+    return null;
+  }
+}

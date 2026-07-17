@@ -537,5 +537,43 @@ router.post("/admin/test-daily-brief", async (req: Request, res: Response) => {
   });
 });
 
+/**
+ * POST /api/admin/test-daily-brief-searchapi
+ *
+ * Diagnostic tool for manually testing generateDailyBriefSearchApi
+ * (gpt-5-search-api via Chat Completions) without touching the chat trigger.
+ * Same fire-and-forget pattern as /admin/test-daily-brief — fires the job and
+ * returns immediately; the result is logged separately once it completes
+ * (search server logs for [DailyBriefSearchApi]).
+ */
+router.post("/admin/test-daily-brief-searchapi", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  // Fire and forget — do not await. Respond immediately.
+  res.json({ ok: true, message: "gpt-5-search-api briefing started — check server logs for the result (search for [DailyBriefSearchApi])." });
+
+  import("../morning/briefingPregenerate.js").then(({ generateDailyBriefSearchApi }) => {
+    generateDailyBriefSearchApi(userName)
+      .then((result) => {
+        if (result) {
+          req.log.info(
+            { userName, resultLength: result.length, resultPreview: result.slice(0, 200) },
+            "[DailyBriefSearchApi] TEST ROUTE — completed successfully, full result below"
+          );
+          req.log.info(
+            { userName, fullResult: result },
+            "[DailyBriefSearchApi] TEST ROUTE — full text"
+          );
+        } else {
+          req.log.warn({ userName }, "[DailyBriefSearchApi] TEST ROUTE — returned null");
+        }
+      })
+      .catch((err) => {
+        req.log.warn({ err, userName }, "[DailyBriefSearchApi] TEST ROUTE — threw an error");
+      });
+  });
+});
+
 export default router;
 
