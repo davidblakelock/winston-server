@@ -444,7 +444,7 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
 // Build-only step — call manually to test before it replaces the existing
 // news/weather/sports/local-content pipeline in a later pass.
 
-const DAILY_BRIEF_INSTRUCTION = `Search for today's real news, markets, and sports scores relevant to this person, then write them a genuinely enjoyable five-minute morning brief. Also search for real local events happening today or this weekend near their city that match their actual interests or goals (concerts, tastings, exhibits, etc.) — mention one or two if you find something genuinely worth it, skip entirely if nothing good turns up. Use only real, current, verified information from your search — never invent facts, venues, dates, or events. Style it however reads best for a five-minute morning read — sections, headers, or flowing prose, your call, and vary the structure day to day rather than repeating an identical template every time. For loose style reference only (not a required template), here are two briefings this person said they liked:
+const DAILY_BRIEF_INSTRUCTION = `Do several real web searches — don't stop after one. Search for: today's top news headlines (aim for at least 5 real stories worth knowing, not just one), today's weather for this person's city, market/investing news, sports scores for their teams, and one or two genuinely funny or delightful "you won't believe this" news stories from today. Then write them a genuinely enjoyable five-minute morning brief covering all of that. Also search for real local events happening today or this weekend near their city that match their actual interests or goals (concerts, tastings, exhibits, etc.) — mention one or two if you find something genuinely worth it, skip entirely if nothing good turns up. Use only real, current, verified information from your searches — never invent facts, venues, dates, scores, or weather. Style it however reads best for a five-minute morning read — sections, headers, or flowing prose, your call, and vary the structure day to day rather than repeating an identical template every time. Don't hold back on length or detail — a good five-minute read has real substance, not just one or two lines per topic. For loose style reference only (not a required template), here are two briefings this person said they liked:
 
 [EXAMPLE 1]
 ☕ David's Daily Brief
@@ -565,6 +565,7 @@ Today's reflection: ${stoicLine}`;
         model: "gpt-4o",
         tools: [{ type: "web_search_preview" }],
         input: `${contextBlock}\n\n${DAILY_BRIEF_INSTRUCTION}`,
+        max_output_tokens: 4000,
       }),
     });
 
