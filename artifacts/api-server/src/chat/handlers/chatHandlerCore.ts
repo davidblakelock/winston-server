@@ -1234,20 +1234,45 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       break;
     }
 
-    // TEMPORARY TEST WIRING — bypasses the cache to test generateDailyBrief
-    // directly against live chat traffic. Revert to the cached/scheduled
-    // version (getPersistedBriefingText) once the new generator is approved.
+    // TEMPORARY TEST WIRING — fires generateDailyBriefDeepResearch in the
+    // background and delivers the result via SSE once ready, since deep
+    // research takes several minutes and both client and server infrastructure
+    // abort HTTP requests around 38-60 seconds. Revert to the cached/scheduled
+    // pre-generation version (getPersistedBriefingText) once the deep research
+    // approach is fully approved for the live 5:40 AM schedule.
     case "morning_rundown": {
-      const { generateDailyBriefDeepResearch } = await import("../../morning/briefingPregenerate.js");
-      const fresh = await generateDailyBriefDeepResearch(sessionUserName).catch((err) => {
-        log.warn({ err }, "[chatHandlerCore] generateDailyBriefDeepResearch failed");
-        return null;
+      finalReply = "Give me a few minutes to put together your full briefing — I'll have it ready for you shortly.";
+
+      import("../../morning/briefingPregenerate.js").then(({ generateDailyBriefDeepResearch }) => {
+        generateDailyBriefDeepResearch(sessionUserName)
+          .then((result) => {
+            if (!result) {
+              broadcastToUser(sessionUserName, "chat_sync", {
+                role: "assistant",
+                content: "Sorry — I had trouble putting your briefing together. Try asking again in a bit.",
+                messageId: `briefing-fail-${Date.now()}`,
+                createdAt: new Date().toISOString(),
+              });
+              return;
+            }
+            const msgId = `briefing-${Date.now()}`;
+            broadcastToUser(sessionUserName, "chat_sync", {
+              role: "assistant",
+              content: result,
+              messageId: msgId,
+              createdAt: new Date().toISOString(),
+            });
+            broadcastToUser(sessionUserName, "speak_sync", {
+              text: result,
+              messageId: msgId,
+              initiated_by: null,
+            });
+          })
+          .catch((err) => {
+            log.warn({ err }, "[chatHandlerCore] generateDailyBriefDeepResearch background failure");
+          });
       });
-      if (fresh) {
-        finalReply = fresh;
-      } else {
-        finalReply = "I had trouble putting together your briefing just now — give it another try in a moment.";
-      }
+
       break;
     }
 
