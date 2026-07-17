@@ -497,5 +497,45 @@ router.post("/admin/test-push", express.json({ limit: "256kb" }), async (req: Re
   res.status(400).json({ error: "type must be 'medication' or 'bill-reminder'" });
 });
 
+/**
+ * POST /api/admin/test-daily-brief
+ *
+ * Diagnostic tool for manually testing long-running background generation
+ * (generateDailyBriefDeepResearch) without being constrained by chat request
+ * timeouts — deep research needs several minutes, but both the client and
+ * server infrastructure abort HTTP requests around 38-60 seconds. This route
+ * fires the job and returns immediately; the result is logged separately
+ * once it completes (search server logs for [DailyBriefDeepResearch]).
+ */
+router.post("/admin/test-daily-brief", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  // Fire and forget — do not await. Respond immediately so the HTTP
+  // connection isn't held open for the several minutes deep research needs.
+  res.json({ ok: true, message: "Deep research briefing started — check server logs for progress and the final result (search for [DailyBriefDeepResearch])." });
+
+  import("../morning/briefingPregenerate.js").then(({ generateDailyBriefDeepResearch }) => {
+    generateDailyBriefDeepResearch(userName)
+      .then((result) => {
+        if (result) {
+          req.log.info(
+            { userName, resultLength: result.length, resultPreview: result.slice(0, 200) },
+            "[DailyBriefDeepResearch] TEST ROUTE — completed successfully, full result below"
+          );
+          req.log.info(
+            { userName, fullResult: result },
+            "[DailyBriefDeepResearch] TEST ROUTE — full text"
+          );
+        } else {
+          req.log.warn({ userName }, "[DailyBriefDeepResearch] TEST ROUTE — returned null");
+        }
+      })
+      .catch((err) => {
+        req.log.warn({ err, userName }, "[DailyBriefDeepResearch] TEST ROUTE — threw an error");
+      });
+  });
+});
+
 export default router;
 
