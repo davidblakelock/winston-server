@@ -586,6 +586,20 @@ Today's reflection: ${stoicLine}`;
     }
 
     const data = await resp.json() as OpenAiResponsesResult;
+
+    logger.info(
+      { userName, fullRawResponse: JSON.stringify(data) },
+      "[DailyBrief] DIAGNOSTIC — full raw Responses API output"
+    );
+    if (Array.isArray(data.output)) {
+      data.output.forEach((item, i) => {
+        logger.info(
+          { userName, index: i, itemType: item.type, itemSummary: JSON.stringify(item).slice(0, 2000) },
+          "[DailyBrief] DIAGNOSTIC — output item"
+        );
+      });
+    }
+
     const messageItem = data.output?.find((item) => item.type === "message");
     const textItem = messageItem?.content?.find((c) => c.type === "output_text" || c.type === "text");
 
