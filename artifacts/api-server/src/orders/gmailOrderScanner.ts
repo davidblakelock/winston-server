@@ -265,7 +265,10 @@ export async function scanOrderEmails(
       const rawPayload = (detail.data.payload ?? {}) as GmailPart;
       const body = extractBodyFromPayload(rawPayload);
 
-      if (!body || body.length < 50) continue;
+      if (!body || body.length < 50) {
+        logger.info({ subject, from, bodyLength: body?.length ?? 0 }, "[OrderScanner] Body extraction returned empty/short — skipping");
+        continue;
+      }
 
       const order = await extractOrderDetails(subject, from, body);
       if (!order) continue;
