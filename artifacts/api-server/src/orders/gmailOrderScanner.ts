@@ -4,6 +4,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { logger } from "../lib/logger.js";
 import { query } from "../db.js";
 import { createTracker } from "./easypostManager.js";
+import { MODEL_HAIKU } from "../lib/models.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -131,87 +132,77 @@ function extractBodyFromPayload(payload: GmailPart): string {
   return "";
 }
 
-// Returns raw HTML before stripping — used to pre-extract tracking numbers
-// from href attributes that get removed by stripHtml.
-function extractRawHtmlFromPayload(payload: GmailPart): string {
-  if (payload.parts && payload.parts.length > 0) {
-    return extractTextFromParts(payload.parts, true);
-  }
-  if (payload.body?.data) {
-    return decodeBase64Url(payload.body.data);
-  }
-  return "";
-}
-
 // ── Claude Haiku extraction ───────────────────────────────────────────────────
 
-// ── Pre-extraction: pull tracking numbers from URLs before Claude sees the body ─
-// Amazon embeds TBA numbers in URLs (track.amazon.com/tracking/TBAxxxxxxxxx).
-// Claude may miss these if they're only in href attributes after HTML stripping.
-function preExtractTrackingNumber(body: string): string | null {
-  // Amazon TBA: appears in URLs like track.amazon.com/tracking/TBA123456789000
-  const tbaMatch = body.match(/\bTBA\d{12,}\b/i);
-  if (tbaMatch) return tbaMatch[0].toUpperCase();
-
-  // UPS 1Z tracking in URLs
-  const upsMatch = body.match(/\b1Z[A-Z0-9]{16}\b/i);
-  if (upsMatch) return upsMatch[0].toUpperCase();
-
-  // FedEx 12- or 15-digit in URLs
-  const fedexMatch = body.match(/tracking[_\-/=](\d{12}|\d{15})\b/i);
-  if (fedexMatch) return fedexMatch[1]!;
-
-  // USPS 22-digit starting with 9
-  const uspsMatch = body.match(/\b(9\d{21})\b/);
-  if (uspsMatch) return uspsMatch[1]!;
-
-  return null;
+interface ExtractedOrder {
+  trackingNumber: string | null;
+  carrier: string | null;
+  orderNumber: string | null;
+  retailer: string | null;
+  itemName: string | null;
+  expectedDeliveryDate: string | null; // YYYY-MM-DD or null
 }
 
-async function extractTrackingNumber(
+// Single Claude call: classifies the email AND extracts the full order record
+// in one pass. No regex pre-extraction or hints — Claude reads the body itself.
+async function extractOrderDetails(
   subject: string,
   from: string,
-  body: string,
-  preExtractedTracking?: string | null
-): Promise<string | null> {
-  const truncatedBody = body.slice(0, 6000);
+  body: string
+): Promise<ExtractedOrder | null> {
+  const truncatedBody = body.slice(0, 20000);
 
-  // Use the caller-provided pre-extracted value (from raw HTML) or fall back to
-  // scanning the already-stripped body as a secondary attempt.
-  const preExtracted = preExtractedTracking ?? preExtractTrackingNumber(body);
-
-  const prompt = `Does this email contain a shipping tracking number from a carrier like UPS, FedEx, USPS, DHL, Amazon Logistics? If yes, extract just the tracking number. If no, return none.
+  const prompt = `Read this email and determine whether it is a genuine order or shipping notification containing a trackable shipping tracking number (from a carrier like UPS, FedEx, USPS, DHL, Amazon Logistics, OnTrac, LaserShip, etc).
 
 Email subject: ${subject}
-Email from: ${from}${preExtracted ? `\nPre-extracted tracking number found in email URLs: ${preExtracted}` : ""}
+Email from: ${from}
 
 Email body:
 ${truncatedBody}
 
-Reply with ONLY the tracking number, or the literal word "none" — nothing else.`;
+Return ONLY valid JSON with exactly these fields — use null for any field not present in the email:
+{
+  "trackingNumber": "the shipping tracking number, or null if this email does not contain one",
+  "carrier": "UPS, FedEx, USPS, DHL, Amazon Logistics, etc, or null",
+  "orderNumber": "the order/confirmation number, or null",
+  "retailer": "the store or retailer name, or null",
+  "itemName": "a short description of what was ordered/shipped, or null",
+  "expectedDeliveryDate": "YYYY-MM-DD expected delivery date, or null"
+}
+
+If this email does not contain a genuine trackable shipping tracking number, set trackingNumber to null.
+Reply with ONLY the JSON object — no explanation, no markdown code fences.`;
 
   try {
     const resp = await anthropic.messages.create({
-      model: "claude-haiku-4-5",
-      max_tokens: 40,
+      model: MODEL_HAIKU,
+      max_tokens: 400,
       messages: [{ role: "user", content: prompt }],
     });
-    const text = resp.content[0].type === "text" ? resp.content[0].text.trim() : "";
-    if (!text || text.toLowerCase() === "none") {
-      return null;
+    const text = resp.content[0]?.type === "text" ? resp.content[0].text.trim() : "";
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+
+    const parsed = JSON.parse(match[0]) as ExtractedOrder;
+    if (!parsed.trackingNumber) return null;
+
+    // Guard against a malformed date reaching the `date`-typed column.
+    if (parsed.expectedDeliveryDate && !/^\d{4}-\d{2}-\d{2}$/.test(parsed.expectedDeliveryDate)) {
+      parsed.expectedDeliveryDate = null;
     }
-    return text;
+
+    return parsed;
   } catch (err) {
-    logger.warn({ err, subject, from }, "[OrderScanner] Claude Haiku tracking extraction failed");
+    logger.warn({ err, subject, from }, "[OrderScanner] Claude order extraction failed");
     return null;
   }
 }
 
 // ── Main scanner ──────────────────────────────────────────────────────────────
-// Minimal pipeline: extract a tracking number, skip if already on file,
-// insert a bare-bones row, then create an EasyPost tracker for it.
-// No other order fields (order_number, carrier, expected_date, order_total,
-// order_url) are parsed — EasyPost webhooks fill in status/tracking_events.
+// Extracts a full structured order record (tracking number, carrier, order
+// number, retailer, item name, expected delivery date) in a single Claude
+// call, skips if already on file, inserts the row, then creates an EasyPost
+// tracker for it.
 
 function senderDisplayName(from: string): string {
   const match = from.match(/^(.*?)\s*<[^>]+>/);
@@ -272,16 +263,13 @@ export async function scanOrderEmails(
       const subject = getHeader("Subject");
       const from = getHeader("From");
       const rawPayload = (detail.data.payload ?? {}) as GmailPart;
-      // Pre-extract from raw HTML BEFORE stripping so TBA numbers in href
-      // attributes (track.amazon.com/tracking/TBAxxxxxxx) are captured.
-      const rawHtml = extractRawHtmlFromPayload(rawPayload);
-      const preExtractedTracking = preExtractTrackingNumber(rawHtml) ?? preExtractTrackingNumber(rawHtml.replace(/<[^>]+>/g, " "));
       const body = extractBodyFromPayload(rawPayload);
 
       if (!body || body.length < 50) continue;
 
-      const trackingNumber = await extractTrackingNumber(subject, from, body, preExtractedTracking);
-      if (!trackingNumber) continue;
+      const order = await extractOrderDetails(subject, from, body);
+      if (!order) continue;
+      const trackingNumber = order.trackingNumber!;
 
       // Check if tracking number already exists in orders table — skip if yes
       const { rows: existing } = await query<{ id: number }>(
@@ -293,18 +281,20 @@ export async function scanOrderEmails(
         continue;
       }
 
-      // Insert minimal row
+      const retailer = order.retailer ?? senderDisplayName(from);
+      const itemName = order.itemName ?? subject;
+
       const { rows: inserted } = await query<{ id: number }>(
-        `INSERT INTO orders (user_name, tracking_number, retailer, item_name, status, created_at)
-         VALUES ($1, $2, $3, $4, 'pre_transit', NOW())
+        `INSERT INTO orders (user_name, tracking_number, carrier, order_number, retailer, item_name, expected_date, status, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'pre_transit', NOW())
          RETURNING id`,
-        [userName, trackingNumber, senderDisplayName(from), subject]
+        [userName, trackingNumber, order.carrier, order.orderNumber, retailer, itemName, order.expectedDeliveryDate]
       );
       newCount++;
-      logger.info({ emailId: msgId, trackingNumber }, "[OrderScanner] Minimal order row inserted");
+      logger.info({ emailId: msgId, trackingNumber, carrier: order.carrier }, "[OrderScanner] Order row inserted");
 
-      // Create EasyPost tracker
-      const tracker = await createTracker(trackingNumber);
+      // Create EasyPost tracker — pass the extracted carrier when known, for more reliable tracking
+      const tracker = await createTracker(trackingNumber, order.carrier ?? undefined);
       if (tracker && inserted[0]) {
         await query(
           `UPDATE orders SET easypost_tracker_id = $1 WHERE id = $2`,
