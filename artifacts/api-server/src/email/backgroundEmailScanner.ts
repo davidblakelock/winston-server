@@ -1,14 +1,18 @@
 /**
  * Background Email Scanner — Unified Claude Classification
  *
- * Two separate Gmail queries per scan:
- *   1. ORDER scan  — broad query, no inbox restriction (orders land in Promotions/Updates),
- *                    up to 50 candidates, processes up to 40. email_id passed for dedup.
- *   2. SOCIAL scan — all unread inbox emails, up to 30 candidates, processes up to 20.
+ * Runs on the same 60-min-interval tick:
+ *   1. SOCIAL scan — all unread inbox emails, up to 30 candidates, processes up to 20.
  *                    Keyword-free — classifyEmail handles filtering.
+ *   2. Reservation/confirmation scan (scanReservationEmails) — trip, warranty,
+ *                    subscription, home service, and order confirmations saved to user_records.
+ *   3. ORDER / shipping scan (scanOrderEmails) — tracking-number-bearing order and
+ *                    shipping emails saved to the orders table, EasyPost tracker created.
  *
  * Claude Haiku classifies + extracts each email in a single call.
- * Last-scan timestamp is persisted to DB (order_sync_state) so restarts don't re-process.
+ * Last-scan timestamps are persisted to DB (social_scan_state, order_sync_state)
+ * so restarts don't re-process, and order_sync_state is shared with the manual
+ * POST /api/orders/sync endpoint.
  */
 
 import cron from "node-cron";
@@ -26,6 +30,8 @@ import { getEmailScanSettings } from "../email/emailScanSettings.js";
 import { scanReservationEmails } from "./reservationScanner.js";
 import { checkForConflict, addOneHour } from "../email/meetingScanner.js";
 import { query } from "../db.js";
+import { scanOrderEmails } from "../orders/gmailOrderScanner.js";
+import { getLastOrderScanAt, updateLastOrderScanAt } from "../orders/ordersManager.js";
 
 const TZ = "UTC";
 
@@ -400,6 +406,27 @@ async function runScan(userName: string): Promise<void> {
     }
   }
 
+  // ── Order / shipping scan ─────────────────────────────────────────────────
+  // Runs on the same schedule as the social scan. Shares order_sync_state with
+  // the manual POST /api/orders/sync endpoint so neither path re-scans emails
+  // the other already processed.
+  if (shouldScanSocial) {
+    try {
+      const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+      const lastOrderScan = await getLastOrderScanAt(userName);
+      const orderSince = lastOrderScan ?? ninetyDaysAgo;
+
+      const newOrders = await scanOrderEmails(userName, orderSince);
+      await updateLastOrderScanAt(userName);
+
+      if (newOrders > 0) {
+        logger.info({ userName, newOrders }, "[OrderScanner] Order scan complete");
+      }
+    } catch (err) {
+      logger.warn({ err, userName }, "[OrderScanner] Scan failed — skipping");
+    }
+  }
+
   // ── Batch summary push ────────────────────────────────────────────────────
   const scanReplies = getPendingReplyEmails(userName);
   const scanMeetings = getPendingMeetingRequests(userName);
@@ -476,5 +503,5 @@ export function startBackgroundEmailScanner(userName = NATIVE_USER): void {
     }
   }, { timezone: TZ });
 
-  logger.info("[BgEmailScanner] Scheduler started — order scan (DB-backed) + social scan (in-memory), 60-min interval");
+  logger.info("[BgEmailScanner] Scheduler started — social scan (DB-backed) + reservation scan + order scan (DB-backed), 60-min interval");
 }
