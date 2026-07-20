@@ -69,6 +69,7 @@ type ProfileRow = {
   favorite_podcasts:    string | null;
   favorite_artists:     string[] | null;
   email_done_action:    string | null;
+  onboarding_completed: boolean | null;
 };
 
 async function fetchProfileRow(userName: string): Promise<ProfileRow | null> {
@@ -120,6 +121,7 @@ async function fetchProfileRow(userName: string): Promise<ProfileRow | null> {
     favorite_podcasts:    str("favorite_podcasts"),
     favorite_artists:     Array.isArray(r["favorite_artists"]) ? (r["favorite_artists"] as string[]) : null,
     email_done_action:    str("email_done_action"),
+    onboarding_completed: (r["onboarding_completed"] as boolean | null) ?? null,
   };
 }
 
@@ -153,6 +155,7 @@ function rowToResponse(row: ProfileRow, settings: UserSettings) {
     favoritePodcasts:    row.favorite_podcasts,
     favoriteArtists:     row.favorite_artists ?? [],
     emailDoneAction:     row.email_done_action,
+    onboardingCompleted: row.onboarding_completed ?? false,
     settings: {
       briefingWeather:  settings.briefingWeather,
       briefingCalendar: settings.briefingCalendar,
@@ -203,7 +206,8 @@ router.get("/profile", async (req: Request, res: Response) => {
 //   homeAddress, homeLatitude, homeLongitude, neighborhood,
 //   age, birthday, relationshipStatus, bookingPhone,
 //   healthNotes, photoUrl, hobbies, musicGenres, tvGenres,
-//   sportsTeams, favoriteRestaurants, favoritePodcasts
+//   sportsTeams, favoriteRestaurants, favoritePodcasts,
+//   onboardingCompleted
 //
 // Allowed settings fields (user_settings table):
 //   briefingWeather, briefingCalendar, briefingTodos, briefingEmail,
@@ -253,6 +257,11 @@ const JSONB_COLS: Record<string, string> = {
   favoriteArtists: "favorite_artists",
 };
 
+// Boolean columns on user_profiles
+const BOOLEAN_COLS: Record<string, string> = {
+  onboardingCompleted: "onboarding_completed",
+};
+
 // user_settings boolean columns
 const SETTINGS_KEYS = new Set<keyof Omit<UserSettings, "stoicDay">>([
   "briefingWeather", "briefingCalendar", "briefingTodos", "briefingEmail",
@@ -297,6 +306,10 @@ router.patch("/profile", async (req: Request, res: Response) => {
     }
   }
 
+  for (const [key, col] of Object.entries(BOOLEAN_COLS)) {
+    if (key in body) addParam(col, Boolean(body[key]));
+  }
+
   // ── Build the user_settings UPDATE ───────────────────────────────────────
   const settingsUpdate: Partial<Omit<UserSettings, "stoicDay">> = {};
   for (const key of SETTINGS_KEYS) {
@@ -309,6 +322,7 @@ router.patch("/profile", async (req: Request, res: Response) => {
     ...Object.keys(NUMERIC_COLS),
     ...Object.keys(DATE_COLS),
     ...Object.keys(JSONB_COLS),
+    ...Object.keys(BOOLEAN_COLS),
     ...SETTINGS_KEYS,
   ]);
   const unknownKeys = Object.keys(body).filter(k => !allKnownKeys.has(k));
