@@ -4,8 +4,6 @@ import { authenticate } from "../auth/middleware.js";
 import {
   getOrders,
   deleteOrder,
-  getLastOrderScanAt,
-  updateLastOrderScanAt,
   consolidateOrders,
 } from "../orders/ordersManager.js";
 import { scanOrderEmails } from "../orders/gmailOrderScanner.js";
@@ -29,45 +27,22 @@ router.get("/orders", async (req, res) => {
 });
 
 // ── POST /api/orders/sync ─────────────────────────────────────────────────────
-// 1. Scans Gmail for new order/shipping emails since last sync (90 days on first run).
-// 2. Parses each email with Claude Haiku.
-// Body: { force?: boolean } — when true, ignores last_scan_at and looks back 90 days.
+// Scans currently-unread inbox mail for order/shipping emails (see
+// buildGmailQuery in gmailOrderScanner.ts), parses each with Claude Haiku,
+// then consolidates any duplicate rows. No lookback window or watermark —
+// every sync just processes whatever's unread right now.
 router.post("/orders/sync", express.json({ limit: "1mb" }), async (req, res) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
 
-  const force = req.body?.force === true;
-  req.log.info({ userName, force }, "[Orders] Sync started");
+  req.log.info({ userName }, "[Orders] Sync started");
 
   try {
     // ── Step 1: Gmail scan ──────────────────────────────────────────────────
-    const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-    const existingOrders = await getOrders(userName);
-    // Use last_scan_at if we have ANY existing orders — even ones without tracking numbers.
-    // Previously this checked hasTrackedOrders which caused every sync to do a full 90-day
-    // re-scan (and re-insert the same emails) whenever Amazon emails lacked tracking numbers.
-    const hasAnyOrders = existingOrders.length > 0;
-    // Force flag OR truly first-time (no orders at all) → ignore last_scan_at, look back 90 days
-    const lastScan = (force || !hasAnyOrders) ? null : await getLastOrderScanAt(userName);
-    const since = lastScan ?? ninetyDaysAgo;
-    if (force) req.log.info({ userName, since }, "[Orders] Force sync — using 90-day lookback");
-    else if (!hasAnyOrders) req.log.info({ userName, since }, "[Orders] No orders on record — using 90-day lookback");
-
     // scanOrderEmails handles insertion + EasyPost tracker creation internally
     // and returns both the new-row count and how many candidates the Gmail
     // query itself found.
-    const { newCount, candidatesFound } = await scanOrderEmails(userName, since);
-
-    // Only advance the watermark when the Gmail query actually found
-    // candidates. A zero-candidate scan (transient failure, or a genuinely
-    // quiet inbox) must not move last_scan_at forward — otherwise the next
-    // sync's lookback window shrinks to whatever this scan's timestamp was,
-    // instead of ever reaching back far enough to find real order emails.
-    if (candidatesFound > 0) {
-      await updateLastOrderScanAt(userName);
-    } else {
-      req.log.info({ userName }, "[Orders] No candidate emails found — not advancing scan watermark");
-    }
+    const { newCount, candidatesFound } = await scanOrderEmails(userName);
     req.log.info({ userName, newOrUpdated: newCount, candidatesFound }, "[Orders] Gmail scan complete");
 
     // ── Step 2: Consolidate duplicates from this scan and any previous scans ─

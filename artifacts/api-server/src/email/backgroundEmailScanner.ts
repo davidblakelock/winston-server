@@ -10,9 +10,9 @@
  *                    shipping emails saved to the orders table, EasyPost tracker created.
  *
  * Claude Haiku classifies + extracts each email in a single call.
- * Last-scan timestamps are persisted to DB (social_scan_state, order_sync_state)
- * so restarts don't re-process, and order_sync_state is shared with the manual
- * POST /api/orders/sync endpoint.
+ * Social scan's last-scan timestamp is persisted to DB (social_scan_state) so
+ * restarts don't re-process. The order scan has no watermark — it always
+ * processes whatever's currently unread in the inbox.
  */
 
 import cron from "node-cron";
@@ -31,11 +31,10 @@ import { scanReservationEmails } from "./reservationScanner.js";
 import { checkForConflict, addOneHour } from "../email/meetingScanner.js";
 import { query } from "../db.js";
 import { scanOrderEmails } from "../orders/gmailOrderScanner.js";
-import { getLastOrderScanAt, updateLastOrderScanAt } from "../orders/ordersManager.js";
 
 const TZ = "UTC";
 
-// Social scan last-scan is DB-backed via social_scan_state (mirrors order_sync_state).
+// Social scan last-scan is DB-backed via social_scan_state.
 // Previously in-memory, which caused re-insertion of the same emails after every restart.
 
 // ── Gmail body helpers ────────────────────────────────────────────────────────
@@ -407,27 +406,15 @@ async function runScan(userName: string): Promise<void> {
   }
 
   // ── Order / shipping scan ─────────────────────────────────────────────────
-  // Runs on the same schedule as the social scan. Shares order_sync_state with
-  // the manual POST /api/orders/sync endpoint so neither path re-scans emails
-  // the other already processed.
+  // Runs on the same schedule as the social scan. No watermark to share —
+  // scanOrderEmails() always processes whatever's currently unread in the
+  // inbox (see buildGmailQuery in gmailOrderScanner.ts).
   if (shouldScanSocial) {
     try {
-      const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-      const lastOrderScan = await getLastOrderScanAt(userName);
-      const orderSince = lastOrderScan ?? ninetyDaysAgo;
-
-      const { newCount: newOrders, candidatesFound } = await scanOrderEmails(userName, orderSince);
-
-      // Same watermark-shrinking bug as the manual /orders/sync endpoint:
-      // only advance last_scan_at when this scan actually found candidates.
-      if (candidatesFound > 0) {
-        await updateLastOrderScanAt(userName);
-      } else {
-        logger.info({ userName }, "[OrderScanner] No candidate emails found — not advancing scan watermark");
-      }
+      const { newCount: newOrders, candidatesFound } = await scanOrderEmails(userName);
 
       if (newOrders > 0) {
-        logger.info({ userName, newOrders }, "[OrderScanner] Order scan complete");
+        logger.info({ userName, newOrders, candidatesFound }, "[OrderScanner] Order scan complete");
       }
     } catch (err) {
       logger.warn({ err, userName }, "[OrderScanner] Scan failed — skipping");

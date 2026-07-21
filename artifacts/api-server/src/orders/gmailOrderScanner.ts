@@ -15,36 +15,21 @@ function isAmazonSender(from: string): boolean {
   return from.toLowerCase().includes("amazon.com");
 }
 
-// Infrastructure noise, not retailer/order content — excluded structurally,
-// not as a keyword/retailer allow-list. Mailgun's own billing/transactional
-// emails to this account were showing up as spurious Claude-classification
-// candidates on every scan.
-const EXCLUDED_SENDER_DOMAINS = ["mailgun.com", "mailgun.net"];
-
-// Broad query, no subject-keyword or retailer allow-list. Those were exactly
-// the brittle, hardcoded-list problem: a real King Arthur "Shipment
-// Confirmation" email was silently invisible to this scanner because it
-// didn't literally match any string in the old list, and the next
-// retailer's different wording would fail the same way. extractOrderDetails()
-// is the actual filter now — Claude already returns null for trackingNumber
-// and orderStatusStage on anything that isn't a genuine order/shipping email.
+// No subject-keyword, retailer allow-list, or sender-domain exclusion —
+// those were exactly the brittle, hardcoded-list problem: a real King
+// Arthur "Shipment Confirmation" email was silently invisible to this
+// scanner because it didn't literally match any string in the old keyword
+// list, and a hardcoded domain exclusion is the same mistake in the other
+// direction. extractOrderDetails() is the actual filter — confirmed via
+// logs that Claude already returns all-null fields for irrelevant mail
+// (e.g. billing receipts) on its own, no hardcoded exclusion needed.
 //
-// Two structural (not keyword-based) narrowings on top of that broad net:
-//   - EXCLUDED_SENDER_DOMAINS — infrastructure noise, not retailer content.
-//   - (is:unread OR after:since) — avoids re-running Claude on the same
-//     already-read backlog every tick, while still catching older unread
-//     mail the user hasn't dealt with yet.
-//
-// Deliberately NOT mirroring the social scan's `in:inbox` restriction here:
-// order/shipping emails commonly land in Promotions/Updates, so restricting
-// to the inbox label would silently drop real orders.
-function buildGmailQuery(since?: Date): string {
-  const exclusions = EXCLUDED_SENDER_DOMAINS.map((d) => `-from:${d}`).join(" ");
-  const base = `-in:spam -in:trash -from:me ${exclusions}`;
-  if (!since) return base;
-
-  const epoch = Math.floor(since.getTime() / 1000);
-  return `(is:unread OR after:${epoch}) ${base}`;
+// in:inbox is:unread scopes to exactly what the user hasn't dealt with yet
+// in their visible inbox — not Promotions/Updates/Archive/All Mail, and no
+// date-based lookback. There is no watermark to maintain: every scan just
+// processes whatever's currently unread in the inbox.
+function buildGmailQuery(): string {
+  return `in:inbox is:unread -in:spam -in:trash -from:me`;
 }
 
 // ── Email body extraction ─────────────────────────────────────────────────────
@@ -211,18 +196,13 @@ function senderDisplayName(from: string): string {
 export interface OrderScanResult {
   newCount: number;
   // Raw count of messageIds the Gmail query itself returned, before the
-  // per-tick processing cap. Callers use this — not newCount — to decide
-  // whether to advance order_sync_state.last_scan_at: a scan that found zero
-  // candidates (transient auth/API failure, or a genuinely quiet inbox)
-  // must not move the watermark forward, or the next scan's lookback window
-  // silently shrinks to almost nothing instead of ever reaching back far
-  // enough to find real order emails again.
+  // per-tick processing cap. Purely a diagnostic/logging signal now — no
+  // watermark depends on it.
   candidatesFound: number;
 }
 
 export async function scanOrderEmails(
-  userName: string,
-  since?: Date
+  userName: string
 ): Promise<OrderScanResult> {
   const auth = await getAuthClientForUser(userName);
   if (!auth) {
@@ -238,17 +218,14 @@ export async function scanOrderEmails(
   }
 
   const gmail = google.gmail({ version: "v1", auth });
-  const q = buildGmailQuery(since);
+  const q = buildGmailQuery();
 
-  logger.info({ userName, since: since?.toISOString(), q }, "[OrderScanner] Scanning Gmail");
+  logger.info({ userName, q }, "[OrderScanner] Scanning Gmail");
 
   let messageIds: string[] = [];
   try {
     const list = await gmail.users.messages.list({
       userId: "me",
-      // Raised from 100 now that the query has no subject/domain restriction —
-      // a broad query surfaces far more candidates per scan than the old
-      // narrow one did.
       maxResults: 200,
       q,
     });
@@ -262,8 +239,9 @@ export async function scanOrderEmails(
 
   let newCount = 0;
 
-  // Raised from 50 alongside maxResults, same reasoning — still a sane bound
-  // on Claude calls per tick (Haiku is fast/cheap; see lib/models.ts).
+  // Sane upper bound on Claude calls per tick (Haiku is fast/cheap; see
+  // lib/models.ts) — in practice a scoped in:inbox is:unread query rarely
+  // approaches this.
   for (const msgId of messageIds.slice(0, 100)) {
     try {
       const detail = await gmail.users.messages.get({

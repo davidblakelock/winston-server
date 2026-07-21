@@ -88,17 +88,11 @@ export async function ensureOrdersTable(): Promise<void> {
       CREATE UNIQUE INDEX IF NOT EXISTS orders_tracking_number_idx
       ON orders (user_name, tracking_number) WHERE tracking_number IS NOT NULL
     `).catch(() => {});
-    await query(`
-      CREATE TABLE IF NOT EXISTS order_sync_state (
-        user_name text PRIMARY KEY,
-        last_scan_at timestamptz
-      )
-    `);
     // Add direct-carrier tracking columns (idempotent)
     await query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS status_color text`).catch(() => {});
     await query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS status_detail text`).catch(() => {});
     await query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS easypost_tracker_id text`).catch(() => {});
-    logger.info("[Orders] Table and sync state ready");
+    logger.info("[Orders] Table ready");
   } catch (err) {
     logger.warn({ err }, "[Orders] Startup migration warning");
   }
@@ -522,24 +516,3 @@ export async function deleteOrder(id: number, userName: string): Promise<boolean
   return rows.length > 0;
 }
 
-// ── Sync state ─────────────────────────────────────────────────────────────────
-
-export async function getLastOrderScanAt(userName = NATIVE_USER): Promise<Date | null> {
-  const { rows } = await query<{ last_scan_at: string | null }>(
-    `SELECT last_scan_at FROM order_sync_state WHERE user_name = $1`,
-    [userName]
-  );
-  const val = rows[0]?.last_scan_at;
-  return val ? new Date(val) : null;
-}
-
-export async function updateLastOrderScanAt(userName = NATIVE_USER): Promise<void> {
-  await query(
-    `INSERT INTO order_sync_state (user_name, last_scan_at)
-     VALUES ($1, now())
-     ON CONFLICT (user_name)
-     DO UPDATE SET last_scan_at = now()
-     RETURNING user_name`,
-    [userName]
-  );
-}
