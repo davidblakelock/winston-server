@@ -146,6 +146,14 @@ export async function addProfileItem(
     ? null
     : detail.trim();
 
+  // Restaurants live in their own dedicated table (see routes/lists.ts) —
+  // same table the Restaurants screen and the "restaurants" list-sync route
+  // read from. Every other category still uses the shared profile_items
+  // junk-drawer table below, unchanged.
+  if (category === "restaurants") {
+    return addRestaurantItem(cleanName, cleanDetail, userName);
+  }
+
   // Deduplication: case-insensitive name match within same category and user
   const existing = await query<{ id: number; detail: string | null }>(
     `SELECT id, detail FROM profile_items WHERE user_name = $1 AND category = $2 AND LOWER(name) = LOWER($3)`,
@@ -173,20 +181,6 @@ export async function addProfileItem(
     return mapRow(updated.rows[0]);
   }
 
-  // Look up the user's city so URL lookups are location-aware (not hardcoded).
-  const userCityRow = await query<{ city: string | null }>(
-    `SELECT city FROM user_profiles WHERE user_name = $1`,
-    [userName]
-  ).catch(() => ({ rows: [] as Array<{ city: string | null }> }));
-  const userCity = userCityRow.rows[0]?.city ?? "";
-
-  // For restaurants, pre-populate with a guaranteed Yelp search URL so the link
-  // is available immediately, then race a real lookup (OpenTable/Resy/Yelp direct)
-  // against an 8-second timeout so the chat confirmation can name the platform.
-  const initialUrl = category === "restaurants"
-    ? yelpFallbackUrl(cleanName, userCity)
-    : null;
-
   // Insert new row
   const { rows } = await query<{
     id: number;
@@ -195,38 +189,96 @@ export async function addProfileItem(
     detail: string | null;
     created_at: Date;
   }>(
-    `INSERT INTO profile_items (user_name, category, name, detail, url)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO profile_items (user_name, category, name, detail)
+     VALUES ($1, $2, $3, $4)
      RETURNING id, category, name, detail, created_at`,
-    [userName, category, cleanName, cleanDetail, initialUrl]
+    [userName, category, cleanName, cleanDetail]
+  );
+
+  return mapRow(rows[0]);
+}
+
+// ── Restaurants — dedicated table, not profile_items ──────────────────────────
+// Mirrors addProfileItem()'s dedup + URL-lookup behavior exactly, just against
+// the `restaurants` table instead of the shared profile_items table.
+async function addRestaurantItem(
+  cleanName: string,
+  cleanDetail: string | null,
+  userName: string
+): Promise<ProfileItem> {
+  const existing = await query<{ id: number; detail: string | null }>(
+    `SELECT id, detail FROM restaurants WHERE user_name = $1 AND LOWER(name) = LOWER($2)`,
+    [userName, cleanName]
+  );
+
+  if (existing.rows.length > 0) {
+    if (cleanDetail !== null) {
+      await query(
+        `UPDATE restaurants SET detail = $1 WHERE id = $2 RETURNING id`,
+        [cleanDetail, existing.rows[0].id]
+      );
+    }
+    const updated = await query<RestaurantRow>(
+      `SELECT id, name, detail, created_at, url, booking_platform FROM restaurants WHERE id = $1`,
+      [existing.rows[0].id]
+    );
+    return mapRestaurantRow(updated.rows[0]);
+  }
+
+  // Look up the user's city so URL lookups are location-aware (not hardcoded).
+  const userCityRow = await query<{ city: string | null }>(
+    `SELECT city FROM user_profiles WHERE user_name = $1`,
+    [userName]
+  ).catch(() => ({ rows: [] as Array<{ city: string | null }> }));
+  const userCity = userCityRow.rows[0]?.city ?? "";
+
+  // Pre-populate with a guaranteed Yelp search URL so the link is available
+  // immediately, then race a real lookup (OpenTable/Resy/Yelp direct) against
+  // an 8-second timeout so the chat confirmation can name the platform.
+  const initialUrl = yelpFallbackUrl(cleanName, userCity);
+
+  const { rows } = await query<{
+    id: number;
+    name: string;
+    detail: string | null;
+    created_at: Date;
+  }>(
+    `INSERT INTO restaurants (user_name, name, detail, url)
+     VALUES ($1, $2, $3, $4)
+     RETURNING id, name, detail, created_at`,
+    [userName, cleanName, cleanDetail, initialUrl]
   );
 
   let resolvedUrl: string | null = initialUrl;
   let resolvedPlatform: string | null = detectBookingPlatform(initialUrl);
 
-  if (category === "restaurants") {
-    try {
-      // Race the lookup against an 8-second timeout so the chat response can confirm
-      // the actual booking platform (OpenTable / Resy / Yelp) without excessive latency.
-      const LOOKUP_TIMEOUT = 8000;
-      const result = await Promise.race([
-        lookupRestaurantUrl(cleanName, userCity),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), LOOKUP_TIMEOUT)),
-      ]);
-      if (result) {
-        resolvedUrl = result;
-        resolvedPlatform = detectBookingPlatform(result);
-        await query(
-          `UPDATE profile_items SET url = $1, booking_platform = $2 WHERE id = $3`,
-          [resolvedUrl, resolvedPlatform, rows[0].id]
-        ).catch(() => {});
-      }
-    } catch {
-      // Best effort — restaurant is saved with Yelp fallback
+  try {
+    const LOOKUP_TIMEOUT = 8000;
+    const result = await Promise.race([
+      lookupRestaurantUrl(cleanName, userCity),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), LOOKUP_TIMEOUT)),
+    ]);
+    if (result) {
+      resolvedUrl = result;
+      resolvedPlatform = detectBookingPlatform(result);
+      await query(
+        `UPDATE restaurants SET url = $1, booking_platform = $2 WHERE id = $3`,
+        [resolvedUrl, resolvedPlatform, rows[0].id]
+      ).catch(() => {});
     }
+  } catch {
+    // Best effort — restaurant is saved with Yelp fallback
   }
 
-  return { ...mapRow(rows[0]), url: resolvedUrl, bookingPlatform: resolvedPlatform };
+  return {
+    id: rows[0].id,
+    category: "restaurants",
+    name: rows[0].name,
+    detail: rows[0].detail,
+    createdAt: rows[0].created_at,
+    url: resolvedUrl,
+    bookingPlatform: resolvedPlatform,
+  };
 }
 
 export async function removeProfileItem(
@@ -234,6 +286,13 @@ export async function removeProfileItem(
   name: string,
   userName = NATIVE_STORED_NAME
 ): Promise<boolean> {
+  if (category === "restaurants") {
+    const { rowCount } = await query(
+      `DELETE FROM restaurants WHERE user_name = $1 AND LOWER(name) = LOWER($2) RETURNING id`,
+      [userName, name]
+    );
+    return (rowCount ?? 0) > 0;
+  }
   const { rowCount } = await query(
     `DELETE FROM profile_items WHERE user_name = $1 AND category = $2 AND LOWER(name) = LOWER($3) RETURNING id`,
     [userName, category, name]
@@ -245,33 +304,58 @@ export async function getProfileItems(
   category?: ProfileCategory,
   userName = NATIVE_STORED_NAME
 ): Promise<ProfileItem[]> {
-  const { rows } = category
-    ? await query<{
-        id: number;
-        category: string;
-        name: string;
-        detail: string | null;
-        created_at: Date;
-      }>(
-        `SELECT id, category, name, detail, created_at
-         FROM profile_items WHERE user_name = $1 AND category = $2
-         ORDER BY created_at ASC`,
-        [userName, category]
-      )
-    : await query<{
-        id: number;
-        category: string;
-        name: string;
-        detail: string | null;
-        created_at: Date;
-      }>(
-        `SELECT id, category, name, detail, created_at
-         FROM profile_items WHERE user_name = $1
-         ORDER BY category, created_at ASC`,
-        [userName]
-      );
+  if (category === "restaurants") {
+    const { rows } = await query<RestaurantRow>(
+      `SELECT id, name, detail, created_at, url, booking_platform
+       FROM restaurants WHERE user_name = $1
+       ORDER BY created_at ASC`,
+      [userName]
+    );
+    return rows.map(mapRestaurantRow);
+  }
 
-  return rows.map(mapRow);
+  if (category) {
+    const { rows } = await query<{
+      id: number;
+      category: string;
+      name: string;
+      detail: string | null;
+      created_at: Date;
+    }>(
+      `SELECT id, category, name, detail, created_at
+       FROM profile_items WHERE user_name = $1 AND category = $2
+       ORDER BY created_at ASC`,
+      [userName, category]
+    );
+    return rows.map(mapRow);
+  }
+
+  // No category filter ("give me everything") — profile_items no longer holds
+  // restaurants, so merge in the dedicated restaurants table too. Callers like
+  // formatProfileForContext() build full-profile context from this and still
+  // need restaurants included.
+  const [profileRows, restaurantRows] = await Promise.all([
+    query<{
+      id: number;
+      category: string;
+      name: string;
+      detail: string | null;
+      created_at: Date;
+    }>(
+      `SELECT id, category, name, detail, created_at
+       FROM profile_items WHERE user_name = $1
+       ORDER BY category, created_at ASC`,
+      [userName]
+    ),
+    query<RestaurantRow>(
+      `SELECT id, name, detail, created_at, url, booking_platform
+       FROM restaurants WHERE user_name = $1
+       ORDER BY created_at ASC`,
+      [userName]
+    ),
+  ]);
+
+  return [...profileRows.rows.map(mapRow), ...restaurantRows.rows.map(mapRestaurantRow)];
 }
 
 function mapRow(r: {
@@ -287,6 +371,27 @@ function mapRow(r: {
     name: r.name,
     detail: r.detail,
     createdAt: r.created_at,
+  };
+}
+
+interface RestaurantRow {
+  id: number;
+  name: string;
+  detail: string | null;
+  created_at: Date;
+  url: string | null;
+  booking_platform: string | null;
+}
+
+function mapRestaurantRow(r: RestaurantRow): ProfileItem {
+  return {
+    id: r.id,
+    category: "restaurants",
+    name: r.name,
+    detail: r.detail,
+    createdAt: r.created_at,
+    url: r.url,
+    bookingPlatform: r.booking_platform,
   };
 }
 

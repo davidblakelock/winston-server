@@ -51,11 +51,28 @@ query(`
   )
 `).catch(() => {});
 
-// ── Idempotent column migrations for profile_items (restaurants) ────────────
-// These columns were added after initial schema creation — ensure they exist in
-// Supabase before any restaurant SELECT/INSERT/UPDATE referencing them runs.
-query(`ALTER TABLE profile_items ADD COLUMN IF NOT EXISTS url TEXT`).catch(() => {});
-query(`ALTER TABLE profile_items ADD COLUMN IF NOT EXISTS booking_platform TEXT`).catch(() => {});
+// ── Idempotent migration for the dedicated restaurants table ─────────────────
+// Own table, own dedicated routes below — same pattern watched_shows already
+// uses for TV Shows, replacing profile_items category 'restaurants'.
+query(`
+  CREATE TABLE IF NOT EXISTS restaurants (
+    id                serial      PRIMARY KEY,
+    user_name         text        NOT NULL,
+    name              text        NOT NULL,
+    detail            text,
+    notes             text,
+    url               text,
+    booking_platform  text,
+    created_at        timestamptz NOT NULL DEFAULT now()
+  )
+`).catch(() => {});
+query(`CREATE INDEX IF NOT EXISTS restaurants_user_idx ON restaurants (user_name)`).catch(() => {});
+// Prevents duplicate restaurant names per user (case-insensitive) — mirrors the
+// dedup-on-insert logic below.
+query(`
+  CREATE UNIQUE INDEX IF NOT EXISTS restaurants_user_name_lower_idx
+  ON restaurants (user_name, lower(name))
+`).catch(() => {});
 
 // ── Disable 304 caching for all list routes ────────────────────────────────
 // Express generates a stable ETag from the response body and returns 304 when
@@ -81,7 +98,7 @@ router.get("/lists", async (req: Request, res: Response) => {
 
   try {
     // Run all count queries + list metadata in parallel
-    const [listItemsRes, wsCountRes, piShowsRes, piRestRes, listMetaRes, todoCount] = await Promise.all([
+    const [listItemsRes, wsCountRes, piShowsRes, restCountRes, listMetaRes, todoCount] = await Promise.all([
       query<{ list_name: string; item_count: string }>(
         `SELECT lower(list_name) AS list_name, COUNT(*) AS item_count
          FROM list_items WHERE user_name = $1
@@ -101,7 +118,7 @@ router.get("/lists", async (req: Request, res: Response) => {
         [userName]
       ),
       query<{ cnt: string }>(
-        `SELECT COUNT(*) AS cnt FROM profile_items WHERE user_name = $1 AND category = 'restaurants'`,
+        `SELECT COUNT(*) AS cnt FROM restaurants WHERE user_name = $1`,
         [userName]
       ),
       // list_type metadata — only exists for lists explicitly created via POST /api/lists
@@ -125,7 +142,7 @@ router.get("/lists", async (req: Request, res: Response) => {
 
     const wsCount = parseInt(wsCountRes.rows[0]?.cnt ?? "0", 10);
     const tvCount = wsCount > 0 ? wsCount : parseInt(piShowsRes.rows[0]?.cnt ?? "0", 10);
-    const restCount = parseInt(piRestRes.rows[0]?.cnt ?? "0", 10);
+    const restCount = parseInt(restCountRes.rows[0]?.cnt ?? "0", 10);
 
     // Custom lists — union of names in list_items AND names in the lists metadata
     // table, excluding system lists. This ensures notepad lists appear even before
@@ -290,8 +307,8 @@ router.get("/lists/restaurants", async (req: Request, res: Response) => {
   try {
     const { rows } = await query<{ id: number; name: string; detail: string | null; url: string | null; booking_platform: string | null; notes: string | null; created_at: string }>(
       `SELECT id, name, detail, url, booking_platform, notes, created_at
-       FROM profile_items
-       WHERE user_name = $1 AND category = 'restaurants'
+       FROM restaurants
+       WHERE user_name = $1
        ORDER BY created_at DESC`,
       [userName]
     );
@@ -349,11 +366,11 @@ router.post("/lists/restaurants", async (req: Request, res: Response) => {
   const manualPlatform = manualUrl ? detectBookingPlatform(manualUrl) : null;
   try {
     const { rows } = await query<{ id: number; name: string }>(
-      `INSERT INTO profile_items (user_name, category, name, detail, url, booking_platform)
-       SELECT $1, 'restaurants', $2, NULL, $3, $4
+      `INSERT INTO restaurants (user_name, name, detail, url, booking_platform)
+       SELECT $1, $2, NULL, $3, $4
        WHERE NOT EXISTS (
-         SELECT 1 FROM profile_items
-         WHERE user_name = $1 AND category = 'restaurants' AND lower(name) = lower($2)
+         SELECT 1 FROM restaurants
+         WHERE user_name = $1 AND lower(name) = lower($2)
        )
        RETURNING id, name`,
       [userName, item, manualUrl, manualPlatform]
@@ -372,7 +389,7 @@ router.post("/lists/restaurants", async (req: Request, res: Response) => {
         if (resolvedUrl) {
           const platform = detectBookingPlatform(resolvedUrl);
           await query(
-            `UPDATE profile_items SET url = $1, booking_platform = $2 WHERE id = $3`,
+            `UPDATE restaurants SET url = $1, booking_platform = $2 WHERE id = $3`,
             [resolvedUrl, platform, newItem.id]
           );
           req.log.info({ id: newItem.id, name: newItem.name, url: resolvedUrl, platform }, "[Restaurants] URL auto-resolved");
@@ -398,7 +415,7 @@ router.delete("/lists/restaurants/:id", async (req: Request, res: Response) => {
   const { id } = req.params;
   try {
     await query(
-      `DELETE FROM profile_items WHERE id = $1 AND user_name = $2 AND category = 'restaurants' RETURNING id`,
+      `DELETE FROM restaurants WHERE id = $1 AND user_name = $2 RETURNING id`,
       [id, userName]
     );
     res.json({ deleted: true });
@@ -423,12 +440,12 @@ router.put("/lists/restaurants/:id", async (req: Request, res: Response) => {
   const notesVal = notes !== undefined ? (notes?.trim() || null) : undefined;
   try {
     const { rows } = await query<{ id: number; name: string; url: string | null; booking_platform: string | null; notes: string | null }>(
-      `UPDATE profile_items
+      `UPDATE restaurants
        SET name = $1,
            url = COALESCE($2, url),
            booking_platform = CASE WHEN $2 IS NOT NULL THEN $3 ELSE booking_platform END,
            notes = COALESCE($4, notes)
-       WHERE id = $5 AND user_name = $6 AND category = 'restaurants'
+       WHERE id = $5 AND user_name = $6
        RETURNING id, name, url, booking_platform, notes`,
       [item.trim(), manualUrl, manualPlatform, notesVal ?? null, id, userName]
     );
@@ -454,8 +471,8 @@ router.post("/lists/restaurants/backfill-urls", async (req: Request, res: Respon
   if (!userName) return;
   try {
     const { rows } = await query<{ id: number; name: string; url: string | null }>(
-      `SELECT id, name, url FROM profile_items
-       WHERE user_name = $1 AND category = 'restaurants'
+      `SELECT id, name, url FROM restaurants
+       WHERE user_name = $1
        ORDER BY created_at ASC`,
       [userName]
     );

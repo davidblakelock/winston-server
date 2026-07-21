@@ -624,5 +624,73 @@ router.post("/admin/migrate-raw-data-restaurants", async (req: Request, res: Res
   }
 });
 
+/**
+ * POST /api/admin/migrate-restaurants-to-table
+ *
+ * One-time migration: moves davidblakelock's existing restaurant rows out of
+ * profile_items (category = 'restaurants') into the new dedicated
+ * restaurants table, preserving name/detail/url/booking_platform/notes/
+ * created_at exactly. Only deletes the source profile_items rows that were
+ * actually migrated (dedup-safe — skips anything that already exists by
+ * name in restaurants, and leaves the source row in place if it does, so
+ * nothing is silently lost). Hardcoded to davidblakelock's account since
+ * this is a one-off repair, not a general-purpose tool.
+ */
+router.post("/admin/migrate-restaurants-to-table", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  try {
+    const { rows: source } = await query<{
+      id: number;
+      name: string;
+      detail: string | null;
+      url: string | null;
+      booking_platform: string | null;
+      notes: string | null;
+      created_at: string;
+    }>(
+      `SELECT id, name, detail, url, booking_platform, notes, created_at
+       FROM profile_items
+       WHERE user_name = $1 AND category = 'restaurants'`,
+      ["davidblakelock"]
+    );
+
+    const migrated: { sourceId: number; name: string }[] = [];
+    for (const r of source) {
+      const { rows: insertedRows } = await query<{ id: number; name: string }>(
+        `INSERT INTO restaurants (user_name, name, detail, notes, url, booking_platform, created_at)
+         SELECT $1, $2, $3, $4, $5, $6, $7
+         WHERE NOT EXISTS (
+           SELECT 1 FROM restaurants
+           WHERE user_name = $1 AND lower(name) = lower($2)
+         )
+         RETURNING id, name`,
+        ["davidblakelock", r.name, r.detail, r.notes, r.url, r.booking_platform, r.created_at]
+      );
+      if (insertedRows.length > 0) migrated.push({ sourceId: r.id, name: insertedRows[0].name });
+    }
+
+    let deletedFromProfileItems = 0;
+    if (migrated.length > 0) {
+      const { rowCount } = await query(
+        `DELETE FROM profile_items WHERE id = ANY($1) AND user_name = $2 AND category = 'restaurants'`,
+        [migrated.map((m) => m.sourceId), "davidblakelock"]
+      );
+      deletedFromProfileItems = rowCount ?? 0;
+    }
+
+    res.json({
+      found: source.length,
+      migrated: migrated.length,
+      deletedFromProfileItems,
+      names: migrated.map((m) => m.name),
+    });
+  } catch (err) {
+    req.log.warn({ err }, "restaurants → restaurants-table migration error");
+    res.status(500).json({ error: "Migration failed" });
+  }
+});
+
 export default router;
 

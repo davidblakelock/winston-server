@@ -169,6 +169,22 @@ export const medicationLogs = pgTable(
   (t) => [uniqueIndex("medication_logs_user_date").on(t.userName, t.logDate)]
 );
 
+// ── Restaurants ──────────────────────────────────────────────────────────────
+export const restaurants = pgTable(
+  "restaurants",
+  {
+    id: serial("id").primaryKey(),
+    userName: text("user_name").notNull(),
+    name: text("name").notNull(),
+    detail: text("detail"),
+    notes: text("notes"),
+    url: text("url"),
+    bookingPlatform: text("booking_platform"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
+  },
+  (t) => [index("restaurants_user_idx").on(t.userName)]
+);
+
 // ── Watched TV Shows ────────────────────────────────────────────────────────
 export const watchedShows = pgTable(
   "watched_shows",
