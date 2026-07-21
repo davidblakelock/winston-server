@@ -9,72 +9,27 @@ import { upsertOrder, type OrderStatus } from "./ordersManager.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-// ── Subject-line filter ────────────────────────────────────────────────────────
-const ORDER_SUBJECT_KEYWORDS = [
-  "order confirmation",
-  "your order",
-  "has shipped",
-  "out for delivery",
-  "out_for_delivery",
-  "delivered",
-  "shipment notification",
-  "shipping confirmation",
-  "order shipped",
-  "package delivered",
-  "your package",
-  "order update",
-  "tracking number",
-  // Additional patterns missed by the above
-  "your delivery",
-  "delivery scheduled",
-  "delivery notification",
-  "package notification",
-  "delivery exception",
-  "attempted delivery",
-  "ready for pickup",
-];
-
-// Known carrier sender domains — emails from these are captured even if the
-// subject doesn't match a keyword (e.g. "FedEx Shipment 123456789").
-// Include subdomains (e.g. e.fedex.com, pkge.net for FedEx) explicitly since
-// Gmail's from: operator does NOT match subdomains automatically.
-const CARRIER_SENDER_DOMAINS = [
-  "fedex.com",
-  "e.fedex.com",
-  "fedexemail.com",
-  "ups.com",
-  "pkginfo.ups.com",
-  "usps.com",
-  "email.usps.com",
-  "dhl.com",
-  "dhlexpress.com",
-  "ontrac.com",
-  "lasership.com",
-  "amazon.com",
-  "notifications.amazon.com",
-  "ship.amazon.com",
-];
-
-// Reuses the amazon.* entries already in CARRIER_SENDER_DOMAINS — no new
-// hardcoded domain list — to gate the no-tracking-number pseudo-status path.
-const AMAZON_SENDER_DOMAINS = CARRIER_SENDER_DOMAINS.filter((d) => d.includes("amazon"));
-
+// Direct sender-domain check — replaces the old CARRIER_SENDER_DOMAINS-derived
+// filter list. Only used to gate the no-tracking-number pseudo-status path.
 function isAmazonSender(from: string): boolean {
-  const lower = from.toLowerCase();
-  return AMAZON_SENDER_DOMAINS.some((d) => lower.includes(d));
+  return from.toLowerCase().includes("amazon.com");
 }
 
+// Broad query, no subject-keyword or sender-domain restriction. Those were
+// exactly the brittle, hardcoded-list problem: a real King Arthur "Shipment
+// Confirmation" email was silently invisible to this scanner because it
+// didn't literally match any string in the old list, and the next
+// retailer's different wording would fail the same way. extractOrderDetails()
+// is the actual filter now — Claude already returns null for trackingNumber
+// and orderStatusStage on anything that isn't a genuine order/shipping email.
+//
+// Deliberately NOT mirroring the social scan's `in:inbox is:unread` here:
+// order/shipping emails commonly land in Promotions/Updates and are very
+// often already read by the time a 60-min-interval scan runs (people open
+// "your order shipped" emails immediately), so restricting to unread inbox
+// mail would silently drop most real orders.
 function buildGmailQuery(since?: Date): string {
-  const subjectClauses = ORDER_SUBJECT_KEYWORDS
-    .map((k) => `subject:"${k}"`)
-    .join(" OR ");
-
-  // Also catch emails from known carrier domains that mention package/tracking.
-  // e.g. "Your FedEx package is on the way" never matches the subject keywords above.
-  const fromClauses = CARRIER_SENDER_DOMAINS.map((d) => `from:${d}`).join(" OR ");
-  const carrierClause = `(${fromClauses}) (package OR delivery OR shipment OR tracking OR order)`;
-
-  let q = `((${subjectClauses}) OR (${carrierClause})) -in:spam -in:trash`;
+  let q = `-in:spam -in:trash -from:me`;
   if (since) {
     const epoch = Math.floor(since.getTime() / 1000);
     q += ` after:${epoch}`;
@@ -269,7 +224,10 @@ export async function scanOrderEmails(
   try {
     const list = await gmail.users.messages.list({
       userId: "me",
-      maxResults: 100,
+      // Raised from 100 now that the query has no subject/domain restriction —
+      // a broad query surfaces far more candidates per scan than the old
+      // narrow one did.
+      maxResults: 200,
       q,
     });
     messageIds = (list.data.messages ?? []).map((m) => m.id!).filter(Boolean);
@@ -282,7 +240,9 @@ export async function scanOrderEmails(
 
   let newCount = 0;
 
-  for (const msgId of messageIds.slice(0, 50)) {
+  // Raised from 50 alongside maxResults, same reasoning — still a sane bound
+  // on Claude calls per tick (Haiku is fast/cheap; see lib/models.ts).
+  for (const msgId of messageIds.slice(0, 100)) {
     try {
       const detail = await gmail.users.messages.get({
         userId: "me",
