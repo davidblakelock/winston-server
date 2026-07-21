@@ -3,7 +3,7 @@ import { getAuthClientForUser } from "../google/oauth.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { logger } from "../lib/logger.js";
 import { query } from "../db.js";
-import { createTracker } from "./easypostManager.js";
+import { createTracker, getStatusLabel } from "./easypostManager.js";
 import { MODEL_HAIKU } from "../lib/models.js";
 import { upsertOrder, type OrderStatus } from "./ordersManager.js";
 
@@ -15,26 +15,36 @@ function isAmazonSender(from: string): boolean {
   return from.toLowerCase().includes("amazon.com");
 }
 
-// Broad query, no subject-keyword or sender-domain restriction. Those were
-// exactly the brittle, hardcoded-list problem: a real King Arthur "Shipment
+// Infrastructure noise, not retailer/order content — excluded structurally,
+// not as a keyword/retailer allow-list. Mailgun's own billing/transactional
+// emails to this account were showing up as spurious Claude-classification
+// candidates on every scan.
+const EXCLUDED_SENDER_DOMAINS = ["mailgun.com", "mailgun.net"];
+
+// Broad query, no subject-keyword or retailer allow-list. Those were exactly
+// the brittle, hardcoded-list problem: a real King Arthur "Shipment
 // Confirmation" email was silently invisible to this scanner because it
 // didn't literally match any string in the old list, and the next
 // retailer's different wording would fail the same way. extractOrderDetails()
 // is the actual filter now — Claude already returns null for trackingNumber
 // and orderStatusStage on anything that isn't a genuine order/shipping email.
 //
-// Deliberately NOT mirroring the social scan's `in:inbox is:unread` here:
-// order/shipping emails commonly land in Promotions/Updates and are very
-// often already read by the time a 60-min-interval scan runs (people open
-// "your order shipped" emails immediately), so restricting to unread inbox
-// mail would silently drop most real orders.
+// Two structural (not keyword-based) narrowings on top of that broad net:
+//   - EXCLUDED_SENDER_DOMAINS — infrastructure noise, not retailer content.
+//   - (is:unread OR after:since) — avoids re-running Claude on the same
+//     already-read backlog every tick, while still catching older unread
+//     mail the user hasn't dealt with yet.
+//
+// Deliberately NOT mirroring the social scan's `in:inbox` restriction here:
+// order/shipping emails commonly land in Promotions/Updates, so restricting
+// to the inbox label would silently drop real orders.
 function buildGmailQuery(since?: Date): string {
-  let q = `-in:spam -in:trash -from:me`;
-  if (since) {
-    const epoch = Math.floor(since.getTime() / 1000);
-    q += ` after:${epoch}`;
-  }
-  return q;
+  const exclusions = EXCLUDED_SENDER_DOMAINS.map((d) => `-from:${d}`).join(" ");
+  const base = `-in:spam -in:trash -from:me ${exclusions}`;
+  if (!since) return base;
+
+  const epoch = Math.floor(since.getTime() / 1000);
+  return `(is:unread OR after:${epoch}) ${base}`;
 }
 
 // ── Email body extraction ─────────────────────────────────────────────────────
@@ -310,24 +320,37 @@ export async function scanOrderEmails(
         const retailer = order.retailer ?? senderDisplayName(from);
         const itemName = order.itemName ?? subject;
 
-        const { rows: inserted } = await query<{ id: number }>(
-          `INSERT INTO orders (user_name, tracking_number, carrier, order_number, retailer, item_name, expected_date, status, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, 'pre_transit', NOW())
-           RETURNING id`,
-          [userName, trackingNumber, order.carrier, order.orderNumber, retailer, itemName, order.expectedDeliveryDate]
-        );
-        newCount++;
-        logger.info({ emailId: msgId, trackingNumber, carrier: order.carrier }, "[OrderScanner] Order row inserted");
-
-        // Create EasyPost tracker — pass the extracted carrier when known, for more reliable tracking
+        // Create the EasyPost tracker BEFORE inserting so the initial row
+        // reflects the package's actual current status. Tracker.create()
+        // returns the carrier's already-known status immediately — a package
+        // can already be delivered by the time we first scan its
+        // confirmation/shipping email, and hardcoding 'pre_transit' would
+        // overwrite that with a stale default. Mirrors the fields the
+        // webhook handler (routes/easypost.ts) writes on every subsequent
+        // tracker.updated event — status stays the raw EasyPost code (what
+        // getOrders()/upsertOrder() compare against), getStatusLabel() only
+        // feeds status_detail (the human-readable string), matching what
+        // those columns are actually for.
         const tracker = await createTracker(trackingNumber, order.carrier ?? undefined);
-        if (tracker && inserted[0]) {
-          await query(
-            `UPDATE orders SET easypost_tracker_id = $1 WHERE id = $2`,
-            [tracker.trackerId, inserted[0].id]
-          ).catch((err) => logger.warn({ err }, "[OrderScanner] Failed to store EasyPost tracker ID"));
-          logger.info({ trackerId: tracker.trackerId, trackingNumber }, "[OrderScanner] EasyPost tracker created");
-        }
+        const initialStatus = tracker?.status ?? "pre_transit";
+        const statusDetail = tracker ? getStatusLabel(tracker.status) : null;
+        const carrier = tracker?.carrier ?? order.carrier;
+        const expectedDate = tracker?.estDeliveryDate
+          ? new Date(tracker.estDeliveryDate).toISOString().split("T")[0]
+          : order.expectedDeliveryDate;
+        const trackingEvents = tracker ? JSON.stringify(tracker.trackingEvents) : "[]";
+
+        const { rows: inserted } = await query<{ id: number }>(
+          `INSERT INTO orders (user_name, tracking_number, carrier, order_number, retailer, item_name, expected_date, status, status_detail, tracking_events, easypost_tracker_id, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, NOW())
+           RETURNING id`,
+          [userName, trackingNumber, carrier, order.orderNumber, retailer, itemName, expectedDate, initialStatus, statusDetail, trackingEvents, tracker?.trackerId ?? null]
+        );
+        if (inserted[0]) newCount++;
+        logger.info(
+          { emailId: msgId, trackingNumber, carrier, status: initialStatus, trackerId: tracker?.trackerId ?? null },
+          "[OrderScanner] Order row inserted"
+        );
       } else {
         // Amazon pseudo-status path — no tracking number, but Amazon's own
         // order_number and status language give us enough to track informally.
