@@ -53,12 +53,22 @@ router.post("/orders/sync", express.json({ limit: "1mb" }), async (req, res) => 
     if (force) req.log.info({ userName, since }, "[Orders] Force sync — using 90-day lookback");
     else if (!hasAnyOrders) req.log.info({ userName, since }, "[Orders] No orders on record — using 90-day lookback");
 
-    // scanOrderEmails now handles insertion + EasyPost tracker creation internally
-    // (minimal tracking-number-only pipeline) and returns the count of new rows.
-    const newCount = await scanOrderEmails(userName, since);
+    // scanOrderEmails handles insertion + EasyPost tracker creation internally
+    // and returns both the new-row count and how many candidates the Gmail
+    // query itself found.
+    const { newCount, candidatesFound } = await scanOrderEmails(userName, since);
 
-    await updateLastOrderScanAt(userName);
-    req.log.info({ userName, newOrUpdated: newCount }, "[Orders] Gmail scan complete");
+    // Only advance the watermark when the Gmail query actually found
+    // candidates. A zero-candidate scan (transient failure, or a genuinely
+    // quiet inbox) must not move last_scan_at forward — otherwise the next
+    // sync's lookback window shrinks to whatever this scan's timestamp was,
+    // instead of ever reaching back far enough to find real order emails.
+    if (candidatesFound > 0) {
+      await updateLastOrderScanAt(userName);
+    } else {
+      req.log.info({ userName }, "[Orders] No candidate emails found — not advancing scan watermark");
+    }
+    req.log.info({ userName, newOrUpdated: newCount, candidatesFound }, "[Orders] Gmail scan complete");
 
     // ── Step 2: Consolidate duplicates from this scan and any previous scans ─
     // Merges rows that share the same tracking_number or order_number so the

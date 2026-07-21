@@ -416,8 +416,15 @@ async function runScan(userName: string): Promise<void> {
       const lastOrderScan = await getLastOrderScanAt(userName);
       const orderSince = lastOrderScan ?? ninetyDaysAgo;
 
-      const newOrders = await scanOrderEmails(userName, orderSince);
-      await updateLastOrderScanAt(userName);
+      const { newCount: newOrders, candidatesFound } = await scanOrderEmails(userName, orderSince);
+
+      // Same watermark-shrinking bug as the manual /orders/sync endpoint:
+      // only advance last_scan_at when this scan actually found candidates.
+      if (candidatesFound > 0) {
+        await updateLastOrderScanAt(userName);
+      } else {
+        logger.info({ userName }, "[OrderScanner] No candidate emails found — not advancing scan watermark");
+      }
 
       if (newOrders > 0) {
         logger.info({ userName, newOrders }, "[OrderScanner] Order scan complete");

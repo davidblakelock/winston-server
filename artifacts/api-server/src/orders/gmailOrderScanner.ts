@@ -198,21 +198,33 @@ function senderDisplayName(from: string): string {
   return match ? match[1].trim().replace(/^"|"$/g, "") : from.trim();
 }
 
+export interface OrderScanResult {
+  newCount: number;
+  // Raw count of messageIds the Gmail query itself returned, before the
+  // per-tick processing cap. Callers use this — not newCount — to decide
+  // whether to advance order_sync_state.last_scan_at: a scan that found zero
+  // candidates (transient auth/API failure, or a genuinely quiet inbox)
+  // must not move the watermark forward, or the next scan's lookback window
+  // silently shrinks to almost nothing instead of ever reaching back far
+  // enough to find real order emails again.
+  candidatesFound: number;
+}
+
 export async function scanOrderEmails(
   userName: string,
   since?: Date
-): Promise<number> {
+): Promise<OrderScanResult> {
   const auth = await getAuthClientForUser(userName);
   if (!auth) {
     logger.warn({ userName }, "[OrderScanner] No auth client — Google not connected");
-    return 0;
+    return { newCount: 0, candidatesFound: 0 };
   }
 
   try {
     await auth.getAccessToken();
   } catch (err) {
     logger.warn({ err }, "[OrderScanner] Token refresh failed");
-    return 0;
+    return { newCount: 0, candidatesFound: 0 };
   }
 
   const gmail = google.gmail({ version: "v1", auth });
@@ -233,7 +245,7 @@ export async function scanOrderEmails(
     messageIds = (list.data.messages ?? []).map((m) => m.id!).filter(Boolean);
   } catch (err) {
     logger.warn({ err }, "[OrderScanner] Gmail list failed");
-    return 0;
+    return { newCount: 0, candidatesFound: 0 };
   }
 
   logger.info({ userName, count: messageIds.length }, "[OrderScanner] Found order emails");
@@ -347,5 +359,5 @@ export async function scanOrderEmails(
     }
   }
 
-  return newCount;
+  return { newCount, candidatesFound: messageIds.length };
 }
