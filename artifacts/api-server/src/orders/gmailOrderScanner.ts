@@ -180,6 +180,7 @@ Reply with ONLY the JSON object — no explanation, no markdown code fences.`;
       messages: [{ role: "user", content: prompt }],
     });
     const text = resp.content[0]?.type === "text" ? resp.content[0].text.trim() : "";
+    logger.info({ subject, rawClaudeResponse: text.slice(0, 500) }, "[OrderScanner] Claude raw response");
     const match = text.match(/\{[\s\S]*\}/);
     if (!match) return null;
 
