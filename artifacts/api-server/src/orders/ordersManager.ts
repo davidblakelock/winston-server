@@ -226,6 +226,48 @@ export async function upsertOrder(
       }
     }
 
+    // ── Priority 1.5: match by order_number alone, no tracking number on either side ──
+    // Handles retailers (e.g. Amazon Logistics) whose "Ordered"/"Shipped"/"Delivered"
+    // emails never carry a carrier tracking number. Without this tier, each status
+    // email would only dedup against an exact email_id repeat, creating a separate
+    // row per email instead of updating the same order over its lifecycle.
+    if (!order.tracking_number && order.order_number) {
+      const { rows: byON } = await query<Order>(
+        `SELECT * FROM orders
+         WHERE user_name = $1 AND order_number = $2 AND tracking_number IS NULL
+         LIMIT 1`,
+        [userName, order.order_number]
+      );
+      if (byON.length > 0) {
+        const row = byON[0]!;
+        const { rows: updated } = await query<Order>(
+          `UPDATE orders SET
+             retailer        = COALESCE($3, retailer),
+             item_name       = COALESCE($4, item_name),
+             carrier         = COALESCE($5, carrier),
+             status          = CASE WHEN $6 > status THEN $6 ELSE status END,
+             expected_date   = COALESCE($7::date, expected_date),
+             order_total     = COALESCE($8, order_total),
+             email_id        = COALESCE(email_id, $9),
+             updated_at      = now()
+           WHERE id = $1 AND user_name = $2
+           RETURNING *`,
+          [
+            row.id, userName,
+            order.retailer ?? null, order.item_name ?? null,
+            order.carrier ?? null, order.status ?? "ordered",
+            order.expected_date ?? null, order.order_total ?? null,
+            order.email_id ?? null,
+          ]
+        );
+        logger.info(
+          { orderId: row.id, orderNumber: order.order_number, status: order.status },
+          "[Orders] Merged order-number-only update into existing row (no tracking number)"
+        );
+        return updated[0] ?? null;
+      }
+    }
+
     // ── Priority 3: insert fresh, dedup by email_id ──────────────────────────
     // No existing row matched — insert. ON CONFLICT on email_id handles the case
     // where we see the same email again (e.g. on a force-sync).

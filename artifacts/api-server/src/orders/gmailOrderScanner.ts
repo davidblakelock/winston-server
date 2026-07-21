@@ -5,6 +5,7 @@ import { logger } from "../lib/logger.js";
 import { query } from "../db.js";
 import { createTracker } from "./easypostManager.js";
 import { MODEL_HAIKU } from "../lib/models.js";
+import { upsertOrder, type OrderStatus } from "./ordersManager.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -53,6 +54,15 @@ const CARRIER_SENDER_DOMAINS = [
   "notifications.amazon.com",
   "ship.amazon.com",
 ];
+
+// Reuses the amazon.* entries already in CARRIER_SENDER_DOMAINS — no new
+// hardcoded domain list — to gate the no-tracking-number pseudo-status path.
+const AMAZON_SENDER_DOMAINS = CARRIER_SENDER_DOMAINS.filter((d) => d.includes("amazon"));
+
+function isAmazonSender(from: string): boolean {
+  const lower = from.toLowerCase();
+  return AMAZON_SENDER_DOMAINS.some((d) => lower.includes(d));
+}
 
 function buildGmailQuery(since?: Date): string {
   const subjectClauses = ORDER_SUBJECT_KEYWORDS
@@ -105,11 +115,14 @@ function extractTextFromParts(parts: GmailPart[], preferHtml = true): string {
   return "";
 }
 
-function stripHtml(html: string): string {
+// Strips only <style> and <script> block noise. Every other tag — including
+// <a href="...">tracking link</a> — is left intact. Retailers frequently put
+// the actual tracking number only in an href, not in the visible link text;
+// Claude reads the raw markup itself, so no custom link-extraction logic here.
+function stripNoiseTags(html: string): string {
   return html
     .replace(/<style[\s\S]*?<\/style>/gi, "")
     .replace(/<script[\s\S]*?<\/script>/gi, "")
-    .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
@@ -123,11 +136,11 @@ function stripHtml(html: string): string {
 function extractBodyFromPayload(payload: GmailPart): string {
   if (payload.parts && payload.parts.length > 0) {
     const text = extractTextFromParts(payload.parts, true);
-    return text.includes("<") ? stripHtml(text) : text;
+    return text.includes("<") ? stripNoiseTags(text) : text;
   }
   if (payload.body?.data) {
     const decoded = decodeBase64Url(payload.body.data);
-    return decoded.includes("<") ? stripHtml(decoded) : decoded;
+    return decoded.includes("<") ? stripNoiseTags(decoded) : decoded;
   }
   return "";
 }
@@ -141,18 +154,33 @@ interface ExtractedOrder {
   retailer: string | null;
   itemName: string | null;
   expectedDeliveryDate: string | null; // YYYY-MM-DD or null
+  orderStatusStage: OrderStatus | null; // "ordered" | "shipped" | "out_for_delivery" | "delivered" | null
 }
 
+const VALID_ORDER_STAGES = new Set<OrderStatus>(["ordered", "shipped", "out_for_delivery", "delivered"]);
+
 // Single Claude call: classifies the email AND extracts the full order record
-// in one pass. No regex pre-extraction or hints — Claude reads the body itself.
+// in one pass. No regex pre-extraction or hints — Claude reads the raw markup
+// itself (see stripNoiseTags — hrefs are left intact).
+//
+// trackingNumber may legitimately come back null (e.g. Amazon Logistics
+// "Ordered"/"Shipped" emails never carry one) — that's not a failure, it's
+// classification. The caller decides what to do with a no-tracking-number
+// result; this function only returns null on a genuine extraction failure
+// (API error or unparseable response).
 async function extractOrderDetails(
   subject: string,
   from: string,
   body: string
 ): Promise<ExtractedOrder | null> {
-  const truncatedBody = body.slice(0, 20000);
+  // Raised from the original 20,000-char cap: with HTML tags no longer
+  // stripped (stripNoiseTags keeps hrefs, etc.), the same email is a larger
+  // payload. 40,000 chars comfortably covers a typical retail confirmation
+  // or shipping email's markup (after <style>/<script> noise is removed)
+  // without truncating mid-content.
+  const truncatedBody = body.slice(0, 40000);
 
-  const prompt = `Read this email and determine whether it is a genuine order or shipping notification containing a trackable shipping tracking number (from a carrier like UPS, FedEx, USPS, DHL, Amazon Logistics, OnTrac, LaserShip, etc).
+  const prompt = `Read this email and determine whether it is a genuine order or shipping notification. Extract a shipping tracking number if one is present — check link hrefs as well as visible text, since retailers often only put the tracking number in a "Track Package" link's URL, not in the link's display text.
 
 Email subject: ${subject}
 Email from: ${from}
@@ -162,12 +190,13 @@ ${truncatedBody}
 
 Return ONLY valid JSON with exactly these fields — use null for any field not present in the email:
 {
-  "trackingNumber": "the shipping tracking number, or null if this email does not contain one",
+  "trackingNumber": "the shipping tracking number (from a carrier like UPS, FedEx, USPS, DHL, Amazon Logistics, OnTrac, LaserShip, etc — check href attributes too), or null if this email does not contain one",
   "carrier": "UPS, FedEx, USPS, DHL, Amazon Logistics, etc, or null",
   "orderNumber": "the order/confirmation number, or null",
   "retailer": "the store or retailer name, or null",
   "itemName": "a short description of what was ordered/shipped, or null",
-  "expectedDeliveryDate": "YYYY-MM-DD expected delivery date, or null"
+  "expectedDeliveryDate": "YYYY-MM-DD expected delivery date, or null",
+  "orderStatusStage": "one of \\"ordered\\", \\"shipped\\", \\"out_for_delivery\\", \\"delivered\\" based on the email's own status language (e.g. subject line, headline), or null if unclear"
 }
 
 If this email does not contain a genuine trackable shipping tracking number, set trackingNumber to null.
@@ -185,11 +214,15 @@ Reply with ONLY the JSON object — no explanation, no markdown code fences.`;
     if (!match) return null;
 
     const parsed = JSON.parse(match[0]) as ExtractedOrder;
-    if (!parsed.trackingNumber) return null;
 
     // Guard against a malformed date reaching the `date`-typed column.
     if (parsed.expectedDeliveryDate && !/^\d{4}-\d{2}-\d{2}$/.test(parsed.expectedDeliveryDate)) {
       parsed.expectedDeliveryDate = null;
+    }
+
+    // Guard against Claude returning a stage outside the 4 allowed values.
+    if (parsed.orderStatusStage && !VALID_ORDER_STAGES.has(parsed.orderStatusStage)) {
+      parsed.orderStatusStage = null;
     }
 
     return parsed;
@@ -273,38 +306,81 @@ export async function scanOrderEmails(
 
       const order = await extractOrderDetails(subject, from, body);
       if (!order) continue;
-      const trackingNumber = order.trackingNumber!;
 
-      // Check if tracking number already exists in orders table — skip if yes
-      const { rows: existing } = await query<{ id: number }>(
-        `SELECT id FROM orders WHERE user_name = $1 AND tracking_number = $2`,
-        [userName, trackingNumber]
-      );
-      if (existing.length > 0) {
-        logger.info({ trackingNumber }, "[OrderScanner] Tracking number already on file — skipping");
-        continue;
-      }
+      const hasTrackingNumber = !!order.trackingNumber;
+      // Amazon Logistics deliveries often never expose a real carrier tracking
+      // number. When Claude has genuinely found none but the email's own
+      // order_number + status language give us enough to track informally,
+      // fall back to a pseudo-status row instead of dropping the email.
+      // Every other retailer keeps the existing behavior: no tracking number,
+      // no row.
+      const isAmazonPseudoStatus =
+        !hasTrackingNumber &&
+        !!order.orderStatusStage &&
+        !!order.orderNumber &&
+        isAmazonSender(from);
 
-      const retailer = order.retailer ?? senderDisplayName(from);
-      const itemName = order.itemName ?? subject;
+      if (!hasTrackingNumber && !isAmazonPseudoStatus) continue;
 
-      const { rows: inserted } = await query<{ id: number }>(
-        `INSERT INTO orders (user_name, tracking_number, carrier, order_number, retailer, item_name, expected_date, status, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'pre_transit', NOW())
-         RETURNING id`,
-        [userName, trackingNumber, order.carrier, order.orderNumber, retailer, itemName, order.expectedDeliveryDate]
-      );
-      newCount++;
-      logger.info({ emailId: msgId, trackingNumber, carrier: order.carrier }, "[OrderScanner] Order row inserted");
+      if (hasTrackingNumber) {
+        const trackingNumber = order.trackingNumber!;
 
-      // Create EasyPost tracker — pass the extracted carrier when known, for more reliable tracking
-      const tracker = await createTracker(trackingNumber, order.carrier ?? undefined);
-      if (tracker && inserted[0]) {
-        await query(
-          `UPDATE orders SET easypost_tracker_id = $1 WHERE id = $2`,
-          [tracker.trackerId, inserted[0].id]
-        ).catch((err) => logger.warn({ err }, "[OrderScanner] Failed to store EasyPost tracker ID"));
-        logger.info({ trackerId: tracker.trackerId, trackingNumber }, "[OrderScanner] EasyPost tracker created");
+        // Check if tracking number already exists in orders table — skip if yes
+        const { rows: existing } = await query<{ id: number }>(
+          `SELECT id FROM orders WHERE user_name = $1 AND tracking_number = $2`,
+          [userName, trackingNumber]
+        );
+        if (existing.length > 0) {
+          logger.info({ trackingNumber }, "[OrderScanner] Tracking number already on file — skipping");
+          continue;
+        }
+
+        const retailer = order.retailer ?? senderDisplayName(from);
+        const itemName = order.itemName ?? subject;
+
+        const { rows: inserted } = await query<{ id: number }>(
+          `INSERT INTO orders (user_name, tracking_number, carrier, order_number, retailer, item_name, expected_date, status, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'pre_transit', NOW())
+           RETURNING id`,
+          [userName, trackingNumber, order.carrier, order.orderNumber, retailer, itemName, order.expectedDeliveryDate]
+        );
+        newCount++;
+        logger.info({ emailId: msgId, trackingNumber, carrier: order.carrier }, "[OrderScanner] Order row inserted");
+
+        // Create EasyPost tracker — pass the extracted carrier when known, for more reliable tracking
+        const tracker = await createTracker(trackingNumber, order.carrier ?? undefined);
+        if (tracker && inserted[0]) {
+          await query(
+            `UPDATE orders SET easypost_tracker_id = $1 WHERE id = $2`,
+            [tracker.trackerId, inserted[0].id]
+          ).catch((err) => logger.warn({ err }, "[OrderScanner] Failed to store EasyPost tracker ID"));
+          logger.info({ trackerId: tracker.trackerId, trackingNumber }, "[OrderScanner] EasyPost tracker created");
+        }
+      } else {
+        // Amazon pseudo-status path — no tracking number, but Amazon's own
+        // order_number and status language give us enough to track informally.
+        // upsertOrder()'s order_number-only tier merges Ordered → Shipped →
+        // Delivered emails into the same row instead of creating duplicates.
+        const retailer = order.retailer ?? senderDisplayName(from);
+        const itemName = order.itemName ?? subject;
+
+        const upserted = await upsertOrder(userName, {
+          retailer,
+          item_name: itemName,
+          order_number: order.orderNumber,
+          carrier: order.carrier,
+          status: order.orderStatusStage!,
+          expected_date: order.expectedDeliveryDate,
+          email_id: msgId,
+        });
+
+        if (upserted) {
+          newCount++;
+          logger.info(
+            { emailId: msgId, orderNumber: order.orderNumber, status: order.orderStatusStage },
+            "[OrderScanner] Amazon pseudo-status order upserted (no tracking number)"
+          );
+        }
       }
     } catch (err) {
       logger.warn({ err, msgId }, "[OrderScanner] Failed to process email");
