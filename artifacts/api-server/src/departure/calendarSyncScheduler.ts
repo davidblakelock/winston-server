@@ -366,11 +366,31 @@ async function runCalendarSyncForUser(userName: string): Promise<void> {
     const known = knownEvents.get(event.id);
 
     if (!known) {
-      // New event — silently populate on first sync, alert on subsequent
-      await markEventKnown(today, event.id, event.summary, !isFirstSyncToday, userName, event.startIso);
+      // New event — silently populate on first sync, alert on subsequent.
+      // Location/leave-time are computed either way: sendNewEventAlert() does
+      // it itself for the alert path, but the first-sync path used to skip
+      // both computation AND alerting together — leaving every event already
+      // on the calendar before the day's first sync without a location or
+      // leave time, since that's the majority of real events.
       if (isFirstSyncToday) {
-        logger.info({ event: event.summary, startIso: event.startIso, userName }, "Calendar sync: initial population (no alert)");
+        const location = event.startIso && !event.allDay
+          ? extractEventLocation({ summary: event.summary, location: event.location, description: event.description })
+          : null;
+        let leaveTimeIso: string | null = null;
+        if (location && event.startIso) {
+          const dep = await getLeaveByTime(event, userName).catch(() => null);
+          leaveTimeIso = dep?.leaveAtIso ?? null;
+        }
+        const attendeesJson = (event.attendees && event.attendees.length > 0)
+          ? JSON.stringify(event.attendees)
+          : null;
+        await markEventKnown(today, event.id, event.summary, false, userName, event.startIso, location, leaveTimeIso, attendeesJson);
+        logger.info(
+          { event: event.summary, startIso: event.startIso, location, hasLeaveTime: !!leaveTimeIso, userName },
+          "Calendar sync: initial population (no alert)"
+        );
       } else {
+        await markEventKnown(today, event.id, event.summary, true, userName, event.startIso);
         newCount++;
         await sendNewEventAlert(event, userName);
       }
