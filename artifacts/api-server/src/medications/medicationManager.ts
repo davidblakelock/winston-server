@@ -676,13 +676,18 @@ export async function logMedicationReminderSent(
 // ── Reminder mute preference ──────────────────────────────────────────────────
 
 export async function getMedicationRemindersEnabled(userName = NATIVE_STORED_NAME): Promise<boolean> {
-  const { rows } = await query<{ detail: string | null }>(
-    `SELECT detail FROM profile_items
-     WHERE user_name = $1 AND category = 'preferences' AND name = 'medication_reminders_muted'
-     LIMIT 1`,
+  const { rows } = await query<{ medication_reminders_muted: boolean }>(
+    `SELECT medication_reminders_muted FROM user_profiles WHERE user_name = $1 LIMIT 1`,
     [userName]
   );
-  return rows.length === 0;
+  return !(rows[0]?.medication_reminders_muted ?? false);
+}
+
+export async function setMedicationRemindersMuted(muted: boolean, userName = NATIVE_STORED_NAME): Promise<void> {
+  await query(
+    `UPDATE user_profiles SET medication_reminders_muted = $1 WHERE user_name = $2`,
+    [muted, userName]
+  );
 }
 
 // ── Utility helpers ───────────────────────────────────────────────────────────

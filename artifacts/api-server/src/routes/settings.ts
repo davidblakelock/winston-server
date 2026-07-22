@@ -15,6 +15,7 @@ import { query } from "../db.js";
 import { getUserSettings, upsertUserSettings } from "../stoic/stoicManager.js";
 import { getEmailScanSettings, setEmailScanSettings } from "../email/emailScanSettings.js";
 import { getVoiceOptions } from "../voices/voiceOptionsManager.js";
+import { setMedicationRemindersMuted } from "../medications/medicationManager.js";
 
 const router: IRouter = Router();
 
@@ -631,13 +632,11 @@ router.patch("/settings/briefing-toggles", express.json({ limit: "16kb" }), asyn
 router.get("/settings/tts", async (req, res) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
-  const { rows } = await query<{ detail: string | null }>(
-    `SELECT detail FROM profile_items
-     WHERE user_name = $1 AND category = 'preferences' AND name = 'tts_muted'
-     LIMIT 1`,
+  const { rows } = await query<{ tts_muted: boolean }>(
+    `SELECT tts_muted FROM user_profiles WHERE user_name = $1 LIMIT 1`,
     [userName]
   );
-  const muted = rows.length > 0;
+  const muted = rows[0]?.tts_muted ?? false;
   res.json({ muted });
 });
 
@@ -651,20 +650,40 @@ router.patch("/settings/tts", express.json(), async (req, res) => {
     res.status(400).json({ error: "muted (boolean) required" });
     return;
   }
-  // Delete any existing record first (upsert pattern)
   await query(
-    `DELETE FROM profile_items
-     WHERE user_name = $1 AND category = 'preferences' AND name = 'tts_muted'`,
+    `UPDATE user_profiles SET tts_muted = $1 WHERE user_name = $2`,
+    [muted, userName]
+  );
+  logger.info({ userName, muted }, "[TTS] Global mute preference updated");
+  res.json({ ok: true, muted });
+});
+
+// ── GET /api/settings/medication-reminders ────────────────────────────────────
+// Returns the medication reminders mute preference.
+router.get("/settings/medication-reminders", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const { rows } = await query<{ medication_reminders_muted: boolean }>(
+    `SELECT medication_reminders_muted FROM user_profiles WHERE user_name = $1 LIMIT 1`,
     [userName]
   );
-  if (muted) {
-    await query(
-      `INSERT INTO profile_items (user_name, category, name, detail)
-       VALUES ($1, 'preferences', 'tts_muted', 'true')`,
-      [userName]
-    );
+  const muted = rows[0]?.medication_reminders_muted ?? false;
+  res.json({ muted });
+});
+
+// ── PATCH /api/settings/medication-reminders ──────────────────────────────────
+// Sets the medication reminders mute preference. { muted: true } silences
+// medication reminder pushes (medicationScheduler.ts checks this every tick).
+router.patch("/settings/medication-reminders", express.json(), async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const { muted } = req.body as { muted?: boolean };
+  if (typeof muted !== "boolean") {
+    res.status(400).json({ error: "muted (boolean) required" });
+    return;
   }
-  logger.info({ userName, muted }, "[TTS] Global mute preference updated");
+  await setMedicationRemindersMuted(muted, userName);
+  logger.info({ userName, muted }, "[Medications] Reminders mute preference updated");
   res.json({ ok: true, muted });
 });
 

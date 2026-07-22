@@ -117,6 +117,9 @@ export async function ensureOnboardingTable(): Promise<void> {
   await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS favorite_artists jsonb DEFAULT '[]'::jsonb`);
   await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS rosie_voice_id text`);
   await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS macc_voice_id text`);
+  // Durable mute-flag settings — moved off the profile_items junk-drawer pattern
+  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS tts_muted boolean NOT NULL DEFAULT false`);
+  await query(`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS medication_reminders_muted boolean NOT NULL DEFAULT false`);
   await query(`UPDATE user_profiles SET rosie_voice_id = voice_id WHERE rosie_voice_id IS NULL AND voice_id IS NOT NULL`);
   await query(`UPDATE user_profiles SET macc_voice_id = voice_id WHERE macc_voice_id IS NULL AND voice_id IS NOT NULL`);
 }
