@@ -295,8 +295,12 @@ export async function scanReservationEmails(
 
   for (const msgId of messageIds.slice(0, 30)) {
     try {
+      // Deliberately ignores deleted_at — a gmail_id that's ever been processed
+      // must never be re-processed or re-notified, whether the resulting record
+      // was kept or later deleted. Deletion hides a record from My Records; it
+      // doesn't mean the email was never seen.
       const alreadySaved = await query<{ id: number }>(
-        `SELECT id FROM user_records WHERE user_name = $1 AND gmail_id = $2 AND deleted_at IS NULL LIMIT 1`,
+        `SELECT id FROM user_records WHERE user_name = $1 AND gmail_id = $2 LIMIT 1`,
         [userName, msgId]
       );
       if (alreadySaved.rows.length > 0) {
@@ -330,28 +334,23 @@ export async function scanReservationEmails(
       const extractResp = await anthropic.messages.create({
         model: MODEL_HAIKU,
         max_tokens: 500,
-        system: `You are reviewing an email to determine if it is a booking, reservation, or service confirmation worth saving to the user's personal records.
+        system: `You are reviewing an email to determine if it is a trip confirmation or a vehicle registration renewal notice worth saving to the user's personal records.
 
-First, decide if this email is a confirmation of one of these categories:
+Only two categories are save-worthy:
 - trip: restaurant reservation, flight, hotel, car rental, vacation rental, cruise, tour
-- warranty: product warranty, extended warranty, protection plan, service plan
-- subscription: software subscription, streaming service, membership, club
-- home_service: home repair, cleaning, HVAC, plumbing, electrical, pest control, lawn service
-- vehicle: car service, oil change, tire, auto repair, recall
-- order: online retail purchase confirmation with an order number or confirmation number (e.g. King Arthur, any online store)
-- other: any other confirmation worth keeping
+- vehicle_registration: specifically a vehicle registration renewal notice or deadline (e.g. DMV registration renewal) — NOT a service appointment, NOT a repair, NOT any other vehicle-related email
 
-If this email is NOT a confirmation (e.g. it's a newsletter, marketing email, account notification, or a bare shipping/tracking notification with no order or confirmation number), return exactly: {"skip": true}
+Everything else must be skipped — including service appointments (vehicle or home), warranties, subscriptions, retail/food order confirmations, and generic reminders. Service and DMV appointments are already on the user's calendar and add no value here; retail/food orders are handled elsewhere. If this email is not a trip confirmation or a vehicle registration renewal notice, return exactly: {"skip": true}
 
-An email IS a confirmation worth saving if it contains a genuine order number, confirmation number, or booking reference — regardless of purchase size. Do not skip a legitimate retail order confirmation just because the purchase amount is small.
+An email IS worth saving if it contains a genuine booking/confirmation reference (trip) or a specific renewal deadline (vehicle_registration) — regardless of purchase size.
 
-If it IS a confirmation, return ONLY this JSON — no explanation, no markdown:
+If it IS worth saving, return ONLY this JSON — no explanation, no markdown:
 {
   "skip": false,
-  "category": "trip|warranty|subscription|home_service|vehicle|order|other",
-  "label": "brief type label e.g. Hotel, Flight, Restaurant Reservation, Car Rental",
+  "category": "trip|vehicle_registration",
+  "label": "brief type label e.g. Hotel, Flight, Restaurant Reservation, Car Rental, Vehicle Registration",
   "vendorName": "business or vendor name",
-  "confirmationNumber": "confirmation/booking/reservation number or null",
+  "confirmationNumber": "confirmation/booking/reservation/registration number or null",
   "dateStart": "YYYY-MM-DD or null",
   "dateEnd": "YYYY-MM-DD or null",
   "time": "HH:MM 24h or null",
@@ -394,12 +393,12 @@ Today is ${new Date().toISOString().slice(0, 10)}. Only use upcoming or recent d
       if (parsed.skip === true) continue;
       if (!parsed.vendorName || !parsed.category) continue;
 
-      // Validate category is one we recognize — default to "other" if not
-      const validCategories = ["trip", "warranty", "home_service", "subscription", "vehicle", "order", "other"] as const;
+      // Only trip and vehicle_registration are save-worthy — anything else
+      // Claude returns (it shouldn't, given the prompt, but guard anyway) is skipped.
+      const validCategories = ["trip", "vehicle_registration"] as const;
       type RecordCategory = typeof validCategories[number];
-      const recordCategory: RecordCategory = validCategories.includes(parsed.category as RecordCategory)
-        ? (parsed.category as RecordCategory)
-        : "other";
+      if (!validCategories.includes(parsed.category as RecordCategory)) continue;
+      const recordCategory: RecordCategory = parsed.category as RecordCategory;
 
       const detectedLabel = parsed.label ?? parsed.category;
 
