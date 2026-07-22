@@ -46,12 +46,19 @@ export function startMedicationScheduler(): void {
         const remindersEnabled = await getMedicationRemindersEnabled(userName).catch(() => true);
         if (!remindersEnabled) continue;
 
-        const meds = await getMedications(userName).catch(() => []);
+        const meds = await getMedications(userName).catch((): Awaited<ReturnType<typeof getMedications>> => []);
         if (!meds.length) continue;
 
-        // Flatten reminderTimes arrays across all meds, deduplicated by unique time value.
+        // Per-medication toggle: a medication with remindersEnabled === false never
+        // contributes its times to the fire set below. This does NOT suppress a time
+        // slot that another (enabled) medication legitimately shares — e.g. if med A
+        // (enabled) and med B (disabled) both use 08:00, 08:00 still fires for med A.
+        const remindersOnMeds = meds.filter((m) => m.remindersEnabled !== false);
+        if (!remindersOnMeds.length) continue;
+
+        // Flatten reminderTimes arrays across meds with reminders enabled, deduplicated by unique time value.
         const uniqueTimes = [
-          ...new Set(meds.flatMap((m) => m.reminderTimes ?? [m.reminderTime])),
+          ...new Set(remindersOnMeds.flatMap((m) => m.reminderTimes ?? [m.reminderTime])),
         ];
 
         for (const time of uniqueTimes) {

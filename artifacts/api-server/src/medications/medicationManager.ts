@@ -17,6 +17,7 @@ export interface Medication {
   timeOfDay: string | null;
   prescribingDoctor: string | null;
   notes: string | null;
+  remindersEnabled: boolean;
 }
 
 // ── Schema migrations ─────────────────────────────────────────────────────────
@@ -26,6 +27,7 @@ export async function runMedicationSchemaMigrations(): Promise<void> {
   await query(`ALTER TABLE medications ADD COLUMN IF NOT EXISTS time_of_day TEXT`);
   await query(`ALTER TABLE medications ADD COLUMN IF NOT EXISTS prescribing_doctor TEXT`);
   await query(`ALTER TABLE medications ADD COLUMN IF NOT EXISTS notes TEXT`);
+  await query(`ALTER TABLE medications ADD COLUMN IF NOT EXISTS reminders_enabled boolean NOT NULL DEFAULT true`);
 }
 
 // ── Core CRUD ─────────────────────────────────────────────────────────────────
@@ -45,8 +47,9 @@ export async function getMedications(
     time_of_day: string | null;
     prescribing_doctor: string | null;
     notes: string | null;
+    reminders_enabled: boolean;
   }>(
-    `SELECT m.id, m.name, m.dosage, m.reminder_time, m.active, m.frequency, m.time_of_day, m.prescribing_doctor, m.notes,
+    `SELECT m.id, m.name, m.dosage, m.reminder_time, m.active, m.frequency, m.time_of_day, m.prescribing_doctor, m.notes, m.reminders_enabled,
             COALESCE(
               (SELECT json_agg(mrt.reminder_time ORDER BY mrt.reminder_time)
                FROM medication_reminder_times mrt
@@ -69,6 +72,7 @@ export async function getMedications(
     timeOfDay: r.time_of_day,
     prescribingDoctor: r.prescribing_doctor,
     notes: r.notes,
+    remindersEnabled: r.reminders_enabled,
   }));
 }
 
@@ -90,6 +94,7 @@ export async function addMedicationFull(
     timeOfDay?: string;
     prescribingDoctor?: string;
     notes?: string;
+    remindersEnabled?: boolean;
   },
   userName = NATIVE_STORED_NAME
 ): Promise<{ success: boolean; alreadyExists: boolean; medication?: Medication }> {
@@ -107,7 +112,7 @@ export async function addMedicationFull(
       const { rows: updated } = await query<{
         id: number; name: string; dosage: string | null; reminder_time: string;
         active: boolean; frequency: string | null; time_of_day: string | null;
-        prescribing_doctor: string | null; notes: string | null;
+        prescribing_doctor: string | null; notes: string | null; reminders_enabled: boolean;
       }>(
         `UPDATE medications
          SET active = true,
@@ -116,12 +121,14 @@ export async function addMedicationFull(
              frequency = COALESCE($5, frequency),
              time_of_day = COALESCE($6, time_of_day),
              prescribing_doctor = COALESCE($7, prescribing_doctor),
-             notes = COALESCE($8, notes)
+             notes = COALESCE($8, notes),
+             reminders_enabled = COALESCE($9, reminders_enabled)
          WHERE id = $1 AND user_name = $2
-         RETURNING id, name, dosage, reminder_time, active, frequency, time_of_day, prescribing_doctor, notes`,
+         RETURNING id, name, dosage, reminder_time, active, frequency, time_of_day, prescribing_doctor, notes, reminders_enabled`,
         [rec.id, userName, fields.dosage ?? null, reminderTime,
          fields.frequency ?? null, fields.timeOfDay ?? null,
-         fields.prescribingDoctor ?? null, fields.notes ?? null]
+         fields.prescribingDoctor ?? null, fields.notes ?? null,
+         fields.remindersEnabled ?? null]
       );
       const r = updated[0];
       return {
@@ -131,6 +138,7 @@ export async function addMedicationFull(
           id: r.id, name: r.name, dosage: r.dosage, reminderTime: r.reminder_time,
           active: r.active, frequency: r.frequency, timeOfDay: r.time_of_day,
           prescribingDoctor: r.prescribing_doctor, notes: r.notes,
+          remindersEnabled: r.reminders_enabled,
         } : undefined,
       };
     }
@@ -148,11 +156,12 @@ export async function addMedicationFull(
     time_of_day: string | null;
     prescribing_doctor: string | null;
     notes: string | null;
+    reminders_enabled: boolean;
   }>(
     `INSERT INTO medications
-       (user_name, name, dosage, reminder_time, frequency, time_of_day, prescribing_doctor, notes)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-     RETURNING id, name, dosage, reminder_time, active, frequency, time_of_day, prescribing_doctor, notes`,
+       (user_name, name, dosage, reminder_time, frequency, time_of_day, prescribing_doctor, notes, reminders_enabled)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     RETURNING id, name, dosage, reminder_time, active, frequency, time_of_day, prescribing_doctor, notes, reminders_enabled`,
     [
       userName,
       fields.name,
@@ -162,6 +171,7 @@ export async function addMedicationFull(
       fields.timeOfDay ?? null,
       fields.prescribingDoctor ?? null,
       fields.notes ?? null,
+      fields.remindersEnabled ?? true,
     ]
   );
 
@@ -177,6 +187,7 @@ export async function addMedicationFull(
       frequency: rows[0].frequency,
       timeOfDay: rows[0].time_of_day,
       prescribingDoctor: rows[0].prescribing_doctor,
+      remindersEnabled: rows[0].reminders_enabled,
       notes: rows[0].notes,
     },
   };
@@ -193,6 +204,7 @@ export async function updateMedication(
     prescribingDoctor?: string | null;
     notes?: string | null;
     active?: boolean;
+    remindersEnabled?: boolean;
   },
   userName = NATIVE_STORED_NAME
 ): Promise<Medication | null> {
@@ -208,6 +220,7 @@ export async function updateMedication(
   if (fields.prescribingDoctor !== undefined) { setClauses.push(`prescribing_doctor = $${idx++}`); values.push(fields.prescribingDoctor); }
   if (fields.notes !== undefined) { setClauses.push(`notes = $${idx++}`); values.push(fields.notes); }
   if (fields.active !== undefined) { setClauses.push(`active = $${idx++}`); values.push(fields.active); }
+  if (fields.remindersEnabled !== undefined) { setClauses.push(`reminders_enabled = $${idx++}`); values.push(fields.remindersEnabled); }
 
   if (setClauses.length === 0) return null;
 
@@ -215,10 +228,11 @@ export async function updateMedication(
   const { rows } = await query<{
     id: number; name: string; dosage: string | null; reminder_time: string; active: boolean;
     frequency: string | null; time_of_day: string | null; prescribing_doctor: string | null; notes: string | null;
+    reminders_enabled: boolean;
   }>(
     `UPDATE medications SET ${setClauses.join(", ")}
      WHERE id = $${idx} AND user_name = $${idx + 1}
-     RETURNING id, name, dosage, reminder_time, active, frequency, time_of_day, prescribing_doctor, notes`,
+     RETURNING id, name, dosage, reminder_time, active, frequency, time_of_day, prescribing_doctor, notes, reminders_enabled`,
     values
   );
   if (rows.length === 0) return null;
@@ -227,6 +241,7 @@ export async function updateMedication(
     reminderTime: rows[0].reminder_time, active: rows[0].active,
     frequency: rows[0].frequency, timeOfDay: rows[0].time_of_day,
     prescribingDoctor: rows[0].prescribing_doctor, notes: rows[0].notes,
+    remindersEnabled: rows[0].reminders_enabled,
   };
 }
 

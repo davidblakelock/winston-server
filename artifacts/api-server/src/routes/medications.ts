@@ -158,7 +158,7 @@ router.post("/medications/add", express.json({ limit: "1mb" }), async (req, res)
   if (!userName) return;
 
   const {
-    name, dosage, reminderTime, reminderTimes, frequency, timeOfDay, prescribingDoctor, notes,
+    name, dosage, reminderTime, reminderTimes, frequency, timeOfDay, prescribingDoctor, notes, remindersEnabled,
   } = req.body as {
     name?: string;
     dosage?: string;
@@ -168,6 +168,7 @@ router.post("/medications/add", express.json({ limit: "1mb" }), async (req, res)
     timeOfDay?: string;
     prescribingDoctor?: string;
     notes?: string;
+    remindersEnabled?: boolean;
   };
 
   if (!name?.trim()) {
@@ -198,6 +199,9 @@ router.post("/medications/add", express.json({ limit: "1mb" }), async (req, res)
         timeOfDay: timeOfDay?.trim(),
         prescribingDoctor: prescribingDoctor?.trim(),
         notes: notes?.trim(),
+        // Defaults to true (via addMedicationFull's fields.remindersEnabled ?? true)
+        // when omitted, for backward compatibility with old client requests.
+        remindersEnabled,
       },
       userName
     );
@@ -444,7 +448,7 @@ router.put("/medications/:id", express.json({ limit: "1mb" }), async (req, res) 
   }
   const id = parseInt(req.params.id, 10);
   const {
-    name, dosage, reminderTime, reminderTimes, frequency, timeOfDay, prescribingDoctor, notes, active,
+    name, dosage, reminderTime, reminderTimes, frequency, timeOfDay, prescribingDoctor, notes, active, remindersEnabled,
   } = req.body as {
     name?: string;
     dosage?: string | null;
@@ -455,6 +459,7 @@ router.put("/medications/:id", express.json({ limit: "1mb" }), async (req, res) 
     prescribingDoctor?: string | null;
     notes?: string | null;
     active?: boolean;
+    remindersEnabled?: boolean;
   };
 
   // Resolve reminder times only if the caller sent something time-related.
@@ -473,7 +478,7 @@ router.put("/medications/:id", express.json({ limit: "1mb" }), async (req, res) 
   try {
     const medication = await updateMedication(
       id,
-      { name: name?.trim(), dosage, reminderTime: resolvedTimes?.[0], frequency, timeOfDay, prescribingDoctor, notes, active },
+      { name: name?.trim(), dosage, reminderTime: resolvedTimes?.[0], frequency, timeOfDay, prescribingDoctor, notes, active, remindersEnabled },
       userName
     );
     if (!medication) {
