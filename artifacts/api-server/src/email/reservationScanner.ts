@@ -52,11 +52,13 @@ function extractBodyFromPayload(payload: GmailPart): string {
   return "";
 }
 
+// Strips only <style> and <script> block noise. Every other tag — including
+// <a href="...">tracking link</a> — is left intact; Claude reads the raw
+// markup itself. Mirrors stripNoiseTags() in orders/gmailOrderScanner.ts.
 function stripHtml(html: string): string {
   return html
     .replace(/<style[\s\S]*?<\/style>/gi, "")
     .replace(/<script[\s\S]*?<\/script>/gi, "")
-    .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'")
     .replace(/\s{2,}/g, " ").trim();
@@ -144,80 +146,6 @@ async function saveReservation(
      ON CONFLICT (user_name, gmail_id) DO NOTHING`,
     [userName, gmailId, restaurantName, reservationDate, reservationTime, partySize, confirmationNumber, address, calendarEventId]
   );
-}
-
-// ── Claude Haiku extraction ───────────────────────────────────────────────────
-
-interface ParsedReservation {
-  restaurant_name: string;
-  date: string;
-  time: string | null;
-  party_size: number | null;
-  confirmation_number: string | null;
-  address: string | null;
-}
-
-async function parseReservationFromEmail(
-  subject: string,
-  from: string,
-  body: string,
-  emailDate: string,
-): Promise<ParsedReservation | null> {
-  const today = new Intl.DateTimeFormat("en-CA", {
-    timeZone: TZ,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date());
-
-  const truncated = body.slice(0, 6000);
-
-  const prompt = `Extract restaurant reservation details from this confirmation email. Return ONLY valid JSON or the literal null if this is NOT a restaurant reservation confirmation.
-
-Email subject: ${subject}
-From: ${from}
-Email date: ${emailDate}
-Today: ${today}
-
-Body:
-${truncated}
-
-Return JSON with exactly these fields:
-{
-  "restaurant_name": "exact restaurant name as shown in the confirmation",
-  "date": "YYYY-MM-DD — the actual reservation date (when you are dining)",
-  "time": "HH:MM in 24-hour format (e.g. '19:30' for 7:30 PM) or null if not found",
-  "party_size": number of guests as integer or null,
-  "confirmation_number": "booking/confirmation/reference number as string or null",
-  "address": "full restaurant street address if present in the email, or null"
-}
-
-Rules:
-- Only return results for UPCOMING reservations (date on or after today: ${today})
-- If this is NOT a restaurant reservation confirmation email, return null
-- date MUST be in YYYY-MM-DD format
-- time is when the table is reserved, NOT when the email was sent
-- OpenTable confirmation numbers appear after 'Reservation #' or 'Confirmation #'
-- Resy confirmation numbers appear after 'Reservation ID' or 'Booking #'`;
-
-  try {
-    const resp = await anthropic.messages.create({
-      model: MODEL_HAIKU,
-      max_tokens: 300,
-      messages: [{ role: "user", content: prompt }],
-    });
-    const text = resp.content[0].type === "text" ? resp.content[0].text.trim() : "";
-    if (!text || text === "null") return null;
-    const m = text.match(/\{[\s\S]*\}/);
-    if (!m) return null;
-    const parsed = JSON.parse(m[0]) as ParsedReservation;
-    if (!parsed.restaurant_name || !parsed.date) return null;
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(parsed.date)) return null;
-    return parsed;
-  } catch (err) {
-    logger.warn({ err }, "[ReservationScanner] Claude parse failed");
-    return null;
-  }
 }
 
 // ── Formatters ────────────────────────────────────────────────────────────────
@@ -397,7 +325,8 @@ export async function scanReservationEmails(
       // whether this is a confirmation worth saving and what category it belongs to.
       // This handles boutique hotels, local restaurants, independent contractors,
       // and any other vendor regardless of domain or subject line format.
-      const snippet = body.slice(0, 2000);
+      const snippet = body.slice(0, 40000);
+      logger.info({ userName, subject, bodyChars: snippet.length }, "[ReservationScanner] Sending email body to Claude (cost)");
       const extractResp = await anthropic.messages.create({
         model: MODEL_HAIKU,
         max_tokens: 500,

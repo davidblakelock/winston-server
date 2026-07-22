@@ -153,6 +153,7 @@ If this email does not contain a genuine trackable shipping tracking number, set
 Reply with ONLY the JSON object — no explanation, no markdown code fences.`;
 
   try {
+    logger.info({ subject, from, bodyChars: truncatedBody.length }, "[OrderScanner] Sending email body to Claude (cost)");
     const resp = await anthropic.messages.create({
       model: MODEL_HAIKU,
       max_tokens: 400,

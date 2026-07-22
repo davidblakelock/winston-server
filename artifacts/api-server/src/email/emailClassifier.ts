@@ -117,6 +117,7 @@ Rules for choosing action:
 - "none": pure marketing, newsletters, promotional offers, automated service notifications with no real information value. Use this ONLY for noise. Never use "none" for anything financial, security-related, or potentially urgent.`;
 
   try {
+    logger.info({ subject, bodyChars: truncated.length }, "[EmailClassifier] Sending email body to Claude (cost)");
     const resp = await anthropic.messages.create({
       model: MODEL_HAIKU,
       max_tokens: 600,

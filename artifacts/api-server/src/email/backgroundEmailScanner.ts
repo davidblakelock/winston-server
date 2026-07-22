@@ -65,11 +65,13 @@ function extractBody(payload: GmailPart): string {
   return "";
 }
 
+// Strips only <style> and <script> block noise. Every other tag — including
+// <a href="...">tracking link</a> — is left intact; Claude reads the raw
+// markup itself. Mirrors stripNoiseTags() in orders/gmailOrderScanner.ts.
 function stripHtml(html: string): string {
   return html
     .replace(/<style[\s\S]*?<\/style>/gi, "")
     .replace(/<script[\s\S]*?<\/script>/gi, "")
-    .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'")
     .replace(/\s{2,}/g, " ").trim();
