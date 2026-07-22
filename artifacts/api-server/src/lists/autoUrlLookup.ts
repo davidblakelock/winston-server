@@ -308,14 +308,14 @@ export async function autoUpdateItemUrl(
   }
 }
 
-// ── Fire-and-forget: lookup restaurant URL and update profile_items ──────────
+// ── Fire-and-forget: lookup restaurant URL and update the restaurants table ──
 // Always tries to find a booking platform URL.
 // Updates the row whether or not it already has a URL — the goal is to replace
 // any stored restaurant website with an OpenTable / Resy / Yelp booking link.
 // If no booking link is found, the existing URL (if any) is left unchanged.
 
 export async function autoUpdateRestaurantUrl(
-  profileItemId: number,
+  restaurantId: number,
   restaurantName: string,
   city = ""
 ): Promise<void> {
@@ -326,11 +326,11 @@ export async function autoUpdateRestaurantUrl(
     const platform = detectBookingPlatform(url);
 
     await query(
-      `UPDATE profile_items SET url = $1, booking_platform = $2 WHERE id = $3`,
-      [url, platform, profileItemId]
+      `UPDATE restaurants SET url = $1, booking_platform = $2 WHERE id = $3`,
+      [url, platform, restaurantId]
     );
-    logger.info({ profileItemId, restaurantName, url, platform }, "[AutoURL] Restaurant booking URL saved");
+    logger.info({ restaurantId, restaurantName, url, platform }, "[AutoURL] Restaurant booking URL saved");
   } catch (err) {
-    logger.warn({ err, profileItemId, restaurantName }, "[AutoURL] Failed to auto-update restaurant URL");
+    logger.warn({ err, restaurantId, restaurantName }, "[AutoURL] Failed to auto-update restaurant URL");
   }
 }

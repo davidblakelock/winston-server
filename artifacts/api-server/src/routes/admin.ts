@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from "express";
 import express from "express";
 import { authenticate } from "../auth/middleware.js";
 import { query } from "../db.js";
-import { lookupRestaurantUrl, isBookingPlatformUrl, detectBookingPlatform, autoUpdateRestaurantUrl } from "../lists/autoUrlLookup.js";
+import { lookupRestaurantUrl, isBookingPlatformUrl, detectBookingPlatform } from "../lists/autoUrlLookup.js";
 import { upsertProfile } from "../onboarding/onboardingManager.js";
 import { isApifyApiKeyConfigured } from "../restaurants/apifyBooking.js";
 import { getResySession } from "../restaurants/bookingCredentialsManager.js";
@@ -573,55 +573,6 @@ router.post("/admin/test-daily-brief-searchapi", async (req: Request, res: Respo
         req.log.warn({ err, userName }, "[DailyBriefSearchApi] TEST ROUTE — threw an error");
       });
   });
-});
-
-/**
- * POST /api/admin/migrate-raw-data-restaurants
- *
- * One-time migration: restores restaurants that exist in
- * user_profiles.raw_data (legacy onboarding storage) but were never
- * carried over to profile_items — the table the live Restaurants screen
- * actually reads from. Hardcoded to davidblakelock's account since this
- * is a one-off repair, not a general-purpose tool.
- */
-router.post("/admin/migrate-raw-data-restaurants", async (req: Request, res: Response) => {
-  const userName = await authenticate(req, res);
-  if (!userName) return;
-
-  try {
-    const { rows } = await query<{ raw_data: any }>(
-      `SELECT raw_data FROM user_profiles WHERE user_name = $1`,
-      ["davidblakelock"]
-    );
-    const restaurants: string[] = rows[0]?.raw_data?.restaurants ?? [];
-
-    const inserted: { id: number; name: string }[] = [];
-    for (const name of restaurants) {
-      const { rows: insertedRows } = await query<{ id: number; name: string }>(
-        `INSERT INTO profile_items (user_name, category, name)
-         SELECT $1, 'restaurants', $2
-         WHERE NOT EXISTS (
-           SELECT 1 FROM profile_items
-           WHERE user_name = $1 AND category = 'restaurants' AND lower(name) = lower($2)
-         )
-         RETURNING id, name`,
-        ["davidblakelock", name.trim()]
-      );
-      if (insertedRows.length > 0) inserted.push(insertedRows[0]);
-    }
-
-    res.json({ found: restaurants.length, inserted: inserted.length, names: inserted.map(r => r.name) });
-
-    (async () => {
-      for (const r of inserted) {
-        await autoUpdateRestaurantUrl(r.id, r.name);
-        await new Promise<void>((resolve) => setTimeout(resolve, 600));
-      }
-    })().catch(() => {});
-  } catch (err) {
-    req.log.warn({ err }, "raw_data restaurant migration error");
-    res.status(500).json({ error: "Migration failed" });
-  }
 });
 
 /**
