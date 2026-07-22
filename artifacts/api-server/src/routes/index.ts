@@ -1,6 +1,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { authenticate } from "../auth/middleware.js";
 import { query } from "../db.js";
+import { reverseGeocodeWithGoogle } from "../departure/departureManager.js";
 import healthRouter from "./health";
 import chatRouter from "./chat";
 import remindersRouter from "./reminders";
@@ -88,20 +89,24 @@ router.post("/location/ping", authenticate, async (req: Request, res: Response) 
     return;
   }
   try {
-    // Reverse geocode to city name
-    const geoRes = await fetch(
-      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`,
-      { headers: { "User-Agent": "WinstonApp/1.0" }, signal: AbortSignal.timeout(5000) }
-    );
-    const geoData = await geoRes.json() as {
-      address?: { city?: string; town?: string; village?: string; county?: string }
-    };
-    const city =
-      geoData.address?.city ??
-      geoData.address?.town ??
-      geoData.address?.village ??
-      geoData.address?.county ??
-      null;
+    // Reverse geocode to city name — Google primary, Nominatim fallback
+    let city = await reverseGeocodeWithGoogle(lat, lon);
+
+    if (!city) {
+      const geoRes = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`,
+        { headers: { "User-Agent": "WinstonApp/1.0" }, signal: AbortSignal.timeout(5000) }
+      );
+      const geoData = await geoRes.json() as {
+        address?: { city?: string; town?: string; village?: string; county?: string }
+      };
+      city =
+        geoData.address?.city ??
+        geoData.address?.town ??
+        geoData.address?.village ??
+        geoData.address?.county ??
+        null;
+    }
 
     const tz = typeof req.body.timezone === "string" && req.body.timezone.trim().length > 0
       ? req.body.timezone.trim()

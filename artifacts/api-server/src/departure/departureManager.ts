@@ -149,6 +149,60 @@ async function geocodeWithGoogle(address: string): Promise<{ lat: number; lon: n
   }
 }
 
+// ── Google Reverse Geocoding API (primary reverse-geocoder — same key as forward geocoding) ──
+export async function reverseGeocodeWithGoogle(lat: number, lon: number): Promise<string | null> {
+  const apiKey = process.env.GOOGLE_MAPS_API_KEY ?? process.env.GOOGLE_PLACES_API_KEY;
+  if (!apiKey) {
+    logger.warn("[GoogleMaps] Reverse geocoding — no API key available");
+    return null;
+  }
+
+  const params = new URLSearchParams({ latlng: `${lat},${lon}`, key: apiKey });
+  const fullUrl = `https://maps.googleapis.com/maps/api/geocode/json?${params}`;
+
+  try {
+    const res = await loggedFetch("ReverseGeocoding", fullUrl, { signal: AbortSignal.timeout(6000) });
+    const data = await res.json() as {
+      status: string;
+      error_message?: string;
+      results?: Array<{
+        address_components: Array<{ long_name: string; short_name: string; types: string[] }>;
+      }>;
+    };
+    if (data.status !== "OK" || !data.results?.length) {
+      logger.warn(
+        { status: data.status, error_message: data.error_message, lat, lon },
+        "[GoogleMaps] Reverse geocoding non-OK status"
+      );
+      return null;
+    }
+
+    // Search across all results (most specific first) for a locality-level
+    // component, falling back to administrative_area_level_3 for smaller
+    // towns that Google — like Nominatim — sometimes files under a broader type.
+    for (const result of data.results) {
+      const locality = result.address_components.find((c) => c.types.includes("locality"));
+      if (locality) {
+        logger.info({ lat, lon, city: locality.long_name }, "[GoogleMaps] Reverse geocoding success (locality)");
+        return locality.long_name;
+      }
+    }
+    for (const result of data.results) {
+      const areaLevel3 = result.address_components.find((c) => c.types.includes("administrative_area_level_3"));
+      if (areaLevel3) {
+        logger.info({ lat, lon, city: areaLevel3.long_name }, "[GoogleMaps] Reverse geocoding success (administrative_area_level_3)");
+        return areaLevel3.long_name;
+      }
+    }
+
+    logger.warn({ lat, lon }, "[GoogleMaps] Reverse geocoding — no locality or administrative_area_level_3 found");
+    return null;
+  } catch (err) {
+    logger.warn({ err, lat, lon }, "[GoogleMaps] Reverse geocoding fetch threw");
+    return null;
+  }
+}
+
 // ── Nominatim geocoding (fallback only — rate-limited public instance) ────────
 async function geocodeWithNominatim(address: string): Promise<{ lat: number; lon: number } | null> {
   // Only append country hint if the address doesn't already include a state or zip
