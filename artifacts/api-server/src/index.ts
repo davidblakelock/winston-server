@@ -27,7 +27,6 @@ import { startProactiveEventScheduler } from "./morning/proactiveEventScheduler"
 import { initConcertsTable, startVenueMonitorScheduler } from "./morning/venueMonitor";
 import { initBriefingStoriesTable } from "./morning/storyDedup";
 import { runBriefingCacheMigrations } from "./morning/briefingCache";
-import { addProfileItem } from "./profile/profileManager";
 import { syncPeopleDatesToImportantDates } from "./people/peopleManager.js";
 import { ensureContactsTable } from "./google/contacts";
 import { ensureJournalInsightsTable, startJournalPatternScheduler } from "./journal/journalPatternAnalyzer";
@@ -483,40 +482,6 @@ app.listen(port, async (err) => {
     logger.info("[startup] ✅ All schedulers started");
   } else {
     logger.info("[startup] Non-Railway environment — schedulers disabled (dev mode)");
-  }
-
-  // Seed David's music preferences into profile_items so they persist and
-  // can be referenced in any conversation naturally.
-  try {
-    const musicPrefs: Array<{ name: string; detail: string }> = [
-      { name: "Jimmy Buffett",     detail: "Favorite artist — loves his laid-back tropical rock style" },
-      { name: "Bonnie Raitt",      detail: "Favorite artist — appreciates her blues-infused sound and slide guitar" },
-      { name: "Jackson Browne",    detail: "Favorite artist — classic 70s rock/folk songwriting" },
-      { name: "The Rolling Stones",detail: "Favorite band — classic rock 60s/70s" },
-      { name: "Gordon Lightfoot",  detail: "Favorite artist — Canadian folk/rock legend" },
-      { name: "Van Morrison",      detail: "Favorite artist — classic rock, Van Morrison's soulful style" },
-      { name: "Classic Rock",      detail: "Primary genre preference — 1960s and 1970s rock" },
-      { name: "Classic Jazz",      detail: "Loves classic jazz — bebop, big band, standards" },
-    ];
-    for (const pref of musicPrefs) {
-      await addProfileItem("interests", pref.name, pref.detail, NATIVE_STORED_NAME).catch(() => {});
-    }
-    const favoriteVenues: Array<{ name: string; detail: string }> = [
-      { name: "Kessler Theater",               detail: "Favorite Dallas music venue — intimate, eclectic bookings" },
-      { name: "Granada Theater",               detail: "Favorite Dallas music venue — mid-size, great sound" },
-      { name: "Dos Equis Pavilion",            detail: "Favorite Dallas outdoor amphitheater" },
-      { name: "AT&T Performing Arts Center",   detail: "Favorite Dallas performing arts venue" },
-      { name: "Klyde Warren Park",             detail: "Favorite Dallas outdoor concert/event space" },
-      { name: "Dallas Arboretum",              detail: "Loves Music Under the Stars concert series here" },
-      { name: "Jazz at the Meyerson",          detail: "Favorite jazz venue — Meyerson Symphony Center" },
-    ];
-    for (const venue of favoriteVenues) {
-      await addProfileItem("places", venue.name, venue.detail, NATIVE_STORED_NAME).catch(() => {});
-    }
-    // Clean up any stale 'David' rows left from before user_name was added
-    logger.info("Music preferences and favorite venues seeded to profile_items");
-  } catch (e) {
-    logger.warn({ err: e }, "Music preference seeding warning");
   }
 
   // Create user_service_preferences table for managing preferred grocery/health/shopping services.

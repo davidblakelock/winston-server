@@ -9,7 +9,6 @@ import {
   type CollectedData,
 } from "../onboarding/onboardingManager.js";
 import { authenticate, tryAuthenticate, NATIVE_USER } from "../auth/middleware.js";
-import { getProfilePlaces, getProfileItems } from "../profile/profileManager.js";
 import { getPeople } from "../people/peopleManager.js";
 import { getCuratedContacts } from "../google/contacts.js";
 import { query } from "../db.js";
@@ -290,17 +289,14 @@ router.get("/voices/:voiceId/preview", async (req, res) => {
 });
 
 // ── GET /api/navigation/places ────────────────────────────────────────────────
-// Returns home address merged with profile_items places.
+// Returns the user's home address as a navigable place.
 // Frontend uses this to detect navigation intent in the user-gesture context
 // (so window.open() is never blocked by popup blockers).
 router.get("/navigation/places", async (req, res) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
   try {
-    const [profilePlaces, userProfile] = await Promise.all([
-      getProfilePlaces(),
-      getProfile(userName).catch(() => null),
-    ]);
+    const userProfile = await getProfile(userName).catch(() => null);
     const homeAddress = ((userProfile?.rawData as CollectedData)?.homeAddress) ?? "";
     const homePlaces = homeAddress
       ? [
@@ -311,9 +307,7 @@ router.get("/navigation/places", async (req, res) => {
           },
         ]
       : [];
-    const extra = profilePlaces
-      .map((p) => ({ name: p.name, address: p.address, keywords: [p.name.toLowerCase()] }));
-    res.json({ places: [...homePlaces, ...extra] });
+    res.json({ places: homePlaces });
   } catch {
     res.json({ places: [] });
   }

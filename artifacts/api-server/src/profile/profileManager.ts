@@ -345,16 +345,4 @@ export function formatProfileForContext(items: ProfileItem[], userName = "the us
   );
 }
 
-// Get places with addresses for navigation lookup
-export async function getProfilePlaces(userName = NATIVE_STORED_NAME): Promise<
-  Array<{ name: string; address: string }>
-> {
-  const { rows } = await query<{ name: string; detail: string }>(
-    `SELECT name, detail FROM profile_items
-     WHERE user_name = $1 AND category = 'places' AND detail IS NOT NULL AND detail != ''`,
-    [userName]
-  );
-  return rows.map((r) => ({ name: r.name, address: r.detail }));
-}
-
 export { logger };
