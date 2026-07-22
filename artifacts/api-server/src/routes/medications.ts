@@ -28,7 +28,6 @@ type InteractionResult = {
   avoid: import("../medications/medicationManager.js").MedicationAvoid[];
   sideEffects: import("../medications/medicationManager.js").MedicationSideEffect[];
   checkedDrugs: string[];
-  failedLookups: string[];
 };
 
 const EMPTY_INTERACTIONS: InteractionResult = {
@@ -36,7 +35,6 @@ const EMPTY_INTERACTIONS: InteractionResult = {
   avoid: [],
   sideEffects: [],
   checkedDrugs: [],
-  failedLookups: [],
 };
 
 // Helper: run interaction check and broadcast "medications-changed" SSE event to the user.
@@ -58,7 +56,6 @@ async function broadcastMedicationInteractions(
     avoid: result.avoid,
     sideEffects: result.sideEffects,
     checkedDrugs: result.checkedDrugs,
-    failedLookups: result.failedLookups,
   });
   return result;
 }
@@ -116,8 +113,9 @@ router.get("/medications/export/data", async (req, res) => {
 });
 
 // ── GET /api/medications/interactions ─────────────────────────────────────────
-// Checks all active medications against the RxNorm interaction database (free, no key).
-// Response: { interactions, checkedDrugs, failedLookups }
+// Checks all active medications for interactions, things to avoid, and side
+// effects via a single Claude Sonnet prompt (see getMedicationInteractions()).
+// Response: { interactions, avoid, sideEffects, checkedDrugs }
 router.get("/medications/interactions", async (req, res) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
@@ -225,7 +223,6 @@ router.post("/medications/add", express.json({ limit: "1mb" }), async (req, res)
       avoid: interactionResult.avoid,
       sideEffects: interactionResult.sideEffects,
       checkedDrugs: interactionResult.checkedDrugs,
-      failedLookups: interactionResult.failedLookups,
     });
   } catch (err) {
     // Unique constraint violation — medication already exists (e.g. inactive record
@@ -505,7 +502,6 @@ router.put("/medications/:id", express.json({ limit: "1mb" }), async (req, res) 
       avoid: interactionResult.avoid,
       sideEffects: interactionResult.sideEffects,
       checkedDrugs: interactionResult.checkedDrugs,
-      failedLookups: interactionResult.failedLookups,
     });
   } catch (err) {
     req.log.error({ err }, "[MEDS] PUT /medications/:id error");
@@ -554,7 +550,6 @@ router.delete("/medications/:idOrName", async (req, res) => {
       avoid: interactionResult.avoid,
       sideEffects: interactionResult.sideEffects,
       checkedDrugs: interactionResult.checkedDrugs,
-      failedLookups: interactionResult.failedLookups,
     });
   } catch (err) {
     req.log.error({ err }, "[MEDS] DELETE /medications error");

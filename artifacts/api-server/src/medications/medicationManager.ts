@@ -293,73 +293,39 @@ export async function getMedicationInteractions(
   avoid: MedicationAvoid[];
   sideEffects: MedicationSideEffect[];
   checkedDrugs: string[];
-  failedLookups: string[];
 }> {
   const meds = await getMedications(userName);
   const checkedDrugs = meds.map((m) => m.name);
 
   if (meds.length === 0) {
-    return { interactions: [], avoid: [], sideEffects: [], checkedDrugs, failedLookups: [] };
+    return { interactions: [], avoid: [], sideEffects: [], checkedDrugs };
   }
 
   const medList = meds
     .map((m) => `- ${m.name}${m.dosage ? ` (${m.dosage})` : ""}${m.frequency ? `, ${m.frequency}` : ""}`)
     .join("\n");
 
-  const prompt = `You are summarizing medications for a regular person, not a doctor. Write like you're texting a friend — short, plain, zero jargon.
+  const prompt = `You're reviewing this person's medications for anything worth knowing about — the way a knowledgeable friend would explain it, not a pharmacist reading off a label. Use plain, everyday language throughout; assume no medical background.
 
 MEDICATIONS:
 ${medList}
 
-BANNED WORDS — never use these (rewrite them if you want to say them):
-hepatotoxic, nephrotoxic, cardiotoxic, CYP450, CYP3A4, potentiate, concurrent, contraindicated, metabolism, metabolized, renal, hepatic, myopathy, rhabdomyolysis, pharmacokinetic, synergistic, agonist, antagonist, inhibitor, substrate, bioavailability, half-life, prophylaxis, titrate, concomitant
+For each REAL, meaningful interaction between these specific drugs — things actually worth knowing about, not minor or theoretical ones — describe:
+- Which drugs are involved
+- How serious it is (moderate / high / critical)
+- What the actual risk is, in one plain sentence (e.g. "Taking Aleve with Meloxicam raises your risk of stomach bleeding.")
+- What to watch for, in a short phrase (e.g. "Stomach pain or dark stools")
 
-STRICT RULES:
-1. Every description: ONE sentence, plain English, 20 words or fewer.
-2. Every watchFor: ONE short symptom phrase — no sentences.
-3. Every avoid item: ONE short phrase — no explanation, no sentence.
-4. Every side effect: ONE short phrase — no explanation, no sentence.
-5. Max 3 avoid items per drug. Max 3 side effects per drug.
-6. Only list interactions that are moderate, high, or critical. Skip minor ones.
+Also note, for each drug: a few common things to avoid (foods, OTC products, supplements) and a few common side effects — briefly, in plain language.
 
-CRITICAL NSAID RULE — must always apply:
-Meloxicam, ibuprofen, Advil, Motrin, naproxen, Aleve, aspirin (high dose), and celecoxib are all NSAIDs.
-If ANY two NSAIDs appear in the medication list, flag it as a HIGH interaction:
-  description: "Taking two NSAIDs together raises your risk of stomach bleeding and kidney damage."
-  watchFor: "Stomach pain, black stools, or swelling"
+Skip anything minor or not worth mentioning. If there's nothing meaningful to flag for a given drug or combination, leave it out entirely.
 
-PART 1 — DRUG INTERACTIONS
-For each real interaction between drugs in the list:
-- drugs: exact drug names from the list above
-- severity: "moderate" | "high" | "critical"
-- description: ONE plain sentence, ≤20 words
-- watchFor: ONE short symptom phrase
-
-PART 2 — THINGS TO AVOID (per drug)
-Top 3 things to avoid per drug: OTC products, foods, or supplements. One short phrase each — no sentences.
-
-PART 3 — SIDE EFFECTS (per drug)
-Top 3 most common side effects per drug. One short phrase each — no sentences.
-
-MANDATORY: You MUST include a sideEffects entry for EVERY drug in the list above — no exceptions.
-Even if side effects are minor or well-known, list the top 3 for each drug. Never skip a drug.
-MANDATORY: You MUST include an avoid entry for EVERY drug in the list above — no exceptions.
-List the top 3 things to avoid (foods, OTC products, supplements) for each drug. Never skip a drug.
-
-Respond ONLY with valid JSON, no markdown, no extra text:
+Respond only with valid JSON in this shape:
 {
-  "interactions": [
-    { "drugs": ["Drug A", "Drug B"], "severity": "high", "description": "...", "watchFor": "..." }
-  ],
-  "avoid": [
-    { "drug": "Drug Name", "items": ["Ibuprofen or Advil", "Grapefruit juice", "Alcohol"] }
-  ],
-  "sideEffects": [
-    { "drug": "Drug Name", "sideEffects": ["Upset stomach", "Muscle aches", "Dizziness"] }
-  ]
-}
-
-If no meaningful interactions exist, return an empty interactions array. Always include avoid and sideEffects for every drug.`;
+  "interactions": [{ "drugs": [...], "severity": "...", "description": "...", "watchFor": "..." }],
+  "avoid": [{ "drug": "...", "items": [...] }],
+  "sideEffects": [{ "drug": "...", "sideEffects": [...] }]
+}`;
 
   try {
     const response = await anthropic.messages.create({
@@ -372,7 +338,7 @@ If no meaningful interactions exist, return an empty interactions array. Always 
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       process.stdout.write(`[STDOUT] MEDS-INTERACTIONS no JSON in Claude response. raw=${raw.slice(0, 300)}\n`);
-      return { interactions: [], avoid: [], sideEffects: [], checkedDrugs, failedLookups: [] };
+      return { interactions: [], avoid: [], sideEffects: [], checkedDrugs };
     }
 
     let parsed: ClaudeInteractionResponse;
@@ -381,7 +347,7 @@ If no meaningful interactions exist, return an empty interactions array. Always 
     } catch (parseErr) {
       const msg = parseErr instanceof Error ? parseErr.message : String(parseErr);
       process.stdout.write(`[STDOUT] MEDS-INTERACTIONS JSON parse failed: ${msg}\nraw snippet: ${jsonMatch[0].slice(0, 400)}\n`);
-      return { interactions: [], avoid: [], sideEffects: [], checkedDrugs, failedLookups: [] };
+      return { interactions: [], avoid: [], sideEffects: [], checkedDrugs };
     }
 
     return {
@@ -389,7 +355,6 @@ If no meaningful interactions exist, return an empty interactions array. Always 
       avoid: Array.isArray(parsed.avoid) ? parsed.avoid : [],
       sideEffects: Array.isArray(parsed.sideEffects) ? parsed.sideEffects : [],
       checkedDrugs,
-      failedLookups: [],
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
