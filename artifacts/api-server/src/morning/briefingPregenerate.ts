@@ -444,13 +444,19 @@ async function _doBriefingPrefetch(userName: string): Promise<void> {
 // Build-only step — call manually to test before it replaces the existing
 // news/weather/sports/local-content pipeline in a later pass.
 
-const DAILY_BRIEF_INSTRUCTION = `Do several real web searches — don't stop after one. Search for: today's top news headlines (aim for at least 5 real stories worth knowing, not just one), today's current weather conditions only for this person's city — do not include a multi-day forecast. This is a required section — if your search doesn't return clear current conditions, search again with a more specific query before giving up, and always include at least one sentence about today's weather in the final output, market/investing news, sports scores for their teams, and one or two genuinely funny or delightful "you won't believe this" news stories from today. Then write them a genuinely enjoyable five-minute morning brief covering all of that. Also search for real local events happening today or this weekend near their city — but only recommend things that genuinely connect to what you know about this specific person from everything above (their real interests, goals, and recent context) — never recommend something generic or popular just because it's happening; if nothing in your search actually connects to who this person is, skip the local section entirely rather than filling it with unrelated events. Use only real, current, verified information from your searches — never invent facts, venues, dates, scores, or weather. Style it however reads best for a five-minute morning read — sections, headers, or flowing prose, your call, and vary the structure day to day rather than repeating an identical template every time. Keep individual news items tight — a sentence or two each, like the examples below, not a full paragraph of explanation per story. "Five-minute read" means concise and scannable across many short items, not long-form writing on each one. Overall length should come from covering enough distinct topics (news, weather, markets, sports, a fun story, local events, wine tip, quote), not from writing at length about any single one of them.
+const DAILY_BRIEF_INSTRUCTION = `This briefing is delivered in the early morning, before the stock market opens for the day. Sports scores should always be from yesterday's/last night's completed games — never describe a game as happening "today" unless you've confirmed via search that it already occurred earlier the same calendar day in this person's timezone. Never give a live/current stock quote or price snapshot — the market is closed at this hour and a snapshot price is meaningless.
+
+Do several real web searches — don't stop after one. Search for: today's top news headlines (aim for at least 5 real stories worth knowing, not just one — major national and international stories only; do not include hyper-local news from a single city or small region (local government votes, local development projects, local tribal/community news) in this section — that belongs only in a separate local-events section, and only when it genuinely matches the person's actual city), today's current weather conditions only for this person's city — do not include a multi-day forecast. This is a required section — if your search doesn't return clear current conditions, search again with a more specific query before giving up, and always include at least one sentence about today's weather in the final output, market/investing news, sports scores for their teams, and one or two genuinely funny or delightful "you won't believe this" news stories from today. Then write them a genuinely enjoyable five-minute morning brief covering all of that. Also search for real local events happening today or this weekend near their city — but only recommend things that genuinely connect to what you know about this specific person from everything above (their real interests, goals, and recent context) — never recommend something generic or popular just because it's happening; if nothing in your search actually connects to who this person is, skip the local section entirely rather than filling it with unrelated events. Use only real, current, verified information from your searches — never invent facts, venues, dates, scores, or weather. Style it however reads best for a five-minute morning read — sections, headers, or flowing prose, your call, and vary the structure day to day rather than repeating an identical template every time. Keep individual news items tight — a sentence or two each, like the examples below, not a full paragraph of explanation per story. "Five-minute read" means concise and scannable across many short items, not long-form writing on each one. Overall length should come from covering enough distinct topics (news, weather, markets, sports, a fun story, local events, quote), not from writing at length about any single one of them.
+
+SPORTS: Search for and report only the FINAL scores from this person's teams' most recently completed games — last night's games if any were played, otherwise each team's most recent prior game. Format each as: team, final score, opponent. Do not mention upcoming games, schedules, or say a team is "set to play today" — this section covers only what already happened, never what's coming up.
+
+MARKETS & INVESTING: Do not give a live price snapshot or quote — the market hasn't opened yet at this hour. Instead, cover futures direction for the major indices (Dow, S&P, Nasdaq) ahead of today's open, and any major overnight financial news likely to move the market at open — earnings reports, Fed commentary, major economic data releases, or significant geopolitical developments affecting markets. Frame this as what the trading day ahead holds, not a snapshot of where things stood at some overnight timestamp — don't reference a specific time or timezone for any price or figure.
 
 FORMATTING — CRITICAL: Write in clean, plain, readable prose only — this will be read aloud via text-to-speech, so it must sound natural when spoken. Never include citation brackets, markdown links, raw URLs, "utm_source" parameters, "#:~:text=" fragment identifiers, or any link syntax anywhere in the output. When you want to credit a source, say it in plain spoken words woven into the sentence — e.g. "according to the AP" or "Axios reports" — never as a clickable link or bracketed reference. Do NOT include a "Sources:" section, footer, bibliography, or list of links anywhere, including at the end. The entire output must read as clean spoken prose from start to finish with zero raw URLs or citation markup of any kind.
 
 For loose style reference only (not a required template), here are two briefings this person said they liked:
 
-(These examples are for tone, structure, and format only — any place names, cities, or venues in brackets are placeholders. Never use a real place name from these examples in your actual output. All real content — including location — must come from your own search and from the person's actual current city given above.)
+(These examples are showing you TONE AND STRUCTURE ONLY. Every fact, story, quote, and detail in your actual output must come from your own fresh search results for today. Do not reuse, paraphrase, or reproduce ANY specific fact, story, or detail from these examples — including the dog-on-a-mountain story — under any circumstances. If your search doesn't turn up a good "weird news" story, skip that section entirely rather than reusing the example. Any place names, cities, venues, team opponents, scores, or story details shown in brackets below are placeholders — never use a real one from these examples in your actual output. All real content — including location, teams, scores, and stories — must come from your own search and from the person's actual current city and teams given above.)
 
 [EXAMPLE 1]
 ☕ David's Daily Brief
@@ -470,19 +476,16 @@ Smoke from wildfires is affecting air quality in portions of the Midwest and Nor
 After several quarters dominated by AI enthusiasm, investors are paying closer attention to whether companies can actually convert AI investments into sustained profits.
 
 📈 Markets & Investing
-Before the opening bell: Dow futures lower, S&P 500 futures lower, Nasdaq futures sharply lower. The main story is a broad technology and semiconductor pullback. Even strong earnings from some chip companies haven't reassured investors, who are becoming more selective about AI-related valuations. Netflix is also under pressure after issuing weaker guidance. Investor takeaway: if you're a long-term investor, this looks more like a valuation reset than a sign that AI itself is losing importance.
+Futures point [direction] ahead of the open for the Dow, S&P 500, and Nasdaq. The overnight story to watch: [a real earnings report, Fed comment, economic data release, or geopolitical development likely to move markets today]. Investor takeaway: [one sentence of context for a long-term investor].
 
 🏈🏀⚾ Pro Sports
-A relatively quiet morning for [this person's home teams]: Cowboys training camp storylines are beginning to build as preseason approaches. Rangers continuing their push through the regular season with the trade deadline approaching. Mavericks offseason roster development remains the focus. Stars quiet offseason as preparations continue for training camp. Internationally, the biggest sports story is the buildup to the upcoming World Cup Final.
+Last night's results for [this person's home teams]: [Team] beat [Opponent], final score [X–Y]. [Team] fell to [Opponent], final score [X–Y]. [Team] defeated [Opponent], final score [X–Y]. Internationally, [a real result from a competition this person follows].
 
 🤖 AI & Technology
 The biggest AI story today isn't a new model — it's the market. Investors are asking whether the hundreds of billions being spent on AI chips, data centers, and infrastructure will generate enough profits to justify current valuations. That debate is driving today's technology selloff.
 
 😂 No Politics, Just Weird
-A Labrador had to be rescued from Britain's highest mountain after apparently eating marijuana during a hike. Mountain rescuers carried the very relaxed dog back down. Also, authorities are still trying to capture a wandering emu that has become something of a local celebrity by calmly strolling through neighborhoods while avoiding capture.
-
-🍷 Daily Discovery
-Wine Tip of the Day: If you enjoy Cabernet Sauvignon, try a Bordeaux blend from France. Unlike many California Cabernets, Bordeaux often blends Cabernet Sauvignon with Merlot and Cabernet Franc, producing a more restrained, food-friendly style. It's an excellent comparison tasting that helps develop your palate.
+[a real, current lighthearted news story — something genuinely funny or delightful from today's search, not invented]
 
 💬 Quote of the Day
 "The important thing is not to stop questioning." — Albert Einstein
@@ -500,6 +503,22 @@ Live music tonight at [a local venue]. A free evening event at [a local museum o
 Grab coffee, explore [a local morning spot], then catch a show at [a local evening venue] tonight. It's less about listing events and more about giving one enjoyable way to spend the day.
 
 End with today's Stoic quote provided above, woven in naturally as a closing thought, not just pasted verbatim.`;
+
+// Server-side safety net — the prompt's anti-link/citation instructions are
+// demonstrably not followed reliably (observed citation/URL leakage despite
+// explicit instructions against it). Backstop, not a replacement for the prompt.
+function sanitizeBriefText(text: string): string {
+  return text
+    // Markdown links [label](url) → keep just the label
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
+    // Bracketed citation numbers, e.g. [1] or [1, 2]
+    .replace(/\[\d+(?:,\s*\d+)*\]/g, "")
+    // Bare URLs carrying a utm_source tracking parameter
+    .replace(/https?:\/\/\S*utm_source[^\s)]*/gi, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .trim();
+}
 
 interface OpenAiResponsesResult {
   status?: string;
@@ -642,7 +661,7 @@ export async function generateDailyBrief(userName: string): Promise<string | nul
       return null;
     }
 
-    return textItem.text;
+    return sanitizeBriefText(textItem.text);
   } catch (err) {
     logger.warn({ err, userName }, "[DailyBrief] generateDailyBrief failed");
     return null;
