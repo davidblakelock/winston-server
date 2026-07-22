@@ -685,33 +685,6 @@ export async function getMedicationRemindersEnabled(userName = NATIVE_STORED_NAM
   return rows.length === 0;
 }
 
-export async function setMedicationRemindersEnabled(
-  enabled: boolean,
-  userName = NATIVE_STORED_NAME
-): Promise<void> {
-  if (enabled) {
-    await query(
-      `DELETE FROM profile_items
-       WHERE user_name = $1 AND category = 'preferences' AND name = 'medication_reminders_muted'
-       RETURNING id`,
-      [userName]
-    );
-  } else {
-    await query(
-      `DELETE FROM profile_items
-       WHERE user_name = $1 AND category = 'preferences' AND name = 'medication_reminders_muted'
-       RETURNING id`,
-      [userName]
-    ).catch(() => {});
-    await query(
-      `INSERT INTO profile_items (user_name, category, name, detail)
-       VALUES ($1, 'preferences', 'medication_reminders_muted', 'true')
-       RETURNING id`,
-      [userName]
-    );
-  }
-}
-
 // ── Utility helpers ───────────────────────────────────────────────────────────
 
 export function buildMedReminderText(meds: Medication[]): string {

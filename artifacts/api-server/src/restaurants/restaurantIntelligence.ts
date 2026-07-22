@@ -316,19 +316,6 @@ export async function cacheRestaurantDetails(
   );
 }
 
-export async function updateProfileItemWithAddress(
-  userName: string,
-  restaurantName: string,
-  address: string
-): Promise<void> {
-  await query(
-    `UPDATE profile_items SET detail = $1
-     WHERE user_name = $2 AND LOWER(name) = LOWER($3) AND category = 'restaurants' AND (detail IS NULL OR detail = '')
-     RETURNING id`,
-    [address, userName, restaurantName]
-  );
-}
-
 // ── Platform detection ────────────────────────────────────────────────────────
 // Works on both a single URL string and raw HTML (scans for the first match).
 function detectPlatform(text: string | null | undefined): {

@@ -23,7 +23,6 @@ import { startBillScheduler } from "./bills/billScheduler";
 import { startDatesScheduler } from "./dates/datesScheduler";
 import { startCalendarSyncScheduler, ensureCalendarSyncTable } from "./departure/calendarSyncScheduler";
 import { ensureRelationshipTable } from "./relationships/relationshipManager";
-import { initDallasContentTable } from "./morning/dallasContent";
 import { startProactiveEventScheduler } from "./morning/proactiveEventScheduler";
 import { initConcertsTable, startVenueMonitorScheduler } from "./morning/venueMonitor";
 import { initBriefingStoriesTable } from "./morning/storyDedup";
@@ -252,12 +251,6 @@ app.listen(port, async (err) => {
     logger.info("[startup] stoic_curriculum + user_settings tables ready");
   } catch (e) {
     logger.warn({ err: e }, "Stoic tables initialization warning");
-  }
-
-  try {
-    await initDallasContentTable();
-  } catch (e) {
-    logger.warn({ err: e }, "Dallas content table initialization warning");
   }
 
   try {

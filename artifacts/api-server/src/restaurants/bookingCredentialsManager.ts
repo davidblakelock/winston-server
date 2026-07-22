@@ -33,49 +33,6 @@ export async function ensureBookingColumns(): Promise<void> {
   logger.info("[Booking] Schema ensured (booking_phone, resy_sessions)");
 }
 
-// ── User booking profile ──────────────────────────────────────────────────────
-
-export interface UserBookingProfile {
-  firstName: string;
-  lastName:  string;
-  email:     string;
-  phone:     string;
-}
-
-/**
- * Reads the user's booking contact info from the database.
- *   - Name from user_profiles.name
- *   - Email from google_users.email (primary) — the address David signed in with
- *   - Phone from user_profiles.booking_phone (set conversationally if needed)
- */
-export async function getUserBookingProfile(userName: string): Promise<UserBookingProfile> {
-  const { rows: profileRows } = await query<{
-    name:          string | null;
-    booking_phone: string | null;
-  }>(
-    `SELECT name, booking_phone FROM user_profiles WHERE user_name = $1 LIMIT 1`,
-    [userName]
-  );
-
-  const profile = profileRows[0];
-  const fullName  = profile?.name ?? "David Lock";
-  const nameParts = fullName.trim().split(/\s+/);
-  const firstName = nameParts[0] ?? "David";
-  const lastName  = nameParts.slice(1).join(" ") || "Lock";
-
-  // Prefer booking_phone; if not set default to empty (OpenTable allows it)
-  const phone = profile?.booking_phone ?? "";
-
-  // Email: read from Google auth record (the address David used to sign in)
-  const { rows: authRows } = await query<{ email: string }>(
-    `SELECT email FROM google_users WHERE user_name = $1 LIMIT 1`,
-    [userName]
-  );
-  const email = authRows[0]?.email ?? "";
-
-  return { firstName, lastName, email, phone };
-}
-
 // ── Resy session management ───────────────────────────────────────────────────
 
 export interface ResySession {
