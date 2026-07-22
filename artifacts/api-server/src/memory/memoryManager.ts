@@ -3,6 +3,7 @@ import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { addProfileItem } from "../profile/profileManager.js";
 import { getUserLocationContext } from "../lib/userTimezone.js";
+import { getProfile } from "../onboarding/onboardingManager.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -28,13 +29,27 @@ export async function ensureMemoryTable(): Promise<void> {
   `);
 }
 
-// Generate a memory summary from conversation history using Claude
+// ── Durable facts extracted from a conversation, alongside the narrative summary ──
+export interface ExtractedFacts {
+  hobbies?: string[];
+  favoriteArtists?: string[];
+  restaurants?: string[];
+  sportsTeams?: string[];
+}
+
+interface MemoryAnalysis {
+  summary: string | null;
+  facts: ExtractedFacts | null;
+}
+
+// Generate a memory summary AND extract durable profile facts from conversation
+// history in a single Claude call — no separate pass, no regex pre-filter.
 export async function generateMemorySummary(
   history: Array<{ role: string; content: string }>,
   companionName?: string | null,
   userName?: string | null
-): Promise<string | null> {
-  if (history.length < 4) return null; // Too short to be worth remembering
+): Promise<MemoryAnalysis> {
+  if (history.length < 4) return { summary: null, facts: null }; // Too short to be worth remembering
 
   const companion = companionName ?? "the AI companion";
   const user = userName ?? "the user";
@@ -53,28 +68,57 @@ export async function generateMemorySummary(
     `- Mood, feelings, or things weighing on them\n` +
     `- New experiences (restaurants tried, things done for the first time, events attended)\n` +
     `- Anything else a close friend would naturally follow up on next time\n\n` +
-    `Write in concise third-person notes. Be specific with names and details. ` +
+    `Write the memory note in concise third-person notes. Be specific with names and details. ` +
     `If the conversation was only about setting reminders, managing lists, or checking the weather ` +
-    `with no personal substance worth remembering, return exactly the word: SKIP\n\n` +
+    `with no personal substance worth remembering, use the literal string "SKIP" as the summary.\n\n` +
+    `Also identify any DURABLE facts about ${user} mentioned in this conversation — lasting ` +
+    `preferences, not one-off events. Use the same judgment as the SKIP rule above: only include ` +
+    `something if it's genuinely durable.\n` +
+    `- hobbies: any new hobby or interest mentioned\n` +
+    `- favoriteArtists: any new artist or musician mentioned as one they like\n` +
+    `- restaurants: any new restaurant mentioned as a favorite or one they enjoyed\n` +
+    `- sportsTeams: any new sports team mentioned as one they follow\n\n` +
+    `Return ONLY valid JSON in exactly this shape — no explanation, no markdown code fences:\n` +
+    `{\n` +
+    `  "summary": "<the memory note, or the literal string SKIP>",\n` +
+    `  "facts": {\n` +
+    `    "hobbies": ["..."],\n` +
+    `    "favoriteArtists": ["..."],\n` +
+    `    "restaurants": ["..."],\n` +
+    `    "sportsTeams": ["..."]\n` +
+    `  }\n` +
+    `}\n` +
+    `Omit any key/array that has nothing new. Omit "facts" entirely if nothing durable came up.\n\n` +
     `Conversation:\n${formatted}`;
 
   try {
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 250,
+      max_tokens: 400, // raised from 250 to fit the facts JSON alongside the summary
       messages: [{ role: "user", content: prompt }],
     });
     const text =
       response.content[0].type === "text" ? response.content[0].text.trim() : "";
-    if (!text || text === "SKIP") return null;
-    return text;
+    if (!text) return { summary: null, facts: null };
+
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return { summary: null, facts: null };
+
+    const parsed = JSON.parse(jsonMatch[0]) as { summary?: string; facts?: ExtractedFacts };
+    const summary = parsed.summary && parsed.summary !== "SKIP" ? parsed.summary : null;
+    const facts = parsed.facts && Object.keys(parsed.facts).length > 0 ? parsed.facts : null;
+
+    return { summary, facts };
   } catch (err) {
     logger.warn({ err }, "Memory summary generation failed");
-    return null;
+    return { summary: null, facts: null };
   }
 }
 
-// Save or update today's memory with the new summary
+// Save or update today's memory with the new summary, and save any durable
+// profile facts extracted in the same pass. Fact-saving is independent of
+// whether the narrative summary was worth keeping (SKIP) — a conversation can
+// mention a new hobby without having a memorable narrative, or vice versa.
 export async function saveMemory(
   history: Array<{ role: string; content: string }>,
   companionName?: string | null,
@@ -83,7 +127,14 @@ export async function saveMemory(
   const { timezone: tz } = userName ? await getUserLocationContext(userName) : { timezone: "UTC" };
   const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
 
-  const summary = await generateMemorySummary(history, companionName, userName);
+  const { summary, facts } = await generateMemorySummary(history, companionName, userName);
+
+  if (facts && userName) {
+    await saveExtractedFacts(facts, userName).catch((err) => {
+      logger.warn({ err, userName }, "Failed to save extracted profile facts (non-fatal)");
+    });
+  }
+
   if (!summary) return false;
 
   await query(
@@ -100,6 +151,79 @@ export async function saveMemory(
 
   logger.info({ date: today, words: summary.split(" ").length }, "Memory saved");
   return true;
+}
+
+// ── Save durable facts into their real structured homes ───────────────────────
+// hobbies / favoriteArtists: jsonb array columns on user_profiles — merge new,
+//   non-duplicate entries into the existing array.
+// sportsTeams: a single comma-separated text column on user_profiles (NOT an
+//   array) — append new teams to the existing string.
+// restaurants: NOT a user_profiles column — the dedicated restaurants table
+//   (routes/lists.ts / profileManager.ts's addRestaurantItem) is the real live
+//   home for restaurants, so route through the existing addProfileItem()
+//   category="restaurants" path, which already handles dedup + URL lookup.
+async function saveExtractedFacts(facts: ExtractedFacts, userName: string): Promise<void> {
+  const profile = await getProfile(userName).catch(() => null);
+  if (!profile) return;
+
+  await mergeJsonbArrayFact(userName, "hobbies", profile.hobbies, facts.hobbies);
+  await mergeJsonbArrayFact(userName, "favorite_artists", profile.favoriteArtists, facts.favoriteArtists);
+
+  if (facts.sportsTeams?.length) {
+    await mergeSportsTeams(userName, profile.sportsTeams, facts.sportsTeams);
+  }
+
+  if (facts.restaurants?.length) {
+    for (const name of facts.restaurants) {
+      const cleanName = name?.trim();
+      if (!cleanName) continue;
+      await addProfileItem("restaurants", cleanName, null, userName).catch((err) => {
+        logger.warn({ err, userName, name: cleanName }, "Failed to save extracted restaurant fact (non-fatal)");
+      });
+    }
+  }
+}
+
+async function mergeJsonbArrayFact(
+  userName: string,
+  column: "hobbies" | "favorite_artists",
+  existing: string[],
+  newFacts: string[] | undefined
+): Promise<void> {
+  if (!newFacts?.length) return;
+
+  const existingLower = new Set(existing.map((v) => v.toLowerCase().trim()));
+  const additions = newFacts
+    .map((v) => v?.trim())
+    .filter((v): v is string => !!v && !existingLower.has(v.toLowerCase()));
+  if (additions.length === 0) return;
+
+  const merged = [...existing, ...additions];
+  await query(
+    `UPDATE user_profiles SET ${column} = $1::jsonb WHERE user_name = $2`,
+    [JSON.stringify(merged), userName]
+  );
+  logger.info({ userName, column, additions }, "[Memory] Extracted fact merged into user_profiles");
+}
+
+async function mergeSportsTeams(
+  userName: string,
+  existing: string | null,
+  newTeams: string[]
+): Promise<void> {
+  const existingStr = existing ?? "";
+  const existingLower = existingStr.toLowerCase();
+  const additions = newTeams
+    .map((t) => t?.trim())
+    .filter((t): t is string => !!t && !existingLower.includes(t.toLowerCase()));
+  if (additions.length === 0) return;
+
+  const merged = [existingStr, ...additions].filter(Boolean).join(", ");
+  await query(
+    `UPDATE user_profiles SET sports_teams = $1 WHERE user_name = $2`,
+    [merged, userName]
+  );
+  logger.info({ userName, additions }, "[Memory] Extracted sports team merged into user_profiles");
 }
 
 // Retrieve memories from the last N days
@@ -243,76 +367,5 @@ export async function searchTranscripts(
   } catch (err) {
     logger.warn({ err }, "Transcript search failed");
     return [];
-  }
-}
-
-// ── Key fact auto-save ─────────────────────────────────────────────────────────
-// Pattern to detect personal statements that may contain saveable facts.
-// Only runs when this pattern matches the user's message (cost guard).
-const PERSONAL_FACT_PATTERN =
-  /\bI (?:prefer|like|love|hate|enjoy|dislike|tend to|always|usually|never|went to|visited|tried|am (?:thinking about|planning)|want to|just (?:had|tried|went|visited))\b|\bmy favorite\b|\bI(?:'m| am) (?:into|a fan of|not a fan of|trying|learning|reading|watching)\b/i;
-
-// Extracts durable personal facts from a user message and saves them to profile_items.
-// Fire-and-forget — non-blocking, non-fatal.
-export async function extractAndSaveConversationFacts(
-  userMessage: string,
-  _assistantResponse: string,
-  userName: string
-): Promise<void> {
-  if (!PERSONAL_FACT_PATTERN.test(userMessage)) return;
-
-  try {
-    const response = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 300,
-      system: `You extract durable personal facts from a user's message that are worth saving to their profile.
-
-Return a JSON array. Each element has:
-- "category": "places" | "shows" | "restaurants" | "people" | "interests" | "other"
-- "name": short label (3-6 words, e.g. "Morning exercise preference")
-- "detail": the specific value (e.g. "Prefers morning workouts")
-
-Only extract DURABLE facts (lasting preferences, habits, people, places, shows being watched).
-Do NOT extract:
-- Temporary states ("I'm tired today", "I'm busy this week")
-- One-off events ("I had pizza last night")
-- Tasks or reminders
-- Weather preferences already obvious from context
-
-If nothing is worth saving, return exactly: []`,
-      messages: [{ role: "user", content: `User message: "${userMessage.slice(0, 500)}"` }],
-    });
-
-    const text = response.content[0].type === "text" ? response.content[0].text.trim() : "[]";
-    const jsonMatch = text.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) return;
-
-    const facts = JSON.parse(jsonMatch[0]) as Array<{
-      category: string;
-      name: string;
-      detail: string;
-    }>;
-
-    if (!Array.isArray(facts) || facts.length === 0) return;
-
-    const validCategories = ["places", "shows", "restaurants", "people", "interests", "other"];
-    let saved = 0;
-
-    for (const fact of facts.slice(0, 5)) {
-      if (!validCategories.includes(fact.category) || !fact.name?.trim()) continue;
-      await addProfileItem(
-        fact.category as "places" | "shows" | "restaurants" | "people" | "interests" | "other",
-        fact.name,
-        fact.detail ?? null,
-        userName
-      );
-      saved++;
-    }
-
-    if (saved > 0) {
-      logger.info({ saved, userName }, "Conversation facts extracted and saved to profile_items");
-    }
-  } catch (err) {
-    logger.warn({ err }, "Conversation fact extraction failed (non-fatal)");
   }
 }
