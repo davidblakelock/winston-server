@@ -10,6 +10,7 @@ import {
 } from "../onboarding/onboardingManager.js";
 import { authenticate, tryAuthenticate, NATIVE_USER } from "../auth/middleware.js";
 import { getProfilePlaces, getProfileItems } from "../profile/profileManager.js";
+import { getPeople } from "../people/peopleManager.js";
 import { getCuratedContacts } from "../google/contacts.js";
 import { query } from "../db.js";
 import { getUserSettings, upsertUserSettings } from "../stoic/stoicManager.js";
@@ -319,143 +320,19 @@ router.get("/navigation/places", async (req, res) => {
 });
 
 // ── GET /api/emergency/info ───────────────────────────────────────────────────
-// Returns home address and all people saved in profile_items with phone numbers
-// (resolved from curated contacts) for the emergency screen on the native app.
+// Returns home address and any My People contacts tagged as emergency
+// contacts — notes field contains "emergency contact" (case-insensitive,
+// simple substring match) — for the emergency screen on the native app.
 router.get("/emergency/info", async (req, res) => {
-  // ── STEP 0: Log every auth-related header ──────────────────────────────────
-  logger.info({
-    msg: "[emergency/info] STEP-0 incoming headers",
-    hasApiKey: !!req.headers["x-api-key"],
-    apiKeyValue: req.headers["x-api-key"] ?? null,
-    hasUserName: !!req.headers["x-user-name"],
-    userNameHeader: req.headers["x-user-name"] ?? null,
-    hasAuthorization: !!req.headers["authorization"],
-    authorizationPrefix: req.headers["authorization"]
-      ? (req.headers["authorization"] as string).slice(0, 20) + "..."
-      : null,
-  });
-
   const userName = await authenticate(req, res);
   if (!userName) return;
 
-  // ── STEP 1: Log resolved auth username ────────────────────────────────────
-  logger.info({
-    msg: "[emergency/info] STEP-1 authenticated userName",
-    userName,
-  });
-
   try {
-    // ── STEP 2: Raw profile lookup ─────────────────────────────────────────
-    const profileSql = `SELECT user_name, name, raw_data FROM user_profiles WHERE user_name = $1 LIMIT 1`;
-    logger.info({ msg: "[emergency/info] STEP-2 running profile query", sql: profileSql, params: [userName] });
-    const profileRaw = await query<{ user_name: string; name: string | null; raw_data: Record<string, unknown> }>(
-      profileSql, [userName]
-    ).catch((e) => { logger.error({ msg: "[emergency/info] STEP-2 profile query error", err: String(e) }); return { rows: [] }; });
-    logger.info({
-      msg: "[emergency/info] STEP-2 profile raw result",
-      rowCount: profileRaw.rows.length,
-      rows: profileRaw.rows.map(r => ({
-        user_name: r.user_name,
-        name: r.name,
-        rawDataName: (r.raw_data as any)?.name ?? null,
-      })),
-    });
-
-    const userProfile = await getProfile(userName).catch(() => null);
-    const rawData = userProfile?.rawData as CollectedData | undefined;
-    const storedName: string =
-      (rawData?.name as string | undefined) ??
-      userProfile?.name ??
-      userName;
-
-    // Build a deduplicated list of candidate usernames for database queries.
-    // Data may have been written under any of these:
-    //   - `storedName`  : resolved from profile.rawData.name (e.g. "David Blakelock")
-    //   - `userName`    : the raw auth username (e.g. "David" for Bearer, "davidblakelock" for x-api-key)
-    //   - `NATIVE_USER` : the canonical native username ("davidblakelock")
-    // Including all three ensures we find the data regardless of which auth path
-    // was used when the data was originally saved.
-    const candidateNames = Array.from(new Set([storedName, userName, NATIVE_USER]));
-
-    logger.info({
-      msg: "[emergency/info] STEP-3 name resolution",
-      authUserName: userName,
-      profileFound: !!userProfile,
-      profileName: userProfile?.name ?? null,
-      rawDataName: (rawData?.name as string | undefined) ?? null,
-      resolvedStoredName: storedName,
-      candidateNames,
-    });
-
-    // ── STEP 4: Raw profile_items query (all candidate usernames) ──────────
-    const itemsSql = `SELECT id, category, name, detail, created_at FROM profile_items WHERE user_name = ANY($1::text[]) AND category = $2 ORDER BY created_at ASC`;
-    logger.info({ msg: "[emergency/info] STEP-4 running profile_items query", sql: itemsSql, params: [candidateNames, "people"] });
-    const itemsRaw = await query<{ id: number; category: string; name: string; detail: string | null }>(
-      itemsSql, [candidateNames, "people"]
-    ).catch((e) => { logger.error({ msg: "[emergency/info] STEP-4 profile_items error", err: String(e) }); return { rows: [] }; });
-    logger.info({
-      msg: "[emergency/info] STEP-4 profile_items raw result",
-      candidateNames,
-      rowCount: itemsRaw.rows.length,
-      rows: itemsRaw.rows.map(r => ({ id: r.id, name: r.name, detail: r.detail?.slice(0, 60) ?? null })),
-    });
-
-    // ── STEP 5: curated contacts raw query (all candidate usernames) ────────
-    const contactsSql = `SELECT display_name, phone FROM google_contacts WHERE user_name = ANY($1::text[]) LIMIT 20`;
-    logger.info({ msg: "[emergency/info] STEP-5 running contacts query", sql: contactsSql, params: [candidateNames] });
-    const contactsRaw = await query<{ display_name: string; phone: string | null }>(
-      contactsSql, [candidateNames]
-    ).catch((e) => { logger.error({ msg: "[emergency/info] STEP-5 contacts query error", err: String(e) }); return { rows: [] }; });
-    logger.info({
-      msg: "[emergency/info] STEP-5 contacts raw result",
-      candidateNames,
-      rowCount: contactsRaw.rows.length,
-      rows: contactsRaw.rows.slice(0, 5).map(r => ({ name: r.display_name, hasPhone: !!r.phone })),
-    });
-
-    // Fetch people and contacts using raw SQL across all candidate names so
-    // we always find the data regardless of which username it was saved under.
-    const [peopleRows, contactRows] = await Promise.all([
-      query<{ id: number; category: string; name: string; detail: string | null }>(
-        `SELECT id, category, name, detail FROM profile_items WHERE user_name = ANY($1::text[]) AND category = 'people' ORDER BY created_at ASC`,
-        [candidateNames]
-      ).then(r => r.rows).catch((e) => {
-        logger.error({ msg: "[emergency/info] people fetch error", err: String(e) });
-        return [] as { id: number; category: string; name: string; detail: string | null }[];
-      }),
-      query<{ display_name: string; phone: string | null }>(
-        `SELECT display_name, phone FROM google_contacts WHERE user_name = ANY($1::text[]) LIMIT 50`,
-        [candidateNames]
-      ).then(r => r.rows).catch((e) => {
-        logger.error({ msg: "[emergency/info] contacts fetch error", err: String(e) });
-        return [] as { display_name: string; phone: string | null }[];
-      }),
+    const [userProfile, people] = await Promise.all([
+      getProfile(userName).catch(() => null),
+      getPeople(userName).catch((): Awaited<ReturnType<typeof getPeople>> => []),
     ]);
-
-    // Deduplicate people by name (in case the same person appears under both usernames)
-    const seenPeople = new Set<string>();
-    const people = peopleRows.filter(p => {
-      const key = p.name.trim().toLowerCase();
-      if (seenPeople.has(key)) return false;
-      seenPeople.add(key);
-      return true;
-    });
-
-    // Deduplicate contacts by display_name
-    const seenContacts = new Set<string>();
-    const contacts = contactRows.filter(c => {
-      const key = c.display_name.trim().toLowerCase();
-      if (seenContacts.has(key)) return false;
-      seenContacts.add(key);
-      return true;
-    }).map(c => ({ name: c.display_name, phone: c.phone }));
-
-    logger.info({
-      msg: "[emergency/info] STEP-6 final counts",
-      candidateNames,
-      peopleCount: people.length,
-      contactsCount: contacts.length,
-    });
+    const rawData = userProfile?.rawData as CollectedData | undefined;
 
     // homeAddress lives as a first-class column on user_profiles.
     // Fall back to rawData.homeAddress for older records.
@@ -464,54 +341,15 @@ router.get("/emergency/info", async (req, res) => {
       (rawData?.homeAddress as string | undefined) ??
       null;
 
-    // Build a normalised name → phone lookup from curated contacts.
-    // Index by full name and by first name so partial matches work.
-    const phoneByName = new Map<string, string>();
-    for (const c of contacts) {
-      if (!c.phone) continue;
-      phoneByName.set(c.name.trim().toLowerCase(), c.phone);
-      const firstName = c.name.trim().split(/\s+/)[0].toLowerCase();
-      if (!phoneByName.has(firstName)) phoneByName.set(firstName, c.phone);
-    }
+    const emergencyContacts = people
+      .filter((p) => p.notes?.toLowerCase().includes("emergency contact"))
+      .map((p) => ({
+        name: p.name,
+        relationship: p.relationship,
+        phone: p.phone,
+      }));
 
-    // Extract a phone number embedded in a detail string.
-    // Detail can contain a phone number at the start: "+16462994839 | email | address"
-    const extractPhoneFromDetail = (detail: string | null): string | null => {
-      if (!detail) return null;
-      const m = detail.match(/(\+?1?[\s\-.]?\(?\d{3}\)?[\s\-.]?\d{3}[\s\-.]?\d{4})/);
-      return m?.[1]?.trim() ?? null;
-    };
-
-    // Resolve relationship label from free-text detail.
-    // Detail is typically "relationship — extra info", e.g. "daughter — attends UT"
-    // or a pipe-separated string "+phone | email | address" where first token is the phone.
-    const extractRelationship = (detail: string | null): string | null => {
-      if (!detail) return null;
-      // If detail starts with a phone/email, it's the contact-data format — no relationship text.
-      if (/^(\+?[\d\s\-.(]+)/.test(detail.trim())) return null;
-      const part = detail.split(/[—\-–|]/)[0].trim();
-      return part || null;
-    };
-
-    res.json({
-      homeAddress,
-      people: people.map((p) => {
-        const nameLower = p.name.trim().toLowerCase();
-        const firstName = nameLower.split(/\s+/)[0];
-        const phone =
-          phoneByName.get(nameLower) ??
-          phoneByName.get(firstName) ??
-          extractPhoneFromDetail(p.detail) ??
-          null;
-        return {
-          id: p.id,
-          name: p.name,
-          relationship: extractRelationship(p.detail),
-          phone,
-          detail: p.detail ?? null,
-        };
-      }),
-    });
+    res.json({ homeAddress, people: emergencyContacts });
   } catch (err) {
     logger.error({ msg: "[emergency/info] unhandled error", err: String(err) });
     res.status(500).json({ error: "Failed to load emergency info" });
