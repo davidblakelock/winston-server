@@ -11,14 +11,13 @@
  * were all tested 2026-05-13 and timed out or returned error items regardless of
  * input format. Eventbrite scraping is not usable via Apify. Ticketmaster only.
  *
- * Claude Haiku filters candidates to ONE event genuinely matching user interests.
+ * Returns raw candidate events — ranking against a specific user's interests
+ * happens in proactiveEventScheduler.ts, alongside candidates from other
+ * discovery sources.
  */
 
-import Anthropic from "@anthropic-ai/sdk";
 import { logger } from "../lib/logger.js";
 import { getCachedApify, setCachedApify, claimActorRun } from "../lib/apifyCache.js";
-
-const anthropic = new Anthropic();
 
 function getApifyKey(): string { return (process.env.APIFY_API_KEY ?? "").trim(); }
 
@@ -69,11 +68,6 @@ export interface LocalEvent {
   description:    string;
   source:         "ticketmaster";
   ticketSaleDate: string | null; // Public on-sale date (ISO), if known
-}
-
-export interface ApifyEventResult {
-  event: LocalEvent | null;
-  block: string;   // Ready-to-inject briefing block (empty if no event found)
 }
 
 // ── Ticketmaster Discovery API (primary when key is set) ──────────────────────
@@ -248,71 +242,10 @@ async function fetchTicketmasterViaApify(city: string): Promise<LocalEvent[]> {
     .filter((e) => e.name.length > 3);
 }
 
-// ── Claude interest filter ────────────────────────────────────────────────────
-
-async function selectBestEvent(
-  events:    LocalEvent[],
-  interests: string[],
-  artists:   string[],
-  city:      string,
-): Promise<LocalEvent | null> {
-  if (events.length === 0) return null;
-
-  const now        = new Date();
-  const fourteenDays = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
-
-  const upcoming = events.filter((e) => {
-    if (!e.dateISO || e.dateISO.length !== 10) return false;
-    const d = new Date(`${e.dateISO}T12:00:00`);
-    return d >= now && d <= fourteenDays;
-  });
-
-  if (upcoming.length === 0) {
-    logger.info({ city, totalEvents: events.length }, "[ApifyEvents] No events within next 14 days");
-    return null;
-  }
-  if (upcoming.length === 1) return upcoming[0]!;
-
-  const artistStr   = artists.length > 0 ? artists.slice(0, 5).join(", ") : null;
-  const interestStr = interests.slice(0, 10).join(", ") || "music, arts, culture";
-  const list = upcoming.slice(0, 20).map((e, i) =>
-    `${i + 1}. "${e.name}" — ${e.date || e.dateISO} at ${e.venue}${e.description ? ` [${e.description}]` : ""}`
-  ).join("\n");
-
-  const artistLine = artistStr
-    ? `HIGHEST PRIORITY — Favorite artists (pick this if any of these are performing): ${artistStr}.\n`
-    : "";
-  const prompt =
-    `${artistLine}` +
-    `General interests: ${interestStr}.\n\n` +
-    `Upcoming events in ${city} (next 14 days):\n${list}\n\n` +
-    `Which ONE event number best matches this user? ` +
-    `${artistStr ? `An exact match on a favorite artist ALWAYS wins. ` : ""}` +
-    `Otherwise be selective — only pick an event that clearly aligns with the stated interests. ` +
-    `Reply with just the number. If none are a genuine match, reply with 0.`;
-
-  try {
-    const resp = await anthropic.messages.create({
-      model:      "claude-haiku-4-5-20251001",
-      max_tokens: 10,
-      messages:   [{ role: "user", content: prompt }],
-    });
-    const numStr = resp.content
-      .filter((b) => b.type === "text")
-      .map((b) => (b as { type: "text"; text: string }).text)
-      .join("").trim();
-    const num = parseInt(numStr, 10);
-    if (num >= 1 && num <= upcoming.length) return upcoming[num - 1]!;
-    return null;
-  } catch {
-    return upcoming[0]!;
-  }
-}
-
 // ── In-memory + DB cache ──────────────────────────────────────────────────────
 
 interface EventCache {
-  result:    ApifyEventResult;
+  events:    LocalEvent[];
   fetchedAt: number;
   city:      string;
 }
@@ -324,26 +257,26 @@ const ACTOR_LOCK_TTL_MS = 23 * 60 * 60 * 1000; // hard 23 h DB lock per city
 
 // In-flight dedup — prevents concurrent callers for the same city from each
 // spawning their own Apify actor run before any of them writes the result back.
-const _fetchInFlight = new Map<string, Promise<ApifyEventResult>>();
+const _fetchInFlight = new Map<string, Promise<LocalEvent[]>>();
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
- * Fetch the most relevant local event in the next 14 days.
- * Prioritises the Ticketmaster Discovery API (runs parallel artist keyword searches);
- * falls back to the Apify scraper actor.
- * Returns a ready-to-inject briefing block (empty string if nothing relevant found).
+ * Fetch candidate events in the next 14 days for a city. Prioritises the
+ * Ticketmaster Discovery API (runs parallel artist keyword searches); falls
+ * back to the Apify scraper actor. Returns the raw filtered candidate list —
+ * ranking/personalization against a specific user's profile is the caller's
+ * job (proactiveEventScheduler.ts combines this with other candidate
+ * sources and ranks them together in one pass).
  *
- * Cache key includes artists so different users with different favourite artists
- * each get their own personalised result while still sharing the expensive Apify
- * actor run (which is locked city-wide for 23 h).
+ * Cache key includes artists so different users with different favourite
+ * artists each get their own candidate set (artist keyword searches differ)
+ * while still sharing the expensive Apify actor run (locked city-wide for 23 h).
  */
-export async function fetchBestLocalEvent(
-  city:      string,
-  interests: string[],
-  userName?: string,
-  artists:   string[] = [],
-): Promise<ApifyEventResult> {
+export async function fetchCandidateEvents(
+  city:    string,
+  artists: string[] = [],
+): Promise<LocalEvent[]> {
   // Cache key = city + sorted artist list so per-user artist prefs get their own
   // cached result without re-running the expensive Apify actor.
   const artistKey  = artists.slice(0, 5).sort().join("|");
@@ -354,17 +287,17 @@ export async function fetchBestLocalEvent(
   const cached = _cache.get(cacheKey);
   if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS && cached.city === city) {
     logger.info({ city }, "[ApifyEvents] Serving from in-memory cache (city-shared)");
-    return cached.result;
+    return cached.events;
   }
 
   // 2. DB cache — survives restarts, prevents repeated Ticketmaster actor runs
   const dbCached = await getCachedApify(dbCacheKey, CACHE_TTL_MS);
   if (dbCached) {
     try {
-      const result = JSON.parse(dbCached) as ApifyEventResult;
+      const events = JSON.parse(dbCached) as LocalEvent[];
       logger.info({ city }, "[ApifyEvents] Serving from DB cache (city-shared) — skipping Apify");
-      _cache.set(cacheKey, { result, fetchedAt: Date.now(), city });
-      return result;
+      _cache.set(cacheKey, { events, fetchedAt: Date.now(), city });
+      return events;
     } catch {
       // Invalid JSON — fall through to fresh fetch
     }
@@ -374,7 +307,7 @@ export async function fetchBestLocalEvent(
   const hasApifyKey = !!getApifyKey();
   if (!hasTmKey && !hasApifyKey) {
     logger.info("[ApifyEvents] No API keys configured — skipping event discovery");
-    return { event: null, block: "" };
+    return [];
   }
 
   // In-flight dedup — all concurrent callers for the same city share one fetch promise.
@@ -382,11 +315,11 @@ export async function fetchBestLocalEvent(
   // each fire the Apify actor before any of them has written the result back.
   const existingFlight = _fetchInFlight.get(cacheKey);
   if (existingFlight) {
-    logger.info({ city }, "[ApifyEvents] fetchBestLocalEvent already in flight — deduplicating");
+    logger.info({ city }, "[ApifyEvents] fetchCandidateEvents already in flight — deduplicating");
     return existingFlight;
   }
 
-  const fetchPromise = (async (): Promise<ApifyEventResult> => {
+  const fetchPromise = (async (): Promise<LocalEvent[]> => {
     try {
       // Try direct API first (fast, no Apify credit cost); fall back to scraper
       let events: LocalEvent[] = await fetchTicketmasterDirect(city, artists);
@@ -396,32 +329,24 @@ export async function fetchBestLocalEvent(
         events = await fetchTicketmasterViaApify(city);
       }
 
-      logger.info({ city, total: events.length, artists: artists.length }, "[ApifyEvents] Total candidate events");
+      // Filter to the next 14 days — same window the old single-pick selection used.
+      const now = new Date();
+      const fourteenDays = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+      const upcoming = events.filter((e) => {
+        if (!e.dateISO || e.dateISO.length !== 10) return false;
+        const d = new Date(`${e.dateISO}T12:00:00`);
+        return d >= now && d <= fourteenDays;
+      });
 
-      const best = await selectBestEvent(events, interests, artists, city);
+      logger.info({ city, total: events.length, upcoming: upcoming.length }, "[ApifyEvents] Candidate events fetched");
 
-      let result: ApifyEventResult;
-      if (!best) {
-        result = { event: null, block: "" };
-      } else {
-        const urlLine = best.url ? `\n  Tickets/info: ${best.url}` : "";
-        const block =
-          `\n\n[VERIFIED — Local Event Discovery — Ticketmaster]\n` +
-          `One upcoming ${city} event that may interest you:\n` +
-          `• ${best.name} — ${best.date || best.dateISO} at ${best.venue}${urlLine}\n` +
-          `INSTRUCTION: Mention this event in ONE sentence — name, date, venue. ` +
-          `Only include if it fits the briefing flow naturally; skip silently if forced.`;
-        result = { event: best, block };
-        logger.info({ city, event: best.name, date: best.dateISO }, "[ApifyEvents] Best event selected");
-      }
-
-      _cache.set(cacheKey, { result, fetchedAt: Date.now(), city });
+      _cache.set(cacheKey, { events: upcoming, fetchedAt: Date.now(), city });
       // Persist to DB (city-keyed) so all users share one result and restarts don't re-run
-      setCachedApify(dbCacheKey, JSON.stringify(result)).catch(() => {});
-      return result;
+      setCachedApify(dbCacheKey, JSON.stringify(upcoming)).catch(() => {});
+      return upcoming;
     } catch (err) {
-      logger.warn({ err, city }, "[ApifyEvents] fetchBestLocalEvent threw");
-      return { event: null, block: "" };
+      logger.warn({ err, city }, "[ApifyEvents] fetchCandidateEvents threw");
+      return [];
     } finally {
       _fetchInFlight.delete(cacheKey);
     }

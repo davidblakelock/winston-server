@@ -44,7 +44,6 @@ import { ensureGoalsTables } from "./goals/goalsManager";
 import { startTodoReminderScheduler } from "./lists/todoReminderScheduler";
 
 import { startBackgroundEmailScanner } from "./email/backgroundEmailScanner";
-import { startLocalContentScheduler } from "./localContent/localContentScanner";
 import { startRecordsArchiver } from "./records/recordsArchiver";
 import { ensureListItemColumns } from "./lists/listManager";
 import { ensureListShareTable } from "./lists/listShareManager";
@@ -460,9 +459,6 @@ app.listen(port, async (err) => {
     startJournalPatternScheduler();
     startTodoReminderScheduler();
     startBackgroundEmailScanner();
-    // ── Local content scanner — finds personalized events for each active
-    // user's current city, twice daily in their own local timezone. ──────────
-    startLocalContentScheduler();
     startRecordsArchiver();
     startProviderScheduler();
     void startTvEpisodeScheduler();
