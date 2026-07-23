@@ -29,6 +29,62 @@ function getCurrentLocalTime(timezone: string): string {
   });
 }
 
+// ── Reminder-time cache ─────────────────────────────────────────────────────
+// getMedicationRemindersEnabled()+getMedications() used to run fresh on every
+// single per-minute tick for every user, regardless of whether any reminder
+// time was anywhere close to firing — a full DB round-trip pair 1,440
+// times/day/user for no benefit. Caching just the derived {enabled, times}
+// set (not full medication rows) and refreshing it lazily every 15 min
+// collapses that to ~96 refreshes/day/user. The outer cron tick and firing
+// precision are unchanged — these cheap in-memory checks only skip the DB
+// fetch; the exact dedup/ack/send logic below still runs unchanged once a
+// time is actually in-window. No invalidation hook on medication edits —
+// worst case is up to 15 min of staleness, acceptable for now.
+interface ReminderTimesCacheEntry {
+  remindersEnabled: boolean;
+  uniqueTimes: string[];
+  refreshedAt: number;
+}
+const _reminderTimesCache = new Map<string, ReminderTimesCacheEntry>();
+const CACHE_TTL_MS = 15 * 60 * 1000;
+
+async function getReminderTimes(userName: string): Promise<ReminderTimesCacheEntry> {
+  const cached = _reminderTimesCache.get(userName);
+  if (cached && Date.now() - cached.refreshedAt < CACHE_TTL_MS) {
+    return cached;
+  }
+
+  const remindersEnabled = await getMedicationRemindersEnabled(userName).catch(() => true);
+  const meds = remindersEnabled
+    ? await getMedications(userName).catch((): Awaited<ReturnType<typeof getMedications>> => [])
+    : [];
+
+  // Per-medication toggle: a medication with remindersEnabled === false never
+  // contributes its times to the fire set below. This does NOT suppress a time
+  // slot that another (enabled) medication legitimately shares — e.g. if med A
+  // (enabled) and med B (disabled) both use 08:00, 08:00 still fires for med A.
+  const remindersOnMeds = meds.filter((m) => m.remindersEnabled !== false);
+
+  // Flatten reminderTimes arrays across meds with reminders enabled, deduplicated by unique time value.
+  const uniqueTimes = [
+    ...new Set(remindersOnMeds.flatMap((m) => m.reminderTimes ?? [m.reminderTime])),
+  ];
+
+  const entry: ReminderTimesCacheEntry = { remindersEnabled, uniqueTimes, refreshedAt: Date.now() };
+  _reminderTimesCache.set(userName, entry);
+  return entry;
+}
+
+// True if `time` (HH:MM) is currently within its 2-hour firing window.
+// Don't fire more than 2 hours after the scheduled time — prevents a late
+// server start (e.g. 7 PM deploy) from sending the 7 AM slot.
+function isTimeInWindow(time: string, localTime: string): boolean {
+  if (localTime < time) return false;
+  const [schedH, schedM] = time.split(":").map(Number);
+  const [localH, localM] = localTime.split(":").map(Number);
+  return localH * 60 + localM <= schedH * 60 + schedM + 120;
+}
+
 export function startMedicationScheduler(): void {
   let _running = false;
   cron.schedule("10 * * * * *", async () => {
@@ -43,32 +99,15 @@ export function startMedicationScheduler(): void {
         const { userName } = user;
         const localTime = getCurrentLocalTime(user.timezone ?? "UTC");
 
-        const remindersEnabled = await getMedicationRemindersEnabled(userName).catch(() => true);
-        if (!remindersEnabled) continue;
+        const { remindersEnabled, uniqueTimes } = await getReminderTimes(userName);
+        if (!remindersEnabled || !uniqueTimes.length) continue;
 
-        const meds = await getMedications(userName).catch((): Awaited<ReturnType<typeof getMedications>> => []);
-        if (!meds.length) continue;
+        // Cheap in-memory gate — skip all DB work this tick unless a time is
+        // actually in-window for this user.
+        const timesInWindow = uniqueTimes.filter((time) => isTimeInWindow(time, localTime));
+        if (!timesInWindow.length) continue;
 
-        // Per-medication toggle: a medication with remindersEnabled === false never
-        // contributes its times to the fire set below. This does NOT suppress a time
-        // slot that another (enabled) medication legitimately shares — e.g. if med A
-        // (enabled) and med B (disabled) both use 08:00, 08:00 still fires for med A.
-        const remindersOnMeds = meds.filter((m) => m.remindersEnabled !== false);
-        if (!remindersOnMeds.length) continue;
-
-        // Flatten reminderTimes arrays across meds with reminders enabled, deduplicated by unique time value.
-        const uniqueTimes = [
-          ...new Set(remindersOnMeds.flatMap((m) => m.reminderTimes ?? [m.reminderTime])),
-        ];
-
-        for (const time of uniqueTimes) {
-          if (localTime < time) continue;
-          // Don't fire more than 2 hours after the scheduled time — prevents
-          // a late server start (e.g. 7 PM deploy) from sending the 7 AM slot.
-          const [schedH, schedM] = time.split(":").map(Number);
-          const [localH, localM] = localTime.split(":").map(Number);
-          if (localH * 60 + localM > schedH * 60 + schedM + 120) continue;
-
+        for (const time of timesInWindow) {
           // Dedup key is per user+time — each time slot fires independently.
           const reminderKey = `${userName}:${time}`;
           let alreadySent = false;
