@@ -2,6 +2,7 @@ import cron from "node-cron";
 import Anthropic from "@anthropic-ai/sdk";
 import { broadcastToUser } from "../reminders/sseStore.js";
 import { sendFcmNotification } from "../push/fcmSender.js";
+import { query } from "../db.js";
 import {
   getSettings,
   hasFiredToday,
@@ -9,9 +10,10 @@ import {
   saveTonightMessage,
 } from "./winddownManager.js";
 
-import { getProfile, getActiveUsers, getCompanionDisplayName, type CollectedData } from "../onboarding/onboardingManager.js";
+import { getProfile, getActiveUsers, getCompanionDisplayName } from "../onboarding/onboardingManager.js";
+import { getPeople } from "../people/peopleManager.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
-import { fetchTodayEvents, fetchTomorrowEvents } from "../google/calendar.js";
+import { fetchTomorrowEvents } from "../google/calendar.js";
 import { getMoodForToday } from "../mood/moodManager.js";
 import { logger } from "../lib/logger.js";
 
@@ -19,70 +21,11 @@ const DEFAULT_TZ = "UTC";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-// ── Build a natural family-mention string from profile people ─────────────────
-
-interface ProfilePerson {
-  name: string;
-  relationship?: string;
-  city?: string;
-  details?: string;
-}
-
-function buildFamilyContext(people: ProfilePerson[]): string {
-  if (!people || people.length === 0) return "";
-
-  const familyRelationships = new Set([
-    "wife", "husband", "spouse", "partner", "girlfriend", "boyfriend",
-    "daughter", "son", "child", "mother", "father", "mom", "dad",
-    "sister", "brother", "grandmother", "grandfather",
-    "dog", "cat", "pet", "corgi", "puppy", "kitten",
-  ]);
-
-  const family = people.filter((p) =>
-    familyRelationships.has((p.relationship ?? "").toLowerCase())
-  );
-
-  if (family.length === 0) return "";
-
-  const pets = family.filter((p) =>
-    ["dog", "cat", "pet", "corgi", "puppy", "kitten"].includes((p.relationship ?? "").toLowerCase())
-  );
-  const humans = family.filter((p) =>
-    !["dog", "cat", "pet", "corgi", "puppy", "kitten"].includes((p.relationship ?? "").toLowerCase())
-  );
-
-  const parts: string[] = [];
-  if (humans.length > 0) {
-    const humanDesc = humans
-      .map((p) => `${p.relationship ?? "family member"} ${p.name}`)
-      .join(", ");
-    parts.push(humanDesc);
-  }
-  if (pets.length > 0) {
-    const petDesc = pets.map((p) => `${p.relationship ?? "pet"} ${p.name}`).join(", ");
-    parts.push(petDesc);
-  }
-
-  return parts.join(" and ");
-}
-
-function buildFamilyNameList(people: ProfilePerson[]): string {
-  if (!people || people.length === 0) return "";
-
-  const familyRelationships = new Set([
-    "wife", "husband", "spouse", "partner", "girlfriend", "boyfriend",
-    "daughter", "son", "child", "dog", "cat", "pet", "corgi", "puppy",
-  ]);
-
-  const family = people.filter((p) =>
-    familyRelationships.has((p.relationship ?? "").toLowerCase())
-  );
-  if (family.length === 0) return "";
-
-  return family.map((p) => p.name).join(", ");
-}
-
 // ── Generate the evening opening message ─────────────────────────────────────
+// Structured delivery: a real day recap (reminders/to-dos, calendar events
+// that already happened), tomorrow's look-ahead, and one specific stoic
+// reflection question — Claude writes a fresh one each night, no hardcoded
+// rotation list.
 
 export async function generateOpeningMessage(
   companionName: string,
@@ -92,25 +35,87 @@ export async function generateOpeningMessage(
   const displayName = profile?.name ?? userName;
   const city = profile?.city ?? "your city";
   const tz = profile?.timezone ?? DEFAULT_TZ;
-  const rawData = profile?.rawData as CollectedData | null;
-  const people = (rawData?.people ?? []) as ProfilePerson[];
-  const familyContext = buildFamilyContext(people);
-  const familyNames = buildFamilyNameList(people);
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
 
   const now = new Date();
   const dayName = now.toLocaleDateString("en-US", { timeZone: tz, weekday: "long" });
 
-  // Today's calendar events — ground the opener in something real
-  let todayContext = "";
+  // Key People — real, live system (key_people via getPeople()), no keyword
+  // matching. Claude is trusted to tell family from pets from friends on its own.
+  let peopleContext = "";
   try {
-    const evts = await fetchTodayEvents(userName);
-    if (evts && evts.length > 0) {
-      const notable = evts.filter((e) => !e.allDay).slice(0, 3).map((e) => e.summary);
-      if (notable.length > 0) todayContext = `Today's calendar events: ${notable.join(", ")}.`;
+    const people = await getPeople(userName);
+    if (people.length > 0) {
+      peopleContext = people.map((p) => `${p.name}${p.relationship ? ` (${p.relationship})` : ""}`).join(", ");
     }
   } catch { /* non-fatal */ }
 
-  // Tomorrow's calendar events — for the look-ahead
+  // ── Today's reminders & to-dos — real data from the reminders table ─────────
+  // Two honesty caveats baked into the query/labels rather than the prompt
+  // guessing: (1) a timed reminder's status flips to "completed" the moment
+  // its notification fires (see reminders/scheduler.ts) — that only means
+  // the alert went out, not that the task was done, so it's labeled as such.
+  // (2) markReminderDone() (genuine user-driven completion) never sets a
+  // completion timestamp, so "completed today" isn't knowable for to-dos —
+  // only "added today" is, via created_at.
+  let remindersContext = "";
+  try {
+    const { rows } = await query<{
+      reminder_text: string;
+      fire_at: string | null;
+      status: string;
+      created_at: string;
+    }>(
+      `SELECT reminder_text, fire_at, status, created_at
+       FROM reminders
+       WHERE user_name = $1
+         AND (
+           (fire_at IS NOT NULL AND fire_at::date = $2)
+           OR (fire_at IS NULL AND status = 'pending')
+           OR (fire_at IS NULL AND status = 'completed' AND created_at::date = $2)
+         )
+       ORDER BY fire_at ASC NULLS LAST, created_at DESC
+       LIMIT 30`,
+      [userName, today]
+    );
+
+    const firedToday = rows.filter((r) => r.fire_at && r.status === "completed").map((r) => r.reminder_text);
+    const pendingToday = rows.filter((r) => r.fire_at && r.status === "pending").map((r) => r.reminder_text);
+    const openTodos = rows.filter((r) => !r.fire_at && r.status === "pending").map((r) => r.reminder_text);
+    const todosAddedAndDoneToday = rows.filter((r) => !r.fire_at && r.status === "completed").map((r) => r.reminder_text);
+
+    const lines: string[] = [];
+    if (firedToday.length) lines.push(`Reminder alerts that went out today (this means the notification fired — NOT confirmation the task was done): ${firedToday.join("; ")}`);
+    if (pendingToday.length) lines.push(`Reminders still scheduled for later today or overdue: ${pendingToday.join("; ")}`);
+    if (todosAddedAndDoneToday.length) lines.push(`To-dos added and marked done today: ${todosAddedAndDoneToday.join("; ")}`);
+    if (openTodos.length) lines.push(`To-dos still open (not yet done): ${openTodos.join("; ")}`);
+    remindersContext = lines.join("\n");
+  } catch (err) {
+    logger.warn({ err, userName }, "[Winddown] Reminders recap query failed");
+  }
+
+  // ── Calendar events that actually already happened today ────────────────────
+  // calendar_sync_state, filtered to events whose start time has already
+  // passed — populated throughout the day by calendarSyncScheduler.ts.
+  let calendarTodayContext = "";
+  try {
+    const { rows } = await query<{ event_summary: string; event_start_iso: string | null }>(
+      `SELECT event_summary, event_start_iso
+       FROM calendar_sync_state
+       WHERE user_name = $1 AND event_date = $2
+         AND event_start_iso IS NOT NULL AND event_start_iso <= NOW()
+       ORDER BY event_start_iso ASC
+       LIMIT 10`,
+      [userName, today]
+    );
+    if (rows.length > 0) {
+      calendarTodayContext = rows.map((r) => r.event_summary).join(", ");
+    }
+  } catch (err) {
+    logger.warn({ err, userName }, "[Winddown] Calendar recap query failed");
+  }
+
+  // Tomorrow's calendar events — for the look-ahead (unchanged live pull)
   let tomorrowContext = "";
   try {
     const evts = await fetchTomorrowEvents(userName);
@@ -131,22 +136,28 @@ export async function generateOpeningMessage(
     if (mood) morningMood = mood;
   } catch { /* non-fatal */ }
 
-  const familyLine = familyContext ? `${displayName}'s family: ${familyContext}.\n` : "";
-
   const prompt =
     `You are ${companionName}, ${displayName}'s trusted personal companion. Dry, warm, never gushing. It's ${dayName} evening in ${city}.\n\n` +
-    familyLine +
-    (todayContext ? `Today's calendar events: ${todayContext}\n` : "") +
+    (peopleContext ? `${displayName}'s key people: ${peopleContext}.\n` : "") +
+    (calendarTodayContext ? `Calendar events that already happened today: ${calendarTodayContext}.\n` : "") +
+    (remindersContext ? `${remindersContext}\n` : "") +
     (morningMood ? `This morning ${displayName} mentioned feeling: "${morningMood.substring(0, 120)}".\n` : "") +
-    `\nWrite ONE opening to start the evening check-in. Genuinely curious, not performative. ` +
-    `Sound like a friend checking in — dry, warm, specific when possible. ` +
-    (todayContext ? `You may reference a non-routine calendar event as a natural hook. ` : "") +
-    (familyContext ? `${familyContext} — weave in naturally if it fits. ` : "");
+    (tomorrowContext ? `Tomorrow's calendar: ${tomorrowContext}.\n` : "") +
+    `\nWrite tonight's evening check-in message with three parts, blended into natural conversational prose — not headers or bullet points:\n\n` +
+    `1. A real, specific day recap grounded in the data above — what happened, what got done, what's still hanging open. ` +
+    `Only claim a reminder alert "went out" or "fired" — never say a task was "done" or "completed" just because its alert fired; only genuinely-completed to-dos may be described as done. ` +
+    `If there's nothing notable in the data, skip the recap rather than inventing one.\n\n` +
+    `2. A brief, natural look-ahead to tomorrow if there's anything on the calendar — one sentence, not a rundown.\n\n` +
+    `3. End with exactly ONE specific stoic reflection question — genuinely inviting real reflection, not "how was your day" or "how are you feeling." ` +
+    `Write a fresh, well-crafted question tonight — something concrete like asking what didn't go as hoped and what they'd do differently, or a moment worth being grateful for and why, or a choice they're proud or unsure of. ` +
+    `Vary it — do not reuse the same question pattern every night. This question is the whole point of the message; make it genuinely thoughtful.\n\n` +
+    (peopleContext ? `Weave in a key person naturally only if it genuinely fits — don't force it.\n` : "") +
+    `Keep the whole message tight — a few sentences, not a essay. Sound like a perceptive friend, not a report.`;
 
   try {
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 150,
+      max_tokens: 300,
       messages: [{ role: "user", content: prompt }],
     });
     const block = response.content[0];
@@ -156,8 +167,7 @@ export async function generateOpeningMessage(
   }
 
   // Fallback
-  const familyNote = familyNames ? ` Hope ${familyNames} had a good one too.` : "";
-  return `Good evening, ${displayName}. How did your ${dayName} go?${familyNote}`;
+  return `Good evening, ${displayName}. What's one thing today that didn't go the way you wanted — and what would you do differently tomorrow?`;
 }
 
 export function startWinddownScheduler(): void {

@@ -68,13 +68,14 @@ router.post("/chat-native", async (req: Request, res: Response) => {
     const result = await handleNewChat({
       sessionUserName,
       message,
-      history:        Array.isArray(body.history) ? body.history : [],
+      history:          Array.isArray(body.history) ? body.history : [],
       timezone,
-      deviceId:       body.deviceId ?? null,
-      requestContext: body.context ?? null,
-      bodyLat:        body.lat ?? null,
-      bodyLng:        body.lng ?? null,
-      log:            req.log,
+      deviceId:         body.deviceId ?? null,
+      requestContext:   body.context ?? null,
+      bodyLat:          body.lat ?? null,
+      bodyLng:          body.lng ?? null,
+      isWinddownOpener: body.winddownRequest === true,
+      log:              req.log,
     });
 
     const responseBody: Record<string, unknown> = { response: result.reply, actionType: result.action.type, messageId: result.messageId };

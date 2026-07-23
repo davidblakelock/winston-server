@@ -7,13 +7,6 @@ export interface WinddownSettings {
   storyDayOfWeek: string;
 }
 
-export interface WinddownNote {
-  id: number;
-  noteDate: string;
-  note: string;
-  createdAt: Date;
-}
-
 export async function ensureWinddownTables(): Promise<void> {
   await query(`
     CREATE TABLE IF NOT EXISTS winddown_settings (
@@ -159,41 +152,6 @@ export async function setWinddownActive(userName: string, active: boolean): Prom
   );
 }
 
-export async function saveWinddownNote(note: string): Promise<void> {
-  await query(`INSERT INTO winddown_notes (note) VALUES ($1) RETURNING id`, [note]);
-}
-
-export async function getLastNightNotes(): Promise<WinddownNote[]> {
-  const { rows } = await query<{
-    id: number;
-    note_date: string;
-    note: string;
-    created_at: Date;
-  }>(
-    `SELECT id, note_date::text, note, created_at
-     FROM winddown_notes
-     WHERE note_date >= CURRENT_DATE - INTERVAL '1 day'
-       AND note_date < CURRENT_DATE
-     ORDER BY created_at ASC`
-  );
-  return rows.map((r) => ({
-    id: r.id,
-    noteDate: r.note_date,
-    note: r.note,
-    createdAt: r.created_at,
-  }));
-}
-
-export function formatNotesForMorningBriefing(notes: WinddownNote[]): string {
-  if (notes.length === 0) return "";
-  const items = notes.map((n) => `• ${n.note}`).join("\n");
-  return (
-    `\n\n[Notes the user asked you to mention this morning — from last night's check-in]\n` +
-    items +
-    `\nMention these naturally early in your morning briefing.`
-  );
-}
-
 export async function saveTonightMessage(userName: string, message: string): Promise<void> {
   const { timezone: tz } = await getUserLocationContext(userName);
   const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
@@ -213,40 +171,3 @@ export async function getTonightMessage(userName: string): Promise<string | null
   return rows.length > 0 ? (rows[0].tonight_message ?? null) : null;
 }
 
-export async function setJournalOfferPending(userName: string, pending: boolean): Promise<void> {
-  const { timezone: tz } = await getUserLocationContext(userName);
-  const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
-  await query(
-    `UPDATE winddown_state SET journal_offer_pending = $1 WHERE user_name = $2 AND trigger_date = $3 RETURNING id`,
-    [pending, userName, today]
-  );
-}
-
-export async function isJournalOfferPending(userName: string): Promise<boolean> {
-  const { timezone: tz } = await getUserLocationContext(userName);
-  const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
-  const { rows } = await query<{ journal_offer_pending: boolean }>(
-    `SELECT journal_offer_pending FROM winddown_state WHERE user_name = $1 AND trigger_date = $2`,
-    [userName, today]
-  );
-  return rows.length > 0 && rows[0].journal_offer_pending === true;
-}
-
-export async function setJournalCaptured(userName: string, captured: boolean): Promise<void> {
-  const { timezone: tz } = await getUserLocationContext(userName);
-  const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
-  await query(
-    `UPDATE winddown_state SET journal_captured = $1 WHERE user_name = $2 AND trigger_date = $3 RETURNING id`,
-    [captured, userName, today]
-  );
-}
-
-export async function hasJournalCapturedTonight(userName: string): Promise<boolean> {
-  const { timezone: tz } = await getUserLocationContext(userName);
-  const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
-  const { rows } = await query<{ journal_captured: boolean }>(
-    `SELECT journal_captured FROM winddown_state WHERE user_name = $1 AND trigger_date = $2`,
-    [userName, today]
-  );
-  return rows.length > 0 && rows[0].journal_captured === true;
-}
