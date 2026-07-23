@@ -7,16 +7,18 @@
  * Profile interests drive what to search for and how to score results.
  */
 
+import cron from "node-cron";
 import Anthropic from "@anthropic-ai/sdk";
 import { logger } from "../lib/logger.js";
-import { getProfile } from "../onboarding/onboardingManager.js";
-import { getProfileItems } from "../profile/profileManager.js";
+import { getProfile, getActiveUsers } from "../onboarding/onboardingManager.js";
+import { getUserLocationContext } from "../lib/userTimezone.js";
 import { query } from "../db.js";
 import {
   insertLocalContentItem,
   hasScannedTodayForCity,
   cleanupExpiredItems,
 } from "./localContentManager.js";
+import { notifyLocalContent } from "./localContentNotifier.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -134,25 +136,18 @@ export async function scanLocalContent(
   }
 
   // Load user profile for personalization
-  const [profile, profileItems] = await Promise.all([
-    getProfile(userName).catch(() => null),
-    getProfileItems(undefined, userName).catch((): Awaited<ReturnType<typeof getProfileItems>> => []),
-  ]);
+  const profile = await getProfile(userName).catch(() => null);
 
-  // Build interest context from profile
+  // Build interest context from profile — all real, user-entered user_profiles
+  // columns. profile_items ("interests"/"places" categories) is retired: there
+  // was never a legitimate writer for a "favorite places" concept beyond the
+  // now-deleted hardcoded seed block, and these five signals already give the
+  // search prompt plenty to personalize against.
   const musicGenres = profile?.musicGenres ?? [];
   const sportsTeams = (profile?.sportsTeams ?? "").split(",").map((s: string) => s.trim()).filter(Boolean);
   const hobbies = profile?.hobbies ?? [];
   const favoriteRestaurants = (profile?.favoriteRestaurants ?? "").split(",").map((s: string) => s.trim()).filter(Boolean);
-
-  // Pull profile items for richer context
-  const interests = profileItems
-    .filter(p => p.category === "interests")
-    .map(p => p.name);
   const favoriteArtists = profile?.favoriteArtists ?? [];
-  const favoritePlaces = profileItems
-    .filter(p => p.category === "places")
-    .map(p => p.name);
 
   // Build the profile context string for Claude
   const profileContext = [
@@ -160,9 +155,7 @@ export async function scanLocalContent(
     favoriteArtists.length ? `Favorite artists: ${favoriteArtists.join(", ")}` : null,
     sportsTeams.length ? `Sports teams: ${sportsTeams.join(", ")}` : null,
     hobbies.length ? `Hobbies and interests: ${hobbies.join(", ")}` : null,
-    interests.length ? `Other interests: ${interests.join(", ")}` : null,
     favoriteRestaurants.length ? `Favorite restaurants: ${favoriteRestaurants.join(", ")}` : null,
-    favoritePlaces.length ? `Favorite local spots: ${favoritePlaces.join(", ")}` : null,
   ].filter(Boolean).join("\n");
 
   const today = new Date().toISOString().slice(0, 10);
@@ -294,4 +287,73 @@ Return between 3 and 8 items maximum. Quality over quantity.`,
     logger.error({ err, userName, city }, "[LocalContent] Scan failed");
     return 0;
   }
+}
+
+// ── Scheduler — twice daily per user, in each user's own local timezone ───────
+// Previously a single fixed cron.schedule("0 10,15 * * *", ...) in index.ts —
+// 10am/3pm UTC, which is 4-5am/9-10am Central. Fixed by ticking frequently and
+// checking each user's own local hour (same per-user-timezone-gate pattern as
+// backgroundEmailScanner.ts's pause-hour check), rather than one UTC cron
+// expression that can only ever be correct for one timezone at a time.
+//
+// Windows: 11am and 3pm local. 11am (not 10am) keeps clear separation from
+// morningPushScheduler's WAKE_WINDOW_MINUTES=120 retry window (a 6am wake
+// time can still be retrying push delivery until 8am) and gives the morning
+// briefing a few hours to have already landed, so this reads as fresh
+// "what's new today" rather than duplicating the briefing. 3pm is a
+// mid-afternoon lull, well ahead of evening dinner-planning time, so same-day
+// evening events still have useful lead time.
+const LOCAL_CONTENT_WINDOWS: Array<{ label: string; hour: number }> = [
+  { label: "late-morning", hour: 11 },
+  { label: "mid-afternoon", hour: 15 },
+];
+
+// userName → Set of "YYYY-MM-DD:window-label" already fired, so each window
+// fires exactly once per user per day despite the tick running every 10 min.
+const _firedLocalContentWindows = new Map<string, Set<string>>();
+
+async function runLocalContentScanForUser(userName: string): Promise<void> {
+  const { timezone } = await getUserLocationContext(userName).catch(() => ({ timezone: "UTC" }));
+  const now = new Date();
+  const nowHour = parseInt(
+    now.toLocaleString("en-US", { timeZone: timezone, hour: "numeric", hour12: false }),
+    10
+  );
+
+  const window = LOCAL_CONTENT_WINDOWS.find((w) => w.hour === nowHour);
+  if (!window) return;
+
+  const today = now.toLocaleDateString("en-CA", { timeZone: timezone });
+  const key = `${today}:${window.label}`;
+  const fired = _firedLocalContentWindows.get(userName) ?? new Set<string>();
+  if (fired.has(key)) return;
+  fired.add(key);
+  _firedLocalContentWindows.set(userName, fired);
+
+  try {
+    const saved = await scanLocalContent(userName);
+    if (saved > 0) {
+      await notifyLocalContent(userName);
+    }
+    logger.info({ userName, window: window.label, saved }, "[LocalContent] Scheduled scan complete");
+  } catch (err) {
+    logger.warn({ err, userName, window: window.label }, "[LocalContent] Scheduled scan failed");
+  }
+}
+
+export function startLocalContentScheduler(): void {
+  let _running = false;
+  cron.schedule("*/10 * * * *", async () => {
+    if (_running) return;
+    _running = true;
+    try {
+      const users = await getActiveUsers();
+      await Promise.allSettled(users.map((u) => runLocalContentScanForUser(u.userName)));
+    } catch (err) {
+      logger.warn({ err }, "[LocalContent] Scheduler tick failed");
+    } finally {
+      _running = false;
+    }
+  });
+  logger.info("[LocalContent] Scheduler started — checking every 10 min for each user's local 11am/3pm window");
 }

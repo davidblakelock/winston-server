@@ -43,10 +43,8 @@ import { ensureUserRecordsColumns, ensureSocialScanStateTable } from "./records/
 import { ensureGoalsTables } from "./goals/goalsManager";
 import { startTodoReminderScheduler } from "./lists/todoReminderScheduler";
 
-import cron from "node-cron";
 import { startBackgroundEmailScanner } from "./email/backgroundEmailScanner";
-import { scanLocalContent } from "./localContent/localContentScanner";
-import { notifyLocalContent } from "./localContent/localContentNotifier";
+import { startLocalContentScheduler } from "./localContent/localContentScanner";
 import { startRecordsArchiver } from "./records/recordsArchiver";
 import { ensureListItemColumns } from "./lists/listManager";
 import { ensureListShareTable } from "./lists/listShareManager";
@@ -462,19 +460,9 @@ app.listen(port, async (err) => {
     startJournalPatternScheduler();
     startTodoReminderScheduler();
     startBackgroundEmailScanner();
-    // ── Local content scanner — finds personalized events for user's current city ──
-    // Runs twice daily at 10am and 3pm. Uses user's last known GPS location
-    // (updated when app comes to foreground) so it works correctly when traveling.
-    cron.schedule("0 10,15 * * *", async () => {
-      try {
-        const saved = await scanLocalContent(NATIVE_STORED_NAME);
-        if (saved > 0) {
-          await notifyLocalContent(NATIVE_STORED_NAME);
-        }
-      } catch (err) {
-        logger.warn({ err }, "[LocalContent] Scheduled scan failed");
-      }
-    });
+    // ── Local content scanner — finds personalized events for each active
+    // user's current city, twice daily in their own local timezone. ──────────
+    startLocalContentScheduler();
     startRecordsArchiver();
     startProviderScheduler();
     void startTvEpisodeScheduler();
