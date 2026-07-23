@@ -68,47 +68,6 @@ const _textCache = new Map<string, BriefingEntry>();
 // backstop so a briefing never survives into the next morning.
 const TEXT_MAX_AGE_MS = 20 * 60 * 60 * 1000;
 
-export function getCachedBriefing(userName: string): string | null {
-  const entry = _textCache.get(userName);
-  if (!entry) return null;
-  if (entry.dateKey !== ctDateKey()) { _textCache.delete(userName); return null; }
-  if (Date.now() - entry.generatedAt > TEXT_MAX_AGE_MS) { _textCache.delete(userName); return null; }
-  return entry.text;
-}
-
-/**
- * Returns the cached briefing only if it was generated within maxAgeMs milliseconds.
- * Used by the native path to skip regeneration on rapid successive calls (e.g. app restart,
- * background refresh). Default: 15 minutes.
- */
-export function getCachedBriefingIfRecent(userName: string, maxAgeMs = 15 * 60 * 1000): string | null {
-  const entry = _textCache.get(userName);
-  if (!entry) return null;
-  if (entry.dateKey !== ctDateKey()) { _textCache.delete(userName); return null; }
-  if (Date.now() - entry.generatedAt > maxAgeMs) return null;
-  return entry.text;
-}
-
-export function setCachedBriefing(userName: string, text: string, explicitDateKey?: string): void {
-  const dateKey = explicitDateKey ?? ctDateKey();
-  _textCache.set(userName, { text, generatedAt: Date.now(), dateKey });
-  // Persist so the web "already loaded" endpoint can return it after a restart
-  query(
-    `INSERT INTO morning_static_context (user_name, date_key, briefing_text)
-     VALUES ($1, $2, $3)
-     ON CONFLICT (user_name, date_key) DO UPDATE
-       SET briefing_text = EXCLUDED.briefing_text
-     RETURNING user_name`,
-    [userName, dateKey, text]
-  ).catch((err: unknown) => {
-    console.warn("[BriefingCache] Failed to persist briefing text to DB:", err);
-  });
-}
-
-export function clearCachedBriefing(userName: string): void {
-  _textCache.delete(userName);
-}
-
 // ── Push-sent tracking — survives server restarts ──────────────────────────────
 
 const _pushSentDone = new Map<string, string>(); // userName → dateKey
@@ -265,28 +224,6 @@ export function getStaticBriefingContext(userName: string): StaticContextEntry |
   if (entry.dateKey !== ctDateKey()) { _staticCtxCache.delete(userName); return null; }
   if (Date.now() - entry.builtAt > STATIC_MAX_AGE_MS) { _staticCtxCache.delete(userName); return null; }
   return entry;
-}
-
-export function setStaticBriefingContext(userName: string, entry: StaticContextEntry): void {
-  _staticCtxCache.set(userName, entry);
-  query(
-    `INSERT INTO morning_static_context
-       (user_name, date_key, preamble, suffix, candidate_story_keys, built_at)
-     VALUES ($1, $2, $3, $4, $5, NOW())
-     ON CONFLICT (user_name, date_key) DO UPDATE
-       SET preamble = EXCLUDED.preamble,
-           suffix = EXCLUDED.suffix,
-           candidate_story_keys = EXCLUDED.candidate_story_keys,
-           built_at = NOW()
-     RETURNING user_name`,
-    [userName, entry.dateKey, entry.preamble, entry.suffix, JSON.stringify(entry.candidateStoryKeys)]
-  ).catch((err: unknown) => {
-    console.warn("[BriefingCache] Failed to persist static context to DB:", err);
-  });
-}
-
-export function clearStaticBriefingContext(userName: string): void {
-  _staticCtxCache.delete(userName);
 }
 
 /**

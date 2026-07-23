@@ -77,14 +77,6 @@ router.post("/chat-native", async (req: Request, res: Response) => {
       log:            req.log,
     });
 
-    if (result.action.type === "morning_rundown") {
-      const cached = await getPersistedBriefingText(sessionUserName).catch(() => null);
-      if (cached) {
-        res.json({ response: cached, actionType: "morning_rundown", messageId: result.messageId });
-        return;
-      }
-    }
-
     const responseBody: Record<string, unknown> = { response: result.reply, actionType: result.action.type, messageId: result.messageId };
     if (result.navigationUrl)      responseBody.navigationUrl      = result.navigationUrl;
     if (result.smsPayload)         responseBody.smsPayload         = result.smsPayload;

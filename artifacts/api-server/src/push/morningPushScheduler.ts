@@ -4,9 +4,7 @@ import { logger } from "../lib/logger.js";
 import { getWatchedShows } from "../tv/showManager.js";
 import { fetchEpisodesForDate } from "../tv/tvmaze.js";
 import { preFetchMorningNews, preFetchDailyMotivation, checkMiddayNews } from "../news/newsManager.js";
-import { preFetchMorningBriefing } from "../morning/briefingPregenerate.js";
 import {
-  getStaticBriefingContext,
   loadStaticContextFromDb,
   claimMorningPushSlot,
   releaseMorningPushSlot,
@@ -19,9 +17,8 @@ import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 const DEFAULT_TZ = "UTC"; // Scheduler runs in UTC; each user has their own timezone in profile
 const DEFAULT_WAKE_TIME = "06:00";
 
-// How many minutes before wake time to start pre-fetching.
+// How many minutes before wake time to start pre-fetching news.
 const NEWS_LEAD_MINUTES = 25;
-const BRIEFING_LEAD_MINUTES = 20;
 
 // How many minutes after wake time we will still attempt to send the push.
 // 120 minutes covers deployment-triggered restarts that land after the wake window.
@@ -62,10 +59,9 @@ function minutesSinceWake(localTime: string, wakeTime: string): number {
 }
 
 // ── Per-user state tracking ────────────────────────────────────────────────────
-// Note: morningPushDone is now DB-backed via wasPushSentToday() / markPushSent().
-// These maps track the pre-fetch actions (news/briefing) which are fire-and-forget.
+// Note: morningPushDone is now DB-backed via wasPushSentToday().
+// This map tracks the news pre-fetch action, which is fire-and-forget.
 
-const prefetchDone: Map<string, string>     = new Map();
 const newsPrefetchDone: Map<string, string> = new Map();
 const middayCheckDone: Map<string, string>  = new Map();
 
@@ -95,17 +91,6 @@ async function buildMorningBody(user: ActiveUser): Promise<string> {
 
 async function sendMorningPush(user: ActiveUser, wakeTime: string): Promise<void> {
   const { userName } = user;
-
-  // Try to restore an already-generated briefing from DB before anything else.
-  // This prevents duplicate Apify/Claude calls after server restarts.
-  let staticCtx = getStaticBriefingContext(userName);
-  if (!staticCtx) {
-    await loadStaticContextFromDb(userName).catch(() => false);
-    staticCtx = getStaticBriefingContext(userName);
-    if (staticCtx) {
-      logger.info({ userName }, "[MorningPush] Briefing restored from DB cache");
-    }
-  }
 
   // Atomically claim the send slot — prevents double-send across restarts.
   // Fire the push AT wake time regardless of whether the briefing is ready.
@@ -148,10 +133,7 @@ async function sendMorningPush(user: ActiveUser, wakeTime: string): Promise<void
     }
 
     _retryCount.delete(userName);
-    logger.info(
-      { userName, wakeTime, briefingReady: !!staticCtx },
-      "[MorningPush] Morning push sent"
-    );
+    logger.info({ userName, wakeTime }, "[MorningPush] Morning push sent");
   } catch (err) {
     logger.error({ err, userName }, "[MorningPush] Failed to send morning push");
     const retries = (_retryCount.get(userName) ?? 0) + 1;
@@ -165,15 +147,6 @@ async function sendMorningPush(user: ActiveUser, wakeTime: string): Promise<void
       await releaseMorningPushSlot(userName).catch(() => {});
     }
     return;
-  }
-
-  // If briefing wasn't cached, generate it now in the background so it's
-  // ready when the user taps the notification (usually a few seconds later).
-  if (!staticCtx) {
-    logger.info({ userName }, "[MorningPush] Briefing not cached — generating in background after push");
-    preFetchMorningBriefing(userName).catch((err) =>
-      logger.warn({ err, userName }, "[MorningPush] Background briefing pre-gen failed")
-    );
   }
 }
 
@@ -191,7 +164,6 @@ async function runPerUserChecks(): Promise<void> {
   for (const user of users) {
     const { userName } = user;
     const wakeTime = user.wakeTime ?? DEFAULT_WAKE_TIME;
-    const preFetchTime = subtractMinutes(wakeTime, BRIEFING_LEAD_MINUTES);
     const newsTime = subtractMinutes(wakeTime, NEWS_LEAD_MINUTES);
     const localTime = getCurrentTimeForUser(user);
     const today = getLocalDateForUser(user);
@@ -204,15 +176,6 @@ async function runPerUserChecks(): Promise<void> {
       );
       preFetchDailyMotivation(userName).catch((err) =>
         logger.warn({ err, userName }, "[MorningPush] Motivation pre-fetch error")
-      );
-    }
-
-    // 20 min before wake: pre-generate full Claude briefing (once per user per day)
-    if (localTime === preFetchTime && prefetchDone.get(userName) !== today) {
-      prefetchDone.set(userName, today);
-      logger.info({ userName, preFetchTime }, "[MorningPush] Pre-generating briefing");
-      preFetchMorningBriefing(userName).catch((err) =>
-        logger.warn({ err, userName }, "[MorningPush] Briefing pre-generate error")
       );
     }
 
@@ -265,65 +228,32 @@ async function startupPrefetch(): Promise<void> {
 
   for (const user of users) {
     const { userName } = user;
-    const today = new Date().toLocaleDateString("en-CA", { timeZone: DEFAULT_TZ });
 
-    // CRITICAL: Check DB for today's static context before spending tokens on regeneration.
-    // loadStaticContextFromDb also restores push_sent_at so we don't re-send.
-    const alreadyCached = await loadStaticContextFromDb(userName).catch(() => false);
-    if (alreadyCached) {
-      // Briefing already generated today — mark pre-fetch flags to suppress cron re-run.
-      prefetchDone.set(userName, today);
-      newsPrefetchDone.set(userName, today);
-      logger.info({ userName }, "[MorningPush] Startup — static context restored from DB, skipping pre-generation");
+    // Restore push-sent state from DB (survives restarts) so we don't re-send.
+    await loadStaticContextFromDb(userName).catch(() => false);
 
-      // If we're inside the wake window AND the push hasn't been sent yet (restart
-      // happened before the push could fire), send it now immediately.
-      const wakeTime = user.wakeTime ?? DEFAULT_WAKE_TIME;
-      const localTime = new Date().toLocaleTimeString("en-US", {
-        timeZone: user.timezone ?? DEFAULT_TZ,
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
-      });
-      const minsSince = minutesSinceWake(localTime, wakeTime);
-      if (minsSince >= 0 && minsSince <= WAKE_WINDOW_MINUTES && !wasPushSentToday(userName)) {
-        logger.info(
-          { userName, minsSince },
-          "[MorningPush] Startup — within wake window and push not sent — sending now"
-        );
-        // Small delay to let the rest of startup finish first
-        setTimeout(() => {
-          sendMorningPush(user, wakeTime).catch((err) =>
-            logger.error({ err, userName }, "[MorningPush] Startup push send failed")
-          );
-        }, 5000);
-      }
-      continue;
-    }
-
-    // Only pre-generate on startup if we're inside the morning window (05:00–07:30 CT).
-    // A midnight restart should NOT trigger a pre-gen — it would use overnight news
-    // and that stale briefing would be served at 6 AM instead of fresh content.
-    // The scheduled cron (at preFetchTime each morning) handles the real pre-gen.
-    const startupLocalTime = new Date().toLocaleTimeString("en-US", {
-      timeZone: DEFAULT_TZ,
+    // If we're inside the wake window AND the push hasn't been sent yet (restart
+    // happened before the push could fire), send it now immediately rather than
+    // waiting for the next per-minute tick.
+    const wakeTime = user.wakeTime ?? DEFAULT_WAKE_TIME;
+    const localTime = new Date().toLocaleTimeString("en-US", {
+      timeZone: user.timezone ?? DEFAULT_TZ,
       hour: "2-digit",
       minute: "2-digit",
       hour12: false,
     });
-    const startupHour = parseInt(startupLocalTime.split(":")[0]!, 10);
-    const inMorningWindow = startupHour >= 5 && startupHour < 8;
-
-    if (!inMorningWindow) {
-      logger.info({ userName, startupLocalTime }, "[MorningPush] Startup — outside morning window, skipping pre-gen (cron will handle it at 5:40 AM CT)");
-      // Do NOT set prefetchDone here — let the cron handle it at 5:40 AM.
-    } else {
-      logger.info({ userName }, "[MorningPush] Startup — in morning window, no DB cache found, pre-generating briefing");
-      prefetchDone.set(userName, today);
-      newsPrefetchDone.set(userName, today);
-      preFetchMorningBriefing(userName).catch((err) =>
-        logger.warn({ err, userName }, "[MorningPush] Startup briefing error")
+    const minsSince = minutesSinceWake(localTime, wakeTime);
+    if (minsSince >= 0 && minsSince <= WAKE_WINDOW_MINUTES && !wasPushSentToday(userName)) {
+      logger.info(
+        { userName, minsSince },
+        "[MorningPush] Startup — within wake window and push not sent — sending now"
       );
+      // Small delay to let the rest of startup finish first
+      setTimeout(() => {
+        sendMorningPush(user, wakeTime).catch((err) =>
+          logger.error({ err, userName }, "[MorningPush] Startup push send failed")
+        );
+      }, 5000);
     }
   }
 }

@@ -27,7 +27,6 @@ import {
   syncListItemToConnections,
 } from "../../lists/listManager.js";
 import { createReminder } from "../../reminders/reminderManager.js";
-import { getPersistedBriefingText } from "../../morning/briefingCache.js";
 import { fetchTodayEvents, type CalendarEvent } from "../../google/calendar.js";
 import {
   getPendingText,
@@ -1234,10 +1233,10 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       break;
     }
 
-    // TEMPORARY TEST WIRING — bypasses the cache to test generateDailyBrief
-    // (gpt-4o with forced tool_choice: "required" search) directly against
-    // live chat traffic. Revert to the cached/scheduled pre-generation
-    // version (getPersistedBriefingText) once approved.
+    // generateDailyBrief() (gpt-4o with forced tool_choice: "required" search)
+    // is the only morning-briefing path now — the old cached/scheduled
+    // pre-generation pipeline (_doBriefingPrefetch/getPersistedBriefingText)
+    // has been retired.
     case "morning_rundown": {
       const { generateDailyBrief } = await import("../../morning/briefingPregenerate.js");
       const fresh = await generateDailyBrief(sessionUserName).catch((err) => {
