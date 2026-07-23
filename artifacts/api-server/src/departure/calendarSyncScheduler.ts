@@ -505,8 +505,13 @@ async function runDepartureAlertsForUser(userName: string): Promise<void> {
     const leaveAtMs = new Date(row.leave_time_iso).getTime();
     const diffMs = nowMs - leaveAtMs;
 
-    // Fire if we're within a 5-minute window starting at leave time
-    if (diffMs < 0 || diffMs > 5 * 60 * 1000) continue;
+    // Fire if we're within a 15-minute window starting at leave time. Must be
+    // at least as wide as this scheduler's own 10-minute tick interval — a
+    // leave_time_iso landing just after one tick isn't seen again until the
+    // next tick, up to ~10 min later, which alone exceeded the old 5-minute
+    // window. 15 min also covers the new-event detection tick's own lag
+    // (every 5 min) so a leave time discovered slightly late still fires.
+    if (diffMs < 0 || diffMs > 15 * 60 * 1000) continue;
 
     const companionName = await getCompanionName(userName);
     const mapsDeepLink = `https://maps.google.com/?daddr=${encodeURIComponent(row.event_location)}&dirflg=d`;
@@ -605,13 +610,24 @@ async function runDepartureAlerts(): Promise<void> {
   }
 }
 
-// ── Scheduler: every 5 minutes, 7am–10pm CT ───────────────────────────────────
+// ── Scheduler ───────────────────────────────────────────────────────────────
+// New-event detection every 5 min, departure alerts every 10 min. No
+// time-of-day restriction — runs 24/7.
+//
+// Was previously hourly ("0 * * * *") for new-event detection, throttled
+// down from an original 5-minute design intent (per the since-corrected
+// stale comments this block used to carry) without updating those comments.
+// That hourly gap is what let a leave_time_iso pass entirely undetected
+// before the departure-alert window even opened — confirmed via a real
+// missed alert where the leave time had already passed by the time the
+// hourly sync first discovered the event. Restored to the originally
+// intended 5-minute cadence.
 
 export function startCalendarSyncScheduler(): void {
   // New-event / moved-event detection — every 5 minutes
   let _syncRunning = false;
   cron.schedule(
-    "0 * * * *",
+    "*/5 * * * *",
     async () => {
       if (_syncRunning) return;
       _syncRunning = true;
@@ -625,7 +641,7 @@ export function startCalendarSyncScheduler(): void {
     }
   );
 
-  // Departure-time alerts — every 2 minutes (finer resolution so we don't miss the window)
+  // Departure-time alerts — every 10 minutes
   let _departRunning = false;
   cron.schedule(
     "*/10 * * * *",
@@ -642,5 +658,5 @@ export function startCalendarSyncScheduler(): void {
     }
   );
 
-  logger.info("Calendar sync scheduler (hourly) + departure alert scheduler (every 10 min) started");
+  logger.info("Calendar sync scheduler (every 5 min) + departure alert scheduler (every 10 min) started");
 }
