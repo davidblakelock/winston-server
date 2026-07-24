@@ -1,7 +1,7 @@
 import cron from "node-cron";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
-import { getActiveUsers } from "../onboarding/onboardingManager.js";
+import { getActiveUsers, type ActiveUser } from "../onboarding/onboardingManager.js";
 import { getWatchedShows } from "./showManager.js";
 import { fetchEpisodesForDate, type ScheduledEpisode } from "./tvmaze.js";
 import { sendFcmNotification } from "../push/fcmSender.js";
@@ -100,6 +100,33 @@ async function checkEpisodesForUser(userName: string): Promise<void> {
 }
 
 // ── Scheduler ─────────────────────────────────────────────────────────────────
+// Fires once per user, per their own local day, once their local hour reaches
+// TARGET_LOCAL_HOUR (streaming services have all dropped new episodes by then).
+// Ticking every 5 min and gating on ">= target hour" (rather than an exact-hour
+// cron) means a restart or delayed tick still catches the day's check — no
+// separate startup catch-up block needed.
+
+const TARGET_LOCAL_HOUR = 9;
+// userName -> local date (in that user's own timezone) already checked
+const _checkedToday = new Map<string, string>();
+
+async function runPerUserCheck(user: ActiveUser): Promise<void> {
+  const tz = user.timezone ?? "UTC";
+  const now = new Date();
+  const localHour = parseInt(
+    now.toLocaleString("en-US", { timeZone: tz, hour: "numeric", hour12: false }),
+    10
+  );
+  if (localHour < TARGET_LOCAL_HOUR) return;
+
+  const today = now.toLocaleDateString("en-CA", { timeZone: tz });
+  if (_checkedToday.get(user.userName) === today) return;
+  _checkedToday.set(user.userName, today);
+
+  await checkEpisodesForUser(user.userName).catch((err) => {
+    logger.warn({ err, userName: user.userName }, "[TVEpisode] Per-user check failed");
+  });
+}
 
 export async function startTvEpisodeScheduler(): Promise<void> {
   try {
@@ -109,37 +136,19 @@ export async function startTvEpisodeScheduler(): Promise<void> {
     logger.warn({ err }, "[TVEpisode] Failed to init dedup table — scheduler will still start");
   }
 
-  // 9:00 AM CT daily — streaming services have all dropped by this time
-  cron.schedule("0 9 * * *", async () => {
-    logger.info("[TVEpisode] Daily check starting");
-    let users;
+  let _running = false;
+  cron.schedule("*/5 * * * *", async () => {
+    if (_running) return;
+    _running = true;
     try {
-      users = await getActiveUsers();
+      const users = await getActiveUsers();
+      await Promise.allSettled(users.map((user) => runPerUserCheck(user)));
     } catch (err) {
       logger.warn({ err }, "[TVEpisode] Failed to load users — skipping");
-      return;
-    }
-    for (const user of users) {
-      await checkEpisodesForUser(user.userName).catch((err) => {
-        logger.warn({ err, userName: user.userName }, "[TVEpisode] Per-user check failed");
-      });
+    } finally {
+      _running = false;
     }
   });
 
-  // Startup catch-up: if the server starts after 9 AM CT and today's check hasn't run yet,
-  // fire it now. Dedup prevents double-sends if it already ran in an earlier instance.
-  const nowHour = parseInt(
-    new Date().toLocaleTimeString("en-US", { timeZone: "UTC", hour: "2-digit", hour12: false }),
-    10
-  );
-  if (nowHour >= 9 && nowHour < 20) {
-    logger.info({ nowHour }, "[TVEpisode] Startup catch-up — running today's episode check");
-    getActiveUsers()
-      .then((users) =>
-        Promise.all(users.map((u) => checkEpisodesForUser(u.userName).catch(() => {})))
-      )
-      .catch((err) => logger.warn({ err }, "[TVEpisode] Startup catch-up failed"));
-  }
-
-  logger.info("[TVEpisode] Scheduler started — runs daily at 9:00 AM CT");
+  logger.info("[TVEpisode] Scheduler started — checks every 5 min, fires once per user at their local 9am");
 }

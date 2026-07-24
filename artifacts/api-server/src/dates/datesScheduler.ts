@@ -2,7 +2,7 @@ import cron from "node-cron";
 import { broadcast } from "../reminders/sseStore.js";
 import { sendFcmNotification } from "../push/fcmSender.js";
 import { logger } from "../lib/logger.js";
-import { getActiveUsers } from "../onboarding/onboardingManager.js";
+import { getActiveUsers, type ActiveUser } from "../onboarding/onboardingManager.js";
 import {
   getDates,
   nextOccurrence,
@@ -18,19 +18,12 @@ function localDateStr(tz = "UTC"): string {
   return new Date().toLocaleDateString("en-CA", { timeZone: tz });
 }
 
-function localTime(tz = "UTC"): string {
-  return new Date().toLocaleTimeString("en-US", {
-    timeZone: tz,
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
-}
-
-function daysBetween(a: Date, b: Date): number {
-  const aDay = new Date(a.getFullYear(), a.getMonth(), a.getDate());
-  const bDay = new Date(b.getFullYear(), b.getMonth(), b.getDate());
-  return Math.round((bDay.getTime() - aDay.getTime()) / 86400000);
+function daysBetween(a: Date, b: Date, tz = "UTC"): number {
+  const aStr = a.toLocaleDateString("en-CA", { timeZone: tz });
+  const bStr = b.toLocaleDateString("en-CA", { timeZone: tz });
+  const [aY, aM, aD] = aStr.split("-").map(Number);
+  const [bY, bM, bD] = bStr.split("-").map(Number);
+  return Math.round((Date.UTC(bY, bM - 1, bD) - Date.UTC(aY, aM - 1, aD)) / 86400000);
 }
 
 async function hasReminderBeenSent(dateId: number, daysUntil: number, today: string): Promise<boolean> {
@@ -64,92 +57,101 @@ async function ensureLogTable(): Promise<void> {
   `);
 }
 
-let _lastChecked: string | null = null;
+const TARGET_LOCAL_HOUR = 9;
+// userName -> local date (in that user's own timezone) already checked
+const _checkedToday = new Map<string, string>();
 
-async function checkDateReminders(): Promise<void> {
-  const today = localDateStr("UTC");
-  if (_lastChecked === today) return;
-  _lastChecked = today;
-
-  const users = await getActiveUsers().catch(() => []);
-  if (!users.length) return;
-
+async function checkDatesForUser(user: ActiveUser, userTz: string): Promise<void> {
+  const { userName, name: displayName, companionName } = user;
+  const today = localDateStr(userTz);
+  const userDisplay = displayName ?? userName;
+  const companion = companionName ?? "Winston";
   const now = new Date();
 
-  for (const user of users) {
-    const { userName, name: displayName, companionName } = user;
-    const { rows: profRowsD } = await query<{ timezone: string | null }>(`SELECT timezone FROM user_profiles WHERE user_name = $1`, [userName]).catch(() => ({ rows: [] }));
-    const userTz = profRowsD[0]?.timezone ?? "UTC";
-    const userDisplay = displayName ?? userName;
-    const companion = companionName ?? "Winston";
+  const dates = await getDates(userName).catch(() => [] as ImportantDate[]);
 
-    const dates = await getDates(userName).catch(() => [] as ImportantDate[]);
+  for (const d of dates) {
+    const occ = nextOccurrence(d.month, d.day, now, userTz);
+    const daysUntil = daysBetween(now, occ, userTz);
 
-    for (const d of dates) {
-      const occ = nextOccurrence(d.month, d.day, now);
-      const daysUntil = daysBetween(now, occ);
+    if (!LEAD_DAYS.includes(daysUntil)) continue;
 
-      if (!LEAD_DAYS.includes(daysUntil)) continue;
+    const alreadySent = await hasReminderBeenSent(d.id, daysUntil, today);
+    if (alreadySent) continue;
 
-      const alreadySent = await hasReminderBeenSent(d.id, daysUntil, today);
-      if (alreadySent) continue;
+    const upcoming: UpcomingDate = {
+      ...d,
+      nextOccurrence: occ,
+      daysUntil,
+      yearsCount: null,
+      label: occ.toLocaleDateString("en-US", { month: "long", day: "numeric" }),
+    };
 
-      const upcoming: UpcomingDate = {
-        ...d,
-        nextOccurrence: occ,
-        daysUntil,
-        yearsCount: null,
-        label: occ.toLocaleDateString("en-US", { month: "long", day: "numeric" }),
-      };
+    const message = buildDateReminderMessage(upcoming, userDisplay);
 
-      const message = buildDateReminderMessage(upcoming, userDisplay);
-
-      // Build a personalized autoSendMessage so tapping the notification opens
-      // the app and Winston immediately responds with planning/message help.
-      const name = d.personName;
-      const isBirthday = d.eventType === "birthday";
-      let autoSendMessage: string;
-      if (daysUntil === 7) {
-        autoSendMessage = isBirthday
-          ? `${name}'s birthday is in 7 days — can you help me plan something?`
-          : `My anniversary with ${name} is in 7 days — can you help me plan something special?`;
-      } else if (daysUntil === 2) {
-        autoSendMessage = isBirthday
-          ? `${name}'s birthday is in 2 days — have I done anything about it yet?`
-          : `My anniversary with ${name} is in 2 days — have I done anything about it yet?`;
-      } else {
-        // daysUntil === 0 — day of
-        autoSendMessage = isBirthday
-          ? `Today is ${name}'s birthday — help me send them a birthday message.`
-          : `Today is my anniversary with ${name} — help me make it a special day.`;
-      }
-
-      broadcast("reminder", {
-        id: `date-${d.id}-${daysUntil}-${Date.now()}`,
-        userName,
-        reminderText: message,
-        speakText: message,
-        isDateReminder: true,
-      });
-
-      await sendFcmNotification({
-        userName,
-        notificationType: 'date-reminder',
-        title: `${isBirthday ? '🎂' : '💍'} Important Date — ${companion}`,
-        body: message,
-        data: {
-          tag: `date-${d.id}-${daysUntil}`,
-          requireInteraction: String(daysUntil <= 3),
-          action: 'send_message',
-          message: autoSendMessage,
-        },
-      }).catch(() => {});
-
-      await markReminderSent(d.id, daysUntil, today);
-
-      logger.info({ dateId: d.id, personName: d.personName, daysUntil, userName }, "Date reminder fired");
+    // Build a personalized autoSendMessage so tapping the notification opens
+    // the app and Winston immediately responds with planning/message help.
+    const name = d.personName;
+    const isBirthday = d.eventType === "birthday";
+    let autoSendMessage: string;
+    if (daysUntil === 7) {
+      autoSendMessage = isBirthday
+        ? `${name}'s birthday is in 7 days — can you help me plan something?`
+        : `My anniversary with ${name} is in 7 days — can you help me plan something special?`;
+    } else if (daysUntil === 2) {
+      autoSendMessage = isBirthday
+        ? `${name}'s birthday is in 2 days — have I done anything about it yet?`
+        : `My anniversary with ${name} is in 2 days — have I done anything about it yet?`;
+    } else {
+      // daysUntil === 0 — day of
+      autoSendMessage = isBirthday
+        ? `Today is ${name}'s birthday — help me send them a birthday message.`
+        : `Today is my anniversary with ${name} — help me make it a special day.`;
     }
+
+    broadcast("reminder", {
+      id: `date-${d.id}-${daysUntil}-${Date.now()}`,
+      userName,
+      reminderText: message,
+      speakText: message,
+      isDateReminder: true,
+    });
+
+    await sendFcmNotification({
+      userName,
+      notificationType: 'date-reminder',
+      title: `${isBirthday ? '🎂' : '💍'} Important Date — ${companion}`,
+      body: message,
+      data: {
+        tag: `date-${d.id}-${daysUntil}`,
+        requireInteraction: String(daysUntil <= 3),
+        action: 'send_message',
+        message: autoSendMessage,
+      },
+    }).catch(() => {});
+
+    await markReminderSent(d.id, daysUntil, today);
+
+    logger.info({ dateId: d.id, personName: d.personName, daysUntil, userName }, "Date reminder fired");
   }
+}
+
+async function runPerUserCheck(user: ActiveUser): Promise<void> {
+  const tz = user.timezone ?? "UTC";
+  const now = new Date();
+  const localHour = parseInt(
+    now.toLocaleString("en-US", { timeZone: tz, hour: "numeric", hour12: false }),
+    10
+  );
+  if (localHour < TARGET_LOCAL_HOUR) return;
+
+  const today = now.toLocaleDateString("en-CA", { timeZone: tz });
+  if (_checkedToday.get(user.userName) === today) return;
+  _checkedToday.set(user.userName, today);
+
+  await checkDatesForUser(user, tz).catch((err) => {
+    logger.error({ err, userName: user.userName }, "Dates scheduler — per-user check failed");
+  });
 }
 
 export async function startDatesScheduler(): Promise<void> {
@@ -158,12 +160,12 @@ export async function startDatesScheduler(): Promise<void> {
   });
 
   let _running = false;
-  cron.schedule("20 * * * * *", async () => {
+  cron.schedule("*/5 * * * *", async () => {
     if (_running) return;
     _running = true;
     try {
-      if (localTime("UTC") !== "09:00") return;
-      await checkDateReminders();
+      const users = await getActiveUsers().catch(() => []);
+      await Promise.allSettled(users.map((user) => runPerUserCheck(user)));
     } catch (err) {
       logger.error({ err }, "Dates scheduler error");
     } finally {
@@ -171,5 +173,5 @@ export async function startDatesScheduler(): Promise<void> {
     }
   });
 
-  logger.info("Dates (birthday/anniversary) scheduler started");
+  logger.info("Dates (birthday/anniversary) scheduler started — checks every 5 min, fires once per user at their local 9am");
 }
