@@ -390,10 +390,10 @@ export function formatCalendarForPrompt(events: CalendarEvent[], label = "today"
 
 // ── Write Operations ────────────────────────────────────────────────────────
 
-function buildEventDateTime(date: string, time: string): { dateTime: string; timeZone: string } {
+function buildEventDateTime(date: string, time: string, tz: string): { dateTime: string; timeZone: string } {
   return {
     dateTime: `${date}T${time}:00`,
-    timeZone: TZ,
+    timeZone: tz,
   };
 }
 
@@ -417,6 +417,8 @@ export async function createCalendarEvent(details: {
   const creds = auth.credentials;
   console.log(`[CALENDAR CREATE] auth resolved — has access_token: ${!!creds.access_token}, has refresh_token: ${!!creds.refresh_token}, expiry: ${creds.expiry_date ? new Date(creds.expiry_date).toISOString() : "none"}`);
 
+  const { timezone: tz } = userName ? await getUserLocationContext(userName) : { timezone: TZ };
+
   const calendar = google.calendar({ version: "v3", auth });
   const endTime = details.endTime ?? addOneHour(details.startTime);
 
@@ -430,8 +432,8 @@ export async function createCalendarEvent(details: {
     requestBody.start = { date: details.date };
     requestBody.end = { date: details.date };
   } else {
-    requestBody.start = buildEventDateTime(details.date, details.startTime);
-    requestBody.end = buildEventDateTime(details.date, endTime);
+    requestBody.start = buildEventDateTime(details.date, details.startTime, tz);
+    requestBody.end = buildEventDateTime(details.date, endTime, tz);
   }
 
   const filteredAttendees = (details.attendees ?? []).filter((a) => a.email);
@@ -530,6 +532,8 @@ export async function updateCalendarEvent(
     return false;
   }
 
+  const { timezone: tz } = userName ? await getUserLocationContext(userName) : { timezone: TZ };
+
   const calendar = google.calendar({ version: "v3", auth });
 
   // Fetch current event first so we can preserve unchanged fields
@@ -566,8 +570,8 @@ export async function updateCalendarEvent(
     const newStart = updates.startTime ?? currentTime;
     const newEnd = updates.endTime ?? (updates.startTime ? addOneHour(updates.startTime) : currentEndTime);
 
-    patch.start = buildEventDateTime(newDate, newStart);
-    patch.end = buildEventDateTime(newDate, newEnd);
+    patch.start = buildEventDateTime(newDate, newStart, tz);
+    patch.end = buildEventDateTime(newDate, newEnd, tz);
 
     console.log(`[CALENDAR UPDATE] new date/time: ${newDate} ${newStart} → ${newEnd}`);
   }

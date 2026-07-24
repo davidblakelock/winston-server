@@ -148,6 +148,7 @@ export interface ServiceProvider {
   notes: string | null;
   lastContactDate: string | null;
   nextDueDate: string | null;
+  nextDueCalendarEventId: string | null;
   googleContactId: string | null;
   createdAt: string;
 }
@@ -167,7 +168,8 @@ export async function ensureServiceProvidersTable(): Promise<void> {
       company           TEXT,
       notes             TEXT,
       last_contact_date DATE,
-      next_due_date     DATE,
+      next_due_date     TIMESTAMPTZ,
+      next_due_calendar_event_id TEXT,
       google_contact_id TEXT,
       created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
@@ -179,6 +181,20 @@ export async function ensureServiceProvidersTable(): Promise<void> {
       ADD COLUMN IF NOT EXISTS specialty TEXT,
       ADD COLUMN IF NOT EXISTS address   TEXT,
       ADD COLUMN IF NOT EXISTS website   TEXT
+  `).catch(() => {});
+
+  // Migration: next_due_date was DATE-only; widen to TIMESTAMPTZ so an
+  // appointment can carry a time-of-day, not just a calendar day.
+  await query(`
+    ALTER TABLE service_providers
+      ALTER COLUMN next_due_date TYPE TIMESTAMPTZ USING next_due_date::timestamptz
+  `).catch(() => {});
+
+  // Migration: track the linked Google Calendar event so edits/clears can
+  // update or delete the same event instead of creating duplicates.
+  await query(`
+    ALTER TABLE service_providers
+      ADD COLUMN IF NOT EXISTS next_due_calendar_event_id TEXT
   `).catch(() => {});
 
   // Remove duplicates (keep oldest per user/name/phone) then enforce uniqueness.
@@ -214,6 +230,7 @@ function rowToProvider(r: {
   address: string | null; website: string | null;
   company: string | null; notes: string | null;
   last_contact_date: string | null; next_due_date: string | null;
+  next_due_calendar_event_id: string | null;
   google_contact_id: string | null; created_at: string;
 }): ServiceProvider {
   return {
@@ -224,6 +241,7 @@ function rowToProvider(r: {
     company: r.company, notes: r.notes,
     lastContactDate: r.last_contact_date,
     nextDueDate: r.next_due_date,
+    nextDueCalendarEventId: r.next_due_calendar_event_id,
     googleContactId: r.google_contact_id,
     createdAt: r.created_at,
   };
@@ -235,13 +253,14 @@ type ProviderRow = {
   address: string | null; website: string | null;
   company: string | null; notes: string | null;
   last_contact_date: string | null; next_due_date: string | null;
+  next_due_calendar_event_id: string | null;
   google_contact_id: string | null; created_at: string;
 };
 
 const SELECT_COLS = `
   id, user_name, name, category, specialty, phone, email, address, website,
   company, notes, last_contact_date::text, next_due_date::text,
-  google_contact_id, created_at::text
+  next_due_calendar_event_id, google_contact_id, created_at::text
 `;
 
 export async function getProviders(
@@ -281,6 +300,7 @@ export async function createProvider(
     notes?: string | null;
     lastContactDate?: string | null;
     nextDueDate?: string | null;
+    nextDueCalendarEventId?: string | null;
     googleContactId?: string | null;
   }
 ): Promise<ServiceProvider> {
@@ -305,8 +325,8 @@ export async function createProvider(
   const { rows } = await query<ProviderRow>(
     `INSERT INTO service_providers
        (user_name, name, category, specialty, phone, email, address, website,
-        company, notes, last_contact_date, next_due_date, google_contact_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+        company, notes, last_contact_date, next_due_date, next_due_calendar_event_id, google_contact_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
      RETURNING ${SELECT_COLS}`,
     [
       userName, data.name, data.category,
@@ -315,6 +335,7 @@ export async function createProvider(
       data.address ?? null, data.website ?? null,
       data.company ?? null, data.notes ?? null,
       data.lastContactDate ?? null, data.nextDueDate ?? null,
+      data.nextDueCalendarEventId ?? null,
       data.googleContactId ?? null,
     ]
   );
@@ -331,6 +352,7 @@ export async function updateProvider(
     address: string | null; website: string | null;
     company: string | null; notes: string | null;
     lastContactDate: string | null; nextDueDate: string | null;
+    nextDueCalendarEventId: string | null;
     googleContactId: string | null;
   }>
 ): Promise<ServiceProvider | null> {
@@ -349,6 +371,7 @@ export async function updateProvider(
   if (data.notes !== undefined)           { sets.push(`notes = $${idx++}`);             vals.push(data.notes); }
   if (data.lastContactDate !== undefined) { sets.push(`last_contact_date = $${idx++}`); vals.push(data.lastContactDate); }
   if (data.nextDueDate !== undefined)     { sets.push(`next_due_date = $${idx++}`);     vals.push(data.nextDueDate); }
+  if (data.nextDueCalendarEventId !== undefined) { sets.push(`next_due_calendar_event_id = $${idx++}`); vals.push(data.nextDueCalendarEventId); }
   if (data.googleContactId !== undefined) { sets.push(`google_contact_id = $${idx++}`); vals.push(data.googleContactId); }
 
   if (!sets.length) return null;
@@ -375,26 +398,11 @@ export async function touchLastContactDate(
   logger.info({ id, userName, date }, "[Providers] last_contact_date updated");
 }
 
-export async function deleteProvider(id: number, userName: string): Promise<boolean> {
-  const { rows } = await query(
-    `DELETE FROM service_providers WHERE id = $1 AND user_name = $2 RETURNING id`,
+export async function deleteProvider(id: number, userName: string): Promise<{ id: number; nextDueCalendarEventId: string | null } | null> {
+  const { rows } = await query<{ id: number; next_due_calendar_event_id: string | null }>(
+    `DELETE FROM service_providers WHERE id = $1 AND user_name = $2 RETURNING id, next_due_calendar_event_id`,
     [id, userName]
   );
-  return rows.length > 0;
-}
-
-export async function getProvidersWithUpcomingDue(
-  userName: string,
-  daysAhead = 7
-): Promise<ServiceProvider[]> {
-  const { rows } = await query<ProviderRow>(
-    `SELECT ${SELECT_COLS}
-       FROM service_providers
-      WHERE user_name = $1
-        AND next_due_date IS NOT NULL
-        AND next_due_date::date BETWEEN CURRENT_DATE AND (CURRENT_DATE + ($2 * INTERVAL '1 day'))
-      ORDER BY next_due_date ASC`,
-    [userName, daysAhead]
-  );
-  return rows.map(rowToProvider);
+  if (!rows.length) return null;
+  return { id: rows[0]!.id, nextDueCalendarEventId: rows[0]!.next_due_calendar_event_id };
 }

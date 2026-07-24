@@ -1,6 +1,9 @@
 import { Router, type Request, type Response } from "express";
 import express from "express";
 import { authenticate } from "../auth/middleware.js";
+import { logger } from "../lib/logger.js";
+import { getUserLocationContext } from "../lib/userTimezone.js";
+import { createCalendarEvent, updateCalendarEvent, deleteCalendarEvent } from "../google/calendar.js";
 import {
   getProviders,
   createProvider,
@@ -8,6 +11,7 @@ import {
   deleteProvider,
   getCategories,
   createCategory,
+  type ServiceProvider,
 } from "../providers/providerManager.js";
 
 const router = Router();
@@ -17,6 +21,62 @@ const router = Router();
 function resolveCategory(v: unknown): string {
   if (typeof v === "string" && v.trim()) return v.trim();
   return "personal";
+}
+
+// Splits a stored UTC timestamp into the wall-clock date/time the Google
+// Calendar API expects, in the user's own timezone.
+function toLocalDateAndTime(isoUtc: string, tz: string): { date: string; startTime: string } {
+  const d = new Date(isoUtc);
+  const date = d.toLocaleDateString("en-CA", { timeZone: tz });
+  const startTime = d.toLocaleTimeString("en-GB", { timeZone: tz, hour: "2-digit", minute: "2-digit" });
+  return { date, startTime };
+}
+
+// Keeps a provider's Google Calendar appointment event in sync with its
+// next_due_date: creates the event on first set, updates it on change,
+// deletes it if the appointment is cleared. Persists the linked event ID
+// back onto the provider row so future edits patch the same event instead
+// of creating duplicates.
+async function syncProviderCalendarEvent(
+  userName: string,
+  provider: ServiceProvider
+): Promise<void> {
+  try {
+    if (!provider.nextDueDate) {
+      if (provider.nextDueCalendarEventId) {
+        await deleteCalendarEvent(provider.nextDueCalendarEventId, userName).catch(() => {});
+        await updateProvider(provider.id, userName, { nextDueCalendarEventId: null });
+      }
+      return;
+    }
+
+    const { timezone: tz } = await getUserLocationContext(userName);
+    const { date, startTime } = toLocalDateAndTime(provider.nextDueDate, tz);
+    const title = `Appointment: ${provider.name}`;
+
+    if (provider.nextDueCalendarEventId) {
+      const ok = await updateCalendarEvent(
+        provider.nextDueCalendarEventId,
+        { title, date, startTime, location: provider.address ?? undefined },
+        userName
+      );
+      if (!ok) {
+        logger.warn({ userName, providerId: provider.id }, "[Providers] Calendar event update failed");
+      }
+    } else {
+      const created = await createCalendarEvent(
+        { title, date, startTime, location: provider.address ?? undefined },
+        userName
+      );
+      if (created) {
+        await updateProvider(provider.id, userName, { nextDueCalendarEventId: created.id });
+      } else {
+        logger.warn({ userName, providerId: provider.id }, "[Providers] Calendar event create failed (Google likely not connected)");
+      }
+    }
+  } catch (err) {
+    logger.error({ err, userName, providerId: provider.id }, "[Providers] syncProviderCalendarEvent error");
+  }
 }
 
 // ── GET /api/providers/categories ─────────────────────────────────────────────
@@ -113,6 +173,11 @@ router.post(
         googleContactId: typeof googleContactId === "string" ? googleContactId : null,
       });
       req.log.info({ userName, id: provider.id, name: provider.name }, "[Providers] Created");
+
+      if (provider.nextDueDate) {
+        await syncProviderCalendarEvent(userName, provider);
+      }
+
       res.status(201).json({ provider });
     } catch (err) {
       req.log.error({ err }, "[Providers] POST /providers error");
@@ -160,6 +225,11 @@ router.put(
         return;
       }
       req.log.info({ userName, id }, "[Providers] Updated");
+
+      if (nextDueRaw !== undefined) {
+        await syncProviderCalendarEvent(userName, provider);
+      }
+
       res.json({ provider });
     } catch (err) {
       req.log.error({ err }, "[Providers] PUT /providers/:id error");
@@ -184,6 +254,11 @@ router.delete("/providers/:id", async (req: Request, res: Response) => {
     if (!deleted) {
       res.status(404).json({ error: "Provider not found" });
       return;
+    }
+    if (deleted.nextDueCalendarEventId) {
+      await deleteCalendarEvent(deleted.nextDueCalendarEventId, userName).catch((err) => {
+        req.log.warn({ err, userName, id }, "[Providers] Failed to clean up linked calendar event on delete");
+      });
     }
     req.log.info({ userName, id }, "[Providers] Deleted");
     res.json({ ok: true });

@@ -49,7 +49,6 @@ import { ensureListItemColumns } from "./lists/listManager";
 import { ensureListShareTable } from "./lists/listShareManager";
 import { ensureBookingColumns } from "./restaurants/bookingCredentialsManager";
 import { ensureServiceProvidersTable, ensureProviderCategoriesTable } from "./providers/providerManager";
-import { startProviderScheduler } from "./providers/providerScheduler";
 import { startTvEpisodeScheduler } from "./tv/tvEpisodeScheduler";
 import { ensureStoicTables } from "./stoic/stoicManager";
 import { ensureEmailScanSettingsTable } from "./email/emailScanSettings";
@@ -460,7 +459,6 @@ app.listen(port, async (err) => {
     startTodoReminderScheduler();
     startBackgroundEmailScanner();
     startRecordsArchiver();
-    startProviderScheduler();
     void startTvEpisodeScheduler();
     setSchedulersEnabled();
     logger.info("[startup] ✅ All schedulers started");
