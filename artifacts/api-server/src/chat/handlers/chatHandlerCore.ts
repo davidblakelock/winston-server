@@ -702,7 +702,11 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       const listName = normalizeListName(action.listName?.trim() || "to do");
       const itemText = action.itemText?.trim() ?? "";
       const items    = itemText.split(",").map((s) => s.trim()).filter(Boolean);
-      if (items.length > 0) {
+      // Plain to-dos live in the reminders table (written below) — same gate
+      // add_todo uses. Without this, a to-do with a reminder time attached
+      // silently double-wrote into list_items, where nothing ever reads it back.
+      const isPlainTodo = listName === "to do" || listName === "reminders";
+      if (!isPlainTodo && items.length > 0) {
         try {
           const inserted = await addItems(listName, items, sessionUserName);
           if (listName.toLowerCase() === "shopping" && inserted.length > 0) {
