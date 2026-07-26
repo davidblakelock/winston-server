@@ -703,6 +703,24 @@ export async function incrementStoicDay(userName: string): Promise<void> {
   );
 }
 
+// Advances stoic_day at most once per calendar day (UTC), gated atomically in
+// the DB via updated_at. Call this after a quote has actually been delivered
+// (e.g. in a fresh morning rundown) so the next day's read returns a new quote
+// instead of repeating the same one indefinitely — without this gate, calling
+// incrementStoicDay() on every rundown request would burn through the
+// curriculum in hours instead of a day at a time.
+export async function advanceStoicDayForNewDay(userName: string): Promise<void> {
+  await query(
+    `INSERT INTO user_settings (user_name, stoic_day, updated_at)
+     VALUES ($1, 2, NOW())
+     ON CONFLICT (user_name) DO UPDATE
+       SET stoic_day = user_settings.stoic_day + 1,
+           updated_at = NOW()
+     WHERE user_settings.updated_at::date < NOW()::date`,
+    [userName]
+  );
+}
+
 // ── Stoic Block Builder ───────────────────────────────────────────────────────
 
 export function buildStoicBlock(entry: StoicEntry): string {

@@ -1270,8 +1270,8 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
 
     // generateDailyBrief() (gpt-4o with forced tool_choice: "required" search)
     // is the only morning-briefing path now — the old cached/scheduled
-    // pre-generation pipeline (_doBriefingPrefetch/getPersistedBriefingText)
-    // has been retired.
+    // pre-generation pipeline has been removed (was: _doBriefingPrefetch,
+    // getPersistedBriefingText/Summary, getStaticBriefingContext).
     case "morning_rundown": {
       const { generateDailyBrief } = await import("../../morning/briefingPregenerate.js");
       const fresh = await generateDailyBrief(sessionUserName).catch((err) => {
@@ -1280,6 +1280,10 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       });
       if (fresh) {
         finalReply = fresh;
+        const { advanceStoicDayForNewDay } = await import("../../stoic/stoicManager.js");
+        advanceStoicDayForNewDay(sessionUserName).catch((err) =>
+          log.warn({ err }, "[chatHandlerCore] advanceStoicDayForNewDay failed")
+        );
       } else {
         finalReply = "I had trouble putting together your briefing just now — give it another try in a moment.";
       }

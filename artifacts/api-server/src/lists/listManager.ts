@@ -3,6 +3,8 @@ import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { getConnections } from "../connect/connectManager.js";
 import { sendFcmNotification } from "../push/fcmSender.js";
+import { createReminder } from "../reminders/reminderManager.js";
+import { getUserLocationContext } from "../lib/userTimezone.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -160,25 +162,43 @@ export async function syncListItemToConnections(
   const connections = await getConnections(senderUserName).catch(() => []);
   if (!connections.length) return;
 
+  const isPlainTodo = listName === "to do" || listName === "reminders";
+
   await Promise.all(connections.map(async (conn) => {
     const connectedUserName =
       conn.requester_user_name === senderUserName
         ? conn.recipient_user_name
         : conn.requester_user_name;
-    if (!connectedUserName) return;
+    // Skip self-connections and missing recipients — nothing to sync to.
+    if (!connectedUserName || connectedUserName === senderUserName) return;
 
     const senderLabel =
       conn.requester_user_name === senderUserName
         ? (conn.requester_label ?? senderUserName)
         : (conn.recipient_label ?? senderUserName);
 
-    for (const item of items) {
-      await query(
-        `INSERT INTO list_items (user_name, list_name, item_text, added_by)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT (user_name, list_name, lower(item_text)) DO NOTHING`,
-        [connectedUserName, listName, item, senderLabel]
-      ).catch(() => {});
+    if (isPlainTodo) {
+      // To-dos live in the reminders table, not list_items — mirror that here
+      // so a synced to-do actually shows up on the recipient's To Do screen,
+      // instead of silently landing in list_items where nothing reads it back.
+      const { timezone: targetTz } = await getUserLocationContext(connectedUserName).catch(() => ({ timezone: "UTC" }));
+      for (const item of items) {
+        await createReminder({
+          userName: connectedUserName,
+          reminderText: item,
+          fireAt: null as any,
+          timezone: targetTz,
+        }).catch(() => {});
+      }
+    } else {
+      for (const item of items) {
+        await query(
+          `INSERT INTO list_items (user_name, list_name, item_text, added_by)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (user_name, list_name, lower(item_text)) DO NOTHING`,
+          [connectedUserName, listName, item, senderLabel]
+        ).catch(() => {});
+      }
     }
 
     const listDisplayName = listName === "shopping" ? "shopping" : "to-do";

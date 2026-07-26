@@ -3,7 +3,6 @@ import { authenticate, tryAuthenticate } from "../auth/middleware.js";
 import { query } from "../db.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
 import { normalizeTtsText } from "../lib/ttsNormalize.js";
-import { getPersistedBriefingText, getPersistedBriefingSummary } from "../morning/briefingCache.js";
 import { handleNewChat } from "../chat/handlers/chatHandlerCore.js";
 
 const router: IRouter = Router();
@@ -204,44 +203,6 @@ router.post("/speak", async (req: Request, res: Response) => {
     req.log.error({ err }, "[speak] TTS error");
     res.status(500).json({ error: "TTS error" });
   }
-});
-
-// ── GET /api/morning-briefing/cached ─────────────────────────────────────────
-// Returns today's pre-generated briefing text if available.
-
-router.get("/morning-briefing/cached", authenticate, async (req: Request, res: Response) => {
-  const userName = (req as unknown as { userName: string }).userName;
-  const text = await getPersistedBriefingText(userName).catch(() => null);
-  res.json({ text: text ?? null });
-});
-
-// ── GET /api/morning-briefing/summary ────────────────────────────────────────
-// Lightweight summary for the native home screen card.
-
-router.get("/morning-briefing/summary", authenticate, async (req: Request, res: Response) => {
-  const userName = (req as unknown as { userName: string }).userName;
-
-  const profileRow = await query<{ wake_time: string | null; timezone: string | null }>(
-    `SELECT wake_time, timezone FROM user_profiles WHERE user_name = $1 LIMIT 1`,
-    [userName]
-  ).then((r) => r.rows[0]).catch(() => null);
-
-  const wakeTime = profileRow?.wake_time ?? null;
-  const timezone = profileRow?.timezone ?? null;
-
-  const result = await getPersistedBriefingSummary(userName).catch(() => null);
-  if (!result) {
-    res.json({ generated: false, preview: "", generatedAt: null, wakeTime, timezone });
-    return;
-  }
-
-  res.json({
-    generated:   true,
-    preview:     result.text.slice(0, 200),
-    generatedAt: result.generatedAt.toISOString(),
-    wakeTime,
-    timezone,
-  });
 });
 
 export default router;

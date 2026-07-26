@@ -109,7 +109,12 @@ async function sendMorningPush(user: ActiveUser, wakeTime: string): Promise<void
       notificationType: "morning-briefing",
       title: `Good morning, ${displayName} ☀️`,
       body,
-      data: { action: "send_message", message: "Good morning" },
+      // Must match the phrasing the system prompt requires to fire
+      // [ACTION:morning_rundown] ("morning run down, morning briefing, or
+      // daily briefing") — a plain "Good morning" greeting doesn't clear that
+      // bar, so tapping the notification produced a generic reply instead of
+      // the actual rundown.
+      data: { action: "send_message", message: "Give me my morning briefing" },
     });
 
     if (result.sent === 0) {

@@ -53,41 +53,9 @@ export async function runBriefingCacheMigrations(): Promise<void> {
   }
 }
 
-// ── Text cache — stores the generated briefing text for follow-up context ─────
-// In-memory for speed; also persisted to DB so it survives server restarts.
-
-interface BriefingEntry {
-  text: string;
-  generatedAt: number;
-  dateKey: string;
-}
-
-const _textCache = new Map<string, BriefingEntry>();
-// 20-hour window covers any realistic usage pattern in a day.
-// The dateKey check is the primary guard — this is a belt-and-suspenders
-// backstop so a briefing never survives into the next morning.
-const TEXT_MAX_AGE_MS = 20 * 60 * 60 * 1000;
-
 // ── Push-sent tracking — survives server restarts ──────────────────────────────
 
 const _pushSentDone = new Map<string, string>(); // userName → dateKey
-
-export async function markPushSent(userName: string): Promise<void> {
-  const dateKey = ctDateKey();
-  _pushSentDone.set(userName, dateKey);
-  try {
-    await query(
-      `INSERT INTO morning_static_context (user_name, date_key, push_sent_at)
-       VALUES ($1, $2, NOW())
-       ON CONFLICT (user_name, date_key) DO UPDATE
-         SET push_sent_at = NOW()
-       RETURNING user_name`,
-      [userName, dateKey]
-    );
-  } catch (err) {
-    console.warn("[BriefingCache] Failed to persist push_sent_at:", err);
-  }
-}
 
 export function wasPushSentToday(userName: string): boolean {
   return _pushSentDone.get(userName) === ctDateKey();
@@ -160,173 +128,35 @@ export async function releaseMorningPushSlot(userName: string): Promise<void> {
   }
 }
 
-// ── Retrieve persisted briefing text from DB (for "already loaded" endpoint) ──
-
-export async function getPersistedBriefingText(userName: string): Promise<string | null> {
-  const summary = await getPersistedBriefingSummary(userName);
-  return summary?.text ?? null;
-}
-
 /**
- * Returns { text, generatedAt } for today's briefing, pulling from in-memory
- * cache first and falling back to DB. Returns null if no briefing exists today.
- */
-export async function getPersistedBriefingSummary(
-  userName: string
-): Promise<{ text: string; generatedAt: Date } | null> {
-  // Check in-memory first
-  const entry = _textCache.get(userName);
-  if (entry && entry.dateKey === ctDateKey()) {
-    const ageMs = Date.now() - entry.generatedAt;
-    if (ageMs <= TEXT_MAX_AGE_MS) {
-      return { text: entry.text, generatedAt: new Date(entry.generatedAt) };
-    }
-    _textCache.delete(userName);
-  }
-
-  // Fall back to DB
-  const today = ctDateKey();
-  try {
-    const res = await query<{ briefing_text: string | null; built_at: string }>(
-      `SELECT briefing_text, built_at FROM morning_static_context
-        WHERE user_name = $1 AND date_key = $2
-        LIMIT 1`,
-      [userName, today]
-    );
-    const row = res.rows[0];
-    if (!row?.briefing_text) return null;
-
-    // Restore to in-memory cache
-    const builtAt = new Date(row.built_at).getTime();
-    _textCache.set(userName, { text: row.briefing_text, generatedAt: builtAt, dateKey: today });
-    return { text: row.briefing_text, generatedAt: new Date(row.built_at) };
-  } catch {
-    return null;
-  }
-}
-
-// ── Static context cache — stores pre-built system prompt halves ──────────────
-
-export interface StaticContextEntry {
-  preamble: string;
-  suffix: string;
-  candidateStoryKeys: string[];
-  dateKey: string;
-  builtAt: number;
-}
-
-const _staticCtxCache = new Map<string, StaticContextEntry>();
-const STATIC_MAX_AGE_MS = 10 * 60 * 60 * 1000;
-
-export function getStaticBriefingContext(userName: string): StaticContextEntry | null {
-  const entry = _staticCtxCache.get(userName);
-  if (!entry) return null;
-  if (entry.dateKey !== ctDateKey()) { _staticCtxCache.delete(userName); return null; }
-  if (Date.now() - entry.builtAt > STATIC_MAX_AGE_MS) { _staticCtxCache.delete(userName); return null; }
-  return entry;
-}
-
-/**
- * Returns true if the given UTC timestamp was built during the legitimate morning
- * pre-generation window (05:00–07:30 CT). Briefings built outside this window
- * (e.g. a midnight server-restart pre-gen or a late-night chat "good morning")
- * should NOT be served as the push-notification briefing — they contain stale
- * overnight news and will have been generated before the Apify morning actors ran.
- */
-function isBuiltInMorningWindow(builtAtMs: number): boolean {
-  const hourCT = parseInt(
-    new Date(builtAtMs).toLocaleTimeString("en-US", {
-      timeZone: "America/Chicago", // Server process is in CT — briefing generation window
-      hour: "2-digit",
-      hour12: false,
-    }),
-    10
-  );
-  // 05:00–07:29 CT covers the scheduled pre-gen window (5:40 AM) with buffer
-  return hourCT >= 5 && hourCT < 8;
-}
-
-/**
- * Attempts to load today's static context (and push-sent state) from the DB
- * into the in-memory caches. Returns true if a valid entry was found.
- *
- * Push-sent state is ALWAYS restored (so we never double-send after a restart).
- * Static context and briefing text are only restored if they were built during
- * the legitimate morning window (05:00–07:59 CT) — this prevents a midnight
- * startup pre-gen from being served as the morning briefing hours later.
+ * Restores today's push-sent state from the DB into the in-memory cache, so a
+ * server restart doesn't cause a duplicate morning push. This is the only
+ * thing still read from morning_static_context — the preamble/suffix/
+ * briefing_text columns and the static-context/text caches that used to back
+ * the old pre-generation pipeline were retired along with it (generateDailyBrief()
+ * is the only morning-briefing path now; it doesn't read or write this cache).
  */
 export async function loadStaticContextFromDb(userName: string): Promise<boolean> {
   const today = ctDateKey();
   try {
-    const res = await query<{
-      preamble: string;
-      suffix: string;
-      candidate_story_keys: string[];
-      built_at: string;
-      push_sent_at: string | null;
-      briefing_text: string | null;
-    }>(
-      `SELECT preamble, suffix, candidate_story_keys, built_at, push_sent_at, briefing_text
-         FROM morning_static_context
+    const res = await query<{ push_sent_at: string | null }>(
+      `SELECT push_sent_at FROM morning_static_context
         WHERE user_name = $1 AND date_key = $2
         LIMIT 1`,
       [userName, today]
     );
     const row = res.rows[0];
-    if (!row) return false;
+    if (!row?.push_sent_at) return false;
 
-    // ALWAYS restore push-sent state — this prevents double-sending regardless
-    // of whether the briefing content itself is considered fresh.
-    if (row.push_sent_at) {
-      const sentDate = new Date(row.push_sent_at).toLocaleDateString("en-CA", { timeZone: "UTC" });
-      if (sentDate === today) {
-        _pushSentDone.set(userName, today);
-        console.log(`[BriefingCache] Push already sent today for ${userName} — restored from DB`);
-      }
+    const sentDate = new Date(row.push_sent_at).toLocaleDateString("en-CA", { timeZone: "UTC" });
+    if (sentDate === today) {
+      _pushSentDone.set(userName, today);
+      console.log(`[BriefingCache] Push already sent today for ${userName} — restored from DB`);
+      return true;
     }
-
-    // Preamble/suffix are NULLed by /api/briefing/refresh to force re-generation.
-    // Treat a null preamble as a cache miss so the morning briefing re-generates fresh.
-    if (!row.preamble || !row.suffix) return false;
-
-    const builtAt = new Date(row.built_at).getTime();
-    if (Date.now() - builtAt > STATIC_MAX_AGE_MS) return false;
-
-    // Reject briefings built outside the 05:00–07:59 CT morning window.
-    // A server restart at midnight triggers an immediate pre-gen with overnight
-    // news; that stale content must not be cached as the morning briefing.
-    // The morning scheduler will regenerate fresh content at 05:40 CT.
-    if (!isBuiltInMorningWindow(builtAt)) {
-      console.log(`[BriefingCache] Briefing for ${userName} built outside morning window (${new Date(builtAt).toLocaleTimeString("en-US", { timeZone: "UTC", hour12: false })} UTC) — discarding content, will regenerate`);
-      return false;
-    }
-
-    // Invalidate cached context that was built before weather was removed from
-    // the briefing. If the suffix still contains a [VERIFIED — Google Weather API]
-    // block, the entry is stale and must be regenerated with the current code.
-    if (row.suffix?.includes("[VERIFIED — Google Weather API")) {
-      console.log(`[BriefingCache] Stale cached context for ${userName} contains weather block — discarding and regenerating`);
-      return false;
-    }
-
-    _staticCtxCache.set(userName, {
-      preamble: row.preamble,
-      suffix: row.suffix,
-      candidateStoryKeys: Array.isArray(row.candidate_story_keys) ? row.candidate_story_keys : [],
-      dateKey: today,
-      builtAt,
-    });
-
-    // Restore briefing text if present
-    if (row.briefing_text) {
-      _textCache.set(userName, { text: row.briefing_text, generatedAt: builtAt, dateKey: today });
-      console.log(`[BriefingCache] Briefing text restored from DB for ${userName}`);
-    }
-
-    console.log(`[BriefingCache] Loaded today's static context from DB for ${userName} — skipping pre-generation`);
-    return true;
+    return false;
   } catch (err) {
-    console.warn("[BriefingCache] Could not load static context from DB:", err);
+    console.warn("[BriefingCache] Could not load push-sent state from DB:", err);
     return false;
   }
 }
