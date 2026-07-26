@@ -42,6 +42,7 @@ import { ensureOrdersTable } from "./orders/ordersManager";
 import { ensureUserRecordsColumns, ensureSocialScanStateTable } from "./records/recordsManager";
 import { ensureGoalsTables } from "./goals/goalsManager";
 import { startTodoReminderScheduler } from "./lists/todoReminderScheduler";
+import { startConnectionEngineScheduler } from "./connectionEngine/connectionEngineManager";
 
 import { startBackgroundEmailScanner } from "./email/backgroundEmailScanner";
 import { startRecordsArchiver } from "./records/recordsArchiver";
@@ -457,6 +458,7 @@ app.listen(port, async (err) => {
     startProactiveEventScheduler();
     startJournalPatternScheduler();
     startTodoReminderScheduler();
+    startConnectionEngineScheduler();
     startBackgroundEmailScanner();
     startRecordsArchiver();
     void startTvEpisodeScheduler();

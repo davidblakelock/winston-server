@@ -15,7 +15,8 @@ import {
 } from "../../profile/profileManager.js";
 import { getPeople, type KeyPerson } from "../../people/peopleManager.js";
 import { claimWinddownReply } from "../../winddown/winddownManager.js";
-import { saveLifeCapture, runDotConnector, runPatternObservation } from "../../lifeCaptures/lifeCapturesManager.js";
+import { saveLifeCapture } from "../../lifeCaptures/lifeCapturesManager.js";
+import { runConnectionEngine } from "../../connectionEngine/connectionEngineManager.js";
 import {
   getBriefingPreferences,
   buildBriefingPrefsBlock,
@@ -514,8 +515,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       if (winddownReplyClaimed) {
         saveLifeCapture(sessionUserName, message, "evening").then((capture) => {
           if (capture) {
-            runDotConnector(sessionUserName).catch((err) => log.warn({ err }, "[chatHandlerCore] runDotConnector failed"));
-            runPatternObservation(sessionUserName).catch((err) => log.warn({ err }, "[chatHandlerCore] runPatternObservation failed"));
+            runConnectionEngine(sessionUserName, "capture").catch((err) => log.warn({ err }, "[chatHandlerCore] runConnectionEngine failed"));
           }
         }).catch((err) => log.warn({ err }, "[chatHandlerCore] Winddown reflection capture failed"));
       }
@@ -559,8 +559,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     if (winddownReplyClaimed) {
       saveLifeCapture(sessionUserName, message, "evening").then((capture) => {
         if (capture) {
-          runDotConnector(sessionUserName).catch((err) => log.warn({ err }, "[chatHandlerCore] runDotConnector failed"));
-          runPatternObservation(sessionUserName).catch((err) => log.warn({ err }, "[chatHandlerCore] runPatternObservation failed"));
+          runConnectionEngine(sessionUserName, "capture").catch((err) => log.warn({ err }, "[chatHandlerCore] runConnectionEngine failed"));
         }
       }).catch((err) => log.warn({ err }, "[chatHandlerCore] Winddown reflection capture failed"));
     }
@@ -1320,8 +1319,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
   if (winddownReplyClaimed && action.type === "none") {
     saveLifeCapture(sessionUserName, message, "evening").then((capture) => {
       if (capture) {
-        runDotConnector(sessionUserName).catch((err) => log.warn({ err }, "[chatHandlerCore] runDotConnector failed"));
-        runPatternObservation(sessionUserName).catch((err) => log.warn({ err }, "[chatHandlerCore] runPatternObservation failed"));
+        runConnectionEngine(sessionUserName, "capture").catch((err) => log.warn({ err }, "[chatHandlerCore] runConnectionEngine failed"));
       }
     }).catch((err) => log.warn({ err }, "[chatHandlerCore] Winddown reflection capture failed"));
   }
