@@ -13,10 +13,25 @@ const upload = multer({ storage: multer.memoryStorage() });
 // (especially HTML-to-text conversions) can run very long.
 const MAX_CONTENT_CHARS = 8000;
 
+// Signature/footer links shouldn't win over a genuine content link. Two
+// simple, deliberately non-exhaustive heuristics: (1) stop looking once a
+// common signature/footer marker shows up, and (2) skip obvious image/
+// tracking/social links even before that point.
+const SIGNATURE_MARKER = /\n--\s*\n|unsubscribe|update your profile|view this email in your browser|sent from my iphone|sent from my android/i;
+const NON_CONTENT_URL  = /^https?:\/\/(img|cdn|assets|static)\.|facebook\.com|twitter\.com|x\.com|instagram\.com|linkedin\.com|youtube\.com|newoldstamp\.com|wixstatic\.com|gravatar\.com/i;
+const IMAGE_EXTENSION  = /\.(png|jpe?g|gif|svg|webp|bmp)(\?|$)/i;
+
 function firstUrl(text: string): string | null {
-  const match = text.match(/https?:\/\/\S+/);
-  if (!match) return null;
-  return match[0].replace(/[.,;:!?)]+$/, "");
+  const cutoff     = text.search(SIGNATURE_MARKER);
+  const searchable = cutoff === -1 ? text : text.slice(0, cutoff);
+
+  const candidates = searchable.match(/https?:\/\/\S+/g) ?? [];
+  for (const raw of candidates) {
+    const url = raw.replace(/[.,;:!?)<>]+$/, "");
+    if (IMAGE_EXTENSION.test(url) || NON_CONTENT_URL.test(url)) continue;
+    return url;
+  }
+  return null;
 }
 
 // ── Inbound email webhook ─────────────────────────────────────────────────────
