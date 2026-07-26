@@ -54,6 +54,28 @@ export interface AtticItem {
   updated_at:      string;
 }
 
+// ── Save ──────────────────────────────────────────────────────────────────────
+
+export async function saveAtticItem(params: {
+  userName:        string;
+  sourceType:      AtticSourceType;
+  rawContent:      string;
+  rawUrl?:         string | null;
+  sourceMetadata?: Record<string, unknown>;
+}): Promise<AtticItem> {
+  await _tableInit;
+  const { userName, sourceType, rawContent, rawUrl = null, sourceMetadata = {} } = params;
+
+  const { rows } = await query<AtticItem>(
+    `INSERT INTO attic_items (user_name, source_type, raw_content, raw_url, source_metadata)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING *`,
+    [userName, sourceType, rawContent.trim(), rawUrl, JSON.stringify(sourceMetadata)]
+  );
+  logger.info({ userName, sourceType, chars: rawContent.length }, "[AtticItems] Item saved");
+  return rows[0]!;
+}
+
 // ── Query ─────────────────────────────────────────────────────────────────────
 
 export async function getRecentAtticItems(

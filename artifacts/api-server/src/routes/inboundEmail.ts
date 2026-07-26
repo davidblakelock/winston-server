@@ -1,61 +1,32 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import multer from "multer";
-import Anthropic from "@anthropic-ai/sdk";
-import { insertUserRecord } from "../records/recordsManager.js";
+import { saveAtticItem } from "../attic/atticItemsManager.js";
 
 const router: IRouter = Router();
-
-const anthropic = new Anthropic();
-
-const MODEL_HAIKU = "claude-haiku-4-5-20251001";
 
 // Mailgun posts either application/x-www-form-urlencoded (text-only) or
 // multipart/form-data (when attachments are present). multer handles both;
 // memoryStorage discards attachment bytes since we don't need them yet.
 const upload = multer({ storage: multer.memoryStorage() });
 
-const EXTRACTION_SYSTEM_PROMPT = `Extract structured booking/confirmation information from this forwarded email. Return ONLY valid JSON, no markdown fences, no explanation.
+// Content this route stores is capped defensively — forwarded email threads
+// (especially HTML-to-text conversions) can run very long.
+const MAX_CONTENT_CHARS = 8000;
 
-{
-  "category": "trip" | "warranty" | "home_service" | "subscription" | "vehicle" | "order" | "other" | "skip",
-  "vendor_name": "business or company name, or null",
-  "confirmation_number": "string or null",
-  "date_start": "YYYY-MM-DD or null",
-  "date_end": "YYYY-MM-DD or null",
-  "time": "string or null",
-  "address": "string or null",
-  "phone": "string or null",
-  "website": "string or null",
-  "amount": "string or null",
-  "notes": "one sentence summary or null"
-}
-
-CRITICAL BOUNDARIES:
-- Never extract bank account numbers, routing numbers, credit/debit card numbers, Social Security numbers, or financial account credentials.
-- Never extract medical diagnoses, lab results, prescription details, or clinical health information.
-- If the email's primary content is financial (bank statement, EOB, payment processing) or medical (lab results, diagnosis, clinical record), return category: "skip" and null for all other fields.
-- Extract only logistics: confirmation numbers, vendor names, dates, times, addresses, phone numbers, websites. If a field isn't present, use null. Never guess or infer.`;
-
-interface ExtractionResult {
-  category: "trip" | "warranty" | "home_service" | "subscription" | "vehicle" | "order" | "other" | "skip";
-  vendor_name: string | null;
-  confirmation_number: string | null;
-  date_start: string | null;
-  date_end: string | null;
-  time: string | null;
-  address: string | null;
-  phone: string | null;
-  website: string | null;
-  amount: string | null;
-  notes: string | null;
-}
-
-function senderDomain(sender: string): string | null {
-  const match = sender.match(/@([^>]+)/);
-  return match ? match[1].trim() : null;
+function firstUrl(text: string): string | null {
+  const match = text.match(/https?:\/\/\S+/);
+  if (!match) return null;
+  return match[0].replace(/[.,;:!?)]+$/, "");
 }
 
 // ── Inbound email webhook ─────────────────────────────────────────────────────
+// The Attic's email-forward path: forward anything with "the attic" anywhere
+// in the subject line (case-insensitive — "put it in the attic", "in the
+// attic", "store it in the attic", etc. all match) to save+<username>@... and
+// its raw content lands in attic_items. This route used to also extract
+// structured My-Records data from forwards (trip/warranty/subscription/etc.)
+// but that use case is handled by email scanning now — that branch has been
+// removed rather than kept alongside this one.
 
 router.post(
   "/inbound-email",
@@ -66,10 +37,10 @@ router.post(
 
     const body = req.body as Record<string, string>;
 
-    const recipient  = body["recipient"]     ?? "";
-    const sender     = body["sender"]        ?? "";
-    const subject    = body["subject"]       ?? "";
-    const text       = body["stripped-text"] ?? body["body-plain"] ?? "";
+    const recipient = body["recipient"]     ?? "";
+    const sender    = body["sender"]        ?? "";
+    const subject   = body["subject"]       ?? "";
+    const text      = body["stripped-text"] ?? body["body-plain"] ?? "";
 
     // Extract +username from recipient — e.g.
     // save+davidblakelock@myrecords.getwinstonai.com → "davidblakelock"
@@ -85,69 +56,35 @@ router.post(
       "  text      : " + text.slice(0, 300) + (text.length > 300 ? "…" : "") + "\n"
     );
 
-    // ── Extraction ────────────────────────────────────────────────────────────
-
-    if (text.length < 20) {
-      process.stdout.write("[InboundEmail] text too short to extract — skipping\n");
-      return;
-    }
-
     if (!username) {
       process.stdout.write("[InboundEmail] no +username in recipient — cannot assign user_name, skipping\n");
       return;
     }
 
-    let extracted: ExtractionResult | null = null;
-    try {
-      const userMessage = `Subject: ${subject}\n\n${text}`;
-
-      const resp = await anthropic.messages.create({
-        model: MODEL_HAIKU,
-        max_tokens: 512,
-        system: EXTRACTION_SYSTEM_PROMPT,
-        messages: [{ role: "user", content: userMessage }],
-      });
-
-      const raw = resp.content[0]?.type === "text" ? resp.content[0].text : "";
-      const cleaned = raw.replace(/^```json\s*/i, "").replace(/```$/i, "").trim();
-
-      extracted = JSON.parse(cleaned) as ExtractionResult;
-    } catch (err) {
-      process.stdout.write("[InboundEmail] extraction failed: " + String(err) + "\n");
+    if (!/the attic/i.test(subject)) {
+      process.stdout.write("[InboundEmail] subject doesn't mention 'the attic' — skipping\n");
       return;
     }
 
-    if (!extracted || extracted.category === "skip") {
-      process.stdout.write("[InboundEmail] category=skip or null result — not inserting\n");
+    if (text.trim().length === 0) {
+      process.stdout.write("[InboundEmail] empty body — skipping\n");
       return;
     }
 
-    process.stdout.write(
-      "[InboundEmail] extracted: " + JSON.stringify(extracted) + "\n"
-    );
-
-    // Vendor name falls back to sender's email domain if Claude returned null
-    const vendorName = extracted.vendor_name ?? senderDomain(sender) ?? "Unknown";
-    const rawSnippet = text.slice(0, 500);
+    const rawContent = text.trim().slice(0, MAX_CONTENT_CHARS);
+    const rawUrl     = firstUrl(text);
 
     try {
-      await insertUserRecord(username, {
-        category: extracted.category,
-        vendorName,
-        confirmationNumber: extracted.confirmation_number,
-        dateStart:          extracted.date_start,
-        dateEnd:            extracted.date_end,
-        time:               extracted.time,
-        address:            extracted.address,
-        phone:              extracted.phone,
-        website:            extracted.website,
-        amount:             extracted.amount,
-        notes:              extracted.notes,
-        rawSnippet,
+      await saveAtticItem({
+        userName:       username,
+        sourceType:     "email_forward",
+        rawContent,
+        rawUrl,
+        sourceMetadata: { subject, sender },
       });
-      process.stdout.write("[InboundEmail] inserted into user_records for user: " + username + "\n");
+      process.stdout.write("[InboundEmail] saved to attic_items for user: " + username + "\n");
     } catch (err) {
-      process.stdout.write("[InboundEmail] DB insert failed: " + String(err) + "\n");
+      process.stdout.write("[InboundEmail] attic_items insert failed: " + String(err) + "\n");
     }
   },
 );

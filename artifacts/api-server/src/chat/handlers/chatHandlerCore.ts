@@ -17,6 +17,7 @@ import { getPeople, type KeyPerson } from "../../people/peopleManager.js";
 import { claimWinddownReply } from "../../winddown/winddownManager.js";
 import { saveLifeCapture } from "../../lifeCaptures/lifeCapturesManager.js";
 import { runConnectionEngine } from "../../connectionEngine/connectionEngineManager.js";
+import { saveAtticItem } from "../../attic/atticItemsManager.js";
 import {
   getBriefingPreferences,
   buildBriefingPrefsBlock,
@@ -84,7 +85,8 @@ export type ActionType =
   | "email_cancel"
   | "email_compose"
   | "sms_send"
-  | "morning_rundown";
+  | "morning_rundown"
+  | "save_to_attic";
 
 export interface ClaudeAction {
   type: ActionType;
@@ -184,7 +186,11 @@ At the end of EVERY response append exactly one action tag on a new line. No exc
 [ACTION:update_calendar|intent=<read|create|modify|delete>] — calendar
 [ACTION:check_email] — email
 [ACTION:make_reservation|restaurant=<name>] — reservation
+[ACTION:save_to_attic|content=<what to save>] — save something for later, no destination named
 [ACTION:none] — weather, sports, news, markets, general questions
+
+THE ATTIC:
+When __USER__ says something like "put this in the attic," "remember this," "file this away," or "save this for later" WITHOUT naming a specific destination (a list, a record type, etc. — if they name one, handle it as that instead), that's a request to save it to their Attic — a catch-all for anything that catches their attention with no destination in mind yet. Emit [ACTION:save_to_attic|content=<what to save>] and confirm briefly and naturally — e.g. "Got it, I'll put that in the attic," "Filed away," or "Saved to your Attic." Don't over-explain what the Attic is unless asked.
 
 TEXT MESSAGES:
 You can COMPOSE text messages for __USER__ but you CANNOT send them. You have zero ability to send any message or touch __USER__'s phone. Draft the message, read it back, and when __USER__ confirms, the app will open the Messages app with the text pre-filled. NEVER claim to have sent a message.
@@ -644,6 +650,9 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       case "morning_rundown":
         action = { type: "morning_rundown" };
         break;
+      case "save_to_attic":
+        action = { type: "save_to_attic", itemText: parts.content ?? "" };
+        break;
     }
   }
   log.info({ actionType: action.type, tag: tagMatch?.[1] ?? "none" }, "[chatHandlerCore] Action parsed");
@@ -701,6 +710,20 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
           }
         } catch (err) {
           log.warn({ err }, "[chatHandlerCore] createReminder failed");
+        }
+      }
+      break;
+    }
+
+    // ── save_to_attic ─────────────────────────────────────────────────────────
+    case "save_to_attic": {
+      const content = action.itemText?.trim() ?? "";
+      if (content) {
+        try {
+          await saveAtticItem({ userName: sessionUserName, sourceType: "voice", rawContent: content });
+          log.info({ chars: content.length }, "[chatHandlerCore] Attic item saved");
+        } catch (err) {
+          log.warn({ err }, "[chatHandlerCore] saveAtticItem failed");
         }
       }
       break;
