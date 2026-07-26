@@ -106,18 +106,35 @@ export interface LifeAnnualLetter {
 /**
  * Store the user's exact words — never paraphrased or interpreted.
  * context: "morning" | "evening" | "goal" | "observation"
+ * Returns null if an identical capture for this user was already stored in the
+ * last 60 seconds — guards against duplicate deliveries (client retries, races
+ * upstream) since this is the only write path into life_captures, including
+ * the direct POST /api/life route.
  */
 export async function saveLifeCapture(
   userName: string,
   content:  string,
   context:  "morning" | "evening" | "goal" | "observation" = "morning",
-): Promise<LifeCapture> {
+): Promise<LifeCapture | null> {
   await _tableInit;
+  const trimmed = content.trim();
+
+  const { rows: dupe } = await query<{ id: number }>(
+    `SELECT id FROM life_captures
+     WHERE user_name = $1 AND content = $2
+       AND captured_at >= now() - interval '60 seconds'`,
+    [userName, trimmed]
+  );
+  if (dupe.length > 0) {
+    logger.info({ userName }, "[LifeCaptures] Duplicate capture within 60s window — skipped");
+    return null;
+  }
+
   const { rows } = await query<LifeCapture>(
     `INSERT INTO life_captures (user_name, content, context)
      VALUES ($1, $2, $3)
      RETURNING *`,
-    [userName, content.trim(), context]
+    [userName, trimmed, context]
   );
   logger.info({ userName, context, chars: content.length }, "[LifeCaptures] Capture saved");
   return rows[0]!;

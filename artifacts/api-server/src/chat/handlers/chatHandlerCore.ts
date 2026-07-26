@@ -14,7 +14,7 @@ import {
   formatProfileForContext,
 } from "../../profile/profileManager.js";
 import { getPeople, type KeyPerson } from "../../people/peopleManager.js";
-import { isWinddownActive, setWinddownActive } from "../../winddown/winddownManager.js";
+import { claimWinddownReply } from "../../winddown/winddownManager.js";
 import { saveLifeCapture, runDotConnector, runPatternObservation } from "../../lifeCaptures/lifeCapturesManager.js";
 import {
   getBriefingPreferences,
@@ -300,28 +300,22 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     log,
   } = req;
 
-  // ── Wind-down reflection capture ────────────────────────────────────────────
+  // ── Wind-down reply claim ────────────────────────────────────────────────────
   // If tonight's evening check-in is active and this message isn't the one that
   // OPENED it (isWinddownOpener from routes/chat.ts's winddownRequest flag, or
   // "Evening Check In" — the literal text the FCM push tap sends, which has no
   // equivalent flag available without a native app change), this message IS the
-  // user's reflection reply. Close the window immediately on the first such
-  // message — no multi-turn accumulation — then capture it into life_captures
-  // and fire the dot-connector/pattern-observation passes. Pure side effect:
-  // never awaited, never blocks or alters the normal chat response below.
+  // user's reply to it. Atomically claim the window closed (single UPDATE ...
+  // WHERE active = true RETURNING id) so near-simultaneous messages can't each
+  // observe it open and each try to capture — only whichever request wins the
+  // claim is eligible to persist a capture, and only once we know below whether
+  // Claude treated this as a plain reflective reply or an actionable request.
+  let winddownReplyClaimed = false;
   if (!isWinddownOpener && message.trim().toLowerCase() !== "evening check in") {
-    isWinddownActive(sessionUserName).then(async (active) => {
-      if (!active) return;
-      await setWinddownActive(sessionUserName, false).catch(() => {});
-      const capture = await saveLifeCapture(sessionUserName, message, "evening").catch((err) => {
-        log.warn({ err }, "[chatHandlerCore] Winddown reflection capture failed");
-        return null;
-      });
-      if (capture) {
-        runDotConnector(sessionUserName).catch((err) => log.warn({ err }, "[chatHandlerCore] runDotConnector failed"));
-        runPatternObservation(sessionUserName).catch((err) => log.warn({ err }, "[chatHandlerCore] runPatternObservation failed"));
-      }
-    }).catch((err) => log.warn({ err }, "[chatHandlerCore] Winddown active-check failed"));
+    winddownReplyClaimed = await claimWinddownReply(sessionUserName).catch((err) => {
+      log.warn({ err }, "[chatHandlerCore] Winddown claim failed");
+      return false;
+    });
   }
 
   let history = req.history.slice(-ACTIVE_CONTEXT_LIMIT);
@@ -517,6 +511,14 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       }
       const messageId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
       runPostProcessing(sessionUserName, message, emailResult.hardcodedResponse, history, userProfile, deviceId, messageId);
+      if (winddownReplyClaimed) {
+        saveLifeCapture(sessionUserName, message, "evening").then((capture) => {
+          if (capture) {
+            runDotConnector(sessionUserName).catch((err) => log.warn({ err }, "[chatHandlerCore] runDotConnector failed"));
+            runPatternObservation(sessionUserName).catch((err) => log.warn({ err }, "[chatHandlerCore] runPatternObservation failed"));
+          }
+        }).catch((err) => log.warn({ err }, "[chatHandlerCore] Winddown reflection capture failed"));
+      }
       return {
         reply: emailResult.hardcodedResponse,
         action: { type: "none" },
@@ -554,6 +556,14 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     const fallback = "Sorry, I had trouble with that. Can you try again?";
     const messageId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     runPostProcessing(sessionUserName, message, fallback, history, userProfile, deviceId, messageId);
+    if (winddownReplyClaimed) {
+      saveLifeCapture(sessionUserName, message, "evening").then((capture) => {
+        if (capture) {
+          runDotConnector(sessionUserName).catch((err) => log.warn({ err }, "[chatHandlerCore] runDotConnector failed"));
+          runPatternObservation(sessionUserName).catch((err) => log.warn({ err }, "[chatHandlerCore] runPatternObservation failed"));
+        }
+      }).catch((err) => log.warn({ err }, "[chatHandlerCore] Winddown reflection capture failed"));
+    }
     return { reply: fallback, action: { type: "none" }, messageId };
   }
 
@@ -1300,6 +1310,20 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       const draftBody = draftMatch ? draftMatch[1].trim() : current.draftBody;
       setPendingEmailReply(sessionUserName, { ...current, draftBody });
     }
+  }
+
+  // ── Wind-down reflection capture ─────────────────────────────────────────────
+  // Only persist as a genuine reflection once we know Claude treated this as a
+  // plain conversational reply (action.type === "none") — not a reminder,
+  // reservation, list add, or anything else that already has its own destination.
+  // Fire-and-forget: never blocks the response already being returned below.
+  if (winddownReplyClaimed && action.type === "none") {
+    saveLifeCapture(sessionUserName, message, "evening").then((capture) => {
+      if (capture) {
+        runDotConnector(sessionUserName).catch((err) => log.warn({ err }, "[chatHandlerCore] runDotConnector failed"));
+        runPatternObservation(sessionUserName).catch((err) => log.warn({ err }, "[chatHandlerCore] runPatternObservation failed"));
+      }
+    }).catch((err) => log.warn({ err }, "[chatHandlerCore] Winddown reflection capture failed"));
   }
 
   // ── Post-processing ──────────────────────────────────────────────────────────

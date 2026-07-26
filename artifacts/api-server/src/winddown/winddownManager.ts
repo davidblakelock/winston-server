@@ -152,6 +152,23 @@ export async function setWinddownActive(userName: string, active: boolean): Prom
   );
 }
 
+// Atomically claims tonight's winddown reply: flips active -> false only if it
+// was still true, in one statement. Prevents the check-then-act race where two
+// near-simultaneous messages (voice segments, retries, quick back-to-back turns)
+// each read active=true before either one's UPDATE commits, causing both to be
+// treated as "the" reply. Only the caller that gets a row back won the claim.
+export async function claimWinddownReply(userName: string): Promise<boolean> {
+  const { timezone: tz } = await getUserLocationContext(userName);
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
+  const { rows } = await query<{ id: number }>(
+    `UPDATE winddown_state SET active = false
+     WHERE user_name = $1 AND trigger_date = $2 AND active = true
+     RETURNING id`,
+    [userName, today]
+  );
+  return rows.length > 0;
+}
+
 export async function saveTonightMessage(userName: string, message: string): Promise<void> {
   const { timezone: tz } = await getUserLocationContext(userName);
   const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });

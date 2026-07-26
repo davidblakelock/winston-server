@@ -50,6 +50,10 @@ router.post("/life", async (req: Request, res: Response) => {
 
   try {
     const capture = await saveLifeCapture(userName, content.trim(), ctx);
+    if (!capture) {
+      res.status(200).json({ duplicate: true });
+      return;
+    }
     res.status(201).json(capture);
   } catch (err) {
     req.log.warn({ err }, "[Life] saveLifeCapture failed");
