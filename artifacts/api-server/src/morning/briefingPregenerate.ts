@@ -5,17 +5,30 @@ import { logger } from "../lib/logger.js";
 import { getStoicForUser } from "../stoic/stoicManager.js";
 import { getUserLocationContext } from "../lib/userTimezone.js";
 import { getGoals } from "../goals/goalsManager.js";
+import { getCachedWeather } from "../weather/weatherCache.js";
 
 // ── Experimental: single-call GPT-4o daily brief via Responses API + web search ──
 // NOT wired into _doBriefingPrefetch, the cron schedule, or any other live path.
 // Build-only step — call manually to test before it replaces the existing
 // news/weather/sports/local-content pipeline in a later pass.
 
-const DAILY_BRIEF_INSTRUCTION = `This briefing is delivered in the early morning, before the stock market opens for the day. Sports scores should always be from yesterday's/last night's completed games — never describe a game as happening "today" unless you've confirmed via search that it already occurred earlier the same calendar day in this person's timezone. Never give a live/current stock quote or price snapshot — the market is closed at this hour and a snapshot price is meaningless.
+const DAILY_BRIEF_INSTRUCTION = `You are about to write a morning briefing. Before writing anything, perform FOUR SEPARATE web searches, one topic at a time — do not combine them into one query, and do not search using the biographical context block that follows this instruction (that block is background for personalizing the writing later, not a search query).
 
-Do several real web searches — don't stop after one. Search for: today's top news headlines (aim for at least 5 real stories worth knowing, not just one — major national and international stories only; do not include hyper-local news from a single city or small region — local government votes, local development projects, local tribal/community news), today's current weather conditions only for this person's city — do not include a multi-day forecast. This is a required section — if your search doesn't return clear current conditions, search again with a more specific query before giving up, and always include at least one sentence about today's weather in the final output, market/investing news, sports scores for their teams, and one or two genuinely funny or delightful "you won't believe this" news stories from today. Then write them a genuinely enjoyable five-minute morning brief covering all of that. Use only real, current, verified information from your searches — never invent facts, venues, dates, scores, or weather. Style it however reads best for a five-minute morning read — sections, headers, or flowing prose, your call, and vary the structure day to day rather than repeating an identical template every time. Keep individual news items tight — a sentence or two each, like the examples below, not a full paragraph of explanation per story. "Five-minute read" means concise and scannable across many short items, not long-form writing on each one. Overall length should come from covering enough distinct topics (news, weather, markets, sports, a fun story, quote), not from writing at length about any single one of them.
+SEARCH 1 — National news: search for today's top news headlines. Aim for at least 5 real stories worth knowing — major national and international stories only. Do not include hyper-local news from a single city or small region — local government votes, local development projects, local tribal/community news.
 
-SPORTS: Search for and report only the FINAL scores from this person's teams' most recently completed games — last night's games if any were played, otherwise each team's most recent prior game. Format each as: team, final score, opponent. Do not mention upcoming games, schedules, or say a team is "set to play today" — this section covers only what already happened, never what's coming up.
+SEARCH 2 — Sports: search for this person's teams' most recent completed games (the specific team names are in the context block below — use them as the search terms, e.g. "[team name] score last night"). Report only FINAL scores from the most recently completed game per team — last night's game if one was played, otherwise their most recent prior game.
+
+SEARCH 3 — Markets: search for stock futures and overnight financial news ahead of today's open (e.g. "stock futures today", "Dow S&P Nasdaq futures").
+
+SEARCH 4 — Weird/funny story: search for a genuinely funny or delightful "you won't believe this" news story from today.
+
+Weather is NOT something to search for — verified current weather conditions for this person's city are already provided in the context block below. Use that data as-is; do not search for weather, do not guess, and do not include a multi-day forecast.
+
+This briefing is delivered in the early morning, before the stock market opens for the day. Sports scores should always be from yesterday's/last night's completed games — never describe a game as happening "today" unless you've confirmed via search that it already occurred earlier the same calendar day in this person's timezone. Never give a live/current stock quote or price snapshot — the market is closed at this hour and a snapshot price is meaningless.
+
+After completing all four searches above, write a genuinely enjoyable five-minute morning brief covering: the news from Search 1, the verified weather data from the context block, the markets info from Search 3, the sports scores from Search 2, and the story from Search 4. Use only real, current, verified information from your searches (and the verified weather data) — never invent facts, venues, dates, scores, or weather. Style it however reads best for a five-minute morning read — sections, headers, or flowing prose, your call, and vary the structure day to day rather than repeating an identical template every time. Keep individual news items tight — a sentence or two each, like the examples below, not a full paragraph of explanation per story. "Five-minute read" means concise and scannable across many short items, not long-form writing on each one. Overall length should come from covering enough distinct topics (news, weather, markets, sports, a fun story, quote), not from writing at length about any single one of them.
+
+SPORTS: Format each as: team, final score, opponent. Do not mention upcoming games, schedules, or say a team is "set to play today" — this section covers only what already happened, never what's coming up.
 
 MARKETS & INVESTING: Do not give a live price snapshot or quote — the market hasn't opened yet at this hour. Instead, cover futures direction for the major indices (Dow, S&P, Nasdaq) ahead of today's open, and any major overnight financial news likely to move the market at open — earnings reports, Fed commentary, major economic data releases, or significant geopolitical developments affecting markets. Frame this as what the trading day ahead holds, not a snapshot of where things stood at some overnight timestamp — don't reference a specific time or timezone for any price or figure.
 
@@ -88,6 +101,38 @@ interface OpenAiResponsesResult {
   }>;
 }
 
+// Resolves coordinates for the daily-brief weather lookup. Live GPS
+// (last_known_lat/lon) is preferred when present since it reflects where the
+// person actually is right now; falls back to their onboarding home
+// coordinates, then the older bare latitude/longitude columns, and finally
+// geocodes the city name as a last resort.
+async function resolveWeatherCoords(
+  city: string,
+  locationContext: { lat: number | null; lon: number | null } | null,
+  profile: { latitude: number | null; longitude: number | null; homeLatitude: number | null; homeLongitude: number | null } | null
+): Promise<{ lat: number; lon: number } | null> {
+  if (locationContext?.lat != null && locationContext?.lon != null) {
+    return { lat: locationContext.lat, lon: locationContext.lon };
+  }
+  if (profile?.homeLatitude != null && profile?.homeLongitude != null) {
+    return { lat: profile.homeLatitude, lon: profile.homeLongitude };
+  }
+  if (profile?.latitude != null && profile?.longitude != null) {
+    return { lat: profile.latitude, lon: profile.longitude };
+  }
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(city)}&format=json&limit=1`,
+      { headers: { "User-Agent": "WinstonCompanion/1.0" }, signal: AbortSignal.timeout(5000) }
+    );
+    const data = await res.json() as Array<{ lat: string; lon: string }>;
+    if (data.length) return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
+  } catch {
+    // fall through
+  }
+  return null;
+}
+
 // ── Shared context-gathering — used by both generateDailyBrief and
 // generateDailyBriefDeepResearch so the two don't duplicate this logic ──────
 async function buildDailyBriefContext(userName: string): Promise<string> {
@@ -102,6 +147,18 @@ async function buildDailyBriefContext(userName: string): Promise<string> {
   const name = profile?.name ?? userName;
   const locationContext = await getUserLocationContext(userName).catch(() => null);
   const city = locationContext?.city ?? profile?.city ?? "an unknown city";
+  const tz = locationContext?.timezone ?? profile?.timezone ?? "UTC";
+
+  let weatherLine = "Not available — do not include a weather section, and do not guess conditions.";
+  try {
+    const coords = await resolveWeatherCoords(city, locationContext, profile);
+    if (coords) {
+      const w = await getCachedWeather(city, coords.lat, coords.lon, tz);
+      weatherLine = `${w.temp}°F (feels like ${w.feelsLike}°F), ${w.condition}, ${w.precipChance}% chance of rain, high ${w.high}°F / low ${w.low}°F.`;
+    }
+  } catch (err) {
+    logger.warn({ err, userName }, "[DailyBrief] Weather fetch failed");
+  }
 
   const interestParts: string[] = [];
   if (profile?.hobbies?.length)        interestParts.push(`hobbies: ${profile.hobbies.join(", ")}`);
@@ -135,12 +192,81 @@ async function buildDailyBriefContext(userName: string): Promise<string> {
 `Today's date: ${today}
 Name: ${name}
 City: ${city}
+VERIFIED WEATHER DATA for ${city} (use exactly this — do not search for or guess weather): ${weatherLine}
 Interests: ${interestsLine}
 Active goals: ${goalsLine}
 ${profileItemsBlock}
 Recent context: ${memoriesBlock || "no recent conversation memories"}
 Today's reflection: ${stoicLine}`
   );
+}
+
+// Below this many real web_search_call events, the run is treated as
+// unreliable (the model likely took a shortcut instead of doing the four
+// distinct searches asked for) and gets one retry with a stronger nudge.
+const MIN_SEARCH_CALLS = 3;
+
+async function callDailyBriefApi(
+  apiKey: string,
+  input: string,
+  userName: string
+): Promise<{ text: string | null; searchCallCount: number }> {
+  const resp = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "gpt-4o",
+      tools: [{ type: "web_search_preview" }],
+      tool_choice: "required",
+      input,
+      max_output_tokens: 4000,
+    }),
+  });
+
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => "");
+    logger.warn(
+      { userName, status: resp.status, errText: errText.slice(0, 500) },
+      "[DailyBrief] OpenAI Responses API returned non-OK status"
+    );
+    return { text: null, searchCallCount: 0 };
+  }
+
+  const data = await resp.json() as OpenAiResponsesResult;
+
+  const searchCallCount = Array.isArray(data.output)
+    ? data.output.filter((item) => item.type === "web_search_call").length
+    : 0;
+  logger.info(
+    { userName, searchCallCount, totalOutputItems: Array.isArray(data.output) ? data.output.length : 0 },
+    "[DailyBrief] Search call count for this run"
+  );
+  if (Array.isArray(data.output)) {
+    data.output.forEach((item, i) => {
+      if (item.type === "web_search_call") {
+        logger.info(
+          { userName, index: i, querySummary: JSON.stringify(item).slice(0, 500) },
+          "[DailyBrief] Search call detail"
+        );
+      }
+    });
+  }
+
+  const messageItem = data.output?.find((item) => item.type === "message");
+  const textItem = messageItem?.content?.find((c) => c.type === "output_text" || c.type === "text");
+
+  if (!textItem?.text) {
+    logger.warn(
+      { userName, raw: JSON.stringify(data).slice(0, 500) },
+      "[DailyBrief] Unexpected Responses API shape — no output_text found"
+    );
+    return { text: null, searchCallCount };
+  }
+
+  return { text: sanitizeBriefText(textItem.text), searchCallCount };
 }
 
 export async function generateDailyBrief(userName: string): Promise<string | null> {
@@ -153,75 +279,30 @@ export async function generateDailyBrief(userName: string): Promise<string | nul
       return null;
     }
 
-    const resp = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "gpt-4o",
-        tools: [{ type: "web_search_preview" }],
-        tool_choice: "required",
-        input: `${contextBlock}\n\n${DAILY_BRIEF_INSTRUCTION}`,
-        max_output_tokens: 4000,
-      }),
-    });
+    // Instructions first, context block second — the model was observed
+    // treating the biographical context block itself as a search query when
+    // it came first, instead of the several distinct searches the
+    // instructions ask for.
+    const baseInput = `${DAILY_BRIEF_INSTRUCTION}\n\n${contextBlock}`;
 
-    if (!resp.ok) {
-      const errText = await resp.text().catch(() => "");
+    let result = await callDailyBriefApi(apiKey, baseInput, userName);
+
+    if (result.searchCallCount < MIN_SEARCH_CALLS) {
       logger.warn(
-        { userName, status: resp.status, errText: errText.slice(0, 500) },
-        "[DailyBrief] OpenAI Responses API returned non-OK status"
+        { userName, searchCallCount: result.searchCallCount },
+        "[DailyBrief] Too few search calls on first attempt — retrying with a stronger nudge"
       );
-      return null;
+      const retryInput =
+        `${baseInput}\n\nYour previous attempt only performed ${result.searchCallCount} search(es) before writing. ` +
+        `That is not enough. Go back and perform all four searches listed above (news, sports, markets, weird story) ` +
+        `as separate, well-formed queries before writing your final answer.`;
+      const retryResult = await callDailyBriefApi(apiKey, retryInput, userName);
+      if (retryResult.text && retryResult.searchCallCount >= result.searchCallCount) {
+        result = retryResult;
+      }
     }
 
-    const data = await resp.json() as OpenAiResponsesResult;
-
-    const searchCallCount = Array.isArray(data.output)
-      ? data.output.filter((item) => item.type === "web_search_call").length
-      : 0;
-    logger.info(
-      { userName, searchCallCount, totalOutputItems: Array.isArray(data.output) ? data.output.length : 0 },
-      "[DailyBrief] Search call count for this run"
-    );
-    if (Array.isArray(data.output)) {
-      data.output.forEach((item, i) => {
-        if (item.type === "web_search_call") {
-          logger.info(
-            { userName, index: i, querySummary: JSON.stringify(item).slice(0, 500) },
-            "[DailyBrief] Search call detail"
-          );
-        }
-      });
-    }
-
-    logger.info(
-      { userName, fullRawResponse: JSON.stringify(data) },
-      "[DailyBrief] DIAGNOSTIC — full raw Responses API output"
-    );
-    if (Array.isArray(data.output)) {
-      data.output.forEach((item, i) => {
-        logger.info(
-          { userName, index: i, itemType: item.type, itemSummary: JSON.stringify(item).slice(0, 2000) },
-          "[DailyBrief] DIAGNOSTIC — output item"
-        );
-      });
-    }
-
-    const messageItem = data.output?.find((item) => item.type === "message");
-    const textItem = messageItem?.content?.find((c) => c.type === "output_text" || c.type === "text");
-
-    if (!textItem?.text) {
-      logger.warn(
-        { userName, raw: JSON.stringify(data).slice(0, 500) },
-        "[DailyBrief] Unexpected Responses API shape — no output_text found"
-      );
-      return null;
-    }
-
-    return sanitizeBriefText(textItem.text);
+    return result.text;
   } catch (err) {
     logger.warn({ err, userName }, "[DailyBrief] generateDailyBrief failed");
     return null;

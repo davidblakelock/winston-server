@@ -576,6 +576,38 @@ router.post("/admin/test-daily-brief-searchapi", async (req: Request, res: Respo
 });
 
 /**
+ * POST /api/admin/test-daily-brief-live
+ *
+ * Diagnostic tool for manually testing generateDailyBrief — the actual live
+ * morning-briefing path (gpt-4o + web_search_preview, verified weather
+ * injected directly, search-count-gated retry) — without going through chat.
+ * Same fire-and-forget pattern as the other test-daily-brief routes.
+ */
+router.post("/admin/test-daily-brief-live", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  res.json({ ok: true, message: "generateDailyBrief started — check server logs for the result (search for [DailyBrief])." });
+
+  import("../morning/briefingPregenerate.js").then(({ generateDailyBrief }) => {
+    generateDailyBrief(userName)
+      .then((result) => {
+        if (result) {
+          req.log.info(
+            { userName, resultLength: result.length, fullResult: result },
+            "[DailyBrief] TEST ROUTE — completed successfully, full result below"
+          );
+        } else {
+          req.log.warn({ userName }, "[DailyBrief] TEST ROUTE — returned null");
+        }
+      })
+      .catch((err) => {
+        req.log.warn({ err, userName }, "[DailyBrief] TEST ROUTE — threw an error");
+      });
+  });
+});
+
+/**
  * POST /api/admin/migrate-restaurants-to-table
  *
  * One-time migration: moves davidblakelock's existing restaurant rows out of
