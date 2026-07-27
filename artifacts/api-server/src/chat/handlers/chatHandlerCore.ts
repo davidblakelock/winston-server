@@ -668,7 +668,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     // ── add_todo ──────────────────────────────────────────────────────────────
     case "add_todo": {
       const listName = requestContext?.trim() || action.listName?.trim() || "";
-      const items    = (action.itemText ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+      const items    = (action.itemText ?? "").split(";").map((s) => s.trim()).filter(Boolean);
 
       if (!listName || listName === "to do" || listName === "reminders") {
         // Plain to-do — write to reminders table with no fire_at
@@ -802,7 +802,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     case "add_todo_with_reminder": {
       const listName = normalizeListName(action.listName?.trim() || "to do");
       const itemText = action.itemText?.trim() ?? "";
-      const items    = itemText.split(",").map((s) => s.trim()).filter(Boolean);
+      const items    = itemText.split(";").map((s) => s.trim()).filter(Boolean);
       // Plain to-dos live in the reminders table (written below) — same gate
       // add_todo uses. Without this, a to-do with a reminder time attached
       // silently double-wrote into list_items, where nothing ever reads it back.
