@@ -142,6 +142,29 @@ export interface Observation {
   shown_at:              string | null;
 }
 
+// ── Surfacing ─────────────────────────────────────────────────────────────────
+// For consumers (e.g. Evening Wind Down) that want to weave in the single
+// best pending observation, regardless of which pass produced it.
+
+export async function getTopPendingObservation(userName: string): Promise<Observation | null> {
+  await _tableInit;
+  const { rows } = await query<Observation>(
+    `SELECT * FROM observations
+     WHERE user_name = $1 AND status = 'pending'
+     ORDER BY confidence_score DESC, created_at DESC
+     LIMIT 1`,
+    [userName]
+  );
+  return rows[0] ?? null;
+}
+
+export async function markObservationShown(id: number): Promise<void> {
+  await query(
+    `UPDATE observations SET status = 'shown', shown_at = now() WHERE id = $1`,
+    [id]
+  );
+}
+
 // ── Source adapter ────────────────────────────────────────────────────────────
 // Normalizes across source tables so the passes below can read a mixed pool
 // of items without knowing which table each one came from. Sources keep their

@@ -10,11 +10,12 @@ import {
   saveTonightMessage,
 } from "./winddownManager.js";
 
-import { getProfile, getActiveUsers, getCompanionDisplayName } from "../onboarding/onboardingManager.js";
+import { getProfile, getActiveUsers, getCompanionDisplayName, buildPersonaPreamble } from "../onboarding/onboardingManager.js";
 import { getPeople } from "../people/peopleManager.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 import { fetchTomorrowEvents } from "../google/calendar.js";
 import { getMoodForToday } from "../mood/moodManager.js";
+import { getTopPendingObservation, markObservationShown } from "../connectionEngine/connectionEngineManager.js";
 import { logger } from "../lib/logger.js";
 
 const DEFAULT_TZ = "UTC";
@@ -136,13 +137,21 @@ export async function generateOpeningMessage(
     if (mood) morningMood = mood;
   } catch { /* non-fatal */ }
 
+  // Pending observation — something Winston noticed (dot-connector, pattern,
+  // cluster, or weekly gift), woven in as optional raw material below rather
+  // than a mandatory part of the message. Marked shown only after a
+  // successful (non-fallback) generation that actually had the chance to use it.
+  const pendingObservation = await getTopPendingObservation(userName).catch(() => null);
+
   const prompt =
+    buildPersonaPreamble(profile?.companionPersona ?? null, profile?.personalityStyle ?? null) +
     `You are ${companionName}, ${displayName}'s trusted personal companion. Dry, warm, never gushing. It's ${dayName} evening in ${city}.\n\n` +
     (peopleContext ? `${displayName}'s key people: ${peopleContext}.\n` : "") +
     (calendarTodayContext ? `Calendar events that already happened today: ${calendarTodayContext}.\n` : "") +
     (remindersContext ? `${remindersContext}\n` : "") +
     (morningMood ? `This morning ${displayName} mentioned feeling: "${morningMood.substring(0, 120)}".\n` : "") +
     (tomorrowContext ? `Tomorrow's calendar: ${tomorrowContext}.\n` : "") +
+    (pendingObservation ? `Something you've noticed recently, in your own voice: "${pendingObservation.message}"\n` : "") +
     `\nWrite tonight's evening check-in message with three parts, blended into natural conversational prose — not headers or bullet points:\n\n` +
     `1. A real, specific day recap grounded in the data above — what happened, what got done, what's still hanging open. ` +
     `Only claim a reminder alert "went out" or "fired" — never say a task was "done" or "completed" just because its alert fired; only genuinely-completed to-dos may be described as done. ` +
@@ -152,6 +161,7 @@ export async function generateOpeningMessage(
     `Write a fresh, well-crafted question tonight — something concrete like asking what didn't go as hoped and what they'd do differently, or a moment worth being grateful for and why, or a choice they're proud or unsure of. ` +
     `Vary it — do not reuse the same question pattern every night. This question is the whole point of the message; make it genuinely thoughtful.\n\n` +
     (peopleContext ? `Weave in a key person naturally only if it genuinely fits — don't force it.\n` : "") +
+    (pendingObservation ? `If something you've noticed is included above, weave it into tonight's message naturally — as a bridge between the recap and the reflection question, or blended into the recap itself, whichever reads more natural. Use your own words, don't quote it verbatim, and don't label it as a "notice" or "observation" or give it a separate heading. Don't force it if it doesn't fit — but it's there because it's worth mentioning.\n` : "") +
     `Keep the whole message tight — a few sentences, not a essay. Sound like a perceptive friend, not a report.`;
 
   try {
@@ -161,12 +171,19 @@ export async function generateOpeningMessage(
       messages: [{ role: "user", content: prompt }],
     });
     const block = response.content[0];
-    if (block.type === "text") return block.text.trim();
+    if (block.type === "text") {
+      if (pendingObservation) {
+        markObservationShown(pendingObservation.id).catch((err) =>
+          logger.warn({ err, id: pendingObservation.id }, "[Winddown] markObservationShown failed")
+        );
+      }
+      return block.text.trim();
+    }
   } catch (err) {
     logger.warn({ err }, "Failed to generate evening check-in opening, using fallback");
   }
 
-  // Fallback
+  // Fallback — observation stays pending, it never actually reached the user
   return `Good evening, ${displayName}. What's one thing today that didn't go the way you wanted — and what would you do differently tomorrow?`;
 }
 
