@@ -35,6 +35,7 @@ import { getUserLocationContext } from "../lib/userTimezone.js";
 import { getProfile, getActiveUsers } from "../onboarding/onboardingManager.js";
 import { getRecentCaptures } from "../lifeCaptures/lifeCapturesManager.js";
 import { getRecentAtticItems } from "../attic/atticItemsManager.js";
+import { getGoals, type Goal } from "../goals/goalsManager.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
 const anthropic = new Anthropic();
@@ -255,6 +256,27 @@ function formatCorrectionContext(corrections: UserCorrection[]): string {
     `important more heavily:\n${lines}\n`;
 }
 
+// A second context source alongside life_capture/attic_item — not merged into
+// SourceItem[] since goals aren't a recency-sorted stream of things that
+// happened, they're standing context to check saved items against. Active
+// goals only, capped at 8 (same cap generateGoalsRecap uses). No goal-creation
+// logic here — this only lets the passes notice a connection to what already
+// exists.
+async function fetchGoalContext(userName: string): Promise<string> {
+  const goals = await getGoals(userName).catch(() => [] as Goal[]);
+  const active = goals.filter((g) => !g.completed_at).slice(0, 8);
+  if (active.length === 0) return "";
+  const lines = active
+    .map((g) => {
+      const done  = g.steps.filter((s) => s.completed).length;
+      const total = g.steps.length;
+      return `  - "${g.title}"${g.description ? ` — ${g.description}` : ""} (${total > 0 ? `${done}/${total} steps done` : "no steps yet"})`;
+    })
+    .join("\n");
+  return `\nCurrent goals — surface a connection here only if a saved item genuinely relates to one of these, ` +
+    `don't force it:\n${lines}\n`;
+}
+
 // ── Source adapter ────────────────────────────────────────────────────────────
 // Normalizes across source tables so the passes below can read a mixed pool
 // of items without knowing which table each one came from. Sources keep their
@@ -361,11 +383,12 @@ export async function dotConnectorPass(userName: string): Promise<void> {
 
   const itemLines = formatItemLines(items, tz, 100);
   const corrections = await getRecentCorrections(userName, 30);
+  const goalContext = await fetchGoalContext(userName);
 
   const prompt =
     `${firstName}'s personal reflections and saved items from the last 30 days:\n${itemLines}\n\n` +
     `Profile: lives in ${city}, interests include ${interests.slice(0, 6).join(", ") || "various things"}.` +
-    listContext + formatCorrectionContext(corrections) + `\n\n` +
+    listContext + formatCorrectionContext(corrections) + goalContext + `\n\n` +
     `One question: Is there anything in the above that Winston could take a concrete action on RIGHT NOW — ` +
     `specifically something involving: checking the calendar for an open week, making a reservation, ` +
     `researching travel options, or adding something to a list?\n\n` +
@@ -436,10 +459,11 @@ export async function patternObservationPass(userName: string): Promise<void> {
 
   const itemLines = formatItemLines(items, tz, 100);
   const corrections = await getRecentCorrections(userName, 30);
+  const goalContext = await fetchGoalContext(userName);
 
   const prompt =
     `${firstName}'s personal reflections and saved items from the last 30 days:\n${itemLines}\n` +
-    formatCorrectionContext(corrections) + `\n` +
+    formatCorrectionContext(corrections) + goalContext + `\n` +
     `Read these carefully. You are a wise, observant friend — not a therapist, not a coach. ` +
     `Look for a genuine recurring pattern: something ${firstName} has mentioned 3 or more times, ` +
     `or a clear trend in their energy, mood, goals, or relationships.\n\n` +
