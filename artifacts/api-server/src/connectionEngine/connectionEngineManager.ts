@@ -165,6 +165,96 @@ export async function markObservationShown(id: number): Promise<void> {
   );
 }
 
+// ── Corrections (Phase 5) ─────────────────────────────────────────────────────
+// Simple version: raw feedback text fed back into future passes as one more
+// prompt ingredient, same shape as every other context block those passes
+// already build. No item-level exclusion filtering, no embeddings — not
+// proven necessary yet. connections is untouched — nothing writes to it today,
+// so there's nothing for a correction to target there.
+
+export type CorrectionType = "dismiss" | "reject" | "elevate" | "forget";
+
+export interface UserCorrection {
+  id:                        number;
+  user_name:                 string;
+  correction_type:           CorrectionType;
+  affected_item_ids:         number[];
+  natural_language_feedback: string;
+  created_at:                string;
+}
+
+// dismiss/reject/forget all close the observation out the same way — the
+// distinction between them lives in correction_type/feedback for future
+// passes to read, not as separate observation states.
+const CORRECTION_TO_STATUS: Record<CorrectionType, "dismissed" | "accepted"> = {
+  dismiss: "dismissed",
+  reject:  "dismissed",
+  forget:  "dismissed",
+  elevate: "accepted",
+};
+
+// Targets the most-recently-shown observation for this user — same pattern
+// as getPendingEmailReply/getPendingText: no ID travels through the action
+// tag, the server resolves "the thing currently in context" itself.
+export async function getMostRecentShownObservation(userName: string): Promise<Observation | null> {
+  await _tableInit;
+  const { rows } = await query<Observation>(
+    `SELECT * FROM observations
+     WHERE user_name = $1 AND status = 'shown'
+     ORDER BY shown_at DESC
+     LIMIT 1`,
+    [userName]
+  );
+  return rows[0] ?? null;
+}
+
+export async function applyObservationCorrection(
+  userName:       string,
+  correctionType: CorrectionType,
+  feedback:       string,
+): Promise<{ observationId: number } | null> {
+  await _tableInit;
+  const target = await getMostRecentShownObservation(userName);
+  if (!target) return null;
+
+  await query(
+    `UPDATE observations SET status = $1 WHERE id = $2`,
+    [CORRECTION_TO_STATUS[correctionType], target.id]
+  );
+  await query(
+    `INSERT INTO user_corrections (user_name, correction_type, affected_item_ids, natural_language_feedback)
+     VALUES ($1, $2, $3, $4)`,
+    [userName, correctionType, [target.id], feedback]
+  );
+  logger.info({ userName, correctionType, observationId: target.id }, "[ConnectionEngine] Correction applied");
+  return { observationId: target.id };
+}
+
+export async function getRecentCorrections(
+  userName: string,
+  days      = 30,
+): Promise<UserCorrection[]> {
+  await _tableInit;
+  const { rows } = await query<UserCorrection>(
+    `SELECT * FROM user_corrections
+     WHERE user_name = $1 AND created_at >= now() - ($2 || ' days')::interval
+     ORDER BY created_at DESC`,
+    [userName, days.toString()]
+  );
+  return rows;
+}
+
+function formatCorrectionContext(corrections: UserCorrection[]): string {
+  if (corrections.length === 0) return "";
+  const lines = corrections
+    .slice(0, 10)
+    .map((c) => `  - "${c.natural_language_feedback}"`)
+    .join("\n");
+  return `\nPast feedback from the user on suggestions/observations like this — take it into account, ` +
+    `don't repeat something they've dismissed for a similar reason, and weigh things they've marked ` +
+    `important more heavily:\n${lines}\n`;
+}
+
 // ── Source adapter ────────────────────────────────────────────────────────────
 // Normalizes across source tables so the passes below can read a mixed pool
 // of items without knowing which table each one came from. Sources keep their
@@ -270,11 +360,12 @@ export async function dotConnectorPass(userName: string): Promise<void> {
   } catch { /* non-fatal */ }
 
   const itemLines = formatItemLines(items, tz, 30);
+  const corrections = await getRecentCorrections(userName, 30);
 
   const prompt =
     `${firstName}'s personal reflections and saved items from the last 30 days:\n${itemLines}\n\n` +
     `Profile: lives in ${city}, interests include ${interests.slice(0, 6).join(", ") || "various things"}.` +
-    listContext + `\n\n` +
+    listContext + formatCorrectionContext(corrections) + `\n\n` +
     `One question: Is there anything in the above that Winston could take a concrete action on RIGHT NOW — ` +
     `specifically something involving: checking the calendar for an open week, making a reservation, ` +
     `researching travel options, or adding something to a list?\n\n` +
@@ -344,9 +435,11 @@ export async function patternObservationPass(userName: string): Promise<void> {
   const firstName = (profile?.name ?? userName).split(" ")[0];
 
   const itemLines = formatItemLines(items, tz, 30);
+  const corrections = await getRecentCorrections(userName, 30);
 
   const prompt =
-    `${firstName}'s personal reflections and saved items from the last 30 days:\n${itemLines}\n\n` +
+    `${firstName}'s personal reflections and saved items from the last 30 days:\n${itemLines}\n` +
+    formatCorrectionContext(corrections) + `\n` +
     `Read these carefully. You are a wise, observant friend — not a therapist, not a coach. ` +
     `Look for a genuine recurring pattern: something ${firstName} has mentioned 3 or more times, ` +
     `or a clear trend in their energy, mood, goals, or relationships.\n\n` +
@@ -430,10 +523,12 @@ export async function clusterPass(userName: string): Promise<void> {
       return `[${i}] (${date}, ${it.context}) ${it.content}`;
     })
     .join("\n");
+  const corrections = await getRecentCorrections(userName, 30);
 
   const prompt =
     `${firstName} has saved these items to their Attic over the last 30 days — things that caught their ` +
-    `attention with no destination in mind:\n${itemLines}\n\n` +
+    `attention with no destination in mind:\n${itemLines}\n` +
+    formatCorrectionContext(corrections) + `\n` +
     `Look for a genuine cluster: three or more separate items pointing at the same emerging interest or ` +
     `unstated intention that isn't already reflected anywhere else (e.g. several Europe-related saves ` +
     `suggesting a trip interest with nothing on the calendar yet). Do not force a cluster that isn't really ` +

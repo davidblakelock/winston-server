@@ -16,7 +16,7 @@ import {
 import { getPeople, type KeyPerson } from "../../people/peopleManager.js";
 import { claimWinddownReply } from "../../winddown/winddownManager.js";
 import { saveLifeCapture } from "../../lifeCaptures/lifeCapturesManager.js";
-import { runConnectionEngine } from "../../connectionEngine/connectionEngineManager.js";
+import { runConnectionEngine, applyObservationCorrection } from "../../connectionEngine/connectionEngineManager.js";
 import { saveAtticItem } from "../../attic/atticItemsManager.js";
 import {
   getBriefingPreferences,
@@ -86,7 +86,8 @@ export type ActionType =
   | "email_compose"
   | "sms_send"
   | "morning_rundown"
-  | "save_to_attic";
+  | "save_to_attic"
+  | "correct_observation";
 
 export interface ClaudeAction {
   type: ActionType;
@@ -102,6 +103,7 @@ export interface ClaudeAction {
   emailAction?: "trash" | "archive" | "markRead" | null;
   gmailId?: string | null;
   feedback?: string | null;
+  correctionType?: "dismiss" | "reject" | "elevate" | "forget" | null;
 }
 
 export interface NewChatRequest {
@@ -187,10 +189,14 @@ At the end of EVERY response append exactly one action tag on a new line. No exc
 [ACTION:check_email] — email
 [ACTION:make_reservation|restaurant=<name>] — reservation
 [ACTION:save_to_attic|content=<what to save>] — save something for later, no destination named
+[ACTION:correct_observation|type=<dismiss|reject|elevate|forget>|feedback=<what they said>] — user reacting to something you recently noticed or suggested
 [ACTION:none] — weather, sports, news, markets, general questions
 
 THE ATTIC:
 When __USER__ says something like "put this in the attic," "remember this," "file this away," or "save this for later" WITHOUT naming a specific destination (a list, a record type, etc. — if they name one, handle it as that instead), that's a request to save it to their Attic — a catch-all for anything that catches their attention with no destination in mind yet. Emit [ACTION:save_to_attic|content=<what to save>] and confirm briefly and naturally — e.g. "Got it, I'll put that in the attic," "Filed away," or "Saved to your Attic." Don't over-explain what the Attic is unless asked.
+
+REACTING TO SOMETHING YOU NOTICED:
+If you recently noticed a pattern or made a suggestion (in this conversation or a recent one) and __USER__ reacts to it, emit [ACTION:correct_observation|type=<type>|feedback=<their words, paraphrased if needed>]. Pick the type from what they're actually saying: "those aren't related" or "don't connect this to X" → reject; "forget this" or a stronger brush-off → forget; a general "that's not it" / not relevant → dismiss; "this is important" or similar → elevate. Acknowledge briefly and naturally — don't make a big deal of it, just take it on board the way a person would.
 
 TEXT MESSAGES:
 You can COMPOSE text messages for __USER__ but you CANNOT send them. You have zero ability to send any message or touch __USER__'s phone. Draft the message, read it back, and when __USER__ confirms, the app will open the Messages app with the text pre-filled. NEVER claim to have sent a message.
@@ -653,6 +659,13 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       case "save_to_attic":
         action = { type: "save_to_attic", itemText: parts.content ?? "" };
         break;
+      case "correct_observation":
+        action = {
+          type: "correct_observation",
+          correctionType: (parts.type ?? "dismiss") as "dismiss" | "reject" | "elevate" | "forget",
+          feedback: parts.feedback ?? "",
+        };
+        break;
     }
   }
   log.info({ actionType: action.type, tag: tagMatch?.[1] ?? "none" }, "[chatHandlerCore] Action parsed");
@@ -726,6 +739,23 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
         } catch (err) {
           log.warn({ err }, "[chatHandlerCore] saveAtticItem failed");
         }
+      }
+      break;
+    }
+
+    // ── correct_observation ───────────────────────────────────────────────────
+    case "correct_observation": {
+      const correctionType = action.correctionType ?? "dismiss";
+      const feedback = action.feedback?.trim() ?? "";
+      try {
+        const result = await applyObservationCorrection(sessionUserName, correctionType, feedback);
+        if (result) {
+          log.info({ correctionType, observationId: result.observationId }, "[chatHandlerCore] Observation correction applied");
+        } else {
+          log.info({ correctionType }, "[chatHandlerCore] Observation correction had nothing to target");
+        }
+      } catch (err) {
+        log.warn({ err }, "[chatHandlerCore] applyObservationCorrection failed");
       }
       break;
     }
