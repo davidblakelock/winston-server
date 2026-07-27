@@ -104,7 +104,7 @@ export async function generateOpeningMessage(
       `SELECT event_summary, event_start_iso
        FROM calendar_sync_state
        WHERE user_name = $1 AND event_date = $2
-         AND event_start_iso IS NOT NULL AND event_start_iso <= NOW()
+         AND event_start_iso IS NOT NULL AND event_start_iso::timestamptz <= NOW()
        ORDER BY event_start_iso ASC
        LIMIT 10`,
       [userName, today]
