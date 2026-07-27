@@ -456,15 +456,11 @@ export async function clusterPass(userName: string): Promise<void> {
       .filter((it): it is SourceItem => !!it && it.sourceType === "attic_item");
     if (clusterItems.length < 2) return;
 
-    for (let i = 0; i < clusterItems.length; i++) {
-      for (let j = i + 1; j < clusterItems.length; j++) {
-        await query(
-          `INSERT INTO connections (user_name, source_type, source_id, target_type, target_id, connection_reason, confidence_score, status)
-           VALUES ($1, 'attic_item', $2, 'attic_item', $3, $4, $5, 'suggested')`,
-          [userName, clusterItems[i]!.sourceId, String(clusterItems[j]!.sourceId), parsed.theme ?? "cluster", parsed.confidence]
-        );
-      }
-    }
+    // No per-pair connections rows — supporting_item_ids on the observation
+    // below already fully encodes cluster membership, and every pair here
+    // would carry the identical confidence/reason, so a full n-choose-2 mesh
+    // is pure redundant writes that grow quadratically with cluster size for
+    // zero queryable value (nothing reads the connections table today).
 
     await query(
       `DELETE FROM observations WHERE user_name = $1 AND observation_type = 'cluster' AND status = 'pending'`,
