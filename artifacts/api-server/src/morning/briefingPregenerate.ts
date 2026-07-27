@@ -1,3 +1,4 @@
+import Anthropic from "@anthropic-ai/sdk";
 import { getRecentMemories, formatMemoriesForContext } from "../memory/memoryManager.js";
 import { getProfileItems, formatProfileForContext } from "../profile/profileManager.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
@@ -6,27 +7,46 @@ import { getStoicForUser } from "../stoic/stoicManager.js";
 import { getUserLocationContext } from "../lib/userTimezone.js";
 import { getGoals } from "../goals/goalsManager.js";
 import { getCachedWeather } from "../weather/weatherCache.js";
+import { MODEL_SONNET } from "../lib/models.js";
 
-// ── Experimental: single-call GPT-4o daily brief via Responses API + web search ──
-// NOT wired into _doBriefingPrefetch, the cron schedule, or any other live path.
-// Build-only step — call manually to test before it replaces the existing
-// news/weather/sports/local-content pipeline in a later pass.
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-const DAILY_BRIEF_INSTRUCTION = `You are about to write a morning briefing. Before writing anything, perform FOUR SEPARATE web searches, one topic at a time — do not combine them into one query, and do not search using the biographical context block that follows this instruction (that block is background for personalizing the writing later, not a search query).
+// ── Daily brief via Claude + web_search (the live Morning Run Down path) ──────
+// Was OpenAI's Responses API + web_search_preview with tool_choice: "required".
+// Diagnosed and replaced: that tool does not reliably decompose a compound
+// instruction into distinct, well-formed searches — verified directly by
+// inspecting the actual query sent to the tool, which was the raw instruction
+// text itself (sometimes 100+ words), not a real search phrase, even when
+// explicitly told to formulate a short query first. Claude's web_search tool,
+// already used successfully elsewhere in this codebase, was tested against
+// the same compound instruction and reliably issued multiple real, distinct,
+// well-formed queries — including autonomous follow-up searches to refine a
+// weak result. That's the actual fix; the instruction content below is
+// largely unchanged except for the interest-search addition and the
+// exclusion list restored to Search 1.
 
-SEARCH 1 — National news: search for today's top news headlines. Aim for 10 real stories worth knowing — major national and international stories only. Do not include hyper-local news from a single city or small region — local government votes, local development projects, local tribal/community news. Use the Interests line in the context block below (hobbies, music genres, favorite artists, sports teams) to weigh which stories to prioritize when you have a choice between similarly newsworthy options — a story connected to something in this person's actual life should win out over an equally routine but disconnected one. This is a weighting signal, not a hard filter: still cover genuinely major national/international/political/economic developments even when nothing personally connects.
+function buildDailyBriefInstruction(interestPicks: string[]): string {
+  const interestSearchBlock = interestPicks.length > 0
+    ? `\n\nSEARCH 1b — Personal interest news: search specifically for recent news connected to: ${interestPicks.join(", ")}. This is in addition to Search 1a, not instead of it — the goal is to surface something genuinely newsworthy tied to what this person actually cares about. If nothing real turns up, that's fine — don't force it.`
+    : "";
+
+  return `You are about to write a morning briefing. Before writing anything, perform the searches below as separate, well-formed queries, one topic at a time — do not combine them into one query, and do not search using the biographical context block that follows this instruction (that block is background for personalizing the writing later, not a search query).
+
+SEARCH 1a — National news: search for today's top US and world news headlines. Aim for 10 real stories worth knowing — major national and international stories only. Do not include hyper-local news from a single city or small region — local government votes, local development projects, local tribal/community news. Exclude stock market and business-finance stories here — that's covered separately in Search 3 — and exclude AI industry/tech company news (product launches, funding rounds, model releases) unless it's genuinely historic.${interestSearchBlock}
+
+When choosing the final list of stories, prefer genuinely important news, but when two stories are similarly newsworthy, favor the one connected to this person's actual interests over an equally routine but disconnected one. If Search 1b turned up something real and relevant, fold it into the same numbered list rather than giving it a separate section.
 
 SEARCH 2 — Sports: search for this person's teams' most recent completed games (the specific team names are in the context block below — use them as the search terms, e.g. "[team name] score last night"). Report only FINAL scores from the most recently completed game per team — last night's game if one was played, otherwise their most recent prior game.
 
 SEARCH 3 — Markets: search for stock futures and overnight financial news ahead of today's open (e.g. "stock futures today", "Dow S&P Nasdaq futures").
 
-SEARCH 4 — Weird/funny story: search for a genuinely funny or delightful "you won't believe this" news story from today.
+SEARCH 4 — Weird/funny story: search for a genuinely funny or delightful news story from today. Not politics. Not crime. Not celebrity gossip. Not trivia facts. A real story with a specific person or place and an unexpected twist — something a person could mention at lunch and get a genuine reaction.
 
 Weather is NOT something to search for — verified current weather conditions for this person's city are already provided in the context block below. Use that data as-is; do not search for weather, do not guess, and do not include a multi-day forecast.
 
 This briefing is delivered in the early morning, before the stock market opens for the day. Sports scores should always be from yesterday's/last night's completed games — never describe a game as happening "today" unless you've confirmed via search that it already occurred earlier the same calendar day in this person's timezone. Never give a live/current stock quote or price snapshot — the market is closed at this hour and a snapshot price is meaningless.
 
-After completing all four searches above, write a genuinely enjoyable Morning Run Down covering: the news from Search 1, the verified weather data from the context block, the markets info from Search 3, the sports scores from Search 2, and the story from Search 4. Use only real, current, verified information from your searches (and the verified weather data) — never invent facts, venues, dates, scores, or weather. Style it however reads best — sections, headers, or flowing prose, your call, and vary the structure day to day rather than repeating an identical template every time. Keep individual news items tight — a sentence or two each, like the examples below, not a full paragraph of explanation per story. Concise and scannable across many short items, not long-form writing on each one — with 10 news stories, staying tight per item matters even more than before. Overall length should come from covering enough distinct topics (news, weather, markets, sports, a fun story, quote), not from writing at length about any single one of them.
+After completing all searches above, write a genuinely enjoyable Morning Run Down covering: the news from Search 1, the verified weather data from the context block, the markets info from Search 3, the sports scores from Search 2, and the story from Search 4. Use only real, current, verified information from your searches (and the verified weather data) — never invent facts, venues, dates, scores, or weather. Style it however reads best — sections, headers, or flowing prose, your call, and vary the structure day to day rather than repeating an identical template every time. Keep individual news items tight — a sentence or two each, like the examples below, not a full paragraph of explanation per story. Concise and scannable across many short items, not long-form writing on each one — with 10 news stories, staying tight per item matters even more than before. Overall length should come from covering enough distinct topics (news, weather, markets, sports, a fun story, quote), not from writing at length about any single one of them.
 
 SPORTS: Format each as: team, final score, opponent. Do not mention upcoming games, schedules, or say a team is "set to play today" — this section covers only what already happened, never what's coming up.
 
@@ -34,9 +54,9 @@ MARKETS & INVESTING: Do not give a live price snapshot or quote — the market h
 
 FORMATTING — CRITICAL: Write in clean, plain, readable prose only — this will be read aloud via text-to-speech, so it must sound natural when spoken. Never include citation brackets, markdown links, raw URLs, "utm_source" parameters, "#:~:text=" fragment identifiers, or any link syntax anywhere in the output. When you want to credit a source, say it in plain spoken words woven into the sentence — e.g. "according to the AP" or "Axios reports" — never as a clickable link or bracketed reference. Do NOT include a "Sources:" section, footer, bibliography, or list of links anywhere, including at the end. The entire output must read as clean spoken prose from start to finish with zero raw URLs or citation markup of any kind.
 
-For loose style reference only (not a required template), here are two briefings this person said they liked:
+For loose style reference only (not a required template), here is a briefing this person said they liked:
 
-(These examples are showing you TONE AND STRUCTURE ONLY. Every fact, story, quote, and detail in your actual output must come from your own fresh search results for today. Do not reuse, paraphrase, or reproduce ANY specific fact, story, or detail from these examples — including the dog-on-a-mountain story — under any circumstances. If your search doesn't turn up a good "weird news" story, skip that section entirely rather than reusing the example. Any place names, cities, venues, team opponents, scores, or story details shown in brackets below are placeholders — never use a real one from these examples in your actual output. All real content — including location, teams, scores, and stories — must come from your own search and from the person's actual current city and teams given above.)
+(This example is showing you TONE AND STRUCTURE ONLY. Every fact, story, quote, and detail in your actual output must come from your own fresh search results for today. Do not reuse, paraphrase, or reproduce ANY specific fact, story, or detail from this example under any circumstances. If your search doesn't turn up a good "weird news" story, skip that section entirely rather than reusing the example. Any place names, cities, venues, team opponents, scores, or story details shown in brackets below are placeholders — never use a real one from this example in your actual output. All real content — including location, teams, scores, and stories — must come from your own search and from the person's actual current city and teams given above.)
 
 [EXAMPLE 1]
 ☕ David's Daily Brief
@@ -45,24 +65,21 @@ Good morning! Here's your Morning Run Down.
 
 🌎 The Stories That Matter (aim for 10 — this example shows 5 for brevity; write out the full set you found)
 1. U.S.–Iran conflict remains the dominant global story
-The conflict continued overnight with additional U.S. strikes and Iranian retaliation against U.S. facilities in the region. Markets remain focused on whether the fighting expands and what it could mean for global energy supplies.
-2. AI stock selloff is accelerating
-Investors are questioning whether the enormous spending on AI infrastructure will translate into profits. Semiconductor stocks were hit across Asia, Europe, and U.S. premarket trading despite strong earnings from some chipmakers.
+The conflict continued overnight with additional U.S. strikes and Iranian retaliation against U.S. facilities in the region. International mediators are pushing for a return to negotiations.
+2. Major flooding displaces thousands in Southeast Asia
+Torrential rains have overwhelmed river systems across the region, forcing large-scale evacuations and straining relief efforts.
 3. Oil remains elevated
 Crude prices continue to trade at relatively high levels because of Middle East tensions. While supplies have not been significantly disrupted, energy markets remain sensitive to any escalation.
 4. Air quality concerns across parts of the U.S.
 Smoke from wildfires is affecting air quality in portions of the Midwest and Northeast, leading to health advisories in several areas.
-5. Earnings season is shifting market leadership
-After several quarters dominated by AI enthusiasm, investors are paying closer attention to whether companies can actually convert AI investments into sustained profits.
+5. New peace talks announced for an ongoing regional conflict
+Diplomats from several countries are set to meet this week in an effort to broker a ceasefire.
 
 📈 Markets & Investing
 Futures point [direction] ahead of the open for the Dow, S&P 500, and Nasdaq. The overnight story to watch: [a real earnings report, Fed comment, economic data release, or geopolitical development likely to move markets today]. Investor takeaway: [one sentence of context for a long-term investor].
 
 🏈🏀⚾ Pro Sports
-Last night's results for [this person's home teams]: [Team] beat [Opponent], final score [X–Y]. [Team] fell to [Opponent], final score [X–Y]. [Team] defeated [Opponent], final score [X–Y]. Internationally, [a real result from a competition this person follows].
-
-🤖 AI & Technology
-The biggest AI story today isn't a new model — it's the market. Investors are asking whether the hundreds of billions being spent on AI chips, data centers, and infrastructure will generate enough profits to justify current valuations. That debate is driving today's technology selloff.
+Last night's results for [this person's home teams]: [Team] beat [Opponent], final score [X–Y]. [Team] fell to [Opponent], final score [X–Y]. Internationally, [a real result from a competition this person follows].
 
 😂 No Politics, Just Weird
 [a real, current lighthearted news story — something genuinely funny or delightful from today's search, not invented]
@@ -70,12 +87,10 @@ The biggest AI story today isn't a new model — it's the market. Investors are 
 💬 Quote of the Day
 "The important thing is not to stop questioning." — Albert Einstein
 
-👍 Things You Can Safely Ignore
-Every dramatic prediction that "AI is over" — the technology continues to advance, even if the stocks experience periods of volatility. Also, hour-by-hour market swings — if you're investing for years rather than days, today's headlines are usually much less important than they seem.
-
 Have a great Friday!
 
 End with today's Stoic quote provided above, woven in naturally as a closing thought, not just pasted verbatim.`;
+}
 
 // Server-side safety net — the prompt's anti-link/citation instructions are
 // demonstrably not followed reliably (observed citation/URL leakage despite
@@ -201,108 +216,76 @@ Today's reflection: ${stoicLine}`
   );
 }
 
-// Below this many real web_search_call events, the run is treated as
-// unreliable (the model likely took a shortcut instead of doing the four
-// distinct searches asked for) and gets one retry with a stronger nudge.
-const MIN_SEARCH_CALLS = 3;
-
-async function callDailyBriefApi(
-  apiKey: string,
-  input: string,
-  userName: string
-): Promise<{ text: string | null; searchCallCount: number }> {
-  const resp = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "gpt-4o",
-      tools: [{ type: "web_search_preview" }],
-      tool_choice: "required",
-      input,
-      max_output_tokens: 4000,
-    }),
-  });
-
-  if (!resp.ok) {
-    const errText = await resp.text().catch(() => "");
-    logger.warn(
-      { userName, status: resp.status, errText: errText.slice(0, 500) },
-      "[DailyBrief] OpenAI Responses API returned non-OK status"
-    );
-    return { text: null, searchCallCount: 0 };
+// Rotates through hobbies/music genres/favorite artists (sports teams are
+// already covered by Search 2, so left out here) so the interest-driven
+// search targets something different day to day rather than the same pick
+// every time. Deterministic on day-of-year — no state to track.
+async function getDailyInterestPicks(userName: string, count = 2): Promise<string[]> {
+  const profile = await getProfile(userName).catch(() => null);
+  const pool = [
+    ...(profile?.hobbies ?? []),
+    ...(profile?.musicGenres ?? []),
+    ...(profile?.favoriteArtists ?? []),
+  ];
+  if (pool.length === 0) return [];
+  const dayOfYear = Math.floor((Date.now() - Date.UTC(new Date().getUTCFullYear(), 0, 0)) / 86_400_000);
+  const picks: string[] = [];
+  for (let i = 0; i < count && i < pool.length; i++) {
+    picks.push(pool[(dayOfYear + i) % pool.length]!);
   }
+  return picks;
+}
 
-  const data = await resp.json() as OpenAiResponsesResult;
-
-  const searchCallCount = Array.isArray(data.output)
-    ? data.output.filter((item) => item.type === "web_search_call").length
-    : 0;
-  logger.info(
-    { userName, searchCallCount, totalOutputItems: Array.isArray(data.output) ? data.output.length : 0 },
-    "[DailyBrief] Search call count for this run"
-  );
-  if (Array.isArray(data.output)) {
-    data.output.forEach((item, i) => {
-      if (item.type === "web_search_call") {
-        logger.info(
-          { userName, index: i, querySummary: JSON.stringify(item).slice(0, 500) },
-          "[DailyBrief] Search call detail"
-        );
-      }
+async function callDailyBriefViaClaude(input: string, userName: string): Promise<string | null> {
+  try {
+    const resp = await anthropic.messages.create({
+      model:      MODEL_SONNET,
+      max_tokens: 4000,
+      tools:      [{ type: "web_search_20250305", name: "web_search" }],
+      messages:   [{ role: "user", content: input }],
     });
+
+    const searchCount = resp.content.filter((b) => b.type === "server_tool_use").length;
+    logger.info({ userName, searchCount }, "[DailyBrief] Search call count for this run");
+
+    const text = resp.content
+      .filter((b) => b.type === "text")
+      .map((b) => (b as { type: "text"; text: string }).text)
+      .join("\n")
+      .trim();
+
+    if (!text) {
+      logger.warn({ userName }, "[DailyBrief] Empty text from Claude");
+      return null;
+    }
+    return sanitizeBriefText(text);
+  } catch (err) {
+    logger.warn({ err, userName }, "[DailyBrief] Claude call failed");
+    return null;
   }
-
-  const messageItem = data.output?.find((item) => item.type === "message");
-  const textItem = messageItem?.content?.find((c) => c.type === "output_text" || c.type === "text");
-
-  if (!textItem?.text) {
-    logger.warn(
-      { userName, raw: JSON.stringify(data).slice(0, 500) },
-      "[DailyBrief] Unexpected Responses API shape — no output_text found"
-    );
-    return { text: null, searchCallCount };
-  }
-
-  return { text: sanitizeBriefText(textItem.text), searchCallCount };
 }
 
 export async function generateDailyBrief(userName: string): Promise<string | null> {
   try {
-    const contextBlock = await buildDailyBriefContext(userName);
+    const [contextBlock, interestPicks] = await Promise.all([
+      buildDailyBriefContext(userName),
+      getDailyInterestPicks(userName),
+    ]);
 
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      logger.warn({ userName }, "[DailyBrief] OPENAI_API_KEY not configured — skipping");
-      return null;
+    const input = `${buildDailyBriefInstruction(interestPicks)}\n\n${contextBlock}`;
+
+    let text = await callDailyBriefViaClaude(input, userName);
+    if (!text) {
+      // One retry on outright failure (network/API error, empty response) —
+      // not a "too few searches" signal like the old OpenAI path needed.
+      // Claude's web_search tool reliably performs the real per-topic
+      // searches this instruction asks for; verified directly against
+      // OpenAI's web_search_preview tool, which does not.
+      logger.warn({ userName }, "[DailyBrief] First attempt failed — retrying once");
+      text = await callDailyBriefViaClaude(input, userName);
     }
 
-    // Instructions first, context block second — the model was observed
-    // treating the biographical context block itself as a search query when
-    // it came first, instead of the several distinct searches the
-    // instructions ask for.
-    const baseInput = `${DAILY_BRIEF_INSTRUCTION}\n\n${contextBlock}`;
-
-    let result = await callDailyBriefApi(apiKey, baseInput, userName);
-
-    if (result.searchCallCount < MIN_SEARCH_CALLS) {
-      logger.warn(
-        { userName, searchCallCount: result.searchCallCount },
-        "[DailyBrief] Too few search calls on first attempt — retrying with a stronger nudge"
-      );
-      const retryInput =
-        `${baseInput}\n\nYour previous attempt only performed ${result.searchCallCount} search(es) before writing. ` +
-        `That is not enough. Go back and perform all four searches listed above (news, sports, markets, weird story) ` +
-        `as separate, well-formed queries before writing your final answer.`;
-      const retryResult = await callDailyBriefApi(apiKey, retryInput, userName);
-      if (retryResult.text && retryResult.searchCallCount >= result.searchCallCount) {
-        result = retryResult;
-      }
-    }
-
-    return result.text;
+    return text;
   } catch (err) {
     logger.warn({ err, userName }, "[DailyBrief] generateDailyBrief failed");
     return null;
@@ -337,7 +320,7 @@ export async function generateDailyBriefDeepResearch(userName: string): Promise<
         model: "o4-mini-deep-research",
         background: true,
         tools: [{ type: "web_search_preview" }],
-        input: `${contextBlock}\n\n${DAILY_BRIEF_INSTRUCTION}`,
+        input: `${contextBlock}\n\n${buildDailyBriefInstruction([])}`,
         max_output_tokens: 8000,
       }),
     });
@@ -481,7 +464,7 @@ export async function generateDailyBriefSearchApi(userName: string): Promise<str
         model: "gpt-5-search-api",
         web_search_options: {},
         messages: [
-          { role: "user", content: `${contextBlock}\n\n${DAILY_BRIEF_INSTRUCTION}` },
+          { role: "user", content: `${contextBlock}\n\n${buildDailyBriefInstruction([])}` },
         ],
       }),
     });
