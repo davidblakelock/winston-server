@@ -93,3 +93,68 @@ export async function getRecentAtticItems(
   );
   return rows;
 }
+
+// ── Cleanup / archive ────────────────────────────────────────────────────────
+// "Clean up the attic": age-based candidate selection + a pending-state
+// confirmation flow, same pattern as pendingText/pendingEmailReply in
+// textMessageComposer.ts / emailMeetingManager.ts. No AI call needed to pick
+// candidates — age alone is a sufficient, cheap heuristic for v1.
+
+export const DEFAULT_ARCHIVE_THRESHOLD_DAYS = 60;
+
+export interface AtticArchiveCandidate {
+  id:          number;
+  sourceType:  AtticSourceType;
+  rawContent:  string;
+  createdAt:   string;
+}
+
+export interface PendingAtticCleanup {
+  candidates:    AtticArchiveCandidate[];
+  thresholdDays: number;
+}
+
+const _pendingCleanupMap = new Map<string, PendingAtticCleanup>();
+
+export function getPendingAtticCleanup(userName: string): PendingAtticCleanup | null {
+  return _pendingCleanupMap.get(userName) ?? null;
+}
+
+export function setPendingAtticCleanup(userName: string, state: PendingAtticCleanup | null): void {
+  if (state === null) {
+    _pendingCleanupMap.delete(userName);
+  } else {
+    _pendingCleanupMap.set(userName, state);
+  }
+}
+
+export async function getArchiveCandidates(
+  userName:      string,
+  thresholdDays  = DEFAULT_ARCHIVE_THRESHOLD_DAYS,
+): Promise<AtticArchiveCandidate[]> {
+  await _tableInit;
+  const { rows } = await query<{ id: number; source_type: AtticSourceType; raw_content: string; created_at: string }>(
+    `SELECT id, source_type, raw_content, created_at FROM attic_items
+     WHERE user_name = $1
+       AND status = 'active'
+       AND created_at < now() - ($2 || ' days')::interval
+     ORDER BY created_at ASC`,
+    [userName, thresholdDays.toString()]
+  );
+  return rows.map((r) => ({
+    id: r.id, sourceType: r.source_type, rawContent: r.raw_content, createdAt: r.created_at,
+  }));
+}
+
+export async function archiveAtticItems(userName: string, ids: number[]): Promise<number> {
+  if (ids.length === 0) return 0;
+  await _tableInit;
+  const { rows } = await query<{ id: number }>(
+    `UPDATE attic_items SET status = 'archived', updated_at = now()
+     WHERE user_name = $1 AND id = ANY($2) AND status = 'active'
+     RETURNING id`,
+    [userName, ids]
+  );
+  logger.info({ userName, count: rows.length }, "[AtticItems] Items archived");
+  return rows.length;
+}

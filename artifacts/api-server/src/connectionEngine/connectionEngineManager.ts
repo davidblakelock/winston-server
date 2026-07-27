@@ -359,7 +359,7 @@ export async function dotConnectorPass(userName: string): Promise<void> {
     }
   } catch { /* non-fatal */ }
 
-  const itemLines = formatItemLines(items, tz, 30);
+  const itemLines = formatItemLines(items, tz, 100);
   const corrections = await getRecentCorrections(userName, 30);
 
   const prompt =
@@ -434,7 +434,7 @@ export async function patternObservationPass(userName: string): Promise<void> {
   const { timezone: tz } = await getUserLocationContext(userName);
   const firstName = (profile?.name ?? userName).split(" ")[0];
 
-  const itemLines = formatItemLines(items, tz, 30);
+  const itemLines = formatItemLines(items, tz, 100);
   const corrections = await getRecentCorrections(userName, 30);
 
   const prompt =
@@ -517,7 +517,7 @@ export async function clusterPass(userName: string): Promise<void> {
   const firstName = (profile?.name ?? userName).split(" ")[0];
 
   const itemLines = items
-    .slice(0, 40)
+    .slice(0, 150)
     .map((it, i) => {
       const date = new Date(it.occurredAt).toLocaleDateString("en-US", { timeZone: tz, month: "short", day: "numeric" });
       return `[${i}] (${date}, ${it.context}) ${it.content}`;

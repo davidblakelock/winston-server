@@ -17,7 +17,15 @@ import { getPeople, type KeyPerson } from "../../people/peopleManager.js";
 import { claimWinddownReply } from "../../winddown/winddownManager.js";
 import { saveLifeCapture } from "../../lifeCaptures/lifeCapturesManager.js";
 import { runConnectionEngine, applyObservationCorrection } from "../../connectionEngine/connectionEngineManager.js";
-import { saveAtticItem } from "../../attic/atticItemsManager.js";
+import {
+  saveAtticItem,
+  getArchiveCandidates,
+  archiveAtticItems,
+  getPendingAtticCleanup,
+  setPendingAtticCleanup,
+  DEFAULT_ARCHIVE_THRESHOLD_DAYS,
+  type PendingAtticCleanup,
+} from "../../attic/atticItemsManager.js";
 import {
   getBriefingPreferences,
   buildBriefingPrefsBlock,
@@ -87,7 +95,10 @@ export type ActionType =
   | "sms_send"
   | "morning_rundown"
   | "save_to_attic"
-  | "correct_observation";
+  | "correct_observation"
+  | "cleanup_attic"
+  | "archive_attic_confirm"
+  | "archive_attic_cancel";
 
 export interface ClaudeAction {
   type: ActionType;
@@ -104,6 +115,7 @@ export interface ClaudeAction {
   gmailId?: string | null;
   feedback?: string | null;
   correctionType?: "dismiss" | "reject" | "elevate" | "forget" | null;
+  excludeIndexes?: string | null;
 }
 
 export interface NewChatRequest {
@@ -190,10 +202,16 @@ At the end of EVERY response append exactly one action tag on a new line. No exc
 [ACTION:make_reservation|restaurant=<name>] — reservation
 [ACTION:save_to_attic|content=<what to save>] — save something for later, no destination named
 [ACTION:correct_observation|type=<dismiss|reject|elevate|forget>|feedback=<what they said>] — user reacting to something you recently noticed or suggested
+[ACTION:cleanup_attic] — user wants to tidy up / clear out their Attic
+[ACTION:archive_attic_confirm|exclude=<comma-separated numbers from the pending list, or omit>] — user approves archiving the pending cleanup candidates
+[ACTION:archive_attic_cancel] — user declines the pending cleanup
 [ACTION:none] — weather, sports, news, markets, general questions
 
 THE ATTIC:
 When __USER__ says something like "put this in the attic," "remember this," "file this away," or "save this for later" WITHOUT naming a specific destination (a list, a record type, etc. — if they name one, handle it as that instead), that's a request to save it to their Attic — a catch-all for anything that catches their attention with no destination in mind yet. Emit [ACTION:save_to_attic|content=<what to save>] and confirm briefly and naturally — e.g. "Got it, I'll put that in the attic," "Filed away," or "Saved to your Attic." Don't over-explain what the Attic is unless asked.
+
+CLEANING UP THE ATTIC:
+When __USER__ asks to "clean up," "tidy up," or "clear out" their Attic, emit [ACTION:cleanup_attic] with no other text needed from you here — the candidate list gets fetched and presented after this reply, so don't try to describe what's stale yourself. If there's a [Pending Attic Cleanup] block in your context, that's the list from a cleanup you already proposed: if __USER__ approves archiving all of it (yes, go ahead, archive them, etc.), emit [ACTION:archive_attic_confirm]; if they want to keep specific numbered items and archive the rest, emit [ACTION:archive_attic_confirm|exclude=<their numbers>]; if they decline (no, never mind, leave it), emit [ACTION:archive_attic_cancel]. Acknowledge briefly and naturally either way — don't make a big deal of it.
 
 REACTING TO SOMETHING YOU NOTICED:
 If you recently noticed a pattern or made a suggestion (in this conversation or a recent one) and __USER__ reacts to it, emit [ACTION:correct_observation|type=<type>|feedback=<their words, paraphrased if needed>]. Pick the type from what they're actually saying: "those aren't related" or "don't connect this to X" → reject; "forget this" or a stronger brush-off → forget; a general "that's not it" / not relevant → dismiss; "this is important" or similar → elevate. Dismissal language attached to a factual justification — "it's not happening," "that's not true anymore," "that's over now" — is still a dismissal, not new information to elevate; the fact is the reason for closing it out, not a reason to keep it open. Acknowledge briefly and naturally — don't make a big deal of it, just take it on board the way a person would.
@@ -369,6 +387,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
   const pendingReservation = getPendingReservation(sessionUserName);
   const pendingEmailReply  = getPendingEmailReply(sessionUserName);
   const pendingMeetingReqs = getPendingMeetingRequests(sessionUserName);
+  const pendingAtticCleanup = getPendingAtticCleanup(sessionUserName);
 
   // ── Build stable system prompt ───────────────────────────────────────────────
   const corePrompt =
@@ -491,6 +510,16 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       `- If they say 'send that word for word' → emit [ACTION:email_send] but first update draftBody to their exact typed text\n` +
       `- If they cancel → emit [ACTION:email_cancel]\n` +
       `After making ANY changes to the draft, always present the COMPLETE updated email in full and ask for confirmation again. Never just say "done" or "on it" without showing the full revised draft.`;
+  }
+
+  // Attic cleanup flow in progress — inject the proposed candidate list so
+  // Claude can interpret confirm/exclude/cancel naturally.
+  if (pendingAtticCleanup !== null) {
+    const list = pendingAtticCleanup.candidates
+      .map((c, i) => `${i + 1}. [${c.sourceType}, saved ${new Date(c.createdAt).toLocaleDateString()}] ${c.rawContent.slice(0, 140)}`)
+      .join("\n");
+    dynamicPrompt += `\n\n[Pending Attic Cleanup — ${pendingAtticCleanup.candidates.length} items older than ${pendingAtticCleanup.thresholdDays} days]\n${list}\n\n` +
+      `If __USER__ approves archiving all of them, emit [ACTION:archive_attic_confirm]. If they want to keep specific numbered items, emit [ACTION:archive_attic_confirm|exclude=<comma-separated numbers>]. If they decline, emit [ACTION:archive_attic_cancel].`;
   }
 
   // Meeting request flow in progress — separate from reply drafts (E007-MEET), unchanged.
@@ -666,6 +695,15 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
           feedback: parts.feedback ?? "",
         };
         break;
+      case "cleanup_attic":
+        action = { type: "cleanup_attic" };
+        break;
+      case "archive_attic_confirm":
+        action = { type: "archive_attic_confirm", excludeIndexes: parts.exclude ?? null };
+        break;
+      case "archive_attic_cancel":
+        action = { type: "archive_attic_cancel" };
+        break;
     }
   }
   log.info({ actionType: action.type, tag: tagMatch?.[1] ?? "none" }, "[chatHandlerCore] Action parsed");
@@ -757,6 +795,60 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       } catch (err) {
         log.warn({ err }, "[chatHandlerCore] applyObservationCorrection failed");
       }
+      break;
+    }
+
+    // ── cleanup_attic ─────────────────────────────────────────────────────────
+    // Fresh data the initial Claude call couldn't have known yet (same reason
+    // composeEmailReply overrides finalReply below) — build the reply here.
+    case "cleanup_attic": {
+      try {
+        const candidates = await getArchiveCandidates(sessionUserName, DEFAULT_ARCHIVE_THRESHOLD_DAYS);
+        if (candidates.length === 0) {
+          finalReply = "Nothing looks stale in your Attic — everything's fairly recent.";
+        } else {
+          setPendingAtticCleanup(sessionUserName, { candidates, thresholdDays: DEFAULT_ARCHIVE_THRESHOLD_DAYS });
+          const list = candidates
+            .map((c, i) => `${i + 1}. [${c.sourceType}, saved ${new Date(c.createdAt).toLocaleDateString()}] ${c.rawContent.slice(0, 140)}`)
+            .join("\n");
+          finalReply = `Here's what's been sitting in your Attic for over ${DEFAULT_ARCHIVE_THRESHOLD_DAYS} days:\n\n${list}\n\nWant me to archive all of these? Just say the word, or tell me to keep any of them.`;
+        }
+      } catch (err) {
+        log.warn({ err }, "[chatHandlerCore] getArchiveCandidates failed");
+        finalReply = "I had trouble pulling up your Attic just now — give it another try in a moment.";
+      }
+      break;
+    }
+
+    // ── archive_attic_confirm ────────────────────────────────────────────────
+    case "archive_attic_confirm": {
+      const pending = pendingAtticCleanup;
+      if (pending) {
+        const excluded = new Set(
+          (action.excludeIndexes ?? "")
+            .split(",")
+            .map((s) => parseInt(s.trim(), 10))
+            .filter((n) => !isNaN(n))
+        );
+        const idsToArchive = pending.candidates
+          .filter((_, i) => !excluded.has(i + 1))
+          .map((c) => c.id);
+        try {
+          const count = await archiveAtticItems(sessionUserName, idsToArchive);
+          log.info({ count, excluded: excluded.size }, "[chatHandlerCore] Attic cleanup confirmed");
+        } catch (err) {
+          log.warn({ err }, "[chatHandlerCore] archiveAtticItems failed");
+        }
+        setPendingAtticCleanup(sessionUserName, null);
+      } else {
+        log.info({}, "[chatHandlerCore] archive_attic_confirm had nothing pending to target");
+      }
+      break;
+    }
+
+    // ── archive_attic_cancel ─────────────────────────────────────────────────
+    case "archive_attic_cancel": {
+      setPendingAtticCleanup(sessionUserName, null);
       break;
     }
 
