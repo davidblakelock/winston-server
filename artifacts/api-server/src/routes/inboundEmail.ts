@@ -1,6 +1,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import multer from "multer";
 import { saveAtticItem } from "../attic/atticItemsManager.js";
+import { runConnectionEngine } from "../connectionEngine/connectionEngineManager.js";
 
 const router: IRouter = Router();
 
@@ -98,6 +99,9 @@ router.post(
         sourceMetadata: { subject, sender },
       });
       process.stdout.write("[InboundEmail] saved to attic_items for user: " + username + "\n");
+      runConnectionEngine(username, "capture").catch((err) =>
+        process.stdout.write("[InboundEmail] runConnectionEngine failed: " + String(err) + "\n")
+      );
     } catch (err) {
       process.stdout.write("[InboundEmail] attic_items insert failed: " + String(err) + "\n");
     }

@@ -722,6 +722,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
         try {
           await saveAtticItem({ userName: sessionUserName, sourceType: "voice", rawContent: content });
           log.info({ chars: content.length }, "[chatHandlerCore] Attic item saved");
+          runConnectionEngine(sessionUserName, "capture").catch((err) => log.warn({ err }, "[chatHandlerCore] runConnectionEngine failed"));
         } catch (err) {
           log.warn({ err }, "[chatHandlerCore] saveAtticItem failed");
         }
