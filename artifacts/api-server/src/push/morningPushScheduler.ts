@@ -3,7 +3,7 @@ import { sendFcmNotification } from "./fcmSender.js";
 import { logger } from "../lib/logger.js";
 import { getWatchedShows } from "../tv/showManager.js";
 import { fetchEpisodesForDate } from "../tv/tvmaze.js";
-import { preFetchMorningNews, preFetchDailyMotivation, checkMiddayNews } from "../news/newsManager.js";
+import { checkMiddayNews } from "../news/newsManager.js";
 import {
   loadStaticContextFromDb,
   claimMorningPushSlot,
@@ -16,9 +16,6 @@ import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
 const DEFAULT_TZ = "UTC"; // Scheduler runs in UTC; each user has their own timezone in profile
 const DEFAULT_WAKE_TIME = "06:00";
-
-// How many minutes before wake time to start pre-fetching news.
-const NEWS_LEAD_MINUTES = 25;
 
 // How many minutes after wake time we will still attempt to send the push.
 // 120 minutes covers deployment-triggered restarts that land after the wake window.
@@ -43,14 +40,6 @@ function getLocalDateForUser(user: ActiveUser): string {
   return new Date().toLocaleDateString("en-CA", { timeZone: tz });
 }
 
-function subtractMinutes(timeStr: string, mins: number): string {
-  const [hStr, mStr] = timeStr.split(":");
-  const totalMin = (parseInt(hStr, 10) * 60 + parseInt(mStr, 10) + 1440 - mins) % 1440;
-  const h = Math.floor(totalMin / 60).toString().padStart(2, "0");
-  const m = (totalMin % 60).toString().padStart(2, "0");
-  return `${h}:${m}`;
-}
-
 // Returns how many minutes localTime is past wakeTime (negative if before).
 function minutesSinceWake(localTime: string, wakeTime: string): number {
   const [lh, lm] = localTime.split(":").map(Number);
@@ -60,9 +49,7 @@ function minutesSinceWake(localTime: string, wakeTime: string): number {
 
 // ── Per-user state tracking ────────────────────────────────────────────────────
 // Note: morningPushDone is now DB-backed via wasPushSentToday().
-// This map tracks the news pre-fetch action, which is fire-and-forget.
 
-const newsPrefetchDone: Map<string, string> = new Map();
 const middayCheckDone: Map<string, string>  = new Map();
 
 const _retryCount = new Map<string, number>();
@@ -169,20 +156,8 @@ async function runPerUserChecks(): Promise<void> {
   for (const user of users) {
     const { userName } = user;
     const wakeTime = user.wakeTime ?? DEFAULT_WAKE_TIME;
-    const newsTime = subtractMinutes(wakeTime, NEWS_LEAD_MINUTES);
     const localTime = getCurrentTimeForUser(user);
     const today = getLocalDateForUser(user);
-
-    // 25 min before wake: pre-fetch news + motivation (once per user per day)
-    if (localTime === newsTime && newsPrefetchDone.get(userName) !== today) {
-      newsPrefetchDone.set(userName, today);
-      preFetchMorningNews(userName).catch((err) =>
-        logger.warn({ err, userName }, "[MorningPush] News pre-fetch error")
-      );
-      preFetchDailyMotivation(userName).catch((err) =>
-        logger.warn({ err, userName }, "[MorningPush] Motivation pre-fetch error")
-      );
-    }
 
     // Within the 30-minute wake window: send push if not already sent today.
     // sendMorningPush fires the push immediately at wake time — it no longer

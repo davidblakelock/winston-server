@@ -14,7 +14,7 @@ import { getCachedWeather } from "../weather/weatherCache.js";
 
 const DAILY_BRIEF_INSTRUCTION = `You are about to write a morning briefing. Before writing anything, perform FOUR SEPARATE web searches, one topic at a time — do not combine them into one query, and do not search using the biographical context block that follows this instruction (that block is background for personalizing the writing later, not a search query).
 
-SEARCH 1 — National news: search for today's top news headlines. Aim for at least 5 real stories worth knowing — major national and international stories only. Do not include hyper-local news from a single city or small region — local government votes, local development projects, local tribal/community news.
+SEARCH 1 — National news: search for today's top news headlines. Aim for 10 real stories worth knowing — major national and international stories only. Do not include hyper-local news from a single city or small region — local government votes, local development projects, local tribal/community news. Use the Interests line in the context block below (hobbies, music genres, favorite artists, sports teams) to weigh which stories to prioritize when you have a choice between similarly newsworthy options — a story connected to something in this person's actual life should win out over an equally routine but disconnected one. This is a weighting signal, not a hard filter: still cover genuinely major national/international/political/economic developments even when nothing personally connects.
 
 SEARCH 2 — Sports: search for this person's teams' most recent completed games (the specific team names are in the context block below — use them as the search terms, e.g. "[team name] score last night"). Report only FINAL scores from the most recently completed game per team — last night's game if one was played, otherwise their most recent prior game.
 
@@ -26,7 +26,7 @@ Weather is NOT something to search for — verified current weather conditions f
 
 This briefing is delivered in the early morning, before the stock market opens for the day. Sports scores should always be from yesterday's/last night's completed games — never describe a game as happening "today" unless you've confirmed via search that it already occurred earlier the same calendar day in this person's timezone. Never give a live/current stock quote or price snapshot — the market is closed at this hour and a snapshot price is meaningless.
 
-After completing all four searches above, write a genuinely enjoyable five-minute morning brief covering: the news from Search 1, the verified weather data from the context block, the markets info from Search 3, the sports scores from Search 2, and the story from Search 4. Use only real, current, verified information from your searches (and the verified weather data) — never invent facts, venues, dates, scores, or weather. Style it however reads best for a five-minute morning read — sections, headers, or flowing prose, your call, and vary the structure day to day rather than repeating an identical template every time. Keep individual news items tight — a sentence or two each, like the examples below, not a full paragraph of explanation per story. "Five-minute read" means concise and scannable across many short items, not long-form writing on each one. Overall length should come from covering enough distinct topics (news, weather, markets, sports, a fun story, quote), not from writing at length about any single one of them.
+After completing all four searches above, write a genuinely enjoyable Morning Run Down covering: the news from Search 1, the verified weather data from the context block, the markets info from Search 3, the sports scores from Search 2, and the story from Search 4. Use only real, current, verified information from your searches (and the verified weather data) — never invent facts, venues, dates, scores, or weather. Style it however reads best — sections, headers, or flowing prose, your call, and vary the structure day to day rather than repeating an identical template every time. Keep individual news items tight — a sentence or two each, like the examples below, not a full paragraph of explanation per story. Concise and scannable across many short items, not long-form writing on each one — with 10 news stories, staying tight per item matters even more than before. Overall length should come from covering enough distinct topics (news, weather, markets, sports, a fun story, quote), not from writing at length about any single one of them.
 
 SPORTS: Format each as: team, final score, opponent. Do not mention upcoming games, schedules, or say a team is "set to play today" — this section covers only what already happened, never what's coming up.
 
@@ -41,9 +41,9 @@ For loose style reference only (not a required template), here are two briefings
 [EXAMPLE 1]
 ☕ David's Daily Brief
 Friday, July 17, 2026
-Good morning! Here's your five-minute briefing.
+Good morning! Here's your Morning Run Down.
 
-🌎 The 5 Stories That Matter
+🌎 The Stories That Matter (aim for 10 — this example shows 5 for brevity; write out the full set you found)
 1. U.S.–Iran conflict remains the dominant global story
 The conflict continued overnight with additional U.S. strikes and Iranian retaliation against U.S. facilities in the region. Markets remain focused on whether the fighting expands and what it could mean for global energy supplies.
 2. AI stock selloff is accelerating
