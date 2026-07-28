@@ -691,11 +691,26 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
         }
       } else {
         if (items.length > 0) {
+          // Prefer the exact text from the conversation over Claude's
+          // retyped notes= value. When notes= signals a title+content save,
+          // the full content (a recipe, etc.) was already generated and
+          // shown one turn ago — asking the model to reproduce it verbatim
+          // from memory into a tag parameter is unreliable no matter how
+          // the instruction is worded; it compresses. The real thing is
+          // already sitting in history exactly as the user saw it.
+          let resolvedNotes = action.notes ?? null;
+          if (items.length === 1 && resolvedNotes) {
+            const lastAssistantTurn = [...history].reverse().find((m) => m.role === "assistant");
+            const historyContent = lastAssistantTurn?.content?.trim();
+            if (historyContent && historyContent.length > resolvedNotes.length) {
+              resolvedNotes = historyContent;
+            }
+          }
           try {
-            const inserted = await addItems(listName, items, sessionUserName, undefined, action.notes ?? null);
+            const inserted = await addItems(listName, items, sessionUserName, undefined, resolvedNotes);
             if (inserted.length > 0) batchCategorizeAndUpdateItems(inserted).catch(() => {});
             await syncListItemToConnections(listName, items, sessionUserName).catch(() => {});
-            log.info({ listName, items, hasNotes: !!action.notes }, "[chatHandlerCore] List items added");
+            log.info({ listName, items, hasNotes: !!resolvedNotes }, "[chatHandlerCore] List items added");
           } catch (err) {
             log.warn({ err }, "[chatHandlerCore] addItems failed");
           }
