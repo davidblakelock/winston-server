@@ -8,6 +8,40 @@ import { getUserLocationContext } from "../lib/userTimezone.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+// ── Pending save offers ──────────────────────────────────────────────────────
+// Same pattern as pendingReservation/pendingEmailReply/pendingAtticCleanup:
+// when Winston makes a save-worthy recommendation (a product, a restaurant, a
+// recipe), the real title/url are captured into this cache immediately, from
+// that turn's own reply and actual search results — not asked of Claude again
+// later. A later "save that" confirmation resolves from here instead of
+// trusting Claude to retype content it generated in an earlier, separate call.
+
+export interface SaveOfferCandidate {
+  title: string;
+  url:   string | null;
+}
+
+export interface PendingSaveOffers {
+  candidates: SaveOfferCandidate[];
+  // Full reply text from the turn the offer was made — shared detail source
+  // for whichever candidate gets confirmed. Exact, not regenerated.
+  detail: string;
+}
+
+const _pendingSaveOffersMap = new Map<string, PendingSaveOffers>();
+
+export function getPendingSaveOffers(userName: string): PendingSaveOffers | null {
+  return _pendingSaveOffersMap.get(userName) ?? null;
+}
+
+export function setPendingSaveOffers(userName: string, offers: PendingSaveOffers | null): void {
+  if (offers === null) {
+    _pendingSaveOffersMap.delete(userName);
+  } else {
+    _pendingSaveOffersMap.set(userName, offers);
+  }
+}
+
 export type ListAction = "add" | "remove" | "clear" | "read";
 
 export interface ListOp {

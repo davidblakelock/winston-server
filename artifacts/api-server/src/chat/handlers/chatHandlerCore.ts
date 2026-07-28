@@ -39,6 +39,9 @@ import {
   addItems,
   batchCategorizeAndUpdateItems,
   syncListItemToConnections,
+  getPendingSaveOffers,
+  setPendingSaveOffers,
+  type SaveOfferCandidate,
 } from "../../lists/listManager.js";
 import { createReminder } from "../../reminders/reminderManager.js";
 import { fetchTodayEvents, type CalendarEvent } from "../../google/calendar.js";
@@ -100,7 +103,8 @@ export type ActionType =
   | "correct_observation"
   | "cleanup_attic"
   | "archive_attic_confirm"
-  | "archive_attic_cancel";
+  | "archive_attic_cancel"
+  | "offer_save";
 
 export interface ClaudeAction {
   type: ActionType;
@@ -120,6 +124,8 @@ export interface ClaudeAction {
   excludeIndexes?: string | null;
   notes?:          string | null;
   url?:            string | null;
+  offers?:         string | null;
+  offerIndex?:     number | null;
 }
 
 export interface NewChatRequest {
@@ -344,6 +350,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
   const pendingEmailReply  = getPendingEmailReply(sessionUserName);
   const pendingMeetingReqs = getPendingMeetingRequests(sessionUserName);
   const pendingAtticCleanup = getPendingAtticCleanup(sessionUserName);
+  const pendingSaveOffers   = getPendingSaveOffers(sessionUserName);
 
   // ── Build stable system prompt ───────────────────────────────────────────────
   const corePrompt =
@@ -478,6 +485,16 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       `If __USER__ approves archiving all of them, emit [ACTION:archive_attic_confirm]. If they want to keep specific numbered items, emit [ACTION:archive_attic_confirm|exclude=<comma-separated numbers>]. If they decline, emit [ACTION:archive_attic_cancel].`;
   }
 
+  // Save-offer flow in progress — inject what was actually offered so a
+  // later "save that" resolves by number, not by retyping content.
+  if (pendingSaveOffers !== null && pendingSaveOffers.candidates.length > 0) {
+    const list = pendingSaveOffers.candidates
+      .map((c, i) => `${i + 1}. ${c.title}${c.url ? ` (${c.url})` : ""}`)
+      .join("\n");
+    dynamicPrompt += `\n\n[Pending Save Offer(s) — from your last recommendation]\n${list}\n\n` +
+      `If __USER__ confirms saving one, emit [ACTION:add_list_item|list=<list>|offerIndex=<N>] — do not retype its title, content, or url yourself.`;
+  }
+
   // Meeting request flow in progress — separate from reply drafts (E007-MEET), unchanged.
   if (pendingMeetingReqs.length > 0) {
     const isEmailReplyAccepted = await classifyConfirmationIntent(message).then(r => r === 'send').catch(() => false);
@@ -580,8 +597,20 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     });
     const tagType = parts["_type"] ?? "none";
     switch (tagType) {
-      case "add_list_item":
-        action = { type: "add_todo", listName: parts.list ?? "", itemText: parts.items ?? "", notes: parts.notes ?? null, url: parts.url ?? null };
+      case "add_list_item": {
+        const offerIndexRaw = parts.offerIndex ? parseInt(parts.offerIndex, 10) : NaN;
+        action = {
+          type: "add_todo",
+          listName: parts.list ?? "",
+          itemText: parts.items ?? "",
+          notes: parts.notes ?? null,
+          url: parts.url ?? null,
+          offerIndex: Number.isNaN(offerIndexRaw) ? null : offerIndexRaw,
+        };
+        break;
+      }
+      case "offer_save":
+        action = { type: "offer_save", offers: parts.offers ?? null };
         break;
       case "add_todo":
         action = { type: "add_todo", listName: "reminders", itemText: parts.task ?? "" };
@@ -678,7 +707,44 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     // ── add_todo ──────────────────────────────────────────────────────────────
     case "add_todo": {
       const listName = requestContext?.trim() || action.listName?.trim() || "";
-      const items    = (action.itemText ?? "").split(";").map((s) => s.trim()).filter(Boolean);
+
+      // Resolve from a pending save offer first when referenced — the real
+      // title/detail/url captured the moment Winston offered it, not
+      // retyped from memory on this later turn. Falls through to items=/
+      // notes=/url= (with the history-lookback fallback for notes) when
+      // there's no valid offer to resolve from.
+      const offerCandidate = action.offerIndex && pendingSaveOffers
+        ? pendingSaveOffers.candidates[action.offerIndex - 1]
+        : undefined;
+
+      let items: string[];
+      let resolvedNotes: string | null;
+      let resolvedUrl: string | null;
+
+      if (offerCandidate) {
+        items = [offerCandidate.title];
+        resolvedNotes = pendingSaveOffers?.detail || null;
+        resolvedUrl = offerCandidate.url;
+        setPendingSaveOffers(sessionUserName, null);
+      } else {
+        items = (action.itemText ?? "").split(";").map((s) => s.trim()).filter(Boolean);
+        // Prefer the exact text from the conversation over Claude's
+        // retyped notes= value. When notes= signals a title+content save,
+        // the full content (a recipe, etc.) was already generated and
+        // shown one turn ago — asking the model to reproduce it verbatim
+        // from memory into a tag parameter is unreliable no matter how
+        // the instruction is worded; it compresses. The real thing is
+        // already sitting in history exactly as the user saw it.
+        resolvedNotes = action.notes ?? null;
+        if (items.length === 1 && resolvedNotes) {
+          const lastAssistantTurn = [...history].reverse().find((m) => m.role === "assistant");
+          const historyContent = lastAssistantTurn?.content?.trim();
+          if (historyContent && historyContent.length > resolvedNotes.length) {
+            resolvedNotes = historyContent;
+          }
+        }
+        resolvedUrl = action.url ?? null;
+      }
 
       if (!listName || listName === "to do" || listName === "reminders") {
         // Plain to-do — write to reminders table with no fire_at
@@ -692,29 +758,54 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
         }
       } else {
         if (items.length > 0) {
-          // Prefer the exact text from the conversation over Claude's
-          // retyped notes= value. When notes= signals a title+content save,
-          // the full content (a recipe, etc.) was already generated and
-          // shown one turn ago — asking the model to reproduce it verbatim
-          // from memory into a tag parameter is unreliable no matter how
-          // the instruction is worded; it compresses. The real thing is
-          // already sitting in history exactly as the user saw it.
-          let resolvedNotes = action.notes ?? null;
-          if (items.length === 1 && resolvedNotes) {
-            const lastAssistantTurn = [...history].reverse().find((m) => m.role === "assistant");
-            const historyContent = lastAssistantTurn?.content?.trim();
-            if (historyContent && historyContent.length > resolvedNotes.length) {
-              resolvedNotes = historyContent;
-            }
-          }
           try {
-            const inserted = await addItems(listName, items, sessionUserName, undefined, resolvedNotes, action.url ?? null);
+            const inserted = await addItems(listName, items, sessionUserName, undefined, resolvedNotes, resolvedUrl);
             if (inserted.length > 0) batchCategorizeAndUpdateItems(inserted).catch(() => {});
             await syncListItemToConnections(listName, items, sessionUserName).catch(() => {});
-            log.info({ listName, items, hasNotes: !!resolvedNotes, hasUrl: !!action.url }, "[chatHandlerCore] List items added");
+            log.info({ listName, items, hasNotes: !!resolvedNotes, hasUrl: !!resolvedUrl, fromOffer: !!offerCandidate }, "[chatHandlerCore] List items added");
           } catch (err) {
             log.warn({ err }, "[chatHandlerCore] addItems failed");
           }
+        }
+      }
+      break;
+    }
+
+    // ── offer_save ────────────────────────────────────────────────────────────
+    // Captures a save-worthy recommendation's real title(s) and source
+    // URL(s) at the moment it's made — same turn as the search that backs
+    // it — rather than asking Claude to retype them later, which is where
+    // both the notes and the URL used to get lost.
+    case "offer_save": {
+      const offersRaw = (action.offers ?? "").split(";").map((s) => s.trim()).filter(Boolean);
+      if (offersRaw.length > 0) {
+        // Real URLs this turn's search actually returned — the only ones a
+        // claimed url is allowed to match. Blocks a hallucinated URL from
+        // ever reaching storage.
+        const realUrls = new Set<string>();
+        for (const block of primaryResponse.content) {
+          if (block.type === "web_search_tool_result" && Array.isArray(block.content)) {
+            for (const result of block.content) {
+              if (result.type === "web_search_result" && result.url) realUrls.add(result.url);
+            }
+          }
+        }
+        const candidates: SaveOfferCandidate[] = offersRaw
+          .map((entry) => {
+            const eq = entry.indexOf("=");
+            const title = (eq === -1 ? entry : entry.slice(0, eq)).trim();
+            const claimedUrl = eq === -1 ? null : entry.slice(eq + 1).trim();
+            const url = claimedUrl && realUrls.has(claimedUrl) ? claimedUrl : null;
+            return { title, url };
+          })
+          .filter((c) => c.title.length > 0);
+
+        if (candidates.length > 0) {
+          setPendingSaveOffers(sessionUserName, { candidates, detail: finalReply });
+          log.info(
+            { count: candidates.length, withUrl: candidates.filter((c) => c.url).length },
+            "[chatHandlerCore] Save offer(s) cached"
+          );
         }
       }
       break;
