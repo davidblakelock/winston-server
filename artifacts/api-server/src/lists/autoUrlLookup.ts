@@ -77,10 +77,14 @@ async function lookupWebsiteViaPlaces(name: string, city = ""): Promise<string |
   const apiKey = process.env.GOOGLE_PLACES_API_KEY;
   if (!apiKey) return null;
 
-  // Skip city suffix for restaurants that are clearly in specific non-default
-  // locations (e.g. "Nobu Malibu" already encodes the city).
+  // This is used for restaurants AND generic "place" saves (parks, venues,
+  // museums, anything on a "places to check out"-style list) — don't bias
+  // the query toward "restaurant", or a non-restaurant name resolves to some
+  // unrelated restaurant's site instead (found via live testing: "Klyde
+  // Warren Park" resolved to a random restaurant's website with the old
+  // hardcoded "${name} restaurant ${city}" query).
   const nameEncodesCity = / (malibu|manhattan|nyc|new york|miami|chicago|la |los angeles|san francisco|austin|houston|nashville|vegas)/i.test(name);
-  const textQuery = nameEncodesCity ? `${name} restaurant` : `${name} restaurant ${city}`;
+  const textQuery = nameEncodesCity ? name : `${name} ${city}`;
 
   try {
     const resp = await fetch("https://places.googleapis.com/v1/places:searchText", {
