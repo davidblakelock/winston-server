@@ -28,6 +28,15 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const router: IRouter = Router();
 
+// TEMPORARY — recipe-display diagnostic (winston-native app/lists.tsx forwards
+// here). Remove once the "recipe saves fine but only the title shows, long-press
+// does nothing" bug is root-caused. No auth check — this is throwaway and the
+// payload never touches the database, just the log stream.
+router.post("/debug/recipe-log", (req: Request, res: Response) => {
+  req.log.info({ tag: req.body?.tag, payload: req.body?.payload }, "[RECIPE-DEBUG]");
+  res.json({ ok: true });
+});
+
 // In-process throttle: track when each profile_item ID was last backfill-checked.
 // Prevents hammering the AI search API on every restaurant list load.
 // Cleared on server restart (Railway restarts periodically anyway).
