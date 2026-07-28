@@ -119,6 +119,7 @@ export interface ClaudeAction {
   correctionType?: "dismiss" | "reject" | "elevate" | "forget" | null;
   excludeIndexes?: string | null;
   notes?:          string | null;
+  url?:            string | null;
 }
 
 export interface NewChatRequest {
@@ -580,7 +581,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     const tagType = parts["_type"] ?? "none";
     switch (tagType) {
       case "add_list_item":
-        action = { type: "add_todo", listName: parts.list ?? "", itemText: parts.items ?? "", notes: parts.notes ?? null };
+        action = { type: "add_todo", listName: parts.list ?? "", itemText: parts.items ?? "", notes: parts.notes ?? null, url: parts.url ?? null };
         break;
       case "add_todo":
         action = { type: "add_todo", listName: "reminders", itemText: parts.task ?? "" };
@@ -707,10 +708,10 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
             }
           }
           try {
-            const inserted = await addItems(listName, items, sessionUserName, undefined, resolvedNotes);
+            const inserted = await addItems(listName, items, sessionUserName, undefined, resolvedNotes, action.url ?? null);
             if (inserted.length > 0) batchCategorizeAndUpdateItems(inserted).catch(() => {});
             await syncListItemToConnections(listName, items, sessionUserName).catch(() => {});
-            log.info({ listName, items, hasNotes: !!resolvedNotes }, "[chatHandlerCore] List items added");
+            log.info({ listName, items, hasNotes: !!resolvedNotes, hasUrl: !!action.url }, "[chatHandlerCore] List items added");
           } catch (err) {
             log.warn({ err }, "[chatHandlerCore] addItems failed");
           }

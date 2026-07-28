@@ -279,19 +279,22 @@ export async function addItems(
   userName: string,
   addedBy?: string,
   notes?: string | null,
+  url?: string | null,
 ): Promise<Array<{ id: number; item_text: string }>> {
   const inserted: Array<{ id: number; item_text: string }> = [];
-  // notes describes ONE thing — a title/full-content pair (a recipe, similar).
-  // A multi-item save (shopping-list style) has no per-item notes concept, so
-  // it's only applied when there's exactly one item.
+  // notes/url describe ONE thing — a title/content/source-link save (a
+  // recipe, a product recommendation). A multi-item save (shopping-list
+  // style) has no per-item notes or url concept, so both are only applied
+  // when there's exactly one item.
   const itemNotes = items.length === 1 ? (notes ?? null) : null;
+  const itemUrl   = items.length === 1 ? (url ?? null) : null;
   for (const item of items) {
     const { rows } = await query<{ id: number; item_text: string }>(
-      `INSERT INTO list_items (user_name, list_name, item_text, added_by, notes)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO list_items (user_name, list_name, item_text, added_by, notes, url)
+       VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT (user_name, list_name, lower(item_text)) DO NOTHING
        RETURNING id, item_text`,
-      [userName, listName, item.trim(), addedBy ?? null, itemNotes]
+      [userName, listName, item.trim(), addedBy ?? null, itemNotes, itemUrl]
     );
     if (rows[0]) inserted.push(rows[0]);
   }
