@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from "express";
 import express from "express";
 import { authenticate } from "../auth/middleware.js";
 import { query } from "../db.js";
-import { lookupRestaurantUrl, isBookingPlatformUrl, detectBookingPlatform } from "../lists/autoUrlLookup.js";
+import { lookupOfficialWebsite } from "../lists/autoUrlLookup.js";
 import { upsertProfile } from "../onboarding/onboardingManager.js";
 import { isApifyApiKeyConfigured } from "../restaurants/apifyBooking.js";
 import { getResySession } from "../restaurants/bookingCredentialsManager.js";
@@ -81,8 +81,7 @@ router.post("/admin/reset-profile", async (req: Request, res: Response) => {
 /**
  * POST /api/admin/backfill-restaurant-urls
  *
- * Scans all restaurants in profile_items and populates missing URLs.
- * Also upgrades any plain website URLs to OpenTable/Resy booking links where available.
+ * Scans all restaurants in profile_items and populates missing official-site URLs.
  * Runs sequentially (not in parallel) to avoid hammering the APIs.
  */
 router.post("/admin/backfill-restaurant-urls", async (req: Request, res: Response) => {
@@ -108,37 +107,33 @@ router.post("/admin/backfill-restaurant-urls", async (req: Request, res: Respons
       ).catch(() => ({ rows: [] as Array<{ city: string | null }> }));
       city = profileRow.rows[0]?.city ?? "";
     }
-    // force=true → re-run lookup for ALL restaurants, even those with a direct booking URL.
-    // Default (force=false) → skip any restaurant that already has a confirmed direct listing URL.
+    // force=true → re-run lookup for ALL restaurants, even those that already have a URL.
+    // Default (force=false) → skip any restaurant that already has one.
     const force = body.force === true;
     const results: Array<{ id: number; name: string; before: string | null; after: string | null; status: string }> = [];
 
     for (const row of rows) {
-      // Skip only when NOT forcing AND the row already has a verified direct booking URL.
-      // isBookingPlatformUrl() requires an actual restaurant-specific path — bare domains and
-      // yelp.com/search pages do NOT count, so those rows are always retried.
-      if (!force && isBookingPlatformUrl(row.url)) {
-        results.push({ id: row.id, name: row.name, before: row.url, after: row.url, status: "skipped_already_booked" });
+      if (!force && row.url) {
+        results.push({ id: row.id, name: row.name, before: row.url, after: row.url, status: "skipped_already_has_url" });
         continue;
       }
 
       req.log.info({ id: row.id, name: row.name, city, force }, "[ADMIN] backfill-restaurant-urls — looking up");
-      const url = await lookupRestaurantUrl(row.name, city);
-      const platform = detectBookingPlatform(url);
+      const url = await lookupOfficialWebsite(row.name, city);
 
       await query(
-        `UPDATE profile_items SET url = $1, booking_platform = $2 WHERE id = $3`,
-        [url, platform, row.id]
+        `UPDATE profile_items SET url = $1, booking_platform = NULL WHERE id = $2`,
+        [url, row.id]
       );
-      results.push({ id: row.id, name: row.name, before: row.url, after: url, status: "updated" });
+      results.push({ id: row.id, name: row.name, before: row.url, after: url, status: url ? "updated" : "not_found" });
 
-      // Small delay between lookups to stay gentle on the Anthropic API
+      // Small delay between lookups to stay gentle on the Places/Anthropic APIs
       await new Promise<void>((resolve) => setTimeout(resolve, 800));
     }
 
     const updated = results.filter((r) => r.status === "updated").length;
     const notFound = results.filter((r) => r.status === "not_found").length;
-    const skipped = results.filter((r) => r.status === "skipped_already_booked").length;
+    const skipped = results.filter((r) => r.status === "skipped_already_has_url").length;
 
     req.log.info({ updated, notFound, skipped }, "[ADMIN] backfill-restaurant-urls — complete");
     res.json({ ok: true, updated, notFound, skipped, results });

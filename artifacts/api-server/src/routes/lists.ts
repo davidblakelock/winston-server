@@ -17,7 +17,7 @@ import {
   getSharedWithUser,
   getRequesterLabel,
 } from "../lists/listShareManager.js";
-import { autoUpdateItemUrl, autoUpdateRestaurantUrl, detectAutoLookupType, lookupRestaurantUrl, isBookingPlatformUrl, detectBookingPlatform } from "../lists/autoUrlLookup.js";
+import { autoUpdateItemUrl, autoUpdateRestaurantUrl, detectAutoLookupType, detectBookingPlatform } from "../lists/autoUrlLookup.js";
 import { sendFcmNotification } from "../push/fcmSender.js";
 import { extractReminder, computeFireAt, resolveNextDayOfWeek } from "../reminders/reminderParser.js";
 import { nextOccurrenceForPattern } from "../reminders/recurringUtils.js";
@@ -333,23 +333,17 @@ router.get("/lists/restaurants", async (req: Request, res: Response) => {
       })),
     });
 
-    // Lazy URL backfill: trigger background lookups for restaurants that either:
-    //  a) have no URL / a non-booking-platform URL (always retry), OR
-    //  b) have an OpenTable /r/<slug> URL — those are AI-guessed slugs and can 404;
-    //     re-verify them at most once every 4 hours using the throttle map.
-    // Yelp search URLs are skipped — they mean we already tried and found nothing better.
+    // Lazy URL backfill: any restaurant without an official site gets queued
+    // for a lookup, throttled per-restaurant (not just for one URL shape —
+    // this used to only throttle the "re-verify an AI-guessed OT slug" case,
+    // so a restaurant with no URL at all got re-queued on every single load).
     const needsLookup = rows.filter((r) => {
-      if (/yelp\.com\/search/i.test(r.url ?? "")) return false; // already retried, use Yelp search
-      if (!isBookingPlatformUrl(r.url)) return true;            // no direct booking URL → check
-      // Re-verify /r/ OT slug URLs (guessed by AI, often wrong) but throttle to 4h
-      if (/opentable\.com\/r\//i.test(r.url ?? "")) {
-        const last = restaurantBackfillChecked.get(r.id) ?? 0;
-        return Date.now() - last > BACKFILL_THROTTLE_MS;
-      }
-      return false; // trusted URL (profile/ID, Resy, Yelp BIZ) — don't re-check
+      if (r.url) return false; // already has a site
+      const last = restaurantBackfillChecked.get(r.id) ?? 0;
+      return Date.now() - last > BACKFILL_THROTTLE_MS;
     });
     if (needsLookup.length > 0) {
-      const batch = needsLookup.slice(0, 3); // cap lower (2 Claude calls each now)
+      const batch = needsLookup.slice(0, 3); // cap per load to stay gentle on the Places/Anthropic APIs
       batch.forEach((r) => restaurantBackfillChecked.set(r.id, Date.now()));
       Promise.allSettled(
         batch.map((r) => autoUpdateRestaurantUrl(r.id, r.name))
@@ -362,8 +356,11 @@ router.get("/lists/restaurants", async (req: Request, res: Response) => {
 });
 
 // POST /api/lists/restaurants
-// Accepts optional manual url; if none provided, auto-looks up booking/website URL.
-// Awaits the lookup so the response always includes the resolved URL.
+// Accepts optional manual url; if none provided, the official site is looked
+// up in the background (fire-and-forget) — this endpoint used to await that
+// lookup synchronously with no timeout anywhere in the chain, which is what
+// made "add a restaurant" spin for 9+ seconds (confirmed live) with no cap
+// on how much worse a slow run could get. Respond immediately instead.
 router.post("/lists/restaurants", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
@@ -389,27 +386,11 @@ router.post("/lists/restaurants", async (req: Request, res: Response) => {
     }
     const newItem = rows[0];
 
-    // Await the URL lookup so the response includes the resolved URL immediately.
-    // manualUrl takes priority; otherwise auto-lookup (booking platform → website).
-    let resolvedUrl = manualUrl;
-    if (!resolvedUrl) {
-      try {
-        resolvedUrl = await lookupRestaurantUrl(newItem.name);
-        if (resolvedUrl) {
-          const platform = detectBookingPlatform(resolvedUrl);
-          await query(
-            `UPDATE restaurants SET url = $1, booking_platform = $2 WHERE id = $3`,
-            [resolvedUrl, platform, newItem.id]
-          );
-          req.log.info({ id: newItem.id, name: newItem.name, url: resolvedUrl, platform }, "[Restaurants] URL auto-resolved");
-        }
-      } catch (lookupErr) {
-        req.log.warn({ lookupErr, name: newItem.name }, "[Restaurants] URL lookup failed — restaurant saved without URL");
-      }
-    }
+    res.json({ item: { id: newItem.id, item_text: newItem.name, url: manualUrl, booking_platform: manualPlatform, created_at: new Date().toISOString() } });
 
-    const resolvedPlatform = detectBookingPlatform(resolvedUrl);
-    res.json({ item: { id: newItem.id, item_text: newItem.name, url: resolvedUrl ?? null, booking_platform: resolvedPlatform, created_at: new Date().toISOString() } });
+    if (!manualUrl) {
+      autoUpdateRestaurantUrl(newItem.id, newItem.name).catch(() => {});
+    }
   } catch (err) {
     req.log.warn({ err }, "Restaurants list POST error");
     res.status(500).json({ error: "Failed to add restaurant" });
@@ -470,10 +451,7 @@ router.put("/lists/restaurants/:id", async (req: Request, res: Response) => {
 });
 
 // POST /api/lists/restaurants/backfill-urls
-// Queues background URL lookups for restaurants that either:
-//   • have no URL (url IS NULL), OR
-//   • have a non-booking-platform URL (e.g. the restaurant's own website)
-// Both cases need to be re-looked up against OpenTable / Resy / Yelp.
+// Queues background official-site lookups for restaurants with no URL yet.
 // Returns { queued: N } immediately; lookups run sequentially with 600 ms gaps.
 router.post("/lists/restaurants/backfill-urls", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
@@ -486,8 +464,8 @@ router.post("/lists/restaurants/backfill-urls", async (req: Request, res: Respon
       [userName]
     );
 
-    // Only queue restaurants that don't already have a booking platform URL
-    const toProcess = rows.filter((r) => !isBookingPlatformUrl(r.url));
+    // Only queue restaurants that don't already have an official site
+    const toProcess = rows.filter((r) => !r.url);
 
     // Look up the user's city for location-aware booking URL searches.
     const profileCityRow = await query<{ city: string | null }>(

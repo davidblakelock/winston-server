@@ -1,7 +1,7 @@
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
-import { autoUpdateRestaurantUrl, yelpFallbackUrl, lookupRestaurantUrl, detectBookingPlatform } from "../lists/autoUrlLookup.js";
+import { lookupOfficialWebsite } from "../lists/autoUrlLookup.js";
 
 export type ProfileCategory =
   | "places"
@@ -161,11 +161,6 @@ async function addRestaurantItem(
   ).catch(() => ({ rows: [] as Array<{ city: string | null }> }));
   const userCity = userCityRow.rows[0]?.city ?? "";
 
-  // Pre-populate with a guaranteed Yelp search URL so the link is available
-  // immediately, then race a real lookup (OpenTable/Resy/Yelp direct) against
-  // an 8-second timeout so the chat confirmation can name the platform.
-  const initialUrl = yelpFallbackUrl(cleanName, userCity);
-
   const { rows } = await query<{
     id: number;
     name: string;
@@ -173,30 +168,31 @@ async function addRestaurantItem(
     created_at: Date;
   }>(
     `INSERT INTO restaurants (user_name, name, detail, url)
-     VALUES ($1, $2, $3, $4)
+     VALUES ($1, $2, $3, NULL)
      RETURNING id, name, detail, created_at`,
-    [userName, cleanName, cleanDetail, initialUrl]
+    [userName, cleanName, cleanDetail]
   );
 
-  let resolvedUrl: string | null = initialUrl;
-  let resolvedPlatform: string | null = detectBookingPlatform(initialUrl);
+  // This is a background job (nightly memory extraction), not a user-facing
+  // request, so a synchronous-but-guarded lookup is fine here — race the
+  // official-site lookup against a timeout so the job never hangs.
+  let resolvedUrl: string | null = null;
+  const resolvedPlatform: string | null = null;
 
   try {
-    const LOOKUP_TIMEOUT = 8000;
     const result = await Promise.race([
-      lookupRestaurantUrl(cleanName, userCity),
-      new Promise<null>((resolve) => setTimeout(() => resolve(null), LOOKUP_TIMEOUT)),
+      lookupOfficialWebsite(cleanName, userCity),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 10000)),
     ]);
     if (result) {
       resolvedUrl = result;
-      resolvedPlatform = detectBookingPlatform(result);
       await query(
-        `UPDATE restaurants SET url = $1, booking_platform = $2 WHERE id = $3`,
-        [resolvedUrl, resolvedPlatform, rows[0].id]
+        `UPDATE restaurants SET url = $1 WHERE id = $2`,
+        [resolvedUrl, rows[0].id]
       ).catch(() => {});
     }
   } catch {
-    // Best effort — restaurant is saved with Yelp fallback
+    // Best effort — restaurant is saved without a URL, backfilled later
   }
 
   return {

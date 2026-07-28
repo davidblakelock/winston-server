@@ -18,33 +18,10 @@ export function detectAutoLookupType(listName: string): AutoLookupType | null {
   return null;
 }
 
-// ── Per-type URL builders ─────────────────────────────────────────────────────
-
-// Constructs a Yelp search URL for a restaurant — used as a guaranteed fallback
-// when no direct OpenTable / Resy / Yelp listing can be found via web search.
-// The URL opens Yelp filtered to the restaurant name + city so the user can
-// browse reviews and book via Yelp Waitlist even without a direct listing.
-export function yelpFallbackUrl(restaurantName: string, city = ""): string {
-  const base = `https://www.yelp.com/search?find_desc=${encodeURIComponent(restaurantName)}`;
-  return city.trim() ? `${base}&find_loc=${encodeURIComponent(city.trim())}` : base;
-}
-
-// Returns true when a stored URL is a DIRECT reservation/listing page on a known
-// booking platform (not a generic search page). Used by backfill logic — Yelp search
-// URLs are intentionally excluded so those rows are retried for a direct listing.
-export function isBookingPlatformUrl(url: string | null | undefined): boolean {
-  if (!url) return false;
-  // Direct OpenTable listing
-  if (/opentable\.com\/(r|restaurant)\//i.test(url)) return true;
-  // Direct Resy venue page
-  if (/resy\.com\/cities\/.+\/venues\//i.test(url)) return true;
-  // Direct Yelp business listing (yelp.com/biz/...) — NOT yelp.com/search
-  if (/yelp\.com\/biz\//i.test(url)) return true;
-  return false;
-}
-
-// Maps a booking URL to a human-readable platform name.
-// Returns null when the URL doesn't match any recognized platform.
+// Classifies a URL's booking platform, when it happens to be one. Only used
+// for MANUALLY-entered URLs now (routes/lists.ts PUT/POST with a user-typed
+// url) — the auto-lookup path below no longer looks for booking platforms at
+// all, so this naturally returns null for anything it resolves.
 export function detectBookingPlatform(url: string | null | undefined): string | null {
   if (!url) return null;
   try {
@@ -63,7 +40,9 @@ export function detectBookingPlatform(url: string | null | undefined): string | 
   return null;
 }
 
-// Verify a booking URL actually resolves (not a 404).
+// Verify a URL actually resolves (not a 404). Only used to sanity-check the
+// web-search fallback result below — Google Places' websiteUri is already
+// authoritative and doesn't need this.
 // Rejects only on HTTP 404 — 403/503/timeouts are treated as "unknown, assume OK"
 // to avoid falsely discarding URLs that block bots.
 async function verifyUrlExists(url: string): Promise<boolean> {
@@ -87,176 +66,101 @@ async function verifyUrlExists(url: string): Promise<boolean> {
   }
 }
 
-// Parse and validate a booking platform URL returned by Claude.
-// Returns the cleaned URL string or null if it fails validation.
-function parseBookingUrl(rawText: string): string | null {
-  if (!rawText || /^none$/i.test(rawText.trim())) return null;
-  const rawUrl = rawText.trim().split(/[\s\n]/)[0] ?? "";
-  const url = rawUrl.replace(/[.,;!?]$/, "");
-  if (!/opentable\.com|resy\.com|yelp\.com/i.test(url)) return null;
-  try {
-    const parsed = new URL(url.startsWith("http") ? url : `https://${url}`);
-    const path = parsed.pathname.replace(/\/+$/, "");
-    if (path.length < 4) return null;
-    if (/yelp\.com/i.test(url) && parsed.pathname.startsWith("/search")) return null;
-  } catch {
-    return null;
-  }
-  return url;
-}
+// ── Official-site lookup ──────────────────────────────────────────────────────
+// General-purpose lookup for every save path EXCEPT the "make a reservation"
+// flow — that flow needs a booking-platform link, not a website, and keeps
+// its own separate, synchronous lookup in restaurantIntelligence.ts. This one
+// only ever looks for the place's own official site, timeout-guarded end to
+// end so no caller can hang waiting on it.
 
-// Step 1: Use Claude web_search to find a direct OpenTable, Resy, or Yelp booking page.
-// Returns the booking URL with a restaurant-specific path, or null if not found.
-// HEAD-verifies the URL before returning to avoid storing 404 slugs.
-async function lookupRestaurantBookingUrl(name: string, city = ""): Promise<string | null> {
-  const anthropicKey = process.env.ANTHROPIC_API_KEY;
-  if (!anthropicKey) return null;
-
-  const anthropic = new Anthropic({ apiKey: anthropicKey });
-  const locationHint = city.trim() ? ` in ${city.trim()}` : "";
-
-  // ── Round 1: search for OT / Resy / Yelp page ─────────────────────────────
-  const prompt =
-    `I need the SPECIFIC restaurant page URL for "${name}"${locationHint} on a booking platform.\n\n` +
-    `Search the web and find the restaurant's own listing page on one of these platforms:\n\n` +
-    `OPENTABLE — URL format examples:\n` +
-    `  https://www.opentable.com/r/nobu-malibu\n` +
-    `  https://www.opentable.com/r/eleven-madison-park-new-york\n` +
-    `  https://www.opentable.com/restaurant/profile/12345  ← prefer this ID format when available\n\n` +
-    `RESY — URL format examples:\n` +
-    `  https://resy.com/cities/nyc/venues/eleven-madison-park\n` +
-    `  https://resy.com/cities/mia/venues/nobu-miami\n\n` +
-    `YELP — the restaurant's own business listing page (NOT a search results page):\n` +
-    `  https://www.yelp.com/biz/nobu-malibu\n` +
-    `  https://www.yelp.com/biz/the-mercury-dallas-2\n\n` +
-    `RULES — read carefully:\n` +
-    `• STRONGLY prefer opentable.com/restaurant/profile/<id> URLs over /r/<slug> slugs — the ID format is always correct.\n` +
-    `• The URL MUST include the restaurant's name or ID in the path (not just the domain).\n` +
-    `• REJECT homepages or search pages: opentable.com, resy.com, yelp.com/search?...\n` +
-    `• Return ONLY the single URL — no explanation, no extra text.\n` +
-    `• If you cannot find a listing with the restaurant's name/ID in the path, return exactly: NONE\n\n` +
-    `Search for: "${name} opentable" OR "${name} resy" OR "${name} yelp${city.trim() ? ` ${city.trim()}` : ""}"`;
-
-  try {
-    const response = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 300,
-      tools: [{ type: "web_search_20250305" as const, name: "web_search" }],
-      messages: [{ role: "user", content: prompt }],
-    });
-
-    const text = response.content
-      .filter((b) => b.type === "text")
-      .map((b) => (b as { type: "text"; text: string }).text)
-      .join("").trim();
-
-    const url = parseBookingUrl(text);
-    if (url) {
-      const exists = await verifyUrlExists(url);
-      if (exists) {
-        logger.info({ name, url }, "[AutoURL] Booking URL found and verified");
-        return url;
-      }
-      logger.warn({ name, url }, "[AutoURL] Round-1 URL failed HEAD check — trying Yelp fallback search");
-    }
-  } catch (err) {
-    logger.warn({ err, name }, "[AutoURL] Booking URL web search failed");
-    return null;
-  }
-
-  // ── Round 2: OT/Resy URL was bad (or not found) — try Yelp BIZ page ───────
-  try {
-    const yelpPrompt =
-      `Find the Yelp business page URL for "${name}"${locationHint}.\n` +
-      `Format: https://www.yelp.com/biz/<slug>\n` +
-      `Return ONLY the URL (e.g. https://www.yelp.com/biz/nick-and-sams-steakhouse-dallas) or exactly: NONE`;
-    const r2 = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 150,
-      tools: [{ type: "web_search_20250305" as const, name: "web_search" }],
-      messages: [{ role: "user", content: yelpPrompt }],
-    });
-    const t2 = r2.content
-      .filter((b) => b.type === "text")
-      .map((b) => (b as { type: "text"; text: string }).text)
-      .join("").trim();
-    const yelpUrl = parseBookingUrl(t2);
-    if (yelpUrl && /yelp\.com\/biz\//i.test(yelpUrl)) {
-      logger.info({ name, yelpUrl }, "[AutoURL] Yelp BIZ page found in round 2");
-      return yelpUrl;
-    }
-  } catch (err) {
-    logger.warn({ err, name }, "[AutoURL] Yelp fallback search failed");
-  }
-
-  return null;
-}
-
-// Step 2 fallback: Google Places API websiteUri (the restaurant's own website).
-async function lookupRestaurantWebsite(name: string, city = ""): Promise<string | null> {
+async function lookupWebsiteViaPlaces(name: string, city = ""): Promise<string | null> {
   const apiKey = process.env.GOOGLE_PLACES_API_KEY;
   if (!apiKey) return null;
 
-  // Skip city suffix for restaurants that are clearly in specific non-default locations
-  // (e.g. "Nobu Malibu" already encodes the city, "Eleven Madison Park" is NYC)
-  const nameEncodeCity = / (malibu|manhattan|nyc|new york|miami|chicago|la |los angeles|san francisco|austin|houston|nashville|vegas)/i.test(name);
-  const query_text = nameEncodeCity ? `${name} restaurant` : `${name} restaurant ${city}`;
-
-  const PLACES_TEXT_URL = "https://places.googleapis.com/v1/places:searchText";
-  logger.info({ label: "PlacesText", url: PLACES_TEXT_URL, query_text }, "[AutoURL] → Places request");
+  // Skip city suffix for restaurants that are clearly in specific non-default
+  // locations (e.g. "Nobu Malibu" already encodes the city).
+  const nameEncodesCity = / (malibu|manhattan|nyc|new york|miami|chicago|la |los angeles|san francisco|austin|houston|nashville|vegas)/i.test(name);
+  const textQuery = nameEncodesCity ? `${name} restaurant` : `${name} restaurant ${city}`;
 
   try {
-    const searchResp = await fetch(PLACES_TEXT_URL, {
+    const resp = await fetch("https://places.googleapis.com/v1/places:searchText", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": apiKey,
         "X-Goog-FieldMask": "places.websiteUri,places.displayName",
       },
-      body: JSON.stringify({
-        textQuery: query_text,
-        maxResultCount: 1,
-        languageCode: "en",
-      }),
-      signal: AbortSignal.timeout(10000),
+      body: JSON.stringify({ textQuery, maxResultCount: 1, languageCode: "en" }),
+      signal: AbortSignal.timeout(8000),
     });
-
-    const clonedResp = searchResp.clone();
-    const bodySnippet = (await clonedResp.text()).slice(0, 300);
-    logger.info(
-      { label: "PlacesText", status: searchResp.status, statusText: searchResp.statusText, body: bodySnippet },
-      "[AutoURL] ← Places response"
-    );
-
-    if (!searchResp.ok) {
-      logger.warn({ status: searchResp.status }, "[AutoURL] Places API error");
+    if (!resp.ok) {
+      logger.warn({ name, status: resp.status }, "[AutoURL] Places API error");
       return null;
     }
-
-    const data = (await searchResp.json()) as {
-      places?: Array<{ websiteUri?: string; displayName?: { text: string } }>;
-    };
-
+    const data = (await resp.json()) as { places?: Array<{ websiteUri?: string }> };
     const websiteUri = data.places?.[0]?.websiteUri ?? null;
-    logger.info({ name, websiteUri }, "[AutoURL] Restaurant website found via Places API");
+    if (websiteUri) logger.info({ name, websiteUri }, "[AutoURL] Official site found via Places API");
     return websiteUri;
   } catch (err) {
-    logger.warn({ err }, "[AutoURL] Restaurant Places lookup failed");
+    logger.warn({ err, name }, "[AutoURL] Places lookup failed");
     return null;
   }
 }
 
-// Orchestrator: always returns a URL — direct booking page if found, Yelp search as fallback.
-// Priority: OpenTable → Resy → Yelp direct listing → Yelp search (guaranteed non-null).
-async function lookupRestaurantUrl(name: string, city = ""): Promise<string> {
-  const bookingUrl = await lookupRestaurantBookingUrl(name, city);
-  if (bookingUrl) return bookingUrl;
-  // Guaranteed fallback: Yelp search for this restaurant, optionally filtered by city.
-  // Retried later by backfill because yelp.com/search is not a "direct" booking URL.
-  return yelpFallbackUrl(name, city);
+// Fallback when Places has no key or no result: a single Claude+web_search
+// call asking specifically for the official site (never a booking platform),
+// hard-capped at 8s via Promise.race — never chained with a second call.
+async function lookupWebsiteViaSearch(name: string, city = ""): Promise<string | null> {
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  if (!anthropicKey) return null;
+  const anthropic = new Anthropic({ apiKey: anthropicKey });
+  const locationHint = city.trim() ? ` in ${city.trim()}` : "";
+
+  const attempt = (async (): Promise<string | null> => {
+    try {
+      const response = await anthropic.messages.create({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 200,
+        tools: [{ type: "web_search_20250305" as const, name: "web_search" }],
+        messages: [{
+          role: "user",
+          content:
+            `Find the OFFICIAL website for "${name}"${locationHint} — its own site, not a review or ` +
+            `booking-platform page (not opentable.com, resy.com, yelp.com, tripadvisor.com, etc.). ` +
+            `Return ONLY the URL, no explanation. If you can't find an official site, return exactly: NONE`,
+        }],
+      });
+      const text = response.content
+        .filter((b) => b.type === "text")
+        .map((b) => (b as { type: "text"; text: string }).text)
+        .join("").trim();
+      if (!text || /^none$/i.test(text)) return null;
+      const raw = (text.split(/[\s\n]/)[0] ?? "").replace(/[.,;!?]$/, "");
+      if (!raw) return null;
+      const url = raw.startsWith("http") ? raw : `https://${raw}`;
+      try { new URL(url); } catch { return null; }
+      if (/opentable\.com|resy\.com|yelp\.com|tripadvisor\.com/i.test(url)) return null; // reject a booking/review link if Claude ignored the instruction
+      const exists = await verifyUrlExists(url);
+      return exists ? url : null;
+    } catch (err) {
+      logger.warn({ err, name }, "[AutoURL] Web-search website lookup failed");
+      return null;
+    }
+  })();
+
+  return Promise.race([
+    attempt,
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), 8000)),
+  ]);
 }
 
-export { lookupRestaurantUrl };
+/** Looks up a place's official website. Returns null if none is found — no
+ *  guaranteed non-null fallback, unlike the old booking-platform lookup. */
+export async function lookupOfficialWebsite(name: string, city = ""): Promise<string | null> {
+  const viaPlaces = await lookupWebsiteViaPlaces(name, city);
+  if (viaPlaces) return viaPlaces;
+  return lookupWebsiteViaSearch(name, city);
+}
 
 export async function lookupItemUrl(itemText: string, type: AutoLookupType): Promise<string | null> {
   const encoded = encodeURIComponent(itemText);
@@ -264,8 +168,9 @@ export async function lookupItemUrl(itemText: string, type: AutoLookupType): Pro
   switch (type) {
     case "restaurant":
     case "place":
-      // Both restaurants and "places to check out" style lists use venue URL lookup
-      return lookupRestaurantUrl(itemText);
+      // Both restaurants and "places to check out" style lists want the
+      // official site — never a booking platform.
+      return lookupOfficialWebsite(itemText);
 
     case "movie":
       return `https://www.imdb.com/find/?q=${encoded}&s=tt&ttype=ft`;
@@ -308,11 +213,7 @@ export async function autoUpdateItemUrl(
   }
 }
 
-// ── Fire-and-forget: lookup restaurant URL and update the restaurants table ──
-// Always tries to find a booking platform URL.
-// Updates the row whether or not it already has a URL — the goal is to replace
-// any stored restaurant website with an OpenTable / Resy / Yelp booking link.
-// If no booking link is found, the existing URL (if any) is left unchanged.
+// ── Fire-and-forget: lookup restaurant's official site and update the restaurants table ──
 
 export async function autoUpdateRestaurantUrl(
   restaurantId: number,
@@ -320,16 +221,13 @@ export async function autoUpdateRestaurantUrl(
   city = ""
 ): Promise<void> {
   try {
-    // lookupRestaurantUrl always returns a string (never null):
-    // OpenTable → Resy → Yelp direct → Yelp search fallback.
-    const url = await lookupRestaurantUrl(restaurantName, city);
-    const platform = detectBookingPlatform(url);
-
+    const url = await lookupOfficialWebsite(restaurantName, city);
+    if (!url) return;
     await query(
-      `UPDATE restaurants SET url = $1, booking_platform = $2 WHERE id = $3`,
-      [url, platform, restaurantId]
+      `UPDATE restaurants SET url = $1, booking_platform = NULL WHERE id = $2`,
+      [url, restaurantId]
     );
-    logger.info({ restaurantId, restaurantName, url, platform }, "[AutoURL] Restaurant booking URL saved");
+    logger.info({ restaurantId, restaurantName, url }, "[AutoURL] Restaurant official site saved");
   } catch (err) {
     logger.warn({ err, restaurantId, restaurantName }, "[AutoURL] Failed to auto-update restaurant URL");
   }
