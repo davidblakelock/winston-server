@@ -492,7 +492,8 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       .map((c, i) => `${i + 1}. ${c.title}${c.url ? ` (${c.url})` : ""}`)
       .join("\n");
     dynamicPrompt += `\n\n[Pending Save Offer(s) — from your last recommendation]\n${list}\n\n` +
-      `If __USER__ confirms saving one, emit [ACTION:add_list_item|list=<list>|offerIndex=<N>] — do not retype its title, content, or url yourself.`;
+      `If __USER__ confirms saving one of these, you MUST end your reply with [ACTION:add_list_item|list=<list>|offerIndex=<N>], using the number from the list above — do not retype its title, content, or url yourself. ` +
+      `This is not optional: telling __USER__ it's saved without emitting this exact tag means nothing is actually written to their list — the words alone don't save anything. Do not skip the tag just because a friendly confirmation sentence feels sufficient by itself.`;
   }
 
   // Meeting request flow in progress — separate from reply drafts (E007-MEET), unchanged.
@@ -691,6 +692,32 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
         break;
     }
   }
+  // Safety net: even with explicit instruction, Claude sometimes narrates a
+  // confident "saved!" while emitting no action tag at all (or [ACTION:none])
+  // — observed live, intermittently, despite a correctly-injected pending
+  // offer and correctly-worded guidance. When that happens with exactly one
+  // unambiguous pending candidate, the reply text itself still reliably names
+  // which list it claims to have saved to ("...to your **wish list**!") — so
+  // recover the real intent from that instead of losing the save outright.
+  if (action.type === "none" && pendingSaveOffers && pendingSaveOffers.candidates.length === 1) {
+    const confirmsSave = /\b(saved|added|done)\b.{0,60}\bto\b.{0,40}\blist\b/i.test(finalReply);
+    const listNameMatch = finalReply.match(/to (?:your |the )?\*{0,2}([a-z0-9 '&-]+?)\*{0,2} list/i);
+    if (confirmsSave && listNameMatch) {
+      action = {
+        type: "add_todo",
+        listName: listNameMatch[1].trim(),
+        itemText: "",
+        notes: null,
+        url: null,
+        offerIndex: 1,
+      };
+      log.warn(
+        { reply: finalReply.slice(0, 200) },
+        "[chatHandlerCore] Recovered save-offer confirmation with no action tag — model narrated success without emitting the tag"
+      );
+    }
+  }
+
   log.info({ actionType: action.type, tag: tagMatch?.[1] ?? "none" }, "[chatHandlerCore] Action parsed");
 
   // ── Execute action ───────────────────────────────────────────────────────────
@@ -723,7 +750,14 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
 
       if (offerCandidate) {
         items = [offerCandidate.title];
-        resolvedNotes = pendingSaveOffers?.detail || null;
+        // The shared turn-level detail only describes ONE thing when only one
+        // candidate was offered (a recipe, a single product) — that's the
+        // title/detail-split case, so it belongs in notes. When several
+        // candidates were offered and the user picked just one, that same
+        // text covers all of them (comparisons, "MACC's Take", etc.), so it
+        // would pollute this item's notes rather than describe it — treat
+        // it like any other simple single-value save instead.
+        resolvedNotes = pendingSaveOffers?.candidates.length === 1 ? (pendingSaveOffers.detail || null) : null;
         resolvedUrl = offerCandidate.url;
         setPendingSaveOffers(sessionUserName, null);
       } else {
@@ -782,11 +816,20 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
         // Real URLs this turn's search actually returned — the only ones a
         // claimed url is allowed to match. Blocks a hallucinated URL from
         // ever reaching storage.
-        const realUrls = new Set<string>();
+        const realUrls  = new Set<string>();
+        const realHosts = new Set<string>();
+        const hostOf = (u: string): string | null => {
+          try { return new URL(u).hostname.replace(/^www\./, "").toLowerCase(); }
+          catch { return null; }
+        };
         for (const block of primaryResponse.content) {
           if (block.type === "web_search_tool_result" && Array.isArray(block.content)) {
             for (const result of block.content) {
-              if (result.type === "web_search_result" && result.url) realUrls.add(result.url);
+              if (result.type === "web_search_result" && result.url) {
+                realUrls.add(result.url);
+                const h = hostOf(result.url);
+                if (h) realHosts.add(h);
+              }
             }
           }
         }
@@ -795,7 +838,16 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
             const eq = entry.indexOf("=");
             const title = (eq === -1 ? entry : entry.slice(0, eq)).trim();
             const claimedUrl = eq === -1 ? null : entry.slice(eq + 1).trim();
-            const url = claimedUrl && realUrls.has(claimedUrl) ? claimedUrl : null;
+            // Exact match is the strongest signal, but Claude often retypes a
+            // real result's URL with small normalization differences (a
+            // trailing slash, a dropped query string, www vs not) — reject
+            // only when even the DOMAIN doesn't appear anywhere in this
+            // turn's real search results, since that's what actually
+            // indicates a hallucinated link rather than a reformatted one.
+            const claimedHost = claimedUrl ? hostOf(claimedUrl) : null;
+            const url = claimedUrl && (realUrls.has(claimedUrl) || (claimedHost && realHosts.has(claimedHost)))
+              ? claimedUrl
+              : null;
             return { title, url };
           })
           .filter((c) => c.title.length > 0);
