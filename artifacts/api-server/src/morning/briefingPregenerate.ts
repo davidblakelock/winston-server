@@ -89,7 +89,7 @@ Last night's results for [this person's home teams]: [Team] beat [Opponent], fin
 
 Have a great Friday!
 
-End with today's Stoic quote provided above, woven in naturally as a closing thought, not just pasted verbatim.`;
+End with today's Stoic quote provided above, delivered essentially as given — the exact words, attributed naturally (e.g. "As Marcus Aurelius put it..." or "Epictetus wrote..."). Immediately after, in exactly ONE sentence, give your own plain-language read on what it actually means today. Match this register: treat the idea as a piece of working technology, not ancient wisdom to admire from a distance — a framework built to run a mind, the way you'd describe a good system or process. Modern, a little wry, confident — never lecturing, never "ancient Rome," never "the Stoics believed," no philosophy jargon. Vary the phrasing and the metaphor day to day — don't lean on the same framing every morning.`;
 }
 
 // Server-side safety net — the prompt's anti-link/citation instructions are
