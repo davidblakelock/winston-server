@@ -36,6 +36,7 @@ import { getProfile, getActiveUsers } from "../onboarding/onboardingManager.js";
 import { getRecentCaptures } from "../lifeCaptures/lifeCapturesManager.js";
 import { getRecentAtticItems } from "../attic/atticItemsManager.js";
 import { getGoals, type Goal } from "../goals/goalsManager.js";
+import { getStoicForUser, PHASE_NAMES } from "../stoic/stoicManager.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
 const anthropic = new Anthropic();
@@ -277,6 +278,18 @@ async function fetchGoalContext(userName: string): Promise<string> {
     `don't force it:\n${lines}\n`;
 }
 
+// A third context source, same shape as fetchGoalContext — standing context,
+// not part of the recency-sorted item stream. No tenet-matching logic; the
+// phase name is just handed over and Claude decides whether it's relevant.
+async function fetchStoicPhaseContext(userName: string): Promise<string> {
+  const stoic = await getStoicForUser(userName).catch(() => null);
+  if (!stoic) return "";
+  const phaseName = PHASE_NAMES[stoic.phase] ?? `Phase ${stoic.phase}`;
+  return `\nThe user's current Stoic curriculum phase: ${phaseName}. Let this inform your read of what's ` +
+    `emerging for them if it genuinely fits — don't force a connection, and never mention the phase or the ` +
+    `curriculum by name.\n`;
+}
+
 // ── Source adapter ────────────────────────────────────────────────────────────
 // Normalizes across source tables so the passes below can read a mixed pool
 // of items without knowing which table each one came from. Sources keep their
@@ -384,11 +397,12 @@ export async function dotConnectorPass(userName: string): Promise<void> {
   const itemLines = formatItemLines(items, tz, 100);
   const corrections = await getRecentCorrections(userName, 30);
   const goalContext = await fetchGoalContext(userName);
+  const stoicPhaseContext = await fetchStoicPhaseContext(userName);
 
   const prompt =
     `${firstName}'s personal reflections and saved items from the last 30 days:\n${itemLines}\n\n` +
     `Profile: lives in ${city}, interests include ${interests.slice(0, 6).join(", ") || "various things"}.` +
-    listContext + formatCorrectionContext(corrections) + goalContext + `\n\n` +
+    listContext + formatCorrectionContext(corrections) + goalContext + stoicPhaseContext + `\n\n` +
     `One question: Is there anything in the above that Winston could take a concrete action on RIGHT NOW — ` +
     `specifically something involving: checking the calendar for an open week, making a reservation, ` +
     `researching travel options, or adding something to a list?\n\n` +
@@ -460,10 +474,11 @@ export async function patternObservationPass(userName: string): Promise<void> {
   const itemLines = formatItemLines(items, tz, 100);
   const corrections = await getRecentCorrections(userName, 30);
   const goalContext = await fetchGoalContext(userName);
+  const stoicPhaseContext = await fetchStoicPhaseContext(userName);
 
   const prompt =
     `${firstName}'s personal reflections and saved items from the last 30 days:\n${itemLines}\n` +
-    formatCorrectionContext(corrections) + goalContext + `\n` +
+    formatCorrectionContext(corrections) + goalContext + stoicPhaseContext + `\n` +
     `Read these carefully. You are a wise, observant friend — not a therapist, not a coach. ` +
     `Look for a genuine recurring pattern: something ${firstName} has mentioned 3 or more times, ` +
     `or a clear trend in their energy, mood, goals, or relationships.\n\n` +

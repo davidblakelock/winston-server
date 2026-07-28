@@ -17,6 +17,7 @@ import {
 import { getPeople, type KeyPerson } from "../../people/peopleManager.js";
 import { claimWinddownReply } from "../../winddown/winddownManager.js";
 import { saveLifeCapture } from "../../lifeCaptures/lifeCapturesManager.js";
+import { getStoicForUser } from "../../stoic/stoicManager.js";
 import { runConnectionEngine, applyObservationCorrection } from "../../connectionEngine/connectionEngineManager.js";
 import {
   saveAtticItem,
@@ -288,11 +289,18 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
   // claim is eligible to persist a capture, and only once we know below whether
   // Claude treated this as a plain reflective reply or an actionable request.
   let winddownReplyClaimed = false;
+  let winddownStoicPhase: number | null = null;
   if (!isWinddownOpener && message.trim().toLowerCase() !== "evening check in") {
     winddownReplyClaimed = await claimWinddownReply(sessionUserName).catch((err) => {
       log.warn({ err }, "[chatHandlerCore] Winddown claim failed");
       return false;
     });
+    if (winddownReplyClaimed) {
+      // Plain fact storage alongside the capture — no classification, just
+      // which phase was active when this reflection was written.
+      const stoicEntry = await getStoicForUser(sessionUserName).catch(() => null);
+      winddownStoicPhase = stoicEntry?.phase ?? null;
+    }
   }
 
   let history = req.history.slice(-ACTIVE_CONTEXT_LIMIT);
@@ -500,7 +508,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       const messageId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
       runPostProcessing(sessionUserName, message, emailResult.hardcodedResponse, history, userProfile, deviceId, messageId);
       if (winddownReplyClaimed) {
-        saveLifeCapture(sessionUserName, message, "evening").then((capture) => {
+        saveLifeCapture(sessionUserName, message, "evening", winddownStoicPhase).then((capture) => {
           if (capture) {
             runConnectionEngine(sessionUserName, "capture").catch((err) => log.warn({ err }, "[chatHandlerCore] runConnectionEngine failed"));
           }
@@ -544,7 +552,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     const messageId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     runPostProcessing(sessionUserName, message, fallback, history, userProfile, deviceId, messageId);
     if (winddownReplyClaimed) {
-      saveLifeCapture(sessionUserName, message, "evening").then((capture) => {
+      saveLifeCapture(sessionUserName, message, "evening", winddownStoicPhase).then((capture) => {
         if (capture) {
           runConnectionEngine(sessionUserName, "capture").catch((err) => log.warn({ err }, "[chatHandlerCore] runConnectionEngine failed"));
         }
@@ -1409,7 +1417,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
   // reservation, list add, or anything else that already has its own destination.
   // Fire-and-forget: never blocks the response already being returned below.
   if (winddownReplyClaimed && action.type === "none") {
-    saveLifeCapture(sessionUserName, message, "evening").then((capture) => {
+    saveLifeCapture(sessionUserName, message, "evening", winddownStoicPhase).then((capture) => {
       if (capture) {
         runConnectionEngine(sessionUserName, "capture").catch((err) => log.warn({ err }, "[chatHandlerCore] runConnectionEngine failed"));
       }

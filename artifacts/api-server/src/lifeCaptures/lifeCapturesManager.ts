@@ -30,9 +30,13 @@ const _tableInit = (async () => {
       captured_at timestamptz NOT NULL DEFAULT now(),
       content     text NOT NULL,
       context     text NOT NULL DEFAULT 'morning',
-      acted_on    boolean NOT NULL DEFAULT false
+      acted_on    boolean NOT NULL DEFAULT false,
+      stoic_phase integer
     )
   `).catch((err) => logger.error({ err }, "[LifeCaptures] Table init failed"));
+  // Idempotent — the table above already existed in production before this column.
+  await query(`ALTER TABLE life_captures ADD COLUMN IF NOT EXISTS stoic_phase integer`)
+    .catch((err) => logger.error({ err }, "[LifeCaptures] stoic_phase column migration failed"));
 
   await query(`
     CREATE TABLE IF NOT EXISTS life_suggestions (
@@ -75,6 +79,7 @@ export interface LifeCapture {
   content:     string;
   context:     "morning" | "evening" | "goal" | "observation";
   acted_on:    boolean;
+  stoic_phase: number | null;
 }
 
 export interface LifeSuggestion {
@@ -112,9 +117,10 @@ export interface LifeAnnualLetter {
  * the direct POST /api/life route.
  */
 export async function saveLifeCapture(
-  userName: string,
-  content:  string,
-  context:  "morning" | "evening" | "goal" | "observation" = "morning",
+  userName:   string,
+  content:    string,
+  context:    "morning" | "evening" | "goal" | "observation" = "morning",
+  stoicPhase: number | null = null,
 ): Promise<LifeCapture | null> {
   await _tableInit;
   const trimmed = content.trim();
@@ -131,12 +137,12 @@ export async function saveLifeCapture(
   }
 
   const { rows } = await query<LifeCapture>(
-    `INSERT INTO life_captures (user_name, content, context)
-     VALUES ($1, $2, $3)
+    `INSERT INTO life_captures (user_name, content, context, stoic_phase)
+     VALUES ($1, $2, $3, $4)
      RETURNING *`,
-    [userName, trimmed, context]
+    [userName, trimmed, context, stoicPhase]
   );
-  logger.info({ userName, context, chars: content.length }, "[LifeCaptures] Capture saved");
+  logger.info({ userName, context, chars: content.length, stoicPhase }, "[LifeCaptures] Capture saved");
   return rows[0]!;
 }
 

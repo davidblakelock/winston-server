@@ -16,6 +16,7 @@ import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 import { fetchTomorrowEvents } from "../google/calendar.js";
 import { getMoodForToday } from "../mood/moodManager.js";
 import { getTopPendingObservation, markObservationShown } from "../connectionEngine/connectionEngineManager.js";
+import { getStoicForUser, PHASE_NAMES } from "../stoic/stoicManager.js";
 import { logger } from "../lib/logger.js";
 
 const DEFAULT_TZ = "UTC";
@@ -143,6 +144,13 @@ export async function generateOpeningMessage(
   // successful (non-fallback) generation that actually had the chance to use it.
   const pendingObservation = await getTopPendingObservation(userName).catch(() => null);
 
+  // Current Stoic curriculum phase — optional context for the reflection
+  // question's angle only. Never named or announced; Winston has it, doesn't
+  // mention it. Same "hand it over, let Claude judge fit" pattern as the
+  // pending observation above.
+  const stoicEntry = await getStoicForUser(userName).catch(() => null);
+  const stoicPhaseName = stoicEntry ? (PHASE_NAMES[stoicEntry.phase] ?? null) : null;
+
   const prompt =
     buildPersonaPreamble(profile?.companionPersona ?? null, profile?.personalityStyle ?? null) +
     `You are ${companionName}, ${displayName}'s trusted personal companion. Dry, warm, never gushing. It's ${dayName} evening in ${city}.\n\n` +
@@ -152,6 +160,7 @@ export async function generateOpeningMessage(
     (morningMood ? `This morning ${displayName} mentioned feeling: "${morningMood.substring(0, 120)}".\n` : "") +
     (tomorrowContext ? `Tomorrow's calendar: ${tomorrowContext}.\n` : "") +
     (pendingObservation ? `Something you've noticed recently, in your own voice: "${pendingObservation.message}"\n` : "") +
+    (stoicPhaseName ? `${displayName}'s current stoic curriculum phase: ${stoicPhaseName}.\n` : "") +
     `\nWrite tonight's evening check-in message with three parts, blended into natural conversational prose — not headers or bullet points:\n\n` +
     `1. A real, specific day recap grounded in the data above — what happened, what got done, what's still hanging open. ` +
     `Only claim a reminder alert "went out" or "fired" — never say a task was "done" or "completed" just because its alert fired; only genuinely-completed to-dos may be described as done. ` +
@@ -159,7 +168,8 @@ export async function generateOpeningMessage(
     `2. A brief, natural look-ahead to tomorrow if there's anything on the calendar — one sentence, not a rundown.\n\n` +
     `3. End with exactly ONE specific stoic reflection question — genuinely inviting real reflection, not "how was your day" or "how are you feeling." ` +
     `Write a fresh, well-crafted question tonight — something concrete like asking what didn't go as hoped and what they'd do differently, or a moment worth being grateful for and why, or a choice they're proud or unsure of. ` +
-    `Vary it — do not reuse the same question pattern every night. This question is the whole point of the message; make it genuinely thoughtful.\n\n` +
+    `Vary it — do not reuse the same question pattern every night. This question is the whole point of the message; make it genuinely thoughtful. ` +
+    (stoicPhaseName ? `If it genuinely fits, let ${displayName}'s current stoic phase shown above shape the angle of tonight's question — never name the phase or the curriculum, just let it inform what you ask.\n\n` : "\n\n") +
     (peopleContext ? `Weave in a key person naturally only if it genuinely fits — don't force it.\n` : "") +
     (pendingObservation ? `If something you've noticed is included above, weave it into tonight's message naturally — as a bridge between the recap and the reflection question, or blended into the recap itself, whichever reads more natural. Use your own words, don't quote it verbatim, and don't label it as a "notice" or "observation" or give it a separate heading. Don't force it if it doesn't fit — but it's there because it's worth mentioning.\n` : "") +
     `Keep the whole message tight — a few sentences, not a essay. Sound like a perceptive friend, not a report.`;
