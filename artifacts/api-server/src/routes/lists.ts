@@ -416,6 +416,11 @@ router.delete("/lists/restaurants/:id", async (req: Request, res: Response) => {
 });
 
 // PUT /api/lists/restaurants/:id — update a restaurant name, url, and/or notes
+// This is a full-resource PUT — the edit modal always sends every field, so
+// an empty url/notes means the user explicitly cleared it, not "leave alone."
+// COALESCE(newValue, oldValue) used to treat both the same (an empty string
+// collapses to null before it ever reaches SQL), silently reverting a
+// deliberate clear back to the old value — always write what was sent.
 router.put("/lists/restaurants/:id", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
@@ -427,17 +432,17 @@ router.put("/lists/restaurants/:id", async (req: Request, res: Response) => {
   }
   const manualUrl = rawUrl?.trim() || null;
   const manualPlatform = manualUrl ? detectBookingPlatform(manualUrl) : null;
-  const notesVal = notes !== undefined ? (notes?.trim() || null) : undefined;
+  const notesVal = notes?.trim() || null;
   try {
     const { rows } = await query<{ id: number; name: string; url: string | null; booking_platform: string | null; notes: string | null }>(
       `UPDATE restaurants
        SET name = $1,
-           url = COALESCE($2, url),
-           booking_platform = CASE WHEN $2 IS NOT NULL THEN $3 ELSE booking_platform END,
-           notes = COALESCE($4, notes)
+           url = $2,
+           booking_platform = $3,
+           notes = $4
        WHERE id = $5 AND user_name = $6
        RETURNING id, name, url, booking_platform, notes`,
-      [item.trim(), manualUrl, manualPlatform, notesVal ?? null, id, userName]
+      [item.trim(), manualUrl, manualPlatform, notesVal, id, userName]
     );
     if (rows.length === 0) {
       res.status(404).json({ error: "Restaurant not found" });
@@ -1156,6 +1161,12 @@ router.put(["/lists/todo/:id", "/lists/to do/:id", "/lists/to%20do/:id"], async 
 });
 
 // PUT /api/lists/:listName/:id — update an existing item's text, url, and/or reminder_time
+// Full-resource PUT — the edit modal always sends every field, so an empty
+// url/notes/reminder_time means the user explicitly cleared it, not "leave
+// alone." COALESCE(newValue, oldValue) used to treat both the same (an
+// empty string collapses to null before it reaches SQL), silently
+// reverting a deliberate clear back to the old value — always write what
+// was sent instead.
 router.put("/lists/:listName/:id", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
@@ -1172,10 +1183,10 @@ router.put("/lists/:listName/:id", async (req: Request, res: Response) => {
     const { rows } = await query<{ id: number; item_text: string; added_by: string | null; url: string | null; created_at: string; reminder_time: string | null; notes: string | null }>(
       `UPDATE list_items
        SET item_text      = $1,
-           url            = COALESCE($2, url),
-           reminder_time  = COALESCE($3, reminder_time),
+           url            = $2,
+           reminder_time  = $3,
            reminder_fired = CASE WHEN $3 IS NOT NULL THEN FALSE ELSE reminder_fired END,
-           notes          = COALESCE($4, notes)
+           notes          = $4
        WHERE id = $5 AND user_name = $6 AND list_name = $7
        RETURNING id, item_text, added_by, url, created_at, reminder_time, notes`,
       [item.trim(), manualUrl, reminderTime, notes, id, userName, listName]
