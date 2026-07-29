@@ -64,6 +64,7 @@ router.post("/bills/paid", express.json({ limit: "1mb" }), async (req, res) => {
   }
 
   try {
+    const { timezone } = await getUserLocationContext(userName);
     // Look up the bill name so we can log it meaningfully
     const bills = await getBills(userName);
     const bill = bills.find((b) => b.id === billId);
@@ -71,7 +72,7 @@ router.post("/bills/paid", express.json({ limit: "1mb" }), async (req, res) => {
     await markBillPaid(billId, name, userName);
     const updatedBills = await getBills(userName);
     const updatedBill = updatedBills.find((b) => b.id === billId);
-    const enriched = updatedBill ? enrichBill(updatedBill) : null;
+    const enriched = updatedBill ? enrichBill(updatedBill, new Date(), timezone) : null;
     req.log.info({ userName, billId, billName: name }, "[BILLS] Paid via /bills/paid notification action");
     res.json({ ok: true, bill: enriched });
   } catch (err) {
@@ -136,6 +137,36 @@ router.post("/bills/remind-tomorrow", express.json({ limit: "1mb" }), async (req
   } catch (err) {
     req.log.error({ err }, "[BILLS] POST /bills/remind-tomorrow error");
     res.status(500).json({ error: "Failed to create tomorrow reminder" });
+  }
+});
+
+// ── POST /api/bills/:id/paid — mark a bill paid (in-app "Mark as Paid" button) ──
+// The native app's bills.tsx screen calls this exact path — it existed
+// nowhere on the server (only /bills/paid, billId-in-body, used by the
+// notification action, was registered), so every in-app tap 404'd. The
+// screen's optimistic local update then got silently reverted by the
+// follow-up fetchBills() call, which re-fetched the real, still-unpaid
+// server state — looked like "stays showing unpaid" with no error visible.
+// Response: { ok: true, bill: enrichedBill }
+router.post("/bills/:id/paid", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const billId = parseInt(req.params.id, 10);
+  if (isNaN(billId)) { res.status(400).json({ error: "Invalid bill id" }); return; }
+  try {
+    const { timezone } = await getUserLocationContext(userName);
+    const bills = await getBills(userName);
+    const bill = bills.find((b) => b.id === billId);
+    const name = bill?.name ?? `Bill #${billId}`;
+    await markBillPaid(billId, name, userName);
+    const updatedBills = await getBills(userName);
+    const updatedBill = updatedBills.find((b) => b.id === billId);
+    const enriched = updatedBill ? enrichBill(updatedBill, new Date(), timezone) : null;
+    req.log.info({ userName, billId, billName: name }, "[BILLS] Paid via in-app /bills/:id/paid button");
+    res.json({ ok: true, bill: enriched });
+  } catch (err) {
+    req.log.error({ err }, "[BILLS] POST /bills/:id/paid error");
+    res.status(500).json({ error: "Failed to mark bill as paid" });
   }
 });
 
