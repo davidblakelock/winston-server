@@ -391,7 +391,21 @@ export async function findBookingPlatformByWebSearch(
       const text = block.text.trim();
       if (!text || text === "NOT_FOUND") continue;
       const detected = detectPlatform(text);
-      if (detected.platform === "opentable") return { platform: "opentable", slug: text, city: null };
+      if (detected.platform === "opentable") {
+        // buildReservationUrl uses this slug as a complete URL for OpenTable
+        // (unlike Resy/Yelp, which reconstruct from a path fragment) — so it
+        // MUST be exactly the URL, nothing else. The prompt asks Claude to
+        // return "ONLY the URL, no explanation," but that's not reliable
+        // (confirmed live: a real response came back as "Based on my search
+        // results, here is the best direct URL...\n\nhttps://...", and
+        // storing that whole blob as the slug produced a broken booking
+        // link). Extract just the URL regardless of what else Claude wrote.
+        const urlMatch = text.match(/https?:\/\/\S*opentable\.com\/\S+/i);
+        const cleanUrl = urlMatch ? urlMatch[0].replace(/[.,;!?]+$/, "") : null;
+        if (cleanUrl) return { platform: "opentable", slug: cleanUrl, city: null };
+        console.warn(`[RestaurantIntel] OpenTable detected but couldn't extract a clean URL — skipping: ${text}`);
+        continue;
+      }
       if (detected.platform !== "phone") return detected;
     }
     return none;
