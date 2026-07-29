@@ -22,6 +22,8 @@ export interface GoalStep {
   completed_at: string | null;
 }
 
+export type GoalStatus = "active" | "aspirational" | "completed";
+
 export interface Goal {
   id: number;
   user_name: string;
@@ -29,6 +31,7 @@ export interface Goal {
   description: string | null;
   created_at: string;
   completed_at: string | null;
+  status: GoalStatus;
   steps: GoalStep[];
   source_observation_id: number | null;
 }
@@ -59,6 +62,24 @@ export async function ensureGoalsTables(): Promise<void> {
     // for no real benefit; a plain nullable column still joins fine.
     await query(`ALTER TABLE goals ADD COLUMN IF NOT EXISTS source_observation_id integer`)
       .catch((err) => logger.warn({ err }, "[Goals] source_observation_id migration warning"));
+    // Real status model replacing completed_at-as-only-signal: 'active' is the
+    // default for both chat-driven and pre-existing goals, 'aspirational' is
+    // the default for cluster-suggested goals (an emerging interest Winston
+    // noticed isn't the same as a commitment the user made), 'completed' is
+    // set explicitly via updateGoalStatus. completed_at stays as a separate
+    // timestamp column, populated only alongside a transition to 'completed'.
+    await query(`ALTER TABLE goals ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'active'`)
+      .catch((err) => logger.warn({ err }, "[Goals] status migration warning"));
+    await query(`
+      DO $$ BEGIN
+        IF NOT EXISTS (
+          SELECT FROM pg_constraint WHERE conname = 'goals_status_check'
+        ) THEN
+          ALTER TABLE goals ADD CONSTRAINT goals_status_check
+            CHECK (status IN ('active', 'aspirational', 'completed'));
+        END IF;
+      END $$
+    `).catch((err) => logger.warn({ err }, "[Goals] status check constraint migration warning"));
     await query(`
       CREATE TABLE IF NOT EXISTS goal_steps (
         id           serial PRIMARY KEY,
@@ -88,16 +109,42 @@ export async function ensureGoalsTables(): Promise<void> {
 export async function createGoal(
   userName: string,
   title: string,
-  description?: string | null
+  description?: string | null,
+  status: GoalStatus = "active"
 ): Promise<Goal> {
   const { rows } = await query<Omit<Goal, "steps">>(
-    `INSERT INTO goals (user_name, title, description)
-     VALUES ($1, $2, $3)
+    `INSERT INTO goals (user_name, title, description, status)
+     VALUES ($1, $2, $3, $4)
      RETURNING *`,
-    [userName, title, description ?? null]
+    [userName, title, description ?? null, status]
   );
   const row = rows[0]!;
   return { ...row, steps: [] };
+}
+
+// Changeable later: a goal can move between active/aspirational/completed as
+// circumstances change. completed_at is derived from the transition itself
+// (set on entering 'completed', cleared on leaving it) rather than being a
+// second independent field the caller has to keep in sync.
+export async function updateGoalStatus(
+  goalId: number,
+  userName: string,
+  status: GoalStatus
+): Promise<Goal | null> {
+  const { rows } = await query<Omit<Goal, "steps">>(
+    `UPDATE goals
+     SET status = $3,
+         completed_at = CASE WHEN $3 = 'completed' THEN now() ELSE NULL END
+     WHERE id = $1 AND user_name = $2
+     RETURNING *`,
+    [goalId, userName, status]
+  );
+  if (!rows[0]) return null;
+  const { rows: steps } = await query<GoalStep>(
+    `SELECT * FROM goal_steps WHERE goal_id = $1 ORDER BY "order" ASC, id ASC`,
+    [goalId]
+  );
+  return { ...rows[0], steps };
 }
 
 // Links a goal back to the cluster observation it was created from (build
@@ -529,8 +576,12 @@ export async function generateGoalsRecap(userName: string): Promise<GoalsRecap> 
     return { recap: cached[0].recap, generated_at: cached[0].generated_at, from_cache: true };
   }
 
-  // Build a summary of the user's goals to pass to Claude
-  const goals = await getGoals(userName);
+  // Build a summary of the user's goals to pass to Claude. Completed goals
+  // are excluded from the recap's "active goals" framing now that status is
+  // a real signal — previously completed_at never fired, so every goal was
+  // counted as active by default; that's no longer true once completion is
+  // real.
+  const goals = (await getGoals(userName)).filter((g) => g.status !== "completed");
   if (goals.length === 0) {
     const fallback = "You haven't set any goals yet — but you're here, which counts for something.";
     await query(

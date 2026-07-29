@@ -1023,7 +1023,9 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
         const description = target.message.endsWith(GOAL_OFFER_SUFFIX)
           ? target.message.slice(0, -GOAL_OFFER_SUFFIX.length).trim()
           : target.message.trim();
-        const goal = await createGoal(sessionUserName, title, description);
+        // A cluster is an emerging interest Winston noticed, not a commitment
+        // the user made — starts aspirational, not active.
+        const goal = await createGoal(sessionUserName, title, description, "aspirational");
         await linkGoalToObservation(goal.id, target.id);
         await markObservationAccepted(target.id);
         finalReply = `Done — I've added "${title}" to your goals.`;

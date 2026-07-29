@@ -14,8 +14,12 @@ import {
   getGoalsChatHistory,
   generateGoalsRecap,
   formatContentForSharing,
+  updateGoalStatus,
   type ShareFormat,
+  type GoalStatus,
 } from "../goals/goalsManager.js";
+
+const GOAL_STATUSES: GoalStatus[] = ["active", "aspirational", "completed"];
 
 const router = Router();
 
@@ -34,23 +38,54 @@ router.get("/goals", async (req, res) => {
 });
 
 // ── POST /api/goals ────────────────────────────────────────────────────────────
-// Creates a new goal. Body: { title, description? }
-// Returns: { id, title, description, steps: [] }
+// Creates a new goal. Body: { title, description?, status? }
+// Returns: { id, title, description, status, steps: [] }
 router.post("/goals", async (req, res) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
-  const { title, description } = req.body as { title?: string; description?: string };
+  const { title, description, status } = req.body as { title?: string; description?: string; status?: string };
   if (!title || typeof title !== "string" || !title.trim()) {
     res.status(400).json({ error: "title is required" });
     return;
   }
+  const safeStatus = GOAL_STATUSES.includes(status as GoalStatus) ? (status as GoalStatus) : undefined;
   try {
-    const goal = await createGoal(userName, title.trim(), description ?? null);
-    req.log.info({ goalId: goal.id, title: goal.title }, "[Goals] Goal created");
+    const goal = await createGoal(userName, title.trim(), description ?? null, safeStatus);
+    req.log.info({ goalId: goal.id, title: goal.title, status: goal.status }, "[Goals] Goal created");
     res.status(201).json(goal);
   } catch (err) {
     req.log.error({ err }, "[Goals] POST /goals error");
     res.status(500).json({ error: "Failed to create goal" });
+  }
+});
+
+// ── PATCH /api/goals/:id ───────────────────────────────────────────────────────
+// Changes a goal's status. Body: { status: 'active' | 'aspirational' | 'completed' }
+// completed_at is derived server-side from the transition, not passed in.
+router.patch("/goals/:id", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const goalId = parseInt(req.params.id, 10);
+  if (isNaN(goalId)) {
+    res.status(400).json({ error: "Invalid goal id" });
+    return;
+  }
+  const { status } = req.body as { status?: string };
+  if (!GOAL_STATUSES.includes(status as GoalStatus)) {
+    res.status(400).json({ error: `status must be one of: ${GOAL_STATUSES.join(", ")}` });
+    return;
+  }
+  try {
+    const goal = await updateGoalStatus(goalId, userName, status as GoalStatus);
+    if (!goal) {
+      res.status(404).json({ error: "Goal not found" });
+      return;
+    }
+    req.log.info({ goalId, status }, "[Goals] Goal status updated");
+    res.json(goal);
+  } catch (err) {
+    req.log.error({ err }, "[Goals] PATCH /goals/:id error");
+    res.status(500).json({ error: "Failed to update goal status" });
   }
 });
 

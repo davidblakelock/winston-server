@@ -184,7 +184,9 @@ async function buildDailyBriefContext(userName: string): Promise<string> {
 
   const profileItemsBlock = formatProfileForContext(profileItems);
 
-  const activeGoals = goals.filter((g) => !g.completed_at);
+  // Aspirational goals are deliberately excluded from the daily brief — they
+  // aren't being actively worked, so "next steps" framing doesn't fit them.
+  const activeGoals = goals.filter((g) => g.status === "active");
   const goalsLine = activeGoals.length > 0
     ? activeGoals.map((g) => {
         const incompleteSteps = g.steps.filter((s) => !s.completed_at);

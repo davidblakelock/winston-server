@@ -299,7 +299,10 @@ function formatCorrectionContext(corrections: UserCorrection[]): string {
 // exists.
 async function fetchGoalContext(userName: string): Promise<string> {
   const goals = await getGoals(userName).catch(() => [] as Goal[]);
-  const active = goals.filter((g) => !g.completed_at).slice(0, 8);
+  // Active AND aspirational both count as "current" here — noticing a
+  // connection to an aspirational goal is exactly the kind of nudge that
+  // could promote it to active, not something to withhold until it is one.
+  const active = goals.filter((g) => g.status !== "completed").slice(0, 8);
   if (active.length === 0) return "";
   const lines = active
     .map((g) => {
