@@ -30,6 +30,7 @@ export interface Goal {
   created_at: string;
   completed_at: string | null;
   steps: GoalStep[];
+  source_observation_id: number | null;
 }
 
 export type BreakdownResult =
@@ -50,6 +51,14 @@ export async function ensureGoalsTables(): Promise<void> {
         completed_at timestamptz
       )
     `);
+    // Points at observations.id when a goal was created from a cluster
+    // observation's goal-creation offer (build spec Part 3.4). No FK
+    // constraint — connectionEngineManager.ts's table init runs from a
+    // module-load-time IIFE with no guaranteed ordering relative to this
+    // function, so a hard REFERENCES here would be a startup-timing risk
+    // for no real benefit; a plain nullable column still joins fine.
+    await query(`ALTER TABLE goals ADD COLUMN IF NOT EXISTS source_observation_id integer`)
+      .catch((err) => logger.warn({ err }, "[Goals] source_observation_id migration warning"));
     await query(`
       CREATE TABLE IF NOT EXISTS goal_steps (
         id           serial PRIMARY KEY,
@@ -89,6 +98,12 @@ export async function createGoal(
   );
   const row = rows[0]!;
   return { ...row, steps: [] };
+}
+
+// Links a goal back to the cluster observation it was created from (build
+// spec Part 3.4's confirmation flow) — set once, right after createGoal.
+export async function linkGoalToObservation(goalId: number, observationId: number): Promise<void> {
+  await query(`UPDATE goals SET source_observation_id = $1 WHERE id = $2`, [observationId, goalId]);
 }
 
 export async function getGoals(userName: string): Promise<Goal[]> {

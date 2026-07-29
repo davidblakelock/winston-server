@@ -18,7 +18,14 @@ import { getPeople, type KeyPerson } from "../../people/peopleManager.js";
 import { claimWinddownReply } from "../../winddown/winddownManager.js";
 import { saveLifeCapture } from "../../lifeCaptures/lifeCapturesManager.js";
 import { getStoicForUser } from "../../stoic/stoicManager.js";
-import { runConnectionEngine, applyObservationCorrection } from "../../connectionEngine/connectionEngineManager.js";
+import {
+  runConnectionEngine,
+  applyObservationCorrection,
+  getMostRecentShownObservation,
+  markObservationAccepted,
+  GOAL_OFFER_SUFFIX,
+} from "../../connectionEngine/connectionEngineManager.js";
+import { createGoal, linkGoalToObservation } from "../../goals/goalsManager.js";
 import {
   saveAtticItem,
   getArchiveCandidates,
@@ -111,7 +118,8 @@ export type ActionType =
   | "archive_attic_cancel"
   | "offer_save"
   | "convert_notepad_confirm"
-  | "convert_notepad_cancel";
+  | "convert_notepad_cancel"
+  | "create_goal_from_observation";
 
 export interface ClaudeAction {
   type: ActionType;
@@ -360,6 +368,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
   const pendingAtticCleanup = getPendingAtticCleanup(sessionUserName);
   const pendingSaveOffers   = getPendingSaveOffers(sessionUserName);
   const pendingListConflict = getPendingListTypeConflict(sessionUserName);
+  const mostRecentShownObservation = await getMostRecentShownObservation(sessionUserName).catch(() => null);
 
   // ── Build stable system prompt ───────────────────────────────────────────────
   const corePrompt =
@@ -517,6 +526,19 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       `If __USER__ wants to drop it entirely, emit [ACTION:convert_notepad_cancel].`;
   }
 
+  // Goal-creation offer — only injected when the most recently shown
+  // observation is a cluster that's genuinely recurring (goal_eligible, set
+  // by clusterPass when the same attic items surfaced across a separate,
+  // later batch_daily run — a single one-off cluster never sets this).
+  // Once accepted/dismissed its status changes, so this naturally stops
+  // being injected without any extra bookkeeping here.
+  if (mostRecentShownObservation?.observation_type === "cluster" && mostRecentShownObservation.goal_eligible) {
+    dynamicPrompt += `\n\n[Recurring Pattern — goal-creation offer]\n` +
+      `You recently told __USER__: "${mostRecentShownObservation.message}"\n` +
+      `If __USER__ wants to make this a real goal (yes, do it, make that a goal, etc.), emit [ACTION:create_goal_from_observation] — no parameters, the server resolves the goal's title and description from what was already captured, do not retype them yourself.\n` +
+      `If __USER__ doesn't want this, that's a normal observation dismissal — emit [ACTION:correct_observation|type=dismiss] like any other.`;
+  }
+
   // Meeting request flow in progress — separate from reply drafts (E007-MEET), unchanged.
   if (pendingMeetingReqs.length > 0) {
     const isEmailReplyAccepted = await classifyConfirmationIntent(message).then(r => r === 'send').catch(() => false);
@@ -640,6 +662,9 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
         break;
       case "convert_notepad_cancel":
         action = { type: "convert_notepad_cancel" };
+        break;
+      case "create_goal_from_observation":
+        action = { type: "create_goal_from_observation" };
         break;
       case "add_todo":
         action = { type: "add_todo", listName: "reminders", itemText: parts.task ?? "" };
@@ -979,6 +1004,32 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
         }
       } catch (err) {
         log.warn({ err }, "[chatHandlerCore] applyObservationCorrection failed");
+      }
+      break;
+    }
+
+    // ── create_goal_from_observation ─────────────────────────────────────────
+    // Resolves entirely from mostRecentShownObservation (already fetched
+    // this turn, same "no ID travels through the tag" pattern as
+    // correct_observation) — Claude never retypes the title/description.
+    case "create_goal_from_observation": {
+      const target = mostRecentShownObservation;
+      if (!target || target.observation_type !== "cluster" || !target.goal_eligible) {
+        log.info({ target: target?.id ?? null }, "[chatHandlerCore] create_goal_from_observation had nothing eligible to target");
+        break;
+      }
+      try {
+        const title = (target.theme?.trim() || target.message.replace(GOAL_OFFER_SUFFIX, "").trim()).slice(0, 120);
+        const description = target.message.endsWith(GOAL_OFFER_SUFFIX)
+          ? target.message.slice(0, -GOAL_OFFER_SUFFIX.length).trim()
+          : target.message.trim();
+        const goal = await createGoal(sessionUserName, title, description);
+        await linkGoalToObservation(goal.id, target.id);
+        await markObservationAccepted(target.id);
+        finalReply = `Done — I've added "${title}" to your goals.`;
+        log.info({ goalId: goal.id, observationId: target.id, title }, "[chatHandlerCore] Goal created from cluster observation");
+      } catch (err) {
+        log.warn({ err }, "[chatHandlerCore] create_goal_from_observation failed");
       }
       break;
     }

@@ -45,6 +45,21 @@ const anthropic = new Anthropic();
 // distributions once cluster data exists (build spec Part 1.6, Phase 4 note).
 const CLUSTER_CONFIDENCE_THRESHOLD = 80;
 
+// Goal-suggestion gate (build spec Part 3.4): a single one-off cluster is not
+// enough evidence of a genuine emerging interest — require the SAME items to
+// resurface across a separate, later batch_daily run before offering to make
+// it a goal. Window is how far back to look for a prior cluster to compare
+// against; count is how many shared attic_item IDs count as "the same
+// pattern recurring" rather than one coincidental shared item.
+const GOAL_ELIGIBLE_LOOKBACK_DAYS  = 14;
+const GOAL_ELIGIBLE_MIN_OVERLAP    = 2;
+
+// Appended to a goal-eligible cluster's message, stripped back off by
+// chatHandlerCore.ts's create_goal_from_observation handler when building a
+// goal's description — the question reads fine as a live prompt but not as
+// persisted text once it's actually become a goal.
+export const GOAL_OFFER_SUFFIX = " Want me to make that an actual goal?";
+
 // ── Table init ────────────────────────────────────────────────────────────────
 
 const _tableInit = (async () => {
@@ -87,6 +102,16 @@ const _tableInit = (async () => {
   await query(`
     CREATE INDEX IF NOT EXISTS observations_user_pending_idx ON observations (user_name, observation_type, status)
   `).catch((err) => logger.error({ err }, "[ConnectionEngine] observations index init failed"));
+
+  // theme: short title-shaped phrase clusterPass already generates but never
+  // stored — needed as a goal title candidate once a cluster is goal-eligible.
+  // goal_eligible: set true only when a cluster's items overlap a PRIOR
+  // separate batch_daily run's cluster (not just this one run) — see
+  // clusterPass. Gates whether the goal-creation invitation is offered at all.
+  await query(`ALTER TABLE observations ADD COLUMN IF NOT EXISTS theme text`)
+    .catch((err) => logger.warn({ err }, "[ConnectionEngine] observations.theme migration warning"));
+  await query(`ALTER TABLE observations ADD COLUMN IF NOT EXISTS goal_eligible boolean NOT NULL DEFAULT false`)
+    .catch((err) => logger.warn({ err }, "[ConnectionEngine] observations.goal_eligible migration warning"));
 
   await query(`
     CREATE TABLE IF NOT EXISTS user_corrections (
@@ -142,6 +167,8 @@ export interface Observation {
   status:                "pending" | "shown" | "dismissed" | "accepted";
   created_at:            string;
   shown_at:              string | null;
+  theme:                 string | null;
+  goal_eligible:         boolean;
 }
 
 // ── Surfacing ─────────────────────────────────────────────────────────────────
@@ -163,6 +190,13 @@ export async function getTopPendingObservation(userName: string): Promise<Observ
 export async function markObservationShown(id: number): Promise<void> {
   await query(
     `UPDATE observations SET status = 'shown', shown_at = now() WHERE id = $1`,
+    [id]
+  );
+}
+
+export async function markObservationAccepted(id: number): Promise<void> {
+  await query(
+    `UPDATE observations SET status = 'accepted' WHERE id = $1`,
     [id]
   );
 }
@@ -613,6 +647,23 @@ export async function clusterPass(userName: string): Promise<void> {
       .filter((it): it is SourceItem => !!it && it.sourceType === "attic_item");
     if (clusterItems.length < 2) return;
 
+    const newItemIds = clusterItems.map((it) => it.sourceId);
+
+    // Goal-eligibility check MUST run before the delete below — a prior
+    // cluster still sitting at status='pending' (never yet shown) would
+    // otherwise be gone before its supporting_item_ids could be compared
+    // against this run's.
+    const { rows: priorClusters } = await query<{ id: number; supporting_item_ids: number[] }>(
+      `SELECT id, supporting_item_ids FROM observations
+       WHERE user_name = $1 AND observation_type = 'cluster'
+         AND created_at >= now() - interval '${GOAL_ELIGIBLE_LOOKBACK_DAYS} days'`,
+      [userName]
+    );
+    const goalEligible = priorClusters.some((prior) => {
+      const overlap = prior.supporting_item_ids.filter((id) => newItemIds.includes(id));
+      return overlap.length >= GOAL_ELIGIBLE_MIN_OVERLAP;
+    });
+
     // No per-pair connections rows — supporting_item_ids on the observation
     // below already fully encodes cluster membership, and every pair here
     // would carry the identical confidence/reason, so a full n-choose-2 mesh
@@ -623,12 +674,16 @@ export async function clusterPass(userName: string): Promise<void> {
       `DELETE FROM observations WHERE user_name = $1 AND observation_type = 'cluster' AND status = 'pending'`,
       [userName]
     );
+    const finalMessage = parsed.message + (goalEligible ? GOAL_OFFER_SUFFIX : "");
     await query(
-      `INSERT INTO observations (user_name, observation_type, message, supporting_item_ids, confidence_score, urgency, should_interrupt_user)
-       VALUES ($1, 'cluster', $2, $3, $4, 'low', false)`,
-      [userName, parsed.message, clusterItems.map((it) => it.sourceId), parsed.confidence]
+      `INSERT INTO observations (user_name, observation_type, message, supporting_item_ids, confidence_score, urgency, should_interrupt_user, theme, goal_eligible)
+       VALUES ($1, 'cluster', $2, $3, $4, 'low', false, $5, $6)`,
+      [userName, finalMessage, newItemIds, parsed.confidence, parsed.theme, goalEligible]
     );
-    logger.info({ userName, confidence: parsed.confidence, theme: parsed.theme }, "[ConnectionEngine] Cluster: observation stored");
+    logger.info(
+      { userName, confidence: parsed.confidence, theme: parsed.theme, goalEligible },
+      "[ConnectionEngine] Cluster: observation stored"
+    );
   } catch (err) {
     logger.warn({ err, userName }, "[ConnectionEngine] Cluster: Claude call failed");
   }
