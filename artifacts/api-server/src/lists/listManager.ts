@@ -42,6 +42,63 @@ export function setPendingSaveOffers(userName: string, offers: PendingSaveOffers
   }
 }
 
+// ── List type (checklist vs notepad) ─────────────────────────────────────────
+// A structured title+notes+url save only makes sense against a checklist —
+// a notepad-type list only ever renders/edits a single freeform blob
+// (items[0].item_text), so a structured save into one silently vanishes
+// from the user's point of view (data's in list_items, but nothing on
+// screen reflects it). Lists default to "checklist" unless a row in `lists`
+// says otherwise.
+
+export async function getListType(userName: string, listName: string): Promise<string> {
+  const { rows } = await query<{ list_type: string }>(
+    `SELECT list_type FROM lists WHERE user_name = $1 AND lower(list_name) = lower($2)`,
+    [userName, listName]
+  );
+  return rows[0]?.list_type ?? "checklist";
+}
+
+// Flips a notepad list to checklist. No data migration needed — the
+// underlying list_items rows are identical either way; only the client's
+// list_type-driven rendering differs. Whatever's already there (the
+// notepad's single freeform row, if any) just starts rendering as an
+// ordinary checklist item instead of the single editable blob.
+export async function convertListToChecklist(userName: string, listName: string): Promise<void> {
+  await query(
+    `INSERT INTO lists (user_name, list_name, list_type)
+     VALUES ($1, $2, 'checklist')
+     ON CONFLICT (user_name, list_name) DO UPDATE SET list_type = 'checklist'`,
+    [userName, listName]
+  );
+}
+
+// ── Pending list-type conflict ───────────────────────────────────────────────
+// Same pattern as pendingSaveOffers: when a structured save targets a
+// notepad-type list, the save is held here (not written) while Winston asks
+// whether to convert the list or use a different name — resolved on the
+// next turn instead of asking Claude to retype the title/notes/url.
+
+export interface PendingListTypeConflict {
+  listName: string;
+  title:    string;
+  notes:    string | null;
+  url:      string | null;
+}
+
+const _pendingListTypeConflictMap = new Map<string, PendingListTypeConflict>();
+
+export function getPendingListTypeConflict(userName: string): PendingListTypeConflict | null {
+  return _pendingListTypeConflictMap.get(userName) ?? null;
+}
+
+export function setPendingListTypeConflict(userName: string, conflict: PendingListTypeConflict | null): void {
+  if (conflict === null) {
+    _pendingListTypeConflictMap.delete(userName);
+  } else {
+    _pendingListTypeConflictMap.set(userName, conflict);
+  }
+}
+
 export type ListAction = "add" | "remove" | "clear" | "read";
 
 export interface ListOp {

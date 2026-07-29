@@ -43,8 +43,9 @@ export function detectBookingPlatform(url: string | null | undefined): string | 
 // Verify a URL actually resolves (not a 404). Only used to sanity-check the
 // web-search fallback result below — Google Places' websiteUri is already
 // authoritative and doesn't need this.
-// Rejects only on HTTP 404 — 403/503/timeouts are treated as "unknown, assume OK"
-// to avoid falsely discarding URLs that block bots.
+// Rejects on HTTP 404 or a DNS resolution failure (the domain genuinely
+// doesn't exist) — 403/503/timeouts are treated as "unknown, assume OK" to
+// avoid falsely discarding URLs that block bots.
 async function verifyUrlExists(url: string): Promise<boolean> {
   try {
     const controller = new AbortController();
@@ -61,7 +62,12 @@ async function verifyUrlExists(url: string): Promise<boolean> {
       return false;
     }
     return true;
-  } catch {
+  } catch (err) {
+    const code = (err as { cause?: { code?: string } })?.cause?.code;
+    if (code === "ENOTFOUND" || code === "EAI_AGAIN") {
+      logger.warn({ url, code }, "[AutoURL] URL domain does not resolve — rejecting");
+      return false;
+    }
     return true; // network error / bot-blocked → assume URL exists
   }
 }
@@ -139,7 +145,15 @@ async function lookupWebsiteViaSearch(name: string, city = ""): Promise<string |
         .map((b) => (b as { type: "text"; text: string }).text)
         .join("").trim();
       if (!text || /^none$/i.test(text)) return null;
-      const raw = (text.split(/[\s\n]/)[0] ?? "").replace(/[.,;!?]$/, "");
+      // Extract an actual URL/domain from the response — don't just take the
+      // first whitespace-separated token. Claude doesn't reliably return
+      // "just the URL" despite the instruction (confirmed live: a response
+      // for a restaurant with no site started with "Since..." explanatory
+      // prose instead of NONE, and treating the first word as a URL
+      // produced the literal string "https://Since").
+      const urlMatch = text.match(/https?:\/\/[^\s"'<>]+/i);
+      const domainMatch = !urlMatch ? text.match(/\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s"'<>]*)?\b/i) : null;
+      const raw = (urlMatch?.[0] ?? domainMatch?.[0] ?? "").replace(/[.,;!?)]+$/, "");
       if (!raw) return null;
       const url = raw.startsWith("http") ? raw : `https://${raw}`;
       try { new URL(url); } catch { return null; }

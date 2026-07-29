@@ -41,7 +41,12 @@ import {
   syncListItemToConnections,
   getPendingSaveOffers,
   setPendingSaveOffers,
+  getListType,
+  convertListToChecklist,
+  getPendingListTypeConflict,
+  setPendingListTypeConflict,
   type SaveOfferCandidate,
+  type PendingListTypeConflict,
 } from "../../lists/listManager.js";
 import { createReminder } from "../../reminders/reminderManager.js";
 import { fetchTodayEvents, type CalendarEvent } from "../../google/calendar.js";
@@ -104,7 +109,9 @@ export type ActionType =
   | "cleanup_attic"
   | "archive_attic_confirm"
   | "archive_attic_cancel"
-  | "offer_save";
+  | "offer_save"
+  | "convert_notepad_confirm"
+  | "convert_notepad_cancel";
 
 export interface ClaudeAction {
   type: ActionType;
@@ -126,6 +133,7 @@ export interface ClaudeAction {
   url?:            string | null;
   offers?:         string | null;
   offerIndex?:     number | null;
+  fromConflict?:   boolean | null;
 }
 
 export interface NewChatRequest {
@@ -351,6 +359,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
   const pendingMeetingReqs = getPendingMeetingRequests(sessionUserName);
   const pendingAtticCleanup = getPendingAtticCleanup(sessionUserName);
   const pendingSaveOffers   = getPendingSaveOffers(sessionUserName);
+  const pendingListConflict = getPendingListTypeConflict(sessionUserName);
 
   // ── Build stable system prompt ───────────────────────────────────────────────
   const corePrompt =
@@ -496,6 +505,18 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       `This is not optional: telling __USER__ it's saved without emitting this exact tag means nothing is actually written to their list — the words alone don't save anything. Do not skip the tag just because a friendly confirmation sentence feels sufficient by itself.`;
   }
 
+  // List-type conflict — a structured save (title+content) was about to
+  // land in a list that's currently a notepad (single freeform blob), where
+  // it would silently never show up. Held instead of written; ask which way
+  // to go.
+  if (pendingListConflict !== null) {
+    dynamicPrompt += `\n\n[List Type Conflict — "${pendingListConflict.listName}" is currently a notepad, not a checklist]\n` +
+      `You just told __USER__ their "${pendingListConflict.listName}" list is set up as a single freeform note, not a checklist of separate items, and asked what to do with "${pendingListConflict.title}".\n` +
+      `If __USER__ wants to convert "${pendingListConflict.listName}" to a checklist (yes, convert it, make it a checklist, etc.) — any existing content in it is kept, just as the first item — emit [ACTION:convert_notepad_confirm]. Do not retype the title, content, or url; the server resolves those from what you already captured.\n` +
+      `If __USER__ names a different list to use instead, emit [ACTION:add_list_item|list=<that list name>|fromConflict=true] — do not retype the title, content, or url yourself.\n` +
+      `If __USER__ wants to drop it entirely, emit [ACTION:convert_notepad_cancel].`;
+  }
+
   // Meeting request flow in progress — separate from reply drafts (E007-MEET), unchanged.
   if (pendingMeetingReqs.length > 0) {
     const isEmailReplyAccepted = await classifyConfirmationIntent(message).then(r => r === 'send').catch(() => false);
@@ -607,11 +628,18 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
           notes: parts.notes ?? null,
           url: parts.url ?? null,
           offerIndex: Number.isNaN(offerIndexRaw) ? null : offerIndexRaw,
+          fromConflict: parts.fromConflict === "true",
         };
         break;
       }
       case "offer_save":
         action = { type: "offer_save", offers: parts.offers ?? null };
+        break;
+      case "convert_notepad_confirm":
+        action = { type: "convert_notepad_confirm" };
+        break;
+      case "convert_notepad_cancel":
+        action = { type: "convert_notepad_cancel" };
         break;
       case "add_todo":
         action = { type: "add_todo", listName: "reminders", itemText: parts.task ?? "" };
@@ -718,6 +746,22 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     }
   }
 
+  // Same safety net for the list-type-conflict flow's "yes, convert it" path
+  // — the rename-to-a-different-list path already relies on Claude naming a
+  // list correctly, same as any other add_list_item call, so it isn't
+  // covered here.
+  if (action.type === "none" && pendingListConflict !== null) {
+    const confirmsConvert = /\bconvert\b|\bmake it a checklist\b|\bturn it into a checklist\b/i.test(finalReply)
+      && /\b(yes|done|got it|sure|sounds good|will do|converting|converted)\b/i.test(finalReply);
+    if (confirmsConvert) {
+      action = { type: "convert_notepad_confirm" };
+      log.warn(
+        { reply: finalReply.slice(0, 200) },
+        "[chatHandlerCore] Recovered notepad-conversion confirmation with no action tag — model narrated success without emitting the tag"
+      );
+    }
+  }
+
   log.info({ actionType: action.type, tag: tagMatch?.[1] ?? "none" }, "[chatHandlerCore] Action parsed");
 
   // ── Execute action ───────────────────────────────────────────────────────────
@@ -748,7 +792,15 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       let resolvedNotes: string | null;
       let resolvedUrl: string | null;
 
-      if (offerCandidate) {
+      if (action.fromConflict && pendingListConflict) {
+        // Resolving a held list-type-conflict save with a different target
+        // list — the real title/notes/url were captured when the conflict
+        // was first detected, not retyped by Claude just now.
+        items = [pendingListConflict.title];
+        resolvedNotes = pendingListConflict.notes;
+        resolvedUrl = pendingListConflict.url;
+        setPendingListTypeConflict(sessionUserName, null);
+      } else if (offerCandidate) {
         items = [offerCandidate.title];
         // The shared turn-level detail only describes ONE thing when only one
         // candidate was offered (a recipe, a single product) — that's the
@@ -791,6 +843,25 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
           }
         }
       } else {
+        // A structured save (a real title + full content) into a notepad-type
+        // list would silently vanish from the user's point of view — the
+        // notepad UI only ever shows/edits a single freeform blob, so the
+        // saved row would sit in the database with nothing on screen
+        // reflecting it. Hold it and ask instead of writing it there.
+        // Skipped when this save is itself resolving a conflict — by then
+        // either the list was just converted (convert_notepad_confirm) or
+        // the user named a fresh target, so re-checking would just loop.
+        if (items.length === 1 && resolvedNotes && !action.fromConflict) {
+          const currentType = await getListType(sessionUserName, listName).catch(() => "checklist");
+          if (currentType === "notepad") {
+            setPendingListTypeConflict(sessionUserName, { listName, title: items[0], notes: resolvedNotes, url: resolvedUrl });
+            finalReply =
+              `Heads up — your "${listName}" list is currently a single freeform note, not a checklist, so "${items[0]}" wouldn't really show up right if I saved it there as-is. ` +
+              `Want me to convert "${listName}" to a checklist (anything already in it stays, just as the first item), or should I use a different list name for this instead?`;
+            log.info({ listName, title: items[0] }, "[chatHandlerCore] Notepad list-type conflict — save held");
+            break;
+          }
+        }
         if (items.length > 0) {
           try {
             const inserted = await addItems(listName, items, sessionUserName, undefined, resolvedNotes, resolvedUrl);
@@ -963,6 +1034,40 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     // ── archive_attic_cancel ─────────────────────────────────────────────────
     case "archive_attic_cancel": {
       setPendingAtticCleanup(sessionUserName, null);
+      break;
+    }
+
+    // ── convert_notepad_confirm ──────────────────────────────────────────────
+    // Flips the held-conflict list to checklist type, then writes the save
+    // that was held for it. No data migration — whatever was already in the
+    // list (a notepad's single freeform row, if any) is untouched and just
+    // starts rendering as an ordinary checklist item.
+    case "convert_notepad_confirm": {
+      if (pendingListConflict) {
+        try {
+          await convertListToChecklist(sessionUserName, pendingListConflict.listName);
+          const inserted = await addItems(
+            pendingListConflict.listName,
+            [pendingListConflict.title],
+            sessionUserName,
+            undefined,
+            pendingListConflict.notes,
+            pendingListConflict.url
+          );
+          if (inserted.length > 0) batchCategorizeAndUpdateItems(inserted).catch(() => {});
+          log.info({ listName: pendingListConflict.listName, title: pendingListConflict.title }, "[chatHandlerCore] Notepad list converted and save completed");
+        } catch (err) {
+          log.warn({ err }, "[chatHandlerCore] convert_notepad_confirm failed");
+        } finally {
+          setPendingListTypeConflict(sessionUserName, null);
+        }
+      }
+      break;
+    }
+
+    // ── convert_notepad_cancel ───────────────────────────────────────────────
+    case "convert_notepad_cancel": {
+      setPendingListTypeConflict(sessionUserName, null);
       break;
     }
 

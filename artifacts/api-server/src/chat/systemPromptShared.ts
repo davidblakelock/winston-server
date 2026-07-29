@@ -66,6 +66,8 @@ At the end of EVERY response append exactly one action tag on a new line. No exc
 [ACTION:offer_save|offers=<title1=url1; title2; ...>] — flags a save-worthy recommendation you just gave, same turn. One entry per recommended item; omit "=url" for an item with no known URL.
 [ACTION:add_list_item|list=<exact list name>|offerIndex=<N>] — confirms saving item N from a [Pending Save Offer(s)] block; title/content/url are resolved from what was captured, not retyped.
 [ACTION:add_list_item|list=<exact list name>|items=<item1; item2; ...>|notes=<full content, only for a single title+content save with no pending offer>|url=<source url, only when genuinely known>] — direct save with no pending offer to resolve from. Always use "shopping" (never "shopping list") for the shopping list. A single saved item (e.g. a recipe) is ONE entry even if its own text contains commas.
+[ACTION:convert_notepad_confirm] — user agrees to convert a [List Type Conflict] list from a freeform note to a checklist; title/content/url are resolved from what was already captured, not retyped
+[ACTION:convert_notepad_cancel] — user declines a [List Type Conflict] entirely, drop it
 [ACTION:add_todo|task=<task1; task2; ...>] — plain to-do with no time; one task, or several separated by semicolons
 [ACTION:add_reminder|task=<task>|time=<ISO 8601 with tz offset>] — timed reminder only
 [ACTION:add_todo_with_reminder|task=<task1; task2; ...>|time=<ISO 8601 with tz offset>] — to-do with time; one task, or several separated by semicolons
