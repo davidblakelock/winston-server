@@ -112,6 +112,13 @@ const _tableInit = (async () => {
     .catch((err) => logger.warn({ err }, "[ConnectionEngine] observations.theme migration warning"));
   await query(`ALTER TABLE observations ADD COLUMN IF NOT EXISTS goal_eligible boolean NOT NULL DEFAULT false`)
     .catch((err) => logger.warn({ err }, "[ConnectionEngine] observations.goal_eligible migration warning"));
+  // Points at connections.id when dotConnectorPass/patternObservationPass
+  // noticed a fit to an existing goal alongside the observation's message.
+  // No FK for the same reason source_observation_id on goals has none —
+  // this module's own table init has no guaranteed ordering relative to
+  // itself running twice (connections vs observations), let alone goals'.
+  await query(`ALTER TABLE observations ADD COLUMN IF NOT EXISTS related_connection_id integer`)
+    .catch((err) => logger.warn({ err }, "[ConnectionEngine] observations.related_connection_id migration warning"));
 
   await query(`
     CREATE TABLE IF NOT EXISTS user_corrections (
@@ -169,6 +176,7 @@ export interface Observation {
   shown_at:              string | null;
   theme:                 string | null;
   goal_eligible:         boolean;
+  related_connection_id: number | null;
 }
 
 // ── Surfacing ─────────────────────────────────────────────────────────────────
@@ -199,6 +207,47 @@ export async function markObservationAccepted(id: number): Promise<void> {
     `UPDATE observations SET status = 'accepted' WHERE id = $1`,
     [id]
   );
+}
+
+// ── Connections (goal-fit writes) ────────────────────────────────────────────
+// First real writer of the connections table — previously created but unused.
+// dotConnectorPass/patternObservationPass call this when they notice a saved
+// item genuinely fits an existing goal, instead of only mentioning it in the
+// observation's message text.
+
+export async function writeGoalConnection(
+  userName:      string,
+  sourceType:    SourceType,
+  sourceId:      number,
+  goalId:        number,
+  reason:        string,
+  confidence     = 90,
+): Promise<number> {
+  await _tableInit;
+  const { rows } = await query<{ id: number }>(
+    `INSERT INTO connections (user_name, source_type, source_id, target_type, target_id, connection_reason, confidence_score, status)
+     VALUES ($1, $2, $3, 'goal', $4, $5, $6, 'suggested')
+     RETURNING id`,
+    [userName, sourceType, sourceId, String(goalId), reason, confidence]
+  );
+  return rows[0]!.id;
+}
+
+export async function getConnectionById(id: number): Promise<Connection | null> {
+  await _tableInit;
+  const { rows } = await query<Connection>(`SELECT * FROM connections WHERE id = $1`, [id]);
+  return rows[0] ?? null;
+}
+
+export async function updateConnectionStatus(
+  id:     number,
+  status: "suggested" | "accepted" | "dismissed" | "rejected",
+): Promise<void> {
+  await query(`UPDATE connections SET status = $1 WHERE id = $2`, [status, id]);
+}
+
+export async function linkObservationToConnection(observationId: number, connectionId: number): Promise<void> {
+  await query(`UPDATE observations SET related_connection_id = $1 WHERE id = $2`, [connectionId, observationId]);
 }
 
 // ── Corrections (Phase 5) ─────────────────────────────────────────────────────
@@ -253,10 +302,17 @@ export async function applyObservationCorrection(
   const target = await getMostRecentShownObservation(userName);
   if (!target) return null;
 
+  const newStatus = CORRECTION_TO_STATUS[correctionType];
   await query(
     `UPDATE observations SET status = $1 WHERE id = $2`,
-    [CORRECTION_TO_STATUS[correctionType], target.id]
+    [newStatus, target.id]
   );
+  // Cascade to the linked goal-connection, if this observation carried one —
+  // "elevate" (confirm) accepts it, everything else that closes the
+  // observation out (dismiss/reject/forget) dismisses it too.
+  if (target.related_connection_id) {
+    await updateConnectionStatus(target.related_connection_id, newStatus === "accepted" ? "accepted" : "dismissed");
+  }
   await query(
     `INSERT INTO user_corrections (user_name, correction_type, affected_item_ids, natural_language_feedback)
      VALUES ($1, $2, $3, $4)`,
@@ -294,25 +350,33 @@ function formatCorrectionContext(corrections: UserCorrection[]): string {
 // A second context source alongside life_capture/attic_item — not merged into
 // SourceItem[] since goals aren't a recency-sorted stream of things that
 // happened, they're standing context to check saved items against. Active
-// goals only, capped at 8 (same cap generateGoalsRecap uses). No goal-creation
-// logic here — this only lets the passes notice a connection to what already
-// exists.
-async function fetchGoalContext(userName: string): Promise<string> {
+// goals only, capped at 8 (same cap generateGoalsRecap uses). Indexed (not
+// just prose) so dotConnectorPass/patternObservationPass can report back
+// WHICH goal a suggestion connects to by position, the same "point at it,
+// don't retype it" discipline used everywhere else — Claude picks an index,
+// the server resolves the real goal id.
+export interface IndexedGoalContext {
+  text:  string;
+  goals: Goal[];
+}
+
+async function fetchGoalContext(userName: string): Promise<IndexedGoalContext> {
   const goals = await getGoals(userName).catch(() => [] as Goal[]);
   // Active AND aspirational both count as "current" here — noticing a
   // connection to an aspirational goal is exactly the kind of nudge that
   // could promote it to active, not something to withhold until it is one.
   const active = goals.filter((g) => g.status !== "completed").slice(0, 8);
-  if (active.length === 0) return "";
+  if (active.length === 0) return { text: "", goals: [] };
   const lines = active
-    .map((g) => {
+    .map((g, i) => {
       const done  = g.steps.filter((s) => s.completed).length;
       const total = g.steps.length;
-      return `  - "${g.title}"${g.description ? ` — ${g.description}` : ""} (${total > 0 ? `${done}/${total} steps done` : "no steps yet"})`;
+      return `  [${i}] "${g.title}"${g.description ? ` — ${g.description}` : ""} (${total > 0 ? `${done}/${total} steps done` : "no steps yet"})`;
     })
     .join("\n");
-  return `\nCurrent goals — surface a connection here only if a saved item genuinely relates to one of these, ` +
-    `don't force it:\n${lines}\n`;
+  const text = `\nCurrent goals (indexed) — if a saved item below genuinely relates to one of these, report its ` +
+    `index as relatedGoalIndex; don't force it:\n${lines}\n`;
+  return { text, goals: active };
 }
 
 // A third context source, same shape as fetchGoalContext — standing context,
@@ -381,6 +445,21 @@ function formatItemLines(items: SourceItem[], tz: string, limit: number): string
     .join("\n");
 }
 
+// Numbered variant of formatItemLines — needed wherever a pass has to point
+// back at a specific item by position (goal-connection linking) rather than
+// just quoting it in a message.
+function formatIndexedItemLines(items: SourceItem[], tz: string, limit: number): string {
+  return items
+    .slice(0, limit)
+    .map((it, i) => {
+      const date = new Date(it.occurredAt).toLocaleDateString("en-US", {
+        timeZone: tz, month: "short", day: "numeric",
+      });
+      return `[${i}] (${date}, ${it.context}) ${it.content}`;
+    })
+    .join("\n");
+}
+
 // ── Dot-connector (actionable suggestions) ───────────────────────────────────
 // Generalized runDotConnector (lifeCapturesManager.ts) — same prompt, same
 // binary null-or-sentence style, same "one kept at a time" / 3-day rate limit,
@@ -431,13 +510,13 @@ export async function dotConnectorPass(userName: string): Promise<void> {
     }
   } catch { /* non-fatal */ }
 
-  const itemLines = formatItemLines(items, tz, 100);
+  const itemLines = formatIndexedItemLines(items, tz, 100);
   const corrections = await getRecentCorrections(userName, 30);
-  const goalContext = await fetchGoalContext(userName);
+  const { text: goalContext, goals } = await fetchGoalContext(userName);
   const stoicPhaseContext = await fetchStoicPhaseContext(userName);
 
   const prompt =
-    `${firstName}'s personal reflections and saved items from the last 30 days:\n${itemLines}\n\n` +
+    `${firstName}'s personal reflections and saved items from the last 30 days (numbered):\n${itemLines}\n\n` +
     `Profile: lives in ${city}, interests include ${interests.slice(0, 6).join(", ") || "various things"}.` +
     listContext + formatCorrectionContext(corrections) + goalContext + stoicPhaseContext + `\n\n` +
     `One question: Is there anything in the above that Winston could take a concrete action on RIGHT NOW — ` +
@@ -449,21 +528,34 @@ export async function dotConnectorPass(userName: string): Promise<void> {
     `• No suggestions about things already in progress or recently acted on.\n` +
     `• The suggestion must be ONE natural conversational sentence Winston would say — under 25 words.\n` +
     `• Example format: "You mentioned wanting an exotic trip — you have a clear week in September. Want me to start looking at options?"\n\n` +
-    `If there's a genuine actionable match: return ONLY the suggestion sentence.\n` +
-    `If not: return exactly the word null.`;
+    `Return ONLY this JSON, no markdown:\n` +
+    `{"suggestion": "the sentence, or null if nothing genuinely actionable", "itemIndex": <item number above this is most directly based on, or null>, "relatedGoalIndex": <index from "Current goals" above if this genuinely connects to one, or null>}`;
 
   try {
     const resp = await anthropic.messages.create({
       model:      MODEL_HAIKU,
-      max_tokens: 80,
+      max_tokens: 150,
       messages:   [{ role: "user", content: prompt }],
     });
-    const text = resp.content
+    const raw = resp.content
       .filter((b) => b.type === "text")
       .map((b) => (b as { type: "text"; text: string }).text)
       .join("").trim();
 
-    if (!text || /^null$/i.test(text)) {
+    const stripped = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+    const m = stripped.match(/\{[\s\S]*\}/);
+    if (!m) {
+      logger.info({ userName }, "[ConnectionEngine] DotConnector: no JSON in response");
+      return;
+    }
+
+    const parsed = JSON.parse(m[0]) as {
+      suggestion:       string | null;
+      itemIndex:        number | null;
+      relatedGoalIndex: number | null;
+    };
+
+    if (!parsed.suggestion) {
       logger.info({ userName }, "[ConnectionEngine] DotConnector: no actionable suggestion found");
       return;
     }
@@ -472,12 +564,29 @@ export async function dotConnectorPass(userName: string): Promise<void> {
       `DELETE FROM observations WHERE user_name = $1 AND observation_type = 'dot_connector' AND status = 'pending'`,
       [userName]
     );
-    await query(
+    const { rows: inserted } = await query<{ id: number }>(
       `INSERT INTO observations (user_name, observation_type, message, confidence_score, urgency, should_interrupt_user)
-       VALUES ($1, 'dot_connector', $2, 90, 'low', false)`,
-      [userName, text]
+       VALUES ($1, 'dot_connector', $2, 90, 'low', false)
+       RETURNING id`,
+      [userName, parsed.suggestion]
     );
-    logger.info({ userName, suggestion: text.slice(0, 80) }, "[ConnectionEngine] DotConnector: suggestion stored");
+    const observationId = inserted[0]!.id;
+    logger.info({ userName, suggestion: parsed.suggestion.slice(0, 80) }, "[ConnectionEngine] DotConnector: suggestion stored");
+
+    // Real connections row when this suggestion genuinely fits an existing
+    // goal, instead of the fit only living inside the message's prose.
+    const matchedGoal = parsed.relatedGoalIndex != null ? goals[parsed.relatedGoalIndex] : undefined;
+    const matchedItem = parsed.itemIndex != null ? items[parsed.itemIndex] : undefined;
+    if (matchedGoal && matchedItem) {
+      const connectionId = await writeGoalConnection(
+        userName, matchedItem.sourceType, matchedItem.sourceId, matchedGoal.id, parsed.suggestion
+      );
+      await linkObservationToConnection(observationId, connectionId);
+      logger.info(
+        { userName, observationId, connectionId, goalId: matchedGoal.id },
+        "[ConnectionEngine] DotConnector: goal connection written"
+      );
+    }
   } catch (err) {
     logger.warn({ err, userName }, "[ConnectionEngine] DotConnector: Claude call failed");
   }
@@ -508,13 +617,13 @@ export async function patternObservationPass(userName: string): Promise<void> {
   const { timezone: tz } = await getUserLocationContext(userName);
   const firstName = (profile?.name ?? userName).split(" ")[0];
 
-  const itemLines = formatItemLines(items, tz, 100);
+  const itemLines = formatIndexedItemLines(items, tz, 100);
   const corrections = await getRecentCorrections(userName, 30);
-  const goalContext = await fetchGoalContext(userName);
+  const { text: goalContext, goals } = await fetchGoalContext(userName);
   const stoicPhaseContext = await fetchStoicPhaseContext(userName);
 
   const prompt =
-    `${firstName}'s personal reflections and saved items from the last 30 days:\n${itemLines}\n` +
+    `${firstName}'s personal reflections and saved items from the last 30 days (numbered):\n${itemLines}\n` +
     formatCorrectionContext(corrections) + goalContext + stoicPhaseContext + `\n` +
     `Read these carefully. You are a wise, observant friend — not a therapist, not a coach. ` +
     `Look for a genuine recurring pattern: something ${firstName} has mentioned 3 or more times, ` +
@@ -529,22 +638,35 @@ export async function patternObservationPass(userName: string): Promise<void> {
     `  - "You've said you feel most alive after time outdoors. You have a clear afternoon today."\n` +
     `  - "You've brought up calling Olivia three times and haven't yet. What's in the way?"\n` +
     `• If anything concerning emerges — anxiety, persistent sadness, isolation — acknowledge it warmly and gently suggest talking to someone. Do NOT diagnose.\n` +
-    `• If there is no genuine pattern: return exactly the word null.\n\n` +
-    `If a real pattern exists: return ONLY the observation sentence.\n` +
-    `If not: return exactly the word null.`;
+    `• If there is no genuine pattern: set observation to null.\n\n` +
+    `Return ONLY this JSON, no markdown:\n` +
+    `{"observation": "the observation sentence, or null if no genuine pattern", "itemIndex": <item number above this is most directly based on, or null>, "relatedGoalIndex": <index from "Current goals" above if this genuinely connects to one, or null>}`;
 
   try {
     const resp = await anthropic.messages.create({
       model:      MODEL_HAIKU,
-      max_tokens: 100,
+      max_tokens: 170,
       messages:   [{ role: "user", content: prompt }],
     });
-    const text = resp.content
+    const raw = resp.content
       .filter((b) => b.type === "text")
       .map((b) => (b as { type: "text"; text: string }).text)
       .join("").trim();
 
-    if (!text || /^null$/i.test(text)) {
+    const stripped = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+    const m = stripped.match(/\{[\s\S]*\}/);
+    if (!m) {
+      logger.info({ userName }, "[ConnectionEngine] PatternObservation: no JSON in response");
+      return;
+    }
+
+    const parsed = JSON.parse(m[0]) as {
+      observation:      string | null;
+      itemIndex:        number | null;
+      relatedGoalIndex: number | null;
+    };
+
+    if (!parsed.observation) {
       logger.info({ userName }, "[ConnectionEngine] PatternObservation: no genuine pattern found");
       return;
     }
@@ -553,12 +675,27 @@ export async function patternObservationPass(userName: string): Promise<void> {
       `DELETE FROM observations WHERE user_name = $1 AND observation_type = 'pattern' AND status = 'pending'`,
       [userName]
     );
-    await query(
+    const { rows: inserted } = await query<{ id: number }>(
       `INSERT INTO observations (user_name, observation_type, message, confidence_score, urgency, should_interrupt_user)
-       VALUES ($1, 'pattern', $2, 90, 'low', false)`,
-      [userName, text]
+       VALUES ($1, 'pattern', $2, 90, 'low', false)
+       RETURNING id`,
+      [userName, parsed.observation]
     );
-    logger.info({ userName, obs: text.slice(0, 80) }, "[ConnectionEngine] PatternObservation: observation stored");
+    const observationId = inserted[0]!.id;
+    logger.info({ userName, obs: parsed.observation.slice(0, 80) }, "[ConnectionEngine] PatternObservation: observation stored");
+
+    const matchedGoal = parsed.relatedGoalIndex != null ? goals[parsed.relatedGoalIndex] : undefined;
+    const matchedItem = parsed.itemIndex != null ? items[parsed.itemIndex] : undefined;
+    if (matchedGoal && matchedItem) {
+      const connectionId = await writeGoalConnection(
+        userName, matchedItem.sourceType, matchedItem.sourceId, matchedGoal.id, parsed.observation
+      );
+      await linkObservationToConnection(observationId, connectionId);
+      logger.info(
+        { userName, observationId, connectionId, goalId: matchedGoal.id },
+        "[ConnectionEngine] PatternObservation: goal connection written"
+      );
+    }
   } catch (err) {
     logger.warn({ err, userName }, "[ConnectionEngine] PatternObservation: Claude call failed");
   }

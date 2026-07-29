@@ -69,6 +69,8 @@ At the end of EVERY response append exactly one action tag on a new line. No exc
 [ACTION:convert_notepad_confirm] — user agrees to convert a [List Type Conflict] list from a freeform note to a checklist; title/content/url are resolved from what was already captured, not retyped
 [ACTION:convert_notepad_cancel] — user declines a [List Type Conflict] entirely, drop it
 [ACTION:create_goal_from_observation] — user confirms turning a [Recurring Pattern] into a real goal; title/description are resolved from what was already captured, not retyped
+[ACTION:reconnect_goal_observation|goal=<the other goal's name as the user said it>] — user says a [Goal Connection] suggestion actually fits a DIFFERENT existing goal than the one offered
+[ACTION:make_goal_aspirational_from_observation] — user declines a [Goal Connection] suggestion's target goal and wants it as its own new standalone goal instead; title/description resolved from what was already captured, not retyped
 [ACTION:add_todo|task=<task1; task2; ...>] — plain to-do with no time; one task, or several separated by semicolons
 [ACTION:add_reminder|task=<task>|time=<ISO 8601 with tz offset>] — timed reminder only
 [ACTION:add_todo_with_reminder|task=<task1; task2; ...>|time=<ISO 8601 with tz offset>] — to-do with time; one task, or several separated by semicolons

@@ -23,9 +23,14 @@ import {
   applyObservationCorrection,
   getMostRecentShownObservation,
   markObservationAccepted,
+  getConnectionById,
+  updateConnectionStatus,
+  linkObservationToConnection,
+  writeGoalConnection,
   GOAL_OFFER_SUFFIX,
+  type SourceType,
 } from "../../connectionEngine/connectionEngineManager.js";
-import { createGoal, linkGoalToObservation } from "../../goals/goalsManager.js";
+import { createGoal, linkGoalToObservation, getGoals, getGoalById } from "../../goals/goalsManager.js";
 import {
   saveAtticItem,
   getArchiveCandidates,
@@ -119,7 +124,9 @@ export type ActionType =
   | "offer_save"
   | "convert_notepad_confirm"
   | "convert_notepad_cancel"
-  | "create_goal_from_observation";
+  | "create_goal_from_observation"
+  | "reconnect_goal_observation"
+  | "make_goal_aspirational_from_observation";
 
 export interface ClaudeAction {
   type: ActionType;
@@ -136,6 +143,7 @@ export interface ClaudeAction {
   gmailId?: string | null;
   feedback?: string | null;
   correctionType?: "dismiss" | "reject" | "elevate" | "forget" | null;
+  goalName?: string | null;
   excludeIndexes?: string | null;
   notes?:          string | null;
   url?:            string | null;
@@ -369,6 +377,18 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
   const pendingSaveOffers   = getPendingSaveOffers(sessionUserName);
   const pendingListConflict = getPendingListTypeConflict(sessionUserName);
   const mostRecentShownObservation = await getMostRecentShownObservation(sessionUserName).catch(() => null);
+  // When the shown observation carries a suggested goal fit, resolve the
+  // target goal's title now so the dynamicPrompt block below can name it
+  // without Claude having to retype or guess it.
+  let pendingGoalConnection: { connectionId: number; goalId: number; goalTitle: string } | null = null;
+  if (mostRecentShownObservation?.related_connection_id) {
+    const conn = await getConnectionById(mostRecentShownObservation.related_connection_id).catch(() => null);
+    if (conn && conn.status === "suggested" && conn.target_type === "goal") {
+      const goalId = parseInt(conn.target_id, 10);
+      const goal = await getGoalById(goalId, sessionUserName).catch(() => null);
+      if (goal) pendingGoalConnection = { connectionId: conn.id, goalId, goalTitle: goal.title };
+    }
+  }
 
   // ── Build stable system prompt ───────────────────────────────────────────────
   const corePrompt =
@@ -539,6 +559,21 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       `If __USER__ doesn't want this, that's a normal observation dismissal — emit [ACTION:correct_observation|type=dismiss] like any other.`;
   }
 
+  // Goal-connection offer — only injected when the most recently shown
+  // observation carries a suggested (not yet resolved) connections row,
+  // written by dotConnectorPass/patternObservationPass when a saved item
+  // genuinely fit an existing goal. Four resolutions map to four different
+  // outcomes; confirm/dismiss reuse the existing correct_observation
+  // machinery (now generalized to cascade to the linked connection).
+  if (pendingGoalConnection) {
+    dynamicPrompt += `\n\n[Goal Connection — suggested fit to an existing goal]\n` +
+      `You recently told __USER__: "${mostRecentShownObservation!.message}" — noting a fit to their goal "${pendingGoalConnection.goalTitle}".\n` +
+      `If __USER__ confirms the connection (yes, that's right, good catch, etc.), emit [ACTION:correct_observation|type=elevate].\n` +
+      `If __USER__ says it doesn't relate to that goal at all, emit [ACTION:correct_observation|type=dismiss].\n` +
+      `If __USER__ says it actually relates to a DIFFERENT goal, emit [ACTION:reconnect_goal_observation|goal=<the other goal's name as they said it>].\n` +
+      `If __USER__ says this should be its own new goal instead (not connected to "${pendingGoalConnection.goalTitle}"), emit [ACTION:make_goal_aspirational_from_observation] — no parameters, the server derives the new goal from what was already captured.`;
+  }
+
   // Meeting request flow in progress — separate from reply drafts (E007-MEET), unchanged.
   if (pendingMeetingReqs.length > 0) {
     const isEmailReplyAccepted = await classifyConfirmationIntent(message).then(r => r === 'send').catch(() => false);
@@ -665,6 +700,12 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
         break;
       case "create_goal_from_observation":
         action = { type: "create_goal_from_observation" };
+        break;
+      case "reconnect_goal_observation":
+        action = { type: "reconnect_goal_observation", goalName: parts.goal ?? null };
+        break;
+      case "make_goal_aspirational_from_observation":
+        action = { type: "make_goal_aspirational_from_observation" };
         break;
       case "add_todo":
         action = { type: "add_todo", listName: "reminders", itemText: parts.task ?? "" };
@@ -1032,6 +1073,79 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
         log.info({ goalId: goal.id, observationId: target.id, title }, "[chatHandlerCore] Goal created from cluster observation");
       } catch (err) {
         log.warn({ err }, "[chatHandlerCore] create_goal_from_observation failed");
+      }
+      break;
+    }
+
+    // ── reconnect_goal_observation ──────────────────────────────────────────
+    // "Connect to a different goal instead" — the one resolution that needs a
+    // real param, since the server can't infer WHICH other goal from context
+    // alone. Same source item, new target: dismiss the old suggested
+    // connection, write a fresh one directly as accepted (the user just
+    // confirmed it), repoint the observation at it.
+    case "reconnect_goal_observation": {
+      const target = mostRecentShownObservation;
+      const goalName = action.goalName?.trim();
+      if (!target || !target.related_connection_id || !goalName) {
+        log.info(
+          { target: target?.id ?? null, goalName: goalName ?? null },
+          "[chatHandlerCore] reconnect_goal_observation had nothing eligible to target"
+        );
+        break;
+      }
+      try {
+        const oldConnection = await getConnectionById(target.related_connection_id);
+        const goals = await getGoals(sessionUserName);
+        const needle = goalName.toLowerCase();
+        const matchedGoal =
+          goals.find((g) => g.title.toLowerCase() === needle) ??
+          goals.find((g) => g.title.toLowerCase().includes(needle));
+        if (!oldConnection || !matchedGoal) {
+          finalReply = `I couldn't find a goal called "${goalName}" — what's it titled exactly?`;
+          log.info({ goalName, found: !!matchedGoal }, "[chatHandlerCore] reconnect_goal_observation: goal not found");
+          break;
+        }
+        await updateConnectionStatus(oldConnection.id, "dismissed");
+        const newConnectionId = await writeGoalConnection(
+          sessionUserName, oldConnection.source_type as SourceType, oldConnection.source_id,
+          matchedGoal.id, oldConnection.connection_reason
+        );
+        await updateConnectionStatus(newConnectionId, "accepted");
+        await linkObservationToConnection(target.id, newConnectionId);
+        await markObservationAccepted(target.id);
+        finalReply = `Got it — connected to "${matchedGoal.title}" instead.`;
+        log.info(
+          { observationId: target.id, oldConnectionId: oldConnection.id, newConnectionId, goalId: matchedGoal.id },
+          "[chatHandlerCore] Goal connection repointed"
+        );
+      } catch (err) {
+        log.warn({ err }, "[chatHandlerCore] reconnect_goal_observation failed");
+      }
+      break;
+    }
+
+    // ── make_goal_aspirational_from_observation ─────────────────────────────
+    // "Make this its own aspirational goal instead" — declines the suggested
+    // connection to the existing goal and creates a new standalone one from
+    // the observation's own message, same derivation style as
+    // create_goal_from_observation (which has theme/suffix handling this
+    // path doesn't need — dot_connector/pattern messages carry neither).
+    case "make_goal_aspirational_from_observation": {
+      const target = mostRecentShownObservation;
+      if (!target || !target.related_connection_id) {
+        log.info({ target: target?.id ?? null }, "[chatHandlerCore] make_goal_aspirational_from_observation had nothing eligible to target");
+        break;
+      }
+      try {
+        const title = target.message.slice(0, 120);
+        const goal = await createGoal(sessionUserName, title, target.message, "aspirational");
+        await linkGoalToObservation(goal.id, target.id);
+        await updateConnectionStatus(target.related_connection_id, "dismissed");
+        await markObservationAccepted(target.id);
+        finalReply = `Done — I've added "${title}" as its own goal.`;
+        log.info({ goalId: goal.id, observationId: target.id, title }, "[chatHandlerCore] Standalone goal created from goal-connection observation");
+      } catch (err) {
+        log.warn({ err }, "[chatHandlerCore] make_goal_aspirational_from_observation failed");
       }
       break;
     }
