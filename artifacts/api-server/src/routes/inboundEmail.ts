@@ -2,6 +2,8 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import multer from "multer";
 import { saveAtticItem } from "../attic/atticItemsManager.js";
 import { runConnectionEngine } from "../connectionEngine/connectionEngineManager.js";
+import { importRecipeFromEmail } from "../lists/recipeEmailImporter.js";
+import { firstUrl } from "../lib/emailForwardParsing.js";
 
 const router: IRouter = Router();
 
@@ -13,27 +15,6 @@ const upload = multer({ storage: multer.memoryStorage() });
 // Content this route stores is capped defensively — forwarded email threads
 // (especially HTML-to-text conversions) can run very long.
 const MAX_CONTENT_CHARS = 8000;
-
-// Signature/footer links shouldn't win over a genuine content link. Two
-// simple, deliberately non-exhaustive heuristics: (1) stop looking once a
-// common signature/footer marker shows up, and (2) skip obvious image/
-// tracking/social links even before that point.
-const SIGNATURE_MARKER = /\n--\s*\n|unsubscribe|update your profile|view this email in your browser|sent from my iphone|sent from my android/i;
-const NON_CONTENT_URL  = /^https?:\/\/(img|cdn|assets|static)\.|facebook\.com|twitter\.com|x\.com|instagram\.com|linkedin\.com|youtube\.com|newoldstamp\.com|wixstatic\.com|gravatar\.com/i;
-const IMAGE_EXTENSION  = /\.(png|jpe?g|gif|svg|webp|bmp)(\?|$)/i;
-
-function firstUrl(text: string): string | null {
-  const cutoff     = text.search(SIGNATURE_MARKER);
-  const searchable = cutoff === -1 ? text : text.slice(0, cutoff);
-
-  const candidates = searchable.match(/https?:\/\/\S+/g) ?? [];
-  for (const raw of candidates) {
-    const url = raw.replace(/[.,;:!?)<>]+$/, "");
-    if (IMAGE_EXTENSION.test(url) || NON_CONTENT_URL.test(url)) continue;
-    return url;
-  }
-  return null;
-}
 
 // ── Inbound email webhook ─────────────────────────────────────────────────────
 // The Attic's email-forward path: forward anything with "the attic" anywhere
@@ -74,6 +55,16 @@ router.post(
 
     if (!username) {
       process.stdout.write("[InboundEmail] no +username in recipient — cannot assign user_name, skipping\n");
+      return;
+    }
+
+    // Recipe forwards — an independent branch, checked before the Attic's
+    // subject match so the two stay cleanly separate. "recipe" is a much
+    // more specific signal than the Attic's deliberately generic catch-all,
+    // and a recipe forward needs real structured extraction into list_items
+    // (title/notes/url), not the Attic's raw-content-dump behavior.
+    if (/recipe/i.test(subject)) {
+      await importRecipeFromEmail({ userName: username, text, subject, sender });
       return;
     }
 
