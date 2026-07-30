@@ -53,6 +53,10 @@ app.get("/terms", (_req: Request, res: Response) => {
   res.sendFile(path.join(publicDir, "Winston_Terms_of_Service.pdf"));
 });
 
+app.get("/user-guide", (_req: Request, res: Response) => {
+  res.sendFile(path.join(publicDir, "user-guide.html"));
+});
+
 app.use("/api", router);
 
 export default app;

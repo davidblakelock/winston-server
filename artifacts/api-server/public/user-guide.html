@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Winston — User Guide</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&family=DM+Sans:wght@300;400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --gold: #C9A84C;
+    --gold-light: #E8C97A;
+    --dark: #0A0A0F;
+    --dark-2: #111118;
+    --dark-3: #1A1A26;
+    --cream: #F5F0E8;
+    --muted: #8888AA;
+    --border: #2A2A3A;
+    --green: #4CAF50;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--dark);
+    font-family: 'DM Sans', sans-serif;
+    color: var(--cream);
+    line-height: 1.7;
+    font-weight: 300;
+  }
+  .hero {
+    background: var(--dark-2);
+    color: var(--cream);
+    padding: 60px 40px;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+    border-bottom: 1px solid rgba(201,168,76,0.2);
+  }
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: -50%; left: -50%;
+    width: 200%; height: 200%;
+    background: radial-gradient(ellipse at center, rgba(201,168,76,0.10) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  .hero-paw { font-size: 36px; margin-bottom: 16px; display: block; }
+  .hero h1 {
+    font-family: 'Playfair Display', serif;
+    font-size: 44px;
+    letter-spacing: 4px;
+    color: var(--gold-light);
+    margin-bottom: 8px;
+  }
+  .hero .tagline {
+    font-family: 'Playfair Display', serif;
+    font-style: italic;
+    font-size: 17px;
+    color: var(--cream);
+    opacity: 0.8;
+    margin-bottom: 8px;
+  }
+  .hero .version {
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+  .nav {
+    background: var(--dark-2);
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    display: flex;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .nav::-webkit-scrollbar { display: none; }
+  .nav a {
+    color: var(--muted);
+    text-decoration: none;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    padding: 16px 16px;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    white-space: nowrap;
+    transition: all 0.2s ease;
+  }
+  .nav a:hover { color: var(--gold); border-bottom-color: var(--gold); }
+  .container { max-width: 780px; margin: 0 auto; padding: 48px 24px 80px; }
+  .section { margin-bottom: 52px; }
+  .section-header {
+    display: flex; align-items: center; gap: 14px;
+    margin-bottom: 20px; padding-bottom: 14px;
+    border-bottom: 1px solid rgba(201,168,76,0.35);
+  }
+  .section-icon {
+    font-size: 24px; width: 46px; height: 46px;
+    background: rgba(201,168,76,0.08);
+    border: 1px solid rgba(201,168,76,0.25);
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .section-title {
+    font-family: 'Playfair Display', serif;
+    font-size: 23px;
+    color: var(--gold-light);
+  }
+  .section-subtitle { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .intro-box {
+    background: var(--dark-2);
+    border: 1px solid rgba(201,168,76,0.25);
+    border-radius: 14px;
+    padding: 28px 32px;
+    margin-bottom: 44px;
+    font-family: 'Playfair Display', serif;
+    font-style: italic;
+    font-size: 17px;
+    color: var(--gold-light);
+    line-height: 1.7;
+  }
+  .feature-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 20px; }
+  @media (max-width: 600px) {
+    .feature-grid { grid-template-columns: 1fr; }
+    .hero h1 { font-size: 32px; }
+    .nav a { padding: 14px 12px; font-size: 10px; }
+  }
+  .feature-card {
+    background: var(--dark-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+  }
+  .feature-card-icon { font-size: 22px; margin-bottom: 8px; display: block; }
+  .feature-card-title {
+    font-weight: 700; font-size: 13px; color: var(--gold);
+    margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .feature-card-desc { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+  .commands { background: var(--dark-2); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; margin: 14px 0; }
+  .commands-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-bottom: 10px; }
+  .command { margin-bottom: 8px; }
+  .command-bubble {
+    background: var(--dark-3);
+    border: 1px solid rgba(201,168,76,0.3);
+    color: var(--cream);
+    border-radius: 16px 16px 16px 4px;
+    padding: 8px 14px;
+    font-size: 13px;
+    display: inline-block;
+    font-style: italic;
+  }
+  .tip {
+    background: rgba(201,168,76,0.07);
+    border-left: 3px solid var(--gold);
+    border-radius: 0 8px 8px 0;
+    padding: 13px 18px;
+    margin: 14px 0;
+    font-size: 13.5px;
+    color: var(--cream);
+  }
+  .tip strong { color: var(--gold-light); font-weight: 700; }
+  p { font-size: 14.5px; color: var(--cream); opacity: 0.92; margin-bottom: 14px; }
+  .steps { counter-reset: steps; list-style: none; margin: 14px 0; }
+  .steps li { counter-increment: steps; display: flex; gap: 14px; margin-bottom: 14px; align-items: flex-start; }
+  .steps li::before {
+    content: counter(steps);
+    background: var(--gold); color: var(--dark);
+    width: 26px; height: 26px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700; flex-shrink: 0; margin-top: 2px;
+  }
+  .steps li span { font-size: 13.5px; line-height: 1.6; color: var(--cream); opacity: 0.9; }
+  .steps li strong { color: var(--gold-light); font-weight: 600; }
+  .faq-item { border-bottom: 1px solid var(--border); padding: 18px 0; }
+  .faq-q { font-family: 'Playfair Display', serif; font-size: 15px; color: var(--gold-light); margin-bottom: 8px; }
+  .faq-a { font-size: 13.5px; color: var(--cream); opacity: 0.85; line-height: 1.7; }
+  .divider { border: none; border-top: 1px solid var(--border); margin: 36px 0; }
+  .footer {
+    background: var(--dark-2);
+    color: var(--cream);
+    text-align: center;
+    padding: 36px 24px;
+    font-family: 'Playfair Display', serif;
+    font-style: italic;
+    font-size: 15px;
+    opacity: 0.85;
+    border-top: 1px solid rgba(201,168,76,0.15);
+  }
+  .footer .paw { font-size: 24px; display: block; margin-bottom: 10px; }
+  .full-card { background: var(--dark-2); border: 1px solid var(--border); border-radius: 10px; padding: 22px 24px; margin-bottom: 14px; }
+  .full-card h3 { font-family: 'Playfair Display', serif; font-size: 16px; color: var(--gold-light); margin-bottom: 8px; }
+  .full-card p { margin-bottom: 6px; font-size: 13px; }
+  .pull-quote {
+    font-family: 'Playfair Display', serif;
+    font-style: italic;
+    color: var(--gold-light);
+    text-align: center;
+    font-size: 15px;
+    line-height: 1.7;
+    margin: 18px 0;
+  }
+  code { color: var(--gold-light); background: rgba(201,168,76,0.1); padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <span class="hero-paw">🐾</span>
+  <h1>WINSTON</h1>
+  <p class="tagline">Your Personal AI Companion — User Guide</p>
+  <p class="version">Version 2.0 — July 2026</p>
+</div>
+
+<nav class="nav">
+  <a href="#welcome">Welcome</a>
+  <a href="#getting-started">Getting Started</a>
+  <a href="#stoic">Philosophy</a>
+  <a href="#morning">Morning Run Down</a>
+  <a href="#evening">Evening Wind Down</a>
+  <a href="#attic">The Attic</a>
+  <a href="#goals">My Goals</a>
+  <a href="#features">Features</a>
+  <a href="#people">My People</a>
+  <a href="#settings">Settings</a>
+  <a href="#faq">FAQ</a>
+</nav>
+
+<div class="container">
+
+  <div class="section" id="welcome">
+    <div class="intro-box">
+      "Winston isn't a smart speaker that answers questions. Winston is a companion that knows you — your name, your family, your routines, what you love, and what you need. Every day, for you."
+    </div>
+    <div class="section-header">
+      <div class="section-icon">👋</div>
+      <div>
+        <div class="section-title">Welcome to Winston</div>
+        <div class="section-subtitle">Everything you need to know to get the most from your companion</div>
+      </div>
+    </div>
+    <p>Winston is a personal AI companion designed for people who want the benefits of modern AI without the complexity. Unlike Alexa, Siri, or Google Assistant, Winston knows who you are — it remembers your family, your schedule, your preferences, your goals, and the things you've told it matter to you.</p>
+    <p>You talk to Winston through a <strong style="color: var(--gold-light);">persona</strong> — either <strong style="color: var(--gold-light);">Rosie</strong> or <strong style="color: var(--gold-light);">MACC</strong> — who does the actual talking, listening, and remembering. Winston is the platform underneath; Rosie or MACC is who you're actually getting to know.</p>
+    <p>This guide walks through everything Winston can do. You don't need to read it all at once — start with Getting Started and explore the rest as you go.</p>
+  </div>
+
+  <div class="section" id="getting-started">
+    <div class="section-header">
+      <div class="section-icon">🚀</div>
+      <div>
+        <div class="section-title">Getting Started</div>
+        <div class="section-subtitle">From sign in to your first Morning Run Down</div>
+      </div>
+    </div>
+    <p>Getting started takes about 15 minutes.</p>
+    <ol class="steps">
+      <li><span><strong>Sign in with Google.</strong> No password needed — just approve the sign-in and you're in.</span></li>
+      <li><span><strong>Choose your companion.</strong> Pick Rosie or MACC — each has a distinct personality and voice. You can change this later in Settings.</span></li>
+      <li><span><strong>Choose a voice.</strong> Listen to the available voice samples for your chosen persona and pick the one that feels right.</span></li>
+      <li><span><strong>Tell your companion about you.</strong> Through a warm conversation, your companion learns your name, your family, your schedule, your favorite places, and what you care about.</span></li>
+      <li><span><strong>Connect Google.</strong> Optionally connect Gmail and Google Calendar so your companion can summarize your emails and manage your schedule.</span></li>
+      <li><span><strong>Your first Morning Run Down.</strong> You'll get a real, personalized briefing right away, built from everything you just shared.</span></li>
+    </ol>
+    <div class="tip"><strong>Tip:</strong> The more you tell your companion during onboarding, the better your first Morning Run Down will be. Don't rush — take your time.</div>
+  </div>
+
+  <div class="section" id="stoic">
+    <div class="section-header">
+      <div class="section-icon">🏛️</div>
+      <div>
+        <div class="section-title">The Stoic Philosophy Behind Winston</div>
+        <div class="section-subtitle">Why an ancient framework runs through a modern companion</div>
+      </div>
+    </div>
+    <p>About 2,300 years ago, a group of thinkers developed a philosophy built not for lecture halls, but for actually living — Marcus Aurelius, Epictetus, Seneca. Their central question was simple: how do you live a good life in a world you can't control? Their answers turned out to be remarkably durable, not because the world stayed the same, but because people didn't.</p>
+    <p>Woven quietly through everything your companion does is one of their core practices: <strong style="color: var(--gold-light);">morning preparation, evening review.</strong> Marcus Aurelius did this every day — not to predict the future, but to meet it with intention instead of reaction, and then to look back honestly at how the day actually went. That's the same shape as your Morning Run Down and Evening Wind Down, every day, whether you notice it or not.</p>
+    <p>This isn't a lecture your companion delivers at you. The philosophy shows up as a real quote each morning — the actual words, then a plain, modern explanation of what it means — and it can quietly shape the angle of an evening reflection question when it genuinely fits. It's a long curriculum, not a one-off: each stretch of days centers on a different core idea, from the dichotomy of control (focusing only on what's actually yours to control) to <em>amor fati</em> — literally "love of fate," the idea that what's already happened is material to work with, not something to resent.</p>
+    <p>The goal isn't to make you a philosopher. It's the same thing Winston is built around more broadly: helping you live with a little more intention, one day at a time.</p>
+  </div>
+
+  <div class="section" id="morning">
+    <div class="section-header">
+      <div class="section-icon">☕</div>
+      <div>
+        <div class="section-title">The Morning Run Down</div>
+        <div class="section-subtitle">Your personalized, freshly-built start to every day</div>
+      </div>
+    </div>
+    <p>Every morning, your companion delivers a real, freshly-generated briefing — just say good morning and they take it from there. Each one is put together live, so it takes a few moments; it's not an instant canned message.</p>
+    <p>Your Morning Run Down includes, in order:</p>
+    <div class="feature-grid">
+      <div class="feature-card"><span class="feature-card-icon">📰</span><div class="feature-card-title">Headlines</div><div class="feature-card-desc">Around ten real national and world stories, plus a couple tied to your own interests that rotate day to day.</div></div>
+      <div class="feature-card"><span class="feature-card-icon">🌤️</span><div class="feature-card-title">Weather</div><div class="feature-card-desc">Today's current conditions and high/low, nothing more.</div></div>
+      <div class="feature-card"><span class="feature-card-icon">📈</span><div class="feature-card-title">Markets</div><div class="feature-card-desc">Pre-market futures direction and overnight financial news ahead of the opening bell.</div></div>
+      <div class="feature-card"><span class="feature-card-icon">🏆</span><div class="feature-card-title">Sports</div><div class="feature-card-desc">The final score from the most recent completed game for each team you follow.</div></div>
+      <div class="feature-card"><span class="feature-card-icon">✨</span><div class="feature-card-title">One Good Story</div><div class="feature-card-desc">Something a little unexpected or delightful — never politics, crime, or celebrity gossip.</div></div>
+      <div class="feature-card"><span class="feature-card-icon">🏛️</span><div class="feature-card-title">Stoic Quote</div><div class="feature-card-desc">A line from the Stoics, in the original words, then explained in plain modern language — never the same framing twice.</div></div>
+    </div>
+    <div class="tip"><strong>Note:</strong> Your calendar, to-dos, and email are not part of the Morning Run Down itself — check those directly with your companion any time, or through their own screens.</div>
+  </div>
+
+  <div class="section" id="evening">
+    <div class="section-header">
+      <div class="section-icon">🌙</div>
+      <div>
+        <div class="section-title">Evening Wind Down</div>
+        <div class="section-subtitle">A real check-in to close out your day</div>
+      </div>
+    </div>
+    <p>Each evening, your companion checks in with a real conversation, not a generic prompt:</p>
+    <div class="feature-grid">
+      <div class="feature-card"><span class="feature-card-icon">📋</span><div class="feature-card-title">Day Recap</div><div class="feature-card-desc">What happened, what got done, what's still hanging open.</div></div>
+      <div class="feature-card"><span class="feature-card-icon">🔭</span><div class="feature-card-title">Tomorrow</div><div class="feature-card-desc">A brief look ahead, if there's anything on your calendar.</div></div>
+    </div>
+    <p>Then, one genuine reflection question — always different, meant to actually make you think: what didn't go as hoped and what you'd do differently, a moment worth being grateful for, a choice you're proud of or still unsure about.</p>
+    <p>If your companion has noticed something worth mentioning recently — a pattern, a connection to one of your goals — it may come up naturally as part of the conversation, woven into the recap or the question itself rather than announced separately.</p>
+  </div>
+
+  <div class="section" id="attic">
+    <div class="section-header">
+      <div class="section-icon">🗄️</div>
+      <div>
+        <div class="section-title">The Attic</div>
+        <div class="section-subtitle">A place for anything that catches your attention</div>
+      </div>
+    </div>
+    <p>The Attic is a place to save anything that catches your attention — no folders, no organizing, nothing to file. If you're not sure where something belongs, it belongs in the Attic.</p>
+    <div class="commands">
+      <div class="commands-title">Try saying</div>
+      <div class="command"><div class="command-bubble">Put this in the attic.</div></div>
+      <div class="command"><div class="command-bubble">Rosie, remember this.</div></div>
+      <div class="command"><div class="command-bubble">File this away.</div></div>
+    </div>
+    <p>You can also forward things by email: forward anything with <strong style="color: var(--gold-light);">"the attic"</strong> in the subject line to save it as-is, or forward anything with <strong style="color: var(--gold-light);">"recipe"</strong> in the subject line and your companion will pull out just the recipe — even from a messy webpage full of ads, or from a recipe you've simply pasted in as text.</p>
+    <p>What makes the Attic different from a notes app: your companion actively looks for connections between what you've saved — a pattern, something that relates to a goal, or a cluster of saves that might be the start of something bigger. When it notices something worth mentioning, it'll bring it up naturally, usually during your Evening Wind Down. You can review what's been noticed, browse everything saved, and clean out anything old right from the Attic screen in the menu.</p>
+  </div>
+
+  <div class="section" id="goals">
+    <div class="section-header">
+      <div class="section-icon">🧭</div>
+      <div>
+        <div class="section-title">My Goals</div>
+        <div class="section-subtitle">The pursuits that matter to you</div>
+      </div>
+    </div>
+    <p>My Goals is for the things you're pursuing — not chores, not resolutions, just the pursuits that matter to you: learning bridge, appreciating fine wine, getting into jazz.</p>
+    <p>Start a conversation from the My Goals screen and tell your companion what you're interested in. Rather than a wall of background information, it'll land on one real, concrete starting point — a specific track, book, class, or place to start — and explain why it fits you specifically. If it feels like a real goal worth keeping, your companion will ask if you want it saved; just say yes.</p>
+    <div class="full-card">
+      <h3>Three States</h3>
+      <p><strong style="color: var(--gold-light);">Active</strong> — something you're pursuing now.</p>
+      <p><strong style="color: var(--gold-light);">Aspirational</strong> — real and worth keeping in mind, just not right now.</p>
+      <p><strong style="color: var(--gold-light);">Completed</strong> — done.</p>
+    </div>
+    <p>Sometimes a goal starts itself — if your companion notices a real pattern in what you've been saving to the Attic, it may ask if you'd like to make it an actual goal.</p>
+  </div>
+
+  <div class="section" id="features">
+    <div class="section-header">
+      <div class="section-icon">⭐</div>
+      <div>
+        <div class="section-title">Everything Else Winston Can Do</div>
+        <div class="section-subtitle">Your complete feature reference</div>
+      </div>
+    </div>
+
+    <div class="full-card">
+      <h3>🛒 Lists — Shopping, Wish List, Recipes, and More</h3>
+      <p>Your companion keeps as many lists as you want — just name one and start saving to it. A new list is created automatically the first time you save something to it.</p>
+      <div class="commands">
+        <div class="commands-title">Try saying</div>
+        <div class="command"><div class="command-bubble">Add milk, bread, and butter to my shopping list.</div></div>
+        <div class="command"><div class="command-bubble">Save this recipe to my recipes list.</div></div>
+        <div class="command"><div class="command-bubble">Save that paddle to my wish list.</div></div>
+      </div>
+      <p>If you don't name a list, groceries default to Shopping and bigger considered purchases default to Wish List. Recipes and detailed saves keep their full content, not just a title. And when your companion gives you a good recommendation, just say "save that" afterward and it saves the real thing — not a guess at what it said.</p>
+    </div>
+
+    <div class="full-card">
+      <h3>🔔 Reminders &amp; To-Dos</h3>
+      <div class="commands">
+        <div class="commands-title">Try saying</div>
+        <div class="command"><div class="command-bubble">Remind me to call my sister at 3pm.</div></div>
+        <div class="command"><div class="command-bubble">Remind me to take my medication every morning at 8am.</div></div>
+        <div class="command"><div class="command-bubble">What reminders do I have today?</div></div>
+      </div>
+      <p>Your companion tells the difference between a reminder ("remind me to...") and a real calendar appointment ("add to my calendar...") — if it's not sure which you mean, it'll ask.</p>
+    </div>
+
+    <div class="full-card">
+      <h3>🚗 Departure Alerts</h3>
+      <p>For anything on your calendar with a real location, your companion calculates actual drive time from home using live traffic conditions and lets you know exactly when you need to leave — not a fixed buffer, the real time for that day's traffic.</p>
+    </div>
+
+    <div class="full-card">
+      <h3>📁 My Records</h3>
+      <p>Your companion automatically scans your email for confirmations worth keeping — trips, warranties, home services, subscriptions, vehicle registrations, and more — and organizes them for you. Nothing needs to be forwarded or set up; it happens on its own. Each record keeps the vendor, confirmation number, dates, address, phone, website, and amount — tap in to view, edit, or remove anything.</p>
+    </div>
+
+    <div class="full-card">
+      <h3>📦 My Orders</h3>
+      <p>Orders you place online are picked up from your email automatically and tracked in one place — retailer, item, carrier, current status, and expected delivery date, with a full tracking timeline for each.</p>
+    </div>
+
+    <div class="full-card">
+      <h3>💊 Medications</h3>
+      <p>A private, PIN-protected space to track your medications — name, dose, frequency, and reminder times, with reminders included in your Morning Run Down. Your companion also checks for potential interactions and flags anything worth knowing about. This is for awareness only — always consult your doctor or pharmacist before making any changes. You can export or share your full medication list anytime.</p>
+    </div>
+
+    <div class="full-card">
+      <h3>🗺️ Navigation</h3>
+      <div class="commands">
+        <div class="commands-title">Try saying</div>
+        <div class="command"><div class="command-bubble">Take me to my doctor.</div></div>
+        <div class="command"><div class="command-bubble">Directions to the gym.</div></div>
+      </div>
+      <p>Winston opens Google Maps with your destination already entered.</p>
+      <div class="tip"><strong>Tip:</strong> Add new places anytime — "Add my hairdresser at 123 Main Street to my saved places."</div>
+    </div>
+
+    <div class="full-card">
+      <h3>📅 Calendar, Email, Texting &amp; Calls</h3>
+      <p><strong style="color: var(--gold-light);">Calendar</strong> — read, create, modify, or delete events through natural conversation.</p>
+      <p><strong style="color: var(--gold-light);">Email</strong> — your companion reads your inbox, flags anything suspicious, and can act on emails directly: trash, archive, mark read, or draft a reply for your approval.</p>
+      <p><strong style="color: var(--gold-light);">Texting</strong> — your companion can draft a text, but can never send it on your own behalf — it hands off a pre-filled message to your Messages app for you to send.</p>
+      <p><strong style="color: var(--gold-light);">Calls</strong> — ask your companion to place a call to anyone in your contacts.</p>
+      <p><strong style="color: var(--gold-light);">Reservations</strong> — ask for a restaurant reservation and your companion handles the details.</p>
+    </div>
+
+    <div class="full-card">
+      <h3>📍 Things Worth Doing Nearby</h3>
+      <p>Twice a week — Monday and Thursday — your companion sends a short notification with a few genuinely curated things worth checking out nearby, personalized to you. Tap the notification to see the full details and talk through any of them.</p>
+    </div>
+
+    <div class="full-card">
+      <h3>💰 Bills</h3>
+      <p>Your companion tracks bills that require manual payment (not autopay) — name, due date, and amount — and includes them in your Morning Run Down as they come due.</p>
+    </div>
+  </div>
+
+  <div class="section" id="people">
+    <div class="section-header">
+      <div class="section-icon">👥</div>
+      <div>
+        <div class="section-title">My People &amp; Winston Connect</div>
+        <div class="section-subtitle">The people who matter, and staying in touch through Winston</div>
+      </div>
+    </div>
+    <p><strong style="color: var(--gold-light);">My People</strong> is where you keep the people who matter — name, relationship, phone, email, address, birthdays, anniversaries, and anything else your companion should know about them. Add someone manually, or pull them straight from your Google Contacts.</p>
+    <div class="tip"><strong>Tip:</strong> Add "emergency contact" to someone's notes and they'll automatically show up on the Emergency screen.</div>
+    <p><strong style="color: var(--gold-light);">Winston Connect</strong> is for people who also use Winston. Invite anyone from your list — share an invite link, or enter their Winston username directly if you know it. Once they accept, you're connected, and you can send real messages or reminders straight through Winston — it delivers them, and you'll see the full back-and-forth as an actual conversation thread. Disconnect anytime; you can always reconnect with a new invite.</p>
+    <p>You can also create <strong style="color: var(--gold-light);">Groups</strong> to coordinate with several connected people at once.</p>
+  </div>
+
+  <hr class="divider">
+
+  <div class="section" id="settings">
+    <div class="section-header">
+      <div class="section-icon">⚙️</div>
+      <div>
+        <div class="section-title">Settings and Personalization</div>
+        <div class="section-subtitle">Make Winston completely yours</div>
+      </div>
+    </div>
+    <div class="feature-grid">
+      <div class="feature-card"><span class="feature-card-icon">🎭</span><div class="feature-card-title">Change Companion</div><div class="feature-card-desc">Switch between Rosie and MACC anytime.</div></div>
+      <div class="feature-card"><span class="feature-card-icon">🎤</span><div class="feature-card-title">Change Voice</div><div class="feature-card-desc">Listen to samples and pick what feels right.</div></div>
+      <div class="feature-card"><span class="feature-card-icon">📸</span><div class="feature-card-title">Profile Photo</div><div class="feature-card-desc">Upload one, or use your Google photo.</div></div>
+      <div class="feature-card"><span class="feature-card-icon">🔔</span><div class="feature-card-title">Notifications</div><div class="feature-card-desc">Re-register your device if push notifications stop working.</div></div>
+    </div>
+    <div class="tip"><strong>Tip:</strong> You can update your profile anytime just by telling your companion directly — "I'm now watching The Bear." "My new doctor is Dr. Smith on Oak Lane."</div>
+  </div>
+
+  <hr class="divider">
+
+  <div class="section" id="faq">
+    <div class="section-header">
+      <div class="section-icon">❓</div>
+      <div>
+        <div class="section-title">Frequently Asked Questions</div>
+        <div class="section-subtitle">Honest answers to common questions</div>
+      </div>
+    </div>
+
+    <div class="faq-item">
+      <div class="faq-q">Does Winston sell my data or show me ads?</div>
+      <div class="faq-a">Never. Winston is a subscription service ($9.50/month) specifically so it never needs to monetize your data. Your information is used exclusively to make Winston more helpful to you.</div>
+    </div>
+    <div class="faq-item">
+      <div class="faq-q">What's the difference between Winston and Alexa or Siri?</div>
+      <div class="faq-a">Alexa and Siri answer questions but know nothing personal about you. Winston knows your name, your family, your goals, your routines, and what you've told it matters to you — and it remembers.</div>
+    </div>
+    <div class="faq-item">
+      <div class="faq-q">Can Winston access my bank account or financial data?</div>
+      <div class="faq-a">No. Winston only tracks bills and reminders you tell it about directly, and never connects to any financial institution.</div>
+    </div>
+    <div class="faq-item">
+      <div class="faq-q">What happens to my data if I cancel?</div>
+      <div class="faq-a">Your data is always exportable. We retain data for 30 days after cancellation before permanent deletion.</div>
+    </div>
+    <div class="faq-item">
+      <div class="faq-q">Can I use Winston on multiple devices?</div>
+      <div class="faq-a">Yes — everything syncs automatically. Add a reminder on one device and it shows up everywhere.</div>
+    </div>
+    <div class="faq-item">
+      <div class="faq-q">Is Winston a medical service?</div>
+      <div class="faq-a">No. Winston is not a medical device or healthcare provider — including the medication interaction checker, which is for awareness only. Always consult a qualified healthcare professional for medical advice. In a genuine emergency, always call 911 directly.</div>
+    </div>
+    <div class="faq-item">
+      <div class="faq-q">How do I get help if something isn't working?</div>
+      <div class="faq-a">Just ask your companion directly — "What can you do?" or "How do I set a reminder?" — or reach out to us directly for support.</div>
+    </div>
+  </div>
+
+</div>
+
+<div class="footer">
+  <span class="paw">🐾</span>
+  Named after a very good dog.<br>
+  Built for people who deserve better from technology.
+</div>
+
+</body>
+</html>
