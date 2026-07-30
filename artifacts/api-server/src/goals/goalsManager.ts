@@ -381,6 +381,54 @@ function deriveDescriptionFromContent(content: string): string | null {
   return paragraph.length > 500 ? `${paragraph.slice(0, 497)}…` : paragraph;
 }
 
+// Cheap pre-filter so extractStepsFromContent (an AI call) only runs on
+// responses that plausibly contain a real plan — short answers, clarifying
+// follow-ups, and pure prose never reach it.
+function looksLikeRealPlan(content: string): boolean {
+  if (content.length < 300) return false;
+  const hasNumberedList = /^\s*\d+\.\s/m.test(content);
+  const hasBulletList = /^\s*[-*]\s/m.test(content);
+  const headerCount = (content.match(/^#{2,4}\s/gm) ?? []).length;
+  return hasNumberedList || hasBulletList || headerCount >= 2;
+}
+
+// Extracts concrete, actionable steps from a breakdown's markdown content —
+// reuses the same kind of extraction formatContentForSharing's "checklist"
+// format already does, but returns structured data instead of a display
+// string, and returns an empty array (not a fallback string) when the
+// content is informational with no real plan to extract.
+async function extractStepsFromContent(content: string): Promise<string[]> {
+  try {
+    const response = await anthropic.messages.create({
+      model: MODEL_HAIKU,
+      max_tokens: 500,
+      messages: [
+        {
+          role: "user",
+          content:
+            `Extract only the concrete, actionable steps from the text below — the specific things someone ` +
+            `would actually DO, in order. Not every sentence is a step; skip framing, context, and background ` +
+            `explanation. If the text is informational/explanatory with no real actionable plan, return an ` +
+            `empty array.\n\nReturn ONLY this JSON, no markdown: {"steps": ["step 1", "step 2", ...]}\n\n---\n${content.slice(0, 12000)}`,
+        },
+      ],
+    });
+    const raw = response.content
+      .filter((b) => b.type === "text")
+      .map((b) => (b as { type: "text"; text: string }).text)
+      .join("").trim();
+    const stripped = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+    const m = stripped.match(/\{[\s\S]*\}/);
+    if (!m) return [];
+    const parsed = JSON.parse(m[0]) as { steps?: unknown };
+    if (!Array.isArray(parsed.steps)) return [];
+    return parsed.steps.filter((s): s is string => typeof s === "string" && s.trim().length > 0).map((s) => s.trim());
+  } catch (err) {
+    logger.warn({ err }, "[Goals] extractStepsFromContent failed");
+    return [];
+  }
+}
+
 export async function breakdownGoal(
   goal: string,
   conversationHistory: Array<{ role: "user" | "assistant"; content: string }>,
@@ -494,12 +542,15 @@ Your single sharp question here.`;
   }
 
   // ── Auto-save goal to DB ──────────────────────────────────────────────────────
-  // Note: steps[] is always empty since the ---STEPS--- delimiter was removed;
-  // the full response is in content (markdown). We still save the goal row and
-  // return goalId so the native app can track conversations against a goal.
+  // steps[] starts empty (the ---STEPS--- delimiter was removed; the full
+  // response is in content/markdown) — only populated below when the content
+  // actually looks like a real plan, not for every response that gets saved.
   if (options.autoSave && result.type === "steps") {
     try {
       let savedGoalId = options.goalId;
+      const steps = looksLikeRealPlan(result.content)
+        ? await extractStepsFromContent(result.content)
+        : [];
 
       if (!savedGoalId) {
         const title = (options.goalTitle ?? goal).slice(0, 120);
@@ -509,17 +560,17 @@ Your single sharp question here.`;
         const description = deriveDescriptionFromContent(result.content);
         const newGoal = await createGoal(userName, title, description);
         savedGoalId = newGoal.id;
-        logger.info({ goalId: savedGoalId, title, hasDescription: !!description }, "[Goals] Auto-saved goal from breakdown");
+        logger.info({ goalId: savedGoalId, title, hasDescription: !!description, stepCount: steps.length }, "[Goals] Auto-saved goal from breakdown");
       } else {
         // Clear old steps before re-adding so follow-up conversations don't double-up
         await query(`DELETE FROM goal_steps WHERE goal_id = $1`, [savedGoalId]);
       }
 
-      for (let i = 0; i < result.steps.length; i++) {
-        await addStep(savedGoalId, userName, result.steps[i]!, i);
+      for (let i = 0; i < steps.length; i++) {
+        await addStep(savedGoalId, userName, steps[i]!, i);
       }
 
-      result = { type: "steps", content: result.content, steps: result.steps, goalId: savedGoalId };
+      result = { type: "steps", content: result.content, steps, goalId: savedGoalId };
     } catch (saveErr) {
       logger.warn({ saveErr }, "[Goals] Auto-save failed — returning result without goalId");
     }
