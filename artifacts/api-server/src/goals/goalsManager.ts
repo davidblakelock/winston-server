@@ -354,6 +354,33 @@ export interface BreakdownOptions {
   goalId?: number;
 }
 
+// Pulls the opening paragraph out of a breakdown's markdown content to use as
+// the goal's description — skips any leading headers (e.g. "# Learning Jazz")
+// so it lands on the actual why-this-matters prose the system prompt asks
+// GPT-4o to open with, not a title repeated back. Returns null if the content
+// has no real opening paragraph to extract (e.g. it jumps straight into a
+// list with no framing).
+function deriveDescriptionFromContent(content: string): string | null {
+  const paragraphLines: string[] = [];
+  for (const rawLine of content.split("\n")) {
+    const line = rawLine.trim();
+    if (!line) {
+      if (paragraphLines.length > 0) break;
+      continue;
+    }
+    if (/^#{1,6}\s/.test(line)) {
+      if (paragraphLines.length > 0) break;
+      continue;
+    }
+    paragraphLines.push(line);
+  }
+  const paragraph = paragraphLines.join(" ").trim()
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/\*(.+?)\*/g, "$1");
+  if (!paragraph) return null;
+  return paragraph.length > 500 ? `${paragraph.slice(0, 497)}…` : paragraph;
+}
+
 export async function breakdownGoal(
   goal: string,
   conversationHistory: Array<{ role: "user" | "assistant"; content: string }>,
@@ -476,9 +503,13 @@ Your single sharp question here.`;
 
       if (!savedGoalId) {
         const title = (options.goalTitle ?? goal).slice(0, 120);
-        const newGoal = await createGoal(userName, title, null);
+        // The system prompt already instructs GPT-4o to "build context before
+        // jumping to steps" — the opening paragraph is real why-this-matters
+        // framing the model already wrote, not a new AI call.
+        const description = deriveDescriptionFromContent(result.content);
+        const newGoal = await createGoal(userName, title, description);
         savedGoalId = newGoal.id;
-        logger.info({ goalId: savedGoalId, title }, "[Goals] Auto-saved goal from breakdown");
+        logger.info({ goalId: savedGoalId, title, hasDescription: !!description }, "[Goals] Auto-saved goal from breakdown");
       } else {
         // Clear old steps before re-adding so follow-up conversations don't double-up
         await query(`DELETE FROM goal_steps WHERE goal_id = $1`, [savedGoalId]);
