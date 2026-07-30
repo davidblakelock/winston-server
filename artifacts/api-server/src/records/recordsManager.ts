@@ -60,11 +60,20 @@ export async function updateLastSocialScanAt(userName: string, at?: Date): Promi
 }
 
 // ── Insert ────────────────────────────────────────────────────────────────────
+// Return value tells the caller whether a genuinely NEW record was created
+// ("inserted") vs an existing one was merged/updated ("updated") or a
+// literal duplicate was silently dropped ("skipped") — callers use this to
+// decide whether the user actually needs a fresh notification. A booking
+// that's already known about (a hold that got a reminder resent, a
+// follow-up email that merges into the same trip) shouldn't re-notify just
+// because the underlying email pipeline processed another message about it.
+
+export type InsertUserRecordOutcome = "inserted" | "updated" | "skipped";
 
 export async function insertUserRecord(
   userName: string,
   record: NewUserRecord
-): Promise<void> {
+): Promise<InsertUserRecordOutcome> {
   // ── Idempotent upsert strategy ────────────────────────────────────────────
   // Priority 1: if same confirmation_number + user_name already exists,
   //   update it — handles re-sends of the same booking with a new Gmail ID.
@@ -124,7 +133,7 @@ export async function insertUserRecord(
         { id: existing.rows[0]!.id, confirmationNumber: record.confirmationNumber },
         "[Records] Updated existing record by confirmation_number"
       );
-      return;
+      return "updated";
     }
   }
 
@@ -181,19 +190,23 @@ export async function insertUserRecord(
         { id: recent.rows[0]!.id, vendorName: record.vendorName, newConfirmationNumber: record.confirmationNumber },
         "[Records] Merged trip record into recent same-vendor record — no shared confirmation number (hold → confirmation)"
       );
-      return;
+      return "updated";
     }
   }
 
-  // Fresh insert — use gmail_id conflict as safety net against duplicates
+  // Fresh insert — use gmail_id conflict as safety net against duplicates.
+  // RETURNING id distinguishes a genuine insert from a silent ON CONFLICT
+  // DO NOTHING no-op (this exact email already processed, e.g. a restart
+  // re-scanned it) — the latter must report "skipped", not "inserted".
   if (record.gmailId) {
-    await query(
+    const { rows } = await query<{ id: number }>(
       `INSERT INTO user_records
          (user_name, category, vendor_name, confirmation_number,
           date_start, date_end, time, address, phone, website,
           amount, notes, raw_email_snippet, gmail_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-       ON CONFLICT (user_name, gmail_id) WHERE gmail_id IS NOT NULL DO NOTHING`,
+       ON CONFLICT (user_name, gmail_id) WHERE gmail_id IS NOT NULL DO NOTHING
+       RETURNING id`,
       [
         userName, record.category, record.vendorName, record.confirmationNumber ?? null,
         record.dateStart ?? null, record.dateEnd ?? null, record.time ?? null,
@@ -202,6 +215,7 @@ export async function insertUserRecord(
         record.rawSnippet ?? null, record.gmailId,
       ]
     );
+    return rows.length > 0 ? "inserted" : "skipped";
   } else {
     await query(
       `INSERT INTO user_records
@@ -216,5 +230,6 @@ export async function insertUserRecord(
         record.amount ?? null, record.notes ?? null, record.rawSnippet ?? null,
       ]
     );
+    return "inserted";
   }
 }

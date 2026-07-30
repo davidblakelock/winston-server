@@ -406,7 +406,7 @@ Today is ${new Date().toISOString().slice(0, 10)}. Only use upcoming or recent d
       const detectedLabel = parsed.label ?? parsed.category;
 
       // Save to user_records via idempotent upsert
-      await insertUserRecord(userName, {
+      const outcome = await insertUserRecord(userName, {
         category: recordCategory,
         vendorName: parsed.vendorName,
         confirmationNumber: parsed.confirmationNumber ?? null,
@@ -422,23 +422,35 @@ Today is ${new Date().toISOString().slice(0, 10)}. Only use upcoming or recent d
         gmailId: msgId,
       });
 
-      const pushBody = [
-        parsed.vendorName,
-        parsed.dateStart,
-        parsed.time,
-        parsed.confirmationNumber ? `#${parsed.confirmationNumber}` : null,
-      ].filter(Boolean).join(" · ");
+      // Only notify on a genuinely NEW record — a follow-up email that
+      // merges into a booking the user already knows about (a hold that
+      // got a reminder resent, a status update on an existing trip) has
+      // nothing new to tell them and must not re-fire the same push every
+      // scan cycle.
+      if (outcome === "inserted") {
+        const pushBody = [
+          parsed.vendorName,
+          parsed.dateStart,
+          parsed.time,
+          parsed.confirmationNumber ? `#${parsed.confirmationNumber}` : null,
+        ].filter(Boolean).join(" · ");
 
-      await sendFcmNotification({
-        userName,
-        notificationType: "reservation",
-        title: `${detectedLabel} confirmed ✓`,
-        body: pushBody || `New ${detectedLabel.toLowerCase()} saved to your records`,
-        data: {
-          action: "navigate",
-          screen: "/travel",
-        },
-      }).catch(() => {});
+        await sendFcmNotification({
+          userName,
+          notificationType: "reservation",
+          title: `${detectedLabel} confirmed ✓`,
+          body: pushBody || `New ${detectedLabel.toLowerCase()} saved to your records`,
+          data: {
+            action: "navigate",
+            screen: "/travel",
+          },
+        }).catch(() => {});
+      } else {
+        logger.info(
+          { userName, vendor: parsed.vendorName, outcome },
+          "[ReservationScanner] Record merged/updated, not newly created — skipping notification"
+        );
+      }
 
       results.push({
         gmailId: msgId,
