@@ -401,13 +401,14 @@ async function extractStepsFromContent(content: string): Promise<string[]> {
   try {
     const response = await anthropic.messages.create({
       model: MODEL_HAIKU,
-      max_tokens: 500,
+      max_tokens: 2048,
       messages: [
         {
           role: "user",
           content:
-            `Extract only the concrete, actionable steps from the text below — the specific things someone ` +
-            `would actually DO, in order. Not every sentence is a step; skip framing, context, and background ` +
+            `Extract the concrete milestone-level steps from the plan below — under 15 steps total, one per ` +
+            `phase/week/major task, NOT a granular day-by-day or sub-task breakdown. Each step should read like ` +
+            `a to-do checklist item (under 15 words), not a paragraph. Skip framing, context, and background ` +
             `explanation. If the text is informational/explanatory with no real actionable plan, return an ` +
             `empty array.\n\nReturn ONLY this JSON, no markdown: {"steps": ["step 1", "step 2", ...]}\n\n---\n${content.slice(0, 12000)}`,
         },
@@ -419,10 +420,21 @@ async function extractStepsFromContent(content: string): Promise<string[]> {
       .join("").trim();
     const stripped = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
     const m = stripped.match(/\{[\s\S]*\}/);
-    if (!m) return [];
+    if (!m) {
+      logger.warn({ stopReason: response.stop_reason, rawLen: raw.length }, "[Goals] extractStepsFromContent: no JSON in response");
+      return [];
+    }
     const parsed = JSON.parse(m[0]) as { steps?: unknown };
-    if (!Array.isArray(parsed.steps)) return [];
-    return parsed.steps.filter((s): s is string => typeof s === "string" && s.trim().length > 0).map((s) => s.trim());
+    if (!Array.isArray(parsed.steps)) {
+      logger.warn({ parsed }, "[Goals] extractStepsFromContent: steps was not an array");
+      return [];
+    }
+    // Hard cap regardless of what the model returns — a goal's steps are a
+    // checklist, not a day-by-day itinerary.
+    return parsed.steps
+      .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+      .map((s) => s.trim())
+      .slice(0, 15);
   } catch (err) {
     logger.warn({ err }, "[Goals] extractStepsFromContent failed");
     return [];
