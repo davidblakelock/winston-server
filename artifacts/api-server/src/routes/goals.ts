@@ -272,11 +272,17 @@ router.post("/goals/chat", async (req, res) => {
     return;
   }
   try {
-    const response = await goalsFreeformChat(message.trim(), conversation_history ?? [], userName);
+    const result = await goalsFreeformChat(message.trim(), conversation_history ?? [], userName);
     // Goals conversations are NOT saved to chat_messages — they live only in
     // the Goals screen and must not appear in the main chat history.
-    req.log.info({ responseLen: response.length }, "[Goals] POST /goals/chat completed");
-    res.json({ response });
+    req.log.info(
+      { responseLen: result.reply.length, saved: result.saved ?? false, goalId: result.goalId },
+      "[Goals] POST /goals/chat completed"
+    );
+    // saved/goalId/goalTitle are additive — the current native client only
+    // reads `response`; a goal saved mid-conversation just shows up next
+    // time it fetches the goals list (already does this on every screen focus).
+    res.json({ response: result.reply, saved: result.saved, goalId: result.goalId, goalTitle: result.goalTitle });
   } catch (err) {
     req.log.error({ err }, "[Goals] POST /goals/chat error");
     res.status(500).json({ error: "Failed to generate response" });

@@ -247,6 +247,92 @@ export async function deleteGoal(
   return (rows.length ?? 0) > 0;
 }
 
+// ── Pending goal offer (goals-chat screen only) ──────────────────────────────
+// Mirrors listManager.ts's pendingSaveOffers: the moment the free-form
+// goals-chat conversation lands on something concrete enough to be worth
+// keeping, the model flags it (---GOAL_OFFER---) and the real title/content
+// are captured right then, in goalsFreeformChat — a later "yes, save that"
+// resolves from here instead of asking the model to retype content it
+// already generated. Single slot per user, no TTL — overwritten by a newer
+// offer, cleared on confirm, lost on restart, same tradeoffs as every other
+// in-memory pending-state map in this codebase (pendingSaveOffers,
+// pendingAtticCleanup, pendingListTypeConflict, mostRecentShownObservation).
+
+export interface PendingGoalOffer {
+  title:   string;
+  content: string; // the offering turn's own reply text, before the delimiter
+}
+
+const _pendingGoalOfferMap = new Map<string, PendingGoalOffer>();
+
+export function getPendingGoalOffer(userName: string): PendingGoalOffer | null {
+  return _pendingGoalOfferMap.get(userName) ?? null;
+}
+
+export function setPendingGoalOffer(userName: string, offer: PendingGoalOffer | null): void {
+  if (offer === null) {
+    _pendingGoalOfferMap.delete(userName);
+  } else {
+    _pendingGoalOfferMap.set(userName, offer);
+  }
+}
+
+// A lightweight text-based safety net for the confirm step only — mirrors
+// the save-offer/notepad-conversion recovery nets in chatHandlerCore.ts.
+// GPT-4o occasionally narrates a confident "saved!" without emitting the
+// ---GOAL_CONFIRMED--- line despite explicit instruction; when a pending
+// offer exists and the user's own message unambiguously said yes/save it,
+// recover and save anyway rather than silently losing it. No equivalent net
+// on the offer side — a missed offer just means the conversation continues
+// normally, lower stakes than losing a confirmed save.
+export function isUnambiguousGoalConfirmation(message: string): boolean {
+  const t = message.trim();
+  if (/^(yes|yeah|yep|yup|sure|ok(ay)?|absolutely|definitely|do it|go ahead|sounds good|please do)[.!]*$/i.test(t)) {
+    return true;
+  }
+  if (/\b(save|add)\b[\s\S]{0,20}\b(it|that|this)\b/i.test(t) && !/\b(no|not|don'?t)\b/i.test(t)) {
+    return true;
+  }
+  return false;
+}
+
+// ── Shared profile context — used by both breakdownGoal and goalsFreeformChat
+// so the free-form chat's personalization (hobbies, music taste, key people)
+// is as rich as the structured breakdown's, not just name+city.
+
+async function buildGoalsProfileContext(
+  userName: string
+): Promise<{ profileContext: string; userCity: string; displayName: string }> {
+  const userProfile = await getProfile(userName).catch(() => null);
+  if (!userProfile) return { profileContext: "", userCity: "", displayName: userName };
+
+  const displayName     = userProfile.name ?? userName;
+  const city            = userProfile.city ?? "";
+  const hobbies         = userProfile.hobbies ?? [];
+  const musicGenres     = userProfile.musicGenres ?? [];
+  const sportsTeams     = userProfile.sportsTeams ?? "";
+  const favoriteArtists = userProfile.favoriteArtists ?? [];
+
+  const people = await getPeople(userName).catch(() => [] as Array<{ name: string; relationship: string; city?: string | null; details?: string | null }>);
+
+  const lines: string[] = [`The user's name is ${displayName}.`];
+  if (city)                   lines.push(`They live in ${city}.`);
+  if (hobbies.length)         lines.push(`Hobbies/interests: ${hobbies.join(", ")}.`);
+  if (musicGenres.length)     lines.push(`Music taste: ${musicGenres.join(", ")}.`);
+  if (favoriteArtists.length) lines.push(`Favorite artists: ${favoriteArtists.join(", ")}.`);
+  if (sportsTeams)            lines.push(`Sports teams: ${sportsTeams}.`);
+  if (people.length > 0) {
+    lines.push("Key people in their life:");
+    for (const p of people) {
+      let entry = `- ${p.name} (${p.relationship})`;
+      if ('city' in p && p.city) entry += `, lives in ${p.city}`;
+      if ('details' in p && p.details) entry += ` — ${p.details}`;
+      lines.push(entry);
+    }
+  }
+  return { profileContext: lines.join("\n"), userCity: city, displayName };
+}
+
 // ── SerpAPI web search ────────────────────────────────────────────────────────
 // Used for real-time queries: venue events, concerts, current listings, etc.
 
@@ -447,38 +533,7 @@ export async function breakdownGoal(
   userName = NATIVE_STORED_NAME,
   options: BreakdownOptions = {}
 ): Promise<BreakdownResult> {
-  const userProfile = await getProfile(userName).catch(() => null);
-  let profileContext = "";
-  let userCity = "";
-
-  if (userProfile) {
-    const displayName     = userProfile.name ?? userName;
-    const city            = userProfile.city ?? "";
-    if (city) userCity    = city;
-    const hobbies         = userProfile.hobbies ?? [];
-    const musicGenres     = userProfile.musicGenres ?? [];
-    const sportsTeams     = userProfile.sportsTeams ?? "";
-    const favoriteArtists = userProfile.favoriteArtists ?? [];
-
-    const people = await getPeople(userName).catch(() => [] as Array<{ name: string; relationship: string; city?: string | null; details?: string | null }>);
-
-    const lines: string[] = [`The user's name is ${displayName}.`];
-    if (city)                   lines.push(`They live in ${city}.`);
-    if (hobbies.length)         lines.push(`Hobbies/interests: ${hobbies.join(", ")}.`);
-    if (musicGenres.length)     lines.push(`Music taste: ${musicGenres.join(", ")}.`);
-    if (favoriteArtists.length) lines.push(`Favorite artists: ${favoriteArtists.join(", ")}.`);
-    if (sportsTeams)            lines.push(`Sports teams: ${sportsTeams}.`);
-    if (people.length > 0) {
-      lines.push("Key people in their life:");
-      for (const p of people) {
-        let entry = `- ${p.name} (${p.relationship})`;
-        if ('city' in p && p.city) entry += `, lives in ${p.city}`;
-        if ('details' in p && p.details) entry += ` — ${p.details}`;
-        lines.push(entry);
-      }
-    }
-    profileContext = lines.join("\n");
-  }
+  const { profileContext, userCity } = await buildGoalsProfileContext(userName);
 
   // Build messages array before web search so we can detect intent
   const messages: Array<{ role: "user" | "assistant"; content: string }> =
@@ -499,15 +554,14 @@ export async function breakdownGoal(
 
   const systemPrompt = `You are a knowledgeable, deeply personal advisor — like a brilliant friend who knows this person well and gives real, rich, personalized guidance.${profileContext ? `\n\n${profileContext}` : ""}
 
-Your job is to give a thorough, thoughtful response to any goal or question — not a generic numbered checklist, but a genuinely useful, engaging guide written specifically for THIS person.
+Your job is to open with ONE concrete, specific starting point for THIS person — the actual next thing to do, watch, read, listen to, or try, named exactly (a real track, album, book, class, app, route — never "find a good resource") — and briefly say why it fits them using what you know about them above. Then, since this is a full breakdown request, lay out the fuller path beneath that opening as concrete milestone-level stages so it can become a real step-by-step plan. Never open with generic background survey material before getting to something actionable — the concrete starting point always comes first.
 
 RESPONSE STYLE:
-- Write in rich markdown with headers, sections, and sub-sections where appropriate.
+- Lead with the one concrete thing. Everything else in the response supports or extends it.
 - Be specific and real: name actual albums, tracks, books, apps, podcasts, venues, websites, communities. Never say "find a resource" — say exactly which one.
-- Build context before jumping to steps: explain the landscape, the approach, what to expect. Make them feel informed, not just instructed.
 - Use a warm, direct, intelligent tone — like a trusted advisor who genuinely wants them to succeed.
-- Length: as long as it needs to be to be genuinely useful. Do NOT truncate, summarize, or cut off early. Give the complete picture.
-- For learning goals (music, language, skills): use a clear historical or progressive structure — show the path from beginner to deeper understanding era by era or level by level.
+- Length: as long as it needs to be to lay out a genuinely useful full plan beneath the opening — but the opening itself stays tight, not a preamble. Do NOT truncate, summarize, or cut off early once you're into the real plan.
+- For learning goals (music, language, skills): after the concrete starting point, use a clear historical or progressive structure — show the path from beginner to deeper understanding era by era or level by level.
 - For each stage of a learning path: name the key figures, specific recommended works (album/book/track titles with artist names), and what to listen/look for. Don't just list names — explain what makes each one important.
 - For event/venue questions: if you have real-time data (provided below), use it to give a complete, accurate picture of what's on, when, and how to get tickets. Include ALL the events from the search data.
 - When listing music recommendations, always include BOTH the artist AND the album/track title. Format as: "**Artist Name** — *Album Title* (year)". Give 5–15 specific examples per section.
@@ -518,7 +572,7 @@ HOW TO USE THE PROFILE:
 - People in their life: mention them only when it's a natural, genuinely helpful suggestion (e.g. "you could invite [name] to a live show"). Never force it.
 - Hobbies/interests: use them when they genuinely connect.
 
-ONLY ask a clarifying question if the goal is so vague that you literally cannot write one useful sentence (e.g. "I want to get better" — better at what?). This is rare. If you have enough to go on, give the full response. You may end with ONE optional follow-up question if it would meaningfully deepen the personalization.
+ONLY ask a clarifying question if the goal is so vague that you literally cannot name one concrete starting point (e.g. "I want to get better" — better at what?). This is rare. If you have enough to go on, give the full response.
 
 If there is conversation history, use it to refine, continue, or go deeper. Answer follow-up questions directly and thoroughly — treat this as a continuing conversation, not a fresh start.${webSearchContext ? `\n\nREAL-TIME DATA (use this to answer the question accurately):\n${webSearchContext}` : ""}
 
@@ -809,24 +863,59 @@ export async function getGoalsChatHistory(
 }
 
 // ── Free-form goals conversation ───────────────────────────────────────────────
-// Used by /api/goals/chat — conversational AI response without forced step structure.
-// The caller is responsible for persisting the exchange to chat_messages.
+// Used by /api/goals/chat — conversational AI response without forced step
+// structure. Landing point (per the redesign): the conversation should reach
+// ONE concrete, personally-relevant starting point, not a general-information
+// dump, while staying open to real back-and-forth if the user wants to keep
+// exploring. When the conversation lands somewhere concrete enough to be
+// worth keeping, the model flags it with the ---GOAL_OFFER--- sentinel (same
+// idiom as breakdownGoal's ---QUESTION--- delimiter) and the real content is
+// captured into a per-user pending offer; a later natural confirmation
+// resolves from that instead of asking the model to retype it. The caller is
+// responsible for persisting the exchange to chat_messages.
+
+export interface GoalsFreeformChatResult {
+  reply: string;
+  saved?: boolean;
+  goalId?: number;
+  goalTitle?: string;
+}
+
+const GOAL_OFFER_DELIM     = "---GOAL_OFFER---";
+const GOAL_CONFIRMED_DELIM = "---GOAL_CONFIRMED---";
+
 export async function goalsFreeformChat(
   message: string,
   conversationHistory: Array<{ role: "user" | "assistant"; content: string }>,
   userName: string
-): Promise<string> {
-  const userProfile = await getProfile(userName).catch(() => null);
-  const name = userProfile?.name ?? userName;
-  const city = userProfile?.city ?? "";
+): Promise<GoalsFreeformChatResult> {
+  const { profileContext, displayName, userCity } = await buildGoalsProfileContext(userName);
+  const pendingOffer = getPendingGoalOffer(userName);
+
+  const pendingOfferBlock = pendingOffer
+    ? `\n\n[Pending Goal Offer — you just offered to save this as "${pendingOffer.title}"]\n` +
+      `If their latest message confirms saving it (yes, save it, do it, sounds good, etc.), reply with a brief warm confirmation in your own words and end your reply with exactly this, on its own line:\n` +
+      `${GOAL_CONFIRMED_DELIM}\n` +
+      `This is not optional — telling them it's saved without emitting this exact line means nothing is actually written to their goals list. If they decline, change the subject, or ask something unrelated, just respond naturally and do NOT emit that line.`
+    : "";
+
+  const systemPrompt =
+    `You are a knowledgeable, deeply personal advisor — like a brilliant friend who knows this person well.${profileContext ? `\n\n${profileContext}` : ""}\n\n` +
+    `Your job in this conversation is to help them land on ONE concrete, personally-relevant starting point — a specific thing to actually do, watch, read, listen to, or try — not a survey of background information. Name the actual thing (a real track, album, book, class, app, route — never "find a good resource"), and briefly say why it fits them using what you know about them above.\n\n` +
+    `Keep replies short by default — a few sentences, not an essay. If they want to go deeper, ask follow-ups, or want a fuller plan, keep going naturally; this is a real conversation, not a scripted flow.\n\n` +
+    `WHEN THE CONVERSATION HAS LANDED ON SOMETHING REAL: the moment you've proposed something concrete enough that it's worth tracking as an actual goal — not just background chat — offer to save it in your own words (e.g. "Want me to add this as a goal?"), then end your reply with exactly this, on its own line:\n` +
+    `${GOAL_OFFER_DELIM}\n` +
+    `A short, specific title (under 8 words)\n` +
+    `Only do this once something concrete has actually been proposed — never for a purely informational exchange, and never more than once per turn.` +
+    pendingOfferBlock;
 
   // Prepend basic profile context to the first user turn — same pattern as travel screen.
-  // No system prompt; GPT-4o responds naturally.
-  const contextPrefix = city
-    ? `[User: ${name}, based in ${city}]\n`
-    : `[User: ${name}]\n`;
+  const contextPrefix = userCity
+    ? `[User: ${displayName}, based in ${userCity}]\n`
+    : `[User: ${displayName}]\n`;
 
-  const messages: Array<{ role: "user" | "assistant"; content: string }> = [
+  const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+    { role: "system", content: systemPrompt },
     ...conversationHistory,
     { role: "user", content: contextPrefix + message },
   ];
@@ -837,10 +926,68 @@ export async function goalsFreeformChat(
     messages,
   });
 
-  const reply = response.choices[0]?.message?.content?.trim() ?? "";
-  if (!reply) {
+  const raw = response.choices[0]?.message?.content?.trim() ?? "";
+  if (!raw) {
     logger.warn({ userName }, "[Goals] goalsFreeformChat returned empty response");
-    return "I didn't quite catch that — could you say a bit more?";
+    return { reply: "I didn't quite catch that — could you say a bit more?" };
   }
-  return reply;
+
+  let reply = raw;
+
+  // ── Parse a new goal offer, if this turn made one ──────────────────────────
+  const offerIdx = raw.indexOf(GOAL_OFFER_DELIM);
+  let madeNewOffer = false;
+  if (offerIdx !== -1) {
+    const before = raw.slice(0, offerIdx).trim();
+    const titleLine = raw.slice(offerIdx + GOAL_OFFER_DELIM.length).trim().split("\n")[0]?.trim();
+    reply = before || raw; // never show the raw sentinel to the user
+    if (titleLine) {
+      setPendingGoalOffer(userName, { title: titleLine.slice(0, 120), content: before || raw });
+      madeNewOffer = true;
+      logger.info({ userName, title: titleLine }, "[Goals] Goal offer cached from chat");
+    }
+  }
+
+  // ── Resolve a confirmation against the offer that was pending BEFORE this
+  // call — only relevant when this turn didn't just make a brand-new offer
+  // of its own (that would supersede, not confirm, the old one). ─────────────
+  let confirmedViaTag = false;
+  if (!madeNewOffer && pendingOffer) {
+    const confirmIdx = reply.indexOf(GOAL_CONFIRMED_DELIM);
+    if (confirmIdx !== -1) {
+      reply = reply.slice(0, confirmIdx).trim();
+      confirmedViaTag = true;
+    }
+  }
+  const shouldConfirm =
+    !madeNewOffer && !!pendingOffer &&
+    (confirmedViaTag || isUnambiguousGoalConfirmation(message));
+
+  if (!shouldConfirm) {
+    return { reply };
+  }
+
+  // ── Save: reuse the description/step-extraction logic already built for
+  // breakdownGoal's autoSave path (deriveDescriptionFromContent,
+  // looksLikeRealPlan/extractStepsFromContent) against the offer's own
+  // captured content — never a second AI call to regenerate it. ─────────────
+  try {
+    const description = deriveDescriptionFromContent(pendingOffer!.content);
+    const goal = await createGoal(userName, pendingOffer!.title, description);
+    const steps = looksLikeRealPlan(pendingOffer!.content)
+      ? await extractStepsFromContent(pendingOffer!.content)
+      : [];
+    for (let i = 0; i < steps.length; i++) {
+      await addStep(goal.id, userName, steps[i]!, i);
+    }
+    setPendingGoalOffer(userName, null);
+    logger.info(
+      { userName, goalId: goal.id, title: goal.title, hasDescription: !!description, stepCount: steps.length, viaTag: confirmedViaTag },
+      "[Goals] Goal saved from chat confirmation"
+    );
+    return { reply, saved: true, goalId: goal.id, goalTitle: goal.title };
+  } catch (err) {
+    logger.warn({ err, userName }, "[Goals] Failed to save goal from chat confirmation");
+    return { reply };
+  }
 }
