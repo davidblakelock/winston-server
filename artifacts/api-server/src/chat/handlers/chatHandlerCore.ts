@@ -15,7 +15,14 @@ import {
   formatProfileForContext,
 } from "../../profile/profileManager.js";
 import { getPeople, type KeyPerson } from "../../people/peopleManager.js";
-import { claimWinddownReply } from "../../winddown/winddownManager.js";
+import {
+  claimWinddownReply,
+  getTonightMessage,
+  saveTonightMessage,
+  markFiredToday,
+  setWinddownActive,
+} from "../../winddown/winddownManager.js";
+import { generateOpeningMessage } from "../../winddown/winddownScheduler.js";
 import { saveLifeCapture } from "../../lifeCaptures/lifeCapturesManager.js";
 import { getStoicForUser } from "../../stoic/stoicManager.js";
 import {
@@ -309,6 +316,39 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     isWinddownOpener = false,
     log,
   } = req;
+
+  // ── Wind-down opener short-circuit ──────────────────────────────────────────
+  // The message that OPENS tonight's check-in (isWinddownOpener from the web's
+  // winddownRequest flag, or the literal "Evening Check In" text the native
+  // app's background notification handler posts straight to this endpoint,
+  // with no flag available to mark it) must return the real, data-grounded
+  // recap + reflection question generated for tonight — not whatever Claude's
+  // general-purpose tool loop happens to make of a bare "Evening Check In"
+  // string with no other signal. Confirmed in production logs: with no
+  // short-circuit, that literal string got read as a request to check email.
+  // Skip Claude entirely and hand back the pre-generated (or, if the 9 PM
+  // scheduler hasn't fired yet, freshly generated) message directly.
+  if (isWinddownOpener || message.trim().toLowerCase() === "evening check in") {
+    const openerProfile = await getProfile(sessionUserName).catch(() => null);
+    let tonightMessage = await getTonightMessage(sessionUserName).catch(() => null);
+    if (!tonightMessage) {
+      const companionName = getCompanionDisplayName(
+        openerProfile?.companionPersona ?? null,
+        openerProfile?.companionName ?? null
+      );
+      tonightMessage = await generateOpeningMessage(companionName, sessionUserName);
+      await markFiredToday(sessionUserName).catch((err) =>
+        log.warn({ err }, "[chatHandlerCore] Winddown markFiredToday failed"));
+      await saveTonightMessage(sessionUserName, tonightMessage).catch((err) =>
+        log.warn({ err }, "[chatHandlerCore] Winddown saveTonightMessage failed"));
+    }
+    await setWinddownActive(sessionUserName, true).catch((err) =>
+      log.warn({ err }, "[chatHandlerCore] Winddown setWinddownActive failed"));
+
+    const messageId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    runPostProcessing(sessionUserName, message, tonightMessage, req.history.slice(-ACTIVE_CONTEXT_LIMIT), openerProfile, deviceId, messageId);
+    return { reply: tonightMessage, action: { type: "none" }, messageId };
+  }
 
   // ── Wind-down reply claim ────────────────────────────────────────────────────
   // If tonight's evening check-in is active and this message isn't the one that

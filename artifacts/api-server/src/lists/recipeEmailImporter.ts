@@ -6,8 +6,8 @@ import { addItems, getListType, convertListToChecklist } from "./listManager.js"
 
 // ── Recipe email-forward import ──────────────────────────────────────────────
 // Triggered by inboundEmail.ts when the subject matches /recipe/i (an
-// independent branch, checked before the Attic's subject match). Three
-// paths, decided by what's actually in the body:
+// independent branch, checked before the Attic's subject match). Paths,
+// decided by what's actually in the body:
 //   1. Just a link, no real pasted content → fetch the page, try schema.org/
 //      Recipe JSON-LD first (the common case — 5/5 real sites checked during
 //      investigation had it), fall back to a Claude extraction from the
@@ -15,9 +15,14 @@ import { addItems, getListType, convertListToChecklist } from "./listManager.js"
 //   2. Plain text with no url, or a url alongside pasted text worth keeping
 //      as a reference → skip the fetch entirely, extract directly from what
 //      was pasted (same shape as chat-driven recipe extraction).
-//   3. Neither look like a real recipe → skip, no partial/garbage save. This
-//      is a one-shot import with nobody to ask, so silence is the only
-//      honest outcome when extraction comes back empty.
+//   3. No usable text/url result (including a body with no text at all —
+//      e.g. a forwarded screenshot) but one or more image attachments came
+//      through → hand the images straight to Claude's vision input. A photo
+//      of a recipe (card, cookbook page, screenshot of a recipe site) has no
+//      text for the steps above to work with at all otherwise.
+//   4. Nothing usable → skip, no partial/garbage save. This is a one-shot
+//      import with nobody to ask, so silence is the only honest outcome when
+//      extraction comes back empty.
 // Always saves to the fixed "recipes" list via the same addItems() path
 // chat-driven saves already use — title in item_text, full recipe in notes,
 // source url when there is one.
@@ -26,6 +31,19 @@ interface ParsedRecipe {
   title:   string;
   content: string;
 }
+
+export interface EmailImage {
+  mimeType: string;
+  base64:   string;
+}
+
+// Anthropic caps a single image at 5MB — this is the base64-encoded size, so
+// the underlying file needs to be smaller still, but checking the encoded
+// size directly avoids a second unit conversion.
+const MAX_IMAGE_BASE64_BYTES = 5 * 1024 * 1024;
+// Vision calls cost more than text extraction and a recipe photo rarely
+// needs more than one or two images to cover — cap how many get sent.
+const MAX_IMAGES = 3;
 
 // Body text below this length (after removing the found url and cutting at
 // the signature marker) reads as "just a link with a one-line wrapper," not
@@ -183,6 +201,53 @@ async function extractRecipeViaClaude(content: string, sourceDescription: string
   }
 }
 
+// ── Step 2c: vision extraction — for image-only forwards (photos/screenshots
+// of a recipe, no usable body text) ──────────────────────────────────────────
+
+async function extractRecipeFromImages(images: EmailImage[]): Promise<ParsedRecipe | null> {
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  const usable = images
+    .filter((img) => img.base64.length <= MAX_IMAGE_BASE64_BYTES)
+    .slice(0, MAX_IMAGES);
+  if (!anthropicKey || usable.length === 0) return null;
+  const anthropic = new Anthropic({ apiKey: anthropicKey });
+
+  try {
+    const resp = await anthropic.messages.create({
+      model: MODEL_HAIKU,
+      max_tokens: 2000,
+      messages: [{
+        role: "user",
+        content: [
+          ...usable.map((img) => ({
+            type: "image" as const,
+            source: { type: "base64" as const, media_type: img.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp", data: img.base64 },
+          })),
+          {
+            type: "text" as const,
+            text:
+              `Find and transcribe the recipe shown in ${usable.length > 1 ? "these images" : "this image"} ` +
+              `(a photo or screenshot of a recipe card, cookbook page, or recipe website). Return ONLY valid JSON: ` +
+              `{"title": "short recipe name", "content": "the complete recipe — every ingredient, every step, formatted as clean readable text, never abbreviated or summarized"}. ` +
+              `If no real recipe is visible, return exactly: NONE`,
+          },
+        ],
+      }],
+    });
+    const text = resp.content[0]?.type === "text" ? resp.content[0].text.trim() : "";
+    if (!text || /^none$/i.test(text)) return null;
+
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+    const parsed = JSON.parse(jsonMatch[0]) as { title?: string; content?: string };
+    if (!parsed.title?.trim() || !parsed.content?.trim()) return null;
+    return { title: parsed.title.trim(), content: parsed.content.trim() };
+  } catch (err) {
+    logger.warn({ err }, "[RecipeEmailImport] Claude vision extraction failed");
+    return null;
+  }
+}
+
 // ── List-type guard ────────────────────────────────────────────────────────
 // No conflict-check prompt here — there's no back-and-forth possible over
 // email. But silently leaving "recipes" as notepad-type would reproduce the
@@ -206,24 +271,28 @@ export interface ImportRecipeParams {
   text:     string;
   subject:  string;
   sender:   string;
+  images?:  EmailImage[];
 }
 
 export async function importRecipeFromEmail(params: ImportRecipeParams): Promise<void> {
-  const { userName, text, subject, sender } = params;
+  const { userName, text, subject, sender, images = [] } = params;
   const trimmed = text.trim();
-  if (!trimmed) {
-    logger.info({ userName, subject }, "[RecipeEmailImport] empty body — skipping");
+  if (!trimmed && images.length === 0) {
+    logger.info({ userName, subject }, "[RecipeEmailImport] empty body, no attachments — skipping");
     return;
   }
 
-  const url = firstUrl(trimmed);
-  const remainingText = contentTextWithoutUrl(trimmed, url);
+  const url = trimmed ? firstUrl(trimmed) : null;
+  const remainingText = trimmed ? contentTextWithoutUrl(trimmed, url) : "";
   const hasSubstantialPastedText = remainingText.length >= CONTENT_TEXT_THRESHOLD;
 
   let result: ParsedRecipe | null = null;
   const sourceUrl = url; // kept as a reference either way; only fetched in the link-only branch
 
-  if (url && !hasSubstantialPastedText) {
+  if (!trimmed) {
+    // No body text at all — a bare forwarded photo/screenshot. Images below
+    // are the only chance at extraction.
+  } else if (url && !hasSubstantialPastedText) {
     // Just a link — fetch and extract from the page.
     const html = await fetchPageHtml(url);
     if (!html) {
@@ -251,8 +320,15 @@ export async function importRecipeFromEmail(params: ImportRecipeParams): Promise
     }
   }
 
+  if (!result && images.length > 0) {
+    result = await extractRecipeFromImages(images);
+    if (result) {
+      logger.info({ userName, title: result.title, imageCount: images.length }, "[RecipeEmailImport] extracted via Claude vision from attached image(s)");
+    }
+  }
+
   if (!result) {
-    logger.info({ userName, subject, sender }, "[RecipeEmailImport] no recipe found — skipping");
+    logger.info({ userName, subject, sender, imageCount: images.length }, "[RecipeEmailImport] no recipe found — skipping");
     return;
   }
 

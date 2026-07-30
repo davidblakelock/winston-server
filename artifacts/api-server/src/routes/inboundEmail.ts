@@ -2,15 +2,25 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import multer from "multer";
 import { saveAtticItem } from "../attic/atticItemsManager.js";
 import { runConnectionEngine } from "../connectionEngine/connectionEngineManager.js";
-import { importRecipeFromEmail } from "../lists/recipeEmailImporter.js";
+import { importRecipeFromEmail, type EmailImage } from "../lists/recipeEmailImporter.js";
 import { firstUrl } from "../lib/emailForwardParsing.js";
 
 const router: IRouter = Router();
 
 // Mailgun posts either application/x-www-form-urlencoded (text-only) or
-// multipart/form-data (when attachments are present). multer handles both;
-// memoryStorage discards attachment bytes since we don't need them yet.
+// multipart/form-data (when attachments are present). multer handles both,
+// keeping attachment bytes in memory (they're small — capped below) so the
+// recipe path can hand image attachments to Claude's vision input when a
+// forward has no usable body text (e.g. a forwarded photo/screenshot).
 const upload = multer({ storage: multer.memoryStorage() });
+
+// Same 5MB-base64 cap recipeEmailImporter.ts enforces — checked again here
+// so oversized attachments never even get base64-encoded.
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+// Anthropic's vision input only accepts these four formats — anything else
+// (e.g. HEIC straight off an iPhone camera) is filtered out rather than sent
+// to a call that would just fail.
+const SUPPORTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 
 // Content this route stores is capped defensively — forwarded email threads
 // (especially HTML-to-text conversions) can run very long.
@@ -64,7 +74,11 @@ router.post(
     // and a recipe forward needs real structured extraction into list_items
     // (title/notes/url), not the Attic's raw-content-dump behavior.
     if (/recipe/i.test(subject)) {
-      await importRecipeFromEmail({ userName: username, text, subject, sender });
+      const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+      const images: EmailImage[] = files
+        .filter((f) => SUPPORTED_IMAGE_TYPES.has(f.mimetype) && f.size <= MAX_IMAGE_BYTES)
+        .map((f) => ({ mimeType: f.mimetype, base64: f.buffer.toString("base64") }));
+      await importRecipeFromEmail({ userName: username, text, subject, sender, images });
       return;
     }
 
