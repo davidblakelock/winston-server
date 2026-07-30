@@ -47,7 +47,15 @@ router.post(
     const recipient = body["recipient"]     ?? "";
     const sender    = body["sender"]        ?? "";
     const subject   = body["subject"]       ?? "";
-    const text      = body["stripped-text"] ?? body["body-plain"] ?? "";
+    // Mailgun's "stripped-text" heuristically removes quoted/forwarded
+    // content and signature blocks — exactly the wrong thing for this route,
+    // since every real payload here (a forwarded recipe, an Attic capture)
+    // lives entirely inside that forwarded/quoted section. Confirmed live:
+    // three separate test forwards all logged stripped-text as just the
+    // sender's own auto-appended signature line, with the actual forwarded
+    // body silently stripped out from under it. "body-plain" is the full,
+    // unstripped plain-text body and is what forwards actually need.
+    const text      = body["body-plain"] ?? body["stripped-text"] ?? "";
 
     // Extract +username from recipient — e.g.
     // save+davidblakelock@myrecords.getwinstonai.com → "davidblakelock"
