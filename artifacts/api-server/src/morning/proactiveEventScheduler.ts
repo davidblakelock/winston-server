@@ -1,7 +1,8 @@
 /**
- * Proactive discovery scheduler — once per day around 9 AM in each user's
- * own local timezone. Consolidates what used to be two unconnected
- * pipelines (this file's Ticketmaster-only event check, and
+ * Proactive discovery scheduler — twice weekly (Monday: something to do
+ * this week; Thursday: plan the weekend) around 9 AM in each user's own
+ * local timezone. Consolidates what used to be two unconnected pipelines
+ * (this file's Ticketmaster-only event check, and
  * localContent/localContentScanner.ts's separate Claude-web-search-only
  * scan) into one system combining three candidate sources:
  *
@@ -14,15 +15,29 @@
  *
  * All candidates are combined and ranked in ONE Claude call against the
  * user's real profile signals (hobbies, music genres, sports teams,
- * favorite restaurants, favorite artists). 2-3 genuine picks max — this is
- * deliberately not a "here's everything we found" dump. Sends exactly one
- * push notification + SSE broadcast per user per day if anything qualifies.
+ * favorite restaurants, favorite artists). 4-6 genuine picks max, matching
+ * the twice-weekly (not daily) cadence — deliberately not a "here's
+ * everything we found" dump. Sends exactly one push notification + SSE
+ * broadcast per user per run if anything qualifies — the notification
+ * itself is a generic teaser (no picks named in the title/body); the real
+ * ranked list is cached server-side (getProactivePicks/setProactivePicks,
+ * same in-memory pending-state pattern as pendingSaveOffers/
+ * pendingAtticCleanup) and injected into chat context when the
+ * notification-triggered message arrives, so Winston answers from the
+ * actual curated data instead of re-guessing from the notification text.
  *
- * Dedup is keyed on (user_name, category + name + date) via
- * proactive_message_log, not just the calendar day the check ran on — so
- * the same event/restaurant/activity is never notified twice while it
- * remains relevant, but a different show, a different new restaurant, etc.
- * still gets its own notification.
+ * Dedup is keyed on (user_name, message_type) via proactive_message_log,
+ * not just the calendar day the check ran on — so the same event/
+ * restaurant/activity is never notified twice while it remains relevant,
+ * but a different show, a different new restaurant, etc. still gets its
+ * own notification. For anything with a real dateISO (a one-off show on a
+ * specific night) the key includes that date, so a different occurrence
+ * still gets its own shot. For anything without a real date (a standing
+ * farmers market, a weekly jazz night, a newly-opened restaurant) the key
+ * is name+venue instead — AI-regenerated names/descriptions aren't stable
+ * run to run, so keying dateless candidates on the literal name (as
+ * before) caused these long-lived facts to resurface repeatedly once their
+ * wording drifted even slightly between runs.
  */
 
 import cron from "node-cron";
@@ -37,6 +52,14 @@ import { fetchCandidateEvents, type LocalEvent } from "../events/apifyEventsMana
 import { searchRestaurants } from "../google/places.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+// Monday run = "something to do this week"; Thursday run = "plan the
+// weekend". Shapes the web-search window and the ranking bias below — the
+// Ticketmaster/Places sources aren't filtered by this (no per-request date
+// range on that source's shared city-level cache), ranking does the work of
+// preferring what's actually imminent given the real dates each candidate
+// already carries.
+export type RunContext = "week" | "weekend";
 
 // ── Unified candidate shape across all three sources ───────────────────────
 
@@ -53,8 +76,22 @@ interface Candidate {
   source:    "ticketmaster" | "web_search" | "google_places";
 }
 
+function normalize(s: string): string {
+  return s.toLowerCase().trim().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
 function candidateKey(c: Candidate): string {
-  return `${c.category}:${c.name}:${c.dateISO ?? "ongoing"}`;
+  if (c.dateISO) {
+    // A genuinely one-off dated event — keyed to that specific date, so a
+    // different occurrence of a recurring show still gets its own shot.
+    return `${c.category}:${normalize(c.name)}:${c.dateISO}`;
+  }
+  // No real date — treat as a long-lived fact (a standing market, a weekly
+  // show, a restaurant that's still "new"). Name alone drifts between runs
+  // (AI-regenerated wording), so anchor on name+venue together — venue is
+  // the more stable of the two when known.
+  const venuePart = c.venue ? normalize(c.venue) : "";
+  return `${c.category}:${normalize(c.name)}:${venuePart}`;
 }
 
 // ── Source 1: Ticketmaster events ───────────────────────────────────────────
@@ -84,8 +121,9 @@ interface WebSearchItem {
   url: string | null;
 }
 
-async function searchSupplementalActivities(city: string, interests: string[]): Promise<Candidate[]> {
+async function searchSupplementalActivities(city: string, interests: string[], runContext: RunContext): Promise<Candidate[]> {
   const today = new Date().toISOString().slice(0, 10);
+  const windowLabel = runContext === "weekend" ? "this coming weekend (Friday through Sunday)" : "this week";
   try {
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-6",
@@ -95,7 +133,7 @@ async function searchSupplementalActivities(city: string, interests: string[]): 
 
 This person's interests: ${interests.length ? interests.join(", ") : "no specific interests on file — find broadly appealing options"}
 
-Search for what's happening in ${city} in the next 2 weeks in these categories specifically. Skip anything that's really a concert, sports game, or theater show — those come from a different source and would be a duplicate.
+Search for what's happening in ${city} ${windowLabel} in these categories specifically. Skip anything that's really a concert, sports game, or theater show — those come from a different source and would be a duplicate.
 
 After searching, return ONLY a JSON array — no explanation, no markdown fences:
 [
@@ -108,10 +146,10 @@ After searching, return ONLY a JSON array — no explanation, no markdown fences
   }
 ]
 
-Today is ${today}. Only include things happening from today through 2 weeks out. Return between 0 and 6 items — quality over quantity, return an empty array if nothing genuinely fits.`,
+Today is ${today}. Only include things happening ${windowLabel}. Return between 0 and 6 items — quality over quantity, return an empty array if nothing genuinely fits.`,
       messages: [{
         role: "user",
-        content: `Find wine tastings, farmers markets, pop-ups, local meetups, and art walks in ${city} happening soon.`,
+        content: `Find wine tastings, farmers markets, pop-ups, local meetups, and art walks in ${city} happening ${windowLabel}.`,
       }],
     });
 
@@ -171,8 +209,27 @@ async function searchNewRestaurants(city: string): Promise<Candidate[]> {
 
 // ── Dedup — proactive_message_log, keyed per candidate not just per day ───
 // Deliberately not scoped to today's date, so the same candidate never
-// fires twice across multiple daily runs while it remains eligible, but a
+// fires twice across multiple runs while it remains eligible, but a
 // different show, a different new restaurant, etc. still gets its own shot.
+//
+// This table's migration was dropped in an old cleanup pass (it originally
+// backed a since-removed pickleball reminder feature) and never restored
+// when this scheduler was rebuilt — the queries below have been relying on
+// the table already existing in production ever since. Restored here so a
+// genuinely fresh database doesn't silently fail on every check.
+
+export async function ensureProactiveMessageLogTable(): Promise<void> {
+  await query(`
+    CREATE TABLE IF NOT EXISTS proactive_message_log (
+      id           SERIAL PRIMARY KEY,
+      user_name    TEXT NOT NULL,
+      message_type TEXT NOT NULL,
+      sent_date    DATE NOT NULL,
+      sent_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (user_name, message_type, sent_date)
+    )
+  `).catch((err) => logger.warn({ err }, "[Proactive Discovery] ensureProactiveMessageLogTable failed"));
+}
 
 function todayStr(): string {
   return new Date().toLocaleDateString("en-CA", { timeZone: "UTC" });
@@ -218,6 +275,7 @@ async function rankCandidates(
   candidates: Candidate[],
   profileContext: string,
   city: string,
+  runContext: RunContext,
 ): Promise<RankedPick[]> {
   if (candidates.length === 0) return [];
 
@@ -227,12 +285,18 @@ async function rankCandidates(
     return `${i + 1}. [${c.category}] "${c.name}"${where} — ${when}. ${c.description}`;
   }).join("\n");
 
+  const biasLine = runContext === "weekend"
+    ? "This is the Thursday weekend-planning check-in — favor things happening Friday through Sunday when there's a real choice, though a great weekday pick is still fine if nothing weekend-specific fits as well."
+    : "This is the Monday weekly check-in — favor things happening across the coming week broadly, not just the next day or two.";
+
   const prompt = `${profileContext || "No specific interests on file — pick broadly appealing options."}
 
 Candidates found in ${city}:
 ${list}
 
-Pick 2-3 that this specific person would genuinely enjoy — a mix across categories is fine but not required; only pick things that truly fit their interests. Be selective: if fewer than 2 genuinely fit, return fewer (even zero). Never pad the list with a weak match just to reach 2-3.
+${biasLine}
+
+Pick 4-6 that this specific person would genuinely enjoy — a mix across categories is fine but not required; only pick things that truly fit their interests. Be selective: if fewer than 4 genuinely fit, return fewer (even zero). Never pad the list with a weak match just to reach 4-6.
 
 Return ONLY a JSON array of the chosen item numbers with a one-sentence reason each — no explanation, no markdown fences:
 [{"index": 3, "reason": "why this fits them specifically"}]`;
@@ -240,7 +304,7 @@ Return ONLY a JSON array of the chosen item numbers with a one-sentence reason e
   try {
     const resp = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 400,
+      max_tokens: 700, // raised from 400 — up to 6 picks with reasons now, not 3
       messages: [{ role: "user", content: prompt }],
     });
     const text = resp.content
@@ -253,7 +317,7 @@ Return ONLY a JSON array of the chosen item numbers with a one-sentence reason e
     if (!Array.isArray(picks)) return [];
     return picks
       .filter((p) => p.index >= 1 && p.index <= candidates.length)
-      .slice(0, 3)
+      .slice(0, 6)
       .map((p) => ({ candidate: candidates[p.index - 1]!, reason: p.reason ?? "" }));
   } catch (err) {
     logger.warn({ err, city }, "[Proactive Discovery] Combined ranking failed");
@@ -261,31 +325,63 @@ Return ONLY a JSON array of the chosen item numbers with a one-sentence reason e
   }
 }
 
-// ── Notification — one push covering all picks ─────────────────────────────
+// ── Pending picks cache — same in-memory pending-state pattern as
+// pendingSaveOffers (listManager.ts) / pendingAtticCleanup
+// (atticItemsManager.ts). The notification never names the picks; tapping
+// it auto-sends a generic trigger message, and chatHandlerCore.ts injects
+// this cached context so Winston answers from the actual curated list
+// (names, reasons, venues, dates, URLs) instead of re-guessing from the
+// notification text alone. Single slot per user, no TTL for the map entry
+// itself — staleness is instead checked by the reader (chatHandlerCore.ts)
+// against generatedAt, since a picks batch is only really current until
+// the next Monday/Thursday run replaces it.
 
-const CATEGORY_EMOJI: Record<CandidateCategory, string> = {
-  event: "🎵",
-  activity: "📍",
-  restaurant: "🍽️",
-};
+export interface PendingProactivePick {
+  name:        string;
+  category:    CandidateCategory;
+  reason:      string;
+  venue:       string | null;
+  dateLabel:   string | null;
+  dateISO:     string | null;
+  url:         string | null;
+}
 
-async function sendPicksNotification(userName: string, city: string, picks: RankedPick[]): Promise<void> {
-  const single = picks.length === 1 ? picks[0]! : null;
+export interface PendingProactivePicks {
+  city:         string;
+  runContext:   RunContext;
+  picks:        PendingProactivePick[];
+  generatedAt:  number; // Date.now() — for the reader's own staleness check
+}
 
-  const title = single
-    ? `${CATEGORY_EMOJI[single.candidate.category]} ${single.candidate.name}`
-    : `✨ ${picks.length} things you might enjoy in ${city}`;
+const _pendingPicksMap = new Map<string, PendingProactivePicks>();
 
-  const body = single
-    ? single.reason || `${single.candidate.dateLabel || single.candidate.dateISO || ""} ${single.candidate.venue ? `at ${single.candidate.venue}` : ""}`.trim()
-    : picks.map((p) => {
-        const when = p.candidate.dateLabel || p.candidate.dateISO ? ` (${p.candidate.dateLabel || p.candidate.dateISO})` : "";
-        return `${p.candidate.name}${when}`;
-      }).join(" · ");
+export function getProactivePicks(userName: string): PendingProactivePicks | null {
+  return _pendingPicksMap.get(userName) ?? null;
+}
 
-  const message =
-    `Tell me more about ${picks.length > 1 ? "these" : "this"}: ${picks.map((p) => p.candidate.name).join(", ")} — ` +
-    `in ${city}. Why did you think I'd like ${picks.length > 1 ? "them" : "it"}?`;
+export function setProactivePicks(userName: string, state: PendingProactivePicks | null): void {
+  if (state === null) {
+    _pendingPicksMap.delete(userName);
+  } else {
+    _pendingPicksMap.set(userName, state);
+  }
+}
+
+// ── Notification — a generic teaser, never the picks themselves ────────────
+// The curated list is cached (above) and only actually shown once the user
+// taps in — the notification tray is not the place to spoil a hand-picked
+// list; it's meant to earn the tap, not replace it.
+
+async function sendPicksNotification(userName: string, city: string, picks: RankedPick[], runContext: RunContext): Promise<void> {
+  const title = runContext === "weekend"
+    ? "✨ Weekend plans?"
+    : "✨ A few things worth checking out this week";
+  const body = "Tap to see what I found.";
+
+  // Generic trigger — no pick names embedded here. The real content is
+  // cached below and injected into chat context, so Winston already has
+  // everything it needs to answer from real data the moment this lands.
+  const message = "What did you find for me?";
 
   try {
     await sendFcmNotification({
@@ -295,7 +391,7 @@ async function sendPicksNotification(userName: string, city: string, picks: Rank
       body,
       data: { action: "send_message", message },
     });
-    logger.info({ userName, picks: picks.map((p) => p.candidate.name) }, "[Proactive Discovery] Push sent");
+    logger.info({ userName, count: picks.length, runContext }, "[Proactive Discovery] Push sent (teaser — picks cached, not in notification)");
   } catch (err) {
     logger.warn({ err, userName }, "[Proactive Discovery] Push send failed");
   }
@@ -306,12 +402,29 @@ async function sendPicksNotification(userName: string, city: string, picks: Rank
     logger.warn({ err, userName }, "[Proactive Discovery] SSE broadcast failed");
   }
 
+  setProactivePicks(userName, {
+    city,
+    runContext,
+    generatedAt: Date.now(),
+    picks: picks.map((p) => ({
+      name:      p.candidate.name,
+      category:  p.candidate.category,
+      reason:    p.reason,
+      venue:     p.candidate.venue,
+      dateLabel: p.candidate.dateLabel,
+      dateISO:   p.candidate.dateISO,
+      url:       p.candidate.url,
+    })),
+  });
+
+  const markedKeys = picks.map((p) => ({ name: p.candidate.name, venue: p.candidate.venue, key: candidateKey(p.candidate) }));
+  logger.info({ userName, markedKeys }, "[Proactive Discovery] Dedup — marking these keys notified");
   await Promise.all(picks.map((p) => markNotified(userName, candidateKey(p.candidate))));
 }
 
 // ── Per-user orchestration ──────────────────────────────────────────────────
 
-async function checkUserForEvent(user: ActiveUser): Promise<void> {
+export async function checkUserForEvent(user: ActiveUser, runContext: RunContext): Promise<void> {
   const { userName } = user;
 
   const profile = await getProfile(userName).catch(() => null);
@@ -344,7 +457,7 @@ async function checkUserForEvent(user: ActiveUser): Promise<void> {
 
   const [events, activities, restaurants] = await Promise.all([
     fetchCandidateEvents(city, favoriteArtists).catch((): LocalEvent[] => []),
-    searchSupplementalActivities(city, userInterests),
+    searchSupplementalActivities(city, userInterests, runContext),
     searchNewRestaurants(city),
   ]);
 
@@ -360,7 +473,14 @@ async function checkUserForEvent(user: ActiveUser): Promise<void> {
   }
 
   // Drop anything already notified before spending a ranking call on it.
-  const alreadyNotified = await Promise.all(candidates.map((c) => hasBeenNotified(userName, candidateKey(c))));
+  const keys = candidates.map((c) => candidateKey(c));
+  const alreadyNotified = await Promise.all(keys.map((k) => hasBeenNotified(userName, k)));
+  const skippedLog = candidates
+    .map((c, i) => ({ name: c.name, venue: c.venue, key: keys[i], skip: alreadyNotified[i] }))
+    .filter((c) => c.skip);
+  if (skippedLog.length > 0) {
+    logger.info({ userName, skipped: skippedLog }, "[Proactive Discovery] Dedup — skipping already-notified candidates");
+  }
   candidates = candidates.filter((_, i) => !alreadyNotified[i]);
 
   if (candidates.length === 0) {
@@ -368,27 +488,35 @@ async function checkUserForEvent(user: ActiveUser): Promise<void> {
     return;
   }
 
-  const picks = await rankCandidates(candidates, profileContext, city);
+  const picks = await rankCandidates(candidates, profileContext, city, runContext);
   if (picks.length === 0) {
     logger.info({ userName, city, candidateCount: candidates.length }, "[Proactive Discovery] Nothing genuinely matched — skipping");
     return;
   }
 
-  await sendPicksNotification(userName, city, picks);
+  await sendPicksNotification(userName, city, picks, runContext);
 }
 
-// ── Scheduling — once daily, in each user's own local morning ─────────────────
+// ── Scheduling — twice weekly, in each user's own local morning ───────────────
 // Previously a single fixed cron.schedule("15 9 * * *", ...) with no timezone
 // option — node-cron runs that against the server process's own timezone
 // (UTC on Railway), so it actually fired at 9:15 AM UTC (3:15/4:15 AM Central),
 // not "9:15 AM CT" as the old comments claimed. Fixed by ticking frequently
 // and checking each user's own local hour via getUserLocationContext(), same
 // per-user-timezone-gate pattern as localContentScanner.ts's scheduler and
-// medicationScheduler.ts's cache-gated tick.
+// medicationScheduler.ts's cache-gated tick. Monday/Thursday gate added on
+// top of that same per-user-local-time check, computed in the user's own
+// timezone (not server time) for the same reason the hour check is.
 const FIRE_LOCAL_HOUR = 9; // 9:xx AM local — after the morning briefing has landed
 
+function runContextForWeekday(weekday: string): RunContext | null {
+  if (weekday === "Mon") return "week";
+  if (weekday === "Thu") return "weekend";
+  return null;
+}
+
 // userName → date (local to that user) already fired, so the check runs
-// exactly once per user per day despite the tick running every 10 min.
+// exactly once per user per eligible day despite the tick running every 10 min.
 const _firedToday = new Map<string, string>();
 
 async function runPerUserCheck(user: ActiveUser): Promise<void> {
@@ -400,12 +528,16 @@ async function runPerUserCheck(user: ActiveUser): Promise<void> {
   );
   if (localHour !== FIRE_LOCAL_HOUR) return;
 
+  const weekday = now.toLocaleDateString("en-US", { timeZone: timezone, weekday: "short" });
+  const runContext = runContextForWeekday(weekday);
+  if (!runContext) return;
+
   const today = now.toLocaleDateString("en-CA", { timeZone: timezone });
   if (_firedToday.get(user.userName) === today) return;
   _firedToday.set(user.userName, today);
 
   try {
-    await checkUserForEvent(user);
+    await checkUserForEvent(user, runContext);
   } catch (err) {
     logger.warn({ err, userName: user.userName }, "[Proactive Event] Per-user check failed");
   }
@@ -424,6 +556,10 @@ async function runProactiveEventCheck(): Promise<void> {
 }
 
 export function startProactiveEventScheduler(): void {
+  ensureProactiveMessageLogTable().catch((err) =>
+    logger.warn({ err }, "[Proactive Event] ensureProactiveMessageLogTable failed on startup")
+  );
+
   let _running = false;
   cron.schedule("*/10 * * * *", async () => {
     if (_running) return;
@@ -437,5 +573,5 @@ export function startProactiveEventScheduler(): void {
     }
   });
 
-  logger.info("[Proactive Event] Scheduler started — checking every 10 min for each user's local 9am hour");
+  logger.info("[Proactive Event] Scheduler started — checking every 10 min for each user's local Monday/Thursday 9am hour");
 }

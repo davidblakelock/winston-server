@@ -52,6 +52,7 @@ import {
   buildBriefingPrefsBlock,
   type BriefingPreference,
 } from "../../briefingPreferences/briefingPreferencesManager.js";
+import { getProactivePicks } from "../../morning/proactiveEventScheduler.js";
 import { getCurrentDateTimeBlock } from "../getCurrentDateTimeBlock.js";
 import {
   getAllLists,
@@ -416,6 +417,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
   const pendingAtticCleanup = getPendingAtticCleanup(sessionUserName);
   const pendingSaveOffers   = getPendingSaveOffers(sessionUserName);
   const pendingListConflict = getPendingListTypeConflict(sessionUserName);
+  const pendingProactivePicks = getProactivePicks(sessionUserName);
   const mostRecentShownObservation = await getMostRecentShownObservation(sessionUserName).catch(() => null);
   // When the shown observation carries a suggested goal fit, resolve the
   // target goal's title now so the dynamicPrompt block below can name it
@@ -561,6 +563,26 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       .join("\n");
     dynamicPrompt += `\n\n[Pending Attic Cleanup — ${pendingAtticCleanup.candidates.length} items older than ${pendingAtticCleanup.thresholdDays} days]\n${list}\n\n` +
       `If __USER__ approves archiving all of them, emit [ACTION:archive_attic_confirm]. If they want to keep specific numbered items, emit [ACTION:archive_attic_confirm|exclude=<comma-separated numbers>]. If they decline, emit [ACTION:archive_attic_cancel].`;
+  }
+
+  // Proactive-picks notification tapped — the push never named the picks
+  // (a generic teaser only), so this is the real curated list Winston
+  // actually generated. Only inject while genuinely current: the next
+  // Monday/Thursday run replaces this cache, but a stale leftover from a
+  // much earlier run (e.g. notifications went untapped for a week) isn't
+  // worth grounding a reply in.
+  const PROACTIVE_PICKS_STALE_MS = 5 * 24 * 60 * 60 * 1000; // 5 days
+  if (pendingProactivePicks !== null && Date.now() - pendingProactivePicks.generatedAt < PROACTIVE_PICKS_STALE_MS) {
+    const list = pendingProactivePicks.picks
+      .map((p, i) => {
+        const when = p.dateLabel || p.dateISO || "ongoing";
+        const where = p.venue ? ` at ${p.venue}` : "";
+        const link = p.url ? `\n   Link: ${p.url}` : "";
+        return `${i + 1}. [${p.category}] "${p.name}"${where} — ${when}. ${p.reason}${link}`;
+      })
+      .join("\n");
+    dynamicPrompt += `\n\n[Your Recent Picks — proactive suggestions already generated for __USER__ in ${pendingProactivePicks.city}]\n${list}\n\n` +
+      `This is what you actually found and picked — the notification that brought them here deliberately didn't name them, so this is the reveal. Present the list naturally in your own words (don't just repeat this block verbatim), and if they ask for more detail, tickets, or "why this one," answer from this real information — don't guess or re-search. Share a listed link when it's genuinely relevant to what they're asking.`;
   }
 
   // Save-offer flow in progress — inject what was actually offered so a

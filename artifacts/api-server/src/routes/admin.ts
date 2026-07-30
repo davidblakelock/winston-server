@@ -670,5 +670,37 @@ router.post("/admin/migrate-restaurants-to-table", async (req: Request, res: Res
   }
 });
 
+/**
+ * POST /api/admin/test-proactive-check
+ *
+ * Manually triggers proactiveEventScheduler.ts's checkUserForEvent() for the
+ * authenticated user, bypassing the normal Monday/Thursday + local-9am gate
+ * — for testing the twice-weekly redesign without waiting for a real
+ * scheduled window. Body: { runContext?: "week" | "weekend" }, defaults to
+ * "week". Runs in the background (real Claude/web-search/API calls, a real
+ * push notification, and real proactive_message_log writes) — check server
+ * logs (search [Proactive Discovery]) for the result.
+ */
+router.post("/admin/test-proactive-check", express.json({ limit: "64kb" }), async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const runContext = req.body?.runContext === "weekend" ? "weekend" : "week";
+  res.json({ ok: true, runContext, message: "checkUserForEvent started — check server logs for [Proactive Discovery]." });
+
+  import("../onboarding/onboardingManager.js").then(async ({ getActiveUsers }) => {
+    const users = await getActiveUsers().catch(() => []);
+    const user = users.find((u) => u.userName === userName);
+    if (!user) {
+      req.log.warn({ userName }, "[Proactive Discovery] TEST ROUTE — user not found in getActiveUsers()");
+      return;
+    }
+    const { checkUserForEvent } = await import("../morning/proactiveEventScheduler.js");
+    checkUserForEvent(user, runContext)
+      .then(() => req.log.info({ userName, runContext }, "[Proactive Discovery] TEST ROUTE — checkUserForEvent completed"))
+      .catch((err) => req.log.warn({ err, userName }, "[Proactive Discovery] TEST ROUTE — threw an error"));
+  });
+});
+
 export default router;
 
