@@ -34,10 +34,19 @@
  * specific night) the key includes that date, so a different occurrence
  * still gets its own shot. For anything without a real date (a standing
  * farmers market, a weekly jazz night, a newly-opened restaurant) the key
- * is name+venue instead — AI-regenerated names/descriptions aren't stable
- * run to run, so keying dateless candidates on the literal name (as
- * before) caused these long-lived facts to resurface repeatedly once their
- * wording drifted even slightly between runs.
+ * is name+venue instead of the literal name alone.
+ *
+ * Exact-key matching only gets a dateless candidate so far: it's enough for
+ * structurally stable sources (Google Places, Ticketmaster — fixed name/
+ * address fields), confirmed live, but Claude's web-search source
+ * regenerates name/venue text from scratch every run and can drift past
+ * what normalized equality catches (real example: "...Weekly Wine Tasting
+ * Series" @ "...La Scuola (NorthPark Center)" vs "...Wine Tasting Series
+ * (La Scuola)" @ "...La Scuola, Dallas, TX" — same event, re-notified
+ * anyway). A second fuzzy pass (fuzzyMatchExisting — Jaccard token overlap
+ * on name+venue, threshold 0.5) catches these near-misses for dateless
+ * candidates specifically; dated one-offs skip it entirely since a specific
+ * date is already an unambiguous signal on its own.
  */
 
 import cron from "node-cron";
@@ -92,6 +101,68 @@ function candidateKey(c: Candidate): string {
   // the more stable of the two when known.
   const venuePart = c.venue ? normalize(c.venue) : "";
   return `${c.category}:${normalize(c.name)}:${venuePart}`;
+}
+
+// ── Fuzzy dedup — for dateless candidates whose exact key still misses ─────
+// Exact key matching (above) is enough for structurally stable sources
+// (Google Places, Ticketmaster — fixed name/address fields straight from the
+// API). It's NOT enough for the Claude web-search source, which regenerates
+// name/venue text from scratch every run — confirmed live: the same weekly
+// wine tasting came back as "...Weekly Wine Tasting Series" @ "...La Scuola
+// (NorthPark Center), Dallas" in one run and "...Wine Tasting Series (La
+// Scuola)" @ "...La Scuola, Dallas, TX" in the next. Different words, not
+// just different casing/punctuation — normalized equality doesn't catch it
+// (Jaccard token overlap on that real pair: 0.7; two genuinely different
+// Dallas farmers markets in the same run: 0.2 — 0.5 cleanly separates them).
+// Only applied to dateless candidates: a one-off dated event's specific
+// date is already a strong, unambiguous signal that needs no fuzzing.
+
+const FUZZY_MATCH_THRESHOLD = 0.5;
+// Matches the trailing ":YYYY-MM-DD" a dated key ends with, so the fuzzy
+// pool can be built from dateless keys only — a dated key's date suffix
+// would otherwise pollute the token set being compared against.
+const DATED_KEY_SUFFIX = /:\d{4}-\d{2}-\d{2}$/;
+
+function tokenSet(s: string): Set<string> {
+  return new Set(normalize(s).split(" ").filter((t) => t.length > 2));
+}
+
+function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let intersection = 0;
+  for (const t of a) if (b.has(t)) intersection++;
+  return intersection / (a.size + b.size - intersection);
+}
+
+async function getDatelessKeysForCategory(userName: string, category: CandidateCategory): Promise<string[]> {
+  try {
+    const { rows } = await query<{ message_type: string }>(
+      `SELECT DISTINCT message_type FROM proactive_message_log
+       WHERE user_name = $1 AND message_type LIKE $2`,
+      [userName, `${category}:%`]
+    );
+    return rows.map((r) => r.message_type).filter((k) => !DATED_KEY_SUFFIX.test(k));
+  } catch {
+    return [];
+  }
+}
+
+// Returns the matched existing key if this dateless candidate is a near-miss
+// for something already notified, else null. `existingKeys` are prior
+// candidateKey() output for the same user+category — namePart/venuePart
+// segments never contain ":" themselves (normalize() strips every
+// non-alphanumeric), so splitting the stored key on ":" back into its parts
+// is safe.
+function fuzzyMatchExisting(candidate: Candidate, existingKeys: string[]): string | null {
+  const candidateTokens = tokenSet(`${candidate.name} ${candidate.venue ?? ""}`);
+  for (const key of existingKeys) {
+    const [, ...rest] = key.split(":");
+    const existingTokens = tokenSet(rest.join(" "));
+    if (jaccardSimilarity(candidateTokens, existingTokens) >= FUZZY_MATCH_THRESHOLD) {
+      return key;
+    }
+  }
+  return null;
 }
 
 // ── Source 1: Ticketmaster events ───────────────────────────────────────────
@@ -473,15 +544,38 @@ export async function checkUserForEvent(user: ActiveUser, runContext: RunContext
   }
 
   // Drop anything already notified before spending a ranking call on it.
+  // Two passes: exact key match first (cheap, catches the common case —
+  // structurally stable sources dedup perfectly on this alone), then a
+  // fuzzy token-overlap pass for dateless candidates that didn't exact-match
+  // — catches AI-regenerated wording drift from the web-search source that
+  // exact matching structurally can't (see fuzzyMatchExisting doc comment).
   const keys = candidates.map((c) => candidateKey(c));
-  const alreadyNotified = await Promise.all(keys.map((k) => hasBeenNotified(userName, k)));
+  const exactMatch = await Promise.all(keys.map((k) => hasBeenNotified(userName, k)));
+
+  const datelessKeysByCategory = new Map<CandidateCategory, string[]>();
+  const fuzzyMatch: (string | null)[] = new Array(candidates.length).fill(null);
+  for (let i = 0; i < candidates.length; i++) {
+    if (exactMatch[i]) continue;
+    const c = candidates[i]!;
+    if (c.dateISO) continue; // dated events rely on exact date matching only
+    if (!datelessKeysByCategory.has(c.category)) {
+      datelessKeysByCategory.set(c.category, await getDatelessKeysForCategory(userName, c.category));
+    }
+    fuzzyMatch[i] = fuzzyMatchExisting(c, datelessKeysByCategory.get(c.category)!);
+  }
+
+  const alreadyCovered = candidates.map((_, i) => exactMatch[i] || fuzzyMatch[i] !== null);
   const skippedLog = candidates
-    .map((c, i) => ({ name: c.name, venue: c.venue, key: keys[i], skip: alreadyNotified[i] }))
-    .filter((c) => c.skip);
+    .map((c, i) => ({
+      name: c.name, venue: c.venue, key: keys[i],
+      via: exactMatch[i] ? "exact" as const : fuzzyMatch[i] ? "fuzzy" as const : null,
+      matchedKey: exactMatch[i] ? keys[i] : fuzzyMatch[i],
+    }))
+    .filter((c) => c.via !== null);
   if (skippedLog.length > 0) {
     logger.info({ userName, skipped: skippedLog }, "[Proactive Discovery] Dedup — skipping already-notified candidates");
   }
-  candidates = candidates.filter((_, i) => !alreadyNotified[i]);
+  candidates = candidates.filter((_, i) => !alreadyCovered[i]);
 
   if (candidates.length === 0) {
     logger.info({ userName, city }, "[Proactive Discovery] All candidates already notified — skipping");
