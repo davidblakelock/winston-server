@@ -94,6 +94,65 @@ export async function getRecentAtticItems(
   return rows;
 }
 
+// ── Filtered list (browsing screen) ──────────────────────────────────────────
+// Separate from getRecentAtticItems (kept as-is — it's a fixed rolling-window
+// query the connection engine calls internally). This is the general-purpose
+// query behind the Attic browsing screen: arbitrary date range, source type,
+// and connected-goal filters, none of which the internal caller needs.
+
+export interface AtticItemFilters {
+  sourceType?: AtticSourceType;
+  startDate?:  string; // 'YYYY-MM-DD', inclusive
+  endDate?:    string; // 'YYYY-MM-DD', exclusive (day after is applied here)
+  goalId?:     number; // only items connected to this goal via `connections`
+  limit?:      number; // default 200
+}
+
+export async function listAtticItems(
+  userName: string,
+  filters:  AtticItemFilters = {},
+): Promise<AtticItem[]> {
+  await _tableInit;
+  const { sourceType, startDate, endDate, goalId, limit = 200 } = filters;
+
+  const conditions: string[] = ["user_name = $1", "status = 'active'"];
+  const params: unknown[] = [userName];
+
+  if (sourceType) {
+    params.push(sourceType);
+    conditions.push(`source_type = $${params.length}`);
+  }
+  if (startDate) {
+    params.push(startDate);
+    conditions.push(`created_at >= $${params.length}::date`);
+  }
+  if (endDate) {
+    params.push(endDate);
+    conditions.push(`created_at < ($${params.length}::date + interval '1 day')`);
+  }
+  if (typeof goalId === "number") {
+    params.push(goalId.toString());
+    conditions.push(
+      `id IN (
+         SELECT source_id FROM connections
+         WHERE user_name = $1 AND source_type = 'attic_item'
+           AND target_type = 'goal' AND target_id = $${params.length}
+           AND status != 'dismissed'
+       )`
+    );
+  }
+
+  params.push(limit);
+  const { rows } = await query<AtticItem>(
+    `SELECT * FROM attic_items
+     WHERE ${conditions.join(" AND ")}
+     ORDER BY created_at DESC
+     LIMIT $${params.length}`,
+    params
+  );
+  return rows;
+}
+
 // ── Cleanup / archive ────────────────────────────────────────────────────────
 // "Clean up the attic": age-based candidate selection + a pending-state
 // confirmation flow, same pattern as pendingText/pendingEmailReply in

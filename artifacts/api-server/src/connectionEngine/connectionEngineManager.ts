@@ -35,7 +35,7 @@ import { getUserLocationContext } from "../lib/userTimezone.js";
 import { getProfile, getActiveUsers } from "../onboarding/onboardingManager.js";
 import { getRecentCaptures } from "../lifeCaptures/lifeCapturesManager.js";
 import { getRecentAtticItems } from "../attic/atticItemsManager.js";
-import { getGoals, type Goal } from "../goals/goalsManager.js";
+import { getGoals, getGoalById, type Goal } from "../goals/goalsManager.js";
 import { getStoicForUser, PHASE_NAMES } from "../stoic/stoicManager.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
@@ -248,6 +248,87 @@ export async function updateConnectionStatus(
 
 export async function linkObservationToConnection(observationId: number, connectionId: number): Promise<void> {
   await query(`UPDATE observations SET related_connection_id = $1 WHERE id = $2`, [connectionId, observationId]);
+}
+
+// ── Listing for the browsing screen ──────────────────────────────────────────
+// The chat flow only ever needed "the single best pending one"
+// (getTopPendingObservation) or "whatever was most recently shown"
+// (getMostRecentShownObservation) — the Attic browsing screen needs the
+// actual list, enriched with the connection (and, when it points at a goal,
+// the goal's title) so the client isn't making its own follow-up lookups.
+
+export interface ObservationWithConnection extends Observation {
+  connection: {
+    id:          number;
+    target_type: string;
+    goalId:      number | null;
+    goalTitle:   string | null;
+    status:      Connection["status"];
+  } | null;
+}
+
+export async function listObservationsForUser(
+  userName: string,
+  statuses: Observation["status"][] = ["pending", "shown"],
+  limit     = 50,
+): Promise<ObservationWithConnection[]> {
+  await _tableInit;
+  const { rows } = await query<Observation>(
+    `SELECT * FROM observations
+     WHERE user_name = $1 AND status = ANY($2)
+     ORDER BY created_at DESC
+     LIMIT $3`,
+    [userName, statuses, limit]
+  );
+
+  const enriched: ObservationWithConnection[] = [];
+  for (const row of rows) {
+    let connection: ObservationWithConnection["connection"] = null;
+    // getConnectionById doesn't filter by user_name (it's only ever been
+    // called with an id already scoped to the caller's own observation) —
+    // re-check ownership here since this is now reachable from a route.
+    if (row.related_connection_id) {
+      const conn = await getConnectionById(row.related_connection_id);
+      if (conn && conn.user_name === userName) {
+        let goalId: number | null = null;
+        let goalTitle: string | null = null;
+        if (conn.target_type === "goal") {
+          const parsed = parseInt(conn.target_id, 10);
+          if (!isNaN(parsed)) {
+            goalId = parsed;
+            const goal = await getGoalById(parsed, userName);
+            goalTitle = goal?.title ?? null;
+          }
+        }
+        connection = { id: conn.id, target_type: conn.target_type, goalId, goalTitle, status: conn.status };
+      }
+    }
+    enriched.push({ ...row, connection });
+  }
+  return enriched;
+}
+
+export async function updateObservationStatus(
+  id:       number,
+  userName: string,
+  status:   Observation["status"],
+): Promise<Observation | null> {
+  await _tableInit;
+  const { rows } = await query<Observation>(
+    `UPDATE observations
+     SET status = $1, shown_at = CASE WHEN $1 = 'shown' THEN now() ELSE shown_at END
+     WHERE id = $2 AND user_name = $3
+     RETURNING *`,
+    [status, id, userName]
+  );
+  const updated = rows[0] ?? null;
+  // Cascade to the linked goal-connection the same way applyObservationCorrection
+  // does for the voice flow — accepted/dismissed on the observation should mean
+  // the same thing for whatever connection it carried.
+  if (updated?.related_connection_id && (status === "accepted" || status === "dismissed")) {
+    await updateConnectionStatus(updated.related_connection_id, status);
+  }
+  return updated;
 }
 
 // ── Corrections (Phase 5) ─────────────────────────────────────────────────────
