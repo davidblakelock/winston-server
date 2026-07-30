@@ -214,7 +214,7 @@ export function startWinddownScheduler(): void {
         const { userName } = user;
         const tz = user.timezone ?? DEFAULT_TZ;
 
-        const settings = await getSettings(userName).catch(() => ({ enabled: true, scheduledTime: "21:00", storyDayOfWeek: "sunday" }));
+        const settings = await getSettings(userName).catch(() => ({ enabled: true, scheduledTime: "21:00" }));
         if (!settings.enabled) continue;
 
         const localTime = new Date().toLocaleTimeString("en-US", {

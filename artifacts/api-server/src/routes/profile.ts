@@ -1,7 +1,6 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { authenticate } from "../auth/middleware.js";
 import { query } from "../db.js";
-import { getUserSettings, upsertUserSettings, type UserSettings } from "../stoic/stoicManager.js";
 
 const router: IRouter = Router();
 
@@ -125,7 +124,7 @@ async function fetchProfileRow(userName: string): Promise<ProfileRow | null> {
   };
 }
 
-function rowToResponse(row: ProfileRow, settings: UserSettings) {
+function rowToResponse(row: ProfileRow) {
   return {
     firstName:           row.first_name,
     lastName:            row.last_name,
@@ -156,39 +155,26 @@ function rowToResponse(row: ProfileRow, settings: UserSettings) {
     favoriteArtists:     row.favorite_artists ?? [],
     emailDoneAction:     row.email_done_action,
     onboardingCompleted: row.onboarding_completed ?? false,
-    settings: {
-      briefingWeather:  settings.briefingWeather,
-      briefingCalendar: settings.briefingCalendar,
-      briefingTodos:    settings.briefingTodos,
-      briefingEmail:    settings.briefingEmail,
-      briefingNews:     settings.briefingNews,
-      briefingFunny:    settings.briefingFunny,
-      briefingEvents:   settings.briefingEvents,
-      briefingStoic:    settings.briefingStoic,
-    },
   };
 }
 
 // ── GET /api/profile ──────────────────────────────────────────────────────────
-// Returns all editable profile fields and briefing settings for the
-// authenticated user. No hardcoded values — everything is read from the DB.
+// Returns all editable profile fields for the authenticated user. No
+// hardcoded values — everything is read from the DB.
 router.get("/profile", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
 
   try {
     await _ensureColumns;
-    const [row, settings] = await Promise.all([
-      fetchProfileRow(userName),
-      getUserSettings(userName),
-    ]);
+    const row = await fetchProfileRow(userName);
 
     if (!row) {
       res.status(404).json({ error: "Profile not found" });
       return;
     }
 
-    res.json(rowToResponse(row, settings));
+    res.json(rowToResponse(row));
   } catch (err) {
     req.log.error({ err }, "[Profile] GET failed");
     res.status(500).json({ error: "Failed to retrieve profile" });
@@ -208,10 +194,6 @@ router.get("/profile", async (req: Request, res: Response) => {
 //   healthNotes, photoUrl, hobbies, musicGenres, tvGenres,
 //   sportsTeams, favoriteRestaurants, favoritePodcasts,
 //   onboardingCompleted
-//
-// Allowed settings fields (user_settings table):
-//   briefingWeather, briefingCalendar, briefingTodos, briefingEmail,
-//   briefingNews, briefingFunny, briefingEvents, briefingStoic
 
 // Maps camelCase request key → SQL column name, for text/nullable columns
 const TEXT_COLS: Record<string, string> = {
@@ -262,12 +244,6 @@ const BOOLEAN_COLS: Record<string, string> = {
   onboardingCompleted: "onboarding_completed",
 };
 
-// user_settings boolean columns
-const SETTINGS_KEYS = new Set<keyof Omit<UserSettings, "stoicDay">>([
-  "briefingWeather", "briefingCalendar", "briefingTodos", "briefingEmail",
-  "briefingNews", "briefingFunny", "briefingEvents", "briefingStoic",
-]);
-
 router.patch("/profile", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
@@ -310,12 +286,6 @@ router.patch("/profile", async (req: Request, res: Response) => {
     if (key in body) addParam(col, Boolean(body[key]));
   }
 
-  // ── Build the user_settings UPDATE ───────────────────────────────────────
-  const settingsUpdate: Partial<Omit<UserSettings, "stoicDay">> = {};
-  for (const key of SETTINGS_KEYS) {
-    if (key in body) settingsUpdate[key] = Boolean(body[key]);
-  }
-
   // ── Detect unknown / unsupported keys ────────────────────────────────────
   const allKnownKeys = new Set([
     ...Object.keys(TEXT_COLS),
@@ -323,11 +293,10 @@ router.patch("/profile", async (req: Request, res: Response) => {
     ...Object.keys(DATE_COLS),
     ...Object.keys(JSONB_COLS),
     ...Object.keys(BOOLEAN_COLS),
-    ...SETTINGS_KEYS,
   ]);
   const unknownKeys = Object.keys(body).filter(k => !allKnownKeys.has(k));
 
-  if (setClauses.length === 0 && Object.keys(settingsUpdate).length === 0) {
+  if (setClauses.length === 0) {
     res.status(400).json({
       error: "No valid fields provided",
       unknownKeys: unknownKeys.length ? unknownKeys : undefined,
@@ -349,17 +318,10 @@ router.patch("/profile", async (req: Request, res: Response) => {
       );
     }
 
-    if (Object.keys(settingsUpdate).length > 0) {
-      work.push(upsertUserSettings(userName, settingsUpdate));
-    }
-
     await Promise.all(work);
 
     // Return the full updated profile so the client can refresh state in one round-trip
-    const [row, settings] = await Promise.all([
-      fetchProfileRow(userName),
-      getUserSettings(userName),
-    ]);
+    const row = await fetchProfileRow(userName);
 
     if (!row) {
       res.status(404).json({ error: "Profile not found after update" });
@@ -369,7 +331,7 @@ router.patch("/profile", async (req: Request, res: Response) => {
     res.json({
       ok: true,
       ...(unknownKeys.length ? { unknownKeys } : {}),
-      ...rowToResponse(row, settings),
+      ...rowToResponse(row),
     });
   } catch (err) {
     req.log.error({ err }, "[Profile] PATCH failed");

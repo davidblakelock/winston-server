@@ -18,14 +18,6 @@ export interface StoicEntry {
 
 export interface UserSettings {
   stoicDay: number;
-  briefingWeather: boolean;
-  briefingCalendar: boolean;
-  briefingTodos: boolean;
-  briefingEmail: boolean;
-  briefingNews: boolean;
-  briefingFunny: boolean;
-  briefingEvents: boolean;
-  briefingStoic: boolean;
 }
 
 export const PHASE_NAMES: Record<number, string> = {
@@ -552,14 +544,6 @@ export async function ensureStoicTables(): Promise<void> {
       id SERIAL PRIMARY KEY,
       user_name TEXT NOT NULL UNIQUE,
       stoic_day INTEGER NOT NULL DEFAULT 1,
-      briefing_weather BOOLEAN NOT NULL DEFAULT true,
-      briefing_calendar BOOLEAN NOT NULL DEFAULT true,
-      briefing_todos BOOLEAN NOT NULL DEFAULT true,
-      briefing_email BOOLEAN NOT NULL DEFAULT true,
-      briefing_news BOOLEAN NOT NULL DEFAULT true,
-      briefing_funny BOOLEAN NOT NULL DEFAULT true,
-      briefing_events BOOLEAN NOT NULL DEFAULT true,
-      briefing_stoic BOOLEAN NOT NULL DEFAULT true,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
@@ -591,79 +575,16 @@ export async function ensureStoicTables(): Promise<void> {
 // ── User Settings CRUD ────────────────────────────────────────────────────────
 
 export async function getUserSettings(userName: string): Promise<UserSettings> {
-  const { rows } = await query<{
-    stoic_day: number;
-    briefing_weather: boolean;
-    briefing_calendar: boolean;
-    briefing_todos: boolean;
-    briefing_email: boolean;
-    briefing_news: boolean;
-    briefing_funny: boolean;
-    briefing_events: boolean;
-    briefing_stoic: boolean;
-  }>(
-    `SELECT stoic_day, briefing_weather, briefing_calendar, briefing_todos,
-            briefing_email, briefing_news, briefing_funny, briefing_events, briefing_stoic
-     FROM user_settings WHERE user_name = $1`,
+  const { rows } = await query<{ stoic_day: number }>(
+    `SELECT stoic_day FROM user_settings WHERE user_name = $1`,
     [userName]
   );
 
   if (rows.length === 0) {
-    return {
-      stoicDay: 1,
-      briefingWeather: true,
-      briefingCalendar: true,
-      briefingTodos: true,
-      briefingEmail: true,
-      briefingNews: true,
-      briefingFunny: true,
-      briefingEvents: true,
-      briefingStoic: true,
-    };
+    return { stoicDay: 1 };
   }
 
-  const r = rows[0];
-  return {
-    stoicDay: r.stoic_day,
-    briefingWeather: r.briefing_weather,
-    briefingCalendar: r.briefing_calendar,
-    briefingTodos: r.briefing_todos,
-    briefingEmail: r.briefing_email,
-    briefingNews: r.briefing_news,
-    briefingFunny: r.briefing_funny,
-    briefingEvents: r.briefing_events,
-    briefingStoic: r.briefing_stoic,
-  };
-}
-
-export async function upsertUserSettings(
-  userName: string,
-  settings: Partial<Omit<UserSettings, "stoicDay">>
-): Promise<void> {
-  const fields: string[] = [];
-  const vals: unknown[] = [userName];
-
-  if (settings.briefingWeather !== undefined) { fields.push(`briefing_weather = $${vals.length + 1}`); vals.push(settings.briefingWeather); }
-  if (settings.briefingCalendar !== undefined) { fields.push(`briefing_calendar = $${vals.length + 1}`); vals.push(settings.briefingCalendar); }
-  if (settings.briefingTodos !== undefined) { fields.push(`briefing_todos = $${vals.length + 1}`); vals.push(settings.briefingTodos); }
-  if (settings.briefingEmail !== undefined) { fields.push(`briefing_email = $${vals.length + 1}`); vals.push(settings.briefingEmail); }
-  if (settings.briefingNews !== undefined) { fields.push(`briefing_news = $${vals.length + 1}`); vals.push(settings.briefingNews); }
-  if (settings.briefingFunny !== undefined) { fields.push(`briefing_funny = $${vals.length + 1}`); vals.push(settings.briefingFunny); }
-  if (settings.briefingEvents !== undefined) { fields.push(`briefing_events = $${vals.length + 1}`); vals.push(settings.briefingEvents); }
-  if (settings.briefingStoic !== undefined) { fields.push(`briefing_stoic = $${vals.length + 1}`); vals.push(settings.briefingStoic); }
-
-  if (fields.length === 0) return;
-
-  const insertCols = fields.map(f => f.split(" = ")[0]).join(", ");
-  const insertVals = vals.slice(1).map((_, i) => `$${i + 2}`).join(", ");
-  const updateSet = [...fields, "updated_at = NOW()"].join(", ");
-
-  await query(
-    `INSERT INTO user_settings (user_name, ${insertCols})
-     VALUES ($1, ${insertVals})
-     ON CONFLICT (user_name) DO UPDATE SET ${updateSet}`,
-    vals
-  );
+  return { stoicDay: rows[0].stoic_day };
 }
 
 // ── Stoic Entry Retrieval ─────────────────────────────────────────────────────

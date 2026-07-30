@@ -4,7 +4,6 @@ import { getUserLocationContext } from "../lib/userTimezone.js";
 export interface WinddownSettings {
   enabled: boolean;
   scheduledTime: string;
-  storyDayOfWeek: string;
 }
 
 export async function ensureWinddownTables(): Promise<void> {
@@ -22,8 +21,8 @@ export async function ensureWinddownTables(): Promise<void> {
     ALTER TABLE winddown_settings ADD COLUMN IF NOT EXISTS story_day_of_week varchar(10) NOT NULL DEFAULT 'sunday'
   `).catch(() => {});
   await query(`
-    INSERT INTO winddown_settings (enabled, scheduled_time, story_day_of_week)
-    VALUES (true, '21:00', 'sunday')
+    INSERT INTO winddown_settings (enabled, scheduled_time)
+    VALUES (true, '21:00')
     ON CONFLICT (id) DO NOTHING
     RETURNING id
   `);
@@ -73,15 +72,14 @@ export async function ensureWinddownTables(): Promise<void> {
 }
 
 export async function getSettings(userName: string): Promise<WinddownSettings> {
-  const { rows } = await query<{ enabled: boolean; scheduled_time: string; story_day_of_week: string }>(
-    `SELECT enabled, scheduled_time, story_day_of_week FROM winddown_settings WHERE user_name = $1`,
+  const { rows } = await query<{ enabled: boolean; scheduled_time: string }>(
+    `SELECT enabled, scheduled_time FROM winddown_settings WHERE user_name = $1`,
     [userName]
   );
-  if (rows.length === 0) return { enabled: true, scheduledTime: "21:00", storyDayOfWeek: "sunday" };
+  if (rows.length === 0) return { enabled: true, scheduledTime: "21:00" };
   return {
     enabled: rows[0]!.enabled,
     scheduledTime: rows[0]!.scheduled_time,
-    storyDayOfWeek: rows[0]!.story_day_of_week ?? "sunday",
   };
 }
 
@@ -93,18 +91,16 @@ export async function updateSettings(
   const merged: WinddownSettings = {
     enabled: settings.enabled ?? current.enabled,
     scheduledTime: settings.scheduledTime ?? current.scheduledTime,
-    storyDayOfWeek: (settings.storyDayOfWeek ?? current.storyDayOfWeek).toLowerCase(),
   };
   await query(
-    `INSERT INTO winddown_settings (user_name, enabled, scheduled_time, story_day_of_week, updated_at)
-     VALUES ($1, $2, $3, $4, NOW())
+    `INSERT INTO winddown_settings (user_name, enabled, scheduled_time, updated_at)
+     VALUES ($1, $2, $3, NOW())
      ON CONFLICT (user_name) DO UPDATE SET
        enabled = EXCLUDED.enabled,
        scheduled_time = EXCLUDED.scheduled_time,
-       story_day_of_week = EXCLUDED.story_day_of_week,
        updated_at = NOW()
      RETURNING user_name`,
-    [userName, merged.enabled, merged.scheduledTime, merged.storyDayOfWeek]
+    [userName, merged.enabled, merged.scheduledTime]
   );
   return merged;
 }

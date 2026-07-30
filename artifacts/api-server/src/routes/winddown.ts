@@ -64,10 +64,9 @@ router.put("/winddown/settings", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
   try {
-    const { enabled, scheduledTime, storyDayOfWeek } = req.body as {
+    const { enabled, scheduledTime } = req.body as {
       enabled?: boolean;
       scheduledTime?: string;
-      storyDayOfWeek?: string;
     };
 
     if (
@@ -78,7 +77,7 @@ router.put("/winddown/settings", async (req: Request, res: Response) => {
       return;
     }
 
-    const settings = await updateSettings(userName, { enabled, scheduledTime, storyDayOfWeek });
+    const settings = await updateSettings(userName, { enabled, scheduledTime });
     res.json(settings);
   } catch (err) {
     res.status(500).json({ error: "Failed to update evening check-in settings" });
