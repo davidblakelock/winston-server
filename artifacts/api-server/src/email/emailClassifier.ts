@@ -54,7 +54,12 @@ export async function classifyEmail(
   vacationMode = false,
 ): Promise<ClassifiedEmail | null> {
   const today = new Date().toISOString().split("T")[0];
-  const truncated = body.slice(0, 3000);
+  // 15,000 chars, not the smaller cap a pure meeting/record/reply classifier
+  // would need — this call also does order/tracking extraction (folded in
+  // from the old standalone order scanner), and a retail shipping
+  // confirmation's tracking number is frequently buried deep in an href
+  // partway down a large HTML email, well past what a tight cap would reach.
+  const truncated = body.slice(0, 15000);
 
   const vacationLine = vacationMode
     ? "\nThe user is currently on vacation — only flag this as something other than none if it is genuinely urgent or time-sensitive; hold lower-priority items."
@@ -93,13 +98,19 @@ Decide what action this email warrants, if any. Return ONLY valid JSON:
     "amount": "string or null"
   },
 
-  // include if action="save_to_orders" — a shipping/order/delivery update:
+  // include if action="save_to_orders" — a shipping/order/delivery update.
+  // Check link hrefs as well as visible text for a tracking number —
+  // retailers frequently put it only in a "Track Package" link's URL, not
+  // in the link's display text. trackingNumber may legitimately come back
+  // null (Amazon Logistics "Ordered"/"Shipped" emails never carry one) —
+  // that's not a failure, still classify it as save_to_orders as long as
+  // status and orderNumber are present so it can still be tracked informally.
   "order": {
     "retailer": "string",
     "itemName": "string",
     "orderNumber": "string or null",
-    "trackingNumber": "string or null",
-    "carrier": "UPS" | "FedEx" | "USPS" | "DHL" | null,
+    "trackingNumber": "the shipping tracking number (UPS, FedEx, USPS, DHL, Amazon Logistics, OnTrac, LaserShip, etc — check hrefs too), or null if genuinely absent",
+    "carrier": "UPS" | "FedEx" | "USPS" | "DHL" | "Amazon Logistics" | null,
     "status": "ordered" | "shipped" | "in_transit" | "out_for_delivery" | "delivered" | null,
     "expectedDate": "YYYY-MM-DD or null",
     "orderTotal": "$XX.XX or null",
@@ -115,7 +126,7 @@ Decide what action this email warrants, if any. Return ONLY valid JSON:
 
 Rules for choosing action:
 - "save_to_records": a genuine, actually-booked confirmation — hotel, restaurant reservation, car rental, flight or train ticket, warranty registration, home service appointment (plumber, HVAC, etc.), vehicle service appointment. Requires either a real confirmation/booking/reservation reference number OR explicit confirmed-booking language ("your booking is confirmed," "e-ticket," "itinerary number") — not just an email that happens to mention a date and a place. Specifically exclude price-alerts, fare-trackers, "prices dropped," saved-search notifications, and other browsing/tracking emails from travel search sites and aggregators (Google Flights, Google Hotels, Kayak, Skyscanner, Hopper, etc.) — these are never the airline/hotel/vendor itself and never represent an actual booking, no matter how specific the date or route mentioned. Subscription charge receipts and recurring billing are NOT records — use "fyi" instead.
-- "save_to_orders": shipping, delivery, or order status update from a retailer or carrier.
+- "save_to_orders": shipping, delivery, or order status update from a retailer or carrier — an order confirmation, a "your item shipped," an "out for delivery," or a "delivered" notice. A tracking number is NOT required — Amazon Logistics deliveries especially often have no real carrier tracking number, but the order is still worth tracking by order number and status language alone.
 - "meeting_request": a real person communicating about a meeting or appointment — either (a) a NEW request where the user hasn't responded yet and a time may or may not be set, or (b) a CONFIRMATION that an already-proposed plan is locked in (time, place, and attendees decided; no response needed, just acknowledge it happened). Set isConfirmation=false for new requests, isConfirmation=true when the meeting is already confirmed.
 - "needs_reply": anything from a real person that reasonably expects a response — a question, a catch-up message, a personal note — even if casual.
 - "urgent_alert": anything genuinely urgent requiring the user's immediate awareness — fraud alerts, suspicious login warnings, account security notices, unrecognized transaction alerts, identity theft warnings. Also use this for large or unexpected financial transactions from payment platforms (Venmo, Zelle, PayPal, Cash App, Apple Pay) — any single transfer of $200 or more qualifies. Always flag these prominently; never drop them silently.

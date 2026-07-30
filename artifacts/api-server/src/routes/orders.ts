@@ -6,7 +6,7 @@ import {
   deleteOrder,
   consolidateOrders,
 } from "../orders/ordersManager.js";
-import { scanOrderEmails } from "../orders/gmailOrderScanner.js";
+import { scanOrdersOnly } from "../orders/gmailOrderScanner.js";
 import { logger } from "../lib/logger.js";
 
 const router: IRouter = Router();
@@ -27,10 +27,13 @@ router.get("/orders", async (req, res) => {
 });
 
 // ── POST /api/orders/sync ─────────────────────────────────────────────────────
-// Scans currently-unread inbox mail for order/shipping emails (see
-// buildGmailQuery in gmailOrderScanner.ts), parses each with Claude Haiku,
+// Scans currently-unread inbox mail for order/shipping emails via the same
+// shared classifier the passive background scan uses (emailClassifier.ts),
 // then consolidates any duplicate rows. No lookback window or watermark —
-// every sync just processes whatever's unread right now.
+// every sync just processes whatever's unread right now. This is a separate,
+// on-demand Gmail read from the passive background scan (an explicit user
+// tap, not waiting for the next scheduled tick) — it just no longer runs its
+// own duplicate extraction logic to get there.
 router.post("/orders/sync", express.json({ limit: "1mb" }), async (req, res) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
@@ -39,10 +42,10 @@ router.post("/orders/sync", express.json({ limit: "1mb" }), async (req, res) => 
 
   try {
     // ── Step 1: Gmail scan ──────────────────────────────────────────────────
-    // scanOrderEmails handles insertion + EasyPost tracker creation internally
+    // scanOrdersOnly handles insertion + EasyPost tracker creation internally
     // and returns both the new-row count and how many candidates the Gmail
     // query itself found.
-    const { newCount, candidatesFound } = await scanOrderEmails(userName);
+    const { newCount, candidatesFound } = await scanOrdersOnly(userName);
     req.log.info({ userName, newOrUpdated: newCount, candidatesFound }, "[Orders] Gmail scan complete");
 
     // ── Step 2: Consolidate duplicates from this scan and any previous scans ─

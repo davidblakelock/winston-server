@@ -3,16 +3,27 @@
  *
  * Runs on the same 60-min-interval tick:
  *   1. SOCIAL scan — all unread inbox emails, up to 30 candidates, processes up to 20.
- *                    Keyword-free — classifyEmail handles filtering.
- *   2. Reservation/confirmation scan (scanReservationEmails) — trip, warranty,
- *                    subscription, home service, and order confirmations saved to user_records.
- *   3. ORDER / shipping scan (scanOrderEmails) — tracking-number-bearing order and
- *                    shipping emails saved to the orders table, EasyPost tracker created.
+ *                    Keyword-free — classifyEmail handles filtering. Covers meetings,
+ *                    records (My Records), orders/shipping (My Orders), replies, and
+ *                    alerts from a SINGLE Gmail read + classification per email — orders
+ *                    used to have their own separate scanner reading this exact same
+ *                    is:unread query independently, which meant an order email's
+ *                    read-status was a race between whichever scanner processed it
+ *                    first. Folded into one pass so there's only one read.
+ *   2. Reservation/confirmation scan (scanReservationEmails) — trip and vehicle
+ *                    registration confirmations saved to user_records. Kept separate:
+ *                    it deliberately does NOT scope to is:unread (dedups by gmail_id
+ *                    instead), a different query shape that isn't part of the same race.
  *
  * Claude Haiku classifies + extracts each email in a single call.
  * Social scan's last-scan timestamp is persisted to DB (social_scan_state) so
- * restarts don't re-process. The order scan has no watermark — it always
- * processes whatever's currently unread in the inbox.
+ * restarts don't re-process.
+ *
+ * The manual "sync my orders" button (POST /api/orders/sync) does its own
+ * separate on-demand pass (orders/gmailOrderScanner.ts's scanOrdersOnly) —
+ * that one's intentional, a user-triggered immediate check rather than
+ * waiting for the next scheduled tick, and reuses the same classifier and
+ * the same order-writing logic (handleOrderResult) as this scan does.
  */
 
 import cron from "node-cron";
@@ -30,7 +41,7 @@ import { getEmailScanSettings } from "../email/emailScanSettings.js";
 import { scanReservationEmails } from "./reservationScanner.js";
 import { checkForConflict, addOneHour } from "../email/meetingScanner.js";
 import { query } from "../db.js";
-import { scanOrderEmails } from "../orders/gmailOrderScanner.js";
+import { handleOrderResult } from "../orders/gmailOrderScanner.js";
 
 const TZ = "UTC";
 
@@ -117,6 +128,22 @@ async function handleRecord(userName: string, msgId: string, body: string, resul
     gmailId: msgId,
   });
   logger.info({ vendor: rec.vendorName, category: rec.category, msgId }, "[BgEmailScanner] Record saved");
+}
+
+// ── Order handler ─────────────────────────────────────────────────────────────
+// Folded in from the old standalone gmailOrderScanner.ts scan — that scanner
+// ran its own separate is:unread Gmail read + Claude classification on the
+// exact same candidate mail this social scan already reads, meaning an order
+// email could get marked read by whichever scanner processed it first, race
+// depending on order. One pass, one classification per email, no race.
+
+async function handleOrder(userName: string, msgId: string, from: string, subject: string, result: ClassifiedEmail): Promise<void> {
+  const order = result.order;
+  if (!order) {
+    logger.info({ msgId, subject: result._subject }, "[BgEmailScanner] Order dropped — no order fields extracted");
+    return;
+  }
+  await handleOrderResult(userName, msgId, from, subject, order);
 }
 
 // ── Meeting handler ───────────────────────────────────────────────────────────
@@ -363,9 +390,16 @@ async function runScan(userName: string): Promise<void> {
   const urgentAlerts: { subject: string; summary: string; gmailId: string }[] = [];
   const fyiItems: { subject: string; summary: string; gmailId: string }[] = [];
   const confirmedMeetings: { from: string; subject: string; proposedDateTimeStr: string | null }[] = [];
-  let meetings = 0, records = 0, socials = 0;
+  let meetings = 0, records = 0, socials = 0, orders = 0;
 
   // ── Social scan ───────────────────────────────────────────────────────────
+  // One Gmail read + one classification per email, covering meetings,
+  // records, orders, replies, and alerts together — previously orders had
+  // their own separate scanner reading this exact same is:unread query
+  // independently, meaning an order email's read-status was a race between
+  // whichever scanner got to it first. Folding order detection into this
+  // same pass (handleOrder, via the classifier's existing save_to_orders
+  // action) removes that race entirely: there's only one read now.
   if (shouldScanSocial) {
     logger.info({ userName }, "[BgEmailScanner] Starting social scan");
 
@@ -376,6 +410,7 @@ async function runScan(userName: string): Promise<void> {
       async (u, id, from, subject, body, res) => {
         if (res.action === "meeting_request") { await handleMeeting(u, id, from, subject, res, confirmedMeetings); meetings++; }
         else if (res.action === "save_to_records") { await handleRecord(u, id, body, res); records++; filedRecordsCount++; }
+        else if (res.action === "save_to_orders") { await handleOrder(u, id, from, subject, res); orders++; }
         else if (res.action === "needs_reply") { await handleSocial(u, id, from, res); socials++; }
         else if (res.action === "urgent_alert") { urgentAlerts.push({ subject, summary: res.summary ?? subject, gmailId: id }); }
         else if (res.action === "fyi") { fyiItems.push({ subject, summary: res.summary ?? subject, gmailId: id }); }
@@ -385,13 +420,16 @@ async function runScan(userName: string): Promise<void> {
     );
 
     await updateLastSocialScanAt(userName, scanStart);
-    logger.info({ userName, meetings, records, socials, skipped: socialSkipped }, "[BgEmailScanner] Social scan complete");
+    logger.info({ userName, meetings, records, orders, socials, skipped: socialSkipped }, "[BgEmailScanner] Social scan complete");
   }
 
   // ── Reservation / confirmation scan ──────────────────────────────────────
   // Runs on the same schedule as the social scan — scans for flight, hotel,
   // restaurant, car rental, warranty, subscription, and home service
-  // confirmations and saves them to user_records (My Records screen).
+  // confirmations and saves them to user_records (My Records screen). Kept
+  // separate: this one deliberately does NOT scope to is:unread (dedups by
+  // gmail_id instead), a different query shape from the social/order scan
+  // above, so it isn't part of the same race and doesn't fold in cleanly.
   if (shouldScanSocial) {
     try {
       const reservations = await scanReservationEmails(userName);
@@ -404,22 +442,6 @@ async function runScan(userName: string): Promise<void> {
       }
     } catch (err) {
       logger.warn({ err, userName }, "[ReservationScanner] Scan failed — skipping");
-    }
-  }
-
-  // ── Order / shipping scan ─────────────────────────────────────────────────
-  // Runs on the same schedule as the social scan. No watermark to share —
-  // scanOrderEmails() always processes whatever's currently unread in the
-  // inbox (see buildGmailQuery in gmailOrderScanner.ts).
-  if (shouldScanSocial) {
-    try {
-      const { newCount: newOrders, candidatesFound } = await scanOrderEmails(userName);
-
-      if (newOrders > 0) {
-        logger.info({ userName, newOrders, candidatesFound }, "[OrderScanner] Order scan complete");
-      }
-    } catch (err) {
-      logger.warn({ err, userName }, "[OrderScanner] Scan failed — skipping");
     }
   }
 
@@ -440,7 +462,7 @@ async function runScan(userName: string): Promise<void> {
 
   const newUrgentAlerts = urgentAlerts.filter(e => !notifiedIds.has(e.gmailId));
   const newFyiItems = fyiItems.filter(e => !notifiedIds.has(e.gmailId));
-  const totalEmails = meetings + records + socials + newUrgentAlerts.length + newFyiItems.length + confirmedMeetings.length;
+  const totalEmails = meetings + records + orders + socials + newUrgentAlerts.length + newFyiItems.length + confirmedMeetings.length;
   const actionableCount = scanReplies.length + scanMeetings.length + urgentAlerts.length;
 
   if (totalEmails > 0) {
@@ -499,5 +521,5 @@ export function startBackgroundEmailScanner(userName = NATIVE_USER): void {
     }
   }, { timezone: TZ });
 
-  logger.info("[BgEmailScanner] Scheduler started — social scan (DB-backed) + reservation scan + order scan (DB-backed), 60-min interval");
+  logger.info("[BgEmailScanner] Scheduler started — unified social/records/orders scan (DB-backed, single is:unread pass) + separate reservation scan, 60-min interval");
 }
