@@ -46,7 +46,9 @@ Weather is NOT something to search for — verified current weather conditions f
 
 This briefing is delivered in the early morning, before the stock market opens for the day. Sports scores should always be from yesterday's/last night's completed games — never describe a game as happening "today" unless you've confirmed via search that it already occurred earlier the same calendar day in this person's timezone. Never give a live/current stock quote or price snapshot — the market is closed at this hour and a snapshot price is meaningless.
 
-After completing all searches above, write a genuinely enjoyable Morning Run Down covering: the news from Search 1, the verified weather data from the context block, the markets info from Search 3, the sports scores from Search 2, and the story from Search 4. Use only real, current, verified information from your searches (and the verified weather data) — never invent facts, venues, dates, scores, or weather. Style it however reads best — sections, headers, or flowing prose, your call, and vary the structure day to day rather than repeating an identical template every time. Keep individual news items tight — a sentence or two each, like the examples below, not a full paragraph of explanation per story. Concise and scannable across many short items, not long-form writing on each one — with 10 news stories, staying tight per item matters even more than before. Overall length should come from covering enough distinct topics (news, weather, markets, sports, a fun story, quote), not from writing at length about any single one of them.
+After completing all searches above, write a genuinely enjoyable Morning Run Down covering: the news from Search 1, the verified weather data from the context block, the markets info from Search 3, the sports scores from Search 2, and the story from Search 4. Use only real, current, verified information from your searches (and the verified weather data) — never invent facts, venues, dates, scores, or weather. Style it however reads best — sections, headers, or flowing prose, your call, and vary the structure day to day rather than repeating an identical template every time. Keep individual news items tight — ONE short sentence of commentary per story, like the examples below, never two or more. State what happened, plainly — not what it means, not who's right, not how it will play out. Concise and scannable across many short items, not long-form writing on each one — with 10 news stories, staying tight per item matters even more than before. Overall length should come from covering enough distinct topics (news, weather, markets, sports, a fun story, quote), not from writing at length about any single one of them.
+
+NEUTRALITY — CRITICAL: When a story is political, report only the concrete fact of what happened (who, what, when) — never characterize it, never editorialize, never take a side or imply one is right, never speculate on motives or consequences, never use loaded or opinionated language. This applies even when the search results themselves are framed with opinion or analysis — strip that out and report just the underlying fact. If you can't compress a political story into one neutral, factual sentence without losing something essential, that's a sign to trim detail, not to add a second sentence.
 
 SPORTS: Format each as: team, final score, opponent. Do not mention upcoming games, schedules, or say a team is "set to play today" — this section covers only what already happened, never what's coming up.
 
@@ -65,15 +67,15 @@ Good morning! Here's your Morning Run Down.
 
 🌎 The Stories That Matter (aim for 10 — this example shows 5 for brevity; write out the full set you found)
 1. U.S.–Iran conflict remains the dominant global story
-The conflict continued overnight with additional U.S. strikes and Iranian retaliation against U.S. facilities in the region. International mediators are pushing for a return to negotiations.
+Overnight brought additional U.S. strikes and Iranian retaliation against U.S. facilities in the region.
 2. Major flooding displaces thousands in Southeast Asia
-Torrential rains have overwhelmed river systems across the region, forcing large-scale evacuations and straining relief efforts.
+Torrential rains have overwhelmed river systems across the region, forcing large-scale evacuations.
 3. Oil remains elevated
-Crude prices continue to trade at relatively high levels because of Middle East tensions. While supplies have not been significantly disrupted, energy markets remain sensitive to any escalation.
+Crude prices continue to trade at relatively high levels amid Middle East tensions.
 4. Air quality concerns across parts of the U.S.
-Smoke from wildfires is affecting air quality in portions of the Midwest and Northeast, leading to health advisories in several areas.
+Smoke from wildfires is affecting air quality in portions of the Midwest and Northeast, prompting health advisories.
 5. New peace talks announced for an ongoing regional conflict
-Diplomats from several countries are set to meet this week in an effort to broker a ceasefire.
+Diplomats from several countries are set to meet this week to discuss a ceasefire.
 
 📈 Markets & Investing
 Futures point [direction] ahead of the open for the Dow, S&P 500, and Nasdaq. The overnight story to watch: [a real earnings report, Fed comment, economic data release, or geopolitical development likely to move markets today]. Investor takeaway: [one sentence of context for a long-term investor].
