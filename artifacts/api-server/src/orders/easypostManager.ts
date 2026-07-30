@@ -1,5 +1,6 @@
 import EasyPost from "@easypost/api";
 import { logger } from "../lib/logger.js";
+import type { OrderStatus } from "./ordersManager.js";
 
 const apiKey = process.env.EASYPOST_API_KEY ?? "";
 const client = new EasyPost(apiKey);
@@ -55,6 +56,26 @@ export async function createTracker(
   }
 }
 
+// Backstop for when the webhook never arrives (misconfigured/stale account
+// webhook URL, a dropped delivery, etc.) — a poller calls this directly
+// instead of waiting on EasyPost to tell us.
+export async function getTracker(trackerId: string): Promise<EasyPostTrackerResult | null> {
+  try {
+    const tracker = await client.Tracker.retrieve(trackerId);
+    return {
+      trackerId: tracker.id,
+      status: tracker.status,
+      carrier: tracker.carrier,
+      publicUrl: tracker.public_url,
+      estDeliveryDate: tracker.est_delivery_date ?? null,
+      trackingEvents: mapTrackingDetails(tracker.tracking_details),
+    };
+  } catch (err) {
+    logger.warn({ err, trackerId }, "[EasyPost] Failed to retrieve tracker");
+    return null;
+  }
+}
+
 export function parseWebhookEvent(payload: any): {
   trackerId: string;
   status: string;
@@ -100,4 +121,31 @@ export function getStatusLabel(status: string): string {
     error: "Error",
   };
   return labels[status] ?? status;
+}
+
+// EasyPost's raw tracker.status vocabulary doesn't line up 1:1 with our
+// OrderStatus column — four values match exactly, the rest need mapping onto
+// the closest existing bucket. This is what the `status` column must always
+// be written from (getStatusLabel's human-readable string belongs in
+// status_detail only — writing it into `status` breaks every comparison
+// this app makes against that column, including sort order and forward-
+// progress checks in ordersManager.ts).
+export function mapEasyPostStatus(status: string): OrderStatus {
+  switch (status) {
+    case "pre_transit":
+    case "in_transit":
+    case "out_for_delivery":
+    case "delivered":
+      return status;
+    case "available_for_pickup":
+      return "out_for_delivery"; // closest existing "almost there" bucket
+    case "return_to_sender":
+    case "failure":
+    case "cancelled":
+    case "error":
+      return "exception";
+    case "unknown":
+    default:
+      return "pre_transit"; // no info yet — earliest known state
+  }
 }

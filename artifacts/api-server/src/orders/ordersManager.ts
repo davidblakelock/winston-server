@@ -13,6 +13,39 @@ export type OrderStatus =
   | "delayed"
   | "exception";
 
+// Real lifecycle rank for "only move status forward" checks — NOT the same
+// as the union's declaration order above, and deliberately not a plain
+// string comparison ('delivered' < 'shipped' < 'ordered' alphabetically,
+// which silently blocked a genuine delivery from ever overwriting an
+// earlier "shipped"/"in_transit"/"ordered" status). "ordered"/"pre_transit"
+// are the same maturity (known, nothing physically moving yet); "shipped"/
+// "in_transit" are the same maturity (left origin, en route); "delayed"/
+// "exception" sit at the "something worth flagging" tier but must never
+// permanently block a later "yes, it actually arrived" update from landing.
+const ORDER_STATUS_RANK: Record<OrderStatus, number> = {
+  ordered: 0,
+  pre_transit: 0,
+  shipped: 1,
+  in_transit: 1,
+  out_for_delivery: 2,
+  delayed: 2,
+  exception: 2,
+  delivered: 3,
+};
+
+// Resolves what an order's status should become given its current value and
+// an incoming update — incoming wins on a forward or same-tier move, current
+// is kept on an apparent regression (e.g. a stray out-of-order webhook).
+export function resolveOrderStatus(
+  current: OrderStatus,
+  incoming: OrderStatus | null | undefined
+): OrderStatus {
+  if (!incoming) return current;
+  const currentRank = ORDER_STATUS_RANK[current] ?? 0;
+  const incomingRank = ORDER_STATUS_RANK[incoming] ?? 0;
+  return incomingRank >= currentRank ? incoming : current;
+}
+
 export interface TrackingEvent {
   timestamp: string;
   message: string;
@@ -160,7 +193,7 @@ export async function upsertOrder(
              item_name       = $4,
              order_number    = COALESCE($5, order_number),
              carrier         = COALESCE($6, carrier),
-             status          = CASE WHEN $7 > status THEN $7 ELSE status END,
+             status          = $7,
              expected_date   = COALESCE($8::date, expected_date),
              order_total     = COALESCE($9, order_total),
              email_id        = COALESCE(email_id, $10),
@@ -172,7 +205,7 @@ export async function upsertOrder(
             row.id, userName,
             order.retailer, order.item_name,
             order.order_number ?? null, order.carrier ?? null,
-            order.status ?? "ordered", order.expected_date ?? null,
+            resolveOrderStatus(row.status, order.status), order.expected_date ?? null,
             order.order_total ?? null, order.email_id ?? null,
             order.order_url ?? null,
           ]
@@ -197,7 +230,7 @@ export async function upsertOrder(
             `UPDATE orders SET
                tracking_number = $3,
                carrier         = COALESCE($4, carrier),
-               status          = CASE WHEN $5 > status THEN $5 ELSE status END,
+               status          = $5,
                expected_date   = COALESCE($6::date, expected_date),
                order_total     = COALESCE($7, order_total),
                order_url       = COALESCE($8, order_url),
@@ -207,7 +240,7 @@ export async function upsertOrder(
             [
               row.id, userName,
               order.tracking_number, order.carrier ?? null,
-              order.status ?? "ordered", order.expected_date ?? null,
+              resolveOrderStatus(row.status, order.status), order.expected_date ?? null,
               order.order_total ?? null, order.order_url ?? null,
             ]
           );
@@ -239,7 +272,7 @@ export async function upsertOrder(
              retailer        = COALESCE($3, retailer),
              item_name       = COALESCE($4, item_name),
              carrier         = COALESCE($5, carrier),
-             status          = CASE WHEN $6 > status THEN $6 ELSE status END,
+             status          = $6,
              expected_date   = COALESCE($7::date, expected_date),
              order_total     = COALESCE($8, order_total),
              email_id        = COALESCE(email_id, $9),
@@ -249,7 +282,7 @@ export async function upsertOrder(
           [
             row.id, userName,
             order.retailer ?? null, order.item_name ?? null,
-            order.carrier ?? null, order.status ?? "ordered",
+            order.carrier ?? null, resolveOrderStatus(row.status, order.status),
             order.expected_date ?? null, order.order_total ?? null,
             order.email_id ?? null,
           ]

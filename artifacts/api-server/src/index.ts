@@ -46,6 +46,7 @@ import { startConnectionEngineScheduler } from "./connectionEngine/connectionEng
 
 import { startBackgroundEmailScanner } from "./email/backgroundEmailScanner";
 import { startRecordsArchiver } from "./records/recordsArchiver";
+import { startEasyPostPoller } from "./orders/easypostPoller";
 import { ensureListItemColumns } from "./lists/listManager";
 import { ensureListShareTable } from "./lists/listShareManager";
 import { ensureBookingColumns } from "./restaurants/bookingCredentialsManager";
@@ -461,6 +462,7 @@ app.listen(port, async (err) => {
     startConnectionEngineScheduler();
     startBackgroundEmailScanner();
     startRecordsArchiver();
+    startEasyPostPoller();
     void startTvEpisodeScheduler();
     setSchedulersEnabled();
     logger.info("[startup] ✅ All schedulers started");
