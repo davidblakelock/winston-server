@@ -342,7 +342,9 @@ Only two categories are save-worthy:
 
 Everything else must be skipped — including service appointments (vehicle or home), warranties, subscriptions, retail/food order confirmations, and generic reminders. Service and DMV appointments are already on the user's calendar and add no value here; retail/food orders are handled elsewhere. If this email is not a trip confirmation or a vehicle registration renewal notice, return exactly: {"skip": true}
 
-An email IS worth saving if it contains a genuine booking/confirmation reference (trip) or a specific renewal deadline (vehicle_registration) — regardless of purchase size.
+Also skip price-alerts, fare-trackers, "prices dropped," saved-search notifications, and any other browsing/tracking email from a travel search site or aggregator (Google Flights, Google Hotels, Kayak, Skyscanner, Hopper, etc.) — these are never the airline/hotel/vendor itself and never represent an actual booking, no matter how specific the date, route, or price mentioned. Skip these even though they reference real dates and destinations.
+
+An email IS worth saving if it contains a genuine booking/confirmation/registration reference number, OR explicit confirmed-booking language ("your booking is confirmed," "e-ticket," "itinerary number," "your reservation is confirmed") — regardless of purchase size. A date and a destination alone are not enough.
 
 If it IS worth saving, return ONLY this JSON — no explanation, no markdown:
 {
@@ -360,6 +362,7 @@ If it IS worth saving, return ONLY this JSON — no explanation, no markdown:
   "amount": "total amount with currency symbol or null",
   "notes": "one-line summary of what this is, or null"
 }
+Read the ENTIRE email body, not just the opening lines — confirmation numbers and dates are often lower down (an itinerary block, a table, fine print) rather than in the first sentence. Look for a PNR/record locator or e-ticket number specifically, and for the actual travel date even if stated indirectly (e.g. "Saturday, August 17" rather than a labeled field).
 Today is ${new Date().toISOString().slice(0, 10)}. Only use upcoming or recent dates — ignore dates clearly in the past.`,
         messages: [{ role: "user", content: `Subject: ${subject}\nFrom: ${from}\n\n${snippet}` }],
       });

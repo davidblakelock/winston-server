@@ -73,7 +73,13 @@ Decide what action this email warrants, if any. Return ONLY valid JSON:
   "action": "save_to_records" | "save_to_orders" | "meeting_request" | "needs_reply" | "urgent_alert" | "fyi" | "none",
   "summary": "one short sentence, or null",
 
-  // include if action="save_to_records" — a genuine forward-looking booking with a specific date, location, or confirmation number:
+  // include if action="save_to_records" — a genuine, actually-booked confirmation.
+  // Read the ENTIRE email body, not just the opening lines — confirmation
+  // numbers and dates are often lower down (in an itinerary block, a table,
+  // or near the fine print) rather than in the first sentence. Look for a
+  // PNR/record locator, e-ticket number, or booking reference specifically,
+  // and for the actual travel/appointment date even if it's stated
+  // indirectly (e.g. "Saturday, August 17" rather than a labeled field).
   "record": {
     "category": "trip" | "warranty" | "home_service" | "subscription" | "vehicle" | "other",
     "vendorName": "string",
@@ -108,7 +114,7 @@ Decide what action this email warrants, if any. Return ONLY valid JSON:
 }
 
 Rules for choosing action:
-- "save_to_records": a genuine forward-looking booking or registration with a specific date, location, or confirmation number — hotel, restaurant reservation, car rental, flight or train ticket, warranty registration, home service appointment (plumber, HVAC, etc.), vehicle service appointment. Subscription charge receipts and recurring billing are NOT records — use "fyi" instead.
+- "save_to_records": a genuine, actually-booked confirmation — hotel, restaurant reservation, car rental, flight or train ticket, warranty registration, home service appointment (plumber, HVAC, etc.), vehicle service appointment. Requires either a real confirmation/booking/reservation reference number OR explicit confirmed-booking language ("your booking is confirmed," "e-ticket," "itinerary number") — not just an email that happens to mention a date and a place. Specifically exclude price-alerts, fare-trackers, "prices dropped," saved-search notifications, and other browsing/tracking emails from travel search sites and aggregators (Google Flights, Google Hotels, Kayak, Skyscanner, Hopper, etc.) — these are never the airline/hotel/vendor itself and never represent an actual booking, no matter how specific the date or route mentioned. Subscription charge receipts and recurring billing are NOT records — use "fyi" instead.
 - "save_to_orders": shipping, delivery, or order status update from a retailer or carrier.
 - "meeting_request": a real person communicating about a meeting or appointment — either (a) a NEW request where the user hasn't responded yet and a time may or may not be set, or (b) a CONFIRMATION that an already-proposed plan is locked in (time, place, and attendees decided; no response needed, just acknowledge it happened). Set isConfirmation=false for new requests, isConfirmation=true when the meeting is already confirmed.
 - "needs_reply": anything from a real person that reasonably expects a response — a question, a catch-up message, a personal note — even if casual.

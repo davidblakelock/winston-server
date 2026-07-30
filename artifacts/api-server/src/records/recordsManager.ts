@@ -68,6 +68,13 @@ export async function insertUserRecord(
   // ── Idempotent upsert strategy ────────────────────────────────────────────
   // Priority 1: if same confirmation_number + user_name already exists,
   //   update it — handles re-sends of the same booking with a new Gmail ID.
+  // Priority 1.5 (trip category only): a temporary hold and its eventual
+  //   e-ticket legitimately carry DIFFERENT confirmation codes by airline
+  //   design, so exact-code matching structurally can't connect them —
+  //   fall back to same vendor within a recent window and merge into that
+  //   instead. Scoped to "trip" specifically because it's a one-off event;
+  //   for a subscription or recurring vehicle service, "same vendor again
+  //   soon" is normal and would NOT mean the same booking.
   // Priority 2: if same gmail_id + user_name already exists, skip silently
   //   — prevents duplicates across server restarts.
   // Priority 3: fresh insert.
@@ -116,6 +123,63 @@ export async function insertUserRecord(
       logger.info(
         { id: existing.rows[0]!.id, confirmationNumber: record.confirmationNumber },
         "[Records] Updated existing record by confirmation_number"
+      );
+      return;
+    }
+  }
+
+  // Priority 1.5: no exact confirmation-number match — for trip records,
+  // fall back to same vendor within the last 7 days (this app's existing
+  // staleness window elsewhere) and merge into that rather than inserting
+  // a new row for what's overwhelmingly likely the same booking's next
+  // status update (hold → confirmed).
+  if (record.category === "trip" && record.vendorName) {
+    const recent = await query<{ id: number }>(
+      `SELECT id FROM user_records
+       WHERE user_name = $1
+         AND category = 'trip'
+         AND lower(vendor_name) = lower($2)
+         AND deleted_at IS NULL
+         AND created_at > NOW() - INTERVAL '7 days'
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [userName, record.vendorName]
+    );
+    if (recent.rows.length > 0) {
+      await query(
+        `UPDATE user_records SET
+           vendor_name         = COALESCE($3, vendor_name),
+           confirmation_number = COALESCE($4, confirmation_number),
+           date_start          = COALESCE($5::date, date_start),
+           date_end            = COALESCE($6::date, date_end),
+           time                = COALESCE($7, time),
+           address             = COALESCE($8, address),
+           phone               = COALESCE($9, phone),
+           website             = COALESCE($10, website),
+           amount              = COALESCE($11, amount),
+           notes               = COALESCE($12, notes),
+           raw_email_snippet   = COALESCE($13, raw_email_snippet),
+           gmail_id            = COALESCE($14, gmail_id)
+         WHERE id = $1 AND user_name = $2`,
+        [
+          recent.rows[0]!.id, userName,
+          record.vendorName ?? null,
+          record.confirmationNumber ?? null,
+          record.dateStart ?? null,
+          record.dateEnd ?? null,
+          record.time ?? null,
+          record.address ?? null,
+          record.phone ?? null,
+          record.website ?? null,
+          record.amount ?? null,
+          record.notes ?? null,
+          record.rawSnippet ?? null,
+          record.gmailId ?? null,
+        ]
+      );
+      logger.info(
+        { id: recent.rows[0]!.id, vendorName: record.vendorName, newConfirmationNumber: record.confirmationNumber },
+        "[Records] Merged trip record into recent same-vendor record — no shared confirmation number (hold → confirmation)"
       );
       return;
     }
