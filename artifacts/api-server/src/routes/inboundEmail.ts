@@ -22,6 +22,22 @@ const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 // to a call that would just fail.
 const SUPPORTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 
+// The Content-Type an email attachment arrives with cannot be trusted — a
+// mail client or Mailgun's own multipart parsing can mislabel it. Confirmed
+// live: a screenshot arrived declared as image/jpeg while its actual bytes
+// were PNG, and Claude's vision API correctly rejected the mismatch rather
+// than silently misreading it ("the image was specified using the
+// image/jpeg media type, but the image appears to be a image/png image").
+// Sniff the real format from the file's own magic bytes instead of ever
+// trusting the declared header.
+function sniffImageMimeType(buf: Buffer): string | null {
+  if (buf.length >= 4 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return "image/png";
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "image/jpeg";
+  if (buf.length >= 4 && buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x38) return "image/gif";
+  if (buf.length >= 12 && buf.toString("ascii", 0, 4) === "RIFF" && buf.toString("ascii", 8, 12) === "WEBP") return "image/webp";
+  return null;
+}
+
 // Content this route stores is capped defensively — forwarded email threads
 // (especially HTML-to-text conversions) can run very long.
 const MAX_CONTENT_CHARS = 8000;
@@ -83,9 +99,13 @@ router.post(
     // (title/notes/url), not the Attic's raw-content-dump behavior.
     if (/recipe/i.test(subject)) {
       const files = (req.files as Express.Multer.File[] | undefined) ?? [];
-      const images: EmailImage[] = files
-        .filter((f) => SUPPORTED_IMAGE_TYPES.has(f.mimetype) && f.size <= MAX_IMAGE_BYTES)
-        .map((f) => ({ mimeType: f.mimetype, base64: f.buffer.toString("base64") }));
+      const images: EmailImage[] = [];
+      for (const f of files) {
+        if (f.size > MAX_IMAGE_BYTES) continue;
+        const sniffed = sniffImageMimeType(f.buffer);
+        if (!sniffed || !SUPPORTED_IMAGE_TYPES.has(sniffed)) continue;
+        images.push({ mimeType: sniffed, base64: f.buffer.toString("base64") });
+      }
       await importRecipeFromEmail({ userName: username, text, subject, sender, images });
       return;
     }
