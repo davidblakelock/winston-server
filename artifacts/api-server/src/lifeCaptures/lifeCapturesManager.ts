@@ -77,7 +77,7 @@ export interface LifeCapture {
   user_name:   string;
   captured_at: string;
   content:     string;
-  context:     "morning" | "evening" | "goal" | "observation";
+  context:     "morning" | "evening" | "goal" | "observation" | "manual";
   acted_on:    boolean;
   stoic_phase: number | null;
 }
@@ -110,7 +110,7 @@ export interface LifeAnnualLetter {
 
 /**
  * Store the user's exact words — never paraphrased or interpreted.
- * context: "morning" | "evening" | "goal" | "observation"
+ * context: "morning" | "evening" | "goal" | "observation" | "manual"
  * Returns null if an identical capture for this user was already stored in the
  * last 60 seconds — guards against duplicate deliveries (client retries, races
  * upstream) since this is the only write path into life_captures, including
@@ -119,7 +119,7 @@ export interface LifeAnnualLetter {
 export async function saveLifeCapture(
   userName:   string,
   content:    string,
-  context:    "morning" | "evening" | "goal" | "observation" = "morning",
+  context:    "morning" | "evening" | "goal" | "observation" | "manual" = "morning",
   stoicPhase: number | null = null,
 ): Promise<LifeCapture | null> {
   await _tableInit;

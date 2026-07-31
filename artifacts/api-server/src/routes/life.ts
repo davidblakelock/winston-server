@@ -7,6 +7,7 @@ import {
   getPendingObservation,
   getPendingSuggestion,
 } from "../lifeCaptures/lifeCapturesManager.js";
+import { getStoicForUser } from "../stoic/stoicManager.js";
 
 const router: IRouter = Router();
 
@@ -43,13 +44,17 @@ router.post("/life", async (req: Request, res: Response) => {
     return;
   }
 
-  const validContexts = ["morning", "evening", "goal", "observation"] as const;
+  const validContexts = ["morning", "evening", "goal", "observation", "manual"] as const;
   const ctx = validContexts.includes(context as typeof validContexts[number])
     ? (context as typeof validContexts[number])
     : "morning";
 
   try {
-    const capture = await saveLifeCapture(userName, content.trim(), ctx);
+    // Same fact-storage-alongside-the-capture pattern chatHandlerCore.ts uses
+    // for Evening Wind Down (chatHandlerCore.ts:374-375) — every reflection
+    // gets tagged with the phase it was written under, regardless of source.
+    const stoicEntry = await getStoicForUser(userName).catch(() => null);
+    const capture = await saveLifeCapture(userName, content.trim(), ctx, stoicEntry?.phase ?? null);
     if (!capture) {
       res.status(200).json({ duplicate: true });
       return;
