@@ -257,9 +257,17 @@ type ProviderRow = {
   google_contact_id: string | null; created_at: string;
 };
 
+// next_due_date is TIMESTAMPTZ (widened from DATE to carry a time-of-day) —
+// a plain ::text cast returns Postgres's own space-separated format
+// ("2026-08-15 14:30:00+00"), which is not valid ISO 8601 and fails to
+// parse with new Date() on stricter engines (confirmed: React Native's
+// Hermes rejects it outright, producing "Invalid Date"). to_char forces a
+// canonical ISO 8601 UTC string instead, independent of the server's
+// DateStyle setting.
 const SELECT_COLS = `
   id, user_name, name, category, specialty, phone, email, address, website,
-  company, notes, last_contact_date::text, next_due_date::text,
+  company, notes, last_contact_date::text,
+  to_char(next_due_date AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS next_due_date,
   next_due_calendar_event_id, google_contact_id, created_at::text
 `;
 
