@@ -122,22 +122,47 @@ export async function createGoal(
   return { ...row, steps: [] };
 }
 
-// Changeable later: a goal can move between active/aspirational/completed as
-// circumstances change. completed_at is derived from the transition itself
-// (set on entering 'completed', cleared on leaving it) rather than being a
-// second independent field the caller has to keep in sync.
-export async function updateGoalStatus(
-  goalId: number,
+export interface GoalUpdateFields {
+  title?:       string;
+  description?: string | null;
+  status?:      GoalStatus;
+}
+
+// Partial update — only the fields actually present in `updates` are
+// touched, so editing just the title (or just the description) never
+// requires resending status alongside it. A goal can move between
+// active/aspirational/completed as circumstances change; completed_at is
+// still derived from the transition itself (set on entering 'completed',
+// cleared on leaving it) whenever status is one of the provided fields,
+// rather than being a second independent field the caller has to keep in
+// sync.
+export async function updateGoal(
+  goalId:   number,
   userName: string,
-  status: GoalStatus
+  updates:  GoalUpdateFields
 ): Promise<Goal | null> {
+  const setClauses: string[] = [];
+  const params: unknown[] = [goalId, userName];
+
+  if (updates.title !== undefined) {
+    params.push(updates.title);
+    setClauses.push(`title = $${params.length}`);
+  }
+  if (updates.description !== undefined) {
+    params.push(updates.description);
+    setClauses.push(`description = $${params.length}`);
+  }
+  if (updates.status !== undefined) {
+    params.push(updates.status);
+    setClauses.push(`status = $${params.length}`);
+    setClauses.push(`completed_at = CASE WHEN $${params.length} = 'completed' THEN now() ELSE NULL END`);
+  }
+
+  if (setClauses.length === 0) return getGoalById(goalId, userName);
+
   const { rows } = await query<Omit<Goal, "steps">>(
-    `UPDATE goals
-     SET status = $3,
-         completed_at = CASE WHEN $3 = 'completed' THEN now() ELSE NULL END
-     WHERE id = $1 AND user_name = $2
-     RETURNING *`,
-    [goalId, userName, status]
+    `UPDATE goals SET ${setClauses.join(", ")} WHERE id = $1 AND user_name = $2 RETURNING *`,
+    params
   );
   if (!rows[0]) return null;
   const { rows: steps } = await query<GoalStep>(
@@ -906,7 +931,8 @@ export async function goalsFreeformChat(
     `WHEN THE CONVERSATION HAS LANDED ON SOMETHING REAL: the moment you've proposed something concrete enough that it's worth tracking as an actual goal — not just background chat — you MUST explicitly ask if they want to save it, in your own words (e.g. "Want me to add this as a goal?"), before emitting the delimiter below. The delimiter alone with no visible ask leaves them with no way to know there's anything to confirm. Then end your reply with exactly this, on its own line:\n` +
     `${GOAL_OFFER_DELIM}\n` +
     `A short, specific title (under 8 words)\n` +
-    `Only do this once something concrete has actually been proposed — never for a purely informational exchange, and never more than once per turn.` +
+    `Only do this once something concrete has actually been proposed — never for a purely informational exchange, and never more than once per turn. ` +
+    `${GOAL_OFFER_DELIM} and ${GOAL_CONFIRMED_DELIM} must never both appear in the same reply — offering something is not the same as it being saved. Saving only ever happens in response to the user's own separate, later message actually confirming it. Never emit both delimiters in one turn, and never say or imply it's already saved unless you are emitting ${GOAL_CONFIRMED_DELIM} in direct response to that separate confirmation.` +
     pendingOfferBlock;
 
   // Prepend basic profile context to the first user turn — same pattern as travel screen.

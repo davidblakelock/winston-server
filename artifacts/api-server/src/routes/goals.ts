@@ -14,9 +14,10 @@ import {
   getGoalsChatHistory,
   generateGoalsRecap,
   formatContentForSharing,
-  updateGoalStatus,
+  updateGoal,
   type ShareFormat,
   type GoalStatus,
+  type GoalUpdateFields,
 } from "../goals/goalsManager.js";
 
 const GOAL_STATUSES: GoalStatus[] = ["active", "aspirational", "completed"];
@@ -60,8 +61,10 @@ router.post("/goals", async (req, res) => {
 });
 
 // ── PATCH /api/goals/:id ───────────────────────────────────────────────────────
-// Changes a goal's status. Body: { status: 'active' | 'aspirational' | 'completed' }
-// completed_at is derived server-side from the transition, not passed in.
+// Partial update — only the fields actually present in the body are changed.
+// Body: { title?: string, description?: string | null, status?: GoalStatus }
+// At least one field is required. completed_at is still derived server-side
+// whenever status is included, not passed in.
 router.patch("/goals/:id", async (req, res) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
@@ -70,22 +73,52 @@ router.patch("/goals/:id", async (req, res) => {
     res.status(400).json({ error: "Invalid goal id" });
     return;
   }
-  const { status } = req.body as { status?: string };
-  if (!GOAL_STATUSES.includes(status as GoalStatus)) {
-    res.status(400).json({ error: `status must be one of: ${GOAL_STATUSES.join(", ")}` });
+  const { title, description, status } = req.body as {
+    title?: string;
+    description?: string | null;
+    status?: string;
+  };
+
+  const updates: GoalUpdateFields = {};
+
+  if (title !== undefined) {
+    if (typeof title !== "string" || !title.trim()) {
+      res.status(400).json({ error: "title must be a non-empty string" });
+      return;
+    }
+    updates.title = title.trim();
+  }
+  if (description !== undefined) {
+    if (description !== null && typeof description !== "string") {
+      res.status(400).json({ error: "description must be a string or null" });
+      return;
+    }
+    updates.description = description;
+  }
+  if (status !== undefined) {
+    if (!GOAL_STATUSES.includes(status as GoalStatus)) {
+      res.status(400).json({ error: `status must be one of: ${GOAL_STATUSES.join(", ")}` });
+      return;
+    }
+    updates.status = status as GoalStatus;
+  }
+
+  if (Object.keys(updates).length === 0) {
+    res.status(400).json({ error: "at least one of title, description, status is required" });
     return;
   }
+
   try {
-    const goal = await updateGoalStatus(goalId, userName, status as GoalStatus);
+    const goal = await updateGoal(goalId, userName, updates);
     if (!goal) {
       res.status(404).json({ error: "Goal not found" });
       return;
     }
-    req.log.info({ goalId, status }, "[Goals] Goal status updated");
+    req.log.info({ goalId, updatedFields: Object.keys(updates) }, "[Goals] Goal updated");
     res.json(goal);
   } catch (err) {
     req.log.error({ err }, "[Goals] PATCH /goals/:id error");
-    res.status(500).json({ error: "Failed to update goal status" });
+    res.status(500).json({ error: "Failed to update goal" });
   }
 });
 
