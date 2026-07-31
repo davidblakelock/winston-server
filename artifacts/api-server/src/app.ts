@@ -57,6 +57,10 @@ app.get("/user-guide", (_req: Request, res: Response) => {
   res.sendFile(path.join(publicDir, "user-guide.html"));
 });
 
+app.get("/why", (_req: Request, res: Response) => {
+  res.sendFile(path.join(publicDir, "why.html"));
+});
+
 app.use("/api", router);
 
 export default app;

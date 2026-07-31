@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Why Winston Exists</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&family=DM+Sans:wght@300;400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --gold: #C9A84C;
+    --gold-light: #E8C97A;
+    --dark: #0A0A0F;
+    --dark-2: #111118;
+    --cream: #F5F0E8;
+    --muted: #8888AA;
+    --border: #2A2A3A;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--dark);
+    font-family: 'DM Sans', sans-serif;
+    color: var(--cream);
+    line-height: 1.8;
+    font-weight: 300;
+  }
+  .hero {
+    background: var(--dark-2);
+    padding: 70px 40px 50px;
+    text-align: center;
+    border-bottom: 1px solid rgba(201,168,76,0.2);
+    position: relative;
+    overflow: hidden;
+  }
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: -50%; left: -50%;
+    width: 200%; height: 200%;
+    background: radial-gradient(ellipse at center, rgba(201,168,76,0.10) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  .hero-paw { font-size: 32px; margin-bottom: 14px; display: block; }
+  .hero h1 {
+    font-family: 'Playfair Display', serif;
+    font-size: 36px;
+    color: var(--gold-light);
+    margin-bottom: 10px;
+    font-style: italic;
+  }
+  .hero .sub { color: var(--muted); font-size: 13px; letter-spacing: 1px; text-transform: uppercase; }
+  .container { max-width: 660px; margin: 0 auto; padding: 60px 24px 90px; }
+  .part-label {
+    font-size: 11px; font-weight: 700; letter-spacing: 3px; text-transform: uppercase;
+    color: var(--gold); margin-bottom: 14px; margin-top: 56px;
+  }
+  .part-label:first-child { margin-top: 0; }
+  h2 {
+    font-family: 'Playfair Display', serif;
+    font-size: 30px;
+    color: var(--gold-light);
+    margin-bottom: 24px;
+  }
+  p { font-size: 16px; color: var(--cream); opacity: 0.92; margin-bottom: 20px; }
+  .lede {
+    font-family: 'Playfair Display', serif;
+    font-style: italic;
+    font-size: 19px;
+    color: var(--gold-light);
+    line-height: 1.7;
+    margin-bottom: 24px;
+  }
+  .how-item { margin-bottom: 22px; padding-left: 20px; border-left: 2px solid rgba(201,168,76,0.3); }
+  .how-item strong { color: var(--gold-light); font-family: 'Playfair Display', serif; font-size: 17px; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 50px 0; }
+  .closer {
+    text-align: center;
+    font-family: 'Playfair Display', serif;
+    font-style: italic;
+    color: var(--gold-light);
+    font-size: 16px;
+    margin-top: 60px;
+    opacity: 0.85;
+  }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <span class="hero-paw">🐾</span>
+  <h1>Why Winston Exists</h1>
+  <div class="sub">A note on what we actually believe — not a feature list</div>
+</div>
+
+<div class="container">
+
+  <div class="part-label">Why</div>
+  <p class="lede">Most apps help you organize information. Winston helps you organize your life.</p>
+  <p>That's not a tagline. It's the actual difference. Your calendar, your inbox, your reminders, your notes — every app on your phone is competent at holding pieces of you. None of them know you. None of them remember that you're learning something new, that you're thinking about a big change, that a particular quote landed differently for you this morning than it would have a year ago.</p>
+  <p>We believe technology has spent twenty years getting better at demanding your attention and worse at deserving it. Notifications that interrupt without adding value. A news cycle built to agitate, not inform. Hundreds of digital connections and an epidemic of loneliness. More information than any person can process, and less presence than any generation has had.</p>
+  <p>We think the answer isn't another app that does more. It's a companion that actually knows you — and uses that knowledge to give you back a little intention, a little calm, a little more of yourself, every single day.</p>
+
+  <hr>
+
+  <div class="part-label">How</div>
+  <h2>We believe that in three ways, quietly, every day</h2>
+
+  <div class="how-item">
+    <strong>Winston remembers.</strong>
+    <p style="margin-top: 8px; margin-bottom: 0;">Not just stores — remembers, the way a person does. Your calendar, your family, the restaurant you loved, the goal you mentioned once and meant. It's held onto, not logged.</p>
+  </div>
+  <div class="how-item">
+    <strong>Winston listens.</strong>
+    <p style="margin-top: 8px; margin-bottom: 0;">Not always, and not by default — but the moment something catches your attention, it's one sentence away from never being lost: "put it in the attic." No folders. No organizing. You don't manage Winston's memory. It just becomes part of what Winston knows about you.</p>
+  </div>
+  <div class="how-item">
+    <strong>Winston notices.</strong>
+    <p style="margin-top: 8px; margin-bottom: 0;">This is the part almost nobody else is even trying to build. Most AI answers the question you ask. Winston looks for the questions you didn't think to ask — the connection between something you saved three weeks ago and a goal you mentioned yesterday, the pattern in what's been on your mind, the thing that's genuinely worth bringing up. And it only brings it up when it's genuinely worth it. Not often. Only when it matters.</p>
+  </div>
+
+  <p style="margin-top: 30px;">We didn't build a bigger database. We built something that pays attention.</p>
+
+  <hr>
+
+  <div class="part-label">What</div>
+  <h2>Winston is a voice-first AI companion</h2>
+  <p>Rosie or MACC, whichever fits you — that you talk to the way you'd talk to someone you trust.</p>
+  <p>Every morning, a real briefing built just for you, not generated from a template. Every evening, a real check-in — what happened, what's ahead, one honest question worth sitting with. In between, a place for everything that catches your attention (<strong style="color: var(--gold-light);">The Attic</strong>), a place for what you're actually pursuing in life (<strong style="color: var(--gold-light);">My Goals</strong>), and a quiet thread of Stoic philosophy running underneath it all — not lectured at you, but there, the way it was actually meant to be used: to help you meet each day with a little more intention than the one before.</p>
+  <p>Underneath all of it is the same idea repeated: Winston isn't trying to compete with Alexa or Siri or ChatGPT feature-for-feature. It's trying to become the place where the small, scattered fragments of a person's life become coherent — where the technology itself eventually disappears, and what's left is just the feeling of being genuinely known.</p>
+  <p>That's what we're building. That's why it exists.</p>
+
+  <div class="closer">Winston. Built for people who deserve better from technology.</div>
+
+</div>
+
+</body>
+</html>
