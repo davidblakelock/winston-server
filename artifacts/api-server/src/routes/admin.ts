@@ -603,6 +603,40 @@ router.post("/admin/test-daily-brief-live", async (req: Request, res: Response) 
 });
 
 /**
+ * POST /api/admin/test-stoic-rewind
+ *
+ * Diagnostic tool for testing ensureStoicDayCurrent()'s shared advance gate
+ * without waiting for a real calendar-day rollover. Sets stoic_day_advanced_
+ * date back by one day for the authenticated user, simulating "not yet
+ * engaged today" — the next call to either GET /api/stoic/today or a real
+ * Morning Run Down should then advance stoic_day by exactly one and report
+ * the new day number. Read-only diagnostics elsewhere (test-daily-brief-live
+ * etc.) deliberately never touch this gate; this route exists solely to make
+ * the gate testable on demand instead of waiting a day.
+ */
+router.post("/admin/test-stoic-rewind", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+
+  const before = await query<{ stoic_day: number; stoic_day_advanced_date: string | null }>(
+    `SELECT stoic_day, stoic_day_advanced_date FROM user_settings WHERE user_name = $1`,
+    [userName]
+  );
+
+  await query(
+    `UPDATE user_settings SET stoic_day_advanced_date = stoic_day_advanced_date - INTERVAL '1 day' WHERE user_name = $1`,
+    [userName]
+  );
+
+  const after = await query<{ stoic_day: number; stoic_day_advanced_date: string | null }>(
+    `SELECT stoic_day, stoic_day_advanced_date FROM user_settings WHERE user_name = $1`,
+    [userName]
+  );
+
+  res.json({ ok: true, before: before.rows[0] ?? null, after: after.rows[0] ?? null });
+});
+
+/**
  * POST /api/admin/migrate-restaurants-to-table
  *
  * One-time migration: moves davidblakelock's existing restaurant rows out of
