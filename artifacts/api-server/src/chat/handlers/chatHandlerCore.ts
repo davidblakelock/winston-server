@@ -1871,11 +1871,21 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       break;
     }
 
-    // generateDailyBrief() (gpt-4o with forced tool_choice: "required" search)
-    // is the only morning-briefing path now — the old cached/scheduled
-    // pre-generation pipeline has been removed (was: _doBriefingPrefetch,
+    // generateDailyBrief() (Claude Sonnet + web_search tool) is the only
+    // morning-briefing path now — the old cached/scheduled pre-generation
+    // pipeline has been removed (was: _doBriefingPrefetch,
     // getPersistedBriefingText/Summary, getStaticBriefingContext).
     case "morning_rundown": {
+      // Ensure today's Stoic entry is settled BEFORE the brief reads it —
+      // this is one of two real-engagement call sites (the other is
+      // GET /api/stoic/today for My Life) sharing the same advance gate, so
+      // whichever is opened first each day is the one that advances, and
+      // the brief itself must read the post-advance value, not a stale one.
+      const { ensureStoicDayCurrent } = await import("../../stoic/stoicManager.js");
+      await ensureStoicDayCurrent(sessionUserName).catch((err) =>
+        log.warn({ err }, "[chatHandlerCore] ensureStoicDayCurrent failed")
+      );
+
       const { generateDailyBrief } = await import("../../morning/briefingPregenerate.js");
       const fresh = await generateDailyBrief(sessionUserName).catch((err) => {
         log.warn({ err }, "[chatHandlerCore] generateDailyBrief failed");
@@ -1883,10 +1893,6 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       });
       if (fresh) {
         finalReply = fresh;
-        const { advanceStoicDayForNewDay } = await import("../../stoic/stoicManager.js");
-        advanceStoicDayForNewDay(sessionUserName).catch((err) =>
-          log.warn({ err }, "[chatHandlerCore] advanceStoicDayForNewDay failed")
-        );
       } else {
         finalReply = "I had trouble putting together your briefing just now — give it another try in a moment.";
       }

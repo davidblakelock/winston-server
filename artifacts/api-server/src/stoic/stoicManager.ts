@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
+import { getUserLocationContext } from "../lib/userTimezone.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -547,6 +548,15 @@ export async function ensureStoicTables(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  // Migration: local-calendar-day gate for ensureStoicDayCurrent(), replacing
+  // the old UTC-based `updated_at::date` gate. Stores the user-local date
+  // (YYYY-MM-DD) stoic_day was last assigned/advanced for.
+  await query(`ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS stoic_day_advanced_date date`).catch(() => {});
+  // Backfill existing rows to today (DB-side date, migration moment only) so
+  // the first post-deploy engagement doesn't re-advance a value the old
+  // advance-after-serve model already moved forward — it just marks today as
+  // covered by whatever's already stored, same as the old model intended.
+  await query(`UPDATE user_settings SET stoic_day_advanced_date = CURRENT_DATE WHERE stoic_day_advanced_date IS NULL`).catch(() => {});
 
   const { rows } = await query<{ count: string }>(`SELECT COUNT(*) AS count FROM stoic_curriculum`);
   const count = parseInt(rows[0]?.count ?? "0", 10);
@@ -624,21 +634,40 @@ export async function incrementStoicDay(userName: string): Promise<void> {
   );
 }
 
-// Advances stoic_day at most once per calendar day (UTC), gated atomically in
-// the DB via updated_at. Call this after a quote has actually been delivered
-// (e.g. in a fresh morning rundown) so the next day's read returns a new quote
-// instead of repeating the same one indefinitely — without this gate, calling
-// incrementStoicDay() on every rundown request would burn through the
-// curriculum in hours instead of a day at a time.
-export async function advanceStoicDayForNewDay(userName: string): Promise<void> {
+// Shared advance-eligibility gate for both real-engagement consumers of the
+// Stoic quote — the Morning Run Down and GET /api/stoic/today (My Life).
+// Call this BEFORE reading getStoicForUser() so the read that follows always
+// sees today's correctly-assigned entry, no matter which of the two call
+// sites triggers it. Whichever one is hit first on a given day performs the
+// advance; the other, hit later the same day, finds the gate already closed
+// and just reads back the same settled value — so both surfaces agree on
+// "today's quote" for the rest of that day.
+//
+// Gated on the user's own local calendar date (not DB/UTC time) via
+// stoic_day_advanced_date, matching the local-date pattern already used by
+// recordsArchiver/billScheduler/winddownScheduler — a UTC-based gate here
+// previously meant the day could roll over mid-afternoon or mid-evening for
+// users far from UTC, independent of the sequencing bug this also fixes.
+//
+// Still only advances by exactly one per distinct day of real engagement —
+// if several calendar days pass with no engagement at all, the next
+// engagement (whenever it happens) ticks forward by one, not by the number
+// of days that passed. This preserves the original "only advances on real
+// engagement, waits otherwise" behavior; it does not switch to computing the
+// day number from elapsed time.
+export async function ensureStoicDayCurrent(userName: string): Promise<void> {
+  const { timezone: tz } = await getUserLocationContext(userName);
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
+
   await query(
-    `INSERT INTO user_settings (user_name, stoic_day, updated_at)
-     VALUES ($1, 2, NOW())
+    `INSERT INTO user_settings (user_name, stoic_day, stoic_day_advanced_date, updated_at)
+     VALUES ($1, 1, $2, NOW())
      ON CONFLICT (user_name) DO UPDATE
        SET stoic_day = user_settings.stoic_day + 1,
+           stoic_day_advanced_date = $2,
            updated_at = NOW()
-     WHERE user_settings.updated_at::date < NOW()::date`,
-    [userName]
+     WHERE user_settings.stoic_day_advanced_date IS DISTINCT FROM $2`,
+    [userName, today]
   );
 }
 
