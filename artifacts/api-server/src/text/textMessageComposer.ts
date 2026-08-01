@@ -418,3 +418,35 @@ Reply with ONLY one word: send, cancel, or revise.`,
     return "revise";
   }
 }
+
+// Classifies a message that arrives AFTER an SMS has already been handed off
+// to the Messages app (pendingText is null at this point — the compose flow
+// already completed). Deliberately a real classification call rather than a
+// keyword regex: words like "actually", "change", or "edit" are common
+// enough in ordinary conversation that matching on them directly would
+// hijack unrelated messages into the SMS-edit flow for as long as
+// lastSmsPayload stays in its retry window. Only ever called when
+// lastSmsPayload actually exists, so the cost is bounded to genuinely
+// relevant moments.
+export async function classifySmsFollowupIntent(
+  message: string
+): Promise<"retry" | "edit" | "none"> {
+  try {
+    const resp = await anthropic.messages.create({
+      model: MODEL_HAIKU,
+      max_tokens: 10,
+      system: `A text message was just handed off from this app to the user's Messages app to send. Classify the user's next message into exactly one category:
+- "retry" — the Messages app didn't seem to open, nothing happened, or they want the same hand-off attempted again (e.g. "it didn't open", "nothing happened", "try that again")
+- "edit" — they want to change or redo the text that was just handed off (e.g. "wait, change it to...", "actually let's redo that message", "edit that text")
+- "none" — this message is unrelated to the text that was just sent — a new request, a new topic, anything not about retrying or editing that specific text
+
+Reply with ONLY one word: retry, edit, or none.`,
+      messages: [{ role: "user", content: message }],
+    });
+    const result = resp.content[0]?.type === "text" ? resp.content[0].text.trim().toLowerCase() : "none";
+    if (result === "retry" || result === "edit") return result;
+    return "none";
+  } catch {
+    return "none";
+  }
+}

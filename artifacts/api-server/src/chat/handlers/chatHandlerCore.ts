@@ -69,7 +69,9 @@ import {
   getPendingText,
   setPendingText,
   getLastSmsPayload,
+  setLastSmsPayload,
   classifyConfirmationIntent,
+  classifySmsFollowupIntent,
   composeTextMessage,
   type SmsPayload,
 } from "../../text/textMessageComposer.js";
@@ -479,39 +481,54 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
   // ── Pre-flight: handle active multi-turn flows ───────────────────────────────
 
   // SMS flow in progress
-  if (pendingText !== null) {
-    if (pendingText.phase === 'awaiting_confirmation') {
-      dynamicPrompt += `\n\n[Pending SMS Draft]\nTo: ${pendingText.recipientName}\nDraft: "${pendingText.composedBody}"\n\n` +
-        `Handle the user's response naturally:\n` +
-        `- If they approve (yes, looks good, send it, perfect, etc.) → emit [ACTION:sms_send]\n` +
-        `- If they give direction or want changes → end your reply with [ACTION:sms_revise|feedback=<their exact words>]. The server recomposes the text from that feedback — do not try to write the revised text yourself here.\n` +
-        `- If they say 'send that word for word' or 'use exactly what I typed' → end your reply with [ACTION:sms_send|body=<their exact typed text>], using their exact text verbatim, not a paraphrase.\n` +
-        `- If they cancel → emit [ACTION:sms_cancel]\n` +
-        `Emitting the action tag is not optional — a friendly sentence alone does not actually revise or send anything; only the tag does.`;
-    } else {
-      const textResult = await handleText({
-        message,
-        sessionUserName,
-        deviceId,
-        isTextFlowActive: true,
-        pendingText,
-        isSmsRetryRequest: /\bretry\b|\btry again\b/i.test(message),
-        isSmsEditAfterSend: /\bchange\b|\bedit\b|\bactually\b/i.test(message),
-        lastSmsPayload: getLastSmsPayload(sessionUserName),
-        userProfile,
-        log,
-      });
-      if (textResult.hardcodedResponse) {
-        runPostProcessing(sessionUserName, message, textResult.hardcodedResponse, history, userProfile, deviceId, `${Date.now()}-${Math.random().toString(36).slice(2)}`);
-        return {
-          reply: textResult.hardcodedResponse,
-          action: { type: "send_sms" },
-          smsPayload: textResult.smsPayload,
-          messageId: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        };
-      }
-      dynamicPrompt += textResult.contextBlock;
+  const lastSmsPayload = getLastSmsPayload(sessionUserName);
+  // Retry/edit-after-send apply AFTER a text has already been handed off,
+  // i.e. exactly when pendingText is null — so this has to be checked
+  // independent of pendingText, not nested inside it. Classified via a real
+  // Haiku call rather than a keyword regex: words like "actually", "change",
+  // or "edit" are common enough in ordinary conversation that matching on
+  // them directly would hijack unrelated messages into the SMS-edit flow
+  // for the full length of lastSmsPayload's retry window. Only classified
+  // when there's actually a recent send to be talking about.
+  let isSmsRetryRequest = false;
+  let isSmsEditAfterSend = false;
+  if (pendingText === null && lastSmsPayload) {
+    const followupIntent = await classifySmsFollowupIntent(message).catch((): "none" => "none");
+    isSmsRetryRequest = followupIntent === "retry";
+    isSmsEditAfterSend = followupIntent === "edit";
+  }
+
+  if (pendingText !== null && pendingText.phase === 'awaiting_confirmation') {
+    dynamicPrompt += `\n\n[Pending SMS Draft]\nTo: ${pendingText.recipientName}\nDraft: "${pendingText.composedBody}"\n\n` +
+      `Handle the user's response naturally:\n` +
+      `- If they approve (yes, looks good, send it, perfect, etc.) → emit [ACTION:sms_send]\n` +
+      `- If they give direction or want changes → end your reply with [ACTION:sms_revise|feedback=<their exact words>]. The server recomposes the text from that feedback — do not try to write the revised text yourself here.\n` +
+      `- If they say 'send that word for word' or 'use exactly what I typed' → end your reply with [ACTION:sms_send|body=<their exact typed text>], using their exact text verbatim, not a paraphrase.\n` +
+      `- If they cancel → emit [ACTION:sms_cancel]\n` +
+      `Emitting the action tag is not optional — a friendly sentence alone does not actually revise or send anything; only the tag does.`;
+  } else if (pendingText !== null || isSmsRetryRequest || isSmsEditAfterSend) {
+    const textResult = await handleText({
+      message,
+      sessionUserName,
+      deviceId,
+      isTextFlowActive: true,
+      pendingText,
+      isSmsRetryRequest,
+      isSmsEditAfterSend,
+      lastSmsPayload,
+      userProfile,
+      log,
+    });
+    if (textResult.hardcodedResponse) {
+      runPostProcessing(sessionUserName, message, textResult.hardcodedResponse, history, userProfile, deviceId, `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      return {
+        reply: textResult.hardcodedResponse,
+        action: { type: "send_sms" },
+        smsPayload: textResult.smsPayload,
+        messageId: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      };
     }
+    dynamicPrompt += textResult.contextBlock;
   }
 
   // Reservation flow in progress
@@ -1439,6 +1456,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
           tone: pending.tone,
         };
         setPendingText(sessionUserName, null);
+        setLastSmsPayload(sessionUserName, smsPayload);
         log.info({ recipient: pending.recipientName, usedOverride: !!overrideBody }, "[chatHandlerCore] SMS confirmed and built");
       }
       break;
