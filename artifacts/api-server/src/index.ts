@@ -10,7 +10,6 @@ import { query } from "./db";
 import { startScheduler } from "./reminders/scheduler";
 import { startWinddownScheduler } from "./winddown/winddownScheduler";
 import { ensureWinddownTables } from "./winddown/winddownManager";
-import { ensureBriefingPreferencesTable } from "./briefingPreferences/briefingPreferencesManager";
 import { ensureUsersTable } from "./auth/passwordAuth";
 import { ensureMemoryTable } from "./memory/memoryManager";
 import { ensureProfileTable } from "./profile/profileManager";
@@ -190,11 +189,6 @@ app.listen(port, async (err) => {
     await ensureWinddownTables();
   } catch (e) {
     logger.warn({ err: e }, "winddown tables initialization warning");
-  }
-  try {
-    await ensureBriefingPreferencesTable();
-  } catch (e) {
-    logger.warn({ err: e }, "briefing preferences table initialization warning");
   }
   try {
     await ensureMemoryTable();

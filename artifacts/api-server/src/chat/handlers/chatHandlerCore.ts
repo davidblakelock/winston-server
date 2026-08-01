@@ -47,11 +47,6 @@ import {
   DEFAULT_ARCHIVE_THRESHOLD_DAYS,
   type PendingAtticCleanup,
 } from "../../attic/atticItemsManager.js";
-import {
-  getBriefingPreferences,
-  buildBriefingPrefsBlock,
-  type BriefingPreference,
-} from "../../briefingPreferences/briefingPreferencesManager.js";
 import { getProactivePicks } from "../../morning/proactiveEventScheduler.js";
 import { getCurrentDateTimeBlock } from "../getCurrentDateTimeBlock.js";
 import {
@@ -383,7 +378,6 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     userProfile,
     profileItems,
     keyPeople,
-    briefingPrefs,
     allLists,
     pendingReminderRows,
     todayEvents,
@@ -392,7 +386,6 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     getProfile(sessionUserName).catch(() => null),
     getProfileItems(undefined, sessionUserName).catch(() => []),
     getPeople(sessionUserName).catch((): KeyPerson[] => []),
-    getBriefingPreferences(sessionUserName).catch((): BriefingPreference[] => []),
     getAllLists(sessionUserName).catch(() => ({} as Record<string, string[]>)),
     query<{ reminder_text: string; fire_at: string; for_contact: string | null }>(
       `SELECT reminder_text, fire_at, for_contact FROM reminders
@@ -448,7 +441,6 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
 
   // ── Build dynamic system prompt ──────────────────────────────────────────────
   const profileItemsBlock = formatProfileForContext(profileItems, sessionUserName);
-  const prefsBlock        = buildBriefingPrefsBlock(briefingPrefs, sessionUserName);
 
   const activeScreenBlock = requestContext
     ? `\n\n[Active Screen: ${requestContext} list]\nWhen adding items without specifying a list, use "${requestContext}".`
@@ -457,7 +449,6 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
   let dynamicPrompt =
     getCurrentDateTimeBlock(timezone) +
     profileItemsBlock +
-    prefsBlock +
     buildListsBlock(allLists, requestContext) +
     buildRemindersBlock(pendingReminderRows, timezone) +
     buildCalendarBlock(todayEvents, timezone) +
