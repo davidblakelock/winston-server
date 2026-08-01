@@ -217,3 +217,21 @@ export async function archiveAtticItems(userName: string, ids: number[]): Promis
   logger.info({ userName, count: rows.length }, "[AtticItems] Items archived");
   return rows.length;
 }
+
+// Soft delete — same shape as archiveAtticItems, just the other terminal
+// status. 'deleted' was declared on the AtticItem type from the start but
+// never had a write path until now. listAtticItems already filters to
+// status = 'active', so a deleted row disappears from the browsing screen
+// with no query changes needed on the read side.
+export async function deleteAtticItems(userName: string, ids: number[]): Promise<number> {
+  if (ids.length === 0) return 0;
+  await _tableInit;
+  const { rows } = await query<{ id: number }>(
+    `UPDATE attic_items SET status = 'deleted', updated_at = now()
+     WHERE user_name = $1 AND id = ANY($2) AND status = 'active'
+     RETURNING id`,
+    [userName, ids]
+  );
+  logger.info({ userName, count: rows.length }, "[AtticItems] Items deleted");
+  return rows.length;
+}

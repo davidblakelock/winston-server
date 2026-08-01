@@ -3,6 +3,7 @@ import { authenticate } from "../auth/middleware.js";
 import {
   listAtticItems,
   archiveAtticItems,
+  deleteAtticItems,
   type AtticSourceType,
 } from "../attic/atticItemsManager.js";
 import {
@@ -190,6 +191,29 @@ router.post("/attic/archive", async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "[Attic] POST /attic/archive error");
     res.status(500).json({ error: "Failed to archive items" });
+  }
+});
+
+// ── DELETE /api/attic ────────────────────────────────────────────────────────
+// Direct delete-by-ids for the browsing screen's own multi-select — same
+// shape as POST /attic/archive, just the other terminal status.
+// Body: { ids: number[] }
+// Returns: { ok: true, deleted: <count> }
+router.delete("/attic", async (req, res) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const { ids } = req.body as { ids?: unknown };
+  if (!Array.isArray(ids) || ids.length === 0 || !ids.every((id) => typeof id === "number")) {
+    res.status(400).json({ error: "ids must be a non-empty array of numbers" });
+    return;
+  }
+  try {
+    const deleted = await deleteAtticItems(userName, ids);
+    req.log.info({ requested: ids.length, deleted }, "[Attic] DELETE /attic");
+    res.json({ ok: true, deleted });
+  } catch (err) {
+    req.log.error({ err }, "[Attic] DELETE /attic error");
+    res.status(500).json({ error: "Failed to delete items" });
   }
 });
 
