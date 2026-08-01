@@ -264,14 +264,16 @@ export async function handleText(params: HandleTextParams): Promise<TextResult> 
 
       contextBlock +=
         `\n\n[Text Message Revised — edit after send]\n` +
-        `Previous draft was already handed off to Messages app. User asked to edit it.\n` +
+        `Previous draft was already handed off to Messages app. User asked to edit it. ` +
+        `The revision is already done and saved server-side — do not re-trigger the text flow.\n` +
         `Revised message body:\n"${revised.body}"\n\n` +
         `Read the revised message back word for word, then ask: ` +
         `"Does that work? Say yes and I'll hand it off to your Messages app again." ` +
-        `CRITICAL HONESTY RULES: ` +
+        `CRITICAL RULES: ` +
         `(1) You are composing — you are NOT sending it and you CANNOT send it. ` +
         `(2) The Messages app only opens AFTER the user says yes. Do NOT say it is opening now. ` +
-        `(3) Never say "sending now", "opening Messages", or imply immediate action.`;
+        `(3) Never say "sending now", "opening Messages", or imply immediate action. ` +
+        `(4) Do NOT emit any [ACTION:...] tag in this reply — not send_sms, not sms_send, nothing. This turn is only presenting the revision and asking for confirmation; emitting an action tag here would start a brand new text flow and throw away the revision you just showed.`;
 
       log.info({ recipient: lastSmsPayload.recipient }, "[T006-edit-after-send] Revised draft, restarted flow");
     } catch (err) {
