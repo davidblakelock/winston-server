@@ -70,6 +70,7 @@ import {
   setPendingText,
   getLastSmsPayload,
   classifyConfirmationIntent,
+  composeTextMessage,
   type SmsPayload,
 } from "../../text/textMessageComposer.js";
 import { getPendingReservation } from "../../restaurants/restaurantIntelligence.js";
@@ -118,6 +119,8 @@ export type ActionType =
   | "email_cancel"
   | "email_compose"
   | "sms_send"
+  | "sms_revise"
+  | "sms_cancel"
   | "morning_rundown"
   | "save_to_attic"
   | "correct_observation"
@@ -145,6 +148,10 @@ export interface ClaudeAction {
   emailAction?: "trash" | "archive" | "markRead" | null;
   gmailId?: string | null;
   feedback?: string | null;
+  /** Exact text to send verbatim, overriding the stored draft — used when the
+   *  user says "send that word for word" / "use exactly what I typed" for
+   *  either email_send or sms_send. */
+  body?: string | null;
   correctionType?: "dismiss" | "reject" | "elevate" | "forget" | null;
   goalName?: string | null;
   excludeIndexes?: string | null;
@@ -474,7 +481,13 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
   // SMS flow in progress
   if (pendingText !== null) {
     if (pendingText.phase === 'awaiting_confirmation') {
-      dynamicPrompt += `\n\n[Pending SMS Draft]\nTo: ${pendingText.recipientName}\nDraft: "${pendingText.composedBody}"\n\nIf the user approves, emit [ACTION:sms_send]. If they want changes, revise and present the new draft. If they cancel, emit [ACTION:none] and clear the draft.`;
+      dynamicPrompt += `\n\n[Pending SMS Draft]\nTo: ${pendingText.recipientName}\nDraft: "${pendingText.composedBody}"\n\n` +
+        `Handle the user's response naturally:\n` +
+        `- If they approve (yes, looks good, send it, perfect, etc.) → emit [ACTION:sms_send]\n` +
+        `- If they give direction or want changes → end your reply with [ACTION:sms_revise|feedback=<their exact words>]. The server recomposes the text from that feedback — do not try to write the revised text yourself here.\n` +
+        `- If they say 'send that word for word' or 'use exactly what I typed' → end your reply with [ACTION:sms_send|body=<their exact typed text>], using their exact text verbatim, not a paraphrase.\n` +
+        `- If they cancel → emit [ACTION:sms_cancel]\n` +
+        `Emitting the action tag is not optional — a friendly sentence alone does not actually revise or send anything; only the tag does.`;
     } else {
       const textResult = await handleText({
         message,
@@ -540,10 +553,10 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       `Current draft:\n"${pendingEmailReply.draftBody}"\n\n` +
       `Handle the user's response naturally:\n` +
       `- If they approve (yes, looks good, send it, perfect, etc.) → emit [ACTION:email_send]\n` +
-      `- If they give direction or want changes → compose updated draft, call setPendingEmailReply with new draftBody, present it\n` +
-      `- If they say 'send that word for word' → emit [ACTION:email_send] but first update draftBody to their exact typed text\n` +
+      `- If they give direction or want changes → end your reply with [ACTION:email_revise|feedback=<their exact words>]. The server recomposes the draft from that feedback — do not try to write the revised draft yourself here.\n` +
+      `- If they say 'send that word for word' or 'use exactly what I typed' → end your reply with [ACTION:email_send|body=<their exact typed text>], using their exact text verbatim, not a paraphrase.\n` +
       `- If they cancel → emit [ACTION:email_cancel]\n` +
-      `After making ANY changes to the draft, always present the COMPLETE updated email in full and ask for confirmation again. Never just say "done" or "on it" without showing the full revised draft.`;
+      `Emitting the action tag is not optional — a friendly sentence alone ("Sounds good, I'll make that change") does not actually revise or send anything; only the tag does. Never claim a change was made unless you emitted [ACTION:email_revise] in the same reply.`;
   }
 
   // Attic cleanup flow in progress — inject the proposed candidate list so
@@ -798,7 +811,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
         action = { type: "email_reply", gmailId: parts.gmailId ?? null };
         break;
       case "email_send":
-        action = { type: "email_send" };
+        action = { type: "email_send", body: parts.body ?? null };
         break;
       case "email_revise":
         action = { type: "email_revise", feedback: parts.feedback ?? null };
@@ -810,7 +823,13 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
         action = { type: "email_compose", recipientName: parts.to ?? null };
         break;
       case "sms_send":
-        action = { type: "sms_send" };
+        action = { type: "sms_send", body: parts.body ?? null };
+        break;
+      case "sms_revise":
+        action = { type: "sms_revise", feedback: parts.feedback ?? null };
+        break;
+      case "sms_cancel":
+        action = { type: "sms_cancel" };
         break;
       case "make_reservation":
         action = { type: "make_reservation", restaurantName: parts.restaurant ?? "" };
@@ -1401,9 +1420,10 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     // ── sms_send ──────────────────────────────────────────────────────────────
     case "sms_send": {
       const pending = getPendingText(sessionUserName);
-      if (pending?.composedBody) {
+      const overrideBody = action.body?.trim() || null;
+      const body = overrideBody || pending?.composedBody;
+      if (pending && body) {
         const phone = pending.recipientPhone ?? "";
-        const body = pending.composedBody;
         const cleanPhone = phone ? sanitizePhone(phone) : "";
         const bodySep = "?";
         const encodedBody = encodeURIComponent(body);
@@ -1419,7 +1439,38 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
           tone: pending.tone,
         };
         setPendingText(sessionUserName, null);
-        log.info({ recipient: pending.recipientName }, "[chatHandlerCore] SMS confirmed and built");
+        log.info({ recipient: pending.recipientName, usedOverride: !!overrideBody }, "[chatHandlerCore] SMS confirmed and built");
+      }
+      break;
+    }
+
+    // ── sms_revise ────────────────────────────────────────────────────────────
+    case "sms_revise": {
+      const pending = getPendingText(sessionUserName);
+      if (pending?.composedBody) {
+        try {
+          const { body: revisedBody } = await composeTextMessage({
+            recipientName: pending.recipientName,
+            relationship:  pending.relationship,
+            tone:          pending.tone,
+            userIntent:    `Previous draft: "${pending.composedBody}". User's feedback: "${action.feedback ?? message}"`,
+            senderName:    userProfile?.name ?? sessionUserName,
+          });
+          setPendingText(sessionUserName, { ...pending, composedBody: revisedBody });
+          finalReply = `Here's the revised version: "${revisedBody}" — does that work?`;
+        } catch (err) {
+          log.warn({ err }, "[chatHandlerCore] SMS revision failed");
+          finalReply = "Sorry, I had trouble revising that. Can you try again?";
+        }
+      }
+      break;
+    }
+
+    // ── sms_cancel ────────────────────────────────────────────────────────────
+    case "sms_cancel": {
+      if (getPendingText(sessionUserName)) {
+        setPendingText(sessionUserName, null);
+        finalReply = "No problem, I've dropped it.";
       }
       break;
     }
@@ -1638,8 +1689,8 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
               `Present this draft to ${displayName} naturally. Read it back. Then say:\n` +
               `"Does that work? You can also tell me what you'd like to say instead, or type your exact reply and say 'send that word for word'."\n` +
               `If they approve → emit [ACTION:email_send]\n` +
-              `If they give direction or feedback → compose a new draft incorporating their input, update and present it\n` +
-              `If they say 'send that word for word' or 'use exactly what I typed' → emit [ACTION:email_send] using their typed text as the body\n` +
+              `If they give direction or feedback → end your reply with [ACTION:email_revise|feedback=<their exact words>] — the server recomposes the draft, do not write the revision yourself\n` +
+              `If they say 'send that word for word' or 'use exactly what I typed' → end your reply with [ACTION:email_send|body=<their exact typed text>]\n` +
               `If they cancel → emit [ACTION:email_cancel]`;
 
           } catch (err) {
@@ -1666,15 +1717,16 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       if (pendingEmailReply) {
         const subject = pendingEmailReply.subject ||
           `Following up — ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+        const body = action.body?.trim() || pendingEmailReply.draftBody;
         const mailtoUri =
           `mailto:${encodeURIComponent(pendingEmailReply.to)}` +
           `?subject=${encodeURIComponent(subject)}` +
-          `&body=${encodeURIComponent(pendingEmailReply.draftBody)}`;
+          `&body=${encodeURIComponent(body)}`;
         emailPayload = {
           to: pendingEmailReply.to,
           recipientName: pendingEmailReply.recipientName,
           subject,
-          body: pendingEmailReply.draftBody,
+          body,
           mailtoUri,
         };
         broadcastToUser(sessionUserName, "email-compose", { type: "email_compose", ...emailPayload });
@@ -1771,7 +1823,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
             userName: sessionUserName,
             createdAt: Date.now(),
           });
-          dynamicPrompt += `\n\n[Email Compose — ${name} (${email})]\nThe user wants to compose a new email to ${name}. Ask them what they'd like to say, or offer to draft something based on context. Once you have the content, compose a draft and present it. Then handle confirmation naturally — emit [ACTION:email_send] when approved.`;
+          dynamicPrompt += `\n\n[Email Compose — ${name} (${email})]\nThe user wants to compose a new email to ${name}. Ask them what they'd like to say, or offer to draft something based on context. Once you know what they want to say, end your reply with [ACTION:email_revise|feedback=<what they want to say, in their words>] — the server writes the actual draft from that and shows it next turn; do not write the draft yourself here, it will not be saved. Once a draft has been shown, handle confirmation naturally: approve → [ACTION:email_send]; more changes → [ACTION:email_revise|feedback=<their words>]; cancel → [ACTION:email_cancel].`;
         } else {
           finalReply = `I couldn't find an email address for ${name} in your contacts. Can you provide their email address?`;
         }
@@ -1890,16 +1942,6 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       break;
     }
 
-  }
-
-  // If email reply is pending, keep draftBody in sync with what Claude just showed the user
-  if (getPendingEmailReply(sessionUserName) !== null && finalReply) {
-    const current = getPendingEmailReply(sessionUserName);
-    if (current) {
-      const draftMatch = finalReply.match(/<draft>([\s\S]*?)<\/draft>/i);
-      const draftBody = draftMatch ? draftMatch[1].trim() : current.draftBody;
-      setPendingEmailReply(sessionUserName, { ...current, draftBody });
-    }
   }
 
   // ── Wind-down reflection capture ─────────────────────────────────────────────
