@@ -6,8 +6,6 @@ import {
   detectToneOverride,
   toneLabel,
   setPendingText,
-  classifyConfirmationIntent,
-  setLastSmsPayload,
   type MessageTone,
   type TextContactCandidate,
   type PendingTextState,
@@ -165,122 +163,61 @@ export async function handleText(params: HandleTextParams): Promise<TextResult> 
           contextBlock += `\n\n[Text Message — Composition Error]\nTell ${displayName} you had trouble with that and ask them to try again.`;
         }
       } else {
-        const body = sanitizeSmsBody(message);
-
-        setPendingText(sessionUserName, {
-          ...pendingText,
-          phase: "awaiting_confirmation",
-          composedBody: body,
-        });
-
-        hardcodedResponse =
-          `Here's what I've got for ${pendingText.recipientName}:\n\n"${body}"\n\n` +
-          `Does that look right? Say yes and I'll hand it off to your Messages app. ` +
-          `Or tell me if you'd like a different tone — warmer, more casual, more professional, etc.`;
-
-        log.info({ recipient: pendingText.recipientName, body: body.slice(0, 80) }, "[T006] Intent received — using verbatim (no tone requested)");
-      }
-    } else if (pendingText.phase === "awaiting_confirmation") {
-      if (toneOverride !== null) {
-        const effectiveTone = toneOverride;
+        // No explicit tone requested — still compose via Claude (using the
+        // flow's existing tone, same as every other branch in this file)
+        // rather than using the raw typed intent verbatim. The verbatim
+        // shortcut here was inconsistent with the rest of the flow — the
+        // disambiguation-with-inline-intent path, the tone-override branch
+        // above, and both revision paths below all compose through Claude
+        // by default; only this branch skipped it, producing an unpolished
+        // first draft that read as the user's raw instruction rather than
+        // an actual message ("tell her I will call her tonight" instead of
+        // "I'll call you tonight!").
         try {
-          const recomposed = await composeTextMessage({
+          const composed = await composeTextMessage({
             recipientName: pendingText.recipientName,
             relationship: pendingText.relationship,
-            tone: effectiveTone,
-            userIntent: pendingText.composedBody ?? message,
+            tone: pendingText.tone,
+            userIntent: message,
             senderName: displayName,
           });
 
           setPendingText(sessionUserName, {
             ...pendingText,
-            tone: effectiveTone,
-            composedBody: recomposed.body,
+            phase: "awaiting_confirmation",
+            composedBody: composed.body,
           });
 
-          const toneNote = toneLabel(effectiveTone);
-          contextBlock +=
-            `\n\n[Text Message Revised — ${toneNote} tone]\n` +
-            `Message body:\n"${recomposed.body}"\n\n` +
-            `Read the revised message back word for word, then ask: ` +
-            `"Does that work? Say yes and I'll hand it off to your Messages app." ` +
-            `CRITICAL HONESTY RULES: ` +
-            `(1) You are composing — you are NOT sending it and you CANNOT send it. ` +
-            `(2) The Messages app only opens AFTER the user says yes. Do NOT say it is opening now. ` +
-            `(3) Never say "sending now", "opening Messages", or imply immediate action.`;
+          hardcodedResponse =
+            `Here's what I've got for ${pendingText.recipientName}:\n\n"${composed.body}"\n\n` +
+            `Does that look right? Say yes and I'll hand it off to your Messages app. ` +
+            `Or tell me if you'd like a different tone — warmer, more casual, more professional, etc.`;
+
+          log.info({ recipient: pendingText.recipientName, tone: pendingText.tone }, "[T006] Intent received — composed via Claude");
         } catch (err) {
-          log.warn({ err }, "[T006] Tone re-compose failed");
-        }
-      } else {
-        const confirmIntent = await classifyConfirmationIntent(message);
-        if (confirmIntent === "send") {
-          const phone = pendingText.recipientPhone ?? "";
-          const body = pendingText.composedBody ?? "";
-          const recipientName = pendingText.recipientName;
-          setPendingText(sessionUserName, null);
+          log.warn({ err }, "[T006] Compose failed — falling back to verbatim");
+          const body = sanitizeSmsBody(message);
 
-          const cleanPhone = phone ? sanitizePhone(phone) : "";
+          setPendingText(sessionUserName, {
+            ...pendingText,
+            phase: "awaiting_confirmation",
+            composedBody: body,
+          });
 
-          // TODO: When iOS is added, send platform: 'ios'|'android' in request body and use that instead
-          const bodySep = "?";
-          const encodedBody = encodeURIComponent(body);
-          const smsUri = cleanPhone
-            ? `sms:${cleanPhone}${bodySep}body=${encodedBody}`
-            : `sms:?body=${encodedBody}`;
-
-          const payload: SmsPayload = {
-            phone: cleanPhone,
-            body,
-            recipient: recipientName,
-            smsUri,
-            relationship: pendingText.relationship,
-            tone: pendingText.tone,
-          };
-          smsPayload = payload;
-          setLastSmsPayload(sessionUserName, payload);
-          broadcastToUser(sessionUserName, "sms-compose", { type: "sms_compose", ...payload });
-
-          const confirmationText = phone
-            ? `The message is composed and ready. Your Messages app should open now with it pre-filled for ${recipientName} — tap Send when you're ready. I can't send it directly; that part is yours.`
-            : `The message is composed and ready. Your Messages app should open now — add ${recipientName}'s number and tap Send. I can't send it directly; that part is yours.`;
-          hardcodedResponse = confirmationText;
-
-          log.info({ recipient: recipientName, hasPhone: !!phone }, "[T006] SMS packaged — hardcoded response, skipping Claude");
-        } else if (confirmIntent === "cancel") {
-          setPendingText(sessionUserName, null);
-          contextBlock +=
-            `\n\n[Text Message Cancelled]\nThe user decided not to send the message. ` +
-            `Acknowledge warmly and briefly — "No problem, I've dropped it."`;
-        } else {
-          try {
-            const revised = await composeTextMessage({
-              recipientName: pendingText.recipientName,
-              relationship: pendingText.relationship,
-              tone: pendingText.tone,
-              userIntent: `Previous draft: "${pendingText.composedBody}". User's feedback/edit: "${message}"`,
-              senderName: displayName,
-            });
-
-            setPendingText(sessionUserName, {
-              ...pendingText,
-              composedBody: revised.body,
-            });
-
-            contextBlock +=
-              `\n\n[Text Message Revised]\n` +
-              `Message body:\n"${revised.body}"\n\n` +
-              `Read the revised message back word for word, then ask: ` +
-              `"Does that work? Say yes and I'll hand it off to your Messages app." ` +
-              `CRITICAL HONESTY RULES: ` +
-              `(1) You are composing — you are NOT sending it and you CANNOT send it. ` +
-              `(2) The Messages app only opens AFTER the user says yes. Do NOT say it is opening now. ` +
-              `(3) Never say "sending now", "opening Messages", or imply immediate action.`;
-          } catch (err) {
-            log.warn({ err }, "[T006] Revision failed");
-          }
+          hardcodedResponse =
+            `Here's what I've got for ${pendingText.recipientName}:\n\n"${body}"\n\n` +
+            `Does that look right? Say yes and I'll hand it off to your Messages app. ` +
+            `Or tell me if you'd like a different tone — warmer, more casual, more professional, etc.`;
         }
       }
     }
+    // Note: pendingText.phase === "awaiting_confirmation" is deliberately not
+    // handled here — chatHandlerCore.ts intercepts that phase before ever
+    // calling handleText() (it injects a [Pending SMS Draft] prompt block and
+    // lets Claude drive send/revise/cancel via action tags instead). A ~100-
+    // line branch handling that phase used to live here; it was confirmed
+    // unreachable (the caller's own gating means this function is only ever
+    // invoked when the phase is NOT awaiting_confirmation) and removed.
   }
 
   // ── T006-retry: user says "it didn't open" / "try again" after SMS dispatch ──
