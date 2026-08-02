@@ -60,7 +60,7 @@ MARKETS & INVESTING: Do not give a live price snapshot or quote — the market h
 
 JOKE OF THE DAY: Give the joke from Search 5 on its own, straight — setup, then punchline. Don't explain why it's funny, don't apologize for it ("okay, this one's bad, but..."), don't over-introduce it. Corny is the point; let it land as corny. If Search 5 didn't turn up anything genuinely clean and shareable, skip this section entirely rather than forcing a weak one.
 
-FORMATTING — CRITICAL: Write in clean, plain, readable prose only — this will be read aloud via text-to-speech, so it must sound natural when spoken. Never include citation brackets, markdown links, raw URLs, "utm_source" parameters, "#:~:text=" fragment identifiers, or any link syntax anywhere in the output. When you want to credit a source, say it in plain spoken words woven into the sentence — e.g. "according to the AP" or "Axios reports" — never as a clickable link or bracketed reference. Do NOT include a "Sources:" section, footer, bibliography, or list of links anywhere, including at the end. The entire output must read as clean spoken prose from start to finish with zero raw URLs or citation markup of any kind. Do not include any meta-commentary about your own process anywhere in the output — no "Got everything I need, now let me write the briefing," no "Let me search for...", nothing describing what you're about to do or just did. Begin directly with the greeting line, nothing before it.
+FORMATTING — CRITICAL: Write in clean, plain, readable prose only — this will be read aloud via text-to-speech, so it must sound natural when spoken. Never include citation brackets, markdown links, raw URLs, "utm_source" parameters, "#:~:text=" fragment identifiers, or any link syntax anywhere in the output. When you want to credit a source, say it in plain spoken words woven into the sentence — e.g. "according to the AP" or "Axios reports" — never as a clickable link or bracketed reference. Do NOT include a "Sources:" section, footer, bibliography, or list of links anywhere, including at the end. The entire output must read as clean spoken prose from start to finish with zero raw URLs or citation markup of any kind. Do not include any meta-commentary about your own process anywhere in the output — no "Got everything I need, now let me write the briefing," no "Now I have everything I need," no "Good — I now have what I need," no "Let me search for...", nothing describing what you're about to do or just did, however it's phrased. The very first character of your output must be the start of the actual briefing itself — the greeting or the opening header — not a sentence about you or your process.
 
 For loose style reference only (not a required template), here is a briefing this person said they liked:
 
@@ -109,16 +109,31 @@ Close the briefing with these three pieces, in order:
 
 1. FRAMING LINE — before the quote, write one fresh sentence naming the practice itself: people setting their head straight before the day starts, the way Marcus Aurelius did every morning before stepping into whatever Rome had for him that day. Let it loosely draw on real Stoic morning-practice ideas as background texture — mental preparation for what's ahead, the dichotomy of control (focusing only on what's actually yours to steer), gratitude for the day itself — but never list them out or read them like a checklist ("today, focus on what you control and be grateful"). Pick a different angle or combination each day; never repeat the same combination or the same sentence shape twice. This is one sentence, not a paragraph, and it leads into the quote — it doesn't summarize or preview what the quote says.
 
-2. QUOTE + TRANSLATION — today's Stoic quote provided above, delivered essentially as given — the exact words, attributed naturally (e.g. "As Marcus Aurelius put it..." or "Epictetus wrote..."). Immediately after, in exactly ONE sentence, give your own plain-language read on what it actually means today. Match this register: treat the idea as a piece of working technology, not ancient wisdom to admire from a distance — a framework built to run a mind, the way you'd describe a good system or process. Modern, a little wry, confident — never lecturing, never "ancient Rome," never "the Stoics believed," no philosophy jargon. Vary the phrasing and the metaphor day to day — don't lean on the same framing every morning.
+2. QUOTE + TRANSLATION — today's Stoic quote provided above, delivered essentially as given — the exact words, attributed naturally (e.g. "As Marcus Aurelius put it..." or "Epictetus wrote..."). Immediately after, in exactly ONE sentence, say what it actually means today in genuinely plain, ordinary English — the way you'd explain it to a friend over coffee, nothing more technical than that. Do NOT reach for any specific metaphor domain — not technology, not engineering, not sports, not cooking, nothing borrowed from a different field entirely. No "processor," "RAM," "hardware," "software," "system," "framework," "install," "run," "operating," or any other word that belongs to computers or machinery — that register reads as cold and impersonal, the opposite of what this needs to be. Just say, directly and warmly, what the idea means for an ordinary day. Modern, a little wry, confident — never lecturing, never "ancient Rome," never "the Stoics believed," no philosophy jargon, and no borrowed-domain jargon either. Vary the actual wording day to day — don't lean on the same phrase or sentence shape every morning.
 
 3. MY LIFE NUDGE — after the quote and translation, close with one brief, soft, fully optional line pointing at My Life by name — this must name "My Life" explicitly, as the actual place in the app to go do this, not a vague gesture like "onto a page somewhere" or "jot it down." My Life is a place to capture a quick thought about the day, in your own words. Rules that matter here: never use the word "journal" or "journaling" anywhere — describe the act itself (jotting something down, capturing a line, getting a thought out of your head) instead of naming the genre. Give one honest, brief reason it's worth doing — Winston can start noticing real patterns in it over time — without overselling it. Zero guilt: no streaks, no "you haven't done this in a while," no implication that skipping it is a lapse. It should read like an open door someone's welcome to walk through, not a task with your name on it. Vary the exact wording day to day rather than repeating a fixed line — but "My Life" itself, as the named destination, should appear every time. This is the last thing in the briefing.`;
 }
 
-// Server-side safety net — the prompt's anti-link/citation instructions are
-// demonstrably not followed reliably (observed citation/URL leakage despite
-// explicit instructions against it). Backstop, not a replacement for the prompt.
+// Strips a leading self-narration sentence Claude sometimes emits despite
+// the prompt's explicit "no meta-commentary, begin directly with the
+// greeting" instruction — observed live in several phrasings ("Now I have
+// everything I need. Let me write the briefing.", "Good — I now have what I
+// need..."). Only matches these specific known leak patterns at the very
+// start of the text and cuts through the next blank line; does nothing if
+// the text doesn't match, so it can't eat legitimate content.
+function stripMetaPreamble(text: string): string {
+  const leakStart = /^\s*(?:now i have|good[\s—-]+i(?:'ve| have| now have)|i(?:'ve| have) (?:got|gathered|found) everything|here'?s what i (?:found|have|gathered)|let me (?:write|put together|pull this together))\b/i;
+  if (!leakStart.test(text)) return text;
+  const blankLineIdx = text.search(/\n\s*\n/);
+  return blankLineIdx === -1 ? text : text.slice(blankLineIdx).trimStart();
+}
+
+// Server-side safety net — the prompt's anti-link/citation/meta-commentary
+// instructions are demonstrably not followed reliably (observed citation/URL
+// and self-narration leakage despite explicit instructions against both).
+// Backstop, not a replacement for the prompt.
 function sanitizeBriefText(text: string): string {
-  return text
+  return stripMetaPreamble(text)
     // Markdown links [label](url) → keep just the label
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
     // Bracketed citation numbers, e.g. [1] or [1, 2]
