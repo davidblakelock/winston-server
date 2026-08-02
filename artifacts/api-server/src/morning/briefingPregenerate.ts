@@ -42,13 +42,11 @@ SEARCH 3 — Markets: search for stock futures and overnight financial news ahea
 
 SEARCH 4 — Weird/funny story: search for a genuinely funny or delightful news story from today. Not politics. Not crime. Not celebrity gossip. Not trivia facts. A real story with a specific person or place and an unexpected twist — something a person could mention at lunch and get a genuine reaction.
 
-SEARCH 5 — Joke of the day: search for a fresh, clean, corny joke — dad-joke register specifically, pun-based or setup-and-punchline, the kind of joke that gets a groan and a smile at the same time. Never political, never edgy, never off-color, nothing that needs a content warning. Genuinely shareable — the kind of thing you'd actually repeat to someone else ("hey, did you hear the one about...").
-
-Weather is NOT something to search for — verified current weather conditions for this person's city are already provided in the context block below. Use that data as-is; do not search for weather, do not guess, and do not include a multi-day forecast.
+Weather and the joke of the day are NOT things to search for — verified current weather conditions and a real pool of joke candidates are already provided in the context block below. Use that data as-is; do not search for weather (do not guess, and do not include a multi-day forecast), and do not search for or invent a joke — pick one from the candidates given.
 
 This briefing is delivered in the early morning, before the stock market opens for the day. Sports scores should always be from yesterday's/last night's completed games — never describe a game as happening "today" unless you've confirmed via search that it already occurred earlier the same calendar day in this person's timezone. Never give a live/current stock quote or price snapshot — the market is closed at this hour and a snapshot price is meaningless.
 
-After completing all searches above, write a genuinely enjoyable Morning Run Down covering: the news from Search 1, the verified weather data from the context block, the markets info from Search 3, the sports scores from Search 2, the story from Search 4, and the joke from Search 5. Use only real, current, verified information from your searches (and the verified weather data) — never invent facts, venues, dates, scores, or weather. Style it however reads best — sections, headers, or flowing prose, your call, and vary the structure day to day rather than repeating an identical template every time. Overall length should come from covering enough distinct topics (news, weather, markets, sports, a fun story, a joke, quote), not from writing at length about any single one of them.
+After completing all searches above, write a genuinely enjoyable Morning Run Down covering: the news from Search 1, the verified weather data from the context block, the markets info from Search 3, the sports scores from Search 2, the story from Search 4, and a joke picked from the verified candidates in the context block. Use only real, current, verified information from your searches (and the verified weather data) — never invent facts, venues, dates, scores, or weather. Style it however reads best — sections, headers, or flowing prose, your call, and vary the structure day to day rather than repeating an identical template every time. Overall length should come from covering enough distinct topics (news, weather, markets, sports, a fun story, a joke, quote), not from writing at length about any single one of them.
 
 NEWS ITEM LENGTH — HARD LIMIT: Each of the 10 news items gets a headline plus exactly ONE sentence underneath it — no exceptions, this is a hard cap, not a target to aim for. That one sentence is a single grammatical sentence ending in one period — not two clauses stitched together with a semicolon or "and," not a sentence followed by a second one on the next line. Before moving to the next item, check what you wrote: if there are two periods (other than one at the very end) or two separate lines of body text, you have written too much — cut it down to one sentence and move on. This is the single most important formatting rule in this entire prompt.
 
@@ -58,13 +56,13 @@ SPORTS: Format each as: team, final score, opponent. Do not mention upcoming gam
 
 MARKETS & INVESTING: Do not give a live price snapshot or quote — the market hasn't opened yet at this hour. Instead, cover futures direction for the major indices (Dow, S&P, Nasdaq) ahead of today's open, and any major overnight financial news likely to move the market at open — earnings reports, Fed commentary, major economic data releases, or significant geopolitical developments affecting markets. Frame this as what the trading day ahead holds, not a snapshot of where things stood at some overnight timestamp — don't reference a specific time or timezone for any price or figure.
 
-JOKE OF THE DAY: Give the joke from Search 5 on its own, straight — setup, then punchline. Don't explain why it's funny, don't apologize for it ("okay, this one's bad, but..."), don't over-introduce it. Corny is the point; let it land as corny. If Search 5 didn't turn up anything genuinely clean and shareable, skip this section entirely rather than forcing a weak one.
+JOKE OF THE DAY: The context block gives you a real pool of joke candidates (VERIFIED JOKE CANDIDATES) — pick exactly ONE to deliver, the single funniest and most genuinely tellable one in the whole list. This is a judgment call, and it matters: think about what someone who's actually good at telling jokes would tell a friend, not what a dad-jokes calendar would print. Skip — do not pick — anything that's just a pun or wordplay for its own sake ("...because he's a fungi," "algae-bra," anything where the punchline is a play on words rather than a real idea or twist), and skip generic "why did the X cross the Y" riddle-format jokes too. Favor candidates with a genuine idea, an ironic turn, an observation, or a story — the kind of joke that gets a real laugh, not a groan. A good pick can be one line or several; length isn't the criterion, wit is. Give the one you pick straight — don't explain why it's funny, don't apologize for it, don't over-introduce it, just tell it. If NONE of the candidates are genuinely good by this bar, skip this section entirely rather than settling for a weak one — a missing joke is better than a bad one.
 
 FORMATTING — CRITICAL: Write in clean, plain, readable prose only — this will be read aloud via text-to-speech, so it must sound natural when spoken. Never include citation brackets, markdown links, raw URLs, "utm_source" parameters, "#:~:text=" fragment identifiers, or any link syntax anywhere in the output. When you want to credit a source, say it in plain spoken words woven into the sentence — e.g. "according to the AP" or "Axios reports" — never as a clickable link or bracketed reference. Do NOT include a "Sources:" section, footer, bibliography, or list of links anywhere, including at the end. The entire output must read as clean spoken prose from start to finish with zero raw URLs or citation markup of any kind. Do not include any meta-commentary about your own process anywhere in the output — no "Got everything I need, now let me write the briefing," no "Now I have everything I need," no "Good — I now have what I need," no "Let me search for...", nothing describing what you're about to do or just did, however it's phrased. The very first character of your output must be the start of the actual briefing itself — the greeting or the opening header — not a sentence about you or your process.
 
 For loose style reference only (not a required template), here is a briefing this person said they liked:
 
-(This example is showing you TONE AND STRUCTURE ONLY. Every fact, story, quote, and detail in your actual output must come from your own fresh search results for today. Do not reuse, paraphrase, or reproduce ANY specific fact, story, or detail from this example under any circumstances. If your search doesn't turn up a good "weird news" story or a good joke, skip that section entirely rather than reusing the example. Any place names, cities, venues, team opponents, scores, jokes, or story details shown in brackets below are placeholders — never use a real one from this example in your actual output. All real content — including location, teams, scores, stories, the joke, the framing line, and the My Life line — must come from your own search and fresh writing for today, never copied from this example.)
+(This example is showing you TONE AND STRUCTURE ONLY. Every fact, story, quote, and detail in your actual output must come from your own fresh search results for today (or, for the joke, from the verified candidates given). Do not reuse, paraphrase, or reproduce ANY specific fact, story, or detail from this example under any circumstances. If your search doesn't turn up a good "weird news" story, or none of the joke candidates are genuinely good, skip that section entirely rather than reusing the example. Any place names, cities, venues, team opponents, scores, jokes, or story details shown in brackets below are placeholders — never use a real one from this example in your actual output. All real content — including location, teams, scores, stories, the joke, the framing line, and the My Life line — must come from your own search, the verified joke candidates, and fresh writing for today, never copied from this example.)
 
 [EXAMPLE 1]
 ☕ David's Daily Brief
@@ -93,7 +91,7 @@ Last night's results for [this person's home teams]: [Team] beat [Opponent], fin
 [a real, current lighthearted news story — something genuinely funny or delightful from today's search, not invented]
 
 😄 Joke of the Day
-[a real, fresh, clean dad joke from today's search — setup and punchline, no explanation]
+[the single funniest, genuinely tellable joke picked from the verified candidates — not a pun, not a riddle, delivered straight, no explanation]
 
 Before I go — [one fresh sentence naming the morning-preparation practice itself, loosely touching one or two real Stoic themes as background, never a checklist, never the same combination as yesterday]
 
@@ -185,15 +183,47 @@ async function resolveWeatherCoords(
   return null;
 }
 
+// ── Joke of the day — a real source, not a web search ────────────────────────
+// Dad jokes and puns were the actual problem, not sentence count — a genuinely
+// funny, tellable joke can run several lines. JokeAPI's "Misc" category
+// (which already excludes its own separate "Pun" category) still has real
+// puns mixed in — its categorization is loose — confirmed via live testing:
+// roughly 1 in 10 "single"-type jokes and well over half of "twopart"-type
+// jokes came back as pun/wordplay construction even inside Misc. So this
+// fetches a pool of candidates (both formats — a good joke isn't always one
+// line) rather than trusting any single result, and leaves the actual
+// judgment call — genuinely funny vs. just wordplay — to Claude, which is
+// what distinguishes them, not an API parameter.
+async function fetchJokeCandidates(): Promise<string[]> {
+  try {
+    const res = await fetch(
+      "https://v2.jokeapi.dev/joke/Misc?blacklistFlags=nsfw,racist,sexist,political,religious&amount=10",
+      { signal: AbortSignal.timeout(6000) }
+    );
+    if (!res.ok) return [];
+    const data = await res.json() as {
+      error?: boolean;
+      jokes?: Array<{ type: string; joke?: string; setup?: string; delivery?: string }>;
+    };
+    if (data.error || !data.jokes) return [];
+    return data.jokes
+      .map((j) => j.type === "single" ? j.joke ?? null : (j.setup && j.delivery ? `${j.setup} ${j.delivery}` : null))
+      .filter((t): t is string => !!t?.trim());
+  } catch {
+    return [];
+  }
+}
+
 // ── Shared context-gathering — used by both generateDailyBrief and
 // generateDailyBriefDeepResearch so the two don't duplicate this logic ──────
 async function buildDailyBriefContext(userName: string): Promise<string> {
-  const [profile, goals, profileItems, memories, stoic] = await Promise.all([
+  const [profile, goals, profileItems, memories, stoic, jokeCandidates] = await Promise.all([
     getProfile(userName).catch(() => null),
     getGoals(userName).catch((): Awaited<ReturnType<typeof getGoals>> => []),
     getProfileItems(undefined, userName).catch((): Awaited<ReturnType<typeof getProfileItems>> => []),
     getRecentMemories(7).catch(() => []),
     getStoicForUser(userName).catch(() => null),
+    fetchJokeCandidates(),
   ]);
 
   const name = profile?.name ?? userName;
@@ -238,6 +268,10 @@ async function buildDailyBriefContext(userName: string): Promise<string> {
   const memoriesBlock = formatMemoriesForContext(memories);
   const stoicLine = stoic ? `"${stoic.quote}" — ${stoic.author} (${stoic.source})` : "none available today";
 
+  const jokeCandidatesBlock = jokeCandidates.length > 0
+    ? jokeCandidates.map((j, i) => `${i + 1}. ${j}`).join("\n")
+    : "None available today — skip the joke of the day section entirely rather than inventing one or searching for one.";
+
   const today = new Date().toLocaleDateString("en-US", {
     weekday: "long", year: "numeric", month: "long", day: "numeric",
   });
@@ -251,7 +285,9 @@ Interests: ${interestsLine}
 Active goals: ${goalsLine}
 ${profileItemsBlock}
 Recent context: ${memoriesBlock || "no recent conversation memories"}
-Today's reflection: ${stoicLine}`
+Today's reflection: ${stoicLine}
+VERIFIED JOKE CANDIDATES (real jokes from a dedicated source — pick exactly ONE to deliver, do not invent your own, do not search for one):
+${jokeCandidatesBlock}`
   );
 }
 
