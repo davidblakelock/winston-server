@@ -769,7 +769,7 @@ router.post(["/lists/todo", "/lists/to do", "/lists/to%20do"], async (req: Reque
           ? nextOccurrenceForPattern(recurringPattern!, extracted.time, tz)
           : extracted.dayOfWeek && !extracted.isRecurring
             ? resolveNextDayOfWeek(extracted.dayOfWeek, extracted.time, tz, extracted.nextWeek ?? false)
-            : computeFireAt(extracted.time, tz);
+            : computeFireAt(extracted.time, tz, extracted.isTomorrow ?? false);
         resolvedItemText = extracted.reminderText || resolvedItemText;
       }
     } catch {

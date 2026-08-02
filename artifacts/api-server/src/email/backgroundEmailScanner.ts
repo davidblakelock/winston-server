@@ -465,25 +465,43 @@ async function runScan(userName: string): Promise<void> {
   const totalEmails = meetings + records + orders + socials + newUrgentAlerts.length + newFyiItems.length + confirmedMeetings.length;
   const actionableCount = scanReplies.length + scanMeetings.length + urgentAlerts.length;
 
-  if (totalEmails > 0) {
-    const title = `📬 ${totalEmails} new email${totalEmails === 1 ? "" : "s"}`;
-    const body = actionableCount > 0 ? `${actionableCount} might need your attention` : "Nothing urgent";
-    const hasActionable = actionableCount > 0;
-    await sendFcmNotification({
-      userName,
-      notificationType: "email-scan",
-      title,
-      body,
-      data: {
-        action: "send_message",
-        message: "Check my email",
-        hasActionable: String(hasActionable),
-        ...(hasActionable ? { pushCategoryId: "email-action" } : {}),
-      },
-    });
-    logger.info({ userName, totalEmails, actionableCount }, "[BgEmailScanner] Email scan push sent");
+  // Vacation mode's whole premise is "only notify me if it's genuinely
+  // urgent" — but until now this only nudged the classifier's judgment on
+  // what to flag; it had zero effect on whether a notification actually
+  // fired. Records/orders/meetings/socials still got processed and saved
+  // as normal (that's correct — vacation mode shouldn't stop capturing a
+  // flight confirmation), they just never used to gate the push itself.
+  // Gate it here on the classifier's own "urgent" category specifically,
+  // matching what the setting is described as doing.
+  const shouldNotify = vacationMode ? newUrgentAlerts.length > 0 : totalEmails > 0;
 
-    // Log newly notified email IDs to prevent re-notification
+  if (totalEmails > 0) {
+    if (shouldNotify) {
+      const title = `📬 ${totalEmails} new email${totalEmails === 1 ? "" : "s"}`;
+      const body = actionableCount > 0 ? `${actionableCount} might need your attention` : "Nothing urgent";
+      const hasActionable = actionableCount > 0;
+      await sendFcmNotification({
+        userName,
+        notificationType: "email-scan",
+        title,
+        body,
+        data: {
+          action: "send_message",
+          message: "Check my email",
+          hasActionable: String(hasActionable),
+          ...(hasActionable ? { pushCategoryId: "email-action" } : {}),
+        },
+      });
+      logger.info({ userName, totalEmails, actionableCount }, "[BgEmailScanner] Email scan push sent");
+    } else {
+      logger.info({ userName, totalEmails, vacationMode }, "[BgEmailScanner] Push suppressed — vacation mode, nothing urgent");
+    }
+
+    // Log processed email IDs regardless of whether a notification fired —
+    // this is dedup bookkeeping, not a notification record. Without this,
+    // vacation-mode-suppressed non-urgent emails would never get logged and
+    // would be re-fetched and re-classified on every scan (every 30 min)
+    // indefinitely, until an urgent email finally triggers a notification.
     const newIds = [...newUrgentAlerts, ...newFyiItems]
       .map(e => e.gmailId)
       .filter(Boolean);
@@ -497,7 +515,7 @@ async function runScan(userName: string): Promise<void> {
           [userName, id]
         ).catch(() => {})
       ));
-      logger.info({ count: newIds.length }, "[BgEmailScanner] Logged notified email IDs");
+      logger.info({ count: newIds.length }, "[BgEmailScanner] Logged processed email IDs");
     }
   }
 }
