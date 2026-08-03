@@ -514,6 +514,19 @@ export async function fetchSourceItems(
   return items;
 }
 
+// Explicit relative-age label so passes never have to compute "how long ago
+// was this" themselves from a bare date — spelling it out as "today" /
+// "3 days ago" / "3 weeks ago" makes staleness impossible to miss or
+// miscompute, which a bare "Jul 4" date does not.
+function recencyLabel(occurredAt: string): string {
+  const daysAgo = Math.floor((Date.now() - new Date(occurredAt).getTime()) / 86_400_000);
+  if (daysAgo <= 0) return "today";
+  if (daysAgo === 1) return "yesterday";
+  if (daysAgo < 7) return `${daysAgo} days ago`;
+  const weeks = Math.round(daysAgo / 7);
+  return `${weeks} week${weeks === 1 ? "" : "s"} ago`;
+}
+
 function formatItemLines(items: SourceItem[], tz: string, limit: number): string {
   return items
     .slice(0, limit)
@@ -521,7 +534,7 @@ function formatItemLines(items: SourceItem[], tz: string, limit: number): string
       const date = new Date(it.occurredAt).toLocaleDateString("en-US", {
         timeZone: tz, month: "short", day: "numeric",
       });
-      return `• [${date}, ${it.context}] ${it.content}`;
+      return `• [${date}, ${recencyLabel(it.occurredAt)}, ${it.context}] ${it.content}`;
     })
     .join("\n");
 }
@@ -536,7 +549,7 @@ function formatIndexedItemLines(items: SourceItem[], tz: string, limit: number):
       const date = new Date(it.occurredAt).toLocaleDateString("en-US", {
         timeZone: tz, month: "short", day: "numeric",
       });
-      return `[${i}] (${date}, ${it.context}) ${it.content}`;
+      return `[${i}] (${date}, ${recencyLabel(it.occurredAt)}, ${it.context}) ${it.content}`;
     })
     .join("\n");
 }
@@ -607,6 +620,7 @@ export async function dotConnectorPass(userName: string): Promise<void> {
     `• Only suggest something Winston can actually do — calendar gaps, reservations, travel research, list additions.\n` +
     `• No vague life advice ("you should prioritize rest", "consider reconnecting with family").\n` +
     `• No suggestions about things already in progress or recently acted on.\n` +
+    `• RECENCY MATTERS: each item shows how long ago it was said (today / N days ago / N weeks ago). This is a "right now" nudge, not a memory lane trip — weight items from the last several days heavily and treat anything 2+ weeks old as probably no longer live unless something recent still points at it too. Don't build a suggestion off a single stale item just because it's still inside the 30-day window.\n` +
     `• The suggestion must be ONE natural conversational sentence Winston would say — under 25 words.\n` +
     `• Example format: "You mentioned wanting an exotic trip — you have a clear week in September. Want me to start looking at options?"\n\n` +
     `Return ONLY this JSON, no markdown:\n` +
@@ -719,6 +733,7 @@ export async function patternObservationPass(userName: string): Promise<void> {
     `  - "You've said you feel most alive after time outdoors. You have a clear afternoon today."\n` +
     `  - "You've brought up calling Olivia three times and haven't yet. What's in the way?"\n` +
     `• If anything concerning emerges — anxiety, persistent sadness, isolation — acknowledge it warmly and gently suggest talking to someone. Do NOT diagnose.\n` +
+    `• RECENCY MATTERS: each item shows how long ago it was said. A real pattern needs at least one occurrence from the last week or so still active — three mentions that all happened 3-4 weeks ago with nothing since is a pattern that already ended, not one worth surfacing now. Don't treat old repeated items as current just because they repeat.\n` +
     `• If there is no genuine pattern: set observation to null.\n\n` +
     `Return ONLY this JSON, no markdown:\n` +
     `{"observation": "the observation sentence, or null if no genuine pattern", "itemIndex": <item number above this is most directly based on, or null>, "relatedGoalIndex": <index from "Current goals" above if this genuinely connects to one, or null>}`;
@@ -814,7 +829,7 @@ export async function clusterPass(userName: string): Promise<void> {
     .slice(0, 150)
     .map((it, i) => {
       const date = new Date(it.occurredAt).toLocaleDateString("en-US", { timeZone: tz, month: "short", day: "numeric" });
-      return `[${i}] (${date}, ${it.context}) ${it.content}`;
+      return `[${i}] (${date}, ${recencyLabel(it.occurredAt)}, ${it.context}) ${it.content}`;
     })
     .join("\n");
   const corrections = await getRecentCorrections(userName, 30);
@@ -827,11 +842,18 @@ export async function clusterPass(userName: string): Promise<void> {
     `unstated intention that isn't already reflected anywhere else (e.g. several Europe-related saves ` +
     `suggesting a trip interest with nothing on the calendar yet). Do not force a cluster that isn't really ` +
     `there — most of the time there won't be one.\n\n` +
+    `RECENCY MATTERS: each item shows how long ago it was saved (today / N days ago / N weeks ago) — this is ` +
+    `an "emerging interest right now" signal, not an archive search. An emerging interest needs at least one ` +
+    `item from the last week or two to actually be emerging; three items that all sit 3-4 weeks old with ` +
+    `nothing since read as a phase that already passed, not a current one — score confidence low for that, ` +
+    `regardless of how neatly the theme fits, unless the match is so unambiguous and strong it would be wrong ` +
+    `to ignore it. All-old clusters should rarely clear the confidence bar; a cluster anchored by something ` +
+    `recent should be scored on its actual merits.\n\n` +
     `Return ONLY this JSON, no markdown:\n` +
     `{"confidence": 0-100, "theme": "short theme name or null", "message": "one warm conversational sentence ` +
     `Winston would say, or null", "itemIndexes": [item numbers above that belong to the cluster, or empty]}\n\n` +
-    `confidence reflects how genuinely non-obvious and real this cluster is — not enthusiasm. If nothing ` +
-    `clusters: {"confidence": 0, "theme": null, "message": null, "itemIndexes": []}.`;
+    `confidence reflects how genuinely non-obvious and real this cluster is — not enthusiasm — and must factor ` +
+    `in recency as described above. If nothing clusters: {"confidence": 0, "theme": null, "message": null, "itemIndexes": []}.`;
 
   try {
     const resp = await anthropic.messages.create({
@@ -936,7 +958,7 @@ export async function weeklyGiftPass(userName: string): Promise<string | null> {
       const date = new Date(it.occurredAt).toLocaleDateString("en-US", {
         timeZone: tz, weekday: "short", month: "short", day: "numeric",
       });
-      return `• [${date}, ${it.context}] ${it.content}`;
+      return `• [${date}, ${recencyLabel(it.occurredAt)}, ${it.context}] ${it.content}`;
     })
     .join("\n");
 
