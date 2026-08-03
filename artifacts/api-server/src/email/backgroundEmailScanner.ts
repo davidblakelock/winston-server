@@ -143,7 +143,11 @@ async function handleOrder(userName: string, msgId: string, from: string, subjec
     logger.info({ msgId, subject: result._subject }, "[BgEmailScanner] Order dropped — no order fields extracted");
     return;
   }
-  await handleOrderResult(userName, msgId, from, subject, order);
+  const created = await handleOrderResult(userName, msgId, from, subject, order);
+  logger.info(
+    { msgId, subject: result._subject, retailer: order.retailer, created },
+    created ? "[BgEmailScanner] Order saved" : "[BgEmailScanner] Order classified but not written — see handleOrderResult log above for why"
+  );
 }
 
 // ── Meeting handler ───────────────────────────────────────────────────────────

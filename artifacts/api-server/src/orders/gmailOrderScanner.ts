@@ -44,7 +44,19 @@ export async function handleOrderResult(
     !!order.orderNumber &&
     isAmazonSender(from);
 
-  if (!hasTrackingNumber && !isAmazonPseudoStatus) return false;
+  if (!hasTrackingNumber && !isAmazonPseudoStatus) {
+    // The genuinely undiagnosable case this whole function used to have —
+    // classifyEmail called this an order but extraction found no tracking
+    // number, and it's not Amazon (the only sender with a no-tracking
+    // fallback), so it's dropped. Log what was actually extracted so a report
+    // of "my order didn't show up" is traceable to classifier output instead
+    // of guesswork.
+    logger.info(
+      { emailId: msgId, from, subject, retailer: order.retailer, orderNumber: order.orderNumber, status: order.status },
+      "[OrderScanner] Order dropped — no tracking number and not an Amazon sender"
+    );
+    return false;
+  }
 
   if (hasTrackingNumber) {
     const trackingNumber = order.trackingNumber!;
@@ -242,13 +254,23 @@ export async function scanOrdersOnly(userName: string): Promise<OrderScanResult>
       const rawPayload = (detail.data.payload ?? {}) as GmailPart;
       const body = extractBodyFromPayload(rawPayload);
 
-      if (!body || body.length < 50) continue;
+      if (!body || body.length < 50) {
+        logger.info({ msgId, subject, bodyChars: body?.length ?? 0 }, "[OrderScanner] Skipped — body too short to classify");
+        continue;
+      }
 
       const result = await classifyEmail(from, subject, body);
-      if (!result || result.action !== "save_to_orders" || !result.order) continue;
+      if (!result || result.action !== "save_to_orders" || !result.order) {
+        logger.info({ msgId, subject, action: result?.action ?? "none" }, "[OrderScanner] Skipped — not classified as an order");
+        continue;
+      }
 
       const created = await handleOrderResult(userName, msgId, from, subject, result.order);
-      if (created) newCount++;
+      if (created) {
+        newCount++;
+      } else {
+        logger.info({ msgId, subject }, "[OrderScanner] Classified as an order but not written — see handleOrderResult log above for why");
+      }
     } catch (err) {
       logger.warn({ err, msgId }, "[OrderScanner] Failed to process email");
     }
