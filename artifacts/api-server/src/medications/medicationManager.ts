@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
-import { MODEL_SONNET } from "../lib/models.js";
+import { MODEL_SONNET, MODEL_HAIKU } from "../lib/models.js";
 import nodemailer from "nodemailer";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -688,8 +688,33 @@ export async function extractMedicationFromMessage(message: string): Promise<{
   dosage?: string;
   reminderTime?: string;
 } | null> {
-  const { extractMedicationWithAI } = await import("../lib/intentClassifier.js");
-  return extractMedicationWithAI(message);
+  try {
+    const resp = await anthropic.messages.create({
+      model:      MODEL_HAIKU,
+      max_tokens: 100,
+      system: `Extract medication info from the user message. Return ONLY valid JSON:
+{"name": "medication name", "dosage": "dose like 10mg or null", "reminderTime": "HH:MM 24h or null"}
+If no medication mentioned: {"name": null}.
+Examples:
+- "add lisinopril 10mg taken at 9am" → {"name":"lisinopril","dosage":"10mg","reminderTime":"09:00"}
+- "start taking Metformin" → {"name":"Metformin","dosage":null,"reminderTime":null}
+- "add atorvastatin 40mg at 8pm" → {"name":"atorvastatin","dosage":"40mg","reminderTime":"20:00"}`,
+      messages: [{ role: "user", content: message }],
+    });
+
+    const raw = resp.content[0]?.type === "text" ? resp.content[0].text.trim() : "{}";
+    const m   = raw.match(/\{[\s\S]*\}/);
+    if (!m) return null;
+    const parsed = JSON.parse(m[0]) as { name?: string | null; dosage?: string | null; reminderTime?: string | null };
+    if (!parsed.name || parsed.name.length < 2) return null;
+    return {
+      name:         parsed.name,
+      dosage:       parsed.dosage ?? undefined,
+      reminderTime: parsed.reminderTime ?? undefined,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export async function updateMedicationReminderTime(

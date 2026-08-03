@@ -24,7 +24,6 @@ import { startCalendarSyncScheduler, ensureCalendarSyncTable } from "./departure
 import { ensureRelationshipTable } from "./relationships/relationshipManager";
 import { startProactiveEventScheduler } from "./morning/proactiveEventScheduler";
 import { initConcertsTable, startVenueMonitorScheduler } from "./morning/venueMonitor";
-import { initBriefingStoriesTable } from "./morning/storyDedup";
 import { runBriefingCacheMigrations } from "./morning/briefingCache";
 import { syncPeopleDatesToImportantDates } from "./people/peopleManager.js";
 import { ensureContactsTable } from "./google/contacts";
@@ -248,13 +247,6 @@ app.listen(port, async (err) => {
     await initConcertsTable();
   } catch (e) {
     logger.warn({ err: e }, "Concerts table initialization warning");
-  }
-
-  try {
-    await initBriefingStoriesTable();
-    logger.info("[startup] daily_briefing_stories table ready");
-  } catch (e) {
-    logger.warn({ err: e }, "Briefing stories table initialization warning");
   }
 
   try {

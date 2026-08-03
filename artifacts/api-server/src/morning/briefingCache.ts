@@ -8,16 +8,16 @@ function ctDateKey(tz = "UTC"): string {
 // Idempotent — safe to run on every server start.
 
 export async function runBriefingCacheMigrations(): Promise<void> {
-  // Create the table if it doesn't exist (idempotent).
+  // Create the table if it doesn't exist (idempotent). preamble/suffix/
+  // candidate_story_keys from the old pre-generation pipeline are deliberately
+  // left out of fresh-deploy schema — an existing production table already
+  // has them (untouched, not dropped) but nothing reads or writes them anymore.
   // UNIQUE constraint is a separate index to avoid exec_sql parse issues on Supabase.
   try {
     await query(`
       CREATE TABLE IF NOT EXISTS morning_static_context (
         user_name             text NOT NULL,
         date_key              text NOT NULL,
-        preamble              text,
-        suffix                text,
-        candidate_story_keys  jsonb,
         built_at              timestamptz NOT NULL DEFAULT NOW(),
         push_sent_at          timestamptz,
         briefing_text         text
@@ -39,17 +39,6 @@ export async function runBriefingCacheMigrations(): Promise<void> {
     console.log("[BriefingCache] Startup migrations complete");
   } catch (err) {
     console.warn("[BriefingCache] Startup migration warning:", err);
-  }
-
-  // Drop NOT NULL constraints on preamble/suffix — older deployments created the table
-  // with NOT NULL which causes the briefing_text-only INSERT in setCachedBriefing to fail,
-  // breaking the "briefing doesn't change during the day" guarantee after server restarts.
-  try {
-    await query(`ALTER TABLE morning_static_context ALTER COLUMN preamble DROP NOT NULL`);
-    await query(`ALTER TABLE morning_static_context ALTER COLUMN suffix DROP NOT NULL`);
-    console.log("[BriefingCache] preamble/suffix NOT NULL constraints dropped (idempotent)");
-  } catch (err) {
-    console.warn("[BriefingCache] Could not drop NOT NULL constraints (may already be nullable):", err);
   }
 }
 

@@ -493,90 +493,12 @@ router.post("/admin/test-push", express.json({ limit: "256kb" }), async (req: Re
 });
 
 /**
- * POST /api/admin/test-daily-brief
- *
- * Diagnostic tool for manually testing long-running background generation
- * (generateDailyBriefDeepResearch) without being constrained by chat request
- * timeouts — deep research needs several minutes, but both the client and
- * server infrastructure abort HTTP requests around 38-60 seconds. This route
- * fires the job and returns immediately; the result is logged separately
- * once it completes (search server logs for [DailyBriefDeepResearch]).
- */
-router.post("/admin/test-daily-brief", async (req: Request, res: Response) => {
-  const userName = await authenticate(req, res);
-  if (!userName) return;
-
-  // Fire and forget — do not await. Respond immediately so the HTTP
-  // connection isn't held open for the several minutes deep research needs.
-  res.json({ ok: true, message: "Deep research briefing started — check server logs for progress and the final result (search for [DailyBriefDeepResearch])." });
-
-  import("../morning/briefingPregenerate.js").then(({ generateDailyBriefDeepResearch }) => {
-    generateDailyBriefDeepResearch(userName)
-      .then((result) => {
-        if (result) {
-          req.log.info(
-            { userName, resultLength: result.length, resultPreview: result.slice(0, 200) },
-            "[DailyBriefDeepResearch] TEST ROUTE — completed successfully, full result below"
-          );
-          req.log.info(
-            { userName, fullResult: result },
-            "[DailyBriefDeepResearch] TEST ROUTE — full text"
-          );
-        } else {
-          req.log.warn({ userName }, "[DailyBriefDeepResearch] TEST ROUTE — returned null");
-        }
-      })
-      .catch((err) => {
-        req.log.warn({ err, userName }, "[DailyBriefDeepResearch] TEST ROUTE — threw an error");
-      });
-  });
-});
-
-/**
- * POST /api/admin/test-daily-brief-searchapi
- *
- * Diagnostic tool for manually testing generateDailyBriefSearchApi
- * (gpt-5-search-api via Chat Completions) without touching the chat trigger.
- * Same fire-and-forget pattern as /admin/test-daily-brief — fires the job and
- * returns immediately; the result is logged separately once it completes
- * (search server logs for [DailyBriefSearchApi]).
- */
-router.post("/admin/test-daily-brief-searchapi", async (req: Request, res: Response) => {
-  const userName = await authenticate(req, res);
-  if (!userName) return;
-
-  // Fire and forget — do not await. Respond immediately.
-  res.json({ ok: true, message: "gpt-5-search-api briefing started — check server logs for the result (search for [DailyBriefSearchApi])." });
-
-  import("../morning/briefingPregenerate.js").then(({ generateDailyBriefSearchApi }) => {
-    generateDailyBriefSearchApi(userName)
-      .then((result) => {
-        if (result) {
-          req.log.info(
-            { userName, resultLength: result.length, resultPreview: result.slice(0, 200) },
-            "[DailyBriefSearchApi] TEST ROUTE — completed successfully, full result below"
-          );
-          req.log.info(
-            { userName, fullResult: result },
-            "[DailyBriefSearchApi] TEST ROUTE — full text"
-          );
-        } else {
-          req.log.warn({ userName }, "[DailyBriefSearchApi] TEST ROUTE — returned null");
-        }
-      })
-      .catch((err) => {
-        req.log.warn({ err, userName }, "[DailyBriefSearchApi] TEST ROUTE — threw an error");
-      });
-  });
-});
-
-/**
  * POST /api/admin/test-daily-brief-live
  *
- * Diagnostic tool for manually testing generateDailyBrief — the actual live
- * morning-briefing path (gpt-4o + web_search_preview, verified weather
- * injected directly, search-count-gated retry) — without going through chat.
- * Same fire-and-forget pattern as the other test-daily-brief routes.
+ * Diagnostic tool for manually testing generateDailyBrief — the live
+ * morning-briefing path (Claude Sonnet + web_search, verified weather/joke
+ * data injected directly) — without going through chat. Fire-and-forget:
+ * responds immediately, result is logged separately (search for [DailyBrief]).
  */
 router.post("/admin/test-daily-brief-live", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
