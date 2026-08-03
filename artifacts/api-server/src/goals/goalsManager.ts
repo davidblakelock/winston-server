@@ -975,14 +975,14 @@ export async function goalsFreeformChat(
     `Your job in this conversation is to help them land on something concrete, personally-relevant, and real to actually do, watch, read, listen to, or try — not a survey of background information. Name actual things (a real track, album, book, class, app, route — never "find a good resource").\n\n` +
     `MATCH YOUR DEPTH TO WHAT WAS ACTUALLY ASKED — this matters as much as personalization does. Read the shape of their question before answering:\n` +
     `- A narrow, specific ask ("just give me one thing to start with," "what's the single best album") gets a tight answer: one concrete thing, real personalized reasoning, done.\n` +
-    `- A broad or multi-part ask — naming several distinct facets at once (e.g. "styles, types, places to go"), or a genuinely open "tell me about X" — deserves real breadth. Address EVERY distinct part they named, not just the first or easiest one. If they asked about styles AND places, your reply covers styles AND places, each with specific personalized picks, not one part answered and the rest silently dropped.\n` +
+    `- A broad or multi-part ask — naming several distinct facets at once (e.g. "styles, types, places to go"), or a genuinely open "tell me about X" — deserves real breadth. Address EVERY distinct part they named, not just the first or easiest one. If they asked about styles AND places, your reply covers styles AND places, each with specific personalized picks, not one part answered and the rest silently dropped. Covering that much ground does NOT let you off the hook for landing on one thing at the end — see the mandatory-offer rule below, which applies exactly the same regardless of how much breadth came before it.\n` +
     `- Never compress a multi-part question into a single generic item just to keep the reply short. A short reply that only answers one-third of what was asked is a worse answer than a longer one that actually covers it — length should come from how much ground the question covers, not from a fixed target.\n\n` +
     `PERSONALIZATION IS MANDATORY, NOT OPTIONAL — at every depth: a bare name with no reasoning ("attend a wine tasting") is a label, not a recommendation, and is never acceptable, whether it's the one thing in a tight answer or one item among many in a broad one. Every concrete thing you name must come with a real, specific reason tied to something you actually know about this person above — their hobbies, another goal, something they've saved or mentioned, someone in their life, their music/artist taste, where they live, or something they said earlier in this conversation. A real one reads like "Try [specific thing] — since you're into [specific fact about them], this fits because [specific reason]," never just the name of the thing. When covering several facets of a broad question, each facet gets its own specific, personalized pick — don't personalize the first one and list the rest generically. If you genuinely don't have anything specific yet to hang the reasoning on, ask one question to get something concrete rather than naming something generic with no connection to them.\n\n` +
     `Within whatever depth is actually called for, stay tight — no padding, no generic background survey material, no essay when a paragraph will do. But never sacrifice covering what was actually asked, or the personalized reasoning behind each pick, just to hit a shorter length. If they want to go deeper, ask follow-ups, or want a fuller plan, keep going naturally; this is a real conversation, not a scripted flow.\n\n` +
-    `WHEN THE CONVERSATION HAS LANDED ON SOMETHING REAL: the moment you've proposed something concrete enough that it's worth tracking as an actual goal — not just background chat — you MUST explicitly ask if they want to save it, in your own words (e.g. "Want me to add this as a goal?"), before emitting the delimiter below. The delimiter alone with no visible ask leaves them with no way to know there's anything to confirm. Then end your reply with exactly this, on its own line:\n` +
+    `EVERY REPLY THAT NAMES SOMETHING CONCRETE MUST END BY OFFERING TO SAVE IT — MANDATORY, NOT CONDITIONAL ON DEPTH: if your reply named ANY specific thing(s) to do/watch/read/listen to/try, it must end by crystallizing down to the SINGLE best concrete starting point — even if you covered five facets with a personalized pick under each — and explicitly asking if they want to save THAT ONE THING, in your own words (e.g. "Want me to add [that specific thing] as a goal?"). A rich, multi-part answer is never an exemption from this — if anything it needs this landing step MORE, since without it they're left with a pile of options and no clear next action. Pick the single most compelling one (never "pick any of the above," never a vague wrapper title describing the whole topic), name it specifically, and ask. The delimiter alone with no visible ask leaves them with no way to know there's anything to confirm. Then end your reply with exactly this, on its own line:\n` +
     `${GOAL_OFFER_DELIM}\n` +
-    `A short, specific title (under 8 words)\n` +
-    `Only do this once something concrete has actually been proposed — never for a purely informational exchange, and never more than once per turn. ` +
+    `A short, specific title (under 8 words) naming the ONE thing you just crystallized to — never a title describing the whole broad topic you covered\n` +
+    `The only exemption is a reply that named nothing concrete at all — purely informational or clarifying, no real recommendation in it anywhere. Never more than one offer per turn. ` +
     `${GOAL_OFFER_DELIM} and ${GOAL_CONFIRMED_DELIM} must never both appear in the same reply — offering something is not the same as it being saved. Saving only ever happens in response to the user's own separate, later message actually confirming it. Never emit both delimiters in one turn, and never say or imply it's already saved unless you are emitting ${GOAL_CONFIRMED_DELIM} in direct response to that separate confirmation.` +
     pendingOfferBlock;
 
@@ -1039,6 +1039,19 @@ export async function goalsFreeformChat(
   const shouldConfirm =
     !madeNewOffer && !!pendingOffer &&
     (confirmedViaTag || isUnambiguousGoalConfirmation(message));
+
+  // ── Safety net: an unambiguous "save it" with nothing actually pending ──────
+  // Defense-in-depth for the real failure this was built to catch: a reply can
+  // name real, specific things without ever crystallizing to one and asking to
+  // save it (the prompt above is the actual fix for that) — when it doesn't,
+  // "save it" lands with pendingOffer null and shouldConfirm false, and would
+  // otherwise fall through to whatever GPT-4o happened to say, silently doing
+  // nothing with no signal anything went wrong. Override with an explicit,
+  // deterministic ask instead of trusting the model noticed the mismatch.
+  if (!madeNewOffer && !pendingOffer && isUnambiguousGoalConfirmation(message)) {
+    logger.info({ userName }, "[Goals] Unambiguous save confirmation with no pending offer — asking what to save instead of silent no-op");
+    return { reply: "What would you like me to save as a goal? Let's land on something concrete first." };
+  }
 
   if (!shouldConfirm) {
     return { reply };
