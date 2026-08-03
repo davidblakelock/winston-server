@@ -139,7 +139,6 @@ router.post(
     //   • Memory, profile, weather context
     //   • All post-response side effects (fact extraction, mood, followups…)
     let reply: string;
-    let morningActions: unknown[] | undefined;
     try {
       const port = process.env.PORT ?? "8080";
 
@@ -181,10 +180,8 @@ router.post(
       const chatData = (await chatRes.json()) as {
         response?: string;
         error?: string;
-        morningActions?: unknown[];
       };
       reply = chatData.response ?? "";
-      if (chatData.morningActions) morningActions = chatData.morningActions;
 
       if (!reply) {
         res.status(502).json({ error: "Empty chat response", transcript });
@@ -265,7 +262,6 @@ router.post(
       audioBase64,
       mimeType,
       conversationEnded: isConversationOver(transcript, reply),
-      ...(morningActions !== undefined ? { morningActions } : {}),
     });
   }
 );
