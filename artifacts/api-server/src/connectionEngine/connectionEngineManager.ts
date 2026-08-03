@@ -518,7 +518,7 @@ export async function fetchSourceItems(
 // was this" themselves from a bare date — spelling it out as "today" /
 // "3 days ago" / "3 weeks ago" makes staleness impossible to miss or
 // miscompute, which a bare "Jul 4" date does not.
-function recencyLabel(occurredAt: string): string {
+export function recencyLabel(occurredAt: string): string {
   const daysAgo = Math.floor((Date.now() - new Date(occurredAt).getTime()) / 86_400_000);
   if (daysAgo <= 0) return "today";
   if (daysAgo === 1) return "yesterday";
@@ -527,7 +527,10 @@ function recencyLabel(occurredAt: string): string {
   return `${weeks} week${weeks === 1 ? "" : "s"} ago`;
 }
 
-function formatItemLines(items: SourceItem[], tz: string, limit: number): string {
+// Was unused for a while (only formatIndexedItemLines had callers) — now
+// reused by goalsManager.ts's buildGoalsProfileContext, which needs prose
+// (not indexed) since goals chat isn't pointing back at a specific item.
+export function formatItemLines(items: SourceItem[], tz: string, limit: number): string {
   return items
     .slice(0, limit)
     .map((it) => {

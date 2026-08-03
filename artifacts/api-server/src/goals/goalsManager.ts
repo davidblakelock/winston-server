@@ -6,6 +6,8 @@ import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 import { getProfile, buildSystemPromptFromProfile, buildProfileContext } from "../onboarding/onboardingManager.js";
 import { getPeople } from "../people/peopleManager.js";
 import { MODEL_HAIKU } from "../lib/models.js";
+import { getUserLocationContext } from "../lib/userTimezone.js";
+import type { SourceItem, UserCorrection } from "../connectionEngine/connectionEngineManager.js";
 
 const MODEL_GPT4O = "gpt-4o" as const;
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -325,6 +327,15 @@ export function isUnambiguousGoalConfirmation(message: string): boolean {
 // so the free-form chat's personalization (hobbies, music taste, key people)
 // is as rich as the structured breakdown's, not just name+city.
 
+// Pulled in dynamically (not a static import) to avoid a circular dependency —
+// connectionEngineManager.ts already imports getGoals/getGoalById from this
+// file, so a static top-level import back the other way would create a cycle.
+// Both usages here are inside an async function body (never at module-load
+// time), which is the safe pattern for this regardless.
+async function loadConnectionEngineHelpers() {
+  return import("../connectionEngine/connectionEngineManager.js");
+}
+
 async function buildGoalsProfileContext(
   userName: string
 ): Promise<{ profileContext: string; userCity: string; displayName: string }> {
@@ -338,7 +349,15 @@ async function buildGoalsProfileContext(
   const sportsTeams     = userProfile.sportsTeams ?? "";
   const favoriteArtists = userProfile.favoriteArtists ?? [];
 
-  const people = await getPeople(userName).catch(() => [] as Array<{ name: string; relationship: string; city?: string | null; details?: string | null }>);
+  const { fetchSourceItems, getRecentCorrections, formatItemLines } = await loadConnectionEngineHelpers();
+  const { timezone: tz } = await getUserLocationContext(userName).catch(() => ({ timezone: "UTC" }));
+
+  const [people, existingGoals, sourceItems, corrections] = await Promise.all([
+    getPeople(userName).catch(() => [] as Array<{ name: string; relationship: string; city?: string | null; details?: string | null }>),
+    getGoals(userName).catch(() => [] as Goal[]),
+    fetchSourceItems(userName, ["life_capture", "attic_item"], 30).catch(() => [] as SourceItem[]),
+    getRecentCorrections(userName, 30).catch(() => [] as UserCorrection[]),
+  ]);
 
   const lines: string[] = [`The user's name is ${displayName}.`];
   if (city)                   lines.push(`They live in ${city}.`);
@@ -355,6 +374,33 @@ async function buildGoalsProfileContext(
       lines.push(entry);
     }
   }
+
+  // Same shared knowledge the connection engine reasons over (attic items,
+  // life captures, other goals, past correction feedback) — previously this
+  // function only ever saw static profile fields, so a suggestion could land
+  // right next to something they'd already saved to the Attic or a goal
+  // they're already working, with no awareness it was there.
+  const activeGoals = existingGoals.filter((g) => g.status !== "completed").slice(0, 8);
+  if (activeGoals.length > 0) {
+    lines.push("\nTheir other current goals (don't re-suggest these as if new; connect to them when it genuinely fits):");
+    for (const g of activeGoals) {
+      const done  = g.steps.filter((s) => s.completed).length;
+      const total = g.steps.length;
+      lines.push(`- "${g.title}"${g.description ? ` — ${g.description}` : ""} (${total > 0 ? `${done}/${total} steps done` : "no steps yet"})`);
+    }
+  }
+
+  if (sourceItems.length > 0) {
+    lines.push(`\nThings they've recently saved or jotted down (Attic items, journal-style captures) — use these for real personalization when relevant, don't just recite them back:\n${formatItemLines(sourceItems, tz, 20)}`);
+  }
+
+  if (corrections.length > 0) {
+    lines.push("\nPast feedback they've given on suggestions like this — don't repeat something they've pushed back on for a similar reason:");
+    for (const c of corrections.slice(0, 8)) {
+      lines.push(`- "${c.natural_language_feedback}"`);
+    }
+  }
+
   return { profileContext: lines.join("\n"), userCity: city, displayName };
 }
 
@@ -926,9 +972,13 @@ export async function goalsFreeformChat(
 
   const systemPrompt =
     `You are a knowledgeable, deeply personal advisor — like a brilliant friend who knows this person well.${profileContext ? `\n\n${profileContext}` : ""}\n\n` +
-    `Your job in this conversation is to help them land on ONE concrete, personally-relevant starting point — a specific thing to actually do, watch, read, listen to, or try — not a survey of background information. Name the actual thing (a real track, album, book, class, app, route — never "find a good resource").\n\n` +
-    `PERSONALIZATION IS MANDATORY, NOT OPTIONAL: a bare name with no reasoning ("attend a wine tasting") is a label, not a recommendation, and is never an acceptable reply on its own. Every concrete thing you name must come with a real, specific reason tied to something you actually know about this person above — their hobbies, another goal, someone in their life, their music/artist taste, where they live, or something they said earlier in this conversation. A real one reads like "Try [specific thing] — since you're into [specific fact about them], this fits because [specific reason]," never just the name of the thing. If you genuinely don't have anything specific yet to hang the reasoning on, ask one question to get something concrete rather than naming something generic with no connection to them.\n\n` +
-    `Keep replies short by default — a few sentences, not an essay — but the personalized reasoning above is never the thing you cut for brevity. If you need to trim, cut generic background survey material first; the concrete thing plus its specific reason always stays in, even in the shortest reply. If they want to go deeper, ask follow-ups, or want a fuller plan, keep going naturally; this is a real conversation, not a scripted flow.\n\n` +
+    `Your job in this conversation is to help them land on something concrete, personally-relevant, and real to actually do, watch, read, listen to, or try — not a survey of background information. Name actual things (a real track, album, book, class, app, route — never "find a good resource").\n\n` +
+    `MATCH YOUR DEPTH TO WHAT WAS ACTUALLY ASKED — this matters as much as personalization does. Read the shape of their question before answering:\n` +
+    `- A narrow, specific ask ("just give me one thing to start with," "what's the single best album") gets a tight answer: one concrete thing, real personalized reasoning, done.\n` +
+    `- A broad or multi-part ask — naming several distinct facets at once (e.g. "styles, types, places to go"), or a genuinely open "tell me about X" — deserves real breadth. Address EVERY distinct part they named, not just the first or easiest one. If they asked about styles AND places, your reply covers styles AND places, each with specific personalized picks, not one part answered and the rest silently dropped.\n` +
+    `- Never compress a multi-part question into a single generic item just to keep the reply short. A short reply that only answers one-third of what was asked is a worse answer than a longer one that actually covers it — length should come from how much ground the question covers, not from a fixed target.\n\n` +
+    `PERSONALIZATION IS MANDATORY, NOT OPTIONAL — at every depth: a bare name with no reasoning ("attend a wine tasting") is a label, not a recommendation, and is never acceptable, whether it's the one thing in a tight answer or one item among many in a broad one. Every concrete thing you name must come with a real, specific reason tied to something you actually know about this person above — their hobbies, another goal, something they've saved or mentioned, someone in their life, their music/artist taste, where they live, or something they said earlier in this conversation. A real one reads like "Try [specific thing] — since you're into [specific fact about them], this fits because [specific reason]," never just the name of the thing. When covering several facets of a broad question, each facet gets its own specific, personalized pick — don't personalize the first one and list the rest generically. If you genuinely don't have anything specific yet to hang the reasoning on, ask one question to get something concrete rather than naming something generic with no connection to them.\n\n` +
+    `Within whatever depth is actually called for, stay tight — no padding, no generic background survey material, no essay when a paragraph will do. But never sacrifice covering what was actually asked, or the personalized reasoning behind each pick, just to hit a shorter length. If they want to go deeper, ask follow-ups, or want a fuller plan, keep going naturally; this is a real conversation, not a scripted flow.\n\n` +
     `WHEN THE CONVERSATION HAS LANDED ON SOMETHING REAL: the moment you've proposed something concrete enough that it's worth tracking as an actual goal — not just background chat — you MUST explicitly ask if they want to save it, in your own words (e.g. "Want me to add this as a goal?"), before emitting the delimiter below. The delimiter alone with no visible ask leaves them with no way to know there's anything to confirm. Then end your reply with exactly this, on its own line:\n` +
     `${GOAL_OFFER_DELIM}\n` +
     `A short, specific title (under 8 words)\n` +
