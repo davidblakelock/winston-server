@@ -8,6 +8,7 @@ import { getUserLocationContext } from "../lib/userTimezone.js";
 import { getGoals } from "../goals/goalsManager.js";
 import { getCachedWeather } from "../weather/weatherCache.js";
 import { MODEL_SONNET } from "../lib/models.js";
+import { getRecentBriefingTexts, saveBriefingText } from "./briefingCache.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -34,9 +35,11 @@ function buildDailyBriefInstruction(interestPicks: string[]): string {
 
 SEARCH 1a — National news: search for today's top US and world news headlines. Aim for 10 real stories worth knowing — major national and international stories only. Do not include hyper-local news from a single city or small region — local government votes, local development projects, local tribal/community news. Exclude stock market and business-finance stories here — that's covered separately in Search 3 — and exclude AI industry/tech company news (product launches, funding rounds, model releases) unless it's genuinely historic.${interestSearchBlock}
 
+STORY QUALITY BAR — applies to every item in Search 1a and 1b alike: only include a story if your search results let you state who/what/when clearly and specifically. If the results are thin, contradictory, or leave the basic facts unclear (you can't say what actually happened or to whom), drop it and use a different story instead — an incoherent story is worse than one fewer story. Also exclude recurring event announcements and PR/marketing-style items with no real news hook — "X festival returns this year," "Nth-annual Y classic announced," a venue's routine seasonal promotion — these aren't news even when they technically connect to one of this person's interests; an interest-tied search should surface an actual event, development, or story involving that interest, not a calendar listing.
+
 When choosing the final list of stories, prefer genuinely important news, but when two stories are similarly newsworthy, favor the one connected to this person's actual interests over an equally routine but disconnected one. If Search 1b turned up something real and relevant, fold it into the same numbered list rather than giving it a separate section.
 
-SEARCH 2 — Sports: search for this person's teams' most recent completed games (the specific team names are in the context block below — use them as the search terms, e.g. "[team name] score last night"). Report only FINAL scores from the most recently completed game per team — last night's game if one was played, otherwise their most recent prior game.
+SEARCH 2 — Sports: search for this person's teams' most recent completed games (the specific team names are in the context block below — use them as the search terms, e.g. "[team name] score last night"). Report only FINAL scores from the most recently completed game per team — last night's game if one was played, otherwise their most recent prior game. Verify the date the game was actually played from your search results before including it — if you cannot confirm it was last night's game (or, absent one, the single most recent prior game), leave that team out of the sports section rather than reporting an older score.
 
 SEARCH 3 — Markets: search for stock futures and overnight financial news ahead of today's open (e.g. "stock futures today", "Dow S&P Nasdaq futures").
 
@@ -52,9 +55,9 @@ NEWS ITEM LENGTH — HARD LIMIT: Each of the 10 news items gets a headline plus 
 
 NEUTRALITY — CRITICAL: Report only the concrete fact of what happened (who, what, when) — never characterize it, never editorialize, never take a side or imply one is right, never speculate on motives or consequences, never use loaded or opinionated language. This applies to every item, political or not, and applies even when the search results themselves are framed with opinion or analysis — strip that out and report just the underlying fact. Specifically banned: reaction/framing sentences or clauses tacked onto the fact, like "a serious escalation," "not a new headline, but...," "worth flagging," "tough one," "wine country in crisis," or any other editorial aside — if you catch yourself writing one, delete it rather than keep it as a second sentence. The one sentence you keep is always the fact itself, never your reaction to the fact.
 
-SPORTS: Format each as: team, final score, opponent. Do not mention upcoming games, schedules, or say a team is "set to play today" — this section covers only what already happened, never what's coming up.
+SPORTS: State the result unambiguously, spelling out who won — e.g. "[Team] beat [Opponent], 5–2" or "[Team] lost to [Opponent], 2–5" — always this-person's-team's-score first, opponent's second, and always paired with "beat"/"lost to" so the order can never be misread as reversed. Never just list "team, score, opponent" without saying who won. Do not mention upcoming games, schedules, or say a team is "set to play today" — this section covers only what already happened, never what's coming up.
 
-MARKETS & INVESTING: Do not give a live price snapshot or quote — the market hasn't opened yet at this hour. Instead, cover futures direction for the major indices (Dow, S&P, Nasdaq) ahead of today's open, and any major overnight financial news likely to move the market at open — earnings reports, Fed commentary, major economic data releases, or significant geopolitical developments affecting markets. Frame this as what the trading day ahead holds, not a snapshot of where things stood at some overnight timestamp — don't reference a specific time or timezone for any price or figure.
+MARKETS & INVESTING — HARD LIMIT: Two or three sentences, total, no more. Futures direction for the major indices (Dow, S&P, Nasdaq), plus the ONE or TWO biggest overnight drivers (an earnings report, Fed commentary, a major economic data release, a geopolitical development) — not a survey of everything moving markets today. This section should read as a quick heads-up, not a market column; it must never come out longer than the news section combined. Frame it as what the trading day ahead holds, not a snapshot of where things stood at some overnight timestamp — don't reference a specific time or timezone for any price or figure.
 
 JOKE OF THE DAY: The context block gives you a real pool of joke candidates (VERIFIED JOKE CANDIDATES) — pick exactly ONE to deliver, the single funniest and most genuinely tellable one in the whole list. This is a judgment call, and it matters: think about what someone who's actually good at telling jokes would tell a friend, not what a dad-jokes calendar would print. Skip — do not pick — anything that's just a pun or wordplay for its own sake ("...because he's a fungi," "algae-bra," anything where the punchline is a play on words rather than a real idea or twist), and skip generic "why did the X cross the Y" riddle-format jokes too. Favor candidates with a genuine idea, an ironic turn, an observation, or a story — the kind of joke that gets a real laugh, not a groan. A good pick can be one line or several; length isn't the criterion, wit is. Give the one you pick straight — don't explain why it's funny, don't apologize for it, don't over-introduce it, just tell it. If NONE of the candidates are genuinely good by this bar, skip this section entirely rather than settling for a weak one — a missing joke is better than a bad one.
 
@@ -217,13 +220,14 @@ async function fetchJokeCandidates(): Promise<string[]> {
 // ── Shared context-gathering — used by both generateDailyBrief and
 // generateDailyBriefDeepResearch so the two don't duplicate this logic ──────
 async function buildDailyBriefContext(userName: string): Promise<string> {
-  const [profile, goals, profileItems, memories, stoic, jokeCandidates] = await Promise.all([
+  const [profile, goals, profileItems, memories, stoic, jokeCandidates, recentBriefings] = await Promise.all([
     getProfile(userName).catch(() => null),
     getGoals(userName).catch((): Awaited<ReturnType<typeof getGoals>> => []),
     getProfileItems(undefined, userName).catch((): Awaited<ReturnType<typeof getProfileItems>> => []),
     getRecentMemories(7).catch(() => []),
     getStoicForUser(userName).catch(() => null),
     fetchJokeCandidates(),
+    getRecentBriefingTexts(userName, 2).catch(() => []),
   ]);
 
   const name = profile?.name ?? userName;
@@ -272,6 +276,10 @@ async function buildDailyBriefContext(userName: string): Promise<string> {
     ? jokeCandidates.map((j, i) => `${i + 1}. ${j}`).join("\n")
     : "None available today — skip the joke of the day section entirely rather than inventing one or searching for one.";
 
+  const recentBriefingsBlock = recentBriefings.length > 0
+    ? recentBriefings.map((t, i) => `[Briefing from ${i === 0 ? "yesterday" : i + 1 + " days ago"}]\n${t}`).join("\n\n")
+    : "None on file — this is either the first briefing or none were saved recently.";
+
   const today = new Date().toLocaleDateString("en-US", {
     weekday: "long", year: "numeric", month: "long", day: "numeric",
   });
@@ -287,7 +295,9 @@ ${profileItemsBlock}
 Recent context: ${memoriesBlock || "no recent conversation memories"}
 Today's reflection: ${stoicLine}
 VERIFIED JOKE CANDIDATES (real jokes from a dedicated source — pick exactly ONE to deliver, do not invent your own, do not search for one):
-${jokeCandidatesBlock}`
+${jokeCandidatesBlock}
+RECENT BRIEFINGS (for avoiding repeats only — never read this back or reference it directly): the weird/funny story, the joke, and the news angles below were already delivered recently. Today's actual news will naturally differ since real events happened since then, but do not pick the same weird/funny story, the same joke, or lean on the same angle for an interest-tied story again — if your search for a fresh weird/funny story doesn't turn up something different from what's shown here, skip that section rather than repeat it.
+${recentBriefingsBlock}`
   );
 }
 
@@ -358,6 +368,12 @@ export async function generateDailyBrief(userName: string): Promise<string | nul
       // OpenAI's web_search_preview tool, which does not.
       logger.warn({ userName }, "[DailyBrief] First attempt failed — retrying once");
       text = await callDailyBriefViaClaude(input, userName);
+    }
+
+    if (text) {
+      saveBriefingText(userName, text).catch((err) =>
+        logger.warn({ err, userName }, "[DailyBrief] Failed to save briefing text for repeat-avoidance")
+      );
     }
 
     return text;

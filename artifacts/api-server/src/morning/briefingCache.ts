@@ -130,11 +130,14 @@ export async function releaseMorningPushSlot(userName: string): Promise<void> {
 
 /**
  * Restores today's push-sent state from the DB into the in-memory cache, so a
- * server restart doesn't cause a duplicate morning push. This is the only
- * thing still read from morning_static_context — the preamble/suffix/
- * briefing_text columns and the static-context/text caches that used to back
- * the old pre-generation pipeline were retired along with it (generateDailyBrief()
- * is the only morning-briefing path now; it doesn't read or write this cache).
+ * server restart doesn't cause a duplicate morning push. This used to be the
+ * only thing read from morning_static_context — the preamble/suffix/
+ * briefing_text columns were dead weight from the old pre-generation pipeline.
+ * briefing_text has since been repurposed (see saveBriefingText/
+ * getRecentBriefingTexts below) to hold the last few days' actual generated
+ * brief text, so generateDailyBrief() can tell Claude what it already covered
+ * and avoid repeating the same story/joke — not a content cache to read
+ * instead of generating fresh, just repetition context.
  */
 export async function loadStaticContextFromDb(userName: string): Promise<boolean> {
   const today = ctDateKey();
@@ -158,5 +161,50 @@ export async function loadStaticContextFromDb(userName: string): Promise<boolean
   } catch (err) {
     console.warn("[BriefingCache] Could not load push-sent state from DB:", err);
     return false;
+  }
+}
+
+/**
+ * Persists today's generated brief text so tomorrow's (and the next day's)
+ * generation can see what was already covered. Best-effort — a failure here
+ * should never block the briefing actually being returned to the user.
+ */
+export async function saveBriefingText(userName: string, text: string): Promise<void> {
+  const dateKey = ctDateKey();
+  try {
+    await query(
+      `INSERT INTO morning_static_context (user_name, date_key, briefing_text)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (user_name, date_key) DO UPDATE
+         SET briefing_text = EXCLUDED.briefing_text`,
+      [userName, dateKey, text]
+    );
+  } catch (err) {
+    console.warn("[BriefingCache] Could not save briefing text:", err);
+  }
+}
+
+/**
+ * Returns the last N days' briefing text (most recent first, strictly before
+ * today so a same-day retry doesn't see itself). Used purely so Claude can
+ * avoid repeating the same weird/funny story, joke, or news angle two days
+ * running — not read back to the user directly.
+ */
+export async function getRecentBriefingTexts(userName: string, days = 2): Promise<string[]> {
+  const today = ctDateKey();
+  try {
+    const { rows } = await query<{ briefing_text: string | null }>(
+      `SELECT briefing_text FROM morning_static_context
+        WHERE user_name = $1
+          AND date_key < $2
+          AND date_key >= (CURRENT_DATE - ($3 || ' days')::interval)::text
+          AND briefing_text IS NOT NULL
+        ORDER BY date_key DESC`,
+      [userName, today, String(days)]
+    );
+    return rows.map((r) => r.briefing_text).filter((t): t is string => !!t);
+  } catch (err) {
+    console.warn("[BriefingCache] Could not load recent briefing text:", err);
+    return [];
   }
 }
