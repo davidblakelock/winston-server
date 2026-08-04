@@ -460,6 +460,116 @@ export async function getRecentListItems(
   return rows;
 }
 
+// ── Cleanup / archive ────────────────────────────────────────────────────────
+// "Clean up my wish list": age-based candidate selection + a pending-state
+// confirmation flow, same pattern as Attic's getArchiveCandidates/
+// archiveAtticItems/pendingAtticCleanup. Diverges from Attic's approach in
+// one way: Attic archives via an in-place status flag (attic_items has a
+// single controlled read path in atticItemsManager.ts), but list_items has
+// no status/completed column and is read from many scattered call sites
+// across routes/lists.ts and chatHandlerCore.ts — adding a status column
+// would mean auditing and updating every one of those reads. Moving rows
+// out to a separate table instead means every existing list_items read path
+// keeps working completely unmodified, since archived rows simply aren't in
+// that table anymore.
+
+const _listArchiveTableInit = (async () => {
+  await query(`
+    CREATE TABLE IF NOT EXISTS list_items_archive (
+      id          integer PRIMARY KEY,
+      user_name   text NOT NULL,
+      list_name   text NOT NULL,
+      item_text   text NOT NULL,
+      added_by    text,
+      notes       text,
+      url         text,
+      created_at  timestamptz NOT NULL,
+      archived_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+})();
+
+export const DEFAULT_LIST_ARCHIVE_THRESHOLD_DAYS = 120; // longer than
+// Attic's 60 — list items tend to be more deliberate/curated (a wish list,
+// a reading list) than Attic's catch-all "caught my attention, no
+// destination" bucket, so a longer default before suggesting cleanup.
+
+export interface ListArchiveCandidate {
+  id:        number;
+  listName:  string;
+  itemText:  string;
+  createdAt: string;
+}
+
+export interface PendingListCleanup {
+  listName:      string | null; // null = across all (non-shopping) lists
+  candidates:    ListArchiveCandidate[];
+  thresholdDays: number;
+}
+
+const _pendingListCleanupMap = new Map<string, PendingListCleanup>();
+
+export function getPendingListCleanup(userName: string): PendingListCleanup | null {
+  return _pendingListCleanupMap.get(userName) ?? null;
+}
+
+export function setPendingListCleanup(userName: string, state: PendingListCleanup | null): void {
+  if (state === null) {
+    _pendingListCleanupMap.delete(userName);
+  } else {
+    _pendingListCleanupMap.set(userName, state);
+  }
+}
+
+// Scoped to a single list when listName is given ("clean up my wish
+// list"), or across every non-shopping list when omitted. Shopping is
+// excluded here too, same reasoning as getRecentListItems above —
+// groceries are transitory, nobody wants to "clean up" a shopping list,
+// they just clear it.
+export async function getListArchiveCandidates(
+  userName:      string,
+  listName:      string | null,
+  thresholdDays  = DEFAULT_LIST_ARCHIVE_THRESHOLD_DAYS,
+): Promise<ListArchiveCandidate[]> {
+  await _listArchiveTableInit;
+  const conditions = [`user_name = $1`, `lower(list_name) != 'shopping'`, `created_at < now() - ($2 || ' days')::interval`];
+  const params: unknown[] = [userName, thresholdDays.toString()];
+  if (listName) {
+    params.push(listName);
+    conditions.push(`lower(list_name) = lower($${params.length})`);
+  }
+  const { rows } = await query<{ id: number; list_name: string; item_text: string; created_at: string }>(
+    `SELECT id, list_name, item_text, created_at FROM list_items WHERE ${conditions.join(" AND ")} ORDER BY created_at ASC`,
+    params
+  );
+  return rows.map((r) => ({ id: r.id, listName: r.list_name, itemText: r.item_text, createdAt: r.created_at }));
+}
+
+// Moves rows out of list_items entirely, not a status flag — see the note
+// above. Sequential INSERT-then-DELETE, not a transaction — query() has no
+// transaction support (each call is an independent Supabase REST/exec_sql
+// round-trip, confirmed against the real db.ts). A crash between the two
+// leaves a duplicate (row survives in both tables), not a loss — the
+// DELETE is what actually removes it from the live table, so the failure
+// mode leans toward "item survives" rather than "item lost."
+export async function archiveListItems(userName: string, ids: number[]): Promise<number> {
+  if (ids.length === 0) return 0;
+  await _listArchiveTableInit;
+  await query(
+    `INSERT INTO list_items_archive (id, user_name, list_name, item_text, added_by, notes, url, created_at)
+     SELECT id, user_name, list_name, item_text, added_by, notes, url, created_at
+     FROM list_items WHERE id = ANY($1) AND user_name = $2
+     ON CONFLICT (id) DO NOTHING`,
+    [ids, userName]
+  );
+  const { rows } = await query<{ id: number }>(
+    `DELETE FROM list_items WHERE id = ANY($1) AND user_name = $2 RETURNING id`,
+    [ids, userName]
+  );
+  logger.info({ userName, count: rows.length }, "[Lists] Items archived");
+  return rows.length;
+}
+
 // ── Execute a list operation and return context for the companion ─────────────
 
 export async function executeListOp(op: ListOp, userName: string): Promise<ListResult> {

@@ -60,6 +60,11 @@ import {
   convertListToChecklist,
   getPendingListTypeConflict,
   setPendingListTypeConflict,
+  getPendingListCleanup,
+  setPendingListCleanup,
+  getListArchiveCandidates,
+  archiveListItems,
+  DEFAULT_LIST_ARCHIVE_THRESHOLD_DAYS,
   type SaveOfferCandidate,
   type PendingListTypeConflict,
 } from "../../lists/listManager.js";
@@ -129,6 +134,9 @@ export type ActionType =
   | "cleanup_attic"
   | "archive_attic_confirm"
   | "archive_attic_cancel"
+  | "cleanup_list"
+  | "archive_list_confirm"
+  | "archive_list_cancel"
   | "offer_save"
   | "convert_notepad_confirm"
   | "convert_notepad_cancel"
@@ -162,6 +170,9 @@ export interface ClaudeAction {
   offers?:         string | null;
   offerIndex?:     number | null;
   fromConflict?:   boolean | null;
+  listNameForCleanup?: string | null; // distinct from the existing `listName`
+  // field used elsewhere in this interface for adds, to avoid ambiguity
+  // about which flow a given action's listName refers to
 }
 
 export interface NewChatRequest {
@@ -417,6 +428,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
   const pendingEmailReply  = getPendingEmailReply(sessionUserName);
   const pendingMeetingReqs = getPendingMeetingRequests(sessionUserName);
   const pendingAtticCleanup = getPendingAtticCleanup(sessionUserName);
+  const pendingListCleanup = getPendingListCleanup(sessionUserName);
   const pendingSaveOffers   = getPendingSaveOffers(sessionUserName);
   const pendingListConflict = getPendingListTypeConflict(sessionUserName);
   const pendingProactivePicks = getProactivePicks(sessionUserName);
@@ -584,6 +596,16 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       .join("\n");
     dynamicPrompt += `\n\n[Pending Attic Cleanup — ${pendingAtticCleanup.candidates.length} items older than ${pendingAtticCleanup.thresholdDays} days]\n${list}\n\n` +
       `If __USER__ approves archiving all of them, emit [ACTION:archive_attic_confirm]. If they want to keep specific numbered items, emit [ACTION:archive_attic_confirm|exclude=<comma-separated numbers>]. If they decline, emit [ACTION:archive_attic_cancel].`;
+  }
+
+  // List cleanup flow in progress — same pattern as Attic cleanup above.
+  if (pendingListCleanup !== null) {
+    const list = pendingListCleanup.candidates
+      .map((c, i) => `${i + 1}. [${c.listName}, saved ${new Date(c.createdAt).toLocaleDateString()}] ${c.itemText}`)
+      .join("\n");
+    const scopeDesc = pendingListCleanup.listName ? `your "${pendingListCleanup.listName}" list` : "your lists";
+    dynamicPrompt += `\n\n[Pending List Cleanup — ${pendingListCleanup.candidates.length} items in ${scopeDesc} older than ${pendingListCleanup.thresholdDays} days]\n${list}\n\n` +
+      `If __USER__ approves archiving all of them, emit [ACTION:archive_list_confirm]. If they want to keep specific numbered items, emit [ACTION:archive_list_confirm|exclude=<comma-separated numbers>]. If they decline, emit [ACTION:archive_list_cancel].`;
   }
 
   // Proactive-picks notification tapped — the push never named the picks
@@ -872,6 +894,15 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
         break;
       case "archive_attic_cancel":
         action = { type: "archive_attic_cancel" };
+        break;
+      case "cleanup_list":
+        action = { type: "cleanup_list", listNameForCleanup: parts.list ?? null };
+        break;
+      case "archive_list_confirm":
+        action = { type: "archive_list_confirm", excludeIndexes: parts.exclude ?? null };
+        break;
+      case "archive_list_cancel":
+        action = { type: "archive_list_cancel" };
         break;
     }
   }
@@ -1311,6 +1342,64 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     // ── archive_attic_cancel ─────────────────────────────────────────────────
     case "archive_attic_cancel": {
       setPendingAtticCleanup(sessionUserName, null);
+      break;
+    }
+
+    // ── cleanup_list ──────────────────────────────────────────────────────────
+    // Fresh data the initial Claude call couldn't have known yet, same reason
+    // as cleanup_attic above.
+    case "cleanup_list": {
+      try {
+        const listName = action.listNameForCleanup?.trim() || null;
+        const candidates = await getListArchiveCandidates(sessionUserName, listName, DEFAULT_LIST_ARCHIVE_THRESHOLD_DAYS);
+        if (candidates.length === 0) {
+          finalReply = listName
+            ? `Nothing looks stale in your "${listName}" list — everything's fairly recent.`
+            : "Nothing looks stale across your lists — everything's fairly recent.";
+        } else {
+          setPendingListCleanup(sessionUserName, { listName, candidates, thresholdDays: DEFAULT_LIST_ARCHIVE_THRESHOLD_DAYS });
+          const list = candidates
+            .map((c, i) => `${i + 1}. [${c.listName}, saved ${new Date(c.createdAt).toLocaleDateString()}] ${c.itemText}`)
+            .join("\n");
+          const scopeDesc = listName ? `your "${listName}" list` : "your lists";
+          finalReply = `Here's what's been sitting in ${scopeDesc} for over ${DEFAULT_LIST_ARCHIVE_THRESHOLD_DAYS} days:\n\n${list}\n\nWant me to archive all of these? Just say the word, or tell me to keep any of them.`;
+        }
+      } catch (err) {
+        log.warn({ err }, "[chatHandlerCore] getListArchiveCandidates failed");
+        finalReply = "I had trouble checking your lists just now — give it another try in a moment.";
+      }
+      break;
+    }
+
+    // ── archive_list_confirm ─────────────────────────────────────────────────
+    case "archive_list_confirm": {
+      const pending = pendingListCleanup;
+      if (pending) {
+        const excluded = new Set(
+          (action.excludeIndexes ?? "")
+            .split(",")
+            .map((s) => parseInt(s.trim(), 10))
+            .filter((n) => !isNaN(n))
+        );
+        const idsToArchive = pending.candidates
+          .filter((_, i) => !excluded.has(i + 1))
+          .map((c) => c.id);
+        try {
+          const count = await archiveListItems(sessionUserName, idsToArchive);
+          log.info({ count, excluded: excluded.size }, "[chatHandlerCore] List cleanup confirmed");
+        } catch (err) {
+          log.warn({ err }, "[chatHandlerCore] archiveListItems failed");
+        }
+        setPendingListCleanup(sessionUserName, null);
+      } else {
+        log.info({}, "[chatHandlerCore] archive_list_confirm had nothing pending to target");
+      }
+      break;
+    }
+
+    // ── archive_list_cancel ───────────────────────────────────────────────────
+    case "archive_list_cancel": {
+      setPendingListCleanup(sessionUserName, null);
       break;
     }
 

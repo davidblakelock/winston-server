@@ -44,7 +44,7 @@ import {
   ensureUserCorrectionsTable,
 } from "./memorySourceAdapters.js";
 import { fetchGoalContext, type IndexedGoalContext, getGoalById } from "./standingContextAdapters.js";
-import { applyProfileFact, type ExtractedFacts } from "../memory/memoryManager.js";
+import { applyProfileFact, type ExtractedFacts, pruneOldChatFacts } from "../memory/memoryManager.js";
 import { getStoicForUser, PHASE_NAMES } from "../stoic/stoicManager.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
@@ -1069,6 +1069,11 @@ export function startConnectionEngineScheduler(): void {
     try {
       const users = await getActiveUsers().catch(() => [{ userName: NATIVE_STORED_NAME }]);
       const isSunday = new Date().getUTCDay() === 0;
+
+      // Global housekeeping, not per-user — runs once per cron firing.
+      await pruneOldChatFacts().catch((err) =>
+        logger.warn({ err }, "[ConnectionEngine] Scheduler: chat_facts pruning failed")
+      );
 
       for (const u of users) {
         await runConnectionEngine(u.userName, "batch_daily").catch((err) =>

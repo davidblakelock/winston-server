@@ -164,6 +164,23 @@ export async function getRecentChatFacts(userName: string, days = 30): Promise<C
   return rows;
 }
 
+const CHAT_FACT_RETENTION_DAYS = 180; // generous — these feed durable-
+// context reasoning, not a UI a person manages directly, so err toward
+// keeping them rather than aggressive cleanup. No confirm step: nothing
+// ever displays these to a person for review, so there's nothing to ask
+// permission for — this is housekeeping, not a user-facing deletion.
+
+export async function pruneOldChatFacts(): Promise<number> {
+  await _chatFactsTableInit;
+  const { rows } = await query<{ id: number }>(
+    `DELETE FROM chat_facts WHERE created_at < now() - interval '${CHAT_FACT_RETENTION_DAYS} days' RETURNING id`
+  );
+  if (rows.length > 0) {
+    logger.info({ count: rows.length }, "[Memory] Pruned old chat_facts");
+  }
+  return rows.length;
+}
+
 // Save or update today's memory with the new summary, and save any durable
 // profile facts extracted in the same pass. Fact-saving is independent of
 // whether the narrative summary was worth keeping (SKIP) — a conversation can
