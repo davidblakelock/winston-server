@@ -26,14 +26,14 @@
  */
 
 import { getGoals, getGoalById, type Goal } from "../goals/goalsManager.js";
+import { logger } from "../lib/logger.js";
 
 export { getGoalById };
 
 // A second context source alongside life_capture/attic_item/list_item — not
 // merged into SourceItem[] since goals aren't a recency-sorted stream of
 // things that happened, they're standing context to check saved items
-// against. Active goals only, capped at 8 (same cap generateGoalsRecap
-// uses). Indexed (not just prose) so dotConnectorPass/patternObservationPass
+// against. Indexed (not just prose) so dotConnectorPass/patternObservationPass
 // can report back WHICH goal a suggestion connects to by position, the same
 // "point at it, don't retype it" discipline used everywhere else — Claude
 // picks an index, the server resolves the real goal id.
@@ -42,12 +42,22 @@ export interface IndexedGoalContext {
   goals: Goal[];
 }
 
+const ACTIVE_GOALS_CAP = 20; // was a bare 8. Not a formula — just a more
+// generous bound, with the truncation now logged instead of silent.
+
 export async function fetchGoalContext(userName: string): Promise<IndexedGoalContext> {
   const goals = await getGoals(userName).catch(() => [] as Goal[]);
   // Active AND aspirational both count as "current" here — noticing a
   // connection to an aspirational goal is exactly the kind of nudge that
   // could promote it to active, not something to withhold until it is one.
-  const active = goals.filter((g) => g.status !== "completed").slice(0, 8);
+  const allActive = goals.filter((g) => g.status !== "completed");
+  if (allActive.length > ACTIVE_GOALS_CAP) {
+    logger.info(
+      { userName, activeCount: allActive.length, cap: ACTIVE_GOALS_CAP },
+      "[StandingContext] Active goals exceed cap — truncating"
+    );
+  }
+  const active = allActive.slice(0, ACTIVE_GOALS_CAP);
   if (active.length === 0) return { text: "", goals: [] };
   const lines = active
     .map((g, i) => {

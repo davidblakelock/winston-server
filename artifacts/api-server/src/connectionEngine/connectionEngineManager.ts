@@ -127,6 +127,16 @@ const _tableInit = (async () => {
   // itself running twice (connections vs observations), let alone goals'.
   await query(`ALTER TABLE observations ADD COLUMN IF NOT EXISTS related_connection_id integer`)
     .catch((err) => logger.warn({ err }, "[ConnectionEngine] observations.related_connection_id migration warning"));
+  // Composite (sourceType, sourceId) pairs — fixes a real correctness gap:
+  // the older supporting_item_ids (bare integer[]) has no source-type
+  // qualifier, so an attic_items id and an unrelated list_items/chat_facts
+  // id could numerically collide in the goal-eligibility recurrence check
+  // below. supporting_item_ids is left in place (not dropped, standing
+  // no-DROP policy) and still populated for any existing/future reader that
+  // wants the flat list, but the recurrence comparison itself now uses this
+  // column instead.
+  await query(`ALTER TABLE observations ADD COLUMN IF NOT EXISTS supporting_items jsonb NOT NULL DEFAULT '[]'`)
+    .catch((err) => logger.warn({ err }, "[ConnectionEngine] observations.supporting_items migration warning"));
 })();
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -752,41 +762,31 @@ export async function clusterPass(userName: string): Promise<void> {
       return;
     }
 
-    // Clustering itself now reasons over attic/list/chat sources together
-    // (per explicit decision, Aug 2026 session) — but the goal-eligibility
-    // recurrence check below (supporting_item_ids overlap across separate
-    // cluster runs) stays scoped to attic_item specifically. Reason: that
-    // check compares bare numeric IDs with no source-type qualifier, so an
-    // attic_item id and an unrelated list_item/chat_fact id could
-    // numerically collide and falsely register as "the same thing
-    // recurring." The consequence of getting this wrong is mild (an
-    // occasionally-premature goal-creation offer, not data corruption), but
-    // there's no reason to accept that risk silently when scoping the
-    // overlap check narrower avoids it entirely — clustering's actual new
-    // value (confidence/theme/message) still sees everything.
     const clusterItems = parsed.itemIndexes
       .map((i) => items[i])
       .filter((it): it is SourceItem => !!it);
-    const atticOnlyClusterItems = clusterItems.filter((it) => it.sourceType === "attic_item");
     if (clusterItems.length < 2) return;
 
-    const newItemIds = clusterItems.map((it) => it.sourceId);
-    const newAtticOnlyItemIds = atticOnlyClusterItems.map((it) => it.sourceId);
+    const newItemIds = clusterItems.map((it) => it.sourceId); // still stored in supporting_item_ids below
+    const newSupportingItems = clusterItems.map((it) => ({ sourceType: it.sourceType, sourceId: it.sourceId }));
 
     // Goal-eligibility check MUST run before the delete below — a prior
     // cluster still sitting at status='pending' (never yet shown) would
-    // otherwise be gone before its supporting_item_ids could be compared
+    // otherwise be gone before its supporting_items could be compared
     // against this run's.
-    const { rows: priorClusters } = await query<{ id: number; supporting_item_ids: number[] }>(
-      `SELECT id, supporting_item_ids FROM observations
+    const { rows: priorClusters } = await query<{ id: number; supporting_items: Array<{ sourceType: string; sourceId: number }> }>(
+      `SELECT id, supporting_items FROM observations
        WHERE user_name = $1 AND observation_type = 'cluster'
          AND created_at >= now() - interval '${GOAL_ELIGIBLE_LOOKBACK_DAYS} days'`,
       [userName]
     );
-    // Scoped to attic-only IDs on both sides — see the note above the
-    // clusterItems/atticOnlyClusterItems split for why.
+    // (sourceType, sourceId) pair comparison — the actual fix. Now safe to
+    // cover all three sources, not just attic_item, since a bare numeric
+    // collision across tables can no longer register as a false recurrence.
+    const keyOf = (it: { sourceType: string; sourceId: number }) => `${it.sourceType}:${it.sourceId}`;
+    const newKeys = new Set(newSupportingItems.map(keyOf));
     const goalEligible = priorClusters.some((prior) => {
-      const overlap = prior.supporting_item_ids.filter((id) => newAtticOnlyItemIds.includes(id));
+      const overlap = (prior.supporting_items ?? []).filter((it) => newKeys.has(keyOf(it)));
       return overlap.length >= GOAL_ELIGIBLE_MIN_OVERLAP;
     });
 
@@ -802,9 +802,9 @@ export async function clusterPass(userName: string): Promise<void> {
     );
     const finalMessage = parsed.message + (goalEligible ? GOAL_OFFER_SUFFIX : "");
     await query(
-      `INSERT INTO observations (user_name, observation_type, message, supporting_item_ids, confidence_score, urgency, should_interrupt_user, theme, goal_eligible)
-       VALUES ($1, 'cluster', $2, $3, $4, 'low', false, $5, $6)`,
-      [userName, finalMessage, newItemIds, parsed.confidence, parsed.theme, goalEligible]
+      `INSERT INTO observations (user_name, observation_type, message, supporting_item_ids, supporting_items, confidence_score, urgency, should_interrupt_user, theme, goal_eligible)
+       VALUES ($1, 'cluster', $2, $3, $4, $5, 'low', false, $6, $7)`,
+      [userName, finalMessage, newItemIds, JSON.stringify(newSupportingItems), parsed.confidence, parsed.theme, goalEligible]
     );
     logger.info(
       { userName, confidence: parsed.confidence, theme: parsed.theme, goalEligible },

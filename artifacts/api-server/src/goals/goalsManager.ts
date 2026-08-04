@@ -346,7 +346,7 @@ async function buildGoalsProfileContext(
   const [people, existingGoals, sourceItems, corrections] = await Promise.all([
     getPeople(userName).catch(() => [] as Array<{ name: string; relationship: string; city?: string | null; details?: string | null }>),
     getGoals(userName).catch(() => [] as Goal[]),
-    fetchFromAdapters(userName, ["life_capture", "attic_item"], 30).catch(() => [] as SourceItem[]),
+    fetchFromAdapters(userName, ["life_capture", "attic_item", "list_item", "chat_fact"], 30).catch(() => [] as SourceItem[]),
     getRecentCorrections(userName, 30).catch(() => [] as UserCorrection[]),
   ]);
 
