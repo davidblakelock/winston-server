@@ -452,7 +452,7 @@ function formatIndexedItemLines(items: SourceItem[], tz: string, limit: number):
 export async function dotConnectorPass(userName: string): Promise<void> {
   await _tableInit;
 
-  const items = await fetchSourceItems(userName, ["life_capture", "attic_item", "list_item"], 30);
+  const items = await fetchSourceItems(userName, ["life_capture", "attic_item", "list_item", "chat_fact"], 30);
   if (items.length < 4) return; // need enough data for meaningful patterns
 
   const { rows: rateRows } = await query<{ id: number }>(
@@ -560,7 +560,7 @@ export async function dotConnectorPass(userName: string): Promise<void> {
 export async function patternObservationPass(userName: string): Promise<void> {
   await _tableInit;
 
-  const items = await fetchSourceItems(userName, ["life_capture", "attic_item", "list_item"], 30);
+  const items = await fetchSourceItems(userName, ["life_capture", "attic_item", "list_item", "chat_fact"], 30);
   if (items.length < 4) return; // need enough data to find patterns
 
   const { rows: recent } = await query<{ count: string }>(
@@ -662,21 +662,23 @@ export async function patternObservationPass(userName: string): Promise<void> {
   }
 }
 
-// ── Cluster pass — Attic-to-Attic ────────────────────────────────────────────
-// New: no reference function does this today. Unlike the two passes above,
-// clustering needs an actual graded confidence (several candidate clusters of
-// varying strength, not one yes/no), so this is the one pass that asks Claude
-// for a numeric score and thresholds on it in code.
+// ── Cluster pass — cross-domain emerging-interest detection ─────────────────
+// Unlike the two passes above, clustering needs an actual graded confidence
+// (several candidate clusters of varying strength, not one yes/no), so this
+// is the one pass that asks Claude for a numeric score and thresholds on it
+// in code.
 //
-// This is a direct Claude reasoning pass over the raw attic_item text, not
+// This is a direct Claude reasoning pass over the raw item text, not
 // embedding-similarity candidate generation — pgvector isn't wired into any
-// code path yet (that's Phase 2 extraction work), and attic_items has no real
-// data until Phase 1 capture ships anyway. Revisit once both exist.
+// code path yet. Broadened beyond attic_item to attic/list/chat_fact per
+// explicit decision (Aug 2026 session) — shopping-list items are already
+// excluded upstream at the listItemAdapter level, so no extra filter is
+// needed here for that.
 
 export async function clusterPass(userName: string): Promise<void> {
   await _tableInit;
 
-  const items = await fetchSourceItems(userName, ["attic_item"], 30);
+  const items = await fetchSourceItems(userName, ["attic_item", "list_item", "chat_fact"], 30);
   if (items.length < 4) return; // not enough saved items to find a genuine cluster
 
   const { rows: rateRows } = await query<{ id: number }>(
@@ -700,8 +702,8 @@ export async function clusterPass(userName: string): Promise<void> {
   const corrections = await getRecentCorrections(userName, 30);
 
   const prompt =
-    `${firstName} has saved these items to their Attic over the last 30 days — things that caught their ` +
-    `attention with no destination in mind:\n${itemLines}\n` +
+    `Here's what ${firstName} has saved, added to a list, or explored in conversation over the last 30 ` +
+    `days:\n${itemLines}\n` +
     formatCorrectionContext(corrections) + `\n` +
     `Look for a genuine cluster: three or more separate items pointing at the same emerging interest or ` +
     `unstated intention that isn't already reflected anywhere else (e.g. several Europe-related saves ` +
@@ -750,12 +752,26 @@ export async function clusterPass(userName: string): Promise<void> {
       return;
     }
 
+    // Clustering itself now reasons over attic/list/chat sources together
+    // (per explicit decision, Aug 2026 session) — but the goal-eligibility
+    // recurrence check below (supporting_item_ids overlap across separate
+    // cluster runs) stays scoped to attic_item specifically. Reason: that
+    // check compares bare numeric IDs with no source-type qualifier, so an
+    // attic_item id and an unrelated list_item/chat_fact id could
+    // numerically collide and falsely register as "the same thing
+    // recurring." The consequence of getting this wrong is mild (an
+    // occasionally-premature goal-creation offer, not data corruption), but
+    // there's no reason to accept that risk silently when scoping the
+    // overlap check narrower avoids it entirely — clustering's actual new
+    // value (confidence/theme/message) still sees everything.
     const clusterItems = parsed.itemIndexes
       .map((i) => items[i])
-      .filter((it): it is SourceItem => !!it && it.sourceType === "attic_item");
+      .filter((it): it is SourceItem => !!it);
+    const atticOnlyClusterItems = clusterItems.filter((it) => it.sourceType === "attic_item");
     if (clusterItems.length < 2) return;
 
     const newItemIds = clusterItems.map((it) => it.sourceId);
+    const newAtticOnlyItemIds = atticOnlyClusterItems.map((it) => it.sourceId);
 
     // Goal-eligibility check MUST run before the delete below — a prior
     // cluster still sitting at status='pending' (never yet shown) would
@@ -767,8 +783,10 @@ export async function clusterPass(userName: string): Promise<void> {
          AND created_at >= now() - interval '${GOAL_ELIGIBLE_LOOKBACK_DAYS} days'`,
       [userName]
     );
+    // Scoped to attic-only IDs on both sides — see the note above the
+    // clusterItems/atticOnlyClusterItems split for why.
     const goalEligible = priorClusters.some((prior) => {
-      const overlap = prior.supporting_item_ids.filter((id) => newItemIds.includes(id));
+      const overlap = prior.supporting_item_ids.filter((id) => newAtticOnlyItemIds.includes(id));
       return overlap.length >= GOAL_ELIGIBLE_MIN_OVERLAP;
     });
 
@@ -808,7 +826,7 @@ export async function clusterPass(userName: string): Promise<void> {
 export async function weeklyGiftPass(userName: string): Promise<string | null> {
   await _tableInit;
 
-  const items = await fetchSourceItems(userName, ["life_capture", "attic_item", "list_item"], 7);
+  const items = await fetchSourceItems(userName, ["life_capture", "attic_item", "list_item", "chat_fact"], 7);
   if (items.length < 2) {
     logger.info({ userName }, "[ConnectionEngine] WeeklyGift: fewer than 2 items — skipping");
     return null;

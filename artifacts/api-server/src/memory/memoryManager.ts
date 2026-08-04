@@ -40,6 +40,7 @@ export interface ExtractedFacts {
 interface MemoryAnalysis {
   summary: string | null;
   facts: ExtractedFacts | null;
+  chatFact: string | null;
 }
 
 // Generate a memory summary AND extract durable profile facts from conversation
@@ -49,7 +50,7 @@ export async function generateMemorySummary(
   companionName?: string | null,
   userName?: string | null
 ): Promise<MemoryAnalysis> {
-  if (history.length < 4) return { summary: null, facts: null }; // Too short to be worth remembering
+  if (history.length < 4) return { summary: null, facts: null, chatFact: null }; // Too short to be worth remembering
 
   const companion = companionName ?? "the AI companion";
   const user = userName ?? "the user";
@@ -78,6 +79,14 @@ export async function generateMemorySummary(
     `- favoriteArtists: any new artist or musician mentioned as one they like\n` +
     `- restaurants: any new restaurant mentioned as a favorite or one they enjoyed\n` +
     `- sportsTeams: any new sports team mentioned as one they follow\n\n` +
+    `Also, separately: is there a broader durable interest or context revealed in this conversation that ` +
+    `doesn't fit any of the structured fields above, and is NOT a task, plan, or intention (those already ` +
+    `have their own destinations — a reminder, a to-do, a goal — and must never be duplicated here)? This is ` +
+    `for something that would help a future conversation feel like it remembers ${user} — an exploration of ` +
+    `a topic, a stated curiosity, general context about their life — not an event that already happened ` +
+    `(that's the summary above) and not something they intend to do (that's a task, elsewhere). Write it as ` +
+    `ONE plain third-person sentence, e.g. "David explored jazz styles and Dallas venues." Use null if ` +
+    `nothing like this came up — most conversations won't have one; don't force it.\n\n` +
     `Return ONLY valid JSON in exactly this shape — no explanation, no markdown code fences:\n` +
     `{\n` +
     `  "summary": "<the memory note, or the literal string SKIP>",\n` +
@@ -86,9 +95,11 @@ export async function generateMemorySummary(
     `    "favoriteArtists": ["..."],\n` +
     `    "restaurants": ["..."],\n` +
     `    "sportsTeams": ["..."]\n` +
-    `  }\n` +
+    `  },\n` +
+    `  "chatFact": "<one durable-context sentence, or null>"\n` +
     `}\n` +
-    `Omit any key/array that has nothing new. Omit "facts" entirely if nothing durable came up.\n\n` +
+    `Omit any key/array that has nothing new. Omit "facts" entirely if nothing durable came up. Use null ` +
+    `for "chatFact" if nothing like that came up.\n\n` +
     `Conversation:\n${formatted}`;
 
   try {
@@ -99,20 +110,58 @@ export async function generateMemorySummary(
     });
     const text =
       response.content[0].type === "text" ? response.content[0].text.trim() : "";
-    if (!text) return { summary: null, facts: null };
+    if (!text) return { summary: null, facts: null, chatFact: null };
 
     const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return { summary: null, facts: null };
+    if (!jsonMatch) return { summary: null, facts: null, chatFact: null };
 
-    const parsed = JSON.parse(jsonMatch[0]) as { summary?: string; facts?: ExtractedFacts };
+    const parsed = JSON.parse(jsonMatch[0]) as { summary?: string; facts?: ExtractedFacts; chatFact?: string | null };
     const summary = parsed.summary && parsed.summary !== "SKIP" ? parsed.summary : null;
     const facts = parsed.facts && Object.keys(parsed.facts).length > 0 ? parsed.facts : null;
+    const chatFact = parsed.chatFact && parsed.chatFact.trim().length > 0 ? parsed.chatFact.trim() : null;
 
-    return { summary, facts };
+    return { summary, facts, chatFact };
   } catch (err) {
     logger.warn({ err }, "Memory summary generation failed");
-    return { summary: null, facts: null };
+    return { summary: null, facts: null, chatFact: null };
   }
+}
+
+const _chatFactsTableInit = (async () => {
+  await query(`
+    CREATE TABLE IF NOT EXISTS chat_facts (
+      id         serial PRIMARY KEY,
+      user_name  text NOT NULL,
+      content    text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT NOW()
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS chat_facts_user_created_idx ON chat_facts (user_name, created_at DESC)`);
+})();
+
+export interface ChatFact {
+  id:         number;
+  user_name:  string;
+  content:    string;
+  created_at: string;
+}
+
+async function saveChatFact(userName: string, content: string): Promise<void> {
+  await _chatFactsTableInit;
+  await query(`INSERT INTO chat_facts (user_name, content) VALUES ($1, $2)`, [userName, content]);
+  logger.info({ userName, chars: content.length }, "[Memory] Chat fact saved");
+}
+
+// Read side — wrapped by memorySourceAdapters.ts's chatFactAdapter.
+export async function getRecentChatFacts(userName: string, days = 30): Promise<ChatFact[]> {
+  await _chatFactsTableInit;
+  const { rows } = await query<ChatFact>(
+    `SELECT * FROM chat_facts
+     WHERE user_name = $1 AND created_at >= now() - ($2 || ' days')::interval
+     ORDER BY created_at DESC`,
+    [userName, days.toString()]
+  );
+  return rows;
 }
 
 // Save or update today's memory with the new summary, and save any durable
@@ -127,11 +176,20 @@ export async function saveMemory(
   const { timezone: tz } = userName ? await getUserLocationContext(userName) : { timezone: "UTC" };
   const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
 
-  const { summary, facts } = await generateMemorySummary(history, companionName, userName);
+  const { summary, facts, chatFact } = await generateMemorySummary(history, companionName, userName);
 
   if (facts && userName) {
     await saveExtractedFacts(facts, userName).catch((err) => {
       logger.warn({ err, userName }, "Failed to save extracted profile facts (non-fatal)");
+    });
+  }
+
+  // Independent of whether the narrative summary was worth keeping (SKIP) —
+  // same reasoning as facts above: a conversation can reveal durable context
+  // without having a memorable narrative, or vice versa.
+  if (chatFact && userName) {
+    await saveChatFact(userName, chatFact).catch((err) => {
+      logger.warn({ err, userName }, "Failed to save extracted chat fact (non-fatal)");
     });
   }
 

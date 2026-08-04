@@ -23,14 +23,16 @@ import { query } from "../db.js";
 import { getRecentCaptures } from "../lifeCaptures/lifeCapturesManager.js";
 import { getRecentAtticItems } from "../attic/atticItemsManager.js";
 import { getRecentListItems } from "../lists/listManager.js";
+import { getRecentChatFacts } from "../memory/memoryManager.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-// 'life_capture' | 'attic_item' | 'list_item' now (Phase 2 added Lists);
-// Goals' StandingContextAdapter variant in Phase 3, chat-fact in Phase 4
-// extend this union and register below — the passes never need to change to
-// see it.
-export type SourceType = "life_capture" | "attic_item" | "list_item";
+// 'life_capture' | 'attic_item' | 'list_item' | 'chat_fact' now (Phase 2 added
+// Lists, Phase 4a added chat-fact). Goals' StandingContextAdapter variant
+// lives separately (Phase 3, standingContextAdapters.ts) since it's a
+// standing set, not a stream — extend this union and register below for
+// anything else that IS a recency-sorted stream.
+export type SourceType = "life_capture" | "attic_item" | "list_item" | "chat_fact";
 
 export interface SourceItem {
   sourceType: SourceType;
@@ -98,6 +100,20 @@ export const listItemAdapter: MemorySourceAdapter = {
   },
 };
 
+export const chatFactAdapter: MemorySourceAdapter = {
+  sourceType: "chat_fact",
+  async fetchRecent(userName: string, days: number): Promise<SourceItem[]> {
+    const chatFacts = await getRecentChatFacts(userName, days);
+    return chatFacts.map((cf) => ({
+      sourceType: "chat_fact" as const,
+      sourceId:   cf.id,
+      content:    cf.content,
+      context:    "chat",
+      occurredAt: cf.created_at,
+    }));
+  },
+};
+
 // ── Registry ──────────────────────────────────────────────────────────────────
 // Adding a new domain later means writing one adapter and adding one line
 // here — the passes in connectionEngineManager.ts iterate this map and never
@@ -107,6 +123,7 @@ const registry = new Map<SourceType, MemorySourceAdapter>([
   [lifeCaptureAdapter.sourceType, lifeCaptureAdapter],
   [atticItemAdapter.sourceType, atticItemAdapter],
   [listItemAdapter.sourceType, listItemAdapter],
+  [chatFactAdapter.sourceType, chatFactAdapter],
 ]);
 
 // ── Fetch across adapters ────────────────────────────────────────────────────
