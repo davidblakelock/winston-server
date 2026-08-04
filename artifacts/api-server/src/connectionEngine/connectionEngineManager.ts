@@ -44,6 +44,7 @@ import {
   ensureUserCorrectionsTable,
 } from "./memorySourceAdapters.js";
 import { fetchGoalContext, type IndexedGoalContext, getGoalById } from "./standingContextAdapters.js";
+import { applyProfileFact, type ExtractedFacts } from "../memory/memoryManager.js";
 import { getStoicForUser, PHASE_NAMES } from "../stoic/stoicManager.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
@@ -137,6 +138,13 @@ const _tableInit = (async () => {
   // column instead.
   await query(`ALTER TABLE observations ADD COLUMN IF NOT EXISTS supporting_items jsonb NOT NULL DEFAULT '[]'`)
     .catch((err) => logger.warn({ err }, "[ConnectionEngine] observations.supporting_items migration warning"));
+  // Structured payload for observation types that need to carry more than
+  // free text through to the accept handler — profile_fact stores
+  // {category, value} here so applyObservationCorrection can write the
+  // right thing on 'elevate' without re-parsing the message text (that
+  // would be exactly the brittle-regex pattern this codebase avoids).
+  await query(`ALTER TABLE observations ADD COLUMN IF NOT EXISTS payload jsonb`)
+    .catch((err) => logger.warn({ err }, "[ConnectionEngine] observations.payload migration warning"));
 })();
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -162,7 +170,7 @@ export interface Connection {
   created_at:        string;
 }
 
-export type ObservationType = "dot_connector" | "pattern" | "cluster" | "weekly_gift";
+export type ObservationType = "dot_connector" | "pattern" | "cluster" | "weekly_gift" | "profile_fact";
 
 export interface Observation {
   id:                    number;
@@ -180,6 +188,7 @@ export interface Observation {
   theme:                 string | null;
   goal_eligible:         boolean;
   related_connection_id: number | null;
+  payload:               Record<string, unknown> | null;
 }
 
 // ── Surfacing ─────────────────────────────────────────────────────────────────
@@ -387,6 +396,17 @@ export async function applyObservationCorrection(
   // observation out (dismiss/reject/forget) dismisses it too.
   if (target.related_connection_id) {
     await updateConnectionStatus(target.related_connection_id, newStatus === "accepted" ? "accepted" : "dismissed");
+  }
+  // profile_fact's real write-through — only on genuine acceptance, never
+  // on dismiss/reject/forget. The payload was captured by profileFactPass
+  // at proposal time, not re-derived here.
+  if (newStatus === "accepted" && target.observation_type === "profile_fact" && target.payload) {
+    const payload = target.payload as { category?: string; value?: string };
+    if (payload.category && payload.value) {
+      await applyProfileFact(userName, payload.category as keyof ExtractedFacts, payload.value).catch((err) => {
+        logger.warn({ err, userName, payload }, "[ConnectionEngine] ProfileFact write-through failed (non-fatal)");
+      });
+    }
   }
   await ensureUserCorrectionsTable;
   await query(
@@ -815,6 +835,111 @@ export async function clusterPass(userName: string): Promise<void> {
   }
 }
 
+// ── Profile-fact promotion (Phase 4b) ────────────────────────────────────────
+// Generalizes memoryManager.ts's existing chat-fact-extraction judgment to
+// domains other than chat — an Attic save, a list item, or a life capture
+// can also reveal a durable profile fact chat never got a chance to catch.
+// Deliberately conservative: this NEVER writes to user_profiles directly.
+// It proposes via an observation (observation_type='profile_fact'), and the
+// actual write only happens if the person accepts — see
+// applyObservationCorrection's 'elevate' handling below. A single passive
+// save is weaker evidence of a genuine durable interest than something the
+// person said directly in conversation (which chat's own extraction already
+// trusts more), so this stays confirm-gated rather than auto-write.
+
+export async function profileFactPass(userName: string): Promise<void> {
+  await _tableInit;
+
+  const items = await fetchSourceItems(userName, ["life_capture", "attic_item", "list_item", "chat_fact"], 30);
+  if (items.length < 4) return;
+
+  const { rows: rateRows } = await query<{ id: number }>(
+    `SELECT id FROM observations
+     WHERE user_name = $1 AND observation_type = 'profile_fact' AND created_at >= now() - interval '1 day'`,
+    [userName]
+  );
+  if (rateRows.length > 0) return;
+
+  const profile = await getProfile(userName).catch(() => null);
+  const { timezone: tz } = await getUserLocationContext(userName);
+  const firstName = (profile?.name ?? userName).split(" ")[0];
+
+  const itemLines = formatIndexedItemLines(items, tz, 100);
+  const corrections = await getRecentCorrections(userName, 30);
+
+  const existingFacts = [
+    profile?.hobbies?.length ? `Hobbies already known: ${profile.hobbies.join(", ")}` : null,
+    profile?.favoriteArtists?.length ? `Favorite artists already known: ${profile.favoriteArtists.join(", ")}` : null,
+    profile?.sportsTeams ? `Sports teams already known: ${profile.sportsTeams}` : null,
+  ].filter(Boolean).join("\n");
+
+  const prompt =
+    `${firstName}'s recent saves, reflections, and conversation context from the last 30 days (numbered):\n${itemLines}\n\n` +
+    (existingFacts ? `What Winston already knows about them:\n${existingFacts}\n\n` : "") +
+    formatCorrectionContext(corrections) + `\n` +
+    `Is there a genuinely durable, specific fact about ${firstName} revealed here that Winston doesn't already ` +
+    `know — a hobby, a favorite artist/musician, a restaurant they love, or a sports team they follow? Only ` +
+    `surface something backed by real signal in the items above — ideally more than one item pointing at it, ` +
+    `not a single passing mention. Never something already known above. Never a guess. Never anything ` +
+    `task-like (that belongs elsewhere, not here).\n\n` +
+    `Return ONLY this JSON, no markdown:\n` +
+    `{"category": "hobbies"|"favoriteArtists"|"restaurants"|"sportsTeams"|null, ` +
+    `"value": "<the specific fact, e.g. \\"home espresso\\">, or null", ` +
+    `"message": "<one warm sentence naming what you noticed and asking if you should remember it, in your own ` +
+    `voice — or null>", "itemIndexes": [item numbers above this is based on, or empty]}\n` +
+    `Use null for everything if nothing genuinely new and durable came up — most runs won't have one.`;
+
+  try {
+    const resp = await anthropic.messages.create({
+      model:      MODEL_HAIKU,
+      max_tokens: 200,
+      messages:   [{ role: "user", content: prompt }],
+    });
+    const raw = resp.content
+      .filter((b) => b.type === "text")
+      .map((b) => (b as { type: "text"; text: string }).text)
+      .join("").trim();
+
+    const stripped = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+    const m = stripped.match(/\{[\s\S]*\}/);
+    if (!m) return;
+
+    const parsed = JSON.parse(m[0]) as {
+      category:    string | null;
+      value:       string | null;
+      message:     string | null;
+      itemIndexes: number[];
+    };
+
+    if (!parsed.category || !parsed.value || !parsed.message) {
+      logger.info({ userName }, "[ConnectionEngine] ProfileFact: nothing genuinely new found");
+      return;
+    }
+
+    const supportingItems = (parsed.itemIndexes ?? [])
+      .map((i) => items[i])
+      .filter((it): it is SourceItem => !!it)
+      .map((it) => ({ sourceType: it.sourceType, sourceId: it.sourceId }));
+    const supportingIds = supportingItems.map((it) => it.sourceId);
+
+    await query(
+      `DELETE FROM observations WHERE user_name = $1 AND observation_type = 'profile_fact' AND status = 'pending'`,
+      [userName]
+    );
+    await query(
+      `INSERT INTO observations (user_name, observation_type, message, supporting_item_ids, supporting_items, confidence_score, urgency, should_interrupt_user, payload)
+       VALUES ($1, 'profile_fact', $2, $3, $4, 85, 'low', false, $5)`,
+      [userName, parsed.message, supportingIds, JSON.stringify(supportingItems), JSON.stringify({ category: parsed.category, value: parsed.value })]
+    );
+    logger.info(
+      { userName, category: parsed.category, value: parsed.value },
+      "[ConnectionEngine] ProfileFact: suggestion stored"
+    );
+  } catch (err) {
+    logger.warn({ err, userName }, "[ConnectionEngine] ProfileFact: Claude call failed");
+  }
+}
+
 // ── Weekly gift ───────────────────────────────────────────────────────────────
 // Generalized getWeeklyGift (lifeCapturesManager.ts) — same prompt, now reading
 // life_capture + attic_item and storing into observations
@@ -912,6 +1037,7 @@ export async function runConnectionEngine(
       break;
     case "batch_daily":
       await clusterPass(userName);
+      await profileFactPass(userName);
       break;
     case "weekly":
       await weeklyGiftPass(userName);

@@ -242,6 +242,40 @@ async function saveExtractedFacts(facts: ExtractedFacts, userName: string): Prom
   }
 }
 
+// Write-through for a single accepted cross-domain profile-fact suggestion
+// (Phase 4b). Reuses the exact same merge/dedup logic saveExtractedFacts
+// already uses for chat's own extraction — this is not a second, divergent
+// write path, just a second caller of the same one.
+export async function applyProfileFact(
+  userName: string,
+  category: keyof ExtractedFacts,
+  value: string
+): Promise<void> {
+  const profile = await getProfile(userName).catch(() => null);
+  if (!profile) return;
+
+  switch (category) {
+    case "hobbies":
+      await mergeJsonbArrayFact(userName, "hobbies", profile.hobbies, [value]);
+      break;
+    case "favoriteArtists":
+      await mergeJsonbArrayFact(userName, "favorite_artists", profile.favoriteArtists, [value]);
+      break;
+    case "sportsTeams":
+      await mergeSportsTeams(userName, profile.sportsTeams, [value]);
+      break;
+    case "restaurants": {
+      const cleanName = value?.trim();
+      if (cleanName) {
+        await addProfileItem("restaurants", cleanName, null, userName).catch((err) => {
+          logger.warn({ err, userName, name: cleanName }, "Failed to apply accepted restaurant profile fact (non-fatal)");
+        });
+      }
+      break;
+    }
+  }
+}
+
 async function mergeJsonbArrayFact(
   userName: string,
   column: "hobbies" | "favorite_artists",
