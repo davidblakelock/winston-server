@@ -3,7 +3,7 @@ import { getAuthClientForUser } from "../google/oauth.js";
 import { logger } from "../lib/logger.js";
 import { query } from "../db.js";
 import { createTracker, getStatusLabel } from "./easypostManager.js";
-import { upsertOrder } from "./ordersManager.js";
+import { upsertOrder, type OrderStatus } from "./ordersManager.js";
 import { classifyEmail, type ClassifiedEmail } from "../email/emailClassifier.js";
 
 function senderDisplayName(from: string): string {
@@ -55,30 +55,19 @@ export async function handleOrderResult(
 
   if (hasTrackingNumber) {
     const trackingNumber = order.trackingNumber!;
-
-    // Check if tracking number already exists in orders table — skip if yes
-    const { rows: existing } = await query<{ id: number }>(
-      `SELECT id FROM orders WHERE user_name = $1 AND tracking_number = $2`,
-      [userName, trackingNumber]
-    );
-    if (existing.length > 0) {
-      logger.info({ trackingNumber }, "[OrderScanner] Tracking number already on file — skipping");
-      return false;
-    }
-
     const retailer = order.retailer || senderDisplayName(from);
     const itemName = order.itemName || subject;
 
-    // Create the EasyPost tracker BEFORE inserting so the initial row
-    // reflects the package's actual current status. Tracker.create()
-    // returns the carrier's already-known status immediately — a package
-    // can already be delivered by the time we first scan its
-    // confirmation/shipping email, and hardcoding 'pre_transit' would
-    // overwrite that with a stale default. Mirrors the fields the webhook
-    // handler (routes/easypost.ts, via easypostSync.ts) writes on every
-    // subsequent tracker.updated event — status stays the raw EasyPost code
-    // (what getOrders()/upsertOrder() compare against), getStatusLabel()
-    // only feeds status_detail (the human-readable string).
+    // Create the EasyPost tracker BEFORE writing so the row reflects the
+    // package's actual current status. Tracker.create() returns the
+    // carrier's already-known status immediately — a package can already be
+    // delivered by the time we first scan its confirmation/shipping email,
+    // and hardcoding 'pre_transit' would overwrite that with a stale
+    // default. Mirrors the fields the webhook handler (routes/easypost.ts,
+    // via easypostSync.ts) writes on every subsequent tracker.updated event —
+    // status stays the raw EasyPost code (what getOrders()/upsertOrder()
+    // compare against), getStatusLabel() only feeds status_detail (the
+    // human-readable string).
     const tracker = await createTracker(trackingNumber, order.carrier ?? undefined);
     const initialStatus = tracker?.status ?? "pre_transit";
     const statusDetail = tracker ? getStatusLabel(tracker.status) : null;
@@ -88,17 +77,44 @@ export async function handleOrderResult(
       : order.expectedDate;
     const trackingEvents = tracker ? JSON.stringify(tracker.trackingEvents) : "[]";
 
-    const { rows: inserted } = await query<{ id: number }>(
-      `INSERT INTO orders (user_name, tracking_number, carrier, order_number, retailer, item_name, expected_date, status, status_detail, tracking_events, easypost_tracker_id, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, NOW())
-       RETURNING id`,
-      [userName, trackingNumber, carrier, order.orderNumber, retailer, itemName, expectedDate, initialStatus, statusDetail, trackingEvents, tracker?.trackerId ?? null]
+    // Route through upsertOrder() rather than a raw INSERT — real data loss
+    // found in production without this: a tracking-bearing "shipped" email
+    // arriving after an earlier no-tracking "ready to ship" email for the
+    // SAME order_number always created a brand new row here (dedup was
+    // tracking_number-only), leaving upsertOrder's own "merge into the
+    // existing pseudo-status row" logic (Priority 2, built for exactly this
+    // case) completely unreachable from this path. The raw INSERT also never
+    // set email_id at all, which fed a second bug: consolidateOrders'
+    // order_number dedup step later collapsed genuinely different packages
+    // (two different real tracking numbers under one shared order_number)
+    // down to one row, since nothing here gave it email-level identity to
+    // reason about. upsertOrder's own tracking_number-first matching still
+    // correctly no-ops/updates on a true repeat scan of the same email.
+    const upserted = await upsertOrder(userName, {
+      retailer, item_name: itemName, order_number: order.orderNumber ?? null,
+      tracking_number: trackingNumber, carrier, status: initialStatus as OrderStatus,
+      expected_date: expectedDate, email_id: msgId,
+    });
+
+    if (!upserted) {
+      logger.warn({ emailId: msgId, trackingNumber }, "[OrderScanner] upsertOrder failed for tracking-bearing order");
+      return false;
+    }
+
+    // EasyPost-specific fields (raw tracking event history, the resolved
+    // tracker id) aren't part of upsertOrder's general NewOrder shape —
+    // set them directly on whichever row it resolved to (freshly inserted or
+    // merged into an existing one).
+    await query(
+      `UPDATE orders SET status_detail = $1, tracking_events = $2::jsonb, easypost_tracker_id = COALESCE($3, easypost_tracker_id) WHERE id = $4`,
+      [statusDetail, trackingEvents, tracker?.trackerId ?? null, upserted.id]
     );
+
     logger.info(
-      { emailId: msgId, trackingNumber, carrier, status: initialStatus, trackerId: tracker?.trackerId ?? null },
+      { emailId: msgId, orderId: upserted.id, trackingNumber, carrier, status: initialStatus, trackerId: tracker?.trackerId ?? null },
       "[OrderScanner] Order row inserted"
     );
-    return !!inserted[0];
+    return true;
   }
 
   // Pseudo-status path — no tracking number, but the email's own order
@@ -237,9 +253,15 @@ export async function scanOrdersOnly(userName: string): Promise<OrderScanResult>
 
   logger.info({ userName, count: messageIds.length }, "[OrderScanner] Found candidate emails");
 
+  // Was a plain sequential for-loop — one Gmail fetch + one Claude classify
+  // call per candidate, fully serialized. Confirmed live at 53 seconds for
+  // 11 candidates (the manual "refresh" button's own reported complaint).
+  // Batched with bounded concurrency instead of full parallelism to stay
+  // reasonable against Gmail/Anthropic rate limits.
+  const CONCURRENCY = 5;
   let newCount = 0;
 
-  for (const msgId of messageIds.slice(0, 100)) {
+  async function processOne(msgId: string): Promise<void> {
     try {
       const detail = await gmail.users.messages.get({ userId: "me", id: msgId, format: "full" });
       const headers = detail.data.payload?.headers ?? [];
@@ -253,13 +275,13 @@ export async function scanOrdersOnly(userName: string): Promise<OrderScanResult>
 
       if (!body || body.length < 50) {
         logger.info({ msgId, subject, bodyChars: body?.length ?? 0 }, "[OrderScanner] Skipped — body too short to classify");
-        continue;
+        return;
       }
 
       const result = await classifyEmail(from, subject, body);
       if (!result || result.action !== "save_to_orders" || !result.order) {
         logger.info({ msgId, subject, action: result?.action ?? "none" }, "[OrderScanner] Skipped — not classified as an order");
-        continue;
+        return;
       }
 
       const created = await handleOrderResult(userName, msgId, from, subject, result.order);
@@ -271,6 +293,11 @@ export async function scanOrdersOnly(userName: string): Promise<OrderScanResult>
     } catch (err) {
       logger.warn({ err, msgId }, "[OrderScanner] Failed to process email");
     }
+  }
+
+  const candidates = messageIds.slice(0, 100);
+  for (let i = 0; i < candidates.length; i += CONCURRENCY) {
+    await Promise.all(candidates.slice(i, i + CONCURRENCY).map(processOne));
   }
 
   return { newCount, candidatesFound: messageIds.length };

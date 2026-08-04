@@ -434,6 +434,20 @@ export async function consolidateOrders(userName: string): Promise<number> {
   // (e.g. order confirmation + shipping update + delivery notice) creates one row
   // per email even though it's the same physical order.
   // Keep the row with the highest status, then the most recently updated.
+  //
+  // Real data loss found in production: a single order_number is NOT always
+  // one physical package — a multi-item order can ship in separate boxes with
+  // genuinely different tracking numbers, all carrying the same retailer
+  // order_number (confirmed with a real Peter Millar order: two different
+  // items, two different real tracking numbers, one shared order_number).
+  // The original query grouped by order_number alone and deleted all but one
+  // row, silently destroying a real second package every time this ran. The
+  // extra HAVING clause below only allows this step to fire when the rows
+  // sharing an order_number have at most ONE distinct real tracking number
+  // between them (i.e. they're actually the same package at different
+  // lifecycle stages — some rows NULL, at most one real value) — two or more
+  // different non-null tracking numbers under one order_number means
+  // separate packages, and this step now leaves those alone entirely.
   const { rows: orderNumDups } = await query<{ order_number: string; keep_id: number }>(
     `SELECT order_number,
             (array_agg(id ORDER BY
@@ -449,7 +463,8 @@ export async function consolidateOrders(userName: string): Promise<number> {
      FROM orders
      WHERE user_name = $1 AND order_number IS NOT NULL
      GROUP BY order_number
-     HAVING COUNT(*) > 1`,
+     HAVING COUNT(*) > 1
+        AND COUNT(DISTINCT tracking_number) FILTER (WHERE tracking_number IS NOT NULL) <= 1`,
     [userName]
   );
 
