@@ -17,7 +17,7 @@ const ATTIC_SOURCE_TYPES: AtticSourceType[] = [
   "screenshot", "article", "social_snippet", "manual_entry",
 ];
 
-const OBSERVATION_STATUSES: Observation["status"][] = ["pending", "shown", "dismissed", "accepted"];
+const OBSERVATION_STATUSES: Observation["status"][] = ["pending", "shown", "dismissed", "accepted", "suppressed"];
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 

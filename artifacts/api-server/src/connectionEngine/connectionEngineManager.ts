@@ -182,7 +182,7 @@ export interface Observation {
   urgency:               "low" | "medium" | "high";
   should_interrupt_user: boolean;
   suggested_action:      string | null;
-  status:                "pending" | "shown" | "dismissed" | "accepted";
+  status:                "pending" | "shown" | "dismissed" | "accepted" | "suppressed";
   created_at:            string;
   shown_at:              string | null;
   theme:                 string | null;
@@ -1017,6 +1017,120 @@ export async function weeklyGiftPass(userName: string): Promise<string | null> {
   }
 }
 
+// ── Governance ────────────────────────────────────────────────────────────────
+// The single arbiter across every observation type. Each pass above decides
+// independently whether IT found something worth proposing — this decides,
+// given everything currently proposed plus what's already been said lately,
+// what (if anything) is actually worth surfacing right now. Runs at the end
+// of every runConnectionEngine trigger, not on its own schedule — whenever
+// any pass might have just added a new pending candidate is exactly when
+// arbitration needs to re-run.
+
+const GOVERNANCE_SURFACE_WINDOW_DAYS = 4; // don't surface anything new if
+// something was already shown within this many days — the actual volume
+// control, separate from the pairwise "which is best" arbitration below.
+const GOVERNANCE_HISTORY_LOOKBACK_DAYS = 14;
+
+export async function governancePass(userName: string): Promise<void> {
+  await _tableInit;
+
+  const { rows: pending } = await query<Observation>(
+    `SELECT * FROM observations WHERE user_name = $1 AND status = 'pending' ORDER BY created_at ASC`,
+    [userName]
+  );
+
+  if (pending.length === 0) return; // nothing to arbitrate
+  if (pending.length === 1) return; // trivially already "the" candidate —
+  // leave it for the existing surfacing rate limits (per-type, already
+  // enforced by each pass) to decide timing; governance only needs to act
+  // when there's an actual choice to make between candidates.
+
+  // Cross-type volume control — independent of which candidate is "best."
+  const { rows: recentShown } = await query<{ id: number }>(
+    `SELECT id FROM observations
+     WHERE user_name = $1 AND status IN ('shown', 'accepted', 'dismissed')
+       AND (shown_at >= now() - interval '${GOVERNANCE_SURFACE_WINDOW_DAYS} days'
+            OR (shown_at IS NULL AND created_at >= now() - interval '${GOVERNANCE_SURFACE_WINDOW_DAYS} days'))`,
+    [userName]
+  );
+  if (recentShown.length > 0) {
+    // Budget already spent — suppress everything currently pending rather
+    // than let it silently queue for next time. If any of these are still
+    // genuinely relevant later, their own originating pass will regenerate
+    // a fresh, current version of them (each pass's own DELETE-before-INSERT
+    // already handles that) — this isn't losing them, it's declining to
+    // stack them up.
+    await query(
+      `UPDATE observations SET status = 'suppressed' WHERE id = ANY($1)`,
+      [pending.map((p) => p.id)]
+    );
+    logger.info(
+      { userName, suppressedCount: pending.length },
+      "[ConnectionEngine] Governance: recent surface budget spent, suppressing all pending"
+    );
+    return;
+  }
+
+  // Real arbitration — more than one candidate, budget available.
+  const { rows: history } = await query<Observation>(
+    `SELECT * FROM observations
+     WHERE user_name = $1 AND status IN ('shown', 'accepted', 'dismissed')
+       AND created_at >= now() - interval '${GOVERNANCE_HISTORY_LOOKBACK_DAYS} days'
+     ORDER BY created_at DESC
+     LIMIT 10`,
+    [userName]
+  );
+
+  const candidateLines = pending
+    .map((o, i) => `[${i}] (${o.observation_type}) ${o.message}`)
+    .join("\n");
+  const historyLines = history.length > 0
+    ? history.map((o) => `- (${o.observation_type}) ${o.message}`).join("\n")
+    : "(nothing shown recently)";
+
+  const prompt =
+    `Winston currently has ${pending.length} different things it could tell this person:\n${candidateLines}\n\n` +
+    `What's already been said to them in the last ${GOVERNANCE_HISTORY_LOOKBACK_DAYS} days:\n${historyLines}\n\n` +
+    `Pick AT MOST ONE of the numbered candidates above to actually surface right now — the single best thing ` +
+    `worth telling this person, considering genuine value, avoiding repetitive or overlapping territory with ` +
+    `what they've already heard, and not overloading them just because multiple things happen to be ready at ` +
+    `once. It's completely fine to pick none if nothing genuinely stands out.\n\n` +
+    `Return ONLY this JSON, no markdown:\n` +
+    `{"chosenIndex": <number from the list above, or null if none>}`;
+
+  try {
+    const resp = await anthropic.messages.create({
+      model:      MODEL_HAIKU,
+      max_tokens: 60,
+      messages:   [{ role: "user", content: prompt }],
+    });
+    const raw = resp.content
+      .filter((b) => b.type === "text")
+      .map((b) => (b as { type: "text"; text: string }).text)
+      .join("").trim();
+    const stripped = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+    const m = stripped.match(/\{[\s\S]*\}/);
+    const parsed = m ? (JSON.parse(m[0]) as { chosenIndex: number | null }) : { chosenIndex: null };
+
+    const chosenId = typeof parsed.chosenIndex === "number" ? pending[parsed.chosenIndex]?.id : undefined;
+    const suppressIds = pending.filter((p) => p.id !== chosenId).map((p) => p.id);
+
+    if (suppressIds.length > 0) {
+      await query(`UPDATE observations SET status = 'suppressed' WHERE id = ANY($1)`, [suppressIds]);
+    }
+    logger.info(
+      { userName, chosenId: chosenId ?? null, suppressedCount: suppressIds.length, candidateCount: pending.length },
+      "[ConnectionEngine] Governance: arbitration complete"
+    );
+  } catch (err) {
+    // Fail open, not closed — if governance itself errors, leave all
+    // candidates pending rather than silently suppress everything (the
+    // existing getTopPendingObservation ORDER BY still degrades gracefully
+    // to "pick the highest confidence one" as a fallback in this case).
+    logger.warn({ err, userName }, "[ConnectionEngine] Governance: Claude call failed, leaving candidates pending");
+  }
+}
+
 // ── Unified entry point ──────────────────────────────────────────────────────
 // annual letter generation is untouched — generateAndStoreAnnualLetter stays
 // in lifeCapturesManager.ts against life_annual_letters, its own table. Long-
@@ -1045,9 +1159,15 @@ export async function runConnectionEngine(
     case "annual": {
       const { generateAndStoreAnnualLetter } = await import("../lifeCaptures/lifeCapturesManager.js");
       await generateAndStoreAnnualLetter(userName);
-      break;
+      return; // annual letters aren't observations — nothing for governance to arbitrate
     }
   }
+  // Runs after every trigger except annual — whichever pass(es) just ran
+  // may have added a new pending candidate, so arbitration needs to
+  // reconsider the full current set, not just the newest addition.
+  await governancePass(userName).catch((err) =>
+    logger.warn({ err, userName, trigger }, "[ConnectionEngine] governancePass failed (non-fatal)")
+  );
 }
 
 // ── Scheduler ─────────────────────────────────────────────────────────────────
