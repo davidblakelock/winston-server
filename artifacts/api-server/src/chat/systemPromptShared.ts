@@ -84,7 +84,7 @@ At the end of EVERY response append exactly one action tag on a new line. No exc
 [ACTION:email_action|action=markRead|gmailId=<id>] — mark an email as read/done
 [ACTION:email_compose|to=<contact name>] — when user wants to compose a new email to someone
 [ACTION:make_reservation|restaurant=<name>] — reservation
-[ACTION:morning_rundown] — when user explicitly asks for their morning run down, morning briefing, or daily briefing
+[ACTION:morning_rundown] — when user explicitly asks for their morning run down, morning briefing, or daily briefing. CRITICAL: even though you have web_search available in this same call, NEVER use it to answer this yourself — do not write any weather, news, sports, markets, or joke content in your reply. You do not have the verified weather data, the real joke pool, or the careful formatting rules the real briefing generator uses, so anything you wrote yourself would be fabricated and low-quality. Your entire reply for this request is nothing but the action tag itself — no preamble, no "let me get that for you," nothing else.
 [ACTION:save_to_attic|content=<what to save>] — save something for later, no destination named
 [ACTION:correct_observation|type=<dismiss|reject|elevate|forget>|feedback=<what they said>] — user reacting to something you recently noticed or suggested
 [ACTION:cleanup_attic] — user wants to tidy up / clear out their Attic

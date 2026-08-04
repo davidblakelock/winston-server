@@ -917,6 +917,27 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     }
   }
 
+  // Safety net: the primary Claude call has web_search available directly
+  // (for ordinary "what's the weather"/"how are the markets" questions), and
+  // observed live, it sometimes uses that to answer an explicit morning-
+  // briefing request itself — producing a plausible-looking but entirely
+  // unverified "Morning Run Down" (invented weather, invented activities, no
+  // real search grounding beyond whatever it does on its own) instead of
+  // emitting the tag that routes to the real generateDailyBrief() pipeline.
+  // Confirmed via chat history: 4 of 5 consecutive "give me my morning
+  // briefing" requests in one real session got a fabricated reply like this;
+  // only the request whose reply actually matched a real generateDailyBrief()
+  // log entry was genuine. This is user-message-driven (the trigger phrase
+  // itself), not a narration to recover from Claude's reply — force the real
+  // action whenever the request is unambiguous, regardless of what Claude did.
+  if (action.type !== "morning_rundown" && /\bmorning (run.?down|briefing)\b|\bdaily briefing\b/i.test(message)) {
+    action = { type: "morning_rundown" };
+    log.warn(
+      { message, claudeAction: tagMatch?.[1] ?? "none", reply: finalReply.slice(0, 200) },
+      "[chatHandlerCore] Forced morning_rundown — explicit request but Claude answered directly instead of emitting the tag"
+    );
+  }
+
   log.info({ actionType: action.type, tag: tagMatch?.[1] ?? "none" }, "[chatHandlerCore] Action parsed");
 
   // ── Execute action ───────────────────────────────────────────────────────────
