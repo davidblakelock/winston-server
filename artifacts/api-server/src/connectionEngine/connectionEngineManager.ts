@@ -18,8 +18,9 @@
  *   observations      — the user-facing surfaced insight, one row per
  *                        dot-connector suggestion / pattern / cluster / weekly
  *                        gift
- *   user_corrections  — natural-language feedback rows (Phase 5 — table only
- *                        for now, no read/write helpers yet)
+ *
+ * user_corrections (natural-language feedback rows) is owned by
+ * memorySourceAdapters.ts now, not this file — see ensureUserCorrectionsTable.
  *
  * life_suggestions and life_observations (the old per-feature tables this
  * replaces) are left in place, empty going forward — standing no-DROP policy,
@@ -33,8 +34,16 @@ import { logger } from "../lib/logger.js";
 import { MODEL_HAIKU, MODEL_SONNET } from "../lib/models.js";
 import { getUserLocationContext } from "../lib/userTimezone.js";
 import { getProfile, getActiveUsers } from "../onboarding/onboardingManager.js";
-import { fetchFromAdapters, type SourceType, type SourceItem } from "./memorySourceAdapters.js";
-import { getGoals, getGoalById, type Goal } from "../goals/goalsManager.js";
+import {
+  fetchFromAdapters,
+  type SourceType,
+  type SourceItem,
+  getRecentCorrections,
+  type UserCorrection,
+  recencyLabel,
+  ensureUserCorrectionsTable,
+} from "./memorySourceAdapters.js";
+import { fetchGoalContext, type IndexedGoalContext, getGoalById } from "./standingContextAdapters.js";
 import { getStoicForUser, PHASE_NAMES } from "../stoic/stoicManager.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
@@ -118,17 +127,6 @@ const _tableInit = (async () => {
   // itself running twice (connections vs observations), let alone goals'.
   await query(`ALTER TABLE observations ADD COLUMN IF NOT EXISTS related_connection_id integer`)
     .catch((err) => logger.warn({ err }, "[ConnectionEngine] observations.related_connection_id migration warning"));
-
-  await query(`
-    CREATE TABLE IF NOT EXISTS user_corrections (
-      id                        integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-      user_name                 text NOT NULL,
-      correction_type           text NOT NULL,
-      affected_item_ids         integer[] NOT NULL DEFAULT '{}',
-      natural_language_feedback text NOT NULL,
-      created_at                timestamptz NOT NULL DEFAULT now()
-    )
-  `).catch((err) => logger.error({ err }, "[ConnectionEngine] user_corrections table init failed"));
 })();
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -335,15 +333,6 @@ export async function updateObservationStatus(
 
 export type CorrectionType = "dismiss" | "reject" | "elevate" | "forget";
 
-export interface UserCorrection {
-  id:                        number;
-  user_name:                 string;
-  correction_type:           CorrectionType;
-  affected_item_ids:         number[];
-  natural_language_feedback: string;
-  created_at:                string;
-}
-
 // dismiss/reject/forget all close the observation out the same way — the
 // distinction between them lives in correction_type/feedback for future
 // passes to read, not as separate observation states.
@@ -389,6 +378,7 @@ export async function applyObservationCorrection(
   if (target.related_connection_id) {
     await updateConnectionStatus(target.related_connection_id, newStatus === "accepted" ? "accepted" : "dismissed");
   }
+  await ensureUserCorrectionsTable;
   await query(
     `INSERT INTO user_corrections (user_name, correction_type, affected_item_ids, natural_language_feedback)
      VALUES ($1, $2, $3, $4)`,
@@ -396,20 +386,6 @@ export async function applyObservationCorrection(
   );
   logger.info({ userName, correctionType, observationId: target.id }, "[ConnectionEngine] Correction applied");
   return { observationId: target.id };
-}
-
-export async function getRecentCorrections(
-  userName: string,
-  days      = 30,
-): Promise<UserCorrection[]> {
-  await _tableInit;
-  const { rows } = await query<UserCorrection>(
-    `SELECT * FROM user_corrections
-     WHERE user_name = $1 AND created_at >= now() - ($2 || ' days')::interval
-     ORDER BY created_at DESC`,
-    [userName, days.toString()]
-  );
-  return rows;
 }
 
 function formatCorrectionContext(corrections: UserCorrection[]): string {
@@ -421,38 +397,6 @@ function formatCorrectionContext(corrections: UserCorrection[]): string {
   return `\nPast feedback from the user on suggestions/observations like this — take it into account, ` +
     `don't repeat something they've dismissed for a similar reason, and weigh things they've marked ` +
     `important more heavily:\n${lines}\n`;
-}
-
-// A second context source alongside life_capture/attic_item — not merged into
-// SourceItem[] since goals aren't a recency-sorted stream of things that
-// happened, they're standing context to check saved items against. Active
-// goals only, capped at 8 (same cap generateGoalsRecap uses). Indexed (not
-// just prose) so dotConnectorPass/patternObservationPass can report back
-// WHICH goal a suggestion connects to by position, the same "point at it,
-// don't retype it" discipline used everywhere else — Claude picks an index,
-// the server resolves the real goal id.
-export interface IndexedGoalContext {
-  text:  string;
-  goals: Goal[];
-}
-
-async function fetchGoalContext(userName: string): Promise<IndexedGoalContext> {
-  const goals = await getGoals(userName).catch(() => [] as Goal[]);
-  // Active AND aspirational both count as "current" here — noticing a
-  // connection to an aspirational goal is exactly the kind of nudge that
-  // could promote it to active, not something to withhold until it is one.
-  const active = goals.filter((g) => g.status !== "completed").slice(0, 8);
-  if (active.length === 0) return { text: "", goals: [] };
-  const lines = active
-    .map((g, i) => {
-      const done  = g.steps.filter((s) => s.completed).length;
-      const total = g.steps.length;
-      return `  [${i}] "${g.title}"${g.description ? ` — ${g.description}` : ""} (${total > 0 ? `${done}/${total} steps done` : "no steps yet"})`;
-    })
-    .join("\n");
-  const text = `\nCurrent goals (indexed) — if a saved item below genuinely relates to one of these, report its ` +
-    `index as relatedGoalIndex; don't force it:\n${lines}\n`;
-  return { text, goals: active };
 }
 
 // A third context source, same shape as fetchGoalContext — standing context,
@@ -481,34 +425,6 @@ export async function fetchSourceItems(
   days:        number,
 ): Promise<SourceItem[]> {
   return fetchFromAdapters(userName, sourceTypes, days);
-}
-
-// Explicit relative-age label so passes never have to compute "how long ago
-// was this" themselves from a bare date — spelling it out as "today" /
-// "3 days ago" / "3 weeks ago" makes staleness impossible to miss or
-// miscompute, which a bare "Jul 4" date does not.
-export function recencyLabel(occurredAt: string): string {
-  const daysAgo = Math.floor((Date.now() - new Date(occurredAt).getTime()) / 86_400_000);
-  if (daysAgo <= 0) return "today";
-  if (daysAgo === 1) return "yesterday";
-  if (daysAgo < 7) return `${daysAgo} days ago`;
-  const weeks = Math.round(daysAgo / 7);
-  return `${weeks} week${weeks === 1 ? "" : "s"} ago`;
-}
-
-// Was unused for a while (only formatIndexedItemLines had callers) — now
-// reused by goalsManager.ts's buildGoalsProfileContext, which needs prose
-// (not indexed) since goals chat isn't pointing back at a specific item.
-export function formatItemLines(items: SourceItem[], tz: string, limit: number): string {
-  return items
-    .slice(0, limit)
-    .map((it) => {
-      const date = new Date(it.occurredAt).toLocaleDateString("en-US", {
-        timeZone: tz, month: "short", day: "numeric",
-      });
-      return `• [${date}, ${recencyLabel(it.occurredAt)}, ${it.context}] ${it.content}`;
-    })
-    .join("\n");
 }
 
 // Numbered variant of formatItemLines — needed wherever a pass has to point

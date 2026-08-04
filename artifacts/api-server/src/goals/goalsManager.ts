@@ -7,7 +7,8 @@ import { getProfile, buildSystemPromptFromProfile, buildProfileContext } from ".
 import { getPeople } from "../people/peopleManager.js";
 import { MODEL_HAIKU } from "../lib/models.js";
 import { getUserLocationContext } from "../lib/userTimezone.js";
-import type { SourceItem, UserCorrection } from "../connectionEngine/connectionEngineManager.js";
+import type { SourceItem, UserCorrection } from "../connectionEngine/memorySourceAdapters.js";
+import { fetchFromAdapters, getRecentCorrections, formatItemLines } from "../connectionEngine/memorySourceAdapters.js";
 
 const MODEL_GPT4O = "gpt-4o" as const;
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -327,15 +328,6 @@ export function isUnambiguousGoalConfirmation(message: string): boolean {
 // so the free-form chat's personalization (hobbies, music taste, key people)
 // is as rich as the structured breakdown's, not just name+city.
 
-// Pulled in dynamically (not a static import) to avoid a circular dependency —
-// connectionEngineManager.ts already imports getGoals/getGoalById from this
-// file, so a static top-level import back the other way would create a cycle.
-// Both usages here are inside an async function body (never at module-load
-// time), which is the safe pattern for this regardless.
-async function loadConnectionEngineHelpers() {
-  return import("../connectionEngine/connectionEngineManager.js");
-}
-
 async function buildGoalsProfileContext(
   userName: string
 ): Promise<{ profileContext: string; userCity: string; displayName: string }> {
@@ -349,13 +341,12 @@ async function buildGoalsProfileContext(
   const sportsTeams     = userProfile.sportsTeams ?? "";
   const favoriteArtists = userProfile.favoriteArtists ?? [];
 
-  const { fetchSourceItems, getRecentCorrections, formatItemLines } = await loadConnectionEngineHelpers();
   const { timezone: tz } = await getUserLocationContext(userName).catch(() => ({ timezone: "UTC" }));
 
   const [people, existingGoals, sourceItems, corrections] = await Promise.all([
     getPeople(userName).catch(() => [] as Array<{ name: string; relationship: string; city?: string | null; details?: string | null }>),
     getGoals(userName).catch(() => [] as Goal[]),
-    fetchSourceItems(userName, ["life_capture", "attic_item"], 30).catch(() => [] as SourceItem[]),
+    fetchFromAdapters(userName, ["life_capture", "attic_item"], 30).catch(() => [] as SourceItem[]),
     getRecentCorrections(userName, 30).catch(() => [] as UserCorrection[]),
   ]);
 

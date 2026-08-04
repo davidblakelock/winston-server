@@ -19,6 +19,7 @@
  * live inline in connectionEngineManager.ts's fetchSourceItems.
  */
 
+import { query } from "../db.js";
 import { getRecentCaptures } from "../lifeCaptures/lifeCapturesManager.js";
 import { getRecentAtticItems } from "../attic/atticItemsManager.js";
 import { getRecentListItems } from "../lists/listManager.js";
@@ -129,4 +130,76 @@ export async function fetchFromAdapters(
 
   items.sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime());
   return items;
+}
+
+// ── user_corrections (Phase 3) ───────────────────────────────────────────────
+// Feedback rows referenced by any domain's reasoning — connectionEngineManager
+// .ts's three passes, and now goalsManager.ts too — so this table's ownership
+// moved here from connectionEngineManager.ts's shared _tableInit (which
+// previously created connections/observations/user_corrections together).
+// connectionEngineManager.ts now awaits ensureUserCorrectionsTable before its
+// own INSERT (applyObservationCorrection) instead of creating this table
+// itself.
+
+export const ensureUserCorrectionsTable = (async () => {
+  await query(`
+    CREATE TABLE IF NOT EXISTS user_corrections (
+      id                        integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      user_name                 text NOT NULL,
+      correction_type           text NOT NULL,
+      affected_item_ids         integer[] NOT NULL DEFAULT '{}',
+      natural_language_feedback text NOT NULL,
+      created_at                timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+})();
+
+export interface UserCorrection {
+  id:                        number;
+  user_name:                 string;
+  correction_type:           string;
+  affected_item_ids:         number[];
+  natural_language_feedback: string;
+  created_at:                string;
+}
+
+export async function getRecentCorrections(
+  userName: string,
+  days      = 30,
+): Promise<UserCorrection[]> {
+  await ensureUserCorrectionsTable;
+  const { rows } = await query<UserCorrection>(
+    `SELECT * FROM user_corrections
+     WHERE user_name = $1 AND created_at >= now() - ($2 || ' days')::interval
+     ORDER BY created_at DESC`,
+    [userName, days.toString()]
+  );
+  return rows;
+}
+
+// ── Shared item formatting (Phase 3) ─────────────────────────────────────────
+// Moved verbatim from connectionEngineManager.ts — pure functions, no table
+// or domain coupling. goalsManager.ts needs formatItemLines directly now;
+// connectionEngineManager.ts re-imports recencyLabel for its own passes'
+// indexed formatting (formatIndexedItemLines stays local to that file).
+
+export function recencyLabel(occurredAt: string): string {
+  const daysAgo = Math.floor((Date.now() - new Date(occurredAt).getTime()) / 86_400_000);
+  if (daysAgo <= 0) return "today";
+  if (daysAgo === 1) return "yesterday";
+  if (daysAgo < 7) return `${daysAgo} days ago`;
+  const weeks = Math.round(daysAgo / 7);
+  return `${weeks} week${weeks === 1 ? "" : "s"} ago`;
+}
+
+export function formatItemLines(items: SourceItem[], tz: string, limit: number): string {
+  return items
+    .slice(0, limit)
+    .map((it) => {
+      const date = new Date(it.occurredAt).toLocaleDateString("en-US", {
+        timeZone: tz, month: "short", day: "numeric",
+      });
+      return `• [${date}, ${recencyLabel(it.occurredAt)}, ${it.context}] ${it.content}`;
+    })
+    .join("\n");
 }
