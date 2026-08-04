@@ -21,13 +21,15 @@
 
 import { getRecentCaptures } from "../lifeCaptures/lifeCapturesManager.js";
 import { getRecentAtticItems } from "../attic/atticItemsManager.js";
+import { getRecentListItems } from "../lists/listManager.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-// 'life_capture' | 'attic_item' today; a new domain (Lists in Phase 2, Goals'
-// StandingContextAdapter variant in Phase 3, chat-fact in Phase 4) extends
-// this union and registers below — the passes never need to change to see it.
-export type SourceType = "life_capture" | "attic_item";
+// 'life_capture' | 'attic_item' | 'list_item' now (Phase 2 added Lists);
+// Goals' StandingContextAdapter variant in Phase 3, chat-fact in Phase 4
+// extend this union and register below — the passes never need to change to
+// see it.
+export type SourceType = "life_capture" | "attic_item" | "list_item";
 
 export interface SourceItem {
   sourceType: SourceType;
@@ -81,6 +83,20 @@ export const atticItemAdapter: MemorySourceAdapter = {
   },
 };
 
+export const listItemAdapter: MemorySourceAdapter = {
+  sourceType: "list_item",
+  async fetchRecent(userName: string, days: number): Promise<SourceItem[]> {
+    const listItems = await getRecentListItems(userName, days);
+    return listItems.map((it) => ({
+      sourceType: "list_item" as const,
+      sourceId:   it.id,
+      content:    it.item_text,
+      context:    it.list_name,
+      occurredAt: it.created_at,
+    }));
+  },
+};
+
 // ── Registry ──────────────────────────────────────────────────────────────────
 // Adding a new domain later means writing one adapter and adding one line
 // here — the passes in connectionEngineManager.ts iterate this map and never
@@ -89,6 +105,7 @@ export const atticItemAdapter: MemorySourceAdapter = {
 const registry = new Map<SourceType, MemorySourceAdapter>([
   [lifeCaptureAdapter.sourceType, lifeCaptureAdapter],
   [atticItemAdapter.sourceType, atticItemAdapter],
+  [listItemAdapter.sourceType, listItemAdapter],
 ]);
 
 // ── Fetch across adapters ────────────────────────────────────────────────────

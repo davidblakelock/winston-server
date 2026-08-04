@@ -437,6 +437,29 @@ export async function getAllLists(userName: string): Promise<Record<string, stri
   return result;
 }
 
+// ── Recent list items (for the connection engine's Lists adapter) ───────────
+// Excludes the shopping list — groceries are too transitory to carry any
+// signal for pattern/interest detection and would just add noise to what the
+// passes reason over. All other named lists (wish lists, notepad saves,
+// custom lists, etc.) are included. No `completed` filter — that column
+// doesn't exist on list_items (only on shared_list_items, a different
+// table) — see verification checklist below re: the query this replaces.
+export async function getRecentListItems(
+  userName: string,
+  days: number,
+): Promise<Array<{ id: number; list_name: string; item_text: string; created_at: string }>> {
+  const { rows } = await query<{ id: number; list_name: string; item_text: string; created_at: string }>(
+    `SELECT id, list_name, item_text, created_at
+     FROM list_items
+     WHERE user_name = $1
+       AND lower(list_name) != 'shopping'
+       AND created_at >= now() - ($2 || ' days')::interval
+     ORDER BY created_at DESC`,
+    [userName, days.toString()]
+  );
+  return rows;
+}
+
 // ── Execute a list operation and return context for the companion ─────────────
 
 export async function executeListOp(op: ListOp, userName: string): Promise<ListResult> {

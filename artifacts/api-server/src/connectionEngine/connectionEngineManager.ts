@@ -536,7 +536,7 @@ function formatIndexedItemLines(items: SourceItem[], tz: string, limit: number):
 export async function dotConnectorPass(userName: string): Promise<void> {
   await _tableInit;
 
-  const items = await fetchSourceItems(userName, ["life_capture", "attic_item"], 30);
+  const items = await fetchSourceItems(userName, ["life_capture", "attic_item", "list_item"], 30);
   if (items.length < 4) return; // need enough data for meaningful patterns
 
   const { rows: rateRows } = await query<{ id: number }>(
@@ -553,29 +553,6 @@ export async function dotConnectorPass(userName: string): Promise<void> {
   const interests = (raw["interests"] as string[] | undefined) ?? [];
   const firstName = (profile?.name ?? userName).split(" ")[0];
 
-  let listContext = "";
-  try {
-    const { rows: listRows } = await query<{ list_name: string; item_text: string }>(
-      `SELECT list_name, item_text
-       FROM list_items
-       WHERE user_name = $1
-         AND (completed IS NULL OR completed = false)
-       ORDER BY list_name, created_at DESC
-       LIMIT 40`,
-      [userName]
-    );
-    if (listRows.length > 0) {
-      const byList: Record<string, string[]> = {};
-      for (const row of listRows) {
-        (byList[row.list_name] ??= []).push(row.item_text);
-      }
-      listContext = `\nCurrent lists:\n` +
-        Object.entries(byList).map(([name, its]) =>
-          `  ${name}: ${its.slice(0, 10).join(", ")}`
-        ).join("\n");
-    }
-  } catch { /* non-fatal */ }
-
   const itemLines = formatIndexedItemLines(items, tz, 100);
   const corrections = await getRecentCorrections(userName, 30);
   const { text: goalContext, goals } = await fetchGoalContext(userName);
@@ -584,7 +561,7 @@ export async function dotConnectorPass(userName: string): Promise<void> {
   const prompt =
     `${firstName}'s personal reflections and saved items from the last 30 days (numbered):\n${itemLines}\n\n` +
     `Profile: lives in ${city}, interests include ${interests.slice(0, 6).join(", ") || "various things"}.` +
-    listContext + formatCorrectionContext(corrections) + goalContext + stoicPhaseContext + `\n\n` +
+    formatCorrectionContext(corrections) + goalContext + stoicPhaseContext + `\n\n` +
     `One question: Is there anything in the above that Winston could take a concrete action on RIGHT NOW — ` +
     `specifically something involving: checking the calendar for an open week, making a reservation, ` +
     `researching travel options, or adding something to a list?\n\n` +
@@ -667,7 +644,7 @@ export async function dotConnectorPass(userName: string): Promise<void> {
 export async function patternObservationPass(userName: string): Promise<void> {
   await _tableInit;
 
-  const items = await fetchSourceItems(userName, ["life_capture", "attic_item"], 30);
+  const items = await fetchSourceItems(userName, ["life_capture", "attic_item", "list_item"], 30);
   if (items.length < 4) return; // need enough data to find patterns
 
   const { rows: recent } = await query<{ count: string }>(
@@ -915,7 +892,7 @@ export async function clusterPass(userName: string): Promise<void> {
 export async function weeklyGiftPass(userName: string): Promise<string | null> {
   await _tableInit;
 
-  const items = await fetchSourceItems(userName, ["life_capture", "attic_item"], 7);
+  const items = await fetchSourceItems(userName, ["life_capture", "attic_item", "list_item"], 7);
   if (items.length < 2) {
     logger.info({ userName }, "[ConnectionEngine] WeeklyGift: fewer than 2 items — skipping");
     return null;
