@@ -11,6 +11,7 @@ import {
   deleteProvider,
   getCategories,
   createCategory,
+  DuplicateProviderError,
   type ServiceProvider,
 } from "../providers/providerManager.js";
 
@@ -180,6 +181,10 @@ router.post(
 
       res.status(201).json({ provider });
     } catch (err) {
+      if (err instanceof DuplicateProviderError) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
       req.log.error({ err }, "[Providers] POST /providers error");
       res.status(500).json({ error: "Failed to create provider" });
     }
@@ -232,6 +237,10 @@ router.put(
 
       res.json({ provider });
     } catch (err) {
+      if (err instanceof DuplicateProviderError) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
       req.log.error({ err }, "[Providers] PUT /providers/:id error");
       res.status(500).json({ error: "Failed to update provider" });
     }

@@ -134,6 +134,18 @@ export async function createCategory(
   return { record: rowToCategory(rows[0]!), created: true };
 }
 
+// Thrown when a create/update would violate the (user_name, lower(name), phone)
+// unique index — surfaced by the route as a clear 409 instead of a generic
+// 500, so a failed save is visible to the client instead of silently
+// swallowed (fetch() doesn't reject on non-2xx, and the app didn't check
+// res.ok, so this previously just looked like "nothing happened").
+export class DuplicateProviderError extends Error {
+  constructor() {
+    super("Another provider with this name and phone number already exists");
+    this.name = "DuplicateProviderError";
+  }
+}
+
 export interface ServiceProvider {
   id: number;
   userName: string;
@@ -330,24 +342,34 @@ export async function createProvider(
     return rowToProvider(existing[0]!);
   }
 
-  const { rows } = await query<ProviderRow>(
-    `INSERT INTO service_providers
-       (user_name, name, category, specialty, phone, email, address, website,
-        company, notes, last_contact_date, next_due_date, next_due_calendar_event_id, google_contact_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
-     RETURNING ${SELECT_COLS}`,
-    [
-      userName, data.name, data.category,
-      data.specialty ?? null,
-      data.phone ?? null, data.email ?? null,
-      data.address ?? null, data.website ?? null,
-      data.company ?? null, data.notes ?? null,
-      data.lastContactDate ?? null, data.nextDueDate ?? null,
-      data.nextDueCalendarEventId ?? null,
-      data.googleContactId ?? null,
-    ]
-  );
-  return rowToProvider(rows[0]!);
+  try {
+    const { rows } = await query<ProviderRow>(
+      `INSERT INTO service_providers
+         (user_name, name, category, specialty, phone, email, address, website,
+          company, notes, last_contact_date, next_due_date, next_due_calendar_event_id, google_contact_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+       RETURNING ${SELECT_COLS}`,
+      [
+        userName, data.name, data.category,
+        data.specialty ?? null,
+        data.phone ?? null, data.email ?? null,
+        data.address ?? null, data.website ?? null,
+        data.company ?? null, data.notes ?? null,
+        data.lastContactDate ?? null, data.nextDueDate ?? null,
+        data.nextDueCalendarEventId ?? null,
+        data.googleContactId ?? null,
+      ]
+    );
+    return rowToProvider(rows[0]!);
+  } catch (err) {
+    // The dedup check above already covers the common case — this only
+    // fires on the rare race between two near-simultaneous identical
+    // creates that both passed the check before either had inserted.
+    if (err instanceof Error && err.message.includes("service_providers_user_name_idx")) {
+      throw new DuplicateProviderError();
+    }
+    throw err;
+  }
 }
 
 export async function updateProvider(
@@ -385,13 +407,20 @@ export async function updateProvider(
   if (!sets.length) return null;
 
   vals.push(id, userName);
-  const { rows } = await query<ProviderRow>(
-    `UPDATE service_providers SET ${sets.join(", ")}
-      WHERE id = $${idx} AND user_name = $${idx + 1}
-     RETURNING ${SELECT_COLS}`,
-    vals
-  );
-  return rows.length ? rowToProvider(rows[0]!) : null;
+  try {
+    const { rows } = await query<ProviderRow>(
+      `UPDATE service_providers SET ${sets.join(", ")}
+        WHERE id = $${idx} AND user_name = $${idx + 1}
+       RETURNING ${SELECT_COLS}`,
+      vals
+    );
+    return rows.length ? rowToProvider(rows[0]!) : null;
+  } catch (err) {
+    if (err instanceof Error && err.message.includes("service_providers_user_name_idx")) {
+      throw new DuplicateProviderError();
+    }
+    throw err;
+  }
 }
 
 export async function touchLastContactDate(
