@@ -33,8 +33,7 @@ import { logger } from "../lib/logger.js";
 import { MODEL_HAIKU, MODEL_SONNET } from "../lib/models.js";
 import { getUserLocationContext } from "../lib/userTimezone.js";
 import { getProfile, getActiveUsers } from "../onboarding/onboardingManager.js";
-import { getRecentCaptures } from "../lifeCaptures/lifeCapturesManager.js";
-import { getRecentAtticItems } from "../attic/atticItemsManager.js";
+import { fetchFromAdapters, type SourceType, type SourceItem } from "./memorySourceAdapters.js";
 import { getGoals, getGoalById, type Goal } from "../goals/goalsManager.js";
 import { getStoicForUser, PHASE_NAMES } from "../stoic/stoicManager.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
@@ -136,15 +135,11 @@ const _tableInit = (async () => {
 
 export type ConnectionEngineTrigger = "capture" | "batch_daily" | "weekly" | "annual";
 
-export type SourceType = "life_capture" | "attic_item";
-
-export interface SourceItem {
-  sourceType: SourceType;
-  sourceId:   number;
-  content:    string;
-  context:    string;
-  occurredAt: string;
-}
+// SourceType/SourceItem now live in memorySourceAdapters.ts (Phase 1 of the
+// unified memory architecture) — re-exported here so existing call sites
+// (goalsManager.ts, this file's own passes) don't need their import paths
+// touched.
+export type { SourceType, SourceItem } from "./memorySourceAdapters.js";
 
 export interface Connection {
   id:                number;
@@ -475,43 +470,17 @@ async function fetchStoicPhaseContext(userName: string): Promise<string> {
 // ── Source adapter ────────────────────────────────────────────────────────────
 // Normalizes across source tables so the passes below can read a mixed pool
 // of items without knowing which table each one came from. Sources keep their
-// own storage — this only fetches and reshapes.
-
+// own storage — this only fetches and reshapes. Delegates to
+// memorySourceAdapters.ts (Phase 1 of the unified memory architecture) —
+// this function name/signature stays as the passes' call site so nothing
+// downstream needed to change, but the actual per-domain fetch/reshape logic
+// now lives in one shared registry instead of inline here.
 export async function fetchSourceItems(
   userName:    string,
   sourceTypes: SourceType[],
   days:        number,
 ): Promise<SourceItem[]> {
-  const items: SourceItem[] = [];
-
-  if (sourceTypes.includes("life_capture")) {
-    const captures = await getRecentCaptures(userName, days);
-    for (const c of captures) {
-      items.push({
-        sourceType: "life_capture",
-        sourceId:   c.id,
-        content:    c.content,
-        context:    c.context,
-        occurredAt: c.captured_at,
-      });
-    }
-  }
-
-  if (sourceTypes.includes("attic_item")) {
-    const atticItems = await getRecentAtticItems(userName, days);
-    for (const it of atticItems) {
-      items.push({
-        sourceType: "attic_item",
-        sourceId:   it.id,
-        content:    it.raw_content,
-        context:    it.source_type,
-        occurredAt: it.created_at,
-      });
-    }
-  }
-
-  items.sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime());
-  return items;
+  return fetchFromAdapters(userName, sourceTypes, days);
 }
 
 // Explicit relative-age label so passes never have to compute "how long ago
