@@ -123,7 +123,7 @@ export async function handleOrderResult(
   if (upserted) {
     logger.info(
       { emailId: msgId, orderNumber: order.orderNumber, status: order.status },
-      "[OrderScanner] Amazon pseudo-status order upserted (no tracking number)"
+      "[OrderScanner] Pseudo-status order upserted (no tracking number)"
     );
   }
   return !!upserted;
