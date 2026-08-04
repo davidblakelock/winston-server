@@ -54,12 +54,14 @@ export async function classifyEmail(
   vacationMode = false,
 ): Promise<ClassifiedEmail | null> {
   const today = new Date().toISOString().split("T")[0];
-  // 15,000 chars, not the smaller cap a pure meeting/record/reply classifier
-  // would need — this call also does order/tracking extraction (folded in
-  // from the old standalone order scanner), and a retail shipping
-  // confirmation's tracking number is frequently buried deep in an href
-  // partway down a large HTML email, well past what a tight cap would reach.
-  const truncated = body.slice(0, 15000);
+  // 40,000 chars (was 15,000 — confirmed too small via a real dropped order:
+  // a Narvar-templated shipping email came in at 76K stripped chars, with the
+  // retailer's own name not appearing until char ~16,700 and the actual order
+  // block well past that — the classifier was never seeing real content at
+  // all, just MJML/responsive-table markup, on any email built with a
+  // template this heavy). Raised well past where that email's real content
+  // starts, not just past where it happened to end.
+  const truncated = body.slice(0, 40000);
 
   const vacationLine = vacationMode
     ? "\nThe user is currently on vacation — only flag this as something other than none if it is genuinely urgent or time-sensitive; hold lower-priority items."

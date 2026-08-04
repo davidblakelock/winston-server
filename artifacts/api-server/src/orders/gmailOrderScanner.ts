@@ -6,12 +6,6 @@ import { createTracker, getStatusLabel } from "./easypostManager.js";
 import { upsertOrder } from "./ordersManager.js";
 import { classifyEmail, type ClassifiedEmail } from "../email/emailClassifier.js";
 
-// Direct sender-domain check — replaces the old CARRIER_SENDER_DOMAINS-derived
-// filter list. Only used to gate the no-tracking-number pseudo-status path.
-function isAmazonSender(from: string): boolean {
-  return from.toLowerCase().includes("amazon.com");
-}
-
 function senderDisplayName(from: string): string {
   const match = from.match(/^(.*?)\s*<[^>]+>/);
   return match ? match[1].trim().replace(/^"|"$/g, "") : from.trim();
@@ -34,26 +28,27 @@ export async function handleOrderResult(
 ): Promise<boolean> {
   const hasTrackingNumber = !!order.trackingNumber;
   // Amazon Logistics deliveries often never expose a real carrier tracking
-  // number. When the classifier genuinely found none but the email's own
-  // order number + status language give us enough to track informally,
-  // fall back to a pseudo-status row instead of dropping the email. Every
-  // other retailer keeps the existing behavior: no tracking number, no row.
-  const isAmazonPseudoStatus =
+  // number — that was the original, narrower reasoning here. Confirmed via a
+  // real dropped order that this isn't Amazon-specific at all: Narvar (a
+  // third-party post-purchase platform used by many retailers, e.g. Peter
+  // Millar) wraps the actual carrier tracking number behind its own opaque
+  // redirect links and never exposes it in the email itself, same as Amazon
+  // Logistics. Any sender can hit this — gate purely on whether the email
+  // itself gives us enough to track informally (order number + status), not
+  // on who sent it.
+  const hasPseudoStatus =
     !hasTrackingNumber &&
     !!order.status &&
-    !!order.orderNumber &&
-    isAmazonSender(from);
+    !!order.orderNumber;
 
-  if (!hasTrackingNumber && !isAmazonPseudoStatus) {
-    // The genuinely undiagnosable case this whole function used to have —
-    // classifyEmail called this an order but extraction found no tracking
-    // number, and it's not Amazon (the only sender with a no-tracking
-    // fallback), so it's dropped. Log what was actually extracted so a report
-    // of "my order didn't show up" is traceable to classifier output instead
-    // of guesswork.
+  if (!hasTrackingNumber && !hasPseudoStatus) {
+    // Still a real drop case — classifyEmail called this an order but
+    // extraction found no tracking number AND no order number/status to fall
+    // back on. Log what was actually extracted so a report of "my order
+    // didn't show up" is traceable to classifier output instead of guesswork.
     logger.info(
       { emailId: msgId, from, subject, retailer: order.retailer, orderNumber: order.orderNumber, status: order.status },
-      "[OrderScanner] Order dropped — no tracking number and not an Amazon sender"
+      "[OrderScanner] Order dropped — no tracking number and not enough for a pseudo-status row"
     );
     return false;
   }
@@ -106,10 +101,12 @@ export async function handleOrderResult(
     return !!inserted[0];
   }
 
-  // Amazon pseudo-status path — no tracking number, but Amazon's own
-  // order_number and status language give us enough to track informally.
-  // upsertOrder()'s order_number-only tier merges Ordered → Shipped →
-  // Delivered emails into the same row instead of creating duplicates.
+  // Pseudo-status path — no tracking number, but the email's own order
+  // number and status language give us enough to track informally (Amazon
+  // Logistics, Narvar-templated retailers, and likely others all withhold a
+  // real carrier tracking number the same way). upsertOrder()'s
+  // order_number-only tier merges Ordered → Shipped → Delivered emails into
+  // the same row instead of creating duplicates.
   const retailer = order.retailer || senderDisplayName(from);
   const itemName = order.itemName || subject;
 
