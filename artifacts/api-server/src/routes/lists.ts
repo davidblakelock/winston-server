@@ -19,7 +19,7 @@ import {
 } from "../lists/listShareManager.js";
 import { autoUpdateItemUrl, autoUpdateRestaurantUrl, detectAutoLookupType, detectBookingPlatform } from "../lists/autoUrlLookup.js";
 import { sendFcmNotification } from "../push/fcmSender.js";
-import { extractReminder, computeFireAt, resolveNextDayOfWeek } from "../reminders/reminderParser.js";
+import { extractReminder, computeFireAt, computeFireAtForDate, resolveNextDayOfWeek } from "../reminders/reminderParser.js";
 import { nextOccurrenceForPattern } from "../reminders/recurringUtils.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
 import { createReminder } from "../reminders/reminderManager.js";
@@ -767,9 +767,11 @@ router.post(["/lists/todo", "/lists/to do", "/lists/to%20do"], async (req: Reque
           (recurringPattern.startsWith("weekly:") || recurringPattern.startsWith("monthly:"));
         resolvedFireAt = needsPatternScheduling
           ? nextOccurrenceForPattern(recurringPattern!, extracted.time, tz)
-          : extracted.dayOfWeek && !extracted.isRecurring
-            ? resolveNextDayOfWeek(extracted.dayOfWeek, extracted.time, tz, extracted.nextWeek ?? false)
-            : computeFireAt(extracted.time, tz, extracted.isTomorrow ?? false);
+          : extracted.explicitDate && !extracted.isRecurring
+            ? computeFireAtForDate(extracted.explicitDate, extracted.time, tz)
+            : extracted.dayOfWeek && !extracted.isRecurring
+              ? resolveNextDayOfWeek(extracted.dayOfWeek, extracted.time, tz, extracted.nextWeek ?? false)
+              : computeFireAt(extracted.time, tz, extracted.isTomorrow ?? false);
         resolvedItemText = extracted.reminderText || resolvedItemText;
       }
     } catch {
