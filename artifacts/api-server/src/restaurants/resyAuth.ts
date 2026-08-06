@@ -13,7 +13,19 @@
  */
 
 import { logger } from "../lib/logger.js";
-import type { ApifyBookingResult } from "./apifyBooking.js";
+
+export interface BookingResult {
+  success: boolean;
+  confirmationNumber?: string;
+  restaurantName?: string;
+  date?: string;
+  time?: string;
+  partySize?: number;
+  /** Returned when the requested slot is taken but alternatives are available. */
+  alternatives?: Array<{ time: string }>;
+  /** Machine-readable reason when success=false. */
+  error?: string;
+}
 
 // Resy web-client API key (public key embedded in resy.com — not a secret)
 const RESY_API_KEY = "VbWk7s3L4KiK5fzlO7JD3Q5EYolJI7n5";
@@ -223,7 +235,7 @@ async function getResyBookToken(configToken: string, token: string): Promise<str
 
 /**
  * Book a Resy reservation directly via the Resy API using a stored session token.
- * No Apify actor is used — the booking is made synchronously.
+ * The booking is made synchronously.
  */
 export async function bookViaResyDirect(
   venueSlug:      string,
@@ -233,7 +245,7 @@ export async function bookViaResyDirect(
   timeHHMM:       string,
   partySize:      number,
   sessionToken:   string,
-): Promise<ApifyBookingResult> {
+): Promise<BookingResult> {
   logger.info(
     { venueSlug, citySlug, restaurantName, dateISO, timeHHMM, partySize },
     "[ResyDirect] Starting booking"

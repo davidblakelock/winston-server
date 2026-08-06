@@ -6,8 +6,8 @@
  * localContent/localContentScanner.ts's separate Claude-web-search-only
  * scan) into one system combining three candidate sources:
  *
- *   1. Ticketmaster events — apifyEventsManager.fetchCandidateEvents()
- *      (direct API, falls back to an Apify actor)
+ *   1. Ticketmaster events — ticketmasterEventsManager.fetchCandidateEvents()
+ *      (direct Discovery API)
  *   2. Claude web search — categories Ticketmaster covers poorly (wine
  *      tastings, farmers markets, pop-ups, local meetups, art walks)
  *   3. Google Places — newly-opened restaurants (google/places.ts's
@@ -57,7 +57,7 @@ import { logger } from "../lib/logger.js";
 import { query } from "../db.js";
 import { getActiveUsers, getProfile, type ActiveUser } from "../onboarding/onboardingManager.js";
 import { getUserLocationContext } from "../lib/userTimezone.js";
-import { fetchCandidateEvents, type LocalEvent } from "../events/apifyEventsManager.js";
+import { fetchCandidateEvents, type LocalEvent } from "../events/ticketmasterEventsManager.js";
 import { searchRestaurants } from "../google/places.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });

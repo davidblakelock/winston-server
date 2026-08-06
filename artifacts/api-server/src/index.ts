@@ -256,10 +256,10 @@ app.listen(port, async (err) => {
   }
 
   try {
-    const { ensureApifyCacheTable } = await import("./lib/apifyCache.js");
-    await ensureApifyCacheTable();
+    const { ensureResultCacheTable } = await import("./lib/resultCache.js");
+    await ensureResultCacheTable();
   } catch (e) {
-    logger.warn({ err: e }, "apify_cache table initialization warning");
+    logger.warn({ err: e }, "result cache table initialization warning");
   }
 
   try {

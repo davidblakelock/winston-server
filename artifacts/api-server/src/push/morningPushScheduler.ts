@@ -10,7 +10,7 @@ import {
   releaseMorningPushSlot,
   wasPushSentToday,
 } from "../morning/briefingCache.js";
-import { wasApifyDailyFlagSet, setApifyDailyFlag } from "../lib/apifyCache.js";
+import { wasDailyFlagSet, setDailyFlag } from "../lib/resultCache.js";
 import { getActiveUsers, type ActiveUser } from "../onboarding/onboardingManager.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 
@@ -168,16 +168,16 @@ async function runPerUserChecks(): Promise<void> {
     }
 
     // 12:00 PM local time: check for significant breaking news since morning briefing.
-    // Guard is now DB-backed so server restarts don't cause duplicate midday Apify runs.
+    // Guard is DB-backed so server restarts don't cause duplicate midday checks.
     if (localTime === "12:00" && middayCheckDone.get(userName) !== today) {
       middayCheckDone.set(userName, today); // in-memory fast-path
       const dbFlagKey = `midday_check_done:${userName}`;
-      wasApifyDailyFlagSet(dbFlagKey, today).then((alreadyDone) => {
+      wasDailyFlagSet(dbFlagKey, today).then((alreadyDone) => {
         if (alreadyDone) {
           logger.info({ userName, today }, "[MiddayNews] Skipped — DB flag already set for today");
           return;
         }
-        setApifyDailyFlag(dbFlagKey, today).catch(() => {});
+        setDailyFlag(dbFlagKey, today).catch(() => {});
         checkMiddayNews(userName)
           .then(async (story) => {
             if (!story) return; // Nothing significant — send nothing

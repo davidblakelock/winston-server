@@ -3,10 +3,10 @@ import { logger } from "../lib/logger.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
 import {
   formatArticlesForClaude,
-  isApifyNewsConfigured,
+  isNewsApiConfigured,
+  fetchNewsApiHeadlines,
   type ScrapedArticle,
-} from "./apifyNewsManager.js";
-import { isNewsApiConfigured, fetchNewsApiHeadlines } from "./newsApiManager.js";
+} from "./newsApiManager.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -71,22 +71,17 @@ async function resolveNewsContext(userName?: string): Promise<NewsContext> {
  * Call this at 12:00 PM local time from morningPushScheduler.
  */
 export async function checkMiddayNews(userName: string): Promise<string | null> {
-  if (!isNewsApiConfigured() && !isApifyNewsConfigured()) {
-    logger.info({ userName }, "[MiddayNews] No news source configured — skipping midday check");
+  if (!isNewsApiConfigured()) {
+    logger.info({ userName }, "[MiddayNews] NewsAPI not configured — skipping midday check");
     return null;
   }
 
-  let current: ScrapedArticle[] = [];
+  const current: ScrapedArticle[] =
+    await fetchNewsApiHeadlines("reuters,the-associated-press", 25).catch(() => []);
+  logger.info({ count: current.length }, "[MiddayNews] Fetched via NewsAPI");
 
-  if (isNewsApiConfigured()) {
-    current = await fetchNewsApiHeadlines("reuters,the-associated-press", 25).catch(() => []);
-    logger.info({ count: current.length }, "[MiddayNews] Fetched via NewsAPI");
-  }
-
-  // Apify is NOT used as a midday fallback — it burns actor credits for background
-  // checks the user never explicitly requested. If NewsAPI isn't configured, skip.
   if (current.length === 0) {
-    logger.info({ userName }, "[MiddayNews] NewsAPI not configured and Apify midday disabled — skipping");
+    logger.info({ userName }, "[MiddayNews] No headlines returned — skipping");
     return null;
   }
 

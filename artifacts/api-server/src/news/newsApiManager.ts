@@ -11,12 +11,35 @@
  */
 
 import { logger } from "../lib/logger.js";
-import type { ScrapedArticle } from "./apifyNewsManager.js";
 
 const NEWSAPI_BASE = "https://newsapi.org/v2";
 
 function getNewsApiKey(): string { return (process.env.NEWS_API_KEY ?? "").trim(); }
 export function isNewsApiConfigured(): boolean { return !!getNewsApiKey(); }
+
+// ── Normalised article type ───────────────────────────────────────────────────
+
+export interface ScrapedArticle {
+  title:       string;
+  description: string;
+  url:         string;
+  publishedAt: string;
+  source:      string;
+}
+
+/** Numbered headline list for Claude to read, with brief description if available. */
+export function formatArticlesForClaude(
+  articles: ScrapedArticle[],
+  label:    string,
+  limit     = 20,
+): string {
+  if (articles.length === 0) return "";
+  const lines = articles.slice(0, limit).map((a, i) => {
+    const desc = a.description ? ` — ${a.description.slice(0, 100).trim()}` : "";
+    return `${i + 1}. [${a.source}] ${a.title}${desc}`;
+  });
+  return `[${label}]\n${lines.join("\n")}`;
+}
 
 /**
  * Fetch top headlines from Reuters + AP News via NewsAPI.org.

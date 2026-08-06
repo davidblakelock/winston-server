@@ -4,7 +4,6 @@ import { authenticate } from "../auth/middleware.js";
 import { query } from "../db.js";
 import { lookupOfficialWebsite } from "../lists/autoUrlLookup.js";
 import { upsertProfile } from "../onboarding/onboardingManager.js";
-import { isApifyApiKeyConfigured } from "../restaurants/apifyBooking.js";
 import { getResySession } from "../restaurants/bookingCredentialsManager.js";
 import { estimateDriveTime } from "../departure/departureManager.js";
 import { sendFcmNotification } from "../push/fcmSender.js";
@@ -222,10 +221,6 @@ router.get("/admin/timezone-check", async (req: Request, res: Response) => {
     );
 
     const resySession = await getResySession(userName).catch(() => null);
-    const bookingStatus = {
-      openTableConnected: isApifyApiKeyConfigured(), // guest booking — no login needed
-      resyConnected:      !!resySession,
-    };
 
     const todoReminders = todoRows.map((r) => {
       const fireMs = new Date(r.reminder_time).getTime();
@@ -266,12 +261,8 @@ router.get("/admin/timezone-check", async (req: Request, res: Response) => {
         "computeFireAt() uses Intl.DateTimeFormat(user timezone) to offset user's local time to UTC. " +
         "reminder_time / fire_at are TIMESTAMPTZ (stored as UTC). " +
         "Scheduler comparison `reminder_time <= NOW()` is UTC vs UTC — correct.",
-      apifyStatus: {
-        apifyKeyConfigured: isApifyApiKeyConfigured(),
-        openTableReady: isApifyApiKeyConfigured() && bookingStatus.openTableConnected,
-        resyReady:      isApifyApiKeyConfigured() && bookingStatus.resyConnected,
-        openTableConnected: bookingStatus.openTableConnected,
-        resyConnected:      bookingStatus.resyConnected,
+      bookingStatus: {
+        resyConnected: !!resySession,
       },
       pendingTodoReminders: todoReminders,
       pendingScheduledReminders: scheduledReminders,
