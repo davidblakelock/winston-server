@@ -115,11 +115,22 @@ export async function hasFiredToday(userName: string): Promise<boolean> {
   return rows.length > 0;
 }
 
-export async function markFiredToday(userName: string): Promise<void> {
+// Returns whether THIS call actually claimed today's slot (true) or someone
+// else already had (false) — the INSERT...WHERE NOT EXISTS was already
+// atomic, but the boolean was previously discarded (Promise<void>) and the
+// caller swallowed any error and sent the push regardless either way. That
+// combination meant two near-simultaneous callers (e.g. old+new server
+// instances briefly overlapping during a rolling deploy) could both pass
+// hasFiredToday's earlier check-then-act read and both end up sending —
+// confirmed as a real, non-atomic check-then-act race, the same class of
+// bug claimWinddownReply's own atomic UPDATE further down this file exists
+// specifically to avoid. The caller must now check this return value and
+// skip sending when it's false.
+export async function markFiredToday(userName: string): Promise<boolean> {
   const { timezone: tz } = await getUserLocationContext(userName);
   const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
   // RETURNING is required so this routes through exec_dml_ret (not exec_sql which can't handle DML).
-  await query(
+  const { rows } = await query<{ id: number }>(
     `INSERT INTO winddown_state (user_name, trigger_date)
      SELECT $1, $2 WHERE NOT EXISTS (
        SELECT 1 FROM winddown_state WHERE user_name = $1 AND trigger_date = $2
@@ -127,6 +138,7 @@ export async function markFiredToday(userName: string): Promise<void> {
      RETURNING id`,
     [userName, today]
   );
+  return rows.length > 0;
 }
 
 export async function isWinddownActive(userName: string): Promise<boolean> {

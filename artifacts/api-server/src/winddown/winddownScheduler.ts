@@ -237,11 +237,24 @@ export function startWinddownScheduler(): void {
         }
 
         console.log(`EVENING_CHECK_IN: firing at ${localTime}`);
-        // Mark fired FIRST to prevent double-fire on subsequent ticks within the 10-min window,
-        // but wrap it so a transient DB error doesn't abort the whole notification.
-        await markFiredToday(userName).catch((err) =>
-          logger.warn({ err }, "Evening check-in: markFiredToday failed — push will still be sent")
-        );
+        // Mark fired FIRST to prevent double-fire on subsequent ticks within the
+        // window — markFiredToday's INSERT...WHERE NOT EXISTS is atomic, and now
+        // its claimed/not-claimed result is actually checked: skip sending if
+        // someone else (e.g. an old+new server instance briefly overlapping
+        // during a rolling deploy) already claimed today's slot. Previously this
+        // result was discarded and the push sent regardless either way, which is
+        // exactly the check-then-act race that produced two separate winddown
+        // notifications (and two generated messages) for the same evening. A
+        // transient DB error on the claim itself still lets the push through,
+        // matching the prior fail-open behavior for that case specifically.
+        const claimedFireSlot = await markFiredToday(userName).catch((err) => {
+          logger.warn({ err }, "Evening check-in: markFiredToday failed — push will still be sent");
+          return true;
+        });
+        if (!claimedFireSlot) {
+          console.log(`EVENING_CHECK_IN: slot already claimed elsewhere — skipping`);
+          continue;
+        }
         logger.info({ userName, time: settings.scheduledTime }, "Evening check-in initiated");
 
         const profile = await getProfile(userName).catch(() => null);
