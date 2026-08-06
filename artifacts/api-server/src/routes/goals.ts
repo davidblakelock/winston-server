@@ -291,31 +291,34 @@ router.get("/goals/chat/history", async (req, res) => {
 // Unlike /goals/breakdown this does NOT force a structured step output —
 // it's a genuine back-and-forth conversation that can go anywhere.
 // Saves the exchange to chat_messages so history persists across app restarts.
-// Body: { message: string, conversation_history?: [{role, content}] }
-// Returns: { response: string }
+// Body: { message: string, conversation_history?: [{role, content}], goal_id?: number }
+// Returns: { response: string, actionTaken?: string | null, actionDetail?: string | null }
 router.post("/goals/chat", async (req, res) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
-  const { message, conversation_history } = req.body as {
+  const { message, conversation_history, goal_id } = req.body as {
     message?: string;
     conversation_history?: Array<{ role: "user" | "assistant"; content: string }>;
+    goal_id?: number;
   };
   if (!message || typeof message !== "string" || !message.trim()) {
     res.status(400).json({ error: "message is required" });
     return;
   }
   try {
-    const result = await goalsFreeformChat(message.trim(), conversation_history ?? [], userName);
+    const result = await goalsFreeformChat(
+      message.trim(),
+      conversation_history ?? [],
+      userName,
+      typeof goal_id === "number" ? goal_id : undefined
+    );
     // Goals conversations are NOT saved to chat_messages — they live only in
     // the Goals screen and must not appear in the main chat history.
     req.log.info(
-      { responseLen: result.reply.length, saved: result.saved ?? false, goalId: result.goalId },
+      { responseLen: result.reply.length, goalId: goal_id, actionTaken: result.actionTaken },
       "[Goals] POST /goals/chat completed"
     );
-    // saved/goalId/goalTitle are additive — the current native client only
-    // reads `response`; a goal saved mid-conversation just shows up next
-    // time it fetches the goals list (already does this on every screen focus).
-    res.json({ response: result.reply, saved: result.saved, goalId: result.goalId, goalTitle: result.goalTitle });
+    res.json({ response: result.reply, actionTaken: result.actionTaken, actionDetail: result.actionDetail });
   } catch (err) {
     req.log.error({ err }, "[Goals] POST /goals/chat error");
     res.status(500).json({ error: "Failed to generate response" });

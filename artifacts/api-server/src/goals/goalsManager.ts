@@ -9,6 +9,7 @@ import { MODEL_HAIKU } from "../lib/models.js";
 import { getUserLocationContext } from "../lib/userTimezone.js";
 import type { SourceItem, UserCorrection } from "../connectionEngine/memorySourceAdapters.js";
 import { fetchFromAdapters, getRecentCorrections, formatItemLines } from "../connectionEngine/memorySourceAdapters.js";
+import { createReminder } from "../reminders/reminderManager.js";
 
 const MODEL_GPT4O = "gpt-4o" as const;
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -275,55 +276,6 @@ export async function deleteGoal(
   return (rows.length ?? 0) > 0;
 }
 
-// ── Pending goal offer (goals-chat screen only) ──────────────────────────────
-// Mirrors listManager.ts's pendingSaveOffers: the moment the free-form
-// goals-chat conversation lands on something concrete enough to be worth
-// keeping, the model flags it (---GOAL_OFFER---) and the real title/content
-// are captured right then, in goalsFreeformChat — a later "yes, save that"
-// resolves from here instead of asking the model to retype content it
-// already generated. Single slot per user, no TTL — overwritten by a newer
-// offer, cleared on confirm, lost on restart, same tradeoffs as every other
-// in-memory pending-state map in this codebase (pendingSaveOffers,
-// pendingAtticCleanup, pendingListTypeConflict, mostRecentShownObservation).
-
-export interface PendingGoalOffer {
-  title:   string;
-  content: string; // the offering turn's own reply text, before the delimiter
-}
-
-const _pendingGoalOfferMap = new Map<string, PendingGoalOffer>();
-
-export function getPendingGoalOffer(userName: string): PendingGoalOffer | null {
-  return _pendingGoalOfferMap.get(userName) ?? null;
-}
-
-export function setPendingGoalOffer(userName: string, offer: PendingGoalOffer | null): void {
-  if (offer === null) {
-    _pendingGoalOfferMap.delete(userName);
-  } else {
-    _pendingGoalOfferMap.set(userName, offer);
-  }
-}
-
-// A lightweight text-based safety net for the confirm step only — mirrors
-// the save-offer/notepad-conversion recovery nets in chatHandlerCore.ts.
-// GPT-4o occasionally narrates a confident "saved!" without emitting the
-// ---GOAL_CONFIRMED--- line despite explicit instruction; when a pending
-// offer exists and the user's own message unambiguously said yes/save it,
-// recover and save anyway rather than silently losing it. No equivalent net
-// on the offer side — a missed offer just means the conversation continues
-// normally, lower stakes than losing a confirmed save.
-export function isUnambiguousGoalConfirmation(message: string): boolean {
-  const t = message.trim();
-  if (/^(yes|yeah|yep|yup|sure|ok(ay)?|absolutely|definitely|do it|go ahead|sounds good|please do)[.!]*$/i.test(t)) {
-    return true;
-  }
-  if (/\b(save|add)\b[\s\S]{0,20}\b(it|that|this)\b/i.test(t) && !/\b(no|not|don'?t)\b/i.test(t)) {
-    return true;
-  }
-  return false;
-}
-
 // ── Shared profile context — used by both breakdownGoal and goalsFreeformChat
 // so the free-form chat's personalization (hobbies, music taste, key people)
 // is as rich as the structured breakdown's, not just name+city.
@@ -502,31 +454,32 @@ export interface BreakdownOptions {
   goalId?: number;
 }
 
-// Pulls the opening paragraph out of a breakdown's markdown content to use as
-// the goal's description — skips any leading headers (e.g. "# Learning Jazz")
-// so it lands on the actual why-this-matters prose the system prompt asks
-// GPT-4o to open with, not a title repeated back. Returns null if the content
-// has no real opening paragraph to extract (e.g. it jumps straight into a
-// list with no framing).
-function deriveDescriptionFromContent(content: string): string | null {
-  const paragraphLines: string[] = [];
-  for (const rawLine of content.split("\n")) {
-    const line = rawLine.trim();
-    if (!line) {
-      if (paragraphLines.length > 0) break;
-      continue;
-    }
-    if (/^#{1,6}\s/.test(line)) {
-      if (paragraphLines.length > 0) break;
-      continue;
-    }
-    paragraphLines.push(line);
+// Light Haiku cleanup — used only when the caller doesn't already supply a
+// goalTitle. Turns a raw stated goal ("hey i want to get into wine, know
+// nothing about it") into a short, natural title ("Learn about wine")
+// WITHOUT narrowing scope or picking a single action out of it — this is
+// tidying phrasing for display, not the old crystallize-to-one-action
+// behavior. Falls back to the raw text on any failure.
+async function deriveCleanGoalTitle(rawGoal: string): Promise<string> {
+  try {
+    const resp = await anthropic.messages.create({
+      model: MODEL_HAIKU,
+      max_tokens: 30,
+      messages: [{
+        role: "user",
+        content: `Turn this into a short goal title (under 8 words) — same scope and topic as stated, ` +
+          `never narrowed to one specific action within it. Return ONLY the title, no quotes, no ` +
+          `trailing punctuation.\n\n"${rawGoal}"`,
+      }],
+    });
+    const title = resp.content
+      .filter((b) => b.type === "text")
+      .map((b) => (b as { type: "text"; text: string }).text)
+      .join("").trim();
+    return title || rawGoal;
+  } catch {
+    return rawGoal;
   }
-  const paragraph = paragraphLines.join(" ").trim()
-    .replace(/\*\*(.+?)\*\*/g, "$1")
-    .replace(/\*(.+?)\*/g, "$1");
-  if (!paragraph) return null;
-  return paragraph.length > 500 ? `${paragraph.slice(0, 497)}…` : paragraph;
 }
 
 // Cheap pre-filter so extractStepsFromContent (an AI call) only runs on
@@ -587,6 +540,24 @@ async function extractStepsFromContent(content: string): Promise<string[]> {
     logger.warn({ err }, "[Goals] extractStepsFromContent failed");
     return [];
   }
+}
+
+// User-initiated only — "give me a checklist for this" / "break this into
+// steps I can track." Reuses the exact same extraction logic that used to
+// run automatically on every save (extractStepsFromContent,
+// looksLikeRealPlan) — only WHEN it runs has changed, not the underlying
+// capability, which was already good.
+export async function addGoalStepsFromContent(goalId: number, userName: string): Promise<number> {
+  const goal = await getGoalById(goalId, userName);
+  if (!goal || !goal.description) return 0;
+  const steps = looksLikeRealPlan(goal.description)
+    ? await extractStepsFromContent(goal.description)
+    : [];
+  await query(`DELETE FROM goal_steps WHERE goal_id = $1`, [goalId]);
+  for (let i = 0; i < steps.length; i++) {
+    await addStep(goalId, userName, steps[i]!, i);
+  }
+  return steps.length;
 }
 
 export async function breakdownGoal(
@@ -676,29 +647,34 @@ Your single sharp question here.`;
   if (options.autoSave && result.type === "steps") {
     try {
       let savedGoalId = options.goalId;
-      const steps = looksLikeRealPlan(result.content)
-        ? await extractStepsFromContent(result.content)
-        : [];
+      // The goal IS the full substantive response now — not an extracted
+      // opening paragraph (that was part of the old crystallize-to-one-
+      // thing model). Capped generously, not truncated to a summary, since
+      // this is meant to be a living document the person actually returns
+      // to and reads, not a blurb.
+      const description = result.content.length > 8000
+        ? result.content.slice(0, 7997) + "…"
+        : result.content;
 
       if (!savedGoalId) {
-        const title = (options.goalTitle ?? goal).slice(0, 120);
-        // The system prompt already instructs GPT-4o to "build context before
-        // jumping to steps" — the opening paragraph is real why-this-matters
-        // framing the model already wrote, not a new AI call.
-        const description = deriveDescriptionFromContent(result.content);
+        const title = (options.goalTitle ?? await deriveCleanGoalTitle(goal)).slice(0, 120);
         const newGoal = await createGoal(userName, title, description);
         savedGoalId = newGoal.id;
-        logger.info({ goalId: savedGoalId, title, hasDescription: !!description, stepCount: steps.length }, "[Goals] Auto-saved goal from breakdown");
+        logger.info({ goalId: savedGoalId, title, descriptionLength: description.length }, "[Goals] Auto-saved goal from breakdown");
       } else {
-        // Clear old steps before re-adding so follow-up conversations don't double-up
-        await query(`DELETE FROM goal_steps WHERE goal_id = $1`, [savedGoalId]);
+        // A follow-up within the same breakdown conversation updating the
+        // goal's content — replace the description with the latest full
+        // response. No longer touches goal_steps here at all; steps are
+        // user-initiated now (see addGoalStepsFromContent below), not tied
+        // to every content update.
+        await updateGoal(savedGoalId, userName, { description });
       }
 
-      for (let i = 0; i < steps.length; i++) {
-        await addStep(savedGoalId, userName, steps[i]!, i);
-      }
-
-      result = { type: "steps", content: result.content, steps, goalId: savedGoalId };
+      // steps is always empty in the return value now — no auto-generated
+      // checklist to show. `type: "steps"` here is the existing response-
+      // shape name (a full answer, vs. a clarifying question) — not a
+      // literal claim about step content.
+      result = { type: "steps", content: result.content, steps: [], goalId: savedGoalId };
     } catch (saveErr) {
       logger.warn({ saveErr }, "[Goals] Auto-save failed — returning result without goalId");
     }
@@ -925,62 +901,54 @@ export async function getGoalsChatHistory(
 }
 
 // ── Free-form goals conversation ───────────────────────────────────────────────
-// Used by /api/goals/chat — conversational AI response without forced step
-// structure. Landing point (per the redesign): the conversation should reach
-// ONE concrete, personally-relevant starting point, not a general-information
-// dump, while staying open to real back-and-forth if the user wants to keep
-// exploring. When the conversation lands somewhere concrete enough to be
-// worth keeping, the model flags it with the ---GOAL_OFFER--- sentinel (same
-// idiom as breakdownGoal's ---QUESTION--- delimiter) and the real content is
-// captured into a per-user pending offer; a later natural confirmation
-// resolves from that instead of asking the model to retype it. The caller is
-// responsible for persisting the exchange to chat_messages.
+// Used by /api/goals/chat. Continues a conversation about a goal that
+// ALREADY EXISTS — this no longer creates new goals or crystallizes
+// anything down to one action to offer for saving (that was the old,
+// now-rejected model; breakdownGoal creates goals now, saving the full
+// first answer as-is — see its autoSave handling above). This function's
+// job: answer questions naturally against the goal's saved content, and
+// recognize when the person wants a concrete action taken.
 
 export interface GoalsFreeformChatResult {
-  reply: string;
-  saved?: boolean;
-  goalId?: number;
-  goalTitle?: string;
+  reply:         string;
+  actionTaken?:  "reminder_added" | "steps_added" | null;
+  actionDetail?: string | null;
 }
-
-const GOAL_OFFER_DELIM     = "---GOAL_OFFER---";
-const GOAL_CONFIRMED_DELIM = "---GOAL_CONFIRMED---";
 
 export async function goalsFreeformChat(
   message: string,
   conversationHistory: Array<{ role: "user" | "assistant"; content: string }>,
-  userName: string
+  userName: string,
+  goalId?: number,
 ): Promise<GoalsFreeformChatResult> {
   const { profileContext, displayName, userCity } = await buildGoalsProfileContext(userName);
-  const pendingOffer = getPendingGoalOffer(userName);
+  const goal = goalId ? await getGoalById(goalId, userName) : null;
 
-  const pendingOfferBlock = pendingOffer
-    ? `\n\n[Pending Goal Offer — you just offered to save this as "${pendingOffer.title}"]\n` +
-      `If their latest message confirms saving it (yes, save it, do it, sounds good, etc.), reply with a brief warm confirmation in your own words and end your reply with exactly this, on its own line:\n` +
-      `${GOAL_CONFIRMED_DELIM}\n` +
-      `This is not optional — telling them it's saved without emitting this exact line means nothing is actually written to their goals list. If they decline, change the subject, or ask something unrelated, just respond naturally and do NOT emit that line.`
+  const goalContextBlock = goal
+    ? `\n\nThe goal you're discussing right now: "${goal.title}"${goal.description ? `\n\n${goal.description}` : ""}\n\n` +
+      `This is a living document ${displayName} returns to over time — answer their questions about it ` +
+      `naturally and specifically, suggest concrete next actions when it genuinely fits, and don't re-summarize ` +
+      `the whole thing unless they ask for that.`
     : "";
 
   const systemPrompt =
-    `You are a knowledgeable, deeply personal advisor — like a brilliant friend who knows this person well.${profileContext ? `\n\n${profileContext}` : ""}\n\n` +
-    `Your job in this conversation is to help them land on something concrete, personally-relevant, and real to actually do, watch, read, listen to, or try — not a survey of background information. Name actual things (a real track, album, book, class, app, route — never "find a good resource").\n\n` +
-    `MATCH YOUR DEPTH TO WHAT WAS ACTUALLY ASKED — this matters as much as personalization does. Read the shape of their question before answering:\n` +
-    `- A narrow, specific ask ("just give me one thing to start with," "what's the single best album") gets a tight answer: one concrete thing, real personalized reasoning, done.\n` +
-    `- A broad or multi-part ask — naming several distinct facets at once (e.g. "styles, types, places to go"), or a genuinely open "tell me about X" — deserves real breadth. Address EVERY distinct part they named, not just the first or easiest one. If they asked about styles AND places, your reply covers styles AND places, each with specific personalized picks, not one part answered and the rest silently dropped. Covering that much ground does NOT let you off the hook for landing on one thing at the end — see the mandatory-offer rule below, which applies exactly the same regardless of how much breadth came before it.\n` +
-    `- Never compress a multi-part question into a single generic item just to keep the reply short. A short reply that only answers one-third of what was asked is a worse answer than a longer one that actually covers it — length should come from how much ground the question covers, not from a fixed target.\n\n` +
-    `PERSONALIZATION IS MANDATORY, NOT OPTIONAL — at every depth: a bare name with no reasoning ("attend a wine tasting") is a label, not a recommendation, and is never acceptable, whether it's the one thing in a tight answer or one item among many in a broad one. Every concrete thing you name must come with a real, specific reason tied to something you actually know about this person above — their hobbies, another goal, something they've saved or mentioned, someone in their life, their music/artist taste, where they live, or something they said earlier in this conversation. A real one reads like "Try [specific thing] — since you're into [specific fact about them], this fits because [specific reason]," never just the name of the thing. When covering several facets of a broad question, each facet gets its own specific, personalized pick — don't personalize the first one and list the rest generically. If you genuinely don't have anything specific yet to hang the reasoning on, ask one question to get something concrete rather than naming something generic with no connection to them.\n\n` +
-    `Within whatever depth is actually called for, stay tight — no padding, no generic background survey material, no essay when a paragraph will do. But never sacrifice covering what was actually asked, or the personalized reasoning behind each pick, just to hit a shorter length. If they want to go deeper, ask follow-ups, or want a fuller plan, keep going naturally; this is a real conversation, not a scripted flow.\n\n` +
-    `EVERY REPLY THAT NAMES SOMETHING CONCRETE MUST END BY OFFERING TO SAVE IT — MANDATORY, NOT CONDITIONAL ON DEPTH: if your reply named ANY specific thing(s) to do/watch/read/listen to/try, it must end by crystallizing down to the SINGLE best concrete starting point — even if you covered five facets with a personalized pick under each — and explicitly asking if they want to save THAT ONE THING, in your own words (e.g. "Want me to add [that specific thing] as a goal?"). A rich, multi-part answer is never an exemption from this — if anything it needs this landing step MORE, since without it they're left with a pile of options and no clear next action. Pick the single most compelling one (never "pick any of the above," never a vague wrapper title describing the whole topic), name it specifically, and ask. The delimiter alone with no visible ask leaves them with no way to know there's anything to confirm. Then end your reply with exactly this, on its own line:\n` +
-    `${GOAL_OFFER_DELIM}\n` +
-    `A short, specific title (under 8 words) naming the ONE thing you just crystallized to — never a title describing the whole broad topic you covered\n` +
-    `The only exemption is a reply that named nothing concrete at all — purely informational or clarifying, no real recommendation in it anywhere. Never more than one offer per turn. ` +
-    `${GOAL_OFFER_DELIM} and ${GOAL_CONFIRMED_DELIM} must never both appear in the same reply — offering something is not the same as it being saved. Saving only ever happens in response to the user's own separate, later message actually confirming it. Never emit both delimiters in one turn, and never say or imply it's already saved unless you are emitting ${GOAL_CONFIRMED_DELIM} in direct response to that separate confirmation.` +
-    pendingOfferBlock;
+    `You are a knowledgeable, deeply personal advisor continuing a conversation about a goal ${displayName} ` +
+    `is already working on.${profileContext ? `\n\n${profileContext}` : ""}${goalContextBlock}\n\n` +
+    `Answer what they actually asked, specifically and directly — real recommendations, real reasoning tied to ` +
+    `what you know about them, matching the depth of the question (a quick question gets a quick answer, a ` +
+    `bigger one gets real depth). Never invent generic filler just to seem thorough.\n\n` +
+    `If what they're asking implies a concrete action you can actually take, take it:\n` +
+    `- A reminder or to-do ("remind me to...", "add ... to my to-do list", "I should pick up...") → end your ` +
+    `reply with [ACTION:add_reminder|task=<the task, in your own words>|time=<a specific time/date if one was ` +
+    `implied, otherwise omit this parameter entirely>]. Never claim something was added unless you actually ` +
+    `emitted this tag — a friendly sentence alone doesn't create anything.\n` +
+    `- Nothing else is wired up as an action here yet. For anything else concrete they want tracked, talk it ` +
+    `through naturally instead.\n\n` +
+    `If ${displayName} EXPLICITLY asks for a checklist, steps, or something to check off — a real request for ` +
+    `trackable steps, not just discussion — end your reply with [ACTION:add_goal_steps]. Only do this when ` +
+    `they clearly ask; never offer or create a checklist unprompted, even for a naturally step-shaped topic.`;
 
-  // Prepend basic profile context to the first user turn — same pattern as travel screen.
-  const contextPrefix = userCity
-    ? `[User: ${displayName}, based in ${userCity}]\n`
-    : `[User: ${displayName}]\n`;
+  const contextPrefix = userCity ? `[User: ${displayName}, based in ${userCity}]\n` : `[User: ${displayName}]\n`;
 
   const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
     { role: "system", content: systemPrompt },
@@ -989,86 +957,62 @@ export async function goalsFreeformChat(
   ];
 
   const response = await openai.chat.completions.create({
-    model: MODEL_GPT4O,
-    max_tokens: 2048,
+    model:      MODEL_GPT4O,
+    max_tokens: 1024,
     messages,
   });
 
   const raw = response.choices[0]?.message?.content?.trim() ?? "";
   if (!raw) {
-    logger.warn({ userName }, "[Goals] goalsFreeformChat returned empty response");
+    logger.warn({ userName, goalId }, "[Goals] goalsFreeformChat returned empty response");
     return { reply: "I didn't quite catch that — could you say a bit more?" };
   }
 
-  let reply = raw;
+  // Same [ACTION:type|params] convention chatHandlerCore.ts uses —
+  // deliberately reused rather than inventing a third tag syntax,
+  // intentionally scoped to just the two action types relevant here.
+  const tagMatch = raw.match(/\[ACTION:([^\]]+)\][\s]*$/);
+  const reply = raw.replace(/\n?\[ACTION:[^\]]+\]/g, "").trim();
 
-  // ── Parse a new goal offer, if this turn made one ──────────────────────────
-  const offerIdx = raw.indexOf(GOAL_OFFER_DELIM);
-  let madeNewOffer = false;
-  if (offerIdx !== -1) {
-    const before = raw.slice(0, offerIdx).trim();
-    const titleLine = raw.slice(offerIdx + GOAL_OFFER_DELIM.length).trim().split("\n")[0]?.trim();
-    reply = before || raw; // never show the raw sentinel to the user
-    if (titleLine) {
-      setPendingGoalOffer(userName, { title: titleLine.slice(0, 120), content: before || raw });
-      madeNewOffer = true;
-      logger.info({ userName, title: titleLine }, "[Goals] Goal offer cached from chat");
-    }
-  }
-
-  // ── Resolve a confirmation against the offer that was pending BEFORE this
-  // call — only relevant when this turn didn't just make a brand-new offer
-  // of its own (that would supersede, not confirm, the old one). ─────────────
-  let confirmedViaTag = false;
-  if (!madeNewOffer && pendingOffer) {
-    const confirmIdx = reply.indexOf(GOAL_CONFIRMED_DELIM);
-    if (confirmIdx !== -1) {
-      reply = reply.slice(0, confirmIdx).trim();
-      confirmedViaTag = true;
-    }
-  }
-  const shouldConfirm =
-    !madeNewOffer && !!pendingOffer &&
-    (confirmedViaTag || isUnambiguousGoalConfirmation(message));
-
-  // ── Safety net: an unambiguous "save it" with nothing actually pending ──────
-  // Defense-in-depth for the real failure this was built to catch: a reply can
-  // name real, specific things without ever crystallizing to one and asking to
-  // save it (the prompt above is the actual fix for that) — when it doesn't,
-  // "save it" lands with pendingOffer null and shouldConfirm false, and would
-  // otherwise fall through to whatever GPT-4o happened to say, silently doing
-  // nothing with no signal anything went wrong. Override with an explicit,
-  // deterministic ask instead of trusting the model noticed the mismatch.
-  if (!madeNewOffer && !pendingOffer && isUnambiguousGoalConfirmation(message)) {
-    logger.info({ userName }, "[Goals] Unambiguous save confirmation with no pending offer — asking what to save instead of silent no-op");
-    return { reply: "What would you like me to save as a goal? Let's land on something concrete first." };
-  }
-
-  if (!shouldConfirm) {
+  if (!tagMatch) {
     return { reply };
   }
 
-  // ── Save: reuse the description/step-extraction logic already built for
-  // breakdownGoal's autoSave path (deriveDescriptionFromContent,
-  // looksLikeRealPlan/extractStepsFromContent) against the offer's own
-  // captured content — never a second AI call to regenerate it. ─────────────
-  try {
-    const description = deriveDescriptionFromContent(pendingOffer!.content);
-    const goal = await createGoal(userName, pendingOffer!.title, description);
-    const steps = looksLikeRealPlan(pendingOffer!.content)
-      ? await extractStepsFromContent(pendingOffer!.content)
-      : [];
-    for (let i = 0; i < steps.length; i++) {
-      await addStep(goal.id, userName, steps[i]!, i);
+  const tagContent = tagMatch[1]!;
+  const parts: Record<string, string> = {};
+  tagContent.split("|").forEach((p) => {
+    const eq = p.indexOf("=");
+    if (eq === -1) parts["_type"] = p;
+    else { parts["_type"] = parts["_type"] || p.slice(0, eq); parts[p.slice(0, eq)] = p.slice(eq + 1); }
+  });
+
+  if (parts["_type"] === "add_reminder" && parts.task) {
+    try {
+      const { timezone: tz } = await getUserLocationContext(userName).catch(() => ({ timezone: "UTC" }));
+      let fireAt: Date | null = null;
+      if (parts.time) {
+        const parsedDate = new Date(parts.time);
+        if (!isNaN(parsedDate.getTime())) fireAt = parsedDate;
+      }
+      await createReminder({ userName, reminderText: parts.task, fireAt: fireAt as any, timezone: tz });
+      logger.info({ userName, goalId, task: parts.task }, "[Goals] Reminder added from goal chat");
+      return { reply, actionTaken: "reminder_added", actionDetail: parts.task };
+    } catch (err) {
+      logger.warn({ err, userName, goalId }, "[Goals] add_reminder action failed");
+      return { reply };
     }
-    setPendingGoalOffer(userName, null);
-    logger.info(
-      { userName, goalId: goal.id, title: goal.title, hasDescription: !!description, stepCount: steps.length, viaTag: confirmedViaTag },
-      "[Goals] Goal saved from chat confirmation"
-    );
-    return { reply, saved: true, goalId: goal.id, goalTitle: goal.title };
-  } catch (err) {
-    logger.warn({ err, userName }, "[Goals] Failed to save goal from chat confirmation");
-    return { reply };
   }
+
+  if (parts["_type"] === "add_goal_steps" && goalId) {
+    try {
+      const count = await addGoalStepsFromContent(goalId, userName);
+      logger.info({ userName, goalId, count }, "[Goals] Steps added from goal chat, on request");
+      return { reply, actionTaken: count > 0 ? "steps_added" : null, actionDetail: count > 0 ? `${count} steps` : null };
+    } catch (err) {
+      logger.warn({ err, userName, goalId }, "[Goals] add_goal_steps action failed");
+      return { reply };
+    }
+  }
+
+  return { reply };
 }
