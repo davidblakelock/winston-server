@@ -15,7 +15,13 @@ import { getPeople } from "../people/peopleManager.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 import { fetchTomorrowEvents } from "../google/calendar.js";
 import { getMoodForToday } from "../mood/moodManager.js";
-import { getTopPendingObservation, markObservationShown } from "../connectionEngine/connectionEngineManager.js";
+import {
+  getTopPendingObservation,
+  markObservationShown,
+  getRecentSurfacedObservations,
+  formatRecentSurfacedContext,
+} from "../connectionEngine/connectionEngineManager.js";
+import { fetchFromAdapters, recencyLabel } from "../connectionEngine/memorySourceAdapters.js";
 import { getStoicForUser, PHASE_NAMES } from "../stoic/stoicManager.js";
 import { logger } from "../lib/logger.js";
 
@@ -24,10 +30,14 @@ const DEFAULT_TZ = "UTC";
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // ── Generate the evening opening message ─────────────────────────────────────
-// Structured delivery: a real day recap (reminders/to-dos, calendar events
-// that already happened), tomorrow's look-ahead, and one specific stoic
-// reflection question — Claude writes a fresh one each night, no hardcoded
-// rotation list.
+// Six-beat structure, blended into one natural message rather than labeled
+// sections: real day recap (reminders/to-dos, calendar events that already
+// happened) → tomorrow's look-ahead → stale open-to-do check → a
+// calendar-gap check → a reminder-worthy check → a closing reflection
+// invitation tied back to the night's actual content (My Life, or just
+// talking now). Beats 3-5 are conditional — most nights several have
+// nothing to say and are skipped outright; only the recap, tomorrow's
+// look-ahead, and the closing invitation are effectively always present.
 
 export async function generateOpeningMessage(
   companionName: string,
@@ -61,6 +71,7 @@ export async function generateOpeningMessage(
   // completion timestamp, so "completed today" isn't knowable for to-dos —
   // only "added today" is, via created_at.
   let remindersContext = "";
+  let staleTodosContext = "";
   try {
     const { rows } = await query<{
       reminder_text: string;
@@ -83,15 +94,29 @@ export async function generateOpeningMessage(
 
     const firedToday = rows.filter((r) => r.fire_at && r.status === "completed").map((r) => r.reminder_text);
     const pendingToday = rows.filter((r) => r.fire_at && r.status === "pending").map((r) => r.reminder_text);
-    const openTodos = rows.filter((r) => !r.fire_at && r.status === "pending").map((r) => r.reminder_text);
+    const openTodos = rows.filter((r) => !r.fire_at && r.status === "pending");
     const todosAddedAndDoneToday = rows.filter((r) => !r.fire_at && r.status === "completed").map((r) => r.reminder_text);
 
     const lines: string[] = [];
     if (firedToday.length) lines.push(`Reminder alerts that went out today (this means the notification fired — NOT confirmation the task was done): ${firedToday.join("; ")}`);
     if (pendingToday.length) lines.push(`Reminders still scheduled for later today or overdue: ${pendingToday.join("; ")}`);
     if (todosAddedAndDoneToday.length) lines.push(`To-dos added and marked done today: ${todosAddedAndDoneToday.join("; ")}`);
-    if (openTodos.length) lines.push(`To-dos still open (not yet done): ${openTodos.join("; ")}`);
     remindersContext = lines.join("\n");
+
+    // Ages included so the prompt can genuinely judge staleness — added
+    // today is obviously not stale, three weeks open probably is. No
+    // hardcoded day-cutoff; the model judges what's worth mentioning, same
+    // principle as recencyLabel's use everywhere else in this codebase.
+    // Note: openTodos is scoped to ALL currently-open to-dos regardless of
+    // when created (the query's fire_at IS NULL AND status='pending'
+    // branch has no date filter) — this is deliberately correct, since
+    // staleness review needs the full open set, not just today's additions.
+    if (openTodos.length > 0) {
+      staleTodosContext = openTodos
+        .slice(0, 20)
+        .map((r) => `- ${r.reminder_text} (open, added ${recencyLabel(r.created_at)})`)
+        .join("\n");
+    }
   } catch (err) {
     logger.warn({ err, userName }, "[Winddown] Reminders recap query failed");
   }
@@ -151,28 +176,54 @@ export async function generateOpeningMessage(
   const stoicEntry = await getStoicForUser(userName).catch(() => null);
   const stoicPhaseName = stoicEntry ? (PHASE_NAMES[stoicEntry.phase] ?? null) : null;
 
+  // Today's raw cross-source activity — what did they save, add to a list,
+  // or mention today that might genuinely need a calendar entry or a
+  // reminder that doesn't exist yet. Same adapters the connection engine's
+  // own passes already use (fetchFromAdapters), just windowed to today
+  // only (1 day) instead of the 30-day window those passes use.
+  let todayActivityContext = "";
+  try {
+    const todayItems = await fetchFromAdapters(userName, ["life_capture", "attic_item", "list_item", "chat_fact"], 1);
+    if (todayItems.length > 0) {
+      todayActivityContext = todayItems.map((it) => `- (${it.context}) ${it.content}`).join("\n");
+    }
+  } catch (err) {
+    logger.warn({ err, userName }, "[Winddown] Today's cross-source activity pull failed");
+  }
+
+  // What's already been surfaced recently — same fix dotConnectorPass/
+  // patternObservationPass/clusterPass/weeklyGiftPass/profileFactPass got
+  // this session: don't independently re-derive something already told to
+  // this person earlier today via a different channel (e.g. a dot-connector
+  // suggestion that already covered the same calendar gap).
+  const recentSurfaced = await getRecentSurfacedObservations(userName).catch(() => []);
+
   const prompt =
     buildPersonaPreamble(profile?.companionPersona ?? null, profile?.personalityStyle ?? null) +
     `You are ${companionName}, ${displayName}'s trusted personal companion. Dry, warm, never gushing. It's ${dayName} evening in ${city}.\n\n` +
     (peopleContext ? `${displayName}'s key people: ${peopleContext}.\n` : "") +
     (calendarTodayContext ? `Calendar events that already happened today: ${calendarTodayContext}.\n` : "") +
     (remindersContext ? `${remindersContext}\n` : "") +
+    (staleTodosContext ? `Open to-dos with how long they've been sitting:\n${staleTodosContext}\n` : "") +
     (morningMood ? `This morning ${displayName} mentioned feeling: "${morningMood.substring(0, 120)}".\n` : "") +
     (tomorrowContext ? `Tomorrow's calendar: ${tomorrowContext}.\n` : "") +
+    (todayActivityContext ? `What ${displayName} saved, added, or mentioned today (raw, across sources):\n${todayActivityContext}\n` : "") +
     (pendingObservation ? `Something you've noticed recently, in your own voice: "${pendingObservation.message}"\n` : "") +
+    formatRecentSurfacedContext(recentSurfaced) +
     (stoicPhaseName ? `${displayName}'s current stoic curriculum phase: ${stoicPhaseName}.\n` : "") +
-    `\nWrite tonight's evening check-in message with three parts, blended into natural conversational prose — not headers or bullet points:\n\n` +
+    `\nWrite tonight's evening check-in message, blended into natural conversational prose — not headers, not bullet points, not a checklist read aloud. Cover what genuinely applies, in roughly this order, but let it flow as one message, not separate labeled sections:\n\n` +
     `1. A real, specific day recap grounded in the data above — what happened, what got done, what's still hanging open. ` +
     `Only claim a reminder alert "went out" or "fired" — never say a task was "done" or "completed" just because its alert fired; only genuinely-completed to-dos may be described as done. ` +
     `If there's nothing notable in the data, skip the recap rather than inventing one.\n\n` +
     `2. A brief, natural look-ahead to tomorrow if there's anything on the calendar — one sentence, not a rundown.\n\n` +
-    `3. End with exactly ONE specific stoic reflection question — genuinely inviting real reflection, not "how was your day" or "how are you feeling." ` +
-    `Write a fresh, well-crafted question tonight — something concrete like asking what didn't go as hoped and what they'd do differently, or a moment worth being grateful for and why, or a choice they're proud or unsure of. ` +
-    `Vary it — do not reuse the same question pattern every night. This question is the whole point of the message; make it genuinely thoughtful. ` +
-    (stoicPhaseName ? `If it genuinely fits, let ${displayName}'s current stoic phase shown above shape the angle of tonight's question — never name the phase or the curriculum, just let it inform what you ask.\n\n` : "\n\n") +
+    `3. If any open to-dos have been sitting a while (ages are shown above), gently name the one or two stalest ones and ask if ${displayName} wants to knock it out, update it, or just let it go. Never list every open to-do — just what's genuinely gone stale. Skip this beat entirely if nothing's actually been sitting long enough to be worth mentioning; a to-do added today or yesterday is not stale.\n\n` +
+    `4. If today's raw activity (shown above) points at something that should probably be on the calendar but isn't — a plan, an appointment, an intention someone mentioned — name it specifically and ask if it should be added. Skip if nothing genuinely fits; never manufacture a suggestion just to fill this beat.\n\n` +
+    `5. If today's raw activity points at something worth a reminder that doesn't have one — a commitment, something to follow up on, a thing worth not forgetting — name it specifically and offer to set it. Skip if nothing fits.\n\n` +
+    `6. Close with a genuine, low-pressure invitation to spend a few minutes reflecting on the day — either in My Life (the app's reflection space) or just talking about it right now. This should read as a real offer, never an obligation, and it should be the natural close of the message, not an abrupt pivot into an unrelated question. Tie it to something specific from tonight's actual recap when it genuinely fits — a choice made, a moment worth sitting with, something that didn't go as hoped — rather than a generic prompt with nothing behind it. This can be phrased as a specific question OR as a plain, warm invitation — vary which, and vary the angle, night to night; never repeat the same framing or the same question shape twice in a row. Never use the word "journal" or "journaling."\n\n` +
+    (stoicPhaseName ? `If it genuinely fits, let ${displayName}'s current stoic phase shown above shape the angle of tonight's closing invitation — never name the phase or the curriculum, just let it inform the framing.\n\n` : "\n\n") +
     (peopleContext ? `Weave in a key person naturally only if it genuinely fits — don't force it.\n` : "") +
-    (pendingObservation ? `If something you've noticed is included above, weave it into tonight's message naturally — as a bridge between the recap and the reflection question, or blended into the recap itself, whichever reads more natural. Use your own words, don't quote it verbatim, and don't label it as a "notice" or "observation" or give it a separate heading. Don't force it if it doesn't fit — but it's there because it's worth mentioning.\n` : "") +
-    `Keep the whole message tight — a few sentences, not a essay. Sound like a perceptive friend, not a report.`;
+    (pendingObservation ? `If something you've noticed is included above, weave it into tonight's message naturally — wherever it fits best (the recap, or as a bridge into the closing invitation). Use your own words, don't quote it verbatim, and don't label it as a "notice" or "observation." Don't force it if it doesn't fit — but it's there because it's worth mentioning.\n` : "") +
+    `Keep the whole message tight — a handful of sentences, not an essay, even with more beats to potentially cover than before. Most nights, several of beats 3-5 will have nothing to say — that's expected, not a failure; don't stretch to fill them. Sound like a perceptive friend catching up, not a report or a checklist being read aloud.`;
 
   try {
     const response = await anthropic.messages.create({
@@ -272,8 +323,14 @@ export function startWinddownScheduler(): void {
         sendFcmNotification({
           userName,
           notificationType: "winddown",
-          title: "🌙 Evening Check-In",
-          body: `${companionName} here — how did your day go?`,
+          title: "🌙 Evening Wrap Up",
+          body: `${companionName} here — how did today go?`,
+          // DO NOT rename this "Evening Check In" value — chatHandlerCore.ts
+          // matches on this exact literal string to short-circuit into the
+          // wind-down opener flow (its own comment documents why: without
+          // the match, this string gets misread as a request to check
+          // email). This is an internal trigger sentinel, not user-facing
+          // copy — the title/body above are what the user actually sees.
           data: { action: "send_message", message: "Evening Check In" },
         }).catch(() => {});
       }

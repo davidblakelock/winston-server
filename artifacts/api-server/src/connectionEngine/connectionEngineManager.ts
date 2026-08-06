@@ -437,7 +437,7 @@ function formatCorrectionContext(corrections: UserCorrection[]): string {
 // back on. Includes every status (pending/shown/accepted/dismissed/
 // suppressed) — a pending-but-not-yet-shown observation about the same
 // theme is just as much a reason to avoid regenerating it as a shown one.
-async function getRecentSurfacedObservations(userName: string, days = 30): Promise<Observation[]> {
+export async function getRecentSurfacedObservations(userName: string, days = 30): Promise<Observation[]> {
   await _tableInit;
   const { rows } = await query<Observation>(
     `SELECT * FROM observations
@@ -449,7 +449,7 @@ async function getRecentSurfacedObservations(userName: string, days = 30): Promi
   return rows;
 }
 
-function formatRecentSurfacedContext(observations: Observation[]): string {
+export function formatRecentSurfacedContext(observations: Observation[]): string {
   if (observations.length === 0) return "";
   const lines = observations
     .map((o) => `  - (${o.observation_type}) ${o.message}`)
