@@ -429,6 +429,36 @@ function formatCorrectionContext(corrections: UserCorrection[]): string {
     `important more heavily:\n${lines}\n`;
 }
 
+// Distinct from getRecentCorrections/formatCorrectionContext (explicit
+// user feedback — dismiss/reject/elevate/forget). This is "what has
+// actually been told to this person recently, regardless of whether they
+// reacted to it" — so generation itself can recognize it's about to repeat
+// something, not just avoid repeating something the user explicitly pushed
+// back on. Includes every status (pending/shown/accepted/dismissed/
+// suppressed) — a pending-but-not-yet-shown observation about the same
+// theme is just as much a reason to avoid regenerating it as a shown one.
+async function getRecentSurfacedObservations(userName: string, days = 30): Promise<Observation[]> {
+  await _tableInit;
+  const { rows } = await query<Observation>(
+    `SELECT * FROM observations
+     WHERE user_name = $1 AND created_at >= now() - interval '${days} days'
+     ORDER BY created_at DESC
+     LIMIT 15`,
+    [userName]
+  );
+  return rows;
+}
+
+function formatRecentSurfacedContext(observations: Observation[]): string {
+  if (observations.length === 0) return "";
+  const lines = observations
+    .map((o) => `  - (${o.observation_type}) ${o.message}`)
+    .join("\n");
+  return `\nThings you've already told this person recently — do NOT repeat the same insight or ` +
+    `observation, even reworded differently. Only surface something here if it's genuinely NEW, or a ` +
+    `materially different angle on the same topic (e.g. a real update, not a restatement):\n${lines}\n`;
+}
+
 // A third context source, same shape as fetchGoalContext — standing context,
 // not part of the recency-sorted item stream. No tenet-matching logic; the
 // phase name is just handed over and Claude decides whether it's relevant.
@@ -501,13 +531,14 @@ export async function dotConnectorPass(userName: string): Promise<void> {
 
   const itemLines = formatIndexedItemLines(items, tz, 100);
   const corrections = await getRecentCorrections(userName, 30);
+  const recentSurfaced = await getRecentSurfacedObservations(userName);
   const { text: goalContext, goals } = await fetchGoalContext(userName);
   const stoicPhaseContext = await fetchStoicPhaseContext(userName);
 
   const prompt =
     `${firstName}'s personal reflections and saved items from the last 30 days (numbered):\n${itemLines}\n\n` +
     `Profile: lives in ${city}, interests include ${interests.slice(0, 6).join(", ") || "various things"}.` +
-    formatCorrectionContext(corrections) + goalContext + stoicPhaseContext + `\n\n` +
+    formatCorrectionContext(corrections) + formatRecentSurfacedContext(recentSurfaced) + goalContext + stoicPhaseContext + `\n\n` +
     `One question: Is there anything in the above that Winston could take a concrete action on RIGHT NOW — ` +
     `specifically something involving: checking the calendar for an open week, making a reservation, ` +
     `researching travel options, or adding something to a list?\n\n` +
@@ -609,12 +640,13 @@ export async function patternObservationPass(userName: string): Promise<void> {
 
   const itemLines = formatIndexedItemLines(items, tz, 100);
   const corrections = await getRecentCorrections(userName, 30);
+  const recentSurfaced = await getRecentSurfacedObservations(userName);
   const { text: goalContext, goals } = await fetchGoalContext(userName);
   const stoicPhaseContext = await fetchStoicPhaseContext(userName);
 
   const prompt =
     `${firstName}'s personal reflections and saved items from the last 30 days (numbered):\n${itemLines}\n` +
-    formatCorrectionContext(corrections) + goalContext + stoicPhaseContext + `\n` +
+    formatCorrectionContext(corrections) + formatRecentSurfacedContext(recentSurfaced) + goalContext + stoicPhaseContext + `\n` +
     `Read these carefully. You are a wise, observant friend — not a therapist, not a coach. ` +
     `Look for a genuine recurring pattern: something ${firstName} has mentioned 3 or more times, ` +
     `or a clear trend in their energy, mood, goals, or relationships.\n\n` +
@@ -730,11 +762,12 @@ export async function clusterPass(userName: string): Promise<void> {
     })
     .join("\n");
   const corrections = await getRecentCorrections(userName, 30);
+  const recentSurfaced = await getRecentSurfacedObservations(userName);
 
   const prompt =
     `Here's what ${firstName} has saved, added to a list, or explored in conversation over the last 30 ` +
     `days:\n${itemLines}\n` +
-    formatCorrectionContext(corrections) + `\n` +
+    formatCorrectionContext(corrections) + formatRecentSurfacedContext(recentSurfaced) + `\n` +
     `Look for a genuine cluster: three or more separate items pointing at the same emerging interest or ` +
     `unstated intention that isn't already reflected anywhere else (e.g. several Europe-related saves ` +
     `suggesting a trip interest with nothing on the calendar yet). Do not force a cluster that isn't really ` +
@@ -866,6 +899,7 @@ export async function profileFactPass(userName: string): Promise<void> {
 
   const itemLines = formatIndexedItemLines(items, tz, 100);
   const corrections = await getRecentCorrections(userName, 30);
+  const recentSurfaced = await getRecentSurfacedObservations(userName);
 
   const existingFacts = [
     profile?.hobbies?.length ? `Hobbies already known: ${profile.hobbies.join(", ")}` : null,
@@ -876,7 +910,7 @@ export async function profileFactPass(userName: string): Promise<void> {
   const prompt =
     `${firstName}'s recent saves, reflections, and conversation context from the last 30 days (numbered):\n${itemLines}\n\n` +
     (existingFacts ? `What Winston already knows about them:\n${existingFacts}\n\n` : "") +
-    formatCorrectionContext(corrections) + `\n` +
+    formatCorrectionContext(corrections) + formatRecentSurfacedContext(recentSurfaced) + `\n` +
     `Is there a genuinely durable, specific fact about ${firstName} revealed here that Winston doesn't already ` +
     `know — a hobby, a favorite artist/musician, a restaurant they love, or a sports team they follow? Only ` +
     `surface something backed by real signal in the items above — ideally more than one item pointing at it, ` +
@@ -969,9 +1003,11 @@ export async function weeklyGiftPass(userName: string): Promise<string | null> {
       return `• [${date}, ${recencyLabel(it.occurredAt)}, ${it.context}] ${it.content}`;
     })
     .join("\n");
+  const recentSurfaced = await getRecentSurfacedObservations(userName);
 
   const prompt =
     `${firstName}'s reflections and saved items from the past 7 days:\n${itemLines}\n\n` +
+    formatRecentSurfacedContext(recentSurfaced) +
     `You are a wise, warm friend who has been listening all week. Write ONE paragraph — ` +
     `3–5 sentences — that offers a genuine insight from what you noticed. ` +
     `This is not a summary. This is not a report. It is a gift — the kind of thing a ` +
@@ -1040,10 +1076,13 @@ export async function governancePass(userName: string): Promise<void> {
   );
 
   if (pending.length === 0) return; // nothing to arbitrate
-  if (pending.length === 1) return; // trivially already "the" candidate —
-  // leave it for the existing surfacing rate limits (per-type, already
-  // enforced by each pass) to decide timing; governance only needs to act
-  // when there's an actual choice to make between candidates.
+  // No longer special-casing a single candidate — it still needs to be
+  // checked against recent surfacing history (the actual bug this fixes:
+  // a lone near-duplicate observation was previously never compared
+  // against anything and sailed straight through). The arbitration prompt
+  // below already handles N=1 correctly on its own; a list of one is still
+  // a valid list to judge "is this worth surfacing given what's already
+  // been said" against.
 
   // Cross-type volume control — independent of which candidate is "best."
   const { rows: recentShown } = await query<{ id: number }>(
