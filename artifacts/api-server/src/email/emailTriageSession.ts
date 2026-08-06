@@ -46,6 +46,16 @@ export function advanceTriageSession(userName: string): EmailSummary | null {
     return null;
   }
   s.currentIndex = next;
+  // Refresh so the TTL is a sliding idle timeout, not a fixed lifetime from
+  // whenever the session started. Without this, createdAt never moved past
+  // the first email, so a longer triage (more emails, replies composed
+  // along the way) could genuinely expire right as the user reaches the
+  // last few — at which point getTriageSession starts returning null, the
+  // [Active Email Triage] context stops being injected, Claude has no
+  // gmailId left to act on, and no amount of the user re-explaining what
+  // they want fixes it, since the server has lost track of which email
+  // they mean.
+  s.createdAt = Date.now();
   _sessions.set(userName, s);
   logger.info({ userName, nextIndex: next }, "[EmailTriage] Advanced");
   return s.emails[next];
