@@ -434,7 +434,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
   const pendingListCleanup = getPendingListCleanup(sessionUserName);
   const pendingSaveOffers   = getPendingSaveOffers(sessionUserName);
   const pendingListConflict = getPendingListTypeConflict(sessionUserName);
-  const pendingProactivePicks = getProactivePicks(sessionUserName);
+  const pendingProactivePicks = await getProactivePicks(sessionUserName);
   const mostRecentShownObservation = await getMostRecentShownObservation(sessionUserName).catch(() => null);
   // When the shown observation carries a suggested goal fit, resolve the
   // target goal's title now so the dynamicPrompt block below can name it

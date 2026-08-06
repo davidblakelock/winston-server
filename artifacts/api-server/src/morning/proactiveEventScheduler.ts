@@ -21,10 +21,10 @@
  * broadcast per user per run if anything qualifies — the notification
  * itself is a generic teaser (no picks named in the title/body); the real
  * ranked list is cached server-side (getProactivePicks/setProactivePicks,
- * same in-memory pending-state pattern as pendingSaveOffers/
- * pendingAtticCleanup) and injected into chat context when the
- * notification-triggered message arrives, so Winston answers from the
- * actual curated data instead of re-guessing from the notification text.
+ * DB-backed so it survives a redeploy between the push firing and the tap)
+ * and injected into chat context when the notification-triggered message
+ * arrives, so Winston answers from the actual curated data instead of
+ * re-guessing from the notification text.
  *
  * Dedup is keyed on (user_name, message_type) via proactive_message_log,
  * not just the calendar day the check ran on — so the same event/
@@ -59,6 +59,7 @@ import { getActiveUsers, getProfile, type ActiveUser } from "../onboarding/onboa
 import { getUserLocationContext } from "../lib/userTimezone.js";
 import { fetchCandidateEvents, type LocalEvent } from "../events/ticketmasterEventsManager.js";
 import { searchRestaurants } from "../google/places.js";
+import { getCachedResult, setCachedResult } from "../lib/resultCache.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -396,16 +397,19 @@ Return ONLY a JSON array of the chosen item numbers with a one-sentence reason e
   }
 }
 
-// ── Pending picks cache — same in-memory pending-state pattern as
+// ── Pending picks cache — DB-backed (resultCache), unlike the in-memory
 // pendingSaveOffers (listManager.ts) / pendingAtticCleanup
-// (atticItemsManager.ts). The notification never names the picks; tapping
-// it auto-sends a generic trigger message, and chatHandlerCore.ts injects
-// this cached context so Winston answers from the actual curated list
-// (names, reasons, venues, dates, URLs) instead of re-guessing from the
-// notification text alone. Single slot per user, no TTL for the map entry
-// itself — staleness is instead checked by the reader (chatHandlerCore.ts)
-// against generatedAt, since a picks batch is only really current until
-// the next Monday/Thursday run replaces it.
+// (atticItemsManager.ts) pattern this originally copied — a server
+// restart/redeploy between the notification firing and the user tapping it
+// (routine here, given how often this service deploys) would otherwise
+// silently wipe the picks, leaving chatHandlerCore.ts with nothing to
+// answer from. The notification never names the picks; tapping it
+// auto-sends a generic trigger message, and chatHandlerCore.ts injects this
+// cached context so Winston answers from the actual curated list (names,
+// reasons, venues, dates, URLs) instead of re-guessing from the
+// notification text alone. Single slot per user; staleness is checked by
+// the reader (chatHandlerCore.ts) against generatedAt, since a picks batch
+// is only really current until the next Monday/Thursday run replaces it.
 
 export interface PendingProactivePick {
   name:        string;
@@ -424,18 +428,26 @@ export interface PendingProactivePicks {
   generatedAt:  number; // Date.now() — for the reader's own staleness check
 }
 
-const _pendingPicksMap = new Map<string, PendingProactivePicks>();
+// DB-backed (not an in-memory Map) — a plain in-memory cache here was
+// confirmed live to silently lose picks on any server restart/redeploy
+// between the notification firing and the user tapping it, producing
+// exactly the "tapped it, got a confused unrelated reply" failure this was
+// built to prevent. Reuses the same generic result-cache table other
+// pending-state caches in this codebase already use.
+const PROACTIVE_PICKS_TTL_MS = 5 * 24 * 60 * 60 * 1000; // 5 days — matches the reader's own staleness check
 
-export function getProactivePicks(userName: string): PendingProactivePicks | null {
-  return _pendingPicksMap.get(userName) ?? null;
+export async function getProactivePicks(userName: string): Promise<PendingProactivePicks | null> {
+  const cached = await getCachedResult(`proactive_picks:${userName}`, PROACTIVE_PICKS_TTL_MS);
+  if (!cached) return null;
+  try {
+    return JSON.parse(cached) as PendingProactivePicks;
+  } catch {
+    return null;
+  }
 }
 
-export function setProactivePicks(userName: string, state: PendingProactivePicks | null): void {
-  if (state === null) {
-    _pendingPicksMap.delete(userName);
-  } else {
-    _pendingPicksMap.set(userName, state);
-  }
+export async function setProactivePicks(userName: string, state: PendingProactivePicks): Promise<void> {
+  await setCachedResult(`proactive_picks:${userName}`, JSON.stringify(state));
 }
 
 // ── Notification — a generic teaser, never the picks themselves ────────────
@@ -473,7 +485,7 @@ async function sendPicksNotification(userName: string, city: string, picks: Rank
     logger.warn({ err, userName }, "[Proactive Discovery] SSE broadcast failed");
   }
 
-  setProactivePicks(userName, {
+  await setProactivePicks(userName, {
     city,
     runContext,
     generatedAt: Date.now(),
