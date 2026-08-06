@@ -31,7 +31,7 @@ function buildDailyBriefInstruction(interestPicks: string[]): string {
     ? `\n\nSEARCH 1b — Personal interest news: search specifically for recent news connected to: ${interestPicks.join(", ")}. This is in addition to Search 1a, not instead of it — the goal is to surface something genuinely newsworthy tied to what this person actually cares about. If nothing real turns up, that's fine — don't force it.`
     : "";
 
-  return `You are about to write a morning briefing. Before writing anything, perform the searches below as separate, well-formed queries, one topic at a time — do not combine them into one query, and do not search using the biographical context block that follows this instruction (that block is background for personalizing the writing later, not a search query).
+  return `You are about to write a Morning Run Down. Before writing anything, perform the searches below as separate, well-formed queries, one topic at a time — do not combine them into one query, and do not search using the biographical context block that follows this instruction (that block is background for personalizing the writing later, not a search query).
 
 SEARCH 1a — National news: search for today's top US and world news headlines. Aim for 10 real stories worth knowing — major national and international stories only. Do not include hyper-local news from a single city or small region — local government votes, local development projects, local tribal/community news. Exclude stock market and business-finance stories here — that's covered separately in Search 3 — and exclude AI industry/tech company news (product launches, funding rounds, model releases) unless it's genuinely historic.${interestSearchBlock}
 
@@ -326,10 +326,28 @@ async function callDailyBriefViaClaude(input: string, userName: string): Promise
     const searchCount = resp.content.filter((b) => b.type === "server_tool_use").length;
     logger.info({ userName, searchCount }, "[DailyBrief] Search call count for this run");
 
+    // web_search is a server-side tool — a single response interleaves
+    // "text" blocks with server_tool_use/web_search_tool_result blocks as
+    // Claude narrates between searches ("Let me check today's headlines...",
+    // "Now checking scores..."). Joining every text block (the old
+    // behavior) prepended that narration straight onto the real content.
+    // The real final answer isn't one single text block either — confirmed
+    // live that citation-bearing text comes back fragmented into many text
+    // blocks (split mid-sentence at each citation boundary), all appearing
+    // AFTER the last tool-use/tool-result block and never followed by
+    // another one. Narration blocks only ever appear BEFORE a subsequent
+    // tool call. So: find the last tool-related block, keep only the text
+    // blocks after it, and join those with no separator (they're literal
+    // mid-sentence continuations of one another, not separate paragraphs).
+    let lastToolIdx = -1;
+    resp.content.forEach((b, i) => {
+      if (b.type === "server_tool_use" || b.type === "web_search_tool_result") lastToolIdx = i;
+    });
     const text = resp.content
+      .slice(lastToolIdx + 1)
       .filter((b) => b.type === "text")
       .map((b) => (b as { type: "text"; text: string }).text)
-      .join("\n")
+      .join("")
       .trim();
 
     if (!text) {

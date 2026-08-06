@@ -58,7 +58,7 @@ const MAX_PUSH_RETRIES = 5;
 // ── Push body ──────────────────────────────────────────────────────────────────
 
 async function buildMorningBody(user: ActiveUser): Promise<string> {
-  const base = `Your morning briefing is ready — tap to open.`;
+  const base = `Your Morning Run Down is ready — tap to open.`;
   try {
     const watchedShows = await getWatchedShows(user.userName);
     const watchedIds = watchedShows.filter((s) => s.tvmazeId).map((s) => s.tvmazeId!);
@@ -66,7 +66,7 @@ async function buildMorningBody(user: ActiveUser): Promise<string> {
     if (todayEps.length > 0) {
       const show = todayEps[0];
       const extra = todayEps.length > 1 ? ` (+${todayEps.length - 1} more)` : "";
-      return `Your morning briefing is ready — tap to open. New ${show.showName} today${extra}!`;
+      return `Your Morning Run Down is ready — tap to open. New ${show.showName} today${extra}!`;
     }
   } catch {
     // ignore — use base body
@@ -101,7 +101,7 @@ async function sendMorningPush(user: ActiveUser, wakeTime: string): Promise<void
       // daily briefing") — a plain "Good morning" greeting doesn't clear that
       // bar, so tapping the notification produced a generic reply instead of
       // the actual rundown.
-      data: { action: "send_message", message: "Give me my morning briefing" },
+      data: { action: "send_message", message: "Give me my Morning Run Down" },
     });
 
     if (result.sent === 0) {
