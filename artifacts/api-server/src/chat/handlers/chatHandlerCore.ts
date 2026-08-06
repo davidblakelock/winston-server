@@ -68,7 +68,7 @@ import {
   type SaveOfferCandidate,
   type PendingListTypeConflict,
 } from "../../lists/listManager.js";
-import { createReminder } from "../../reminders/reminderManager.js";
+import { createReminder, markReminderDone } from "../../reminders/reminderManager.js";
 import { fetchTodayEvents, type CalendarEvent } from "../../google/calendar.js";
 import {
   getPendingText,
@@ -111,6 +111,7 @@ export type ActionType =
   | "none"
   | "add_todo"
   | "add_reminder"
+  | "complete_reminder"
   | "add_todo_with_reminder"
   | "make_reservation"
   | "send_sms"
@@ -149,6 +150,7 @@ export interface ClaudeAction {
   listName?: string | null;
   itemText?: string | null;
   reminderTime?: string | null;
+  reminderId?: number | null;
   restaurantName?: string | null;
   recipientName?: string | null;
   smsBody?: string | null;
@@ -261,7 +263,7 @@ function buildListsBlock(allLists: Record<string, string[]>, skipList?: string |
 }
 
 function buildRemindersBlock(
-  rows: Array<{ reminder_text: string; fire_at: string; for_contact: string | null }>,
+  rows: Array<{ id: number; reminder_text: string; fire_at: string; for_contact: string | null }>,
   timezone: string
 ): string {
   if (rows.length === 0) return "";
@@ -271,10 +273,11 @@ function buildRemindersBlock(
       weekday: "short", month: "short", day: "numeric",
       hour: "numeric", minute: "2-digit", hour12: true,
     });
-  return `\n\n[Active Reminders — ${rows.length} pending]\n` +
+  return `\n\n[Active Reminders — ${rows.length} pending — indexed for reference]\n` +
     rows.map((r, i) =>
-      `${i + 1}. ${r.reminder_text}${r.for_contact ? ` (for ${r.for_contact})` : ""} — ${fmt(r.fire_at)}`
-    ).join("\n");
+      `${i + 1}. [id=${r.id}] ${r.reminder_text}${r.for_contact ? ` (for ${r.for_contact})` : ""} — ${fmt(r.fire_at)}`
+    ).join("\n") +
+    `\nIf the user wants to mark one done or drop it, use the id shown above — never retype the text.`;
 }
 
 function buildCalendarBlock(events: CalendarEvent[], timezone: string): string {
@@ -407,12 +410,12 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     getProfileItems(undefined, sessionUserName).catch(() => []),
     getPeople(sessionUserName).catch((): KeyPerson[] => []),
     getAllLists(sessionUserName).catch(() => ({} as Record<string, string[]>)),
-    query<{ reminder_text: string; fire_at: string; for_contact: string | null }>(
-      `SELECT reminder_text, fire_at, for_contact FROM reminders
+    query<{ id: number; reminder_text: string; fire_at: string; for_contact: string | null }>(
+      `SELECT id, reminder_text, fire_at, for_contact FROM reminders
        WHERE user_name = $1 AND status = 'pending' ORDER BY fire_at ASC`,
       [sessionUserName]
     ).then((r) => r.rows).catch(
-      (): Array<{ reminder_text: string; fire_at: string; for_contact: string | null }> => []
+      (): Array<{ id: number; reminder_text: string; fire_at: string; for_contact: string | null }> => []
     ),
     getTodayEventsCached(sessionUserName),
     history.length === 0 ? hydrateHistoryFromDb(sessionUserName).catch(() => []) : Promise.resolve(null),
@@ -818,6 +821,11 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       case "add_reminder":
         action = { type: "add_reminder", itemText: parts.task ?? "", reminderTime: parts.time ?? null };
         break;
+      case "complete_reminder": {
+        const idRaw = parts.id ? parseInt(parts.id, 10) : NaN;
+        action = { type: "complete_reminder", reminderId: Number.isNaN(idRaw) ? null : idRaw };
+        break;
+      }
       case "add_todo_with_reminder":
         action = { type: "add_todo_with_reminder", itemText: parts.task ?? "", reminderTime: parts.time ?? null };
         break;
@@ -1154,6 +1162,25 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
         } catch (err) {
           log.warn({ err }, "[chatHandlerCore] createReminder failed");
         }
+      }
+      break;
+    }
+
+    // ── complete_reminder ─────────────────────────────────────────────────────
+    // Handles both "mark done" and "drop/forget it" — the reminders table has
+    // no separate dismissed state (only pending/completed, same as the
+    // scheduler's own fire-time transition in scheduler.ts), so both intents
+    // resolve to the same status update.
+    case "complete_reminder": {
+      if (action.reminderId) {
+        try {
+          const done = await markReminderDone(action.reminderId);
+          log.info({ reminderId: action.reminderId, done }, "[chatHandlerCore] Reminder marked done");
+        } catch (err) {
+          log.warn({ err, reminderId: action.reminderId }, "[chatHandlerCore] markReminderDone failed");
+        }
+      } else {
+        log.info({}, "[chatHandlerCore] complete_reminder had no valid id to target");
       }
       break;
     }
