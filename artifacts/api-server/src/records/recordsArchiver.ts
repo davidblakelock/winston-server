@@ -6,7 +6,7 @@
  * and datesScheduler.ts), and sets deleted_at = NOW() for any of that user's
  * records where:
  *   - deleted_at IS NULL (not already archived), AND
- *   - COALESCE(date_end, date_start) is more than 7 days in the past.
+ *   - COALESCE(date_end, date_start) is more than 2 days in the past.
  *
  * date_end is preferred over date_start so a multi-day booking (e.g. hotel)
  * is not archived until after checkout, not after check-in.
@@ -30,7 +30,7 @@ async function archiveOldRecordsForUser(userName: string): Promise<void> {
        WHERE user_name = $1
          AND deleted_at IS NULL
          AND COALESCE(date_end, date_start) IS NOT NULL
-         AND COALESCE(date_end, date_start)::date < CURRENT_DATE - INTERVAL '7 days'
+         AND COALESCE(date_end, date_start)::date < CURRENT_DATE - INTERVAL '2 days'
        RETURNING id`,
       [userName]
     );
