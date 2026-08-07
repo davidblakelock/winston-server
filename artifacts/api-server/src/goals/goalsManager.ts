@@ -841,8 +841,9 @@ export async function goalsFreeformChat(
     `If ${displayName} EXPLICITLY asks for a checklist, steps, or something to check off — a real request for ` +
     `trackable steps, not just discussion — do NOT write the checklist out yourself; the actual steps are ` +
     `extracted separately from the goal's saved plan and shown as trackable items in the app. Just reply with ` +
-    `a brief confirmation (one sentence) and end it with [ACTION:add_goal_steps] — that tag is what makes the ` +
-    `steps actually appear, so it must be the literal last thing in your reply, every time this is requested. ` +
+    `a short confirmation sentence — never send the tag with nothing else, the reply must never be empty — ` +
+    `then end it with [ACTION:add_goal_steps] — that tag is what makes the steps actually appear, so it must ` +
+    `be the literal last thing in your reply, every time this is requested. ` +
     `Only do this when they clearly ask; never offer or create a checklist unprompted, even for a naturally ` +
     `step-shaped topic.\n\n` +
     `When something needs current, specific, real-world detail — venue hours, addresses, current class ` +
