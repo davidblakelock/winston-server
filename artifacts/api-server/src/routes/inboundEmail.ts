@@ -4,8 +4,42 @@ import { saveAtticItem } from "../attic/atticItemsManager.js";
 import { runConnectionEngine } from "../connectionEngine/connectionEngineManager.js";
 import { importRecipeFromEmail, type EmailImage } from "../lists/recipeEmailImporter.js";
 import { firstUrl } from "../lib/emailForwardParsing.js";
+import { query } from "../db.js";
 
 const router: IRouter = Router();
+
+// Every inbound webhook hit gets a persisted row — this route previously only
+// logged to process.stdout, which is wiped on every redeploy. Confirmed live:
+// a real recipe forward went uninvestigatable within hours simply because
+// unrelated deploys had already recycled the container by the time it was
+// reported. This makes "did Mailgun even hit us for this one" answerable
+// after the fact regardless of how many deploys happened in between.
+query(`
+  CREATE TABLE IF NOT EXISTS inbound_email_log (
+    id           integer GENERATED ALWAYS AS IDENTITY NOT NULL PRIMARY KEY,
+    recipient    text,
+    username     text,
+    sender       text,
+    subject      text,
+    text_length  integer,
+    image_count  integer,
+    outcome      text NOT NULL,
+    detail       text,
+    received_at  timestamptz NOT NULL DEFAULT now()
+  )
+`).catch(() => {});
+
+async function logInbound(fields: {
+  recipient: string; username: string | null; sender: string; subject: string;
+  textLength: number; imageCount: number; outcome: string; detail?: string;
+}): Promise<void> {
+  await query(
+    `INSERT INTO inbound_email_log
+       (recipient, username, sender, subject, text_length, image_count, outcome, detail)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [fields.recipient, fields.username, fields.sender, fields.subject, fields.textLength, fields.imageCount, fields.outcome, fields.detail ?? null]
+  ).catch(() => {});
+}
 
 // Mailgun posts either application/x-www-form-urlencoded (text-only) or
 // multipart/form-data (when attachments are present). multer handles both,
@@ -89,6 +123,7 @@ router.post(
 
     if (!username) {
       process.stdout.write("[InboundEmail] no +username in recipient — cannot assign user_name, skipping\n");
+      await logInbound({ recipient, username, sender, subject, textLength: text.length, imageCount: 0, outcome: "skipped-no-username" });
       return;
     }
 
@@ -106,17 +141,23 @@ router.post(
         if (!sniffed || !SUPPORTED_IMAGE_TYPES.has(sniffed)) continue;
         images.push({ mimeType: sniffed, base64: f.buffer.toString("base64") });
       }
-      await importRecipeFromEmail({ userName: username, text, subject, sender, images });
+      const saved = await importRecipeFromEmail({ userName: username, text, subject, sender, images });
+      await logInbound({
+        recipient, username, sender, subject, textLength: text.length, imageCount: images.length,
+        outcome: saved ? "recipe-saved" : "recipe-no-match-found",
+      });
       return;
     }
 
     if (!/the attic/i.test(subject)) {
       process.stdout.write("[InboundEmail] subject doesn't mention 'the attic' — skipping\n");
+      await logInbound({ recipient, username, sender, subject, textLength: text.length, imageCount: 0, outcome: "skipped-no-recognized-keyword" });
       return;
     }
 
     if (text.trim().length === 0) {
       process.stdout.write("[InboundEmail] empty body — skipping\n");
+      await logInbound({ recipient, username, sender, subject, textLength: 0, imageCount: 0, outcome: "skipped-empty-body" });
       return;
     }
 
@@ -132,11 +173,13 @@ router.post(
         sourceMetadata: { subject, sender },
       });
       process.stdout.write("[InboundEmail] saved to attic_items for user: " + username + "\n");
+      await logInbound({ recipient, username, sender, subject, textLength: text.length, imageCount: 0, outcome: "attic-saved" });
       runConnectionEngine(username, "capture").catch((err) =>
         process.stdout.write("[InboundEmail] runConnectionEngine failed: " + String(err) + "\n")
       );
     } catch (err) {
       process.stdout.write("[InboundEmail] attic_items insert failed: " + String(err) + "\n");
+      await logInbound({ recipient, username, sender, subject, textLength: text.length, imageCount: 0, outcome: "attic-save-failed", detail: String(err).slice(0, 500) });
     }
   },
 );

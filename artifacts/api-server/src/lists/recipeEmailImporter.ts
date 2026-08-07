@@ -274,12 +274,12 @@ export interface ImportRecipeParams {
   images?:  EmailImage[];
 }
 
-export async function importRecipeFromEmail(params: ImportRecipeParams): Promise<void> {
+export async function importRecipeFromEmail(params: ImportRecipeParams): Promise<boolean> {
   const { userName, text, subject, sender, images = [] } = params;
   const trimmed = text.trim();
   if (!trimmed && images.length === 0) {
     logger.info({ userName, subject }, "[RecipeEmailImport] empty body, no attachments — skipping");
-    return;
+    return false;
   }
 
   const url = trimmed ? firstUrl(trimmed) : null;
@@ -297,7 +297,7 @@ export async function importRecipeFromEmail(params: ImportRecipeParams): Promise
     const html = await fetchPageHtml(url);
     if (!html) {
       logger.info({ userName, url, subject }, "[RecipeEmailImport] no recipe found — skipping");
-      return;
+      return false;
     }
     result = extractRecipeJsonLd(html);
     if (result) {
@@ -329,7 +329,7 @@ export async function importRecipeFromEmail(params: ImportRecipeParams): Promise
 
   if (!result) {
     logger.info({ userName, subject, sender, imageCount: images.length }, "[RecipeEmailImport] no recipe found — skipping");
-    return;
+    return false;
   }
 
   await ensureRecipesListIsChecklist(userName);
@@ -340,7 +340,9 @@ export async function importRecipeFromEmail(params: ImportRecipeParams): Promise
       { userName, title: result.title, insertedCount: inserted.length, hasUrl: !!sourceUrl },
       "[RecipeEmailImport] saved to recipes list"
     );
+    return inserted.length > 0;
   } catch (err) {
     logger.warn({ err, userName }, "[RecipeEmailImport] addItems failed");
+    return false;
   }
 }
