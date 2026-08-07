@@ -103,6 +103,36 @@ export function parseWebhookEvent(payload: any): {
   }
 }
 
+// Confirmed live: this EasyPost account had ZERO registered webhooks —
+// routes/easypost.ts (the receiving endpoint) was correct and reachable the
+// whole time, but EasyPost had never been told to call it, so every tracker
+// update relied entirely on the 4h polling backstop. Two real orders sat
+// showing "out for delivery" over an hour after EasyPost's own data already
+// said "delivered." Registering a webhook is a one-time account-level
+// action that doesn't need repeating on every deploy, but checking (and
+// re-registering if missing) on startup means this can't silently regress
+// again — e.g. an account reset or key rotation — without anyone noticing
+// until a poller cycle eventually papers over it.
+const WEBHOOK_URL = "https://workspaceapi-server-production-5fd6.up.railway.app/api/easypost/webhook";
+
+export async function ensureEasyPostWebhook(): Promise<void> {
+  if (!apiKey) return;
+  try {
+    const existing = await client.Webhook.all();
+    const hasOurs = (existing.webhooks ?? []).some(
+      (w: { url?: string; disabled_at?: string | null }) => w.url === WEBHOOK_URL && !w.disabled_at
+    );
+    if (hasOurs) {
+      logger.info("[EasyPost] Webhook already registered");
+      return;
+    }
+    await client.Webhook.create({ url: WEBHOOK_URL });
+    logger.info({ url: WEBHOOK_URL }, "[EasyPost] Webhook registered");
+  } catch (err) {
+    logger.warn({ err }, "[EasyPost] ensureEasyPostWebhook failed — tracking will fall back to the 4h poller");
+  }
+}
+
 export function isKeyTrackingStatus(status: string): boolean {
   return ["out_for_delivery", "delivered", "available_for_pickup", "return_to_sender", "failure"].includes(status);
 }

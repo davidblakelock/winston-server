@@ -341,7 +341,14 @@ async function runScan(userName: string): Promise<void> {
   // this way — worst case it's late by less than one tick period (15 min).
   const lastSocialScan = await getLastSocialScanAt(userName);
   const lastScan = lastSocialScan?.getTime() ?? 0;
-  const shouldScanSocial = Date.now() - lastScan >= intervalMs;
+  // TICK_JITTER_TOLERANCE_MS absorbs the small (confirmed live: ~440ms)
+  // processing latency between a tick firing and this line's Date.now() —
+  // last_scan_at is written from THAT run's own start time, so 30 minutes
+  // later the elapsed check can land a few hundred ms short of the
+  // threshold and get bumped to the next 15-min tick for no real reason.
+  // Negligible relative to the 15-min tick granularity either way.
+  const TICK_JITTER_TOLERANCE_MS = 10_000;
+  const shouldScanSocial = Date.now() - lastScan >= intervalMs - TICK_JITTER_TOLERANCE_MS;
 
   if (!shouldScanSocial) {
     logger.info({ userName, intervalMinutes }, "[BgEmailScanner] Skipping tick — already ran in this window");

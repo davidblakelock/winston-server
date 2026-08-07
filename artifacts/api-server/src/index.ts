@@ -263,6 +263,13 @@ app.listen(port, async (err) => {
   }
 
   try {
+    const { ensureEasyPostWebhook } = await import("./orders/easypostManager.js");
+    await ensureEasyPostWebhook();
+  } catch (e) {
+    logger.warn({ err: e }, "EasyPost webhook check warning");
+  }
+
+  try {
     await query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS message_id TEXT`);
     await query(
       `CREATE UNIQUE INDEX IF NOT EXISTS chat_messages_message_id_idx
