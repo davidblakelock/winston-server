@@ -403,23 +403,42 @@ export async function syncWinstonConnectedOnAccept(
   if (!recipient_user_name || !requester_label || !recipient_label) return;
 
   await Promise.all([
-    // Requester's list: find the person whose name matches how the accepter calls themselves
+    // Requester's key_people row for the accepter — now stores the
+    // accepter's real user_name as a stable link, not just a one-time
+    // boolean flip. This is the only moment the name-match needs to run;
+    // every future read prefers this stored username instead, so renaming
+    // this contact later never breaks the connection.
     query(
-      `UPDATE key_people SET winston_connected = true
+      `UPDATE key_people SET winston_connected = true, connected_user_name = $3
        WHERE user_name = $1 AND LOWER(name) = LOWER($2)`,
-      [requester_user_name, recipient_label]
+      [requester_user_name, recipient_label, recipient_user_name]
     ).catch((err) => logger.warn({ err, userName: requester_user_name }, "[Connect] key_people sync failed for requester")),
 
-    // Recipient's list: find the person whose name matches how the requester calls themselves
     query(
-      `UPDATE key_people SET winston_connected = true
+      `UPDATE key_people SET winston_connected = true, connected_user_name = $3
        WHERE user_name = $1 AND LOWER(name) = LOWER($2)`,
-      [recipient_user_name, requester_label]
+      [recipient_user_name, requester_label, requester_user_name]
     ).catch((err) => logger.warn({ err, userName: recipient_user_name }, "[Connect] key_people sync failed for recipient")),
   ]);
 
   logger.info(
     { requester: requester_user_name, recipient: recipient_user_name, requesterLabel: requester_label, recipientLabel: recipient_label },
-    "[Connect] winston_connected synced to key_people for both sides"
+    "[Connect] winston_connected + connected_user_name synced to key_people for both sides"
   );
+}
+
+// One-time-effective, idempotent (safe every boot) — backfills
+// connected_user_name for connections accepted before this stable-link fix
+// shipped, reusing the exact same matching logic syncWinstonConnectedOnAccept
+// already applies at accept-time. Without this, anyone who connected before
+// today keeps working (name hasn't changed yet) but loses their badge the
+// first time they rename that contact — this closes that gap retroactively.
+export async function seedLegacyConnectedUserNames(): Promise<void> {
+  const { rows } = await query<WinstonConnection>(
+    `SELECT * FROM winston_connections WHERE status = 'accepted'`
+  );
+  for (const conn of rows) {
+    await syncWinstonConnectedOnAccept(conn).catch(() => {});
+  }
+  logger.info("[Connect] Legacy connected_user_name backfill complete");
 }

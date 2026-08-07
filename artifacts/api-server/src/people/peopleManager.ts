@@ -14,6 +14,7 @@ export interface KeyPerson {
   notes: string | null;
   googleContactId: string | null;
   winstonConnected: boolean;
+  connectedUserName: string | null;
   createdAt: string;
 }
 
@@ -30,12 +31,14 @@ type PersonRow = {
   notes: string | null;
   google_contact_id: string | null;
   winston_connected: boolean;
+  connected_user_name: string | null;
   created_at: string;
 };
 
 export async function ensureKeyPeopleColumns(): Promise<void> {
   await query(`ALTER TABLE key_people ADD COLUMN IF NOT EXISTS address TEXT`).catch(() => {});
   await query(`ALTER TABLE key_people ADD COLUMN IF NOT EXISTS winston_connected BOOLEAN NOT NULL DEFAULT FALSE`).catch(() => {});
+  await query(`ALTER TABLE key_people ADD COLUMN IF NOT EXISTS connected_user_name TEXT`).catch(() => {});
 }
 
 function rowToPerson(r: PersonRow): KeyPerson {
@@ -52,6 +55,7 @@ function rowToPerson(r: PersonRow): KeyPerson {
     notes: r.notes,
     googleContactId: r.google_contact_id,
     winstonConnected: r.winston_connected ?? false,
+    connectedUserName: r.connected_user_name ?? null,
     createdAt: r.created_at,
   };
 }
@@ -63,7 +67,7 @@ export async function getPeople(userName: string): Promise<KeyPerson[]> {
   const res = await query<PersonRow>(
     `SELECT kp.id, kp.user_name, kp.name, kp.relationship, kp.phone, kp.email,
             kp.address, kp.birthday, kp.anniversary, kp.notes,
-            kp.google_contact_id, kp.created_at,
+            kp.google_contact_id, kp.created_at, kp.connected_user_name,
             (kp.winston_connected OR EXISTS (
               SELECT 1 FROM winston_connections wc
               WHERE wc.status = 'accepted'

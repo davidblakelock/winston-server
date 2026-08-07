@@ -32,7 +32,7 @@ import { ensureMoodTable } from "./mood/moodManager";
 import { ensureFollowupsTable } from "./followups/followupManager";
 import { ensureMemoryArchiveTable } from "./memory/memoryArchiveManager";
 import { ensureJournalSourceColumn } from "./routes/journal";
-import { ensureConnectTables } from "./connect/connectManager";
+import { ensureConnectTables, seedLegacyConnectedUserNames } from "./connect/connectManager";
 import { ensureGroupTables } from "./connect/groupManager";
 import { ensureCalendarSmartTables } from "./routes/calendarSmart";
 import { ensureRestaurantCacheTable } from "./restaurants/restaurantIntelligence";
@@ -296,6 +296,7 @@ app.listen(port, async (err) => {
 
   try {
     await ensureConnectTables();
+    await seedLegacyConnectedUserNames();
   } catch (e) {
     logger.warn({ err: e }, "Winston Connect table initialization warning");
   }
