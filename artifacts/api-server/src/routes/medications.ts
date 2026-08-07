@@ -534,28 +534,31 @@ router.delete("/medications/:idOrName", async (req, res) => {
       req.log.info({ name: param, removed }, "[MEDS] DELETE /medications/:name");
     }
 
-    // Re-check interactions now that the medication list has changed.
-    // broadcastMedicationInteractions also fires an SSE "medications-changed" event so
-    // the native app panel updates even if it doesn't read the DELETE response body.
-    // source="delete" lets the native app suppress the interaction panel on delete —
-    // avoid/sideEffects are always present for drugs like Meloxicam/Pravastatin even
-    // when there are no drug-drug interactions between the remaining medications.
-    const interactionResult = await broadcastMedicationInteractions(userName, "delete");
+    // Respond immediately — the delete itself already happened above, and the
+    // one real caller (winston-native's medications.tsx handleDelete) never
+    // reads this response body; it does its own separate fetchInteractions()
+    // call. Confirmed live this was previously blocking the response for
+    // 20+ seconds (an LLM recheck of interactions across the remaining
+    // medication list), during which the native screen showed no change at
+    // all — easily read as "delete doesn't work" if the user left the
+    // screen before the slow response ever landed.
+    res.json({ ok: true, source: "delete" as const, removed });
 
-    req.log.info(
-      { interactions: interactionResult.interactions.length, checked: interactionResult.checkedDrugs.length },
-      "[MEDS] DELETE — interactions refreshed + SSE broadcast"
-    );
-
-    res.json({
-      ok: true,
-      source: "delete" as const,
-      removed,
-      interactions: interactionResult.interactions,
-      avoid: interactionResult.avoid,
-      sideEffects: interactionResult.sideEffects,
-      checkedDrugs: interactionResult.checkedDrugs,
-    });
+    // Re-check interactions now that the medication list has changed, in the
+    // background — broadcastMedicationInteractions fires an SSE
+    // "medications-changed" event so the native app panel still updates in
+    // real time. source="delete" lets the native app suppress the
+    // interaction panel on delete — avoid/sideEffects are always present for
+    // drugs like Meloxicam/Pravastatin even when there are no drug-drug
+    // interactions between the remaining medications.
+    broadcastMedicationInteractions(userName, "delete")
+      .then((interactionResult) => {
+        req.log.info(
+          { interactions: interactionResult.interactions.length, checked: interactionResult.checkedDrugs.length },
+          "[MEDS] DELETE — interactions refreshed + SSE broadcast"
+        );
+      })
+      .catch((err) => req.log.warn({ err }, "[MEDS] DELETE — background interaction refresh failed"));
   } catch (err) {
     req.log.error({ err }, "[MEDS] DELETE /medications error");
     res.status(500).json({ error: "Failed to remove medication" });

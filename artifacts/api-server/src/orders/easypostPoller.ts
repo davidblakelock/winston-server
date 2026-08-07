@@ -13,12 +13,53 @@
 import cron from "node-cron";
 import { logger } from "../lib/logger.js";
 import { query } from "../db.js";
-import { getTracker } from "./easypostManager.js";
+import { createTracker, getTracker } from "./easypostManager.js";
 import { applyEasyPostTrackerUpdate } from "./easypostSync.js";
 
 // Only bother re-checking a tracker after this long since its last update —
 // the webhook is expected to keep things fresh in the normal case.
 const STALE_HOURS = 4;
+
+// Backfill for orders that have a real tracking number but no EasyPost
+// tracker — confirmed live: createTracker() can fail at order-creation time
+// (gmailOrderScanner.ts's handleOrderResult falls back to a hardcoded
+// "pre_transit" status when it does) and nothing ever retried it. Since
+// pollStaleTrackers below only looks at rows that already HAVE a tracker id,
+// an order in this state was previously frozen on "pre_transit" forever —
+// no webhook possible (nothing to subscribe), no poll possible (filtered
+// out by the WHERE clause). This closes that gap by attempting tracker
+// creation again on the same poll cadence.
+async function backfillMissingTrackers(): Promise<void> {
+  const { rows } = await query<{ id: number; tracking_number: string; carrier: string | null }>(
+    `SELECT id, tracking_number, carrier FROM orders
+     WHERE tracking_number IS NOT NULL
+       AND easypost_tracker_id IS NULL
+       AND status != 'delivered'`
+  );
+  if (rows.length === 0) return;
+
+  logger.info({ count: rows.length }, "[EasyPostPoller] Backfilling orders with no tracker");
+
+  for (const order of rows) {
+    try {
+      const tracker = await createTracker(order.tracking_number, order.carrier ?? undefined);
+      if (!tracker) {
+        logger.warn({ orderId: order.id }, "[EasyPostPoller] Backfill tracker creation still failing — will retry next poll");
+        continue;
+      }
+      await query(`UPDATE orders SET easypost_tracker_id = $1 WHERE id = $2`, [tracker.trackerId, order.id]);
+      await applyEasyPostTrackerUpdate(tracker.trackerId, {
+        status:          tracker.status,
+        carrier:         tracker.carrier,
+        estDeliveryDate: tracker.estDeliveryDate,
+        trackingEvents:  tracker.trackingEvents,
+      });
+      logger.info({ orderId: order.id, trackerId: tracker.trackerId }, "[EasyPostPoller] Backfill succeeded");
+    } catch (err) {
+      logger.warn({ err, orderId: order.id }, "[EasyPostPoller] Backfill failed for order");
+    }
+  }
+}
 
 async function pollStaleTrackers(): Promise<void> {
   const { rows } = await query<{ easypost_tracker_id: string }>(
@@ -53,6 +94,7 @@ export function startEasyPostPoller(): void {
     if (_running) return;
     _running = true;
     try {
+      await backfillMissingTrackers();
       await pollStaleTrackers();
     } catch (err) {
       logger.error({ err }, "[EasyPostPoller] Scheduler error");

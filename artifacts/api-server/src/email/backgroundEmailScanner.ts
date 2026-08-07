@@ -1,7 +1,8 @@
 /**
  * Background Email Scanner — Unified Claude Classification
  *
- * Runs on the same 60-min-interval tick:
+ * Cron ticks every 15 min; each user's own configured interval_minutes
+ * (user_email_scan_settings) gates how often the actual scan work runs:
  *   1. SOCIAL scan — all unread inbox emails, up to 30 candidates, processes up to 20.
  *                    Keyword-free — classifyEmail handles filtering. Covers meetings,
  *                    records (My Records), orders/shipping (My Orders), replies, and
@@ -327,19 +328,23 @@ async function runScan(userName: string): Promise<void> {
   }
 
   // ── Social (meetings/records/replies): DB-backed ─────────────────────────
+  // Gated purely on elapsed time since the last scan — a prior version also
+  // required currentMinute to land exactly on a multiple of intervalMinutes
+  // (e.g. :00/:30 for a 30-min interval), which sounds harmless but isn't:
+  // the outer cron tick doesn't fire at the literal top of the minute (it's
+  // often a few seconds in), so "exactly 30 minutes elapsed" frequently
+  // lands at 29:59 — just under the threshold. That single missed tick then
+  // had to wait for the NEXT aligned minute, silently doubling the real
+  // interval to a full hour. Confirmed live in production logs: scans that
+  // should have run every 30 min were actually landing 60 min apart,
+  // consistently. Elapsed-time alone is correct on its own and can't drift
+  // this way — worst case it's late by less than one tick period (15 min).
   const lastSocialScan = await getLastSocialScanAt(userName);
-  const currentMinute = new Date().getMinutes();
   const lastScan = lastSocialScan?.getTime() ?? 0;
-  const onSchedule = currentMinute % intervalMinutes === 0;
-  const notYetFiredThisWindow = Date.now() - lastScan >= intervalMs;
-  const shouldScanSocial = onSchedule && notYetFiredThisWindow;
+  const shouldScanSocial = Date.now() - lastScan >= intervalMs;
 
   if (!shouldScanSocial) {
-    if (!onSchedule) {
-      logger.info({ userName, currentMinute, intervalMinutes }, "[BgEmailScanner] Skipping tick — not a scheduled fire minute");
-    } else {
-      logger.info({ userName, currentMinute, intervalMinutes }, "[BgEmailScanner] Skipping tick — already ran in this window");
-    }
+    logger.info({ userName, intervalMinutes }, "[BgEmailScanner] Skipping tick — already ran in this window");
     return;
   }
 
@@ -543,5 +548,5 @@ export function startBackgroundEmailScanner(userName = NATIVE_USER): void {
     }
   }, { timezone: TZ });
 
-  logger.info("[BgEmailScanner] Scheduler started — unified social/records/orders scan (DB-backed, single is:unread pass) + separate reservation scan, 60-min interval");
+  logger.info("[BgEmailScanner] Scheduler started — unified social/records/orders scan (DB-backed, single is:unread pass) + separate reservation scan, per-user configured interval");
 }

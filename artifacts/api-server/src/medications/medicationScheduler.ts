@@ -151,7 +151,15 @@ export function startMedicationScheduler(): void {
           }).catch((err: unknown) => {
             logger.error({ err, userName, time }, "[MED] FCM push delivery failed");
           });
-          logger.info({ time, userName }, "[MED] Reminder fired");
+          // minutesLate makes a late fire (within the 2h catch-up window
+          // above) immediately diagnosable from logs alone — previously a
+          // reminder firing well past its scheduled time looked identical
+          // in the logs to one firing right on time, with no way to tell
+          // after the fact whether the scheduler tick itself was delayed.
+          const [schedH, schedM] = time.split(":").map(Number);
+          const [localH, localM] = localTime.split(":").map(Number);
+          const minutesLate = (localH * 60 + localM) - (schedH * 60 + schedM);
+          logger.info({ time, userName, localTime, minutesLate }, "[MED] Reminder fired");
         }
       }
     } catch (err) {

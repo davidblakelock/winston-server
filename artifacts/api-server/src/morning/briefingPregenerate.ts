@@ -361,7 +361,33 @@ async function callDailyBriefViaClaude(input: string, userName: string): Promise
   }
 }
 
+// In-flight de-dup — generateDailyBrief has no cache of its own (removed
+// along with the old scheduled pre-generation pipeline), so two overlapping
+// calls for the same user each run a full independent Sonnet + web_search
+// generation, producing two genuinely different briefings (different top
+// stories, different joke) shown back to back. Confirmed live: this is
+// reachable from a single user action — the morning-push notification's
+// trigger message has no client-side "generating…" feedback, so a user who
+// doesn't see anything happen yet can easily end up sending the trigger a
+// second time before the first call has returned. Same in-flight-promise
+// pattern as ticketmasterEventsManager.ts's _fetchInFlight.
+const _inFlight = new Map<string, Promise<string | null>>();
+
 export async function generateDailyBrief(userName: string): Promise<string | null> {
+  const existing = _inFlight.get(userName);
+  if (existing) {
+    logger.info({ userName }, "[DailyBrief] Generation already in flight — reusing it instead of starting a second one");
+    return existing;
+  }
+
+  const promise = generateDailyBriefOnce(userName).finally(() => {
+    _inFlight.delete(userName);
+  });
+  _inFlight.set(userName, promise);
+  return promise;
+}
+
+async function generateDailyBriefOnce(userName: string): Promise<string | null> {
   try {
     const [contextBlock, interestPicks] = await Promise.all([
       buildDailyBriefContext(userName),
