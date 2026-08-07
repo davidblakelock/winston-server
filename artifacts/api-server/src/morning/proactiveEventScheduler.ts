@@ -73,9 +73,9 @@ export type RunContext = "week" | "weekend";
 
 // ── Unified candidate shape across all three sources ───────────────────────
 
-type CandidateCategory = "event" | "activity" | "restaurant";
+export type CandidateCategory = "event" | "activity" | "restaurant";
 
-interface Candidate {
+export interface Candidate {
   category:  CandidateCategory;
   name:      string;
   description: string;
@@ -338,7 +338,7 @@ async function markNotified(userName: string, key: string): Promise<void> {
 // Mirrors the relevance-scoring approach from the retired
 // localContentScanner.ts, applied across heterogeneous candidate types.
 
-interface RankedPick {
+export interface RankedPick {
   candidate: Candidate;
   reason: string;
 }
@@ -507,16 +507,22 @@ async function sendPicksNotification(userName: string, city: string, picks: Rank
 
 // ── Per-user orchestration ──────────────────────────────────────────────────
 
-export async function checkUserForEvent(user: ActiveUser, runContext: RunContext): Promise<void> {
-  const { userName } = user;
-
+// Shared by checkUserForEvent (scheduled Monday/Thursday push) and
+// searchLocalActivities (ad-hoc "what should I do this weekend" chat
+// queries, chatHandlerCore.ts) — same city/interest resolution and the same
+// profileContext shape rankCandidates expects, so both entry points
+// personalize identically instead of the ad-hoc path reinventing (or
+// skipping) it.
+async function resolveUserEventContext(userName: string): Promise<{
+  city: string;
+  favoriteArtists: string[];
+  userInterests: string[];
+  profileContext: string;
+} | null> {
   const profile = await getProfile(userName).catch(() => null);
   const location = await getUserLocationContext(userName).catch(() => null);
   const city = location?.city ?? profile?.city ?? "";
-  if (!city) {
-    logger.info({ userName }, "[Proactive Discovery] No known city — skipping");
-    return;
-  }
+  if (!city) return null;
 
   const favoriteArtists = profile?.favoriteArtists ?? [];
   const musicGenres = profile?.musicGenres ?? [];
@@ -537,6 +543,54 @@ export async function checkUserForEvent(user: ActiveUser, runContext: RunContext
     hobbies.length ? `Hobbies and interests: ${hobbies.join(", ")}` : null,
     favoriteRestaurants.length ? `Favorite restaurants: ${favoriteRestaurants.join(", ")}` : null,
   ].filter(Boolean).join("\n");
+
+  return { city, favoriteArtists, userInterests, profileContext };
+}
+
+// ── Ad-hoc local activity search — "what should I do this weekend" type
+// chat questions (chatHandlerCore.ts's local_activity_search action).
+// Previously these fell through to general chat with a bare web_search
+// tool and no personalization, which is why a generic "what's happening in
+// Dallas this weekend" search surfaced whatever big-name touring concerts
+// dominate event-listing SEO rather than anything actually matching the
+// user's interests. Reuses the exact same three-source gathering +
+// personalized ranking already proven in the scheduled Monday/Thursday
+// pipeline below — just without the "already notified" dedup or push send,
+// since this is a live answer, not a scheduled notification.
+export async function searchLocalActivities(
+  userName: string,
+  runContext: RunContext = "week",
+): Promise<{ city: string; picks: RankedPick[] } | null> {
+  const ctx = await resolveUserEventContext(userName);
+  if (!ctx) return null;
+  const { city, favoriteArtists, userInterests, profileContext } = ctx;
+
+  const [events, activities, restaurants] = await Promise.all([
+    fetchCandidateEvents(city, favoriteArtists).catch((): LocalEvent[] => []),
+    searchSupplementalActivities(city, userInterests, runContext),
+    searchNewRestaurants(city),
+  ]);
+
+  const candidates: Candidate[] = [
+    ...eventsToCandidates(events),
+    ...activities,
+    ...restaurants,
+  ];
+  if (candidates.length === 0) return { city, picks: [] };
+
+  const picks = await rankCandidates(candidates, profileContext, city, runContext);
+  return { city, picks };
+}
+
+export async function checkUserForEvent(user: ActiveUser, runContext: RunContext): Promise<void> {
+  const { userName } = user;
+
+  const ctx = await resolveUserEventContext(userName);
+  if (!ctx) {
+    logger.info({ userName }, "[Proactive Discovery] No known city — skipping");
+    return;
+  }
+  const { city, favoriteArtists, userInterests, profileContext } = ctx;
 
   const [events, activities, restaurants] = await Promise.all([
     fetchCandidateEvents(city, favoriteArtists).catch((): LocalEvent[] => []),

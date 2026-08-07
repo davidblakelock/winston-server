@@ -130,6 +130,7 @@ export type ActionType =
   | "sms_revise"
   | "sms_cancel"
   | "morning_rundown"
+  | "local_activity_search"
   | "save_to_attic"
   | "correct_observation"
   | "cleanup_attic"
@@ -151,6 +152,8 @@ export interface ClaudeAction {
   itemText?: string | null;
   reminderTime?: string | null;
   reminderId?: number | null;
+  /** "weekend" biases local_activity_search toward Fri-Sun picks; "week" (default) is broader. */
+  localActivityContext?: "week" | "weekend" | null;
   restaurantName?: string | null;
   recipientName?: string | null;
   smsBody?: string | null;
@@ -883,6 +886,12 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
         break;
       case "morning_rundown":
         action = { type: "morning_rundown" };
+        break;
+      case "local_activity_search":
+        action = {
+          type: "local_activity_search",
+          localActivityContext: parts.context === "weekend" ? "weekend" : "week",
+        };
         break;
       case "save_to_attic":
         action = { type: "save_to_attic", itemText: parts.content ?? "" };
@@ -2093,6 +2102,43 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
         finalReply = fresh;
       } else {
         finalReply = "I had trouble putting together your briefing just now — give it another try in a moment.";
+      }
+      break;
+    }
+
+    // ── local_activity_search ─────────────────────────────────────────────────
+    // Ad-hoc "what should I do this weekend" type questions. Previously these
+    // fell through to "none" and got a generic, unpersonalized web_search
+    // reply — confirmed live, it surfaced big-name touring concerts with no
+    // connection to the user's actual interests. Reuses the same
+    // three-source-gathering + personalized-ranking pipeline the scheduled
+    // Monday/Thursday push already uses (proactiveEventScheduler.ts), so
+    // this gets the identical quality bar. Formatted directly here (not a
+    // second model call) so a real link is never optional/forgotten the way
+    // it was for the scheduled picks before that got fixed.
+    case "local_activity_search": {
+      const { searchLocalActivities } = await import("../../morning/proactiveEventScheduler.js");
+      const runContext = action.localActivityContext ?? "week";
+      try {
+        const result = await searchLocalActivities(sessionUserName, runContext);
+        if (!result) {
+          finalReply = "I don't have a city on file for you yet — once that's set I can look this up.";
+        } else if (result.picks.length === 0) {
+          finalReply = "I looked, but nothing genuinely matched what you're into right now — want me to check again in a few days, or broaden what I search for?";
+        } else {
+          const emoji: Record<string, string> = { event: "🎵", activity: "📍", restaurant: "🍽️" };
+          const lines = result.picks.map((p) => {
+            const c = p.candidate;
+            const when = c.dateLabel || c.dateISO || "ongoing";
+            const where = c.venue ? ` at ${c.venue}` : "";
+            const link = c.url ? ` [More info](${c.url})` : "";
+            return `${emoji[c.category] ?? "•"} **${c.name}**${where} — ${when}. ${p.reason}${link}`;
+          });
+          finalReply = `Here's what I found in ${result.city}:\n\n${lines.join("\n\n")}`;
+        }
+      } catch (err) {
+        log.warn({ err }, "[chatHandlerCore] searchLocalActivities failed");
+        finalReply = "I had trouble pulling that together just now — give it another try in a moment.";
       }
       break;
     }
