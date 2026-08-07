@@ -1,18 +1,15 @@
-import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 import { getProfile, buildSystemPromptFromProfile, buildProfileContext } from "../onboarding/onboardingManager.js";
 import { getPeople } from "../people/peopleManager.js";
-import { MODEL_HAIKU } from "../lib/models.js";
+import { MODEL_HAIKU, MODEL_SONNET } from "../lib/models.js";
 import { getUserLocationContext } from "../lib/userTimezone.js";
 import type { SourceItem, UserCorrection } from "../connectionEngine/memorySourceAdapters.js";
 import { fetchFromAdapters, getRecentCorrections, formatItemLines } from "../connectionEngine/memorySourceAdapters.js";
 import { createReminder } from "../reminders/reminderManager.js";
 
-const MODEL_GPT4O = "gpt-4o" as const;
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -347,105 +344,6 @@ async function buildGoalsProfileContext(
   return { profileContext: lines.join("\n"), userCity: city, displayName };
 }
 
-// ── SerpAPI web search ────────────────────────────────────────────────────────
-// Used for real-time queries: venue events, concerts, current listings, etc.
-
-function getSerpApiKey(): string {
-  return (process.env.SERPAPI_KEY ?? "").trim();
-}
-
-const WEB_SEARCH_PATTERNS = [
-  /playing at\s+\w/i,
-  /who('?s| is) (playing|performing|on stage|headlining)/i,
-  /events?\s+(at|this|tonight|this)\b/i,
-  /\bthis (week|weekend|month|night)\b/i,
-  /\btonight\b/i,
-  /upcoming (shows?|concerts?|events?|gigs?)/i,
-  /\blive (music|show|performance)\b/i,
-  /what('?s| is) (on|happening|playing|showing)/i,
-  /current (events?|shows?|exhibits?)/i,
-  /\bschedule\b.*\b(venue|club|bar|hall)\b/i,
-  /\btickets?\s+for\b/i,
-  /(performing|playing|appearing)\s+(this|next)\s+(week|weekend|tuesday|wednesday|thursday|friday|saturday|sunday)/i,
-];
-
-function detectWebSearchQuery(
-  messages: Array<{ role: string; content: string }>
-): string | null {
-  const lastUser = [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
-  const recent = messages.slice(-4).map((m) => m.content).join(" ");
-  const haystack = lastUser || recent;
-  if (WEB_SEARCH_PATTERNS.some((p) => p.test(haystack))) {
-    return lastUser.trim() || recent.slice(0, 200);
-  }
-  return null;
-}
-
-async function serpApiSearch(rawQuery: string, city: string): Promise<string> {
-  const key = getSerpApiKey();
-  if (!key) return "";
-
-  try {
-    // Append city if not already in query
-    const cityHint = city && !rawQuery.toLowerCase().includes(city.toLowerCase())
-      ? ` ${city}` : "";
-    const q = `${rawQuery}${cityHint}`;
-
-    // Try Google Events engine first — best for venue/concert queries
-    const eventsUrl =
-      `https://serpapi.com/search.json?engine=google_events` +
-      `&q=${encodeURIComponent(q)}&hl=en&api_key=${encodeURIComponent(key)}`;
-    const eventsRes = await fetch(eventsUrl, { signal: AbortSignal.timeout(8000) });
-    if (eventsRes.ok) {
-      const eventsData = await eventsRes.json() as {
-        events_results?: Array<{
-          title: string;
-          date?: { start_date?: string; when?: string };
-          address?: string[];
-          description?: string;
-          link?: string;
-          ticket_info?: Array<{ link?: string; source?: string }>;
-        }>;
-      };
-      const events = eventsData.events_results ?? [];
-      if (events.length > 0) {
-        const lines = events.slice(0, 12).map((e) => {
-          const when = e.date?.when ?? e.date?.start_date ?? "";
-          const where = (e.address ?? []).join(", ");
-          const desc = e.description ? ` — ${e.description.slice(0, 150)}` : "";
-          const ticket = e.ticket_info?.[0]?.link ? ` [Tickets: ${e.ticket_info[0].link}]` : "";
-          return `• ${e.title}${when ? ` (${when})` : ""}${where ? ` @ ${where}` : ""}${desc}${ticket}`;
-        });
-        return `Real-time event search results for "${q}":\n${lines.join("\n")}`;
-      }
-    }
-
-    // Fallback: regular Google search
-    const webUrl =
-      `https://serpapi.com/search.json?q=${encodeURIComponent(q)}` +
-      `&num=8&api_key=${encodeURIComponent(key)}`;
-    const webRes = await fetch(webUrl, { signal: AbortSignal.timeout(8000) });
-    if (!webRes.ok) return "";
-    const webData = await webRes.json() as {
-      organic_results?: Array<{ title: string; snippet?: string; link?: string }>;
-      knowledge_graph?: { description?: string; website?: string };
-    };
-    const parts: string[] = [];
-    if (webData.knowledge_graph?.description) {
-      parts.push(`Knowledge: ${webData.knowledge_graph.description}`);
-    }
-    const organics = (webData.organic_results ?? []).slice(0, 6);
-    for (const r of organics) {
-      parts.push(`• ${r.title}: ${r.snippet ?? ""}`.slice(0, 220));
-    }
-    if (!parts.length) return "";
-    return `Web search results for "${q}":\n${parts.join("\n")}`;
-  } catch (err) {
-    logger.warn({ err }, "[Goals] SerpAPI search failed");
-    return "";
-  }
-}
-
 // ── AI goal breakdown ─────────────────────────────────────────────────────────
 
 export interface BreakdownOptions {
@@ -568,22 +466,10 @@ export async function breakdownGoal(
 ): Promise<BreakdownResult> {
   const { profileContext, userCity } = await buildGoalsProfileContext(userName);
 
-  // Build messages array before web search so we can detect intent
   const messages: Array<{ role: "user" | "assistant"; content: string }> =
     conversationHistory.length === 0
       ? [{ role: "user", content: goal }]
       : [...conversationHistory, { role: "user", content: goal }];
-
-  // ── Web search for real-time queries ─────────────────────────────────────────
-  let webSearchContext = "";
-  const searchQuery = detectWebSearchQuery(messages);
-  if (searchQuery) {
-    logger.info({ searchQuery }, "[Goals] Running SerpAPI web search");
-    webSearchContext = await serpApiSearch(searchQuery, userCity);
-    if (webSearchContext) {
-      logger.info({ chars: webSearchContext.length }, "[Goals] Web search results injected");
-    }
-  }
 
   const systemPrompt = `You are a knowledgeable, deeply personal advisor — like a brilliant friend who knows this person well and gives real, rich, personalized guidance.${profileContext ? `\n\n${profileContext}` : ""}
 
@@ -596,7 +482,7 @@ RESPONSE STYLE:
 - Length: as long as it needs to be to lay out a genuinely useful full plan beneath the opening — but the opening itself stays tight, not a preamble. Do NOT truncate, summarize, or cut off early once you're into the real plan.
 - For learning goals (music, language, skills): after the concrete starting point, use a clear historical or progressive structure — show the path from beginner to deeper understanding era by era or level by level.
 - For each stage of a learning path: name the key figures, specific recommended works (album/book/track titles with artist names), and what to listen/look for. Don't just list names — explain what makes each one important.
-- For event/venue questions: if you have real-time data (provided below), use it to give a complete, accurate picture of what's on, when, and how to get tickets. Include ALL the events from the search data.
+- For event/venue questions: search for what's genuinely on, when, and how to get tickets, and give a complete, accurate picture. Include everything relevant you find.
 - When listing music recommendations, always include BOTH the artist AND the album/track title. Format as: "**Artist Name** — *Album Title* (year)". Give 5–15 specific examples per section.
 
 HOW TO USE THE PROFILE:
@@ -607,25 +493,33 @@ HOW TO USE THE PROFILE:
 
 ONLY ask a clarifying question if the goal is so vague that you literally cannot name one concrete starting point (e.g. "I want to get better" — better at what?). This is rare. If you have enough to go on, give the full response.
 
-If there is conversation history, use it to refine, continue, or go deeper. Answer follow-up questions directly and thoroughly — treat this as a continuing conversation, not a fresh start.${webSearchContext ? `\n\nREAL-TIME DATA (use this to answer the question accurately):\n${webSearchContext}` : ""}
+If there is conversation history, use it to refine, continue, or go deeper. Answer follow-up questions directly and thoroughly — treat this as a continuing conversation, not a fresh start.
+
+When something needs current, specific, real-world detail — venue hours, addresses, current class schedules, whether a place is still open, current recommendations — search for it directly rather than relying on what you already know; don't guess or go stale on specifics you can just look up.
 
 If you need to ask a clarifying question instead of giving a full response, write exactly:
 ---QUESTION---
 Your single sharp question here.`;
 
-  const response = await openai.chat.completions.create({
-    model: MODEL_GPT4O,
-    max_tokens: 16383,
-    messages: [
-      { role: "system", content: systemPrompt },
-      ...messages,
-    ],
+  const response = await anthropic.messages.create({
+    model:      MODEL_SONNET,
+    // Deliberately generous, NOT copied from main chat's 1024 — a full
+    // milestone-structured plan needs real room. The old GPT-4o call used
+    // 16383; 8192 is Claude's practical ceiling for a single response.
+    max_tokens: 8192,
+    system:     systemPrompt,
+    tools:      [{ type: "web_search_20250305" as const, name: "web_search" }],
+    messages,
   });
 
-  const raw = response.choices[0]?.message?.content?.trim() ?? "";
+  const raw = response.content
+    .filter((b) => b.type === "text")
+    .map((b) => (b as { type: "text"; text: string }).text)
+    .join("")
+    .trim();
 
   if (!raw) {
-    logger.warn("[Goals] breakdown: GPT-4o returned empty response");
+    logger.warn("[Goals] breakdown: Claude returned empty response");
     return { type: "question", content: "What's the single biggest obstacle you've hit on this before?" };
   }
 
@@ -946,23 +840,41 @@ export async function goalsFreeformChat(
     `through naturally instead.\n\n` +
     `If ${displayName} EXPLICITLY asks for a checklist, steps, or something to check off — a real request for ` +
     `trackable steps, not just discussion — end your reply with [ACTION:add_goal_steps]. Only do this when ` +
-    `they clearly ask; never offer or create a checklist unprompted, even for a naturally step-shaped topic.`;
+    `they clearly ask; never offer or create a checklist unprompted, even for a naturally step-shaped topic.\n\n` +
+    `When something needs current, specific, real-world detail — venue hours, addresses, current class ` +
+    `schedules, whether a place is still open, current recommendations — search for it directly rather than ` +
+    `relying on what you already know; don't guess or go stale on specifics you can just look up.`;
 
   const contextPrefix = userCity ? `[User: ${displayName}, based in ${userCity}]\n` : `[User: ${displayName}]\n`;
 
-  const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
-    { role: "system", content: systemPrompt },
-    ...conversationHistory,
-    { role: "user", content: contextPrefix + message },
-  ];
+  // openGoalDiscussion (native client) seeds a resumed goal's thread with an
+  // assistant-authored message (the goal's saved description) before any
+  // user turn exists — fine for OpenAI, but Anthropic's Messages API rejects
+  // any messages array that doesn't start with role "user". Strip a leading
+  // assistant message rather than erroring: its content is already present
+  // in goalContextBlock above, so nothing is lost by not resending it here.
+  let historyForClaude = conversationHistory;
+  while (historyForClaude.length && historyForClaude[0]!.role === "assistant") {
+    historyForClaude = historyForClaude.slice(1);
+  }
 
-  const response = await openai.chat.completions.create({
-    model:      MODEL_GPT4O,
-    max_tokens: 1024,
-    messages,
+  const response = await anthropic.messages.create({
+    model:      MODEL_SONNET,
+    // Was 2048 for plain conversational replies — bumped for follow-ups
+    // that now pull in live search results and may warrant real depth,
+    // while staying well under breakdownGoal's ceiling (this function's
+    // own prompt still instructs staying tight for narrow questions).
+    max_tokens: 4096,
+    system:     systemPrompt,
+    tools:      [{ type: "web_search_20250305" as const, name: "web_search" }],
+    messages:   [...historyForClaude, { role: "user", content: contextPrefix + message }],
   });
 
-  const raw = response.choices[0]?.message?.content?.trim() ?? "";
+  const raw = response.content
+    .filter((b) => b.type === "text")
+    .map((b) => (b as { type: "text"; text: string }).text)
+    .join("")
+    .trim();
   if (!raw) {
     logger.warn({ userName, goalId }, "[Goals] goalsFreeformChat returned empty response");
     return { reply: "I didn't quite catch that — could you say a bit more?" };
