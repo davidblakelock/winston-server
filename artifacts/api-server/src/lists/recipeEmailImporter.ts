@@ -201,6 +201,65 @@ async function extractRecipeViaClaude(content: string, sourceDescription: string
   }
 }
 
+// ── Step 2b-ii: web_search fallback — for when the direct page fetch is
+// blocked ────────────────────────────────────────────────────────────────
+// Confirmed live: a real forwarded allrecipes.com link returned HTTP
+// 402/403 to our own server's fetch (bot-blocked), AND Anthropic's own
+// web_fetch tool got an explicit "url_not_allowed" for the same domain —
+// allrecipes.com opts out of AI crawling entirely, so no direct-fetch
+// approach can ever reach it. web_search is a genuinely different path: it
+// can surface the recipe via search-result snippets, a syndicated/mirrored
+// copy, or a cached version, without needing to fetch the blocked page
+// directly. Not guaranteed to work for every blocked site, but strictly
+// better than giving up immediately.
+async function extractRecipeViaWebSearch(url: string): Promise<ParsedRecipe | null> {
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  if (!anthropicKey) return null;
+  const anthropic = new Anthropic({ apiKey: anthropicKey });
+
+  try {
+    const resp = await anthropic.messages.create({
+      model: MODEL_HAIKU,
+      max_tokens: 2000,
+      tools: [{ type: "web_search_20250305" as const, name: "web_search" }],
+      messages: [{
+        role: "user",
+        content:
+          `Find and extract the full recipe from this URL: ${url}\n\n` +
+          `If you can't access that exact page directly, search for the recipe by its name/site and use the closest genuine match you can find (a syndicated copy, a cached version, etc.). ` +
+          `Return ONLY valid JSON: {"title": "short recipe name", "content": "the complete recipe — every ingredient, every step, formatted as clean readable text, never abbreviated or summarized"}. ` +
+          `If you genuinely can't find this recipe anywhere, return exactly: NONE`,
+      }],
+    });
+
+    // web_search responses interleave narration text with tool-use blocks,
+    // and the real answer itself can fragment across MANY text blocks split
+    // at citation boundaries — same shape confirmed in briefingPregenerate.ts.
+    // Take only text blocks after the last tool-related block, joined with
+    // no separator (the fragments split mid-sentence, not at line breaks).
+    let lastToolIdx = -1;
+    resp.content.forEach((b, i) => {
+      if (b.type === "server_tool_use" || b.type === "web_search_tool_result") lastToolIdx = i;
+    });
+    const text = resp.content
+      .slice(lastToolIdx + 1)
+      .filter((b) => b.type === "text")
+      .map((b) => (b as { type: "text"; text: string }).text)
+      .join("")
+      .trim();
+
+    if (!text || /^none$/i.test(text)) return null;
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+    const parsed = JSON.parse(jsonMatch[0]) as { title?: string; content?: string };
+    if (!parsed.title?.trim() || !parsed.content?.trim()) return null;
+    return { title: parsed.title.trim(), content: parsed.content.trim() };
+  } catch (err) {
+    logger.warn({ err, url }, "[RecipeEmailImport] web_search fallback failed");
+    return null;
+  }
+}
+
 // ── Step 2c: vision extraction — for image-only forwards (photos/screenshots
 // of a recipe, no usable body text) ──────────────────────────────────────────
 
@@ -296,20 +355,29 @@ export async function importRecipeFromEmail(params: ImportRecipeParams): Promise
     // Just a link — fetch and extract from the page.
     const html = await fetchPageHtml(url);
     if (!html) {
-      logger.info({ userName, url, subject }, "[RecipeEmailImport] no recipe found — skipping");
-      return false;
-    }
-    result = extractRecipeJsonLd(html);
-    if (result) {
-      logger.info({ userName, url, title: result.title }, "[RecipeEmailImport] extracted via JSON-LD");
-    } else {
-      const stripped = stripHtmlAggressive(html);
-      result = await extractRecipeViaClaude(
-        stripped,
-        "this webpage's text (already stripped of scripts/nav/ads, but may still contain some unrelated site content mixed in)"
-      );
+      // Direct fetch blocked (bot protection, or the site opts out of AI
+      // crawling entirely) — try web_search as a genuinely different path
+      // before giving up. See extractRecipeViaWebSearch's doc comment.
+      result = await extractRecipeViaWebSearch(url);
       if (result) {
-        logger.info({ userName, url, title: result.title }, "[RecipeEmailImport] extracted via Claude fallback (no JSON-LD found)");
+        logger.info({ userName, url, title: result.title }, "[RecipeEmailImport] extracted via web_search fallback (direct fetch was blocked)");
+      } else {
+        logger.info({ userName, url, subject }, "[RecipeEmailImport] no recipe found — skipping");
+        return false;
+      }
+    } else {
+      result = extractRecipeJsonLd(html);
+      if (result) {
+        logger.info({ userName, url, title: result.title }, "[RecipeEmailImport] extracted via JSON-LD");
+      } else {
+        const stripped = stripHtmlAggressive(html);
+        result = await extractRecipeViaClaude(
+          stripped,
+          "this webpage's text (already stripped of scripts/nav/ads, but may still contain some unrelated site content mixed in)"
+        );
+        if (result) {
+          logger.info({ userName, url, title: result.title }, "[RecipeEmailImport] extracted via Claude fallback (no JSON-LD found)");
+        }
       }
     }
   } else {
