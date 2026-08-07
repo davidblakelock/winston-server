@@ -74,6 +74,48 @@ export async function getSharedWithUser(
   }));
 }
 
+// Everyone a specific list has been granted to — the reverse of
+// getSharedWithUser (which answers "what's shared TO me"). This answers
+// "who have I shared THIS list with," for the owner's outbound sync
+// direction. Many-to-many by design.
+export async function getGrantedShareTargets(
+  ownerUserName: string,
+  listName: string
+): Promise<string[]> {
+  const { rows } = await query<{ shared_with_user_name: string }>(
+    `SELECT shared_with_user_name FROM list_share_permissions
+     WHERE owner_user_name = $1 AND lower(list_name) = lower($2)`,
+    [ownerUserName, listName]
+  );
+  return rows.map((r) => r.shared_with_user_name);
+}
+
+// One-time-effective migration, idempotent (safe to run every boot via
+// ON CONFLICT DO NOTHING on the underlying grant) — see grantListShare's
+// own ON CONFLICT clause. Before this patch, shopping/to-do synced to
+// EVERY accepted connection unconditionally, no grant required. This
+// backfills that already-in-effect behavior as real grants for connections
+// that existed before permission-gating shipped, so nothing currently
+// working breaks silently. New connections made after this ships need an
+// explicit grant like any other list, same as this decision intends.
+export async function seedLegacyListShareGrants(): Promise<void> {
+  const { rows } = await query<{ requester_user_name: string; recipient_user_name: string }>(
+    `SELECT requester_user_name, recipient_user_name FROM winston_connections WHERE status = 'accepted'`
+  );
+  for (const conn of rows) {
+    const pairs: Array<[string, string]> = [
+      [conn.requester_user_name, conn.recipient_user_name],
+      [conn.recipient_user_name, conn.requester_user_name],
+    ];
+    for (const [owner, recipient] of pairs) {
+      for (const listName of ["shopping", "to do"]) {
+        await grantListShare(owner, recipient, listName).catch(() => {});
+      }
+    }
+  }
+  logger.info("[ListShare] Legacy shopping/to-do grants seeded for existing connections");
+}
+
 export async function getRequesterLabel(
   ownerUserName: string,
   sharedWithUserName: string

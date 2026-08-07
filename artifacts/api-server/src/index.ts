@@ -46,7 +46,7 @@ import { startBackgroundEmailScanner } from "./email/backgroundEmailScanner";
 import { startRecordsArchiver } from "./records/recordsArchiver";
 import { startEasyPostPoller } from "./orders/easypostPoller";
 import { ensureListItemColumns } from "./lists/listManager";
-import { ensureListShareTable } from "./lists/listShareManager";
+import { ensureListShareTable, seedLegacyListShareGrants } from "./lists/listShareManager";
 import { ensureBookingColumns } from "./restaurants/bookingCredentialsManager";
 import { ensureServiceProvidersTable, ensureProviderCategoriesTable } from "./providers/providerManager";
 import { startTvEpisodeScheduler } from "./tv/tvEpisodeScheduler";
@@ -343,6 +343,7 @@ app.listen(port, async (err) => {
 
   try {
     await ensureListShareTable();
+    await seedLegacyListShareGrants();
   } catch (e) {
     logger.warn({ err: e }, "List share permissions table initialization warning");
   }

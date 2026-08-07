@@ -1,7 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
-import { getConnections } from "../connect/connectManager.js";
+import { getConnections, type WinstonConnection } from "../connect/connectManager.js";
+import { getGrantedShareTargets } from "./listShareManager.js";
 import { sendFcmNotification } from "../push/fcmSender.js";
 import { createReminder } from "../reminders/reminderManager.js";
 import { getUserLocationContext } from "../lib/userTimezone.js";
@@ -250,23 +251,29 @@ export async function syncListItemToConnections(
 ): Promise<void> {
   if (!items.length) return;
 
-  const connections = await getConnections(senderUserName).catch(() => []);
-  if (!connections.length) return;
+  // Permission-gated — a list only syncs to people explicitly granted
+  // access to THIS list (confirmed decision, Aug 2026: shopping/to-do get
+  // the same opt-in treatment as any other list, many-to-many).
+  const grantedTargets = await getGrantedShareTargets(senderUserName, listName).catch(() => []);
+  if (!grantedTargets.length) return;
 
+  const connections = await getConnections(senderUserName).catch((): WinstonConnection[] => []);
   const isPlainTodo = listName === "to do" || listName === "reminders";
 
-  await Promise.all(connections.map(async (conn) => {
-    const connectedUserName =
-      conn.requester_user_name === senderUserName
-        ? conn.recipient_user_name
-        : conn.requester_user_name;
-    // Skip self-connections and missing recipients — nothing to sync to.
+  await Promise.all(grantedTargets.map(async (connectedUserName) => {
     if (!connectedUserName || connectedUserName === senderUserName) return;
 
+    // Display label still sourced from the connection record — that's
+    // still where a person's chosen label to this specific other person
+    // lives, unrelated to whether sharing is granted.
+    const conn = connections.find((c) =>
+      (c.requester_user_name === senderUserName && c.recipient_user_name === connectedUserName) ||
+      (c.recipient_user_name === senderUserName && c.requester_user_name === connectedUserName)
+    );
     const senderLabel =
-      conn.requester_user_name === senderUserName
+      conn?.requester_user_name === senderUserName
         ? (conn.requester_label ?? senderUserName)
-        : (conn.recipient_label ?? senderUserName);
+        : (conn?.recipient_label ?? senderUserName);
 
     if (isPlainTodo) {
       // To-dos live in the reminders table, not list_items — mirror that here
@@ -292,8 +299,13 @@ export async function syncListItemToConnections(
       }
     }
 
-    const listDisplayName = listName === "shopping" ? "shopping" : "to-do";
-    const deepLink = listName === "shopping" ? "winston://lists?tab=shopping" : "winston://lists?tab=todo";
+    // Generalized beyond the old hardcoded shopping/to-do display strings —
+    // this function can now be called for any list.
+    const listDisplayName = listName === "shopping" ? "shopping" : listName;
+    const deepLink =
+      listName === "shopping" ? "winston://lists?tab=shopping" :
+      listName === "to do"    ? "winston://lists?tab=todo" :
+      `winston://lists?list=${encodeURIComponent(listName)}`;
 
     await sendFcmNotification({
       userName: connectedUserName,
@@ -593,10 +605,10 @@ export async function executeListOp(op: ListOp, userName: string): Promise<ListR
           }
         }
 
-        // Sync to connected users in the background
-        if (op.listName === "shopping" || op.listName === "to do") {
-          syncListItemToConnections(op.listName, newItems, userName).catch(() => {});
-        }
+        // Sync to anyone granted permission for this specific list — no
+        // longer hardcoded to shopping/to-do; syncListItemToConnections
+        // itself no-ops if nobody's been granted access to this list.
+        syncListItemToConnections(op.listName, newItems, userName).catch(() => {});
       }
       op = { ...op, items: newItems };
       break;
