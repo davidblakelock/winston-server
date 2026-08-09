@@ -26,14 +26,14 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 // largely unchanged except for the interest-search addition and the
 // exclusion list restored to Search 1.
 
-function buildDailyBriefInstruction(interestPicks: string[]): string {
+function buildDailyBriefInstruction(interestPicks: string[], includeMarkets: boolean): string {
   const interestSearchBlock = interestPicks.length > 0
     ? `\n\nSEARCH 1b — Personal interest news: search specifically for recent news connected to: ${interestPicks.join(", ")}. This is in addition to Search 1a, not instead of it — the goal is to surface something genuinely newsworthy tied to what this person actually cares about. If nothing real turns up, that's fine — don't force it.`
     : "";
 
   return `You are about to write a Morning Run Down. Before writing anything, perform the searches below as separate, well-formed queries, one topic at a time — do not combine them into one query, and do not search using the biographical context block that follows this instruction (that block is background for personalizing the writing later, not a search query).
 
-SEARCH 1a — National news: search for today's top US and world news headlines. Aim for 10 real stories worth knowing — major national and international stories only. Do not include hyper-local news from a single city or small region — local government votes, local development projects, local tribal/community news. Exclude stock market and business-finance stories here — that's covered separately in Search 3 — and exclude AI industry/tech company news (product launches, funding rounds, model releases) unless it's genuinely historic.${interestSearchBlock}
+SEARCH 1a — National news: search for today's top US and world news headlines. Aim for 5 real stories worth knowing — major national and international stories only. Do not include hyper-local news from a single city or small region — local government votes, local development projects, local tribal/community news. Exclude stock market and business-finance stories here — that's covered separately in Search 3 — and exclude AI industry/tech company news (product launches, funding rounds, model releases) unless it's genuinely historic.${interestSearchBlock}
 
 STORY QUALITY BAR — applies to every item in Search 1a and 1b alike: only include a story if your search results let you state who/what/when clearly and specifically. If the results are thin, contradictory, or leave the basic facts unclear (you can't say what actually happened or to whom), drop it and use a different story instead — an incoherent story is worse than one fewer story. Also exclude recurring event announcements and PR/marketing-style items with no real news hook — "X festival returns this year," "Nth-annual Y classic announced," a venue's routine seasonal promotion — these aren't news even when they technically connect to one of this person's interests; an interest-tied search should surface an actual event, development, or story involving that interest, not a calendar listing.
 
@@ -41,9 +41,11 @@ When choosing the final list of stories, prefer genuinely important news, but wh
 
 SEARCH 2 — Sports: search for this person's teams' most recent completed games (the specific team names are in the context block below — use them as the search terms, e.g. "[team name] score last night"). Report only FINAL scores from the most recently completed game per team — last night's game if one was played, otherwise their most recent prior game. Verify the date the game was actually played from your search results before including it — if you cannot confirm it was last night's game (or, absent one, the single most recent prior game), leave that team out of the sports section rather than reporting an older score.
 
-SEARCH 3 — Markets: search for stock futures and overnight financial news ahead of today's open (e.g. "stock futures today", "Dow S&P Nasdaq futures").
+${includeMarkets
+  ? `SEARCH 3 — Markets: search for stock futures and overnight financial news ahead of today's open (e.g. "stock futures today", "Dow S&P Nasdaq futures").`
+  : `SEARCH 3 — Markets: skip this search entirely — it's the weekend and US markets are closed, so there's nothing to report ahead of an open that isn't happening today.`}
 
-SEARCH 4 — Weird/funny story: a generic "funny news today" search mostly surfaces routine wire-service oddity filler (an overdue library book, a parking ticket) — unusual, not funny. Instead, search specifically against outlets whose actual editorial job is curating delightful/funny finds, not general news reporting — try queries like "site:boingboing.net", "site:thepoke.co.uk", "site:laughingsquid.com", each combined with a word like "today" or the current month, and also plain queries like "boing boing weird news today" or "the poke funny story today" without the site: operator if that returns better results. These outlets have real editors selecting for exactly this quality — genuinely funny or delightfully absurd, not just odd — which is the actual bar, not merely "unusual." A real story with a specific person or place and an unexpected twist — something a person could mention at lunch and get a genuine reaction. If nothing from these searches clears that bar, that's fine — see the WEIRD/FUNNY STORY formatting rule below on when to skip it.
+SEARCH 4 — Weird/funny story: search UPI's Odd News desk first — try "site:upi.com Odd News" or "UPI odd news today" — that's the primary source. If that doesn't turn up something genuinely funny or delightfully absurd, fall back to AP's Oddities coverage — try "site:apnews.com oddities" or "AP oddities today". These outlets have real editors selecting for exactly this quality — genuinely funny or delightfully absurd, not just odd — which is the actual bar, not merely "unusual." A real story with a specific person or place and an unexpected twist — something a person could mention at lunch and get a genuine reaction. If nothing from either source clears that bar, that's fine — see the WEIRD/FUNNY STORY formatting rule below on when to skip it.
 
 Weather and the joke of the day are NOT things to search for — verified current weather conditions and a real pool of joke candidates are already provided in the context block below. Use that data as-is; do not search for weather (do not guess, and do not include a multi-day forecast), and do not search for or invent a joke — pick one from the candidates given.
 
@@ -51,13 +53,15 @@ This briefing is delivered in the early morning, before the stock market opens f
 
 After completing all searches above, write a genuinely enjoyable Morning Run Down covering: the news from Search 1, the verified weather data from the context block, the markets info from Search 3, the sports scores from Search 2, the story from Search 4, and a joke picked from the verified candidates in the context block. Use only real, current, verified information from your searches (and the verified weather data) — never invent facts, venues, dates, scores, or weather. Style it however reads best — sections, headers, or flowing prose, your call, and vary the structure day to day rather than repeating an identical template every time. Overall length should come from covering enough distinct topics (news, weather, markets, sports, a fun story, a joke, quote), not from writing at length about any single one of them.
 
-NEWS ITEM LENGTH — HARD LIMIT: Each of the 10 news items gets a headline plus exactly ONE sentence underneath it — no exceptions, this is a hard cap, not a target to aim for. That one sentence is a single grammatical sentence ending in one period — not two clauses stitched together with a semicolon or "and," not a sentence followed by a second one on the next line. Before moving to the next item, check what you wrote: if there are two periods (other than one at the very end) or two separate lines of body text, you have written too much — cut it down to one sentence and move on. This is the single most important formatting rule in this entire prompt.
+NEWS ITEM LENGTH — HARD LIMIT: Each of the 5 news items gets a headline plus exactly ONE sentence underneath it — no exceptions, this is a hard cap, not a target to aim for. That one sentence is a single grammatical sentence ending in one period — not two clauses stitched together with a semicolon or "and," not a sentence followed by a second one on the next line. Before moving to the next item, check what you wrote: if there are two periods (other than one at the very end) or two separate lines of body text, you have written too much — cut it down to one sentence and move on. This is the single most important formatting rule in this entire prompt.
 
 NEUTRALITY — CRITICAL: Report only the concrete fact of what happened (who, what, when) — never characterize it, never editorialize, never take a side or imply one is right, never speculate on motives or consequences, never use loaded or opinionated language. This applies to every item, political or not, and applies even when the search results themselves are framed with opinion or analysis — strip that out and report just the underlying fact. Specifically banned: reaction/framing sentences or clauses tacked onto the fact, like "a serious escalation," "not a new headline, but...," "worth flagging," "tough one," "wine country in crisis," or any other editorial aside — if you catch yourself writing one, delete it rather than keep it as a second sentence. The one sentence you keep is always the fact itself, never your reaction to the fact.
 
 SPORTS: State the result unambiguously, spelling out who won — e.g. "[Team] beat [Opponent], 5–2" or "[Team] lost to [Opponent], 2–5" — always this-person's-team's-score first, opponent's second, and always paired with "beat"/"lost to" so the order can never be misread as reversed. Never just list "team, score, opponent" without saying who won. Do not mention upcoming games, schedules, or say a team is "set to play today" — this section covers only what already happened, never what's coming up.
 
-MARKETS & INVESTING — HARD LIMIT: Two or three sentences, total, no more. Futures direction for the major indices (Dow, S&P, Nasdaq), plus the ONE or TWO biggest overnight drivers (an earnings report, Fed commentary, a major economic data release, a geopolitical development) — not a survey of everything moving markets today. This section should read as a quick heads-up, not a market column; it must never come out longer than the news section combined. Frame it as what the trading day ahead holds, not a snapshot of where things stood at some overnight timestamp — don't reference a specific time or timezone for any price or figure.
+MARKETS & INVESTING — HARD LIMIT: ${includeMarkets
+  ? `Two or three sentences, total, no more. Futures direction for the major indices (Dow, S&P, Nasdaq), plus the ONE or TWO biggest overnight drivers (an earnings report, Fed commentary, a major economic data release, a geopolitical development) — not a survey of everything moving markets today. This section should read as a quick heads-up, not a market column; it must never come out longer than the news section combined. Frame it as what the trading day ahead holds, not a snapshot of where things stood at some overnight timestamp — don't reference a specific time or timezone for any price or figure.`
+  : `It's the weekend — US markets are closed, so skip the search and keep this section to exactly one line: "Markets are closed for the weekend." Nothing else — no recap of Friday's close, no preview of Monday.`}
 
 WEIRD/FUNNY STORY: From Search 4's results, pick the single most genuinely funny or delightfully absurd story you found — something a person could mention at lunch and get a real reaction, not just "huh, weird." Skip anything that's political, crime-related, cruel, sad, or just a routine "odd but not funny" wire-service item with no real twist — most generic search results will be exactly that, which is why Search 4 points you at outlets that actually curate for this quality specifically. Use only real facts from what you found — never invent specific details to make a story land better. If nothing from Search 4 genuinely clears this bar, skip this section entirely rather than settling for a weak one — a missing story is better than a boring one.
 
@@ -74,7 +78,7 @@ For loose style reference only (not a required template), here is a briefing thi
 Friday, July 17, 2026
 Good morning! Here's your Morning Run Down.
 
-🌎 The Stories That Matter (aim for 10 — this example shows 5 for brevity; write out the full set you found)
+🌎 The 5 Stories That Matter
 1. U.S.–Iran conflict remains the dominant global story
 Overnight brought additional U.S. strikes and Iranian retaliation against U.S. facilities in the region.
 2. Major flooding displaces thousands in Southeast Asia
@@ -181,30 +185,27 @@ async function resolveWeatherCoords(
 }
 
 // ── Joke of the day — a real source, not a web search ────────────────────────
-// Dad jokes and puns were the actual problem, not sentence count — a genuinely
-// funny, tellable joke can run several lines. JokeAPI's "Misc" category
-// (which already excludes its own separate "Pun" category) still has real
-// puns mixed in — its categorization is loose — confirmed via live testing:
-// roughly 1 in 10 "single"-type jokes and well over half of "twopart"-type
-// jokes came back as pun/wordplay construction even inside Misc. So this
-// fetches a pool of candidates (both formats — a good joke isn't always one
-// line) rather than trusting any single result, and leaves the actual
-// judgment call — genuinely funny vs. just wordplay — to Claude, which is
-// what distinguishes them, not an API parameter.
+// API Ninjas' /v1/jokeoftheday returns exactly one fixed joke per day (no
+// category/blacklist filtering, unlike the old JokeAPI source) — so the
+// candidate pool here is a single item. The judgment call is still left to
+// Claude: the main instruction below already tells it to skip the joke
+// section entirely if the one candidate isn't genuinely good (not a pun,
+// not a riddle), which still holds with a pool of one.
 async function fetchJokeCandidates(): Promise<string[]> {
+  const apiKey = (process.env.API_NINJAS_KEY ?? "").trim();
+  if (!apiKey) {
+    logger.warn("[DailyBrief] API_NINJAS_KEY not set — skipping joke of the day");
+    return [];
+  }
   try {
     const res = await fetch(
-      "https://v2.jokeapi.dev/joke/Misc?blacklistFlags=nsfw,racist,sexist,political,religious&amount=10",
-      { signal: AbortSignal.timeout(6000) }
+      "https://api.api-ninjas.com/v1/jokeoftheday",
+      { headers: { "X-Api-Key": apiKey }, signal: AbortSignal.timeout(6000) }
     );
     if (!res.ok) return [];
-    const data = await res.json() as {
-      error?: boolean;
-      jokes?: Array<{ type: string; joke?: string; setup?: string; delivery?: string }>;
-    };
-    if (data.error || !data.jokes) return [];
-    return data.jokes
-      .map((j) => j.type === "single" ? j.joke ?? null : (j.setup && j.delivery ? `${j.setup} ${j.delivery}` : null))
+    const data = await res.json() as Array<{ joke?: string }>;
+    return data
+      .map((j) => j.joke ?? null)
       .filter((t): t is string => !!t?.trim());
   } catch {
     return [];
@@ -212,7 +213,7 @@ async function fetchJokeCandidates(): Promise<string[]> {
 }
 
 // ── Context-gathering for generateDailyBrief ──────────────────────────────────
-async function buildDailyBriefContext(userName: string): Promise<string> {
+async function buildDailyBriefContext(userName: string): Promise<{ block: string; includeMarkets: boolean }> {
   const [profile, goals, profileItems, memories, stoic, jokeCandidates, recentBriefings] = await Promise.all([
     getProfile(userName).catch(() => null),
     getGoals(userName).catch((): Awaited<ReturnType<typeof getGoals>> => []),
@@ -276,8 +277,10 @@ async function buildDailyBriefContext(userName: string): Promise<string> {
   const today = new Date().toLocaleDateString("en-US", {
     weekday: "long", year: "numeric", month: "long", day: "numeric",
   });
+  const localWeekday = new Date().toLocaleDateString("en-US", { timeZone: tz, weekday: "short" });
+  const includeMarkets = localWeekday !== "Sat" && localWeekday !== "Sun";
 
-  return (
+  const block =
 `Today's date: ${today}
 Name: ${name}
 City: ${city}
@@ -290,8 +293,9 @@ Today's reflection: ${stoicLine}
 VERIFIED JOKE CANDIDATES (real jokes from a dedicated source — pick exactly ONE to deliver, do not invent your own, do not search for one):
 ${jokeCandidatesBlock}
 RECENT BRIEFINGS (for avoiding repeats only — never read this back or reference it directly): the weird/funny story, the joke, and the news angles below were already delivered recently. Today's actual news will naturally differ since real events happened since then, but do not pick the same weird/funny story, the same joke, or lean on the same angle for an interest-tied story again — if your search for a fresh weird/funny story doesn't turn up something different from what's shown here, skip that section rather than repeat it.
-${recentBriefingsBlock}`
-  );
+${recentBriefingsBlock}`;
+
+  return { block, includeMarkets };
 }
 
 // Rotates through hobbies/music genres/favorite artists (sports teams are
@@ -389,12 +393,12 @@ export async function generateDailyBrief(userName: string): Promise<string | nul
 
 async function generateDailyBriefOnce(userName: string): Promise<string | null> {
   try {
-    const [contextBlock, interestPicks] = await Promise.all([
+    const [{ block: contextBlock, includeMarkets }, interestPicks] = await Promise.all([
       buildDailyBriefContext(userName),
       getDailyInterestPicks(userName),
     ]);
 
-    const input = `${buildDailyBriefInstruction(interestPicks)}\n\n${contextBlock}`;
+    const input = `${buildDailyBriefInstruction(interestPicks, includeMarkets)}\n\n${contextBlock}`;
 
     let text = await callDailyBriefViaClaude(input, userName);
     if (!text) {

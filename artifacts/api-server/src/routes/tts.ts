@@ -20,6 +20,20 @@ import { getProfile } from "../onboarding/onboardingManager.js";
 
 const router: IRouter = Router();
 
+// ── Duplicate-request guard ───────────────────────────────────────────────────
+// Keyed by userName+voiceId+text hash → timestamp of the first request seen for
+// that exact (user, voice, text) tuple. See the rejection check below for why
+// this exists. Stale entries are simply overwritten/ignored once they age past
+// the window — no explicit cleanup needed for a map this small and short-lived.
+const _recentTtsRequests = new Map<string, number>();
+const TTS_DUPLICATE_WINDOW_MS = 4000;
+
+function hashTtsText(s: string): string {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return h.toString(36);
+}
+
 // ── Sentence splitter ─────────────────────────────────────────────────────────
 
 /**
@@ -112,6 +126,27 @@ router.post(
       res.status(400).json({ error: "No speakable content" });
       return;
     }
+
+    // Duplicate-request guard — confirmed live on 2026-08-09: the client fired
+    // two /tts/stream requests for the identical Morning Run Down text and
+    // voice within ~100ms of each other, producing two independent ElevenLabs
+    // audio streams that played back simultaneously ("two voices" reading the
+    // same briefing at once). The trigger is client-side and out of reach
+    // here, so this closes the symptom at the one place that can: if the same
+    // user's identical (text, voice) pair comes in again within a few seconds,
+    // reject the repeat instead of opening a second overlapping audio stream.
+    const dupKey = `${userName}:${voiceId}:${hashTtsText(normalized)}`;
+    const now = Date.now();
+    const lastStartedAt = _recentTtsRequests.get(dupKey);
+    if (lastStartedAt !== undefined && now - lastStartedAt < TTS_DUPLICATE_WINDOW_MS) {
+      logger.warn(
+        { userName, voiceId, msSinceFirst: now - lastStartedAt },
+        "[TTS/stream] Duplicate request for identical text+voice within window — rejecting to prevent overlapping playback"
+      );
+      res.status(409).json({ error: "duplicate_request" });
+      return;
+    }
+    _recentTtsRequests.set(dupKey, now);
 
     logger.info(
       { userName, sentences: sentences.length, chars: normalized.length, voiceId },
