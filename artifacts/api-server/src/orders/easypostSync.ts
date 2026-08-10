@@ -47,6 +47,25 @@ export async function applyEasyPostTrackerUpdate(
 
   const resolvedStatus = resolveOrderStatus(order.status, mapEasyPostStatus(tracker.status));
 
+  // EasyPost keeps sending tracker.updated events after delivery (extra scan
+  // events, signature/weight confirmation, webhook retries). Since the update
+  // below unconditionally sets updated_at = NOW(), and getOrders()'s 7-day
+  // "recently delivered" visibility window is based on that same updated_at,
+  // every one of those post-delivery pings was silently resetting the clock —
+  // a delivered order could never age out of My Orders as long as EasyPost
+  // kept pinging it. Once an order is already delivered and stays delivered
+  // (resolveOrderStatus is monotonic, so this is the only way both sides can
+  // read "delivered"), there's nothing user-facing left to update — skip the
+  // write entirely instead of just this one column, so tracking_events/
+  // last_tracked_at don't create the same false impression of new activity.
+  if (order.status === "delivered" && resolvedStatus === "delivered") {
+    logger.info(
+      { trackerId, orderId: order.id },
+      "[EasyPost] Order already delivered — skipping update to avoid resetting the 7-day visibility window"
+    );
+    return;
+  }
+
   await query(
     `UPDATE orders SET
        status          = $1,

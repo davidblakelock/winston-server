@@ -10,6 +10,32 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 export type EmailAction = "save_to_records" | "save_to_orders" | "meeting_request" | "needs_reply" | "urgent_alert" | "fyi" | "none";
 
+// Deterministic backstop for the food-order exclusion — the prompt already
+// tells the model to exclude food from both save_to_orders and
+// save_to_records, but that's prompt-only enforcement, and it has already
+// been observed live to fail twice on the same shape of case (a local
+// pizzeria's order-confirmation email, which reads enough like a real
+// shipping/booking confirmation — order number, status language — to slip
+// past a purely instructional exclusion). This checks the concrete fields
+// the model itself extracted (retailer/item/vendor names, plus the sender)
+// against known food-vendor language and overrides the action regardless of
+// what the model decided, so this specific failure mode can't recur.
+const FOOD_KEYWORDS = /\b(pizza|pizzeria|taco|burrito|taqueria|burger|sushi|hibachi|noodle|ramen|pho\b|bbq|barbecue|wings?|sandwich|deli|bakery|donut|doughnut|bagel|coffee|café|cafe|diner|grill|kitchen|eatery|bar\s*&?\s*grill|catering|food\s*truck|drive-?thru|steakhouse)\b/i;
+const FOOD_ORDERING_DOMAINS = /(doordash|ubereats|uber\.com\/eats|grubhub|postmates|seamless\.com|toasttab|chownow|olo\.com|slicelife|ezcater)/i;
+
+function isFoodOrder(fields: {
+  from: string;
+  subject: string;
+  retailer?: string | null;
+  itemName?: string | null;
+  vendorName?: string | null;
+}): boolean {
+  const haystack = [fields.from, fields.subject, fields.retailer, fields.itemName, fields.vendorName]
+    .filter(Boolean)
+    .join(" ");
+  return FOOD_KEYWORDS.test(haystack) || FOOD_ORDERING_DOMAINS.test(haystack);
+}
+
 export interface ClassifiedEmail {
   action: EmailAction;
   summary: string | null;
@@ -127,8 +153,8 @@ Decide what action this email warrants, if any. Return ONLY valid JSON:
 }
 
 Rules for choosing action:
-- "save_to_records": a genuine, actually-booked confirmation — hotel, restaurant reservation, car rental, flight or train ticket, warranty registration, home service appointment (plumber, HVAC, etc.), vehicle service appointment. Requires a real confirmation/booking/reservation reference number in the vast majority of cases — a PNR, e-ticket number, itinerary number, or booking reference actually printed in the email. The one exception: an email with no reference number can still qualify ONLY if it lays out a full, concrete itinerary (a specific vendor, date, time, and location, reading like a real confirmed booking) rather than just mentioning a date in passing — a bare "your appointment is confirmed" with no reference number and no concrete itinerary detail is NOT enough on its own. Never treat a REMINDER about an appointment or booking you already have on file as a new record — a reminder restates something that should already be recorded, it doesn't create a new one; use "fyi" instead (or "none" if it adds nothing new). Never save a receipt or payment confirmation as a record — a receipt proves a payment happened, it isn't a future-dated booking; use "fyi" instead, whether it's a one-time or recurring charge. Specifically exclude price-alerts, fare-trackers, "prices dropped," saved-search notifications, and other browsing/tracking emails from travel search sites and aggregators (Google Flights, Google Hotels, Kayak, Skyscanner, Hopper, etc.) — these are never the airline/hotel/vendor itself and never represent an actual booking, no matter how specific the date or route mentioned. Also exclude league/class schedules, signup notices, or membership emails that don't carry both a reference number and a specific confirmed session — "here's the schedule" or "you're registered" with no reference number is not a record.
-- "save_to_orders": shipping, delivery, or order status update from a retailer or carrier, for a PHYSICAL item that ships and can be tracked — an order confirmation, a "your item shipped," an "out for delivery," "your order is ready to ship," or a "delivered" notice. This is a broad category for physical goods — ANY email whose subject or body states a physical order/shipment status update belongs here, even if the body is short, templated, or looks routine. A tracking number is NOT required — Amazon Logistics deliveries especially often have no real carrier tracking number, but the order is still worth tracking by order number and status language alone. Do not downgrade a physical order-status email to "fyi" or "none" just because it's short or looks automated — routine and low-effort is normal for these, not a sign it's noise. NEVER use "save_to_orders" for food — restaurant orders, pizza, delivery-app orders (Uber Eats, DoorDash, Grubhub, Postmates), coffee-shop mobile orders, or any prepared food being cooked and delivered/picked up directly by the vendor. Food is never shipped by a carrier and there's nothing meaningful to track — use "fyi" instead, regardless of whether the email has an order number or status language.
+- "save_to_records": a genuine, actually-booked confirmation for a FUTURE service, or a document worth keeping — hotel, restaurant reservation, car rental, flight or train ticket, warranty registration, home service appointment (plumber, HVAC, etc.), vehicle service appointment. Requires a real confirmation/booking/reservation reference number in the vast majority of cases — a PNR, e-ticket number, itinerary number, or booking reference actually printed in the email. The one exception: an email with no reference number can still qualify ONLY if it lays out a full, concrete itinerary (a specific vendor, date, time, and location, reading like a real confirmed booking) rather than just mentioning a date in passing — a bare "your appointment is confirmed" with no reference number and no concrete itinerary detail is NOT enough on its own. Never treat a REMINDER about an appointment or booking you already have on file as a new record — a reminder restates something that should already be recorded, it doesn't create a new one; use "fyi" instead (or "none" if it adds nothing new). Never save a receipt or payment confirmation as a record — a receipt proves a payment happened, it isn't a future-dated booking; use "fyi" instead, whether it's a one-time or recurring charge. This includes a "purchase confirmed" / "package purchased" / "payment received" email for something like a class package, punch card, or membership — that's a receipt for money already spent, not a future-dated booking, EVEN IF it carries what looks like a confirmation or order number; a reference number alone does not make something a record — check whether the email is about a completed payment (receipt → fyi) versus an actual scheduled future booking (record). NEVER use "save_to_records" for a personal appointment, class, or session that's really a calendar item, not a document worth filing — a fitness class booking, personal training session, salon/spa appointment, or medical/dental appointment — even with a specific date, time, and confirmation number; these belong on the user's calendar, not filed as records — use "fyi" instead. NEVER use "save_to_records" for food — restaurant orders, pizza, delivery-app orders (Uber Eats, DoorDash, Grubhub, Postmates), catering — same exclusion as save_to_orders below; use "fyi" instead. When setting dateEnd (expiration/renewal/valid-through), it must come from a date EXPLICITLY stated in the email — never infer, estimate, or assume a standard term (e.g. never assume "expires 1 year from purchase" just because the category is "subscription"); leave dateEnd null if the email doesn't state one. Specifically exclude price-alerts, fare-trackers, "prices dropped," saved-search notifications, and other browsing/tracking emails from travel search sites and aggregators (Google Flights, Google Hotels, Kayak, Skyscanner, Hopper, etc.) — these are never the airline/hotel/vendor itself and never represent an actual booking, no matter how specific the date or route mentioned. Also exclude league/class schedules, signup notices, or membership emails that don't carry both a reference number and a specific confirmed session — "here's the schedule" or "you're registered" with no reference number is not a record.
+- "save_to_orders": shipping, delivery, or order status update from a retailer or carrier, for a PHYSICAL item that ships and can be tracked — an order confirmation, a "your item shipped," an "out for delivery," "your order is ready to ship," or a "delivered" notice. This is a broad category for physical goods — ANY email whose subject or body states a physical order/shipment status update belongs here, even if the body is short, templated, or looks routine. A tracking number is NOT required — Amazon Logistics deliveries especially often have no real carrier tracking number, but the order is still worth tracking by order number and status language alone. Do not downgrade a physical order-status email to "fyi" or "none" just because it's short or looks automated — routine and low-effort is normal for these, not a sign it's noise. NEVER use "save_to_orders" for food — restaurant orders, pizza, delivery-app orders (Uber Eats, DoorDash, Grubhub, Postmates), coffee-shop mobile orders, or any prepared food being cooked and delivered/picked up directly by the vendor. Food is never shipped by a carrier and there's nothing meaningful to track — use "fyi" instead, regardless of whether the email has an order number or status language. This applies to any restaurant by name too, not just the well-known delivery apps — a local pizzeria's own order-confirmation email is still food, not a shippable order.
 - "meeting_request": a real person communicating about a meeting or appointment — either (a) a NEW request where the user hasn't responded yet and a time may or may not be set, or (b) a CONFIRMATION that an already-proposed plan is locked in (time, place, and attendees decided; no response needed, just acknowledge it happened). Set isConfirmation=false for new requests, isConfirmation=true when the meeting is already confirmed.
 - "needs_reply": anything from a real person that reasonably expects a response — a question, a catch-up message, a personal note — even if casual.
 - "urgent_alert": anything genuinely urgent requiring the user's immediate awareness — fraud alerts, suspicious login warnings, account security notices, unrecognized transaction alerts, identity theft warnings. Also use this for large or unexpected financial transactions from payment platforms (Venmo, Zelle, PayPal, Cash App, Apple Pay) — any single transfer of $200 or more qualifies. Always flag these prominently; never drop them silently.
@@ -147,6 +173,26 @@ Rules for choosing action:
     if (!m) return null;
     const parsed = JSON.parse(m[0]) as ClassifiedEmail;
     if (!parsed.action || parsed.action === "none") return null;
+
+    if (
+      (parsed.action === "save_to_orders" || parsed.action === "save_to_records") &&
+      isFoodOrder({
+        from,
+        subject,
+        retailer: parsed.order?.retailer,
+        itemName: parsed.order?.itemName,
+        vendorName: parsed.record?.vendorName,
+      })
+    ) {
+      logger.info(
+        { subject, from, originalAction: parsed.action },
+        "[EmailClassifier] Deterministic food-keyword override — downgrading to fyi"
+      );
+      parsed.action = "fyi";
+      parsed.order = undefined;
+      parsed.record = undefined;
+    }
+
     parsed._subject = subject;
     return parsed;
   } catch (err) {
