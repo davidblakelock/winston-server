@@ -175,6 +175,24 @@ function sanitizeBriefText(text: string): string {
     .trim();
 }
 
+// Turns the prompt's fixed closing line into a real tappable link — done in
+// code rather than asked of the model, so it's always exactly right instead
+// of depending on the model reproducing link syntax correctly (and so
+// sanitizeBriefText's markdown-link-stripping safety net, which runs before
+// this, doesn't eat it — this must run AFTER sanitizeBriefText). The deep
+// link is handled client-side in app/_layout.tsx alongside the existing
+// winstonnative://chat / winstonnative://auth handlers, and
+// normalizeTtsText (lib/ttsNormalize.ts) strips the markdown syntax back out
+// before speech so it's spoken as plain "My Life", not read-aloud brackets.
+// If the model didn't reproduce the line exactly, this simply doesn't match
+// and the plain text stands — no error, just no link that day.
+function injectMyLifeLink(text: string): string {
+  return text.replace(
+    /Go to My Life to record any thoughts\.?/,
+    "Go to [My Life](winstonnative://mylife) to record any thoughts."
+  );
+}
+
 // Resolves coordinates for the daily-brief weather lookup. Live GPS
 // (last_known_lat/lon) is preferred when present since it reflects where the
 // person actually is right now; falls back to their onboarding home
@@ -423,7 +441,7 @@ async function callDailyBriefViaClaude(input: string, userName: string): Promise
       logger.warn({ userName }, "[DailyBrief] Empty text from Claude");
       return null;
     }
-    return sanitizeBriefText(text);
+    return injectMyLifeLink(sanitizeBriefText(text));
   } catch (err) {
     logger.warn({ err, userName }, "[DailyBrief] Claude call failed");
     return null;

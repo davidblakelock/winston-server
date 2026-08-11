@@ -77,6 +77,11 @@ export function normalizeTtsText(text: string): string {
   // Leave these — ElevenLabs handles "1st", "2nd", "3rd", "4th" fine.
 
   // ── Markdown artifacts ───────────────────────────────────────────────────
+  // [label](url) → label — a real tappable link in the displayed chat text
+  // (e.g. the Morning Run Down's "My Life" link) would otherwise get read
+  // aloud as literal brackets/parentheses/URL characters. Must run before
+  // the bold/italic stripping below in case a link label itself is bolded.
+  s = s.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
   // Strip bold/italic markers that sometimes leak into spoken text
   s = s.replace(/\*\*(.+?)\*\*/g, "$1");
   s = s.replace(/\*(.+?)\*/g, "$1");
