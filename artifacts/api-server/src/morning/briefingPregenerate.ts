@@ -9,6 +9,8 @@ import { getGoals } from "../goals/goalsManager.js";
 import { getCachedWeather } from "../weather/weatherCache.js";
 import { MODEL_SONNET } from "../lib/models.js";
 import { getRecentBriefingTexts, saveBriefingText } from "./briefingCache.js";
+import { fetchTodayEvents } from "../google/calendar.js";
+import { query } from "../db.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -51,7 +53,11 @@ Weather and the joke of the day are NOT things to search for — verified curren
 
 This briefing is delivered in the early morning, before the stock market opens for the day. Sports scores should always be from yesterday's/last night's completed games — never describe a game as happening "today" unless you've confirmed via search that it already occurred earlier the same calendar day in this person's timezone. Never give a live/current stock quote or price snapshot — the market is closed at this hour and a snapshot price is meaningless.
 
-After completing all searches above, write a genuinely enjoyable Morning Run Down covering: the news from Search 1, the verified weather data from the context block, the markets info from Search 3, the sports scores from Search 2, the story from Search 4, and a joke picked from the verified candidates in the context block. Use only real, current, verified information from your searches (and the verified weather data) — never invent facts, venues, dates, scores, or weather. Style it however reads best — sections, headers, or flowing prose, your call, and vary the structure day to day rather than repeating an identical template every time. Overall length should come from covering enough distinct topics (news, weather, markets, sports, a fun story, a joke, quote), not from writing at length about any single one of them.
+After completing all searches above, write a genuinely enjoyable Morning Run Down covering: the weather from the context block, the to-dos and calendar events from the context block, the news from Search 1, the markets info from Search 3, the sports scores from Search 2, the story from Search 4, and a joke picked from the verified candidates in the context block. Use only real, current, verified information from your searches (and the verified weather/to-dos/calendar data) — never invent facts, venues, dates, scores, or weather. EVERY section — including Weather — gets its own header (an emoji plus a short title, one line, on its own); vary the emoji and phrasing day to day, but never fold a section into the opening greeting or another section instead of giving it a header. Beyond that, style is your call — vary the wording and exact phrasing day to day rather than repeating an identical script every time. Overall length should come from covering enough distinct topics, not from writing at length about any single one of them.
+
+WEATHER: Give this section its own header, separate from the opening greeting (the greeting itself should just be a short "good morning" line, nothing else). One or two sentences using only the verified weather data from the context block — conditions, temperature, high/low. Never guess, never add a multi-day forecast.
+
+YOUR DAY: Give this section its own header. List the VERIFIED TO-DOS and VERIFIED CALENDAR EVENTS from the context block, plainly — a to-do per line, a calendar event per line (time plus what it is). No commentary, no editorializing, no "looks like a busy day" framing, no advice — just the items themselves, verbatim from what's given, nothing added and nothing invented. If both lists are empty ("None."), skip this section entirely rather than writing "nothing on your plate today" or similar filler.
 
 NEWS ITEM LENGTH — HARD LIMIT: Each of the 5 news items gets a headline plus exactly ONE sentence underneath it — no exceptions, this is a hard cap, not a target to aim for. That one sentence is a single grammatical sentence ending in one period — not two clauses stitched together with a semicolon or "and," not a sentence followed by a second one on the next line. Before moving to the next item, check what you wrote: if there are two periods (other than one at the very end) or two separate lines of body text, you have written too much — cut it down to one sentence and move on. This is the single most important formatting rule in this entire prompt.
 
@@ -67,16 +73,28 @@ WEIRD/FUNNY STORY: From Search 4's results, pick the single most genuinely funny
 
 JOKE OF THE DAY: The context block gives you a real pool of joke candidates (VERIFIED JOKE CANDIDATES) — pick exactly ONE to deliver, the single funniest and most genuinely tellable one in the whole list. This is a judgment call, and it matters: think about what someone who's actually good at telling jokes would tell a friend, not what a dad-jokes calendar would print. Skip — do not pick — anything that's just a pun or wordplay for its own sake ("...because he's a fungi," "algae-bra," anything where the punchline is a play on words rather than a real idea or twist), and skip generic "why did the X cross the Y" riddle-format jokes too. Favor candidates with a genuine idea, an ironic turn, an observation, or a story — the kind of joke that gets a real laugh, not a groan. A good pick can be one line or several; length isn't the criterion, wit is. Give the one you pick straight — don't explain why it's funny, don't apologize for it, don't over-introduce it, just tell it. If NONE of the candidates are genuinely good by this bar, skip this section entirely rather than settling for a weak one — a missing joke is better than a bad one.
 
-FORMATTING — CRITICAL: Write in clean, plain, readable prose only — this will be read aloud via text-to-speech, so it must sound natural when spoken. Never include citation brackets, markdown links, raw URLs, "utm_source" parameters, "#:~:text=" fragment identifiers, or any link syntax anywhere in the output. When you want to credit a source, say it in plain spoken words woven into the sentence — e.g. "according to the AP" or "Axios reports" — never as a clickable link or bracketed reference. Do NOT include a "Sources:" section, footer, bibliography, or list of links anywhere, including at the end. The entire output must read as clean spoken prose from start to finish with zero raw URLs or citation markup of any kind. Do not include any meta-commentary about your own process anywhere in the output — no "Got everything I need, now let me write the briefing," no "Now I have everything I need," no "Good — I now have what I need," no "Let me search for...", nothing describing what you're about to do or just did, however it's phrased. The very first character of your output must be the start of the actual briefing itself — the greeting or the opening header — not a sentence about you or your process.
+FORMATTING — CRITICAL: Write in clean, plain, readable prose only — this will be read aloud via text-to-speech, so it must sound natural when spoken. Never include citation brackets, markdown links, raw URLs, "utm_source" parameters, "#:~:text=" fragment identifiers, or any link syntax anywhere in the output. When you want to credit a source, say it in plain spoken words woven into the sentence — e.g. "according to the AP" or "Axios reports" — never as a clickable link or bracketed reference. Do NOT include a "Sources:" section, footer, bibliography, or list of links anywhere, including at the end. The entire output must read as clean spoken prose from start to finish with zero raw URLs or citation markup of any kind.
+
+Do not include ANY meta-commentary, narration, or explanation of your own process or reasoning anywhere in the output, in any form — this is the single most important rule in this prompt, and it covers more than just a leading sentence. Banned, no matter where in the output it appears: narrating what you're about to do or just did ("Now I have everything I need," "Let me search for...", "Here is the briefing:"); explaining or justifying an editorial choice you made — which story you picked and why, which weird/funny story you rejected and why (e.g. "the wing-walker story was already used yesterday," "the raccoon story is too local"), why a section is missing, why a game hasn't happened yet, why no joke was available; addressing the reader/operator directly about the process ("let me know if you have questions," "here's my reasoning"). None of that belongs in the output under any circumstances — if a section has nothing to say, it simply doesn't appear, with zero explanation of why. The very first character of your output must be the start of the actual greeting — not a sentence about you, your process, or your reasoning — and the very last character must be the end of the My Life line described below, nothing appended after it.
+
+THE MORNING STOIC: Give this section the header "🧘 The Morning Stoic" (keep this exact header — the one part of the output that does NOT vary day to day). Go straight from the header into today's Stoic quote from the context block, delivered essentially as given — the exact words, attributed naturally (e.g. "As Marcus Aurelius wrote..." or "Epictetus wrote..."). Do not add any framing or lead-in sentence before the quote — no scene-setting, no "there is something to be said for..." — the header leads directly into the quote itself. Immediately after the quote, in exactly ONE sentence, say what it actually means today in genuinely plain, ordinary English — the way you'd explain it to a friend over coffee. Do NOT reach for any specific metaphor domain — not technology, not engineering, not sports, not cooking. No "processor," "RAM," "system," "framework," "install," "run," or any other word that belongs to computers or machinery. No philosophy jargon, no "the Stoics believed," no lecturing. Vary the wording of this one sentence day to day. Close the section — and the entire briefing — with exactly this line, unchanged every day: "Go to My Life to record any thoughts." Nothing after it.
 
 For loose style reference only (not a required template), here is a briefing this person said they liked:
 
-(This example is showing you TONE AND STRUCTURE ONLY. Every fact, story, quote, and detail in your actual output must come from your own fresh search results for today (or, for the joke, from the verified candidates given). Do not reuse, paraphrase, or reproduce ANY specific fact, story, or detail from this example under any circumstances. If your search doesn't turn up a good weird/funny story, or none of the joke candidates are genuinely good, skip that section entirely rather than reusing the example. Any place names, cities, venues, team opponents, scores, jokes, or story details shown in brackets below are placeholders — never use a real one from this example in your actual output. All real content — including location, teams, scores, stories, the joke, the framing line, and the My Life line — must come from your own search, the verified joke candidates, and fresh writing for today, never copied from this example.)
+(This example is showing you TONE AND STRUCTURE ONLY. Every fact, story, quote, and detail in your actual output must come from your own fresh search results for today (or, for the joke, from the verified candidates given, and for weather/to-dos/calendar, from the verified context data). Do not reuse, paraphrase, or reproduce ANY specific fact, story, or detail from this example under any circumstances. If your search doesn't turn up a good weird/funny story, or none of the joke candidates are genuinely good, skip that section entirely rather than reusing the example. Any place names, cities, venues, team opponents, scores, jokes, to-dos, or events shown in brackets below are placeholders — never use a real one from this example in your actual output.)
 
 [EXAMPLE 1]
 ☕ David's Daily Brief
 Friday, July 17, 2026
-Good morning! Here's your Morning Run Down.
+Good morning!
+
+🌤️ Weather
+Dallas is starting clear at [temp]°F, feeling like [temp]°F, with a high of [temp]°F expected — [chance]% chance of rain.
+
+📋 Your Day
+- [to-do text, verbatim from the context block]
+- [to-do text, verbatim from the context block]
+- 10:30 AM: [calendar event summary]
 
 🌎 The 5 Stories That Matter
 1. U.S.–Iran conflict remains the dominant global story
@@ -102,34 +120,39 @@ Last night's results for [this person's home teams]: [Team] beat [Opponent], fin
 😄 Joke of the Day
 [the single funniest, genuinely tellable joke picked from the verified candidates — not a pun, not a riddle, delivered straight, no explanation]
 
-Before I go — [one fresh sentence naming the morning-preparation practice itself, loosely touching one or two real Stoic themes as background, never a checklist, never the same combination as yesterday]
-
-💬 Quote of the Day
+🧘 The Morning Stoic
 "The important thing is not to stop questioning." — Albert Einstein
 [one plain-language sentence on what it actually means today, modern and wry, not lecturing]
-
-[one soft, brief, optional line naming "My Life" explicitly as the place to go — describing the act of capturing a quick thought there, never using the word "journal," one honest reason Winston can notice patterns over time, zero guilt, reads as an open door]
-
-Have a great Friday!
-
-Close the briefing with these three pieces, in order:
-
-1. FRAMING LINE — before the quote, write one fresh sentence naming the practice itself: people setting their head straight before the day starts, the way Marcus Aurelius did every morning before stepping into whatever Rome had for him that day. Let it loosely draw on real Stoic morning-practice ideas as background texture — mental preparation for what's ahead, the dichotomy of control (focusing only on what's actually yours to steer), gratitude for the day itself — but never list them out or read them like a checklist ("today, focus on what you control and be grateful"). Pick a different angle or combination each day; never repeat the same combination or the same sentence shape twice. This is one sentence, not a paragraph, and it leads into the quote — it doesn't summarize or preview what the quote says.
-
-2. QUOTE + TRANSLATION — today's Stoic quote provided above, delivered essentially as given — the exact words, attributed naturally (e.g. "As Marcus Aurelius put it..." or "Epictetus wrote..."). Immediately after, in exactly ONE sentence, say what it actually means today in genuinely plain, ordinary English — the way you'd explain it to a friend over coffee, nothing more technical than that. Do NOT reach for any specific metaphor domain — not technology, not engineering, not sports, not cooking, nothing borrowed from a different field entirely. No "processor," "RAM," "hardware," "software," "system," "framework," "install," "run," "operating," or any other word that belongs to computers or machinery — that register reads as cold and impersonal, the opposite of what this needs to be. Just say, directly and warmly, what the idea means for an ordinary day. Modern, a little wry, confident — never lecturing, never "ancient Rome," never "the Stoics believed," no philosophy jargon, and no borrowed-domain jargon either. Vary the actual wording day to day — don't lean on the same phrase or sentence shape every morning.
-
-3. MY LIFE NUDGE — after the quote and translation, close with one brief, soft, fully optional line pointing at My Life by name — this must name "My Life" explicitly, as the actual place in the app to go do this, not a vague gesture like "onto a page somewhere" or "jot it down." My Life is a place to capture a quick thought about the day, in your own words. Rules that matter here: never use the word "journal" or "journaling" anywhere — describe the act itself (jotting something down, capturing a line, getting a thought out of your head) instead of naming the genre. Give one honest, brief reason it's worth doing — Winston can start noticing real patterns in it over time — without overselling it. Zero guilt: no streaks, no "you haven't done this in a while," no implication that skipping it is a lapse. It should read like an open door someone's welcome to walk through, not a task with your name on it. Vary the exact wording day to day rather than repeating a fixed line — but "My Life" itself, as the named destination, should appear every time. This is the last thing in the briefing.`;
+Go to My Life to record any thoughts.`;
 }
 
-// Strips a leading self-narration sentence Claude sometimes emits despite
+// Strips a leading self-narration preamble Claude sometimes emits despite
 // the prompt's explicit "no meta-commentary, begin directly with the
-// greeting" instruction — observed live in several phrasings ("Now I have
-// everything I need. Let me write the briefing.", "Good — I now have what I
-// need..."). Only matches these specific known leak patterns at the very
-// start of the text and cuts through the next blank line; does nothing if
-// the text doesn't match, so it can't eat legitimate content.
+// greeting" instruction. Observed live in several phrasings, including a
+// full editorial-reasoning paragraph ("I now have everything I need. The
+// UPI odd news page turned up the bear-in-the-pool story... Here is the
+// briefing:") that the original narrower start-of-string regex didn't
+// catch — "I now have" wasn't covered (only "now I have"), and the
+// paragraph explaining story/joke selection reasoning had no pattern at
+// all. Two independent strategies, tried in order:
+//
+// 1. A "hand-off" phrase like "here is/here's the briefing:" is a strong,
+//    unambiguous signal on its own — the real briefing would never refer to
+//    itself as "the briefing" — so if found anywhere before the real
+//    content, everything up to and including it is cut, regardless of how
+//    the preamble before it was phrased.
+// 2. Otherwise, fall back to matching known leak-start phrasings at the very
+//    start of the text and cutting through the next blank line.
+//
+// Does nothing if neither matches, so it can't eat legitimate content.
 function stripMetaPreamble(text: string): string {
-  const leakStart = /^\s*(?:now i have|good[\s—-]+i(?:'ve| have| now have)|i(?:'ve| have) (?:got|gathered|found) everything|here'?s what i (?:found|have|gathered)|let me (?:write|put together|pull this together))\b/i;
+  const handoff = /here'?s?\s+(?:is\s+)?the briefing:?/i;
+  const handoffMatch = handoff.exec(text);
+  if (handoffMatch) {
+    return text.slice(handoffMatch.index + handoffMatch[0].length).trimStart();
+  }
+
+  const leakStart = /^\s*(?:now i have|i now have|good[\s—-]+i(?:'ve| have| now have)|i(?:'ve| have) (?:got|gathered|found) everything|here'?s what i (?:found|have|gathered)|let me (?:write|put together|pull this together))\b/i;
   if (!leakStart.test(text)) return text;
   const blankLineIdx = text.search(/\n\s*\n/);
   return blankLineIdx === -1 ? text : text.slice(blankLineIdx).trimStart();
@@ -212,6 +235,28 @@ async function fetchJokeCandidates(): Promise<string[]> {
   }
 }
 
+// ── Your Day — plain to-dos, verified from the database ──────────────────────
+// Open-ended to-dos (no fire_at) plus anything specifically scheduled for
+// today — a reminder timed for 3pm today belongs in "your day" just as much
+// as an undated to-do does. No LLM involvement: this is rendered plainly by
+// Claude straight from what's fetched here, same pattern as weather/jokes.
+async function fetchTodayTodos(userName: string, tz: string): Promise<string[]> {
+  try {
+    const { rows } = await query<{ reminder_text: string }>(
+      `SELECT reminder_text FROM reminders
+        WHERE user_name = $1
+          AND status = 'pending'
+          AND (fire_at IS NULL OR (fire_at AT TIME ZONE $2)::date = (NOW() AT TIME ZONE $2)::date)
+        ORDER BY fire_at ASC NULLS LAST, created_at ASC`,
+      [userName, tz]
+    );
+    return rows.map((r) => r.reminder_text);
+  } catch (err) {
+    logger.warn({ err, userName }, "[DailyBrief] fetchTodayTodos failed");
+    return [];
+  }
+}
+
 // ── Context-gathering for generateDailyBrief ──────────────────────────────────
 async function buildDailyBriefContext(userName: string): Promise<{ block: string; includeMarkets: boolean }> {
   const [profile, goals, profileItems, memories, stoic, jokeCandidates, recentBriefings] = await Promise.all([
@@ -228,6 +273,22 @@ async function buildDailyBriefContext(userName: string): Promise<{ block: string
   const locationContext = await getUserLocationContext(userName).catch(() => null);
   const city = locationContext?.city ?? profile?.city ?? "an unknown city";
   const tz = locationContext?.timezone ?? profile?.timezone ?? "UTC";
+
+  const [todosToday, calendarEventsToday] = await Promise.all([
+    fetchTodayTodos(userName, tz),
+    fetchTodayEvents(userName).catch((err) => {
+      logger.warn({ err, userName }, "[DailyBrief] fetchTodayEvents failed");
+      return null;
+    }),
+  ]);
+  const todosBlock = todosToday.length > 0
+    ? todosToday.map((t) => `- ${t}`).join("\n")
+    : "None.";
+  const calendarBlock = calendarEventsToday === null
+    ? "Calendar not connected."
+    : calendarEventsToday.length > 0
+      ? calendarEventsToday.map((e) => `- ${e.allDay ? "All day" : e.start}: ${e.summary}`).join("\n")
+      : "None.";
 
   let weatherLine = "Not available — do not include a weather section, and do not guess conditions.";
   try {
@@ -285,6 +346,10 @@ async function buildDailyBriefContext(userName: string): Promise<{ block: string
 Name: ${name}
 City: ${city}
 VERIFIED WEATHER DATA for ${city} (use exactly this — do not search for or guess weather): ${weatherLine}
+VERIFIED TO-DOS for today (use exactly this list — do not search for, invent, or add to it):
+${todosBlock}
+VERIFIED CALENDAR EVENTS for today (use exactly this list — do not search for, invent, or add to it):
+${calendarBlock}
 Interests: ${interestsLine}
 Active goals: ${goalsLine}
 ${profileItemsBlock}
