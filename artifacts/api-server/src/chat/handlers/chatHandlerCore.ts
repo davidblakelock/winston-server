@@ -833,7 +833,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
         action = { type: "add_todo_with_reminder", itemText: parts.task ?? "", reminderTime: parts.time ?? null };
         break;
       case "send_sms":
-        action = { type: "send_sms", recipientName: parts.recipient ?? "" };
+        action = { type: "send_sms", recipientName: parts.recipient ?? "", smsBody: parts.body ?? null };
         break;
       case "make_call":
         action = { type: "make_call", recipientName: parts.recipient ?? "" };
@@ -2083,6 +2083,18 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     // pipeline has been removed (was: _doBriefingPrefetch,
     // getPersistedBriefingText/Summary, getStaticBriefingContext).
     case "morning_rundown": {
+      // Serve the version the scheduler pregenerated ~30 min before wake
+      // time, if one's ready — skips a live ~60s Claude + web_search call
+      // inside the user's own request. Falls through to live generation
+      // below if nothing's cached yet (e.g. pregeneration hasn't run today,
+      // or the user asks well outside their usual wake window).
+      const { getTodaysCachedBriefing } = await import("../../morning/briefingCache.js");
+      const cached = await getTodaysCachedBriefing(sessionUserName).catch(() => null);
+      if (cached) {
+        finalReply = cached;
+        break;
+      }
+
       // Ensure today's Stoic entry is settled BEFORE the brief reads it —
       // this is one of two real-engagement call sites (the other is
       // GET /api/stoic/today for My Life) sharing the same advance gate, so

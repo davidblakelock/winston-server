@@ -17,6 +17,13 @@ export async function ensureVoiceOptionsTable(): Promise<void> {
       display_order INTEGER NOT NULL DEFAULT 0
     )
   `);
+  // One-off cleanup: ElevenLabs discontinued "Diana" (UizRZo250FhTtKlJa6mo).
+  // seedVoiceOptions only ever INSERTs (ON CONFLICT DO NOTHING) — it never
+  // updates or removes existing rows, so the stale row would otherwise sit
+  // in this table (and keep being served by GET /api/voices) forever.
+  // Replaced by "Annabel" (rWArYo7a2NWuBYf5BE4V) in FEMALE_VOICES below.
+  // Safe to run on every boot — a no-op once the row is gone.
+  await query(`DELETE FROM voice_options WHERE id = 'UizRZo250FhTtKlJa6mo'`);
 }
 
 const FEMALE_VOICES = [
@@ -30,7 +37,7 @@ const FEMALE_VOICES = [
   { id: 'bD9maNcCuQQS75DGuteM', name: 'Sadie', accent: 'American' },
   { id: 'Zg5uAMn2AyrBAbtY7Ivp', name: 'Veronica', accent: 'Canadian' },
   { id: '5u41aNhyCU6hXOcjPPv0', name: 'Carol', accent: 'American' },
-  { id: 'UizRZo250FhTtKlJa6mo', name: 'Diana', accent: 'American' },
+  { id: 'rWArYo7a2NWuBYf5BE4V', name: 'Annabel', accent: 'British' },
   { id: 'Ky9j3wxFbp3dSAdrkOEv', name: 'Bex', accent: 'British' },
 ];
 

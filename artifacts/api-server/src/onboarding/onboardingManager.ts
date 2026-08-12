@@ -635,10 +635,10 @@ export const VOICE_OPTIONS = [
     gender: "Female",
   },
   {
-    id: "UizRZo250FhTtKlJa6mo",
-    name: "Diana",
-    description: "Elegant American Female",
-    accent: "American",
+    id: "rWArYo7a2NWuBYf5BE4V",
+    name: "Annabel",
+    description: "Elegant British Female",
+    accent: "British",
     gender: "Female",
   },
   {
@@ -746,7 +746,7 @@ The eight options are:
 4. Jon — Deep Authoritative American Male
 5. Archer — Charming Young British Male
 6. Best Female Friend — Warm Casual American Female
-7. Diana — Elegant American Female
+7. Annabel — Elegant British Female
 8. Bex — Expressive British Female
 
 Once the user picks a voice, confirm warmly: "Perfect — ${collected.voiceName ?? "that one"} it is. This is actually the voice you'll hear from now on — welcome to the conversation."

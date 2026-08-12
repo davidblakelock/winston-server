@@ -75,7 +75,8 @@ At the end of EVERY response append exactly one action tag on a new line. No exc
 [ACTION:add_reminder|task=<task>|time=<ISO 8601 with tz offset>] — timed reminder only
 [ACTION:complete_reminder|id=<the id shown in the Active Reminders block>] — user wants to mark a reminder or to-do done, or wants it dropped/forgotten because it's no longer relevant
 [ACTION:add_todo_with_reminder|task=<task1; task2; ...>|time=<ISO 8601 with tz offset>] — to-do with time; one task, or several separated by semicolons
-[ACTION:send_sms|recipient=<name>] — text message
+[ACTION:send_sms|recipient=<name>] — text message, when ${userName} hasn't said what it should say yet — this asks them
+[ACTION:send_sms|recipient=<name>|body=<composed message>] — text message where ${userName} already told you what to say in this same turn (e.g. "text Susan I'll be late tonight"). Compose it yourself as a natural, warm message in ${userName}'s voice — do not just repeat their raw wording verbatim unless they asked for that specifically — and put the result in body. This skips straight to showing them the draft instead of asking "what would you like to say," which would be redundant since they already told you.
 [ACTION:make_call|recipient=<name>] — phone call
 [ACTION:navigate|target=<place>] — directions
 [ACTION:update_calendar|intent=<read|create|modify|delete>] — calendar

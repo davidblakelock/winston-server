@@ -226,29 +226,43 @@ async function resolveWeatherCoords(
 }
 
 // ── Joke of the day — a real source, not a web search ────────────────────────
-// API Ninjas' /v1/jokeoftheday returns exactly one fixed joke per day (no
-// category/blacklist filtering, unlike the old JokeAPI source) — so the
-// candidate pool here is a single item. The judgment call is still left to
-// Claude: the main instruction below already tells it to skip the joke
-// section entirely if the one candidate isn't genuinely good (not a pun,
-// not a riddle), which still holds with a pool of one.
+// Back on JokeAPI (v2.jokeapi.dev) — free and keyless. API Ninjas'
+// /v1/jokeoftheday replaced this for a while but its free tier turned out to
+// be eval/demo-only (returns "Invalid API Key" for every real request, even
+// with a correct key, unless the account is on a paid plan) — silently, since
+// a non-ok response here was never logged, so the joke section had likely
+// been empty for a while before that surfaced. JokeAPI's "Misc" category
+// (which already excludes its own separate "Pun" category) still has real
+// puns mixed in — its categorization is loose — confirmed via live testing:
+// roughly 1 in 10 "single"-type jokes and well over half of "twopart"-type
+// jokes came back as pun/wordplay construction even inside Misc. So this
+// fetches a pool of 10 candidates (both formats — a good joke isn't always
+// one line) rather than trusting any single result, and leaves the actual
+// judgment call — genuinely funny vs. just wordplay — to Claude, which is
+// what distinguishes them, not an API parameter.
 async function fetchJokeCandidates(): Promise<string[]> {
-  const apiKey = (process.env.API_NINJAS_KEY ?? "").trim();
-  if (!apiKey) {
-    logger.warn("[DailyBrief] API_NINJAS_KEY not set — skipping joke of the day");
-    return [];
-  }
   try {
     const res = await fetch(
-      "https://api.api-ninjas.com/v1/jokeoftheday",
-      { headers: { "X-Api-Key": apiKey }, signal: AbortSignal.timeout(6000) }
+      "https://v2.jokeapi.dev/joke/Misc?blacklistFlags=nsfw,racist,sexist,political,religious&amount=10",
+      { signal: AbortSignal.timeout(6000) }
     );
-    if (!res.ok) return [];
-    const data = await res.json() as Array<{ joke?: string }>;
-    return data
-      .map((j) => j.joke ?? null)
+    if (!res.ok) {
+      logger.warn({ status: res.status }, "[DailyBrief] JokeAPI request failed — skipping joke of the day");
+      return [];
+    }
+    const data = await res.json() as {
+      error?: boolean;
+      jokes?: Array<{ type: string; joke?: string; setup?: string; delivery?: string }>;
+    };
+    if (data.error || !data.jokes) {
+      logger.warn({ data }, "[DailyBrief] JokeAPI returned an error — skipping joke of the day");
+      return [];
+    }
+    return data.jokes
+      .map((j) => j.type === "single" ? j.joke ?? null : (j.setup && j.delivery ? `${j.setup} ${j.delivery}` : null))
       .filter((t): t is string => !!t?.trim());
-  } catch {
+  } catch (err) {
+    logger.warn({ err }, "[DailyBrief] JokeAPI fetch threw — skipping joke of the day");
     return [];
   }
 }

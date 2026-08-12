@@ -23,6 +23,14 @@ const DEFAULT_WAKE_TIME = "06:00";
 // to catch any restart caused by a deployment, DB blip, or container recycle.
 const WAKE_WINDOW_MINUTES = 120;
 
+// How many minutes BEFORE wake time we pregenerate the Morning Run Down.
+// Nothing in the brief (weather, to-dos, calendar, news, sports, markets,
+// joke) is time-sensitive enough to need last-second freshness, so it's
+// generated once here — a live Claude + web_search call, ~13 searches,
+// 60+ seconds — well before the user could plausibly ask for it, instead of
+// inside their own request.
+const PREGEN_LEAD_MINUTES = 30;
+
 // ── Local time helpers ─────────────────────────────────────────────────────────
 
 function getCurrentTimeForUser(user: ActiveUser): string {
@@ -51,6 +59,7 @@ function minutesSinceWake(localTime: string, wakeTime: string): number {
 // Note: morningPushDone is now DB-backed via wasPushSentToday().
 
 const middayCheckDone: Map<string, string>  = new Map();
+const pregenDone: Map<string, string>       = new Map();
 
 const _retryCount = new Map<string, number>();
 const MAX_PUSH_RETRIES = 5;
@@ -142,6 +151,31 @@ async function sendMorningPush(user: ActiveUser, wakeTime: string): Promise<void
   }
 }
 
+// ── Pregenerate the Morning Run Down ahead of wake time ─────────────────────────
+
+async function runPregenerateForUser(userName: string): Promise<void> {
+  try {
+    // Settle today's Stoic entry first — the brief reads it, and this is the
+    // same advance gate GET /api/stoic/today (My Life) shares, so whichever
+    // fires first each day is the one that advances. Mirrors the on-demand
+    // morning_rundown handler in chatHandlerCore.ts.
+    const { ensureStoicDayCurrent } = await import("../stoic/stoicManager.js");
+    await ensureStoicDayCurrent(userName).catch((err) =>
+      logger.warn({ err, userName }, "[MorningPush] Pregenerate — ensureStoicDayCurrent failed")
+    );
+
+    const { generateDailyBrief } = await import("../morning/briefingPregenerate.js");
+    const text = await generateDailyBrief(userName);
+    if (text) {
+      logger.info({ userName }, "[MorningPush] Briefing pregenerated ahead of wake time");
+    } else {
+      logger.warn({ userName }, "[MorningPush] Pregenerate returned no text — on-demand request will generate live");
+    }
+  } catch (err) {
+    logger.warn({ err, userName }, "[MorningPush] Pregenerate failed — on-demand request will generate live");
+  }
+}
+
 // ── Per-tick logic ─────────────────────────────────────────────────────────────
 
 async function runPerUserChecks(): Promise<void> {
@@ -165,6 +199,28 @@ async function runPerUserChecks(): Promise<void> {
     const minsSince = minutesSinceWake(localTime, wakeTime);
     if (minsSince >= 0 && minsSince <= WAKE_WINDOW_MINUTES && !wasPushSentToday(userName)) {
       await sendMorningPush(user, wakeTime);
+    }
+
+    // PREGEN_LEAD_MINUTES before wake time (through the same late-restart
+    // window as the push): pregenerate the Morning Run Down so it's cached
+    // and ready the moment the user actually asks. DB-backed flag (same
+    // pattern as the midday check below) so restarts don't cause a second,
+    // wasted generation once today's is already done.
+    if (
+      minsSince >= -PREGEN_LEAD_MINUTES &&
+      minsSince <= WAKE_WINDOW_MINUTES &&
+      pregenDone.get(userName) !== today
+    ) {
+      pregenDone.set(userName, today); // in-memory fast-path
+      const dbFlagKey = `pregen_briefing:${userName}`;
+      wasDailyFlagSet(dbFlagKey, today).then((alreadyDone) => {
+        if (alreadyDone) {
+          logger.info({ userName, today }, "[MorningPush] Pregenerate skipped — DB flag already set for today");
+          return;
+        }
+        setDailyFlag(dbFlagKey, today).catch(() => {});
+        void runPregenerateForUser(userName);
+      }).catch((err) => logger.warn({ err, userName }, "[MorningPush] Pregenerate DB flag check error"));
     }
 
     // 12:00 PM local time: check for significant breaking news since morning briefing.

@@ -311,6 +311,12 @@ export interface SmsPayload {
 }
 
 const _pendingTextMap = new Map<string, PendingTextState>();
+const _pendingTextAtMap = new Map<string, number>();
+// A dangling draft (e.g. the user never says yes/no/cancel) otherwise sits
+// forever and hijacks every unrelated message into the SMS flow — see
+// chatHandlerCore.ts's `pendingText !== null` gate, which doesn't check
+// whether the new message is actually about texting.
+const PENDING_TEXT_TTL_MS = 15 * 60 * 1000; // 15 minutes
 // Keeps the last dispatched SMS payload for up to 30 minutes so the user can
 // retry if the native app didn't open Messages successfully.
 const _lastSmsPayloadMap = new Map<string, SmsPayload>();
@@ -318,15 +324,26 @@ const _lastSmsPayloadAtMap = new Map<string, number>();
 const SMS_RETRY_WINDOW_MS = 30 * 60 * 1000;
 
 export function getPendingText(userName: string): PendingTextState | null {
-  return _pendingTextMap.get(userName) ?? null;
+  const state = _pendingTextMap.get(userName) ?? null;
+  if (!state) return null;
+  const setAt = _pendingTextAtMap.get(userName) ?? 0;
+  if (Date.now() - setAt > PENDING_TEXT_TTL_MS) {
+    _pendingTextMap.delete(userName);
+    _pendingTextAtMap.delete(userName);
+    logger.info({ recipient: state.recipientName, phase: state.phase }, "[TEXT] Pending state expired — clearing stale flow");
+    return null;
+  }
+  return state;
 }
 
 export function setPendingText(userName: string, state: PendingTextState | null): void {
   if (state === null) {
     _pendingTextMap.delete(userName);
+    _pendingTextAtMap.delete(userName);
     logger.info("[TEXT] Pending state cleared");
   } else {
     _pendingTextMap.set(userName, state);
+    _pendingTextAtMap.set(userName, Date.now());
     logger.info({ phase: state.phase, recipient: state.recipientName }, "[TEXT] Pending state updated");
   }
 }

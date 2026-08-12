@@ -174,6 +174,29 @@ export async function saveBriefingText(userName: string, text: string): Promise<
 }
 
 /**
+ * Returns today's already-generated briefing text, if the scheduler
+ * pregenerated one ahead of wake time — lets the on-demand morning_rundown
+ * handler serve it instantly instead of running a fresh ~60s Claude +
+ * web_search generation inside the user's own request. Null if nothing has
+ * been pregenerated yet today (caller falls back to live generation).
+ */
+export async function getTodaysCachedBriefing(userName: string): Promise<string | null> {
+  const today = ctDateKey();
+  try {
+    const { rows } = await query<{ briefing_text: string | null }>(
+      `SELECT briefing_text FROM morning_static_context
+        WHERE user_name = $1 AND date_key = $2
+        LIMIT 1`,
+      [userName, today]
+    );
+    return rows[0]?.briefing_text ?? null;
+  } catch (err) {
+    console.warn("[BriefingCache] Could not load today's cached briefing:", err);
+    return null;
+  }
+}
+
+/**
  * Returns the last N days' briefing text (most recent first, strictly before
  * today so a same-day retry doesn't see itself). Used purely so Claude can
  * avoid repeating the same weird/funny story, joke, or news angle two days
