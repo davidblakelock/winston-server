@@ -3,12 +3,17 @@ import { getAuthClientForUser } from "../google/oauth.js";
 import { logger } from "../lib/logger.js";
 import { query } from "../db.js";
 import { createTracker, getStatusLabel } from "./easypostManager.js";
-import { upsertOrder, type OrderStatus } from "./ordersManager.js";
+import { upsertOrder, getOrdersNeedingEmailFollowup, type OrderStatus } from "./ordersManager.js";
 import { classifyEmail, type ClassifiedEmail } from "../email/emailClassifier.js";
 
 function senderDisplayName(from: string): string {
   const match = from.match(/^(.*?)\s*<[^>]+>/);
   return match ? match[1].trim().replace(/^"|"$/g, "") : from.trim();
+}
+
+function senderEmailAddress(from: string): string | null {
+  const match = from.match(/<([^>]+)>/);
+  return (match ? match[1] : from).trim().toLowerCase() || null;
 }
 
 // ── Order result handler — shared by the unified background scan
@@ -104,10 +109,12 @@ export async function handleOrderResult(
     // EasyPost-specific fields (raw tracking event history, the resolved
     // tracker id) aren't part of upsertOrder's general NewOrder shape —
     // set them directly on whichever row it resolved to (freshly inserted or
-    // merged into an existing one).
+    // merged into an existing one). sender_email is set here too (COALESCE
+    // keeps whichever was captured first) so scanOrderStatusUpdates below
+    // has something to search by if this order ever loses its tracker.
     await query(
-      `UPDATE orders SET status_detail = $1, tracking_events = $2::jsonb, easypost_tracker_id = COALESCE($3, easypost_tracker_id) WHERE id = $4`,
-      [statusDetail, trackingEvents, tracker?.trackerId ?? null, upserted.id]
+      `UPDATE orders SET status_detail = $1, tracking_events = $2::jsonb, easypost_tracker_id = COALESCE($3, easypost_tracker_id), sender_email = COALESCE(sender_email, $4) WHERE id = $5`,
+      [statusDetail, trackingEvents, tracker?.trackerId ?? null, senderEmailAddress(from), upserted.id]
     );
 
     logger.info(
@@ -137,6 +144,13 @@ export async function handleOrderResult(
   });
 
   if (upserted) {
+    // No tracking number to ever hand EasyPost, so this order can ONLY be
+    // updated again by a later email — capture who it's from so
+    // scanOrderStatusUpdates below knows where to look for it.
+    await query(
+      `UPDATE orders SET sender_email = COALESCE(sender_email, $1) WHERE id = $2`,
+      [senderEmailAddress(from), upserted.id]
+    );
     logger.info(
       { emailId: msgId, orderNumber: order.orderNumber, status: order.status },
       "[OrderScanner] Pseudo-status order upserted (no tracking number)"
@@ -301,4 +315,91 @@ export async function scanOrdersOnly(userName: string): Promise<OrderScanResult>
   }
 
   return { newCount, candidatesFound: messageIds.length };
+}
+
+// ── Status-update follow-up scan for orders with no tracking number ─────────
+// The main scan (both this file's manual sync and backgroundEmailScanner.ts)
+// only ever looks at is:unread mail — reasonable for catching genuinely new
+// order emails, but it means an order that can ONLY be updated by a later
+// email (no carrier tracking number to hand EasyPost — Amazon Logistics,
+// Narvar-templated retailers like Peter Millar, etc.) silently stops
+// updating forever the moment that follow-up email gets marked read by
+// anything other than this scan itself — a notification preview, the Gmail
+// app, another integration. Confirmed live: a Peter Millar order's status
+// email arrived and was read before the next scan tick, and the order was
+// never updated because nothing ever looked at it again.
+//
+// This closes that gap with a second, narrowly-scoped pass: for each order
+// that fits that description, search specifically for OTHER mail from the
+// same sender (the address captured on the original order email) since the
+// order was created — regardless of read status — and run any that aren't
+// already tied to an order through the exact same classify + handleOrderResult
+// pipeline used everywhere else. upsertOrder's existing order-number-only
+// merge tier (the same one that already makes Amazon's Ordered → Shipped →
+// Delivered emails update one row instead of creating duplicates) does the
+// actual merge — this only has to find the candidate emails.
+export async function scanOrderStatusUpdates(userName: string): Promise<{ updated: number }> {
+  const orders = await getOrdersNeedingEmailFollowup(userName);
+  if (orders.length === 0) return { updated: 0 };
+
+  const auth = await getAuthClientForUser(userName);
+  if (!auth) return { updated: 0 };
+  try {
+    await auth.getAccessToken();
+  } catch (err) {
+    logger.warn({ err, userName }, "[OrderScanner] Status-update scan — token refresh failed");
+    return { updated: 0 };
+  }
+  const gmail = google.gmail({ version: "v1", auth });
+
+  let updated = 0;
+
+  for (const order of orders) {
+    if (!order.sender_email) continue;
+    const afterEpoch = Math.floor(new Date(order.created_at).getTime() / 1000);
+    const q = `from:${order.sender_email} after:${afterEpoch} -in:spam -in:trash -from:me`;
+
+    try {
+      const list = await gmail.users.messages.list({ userId: "me", maxResults: 10, q });
+      const messageIds = (list.data.messages ?? []).map((m) => m.id!).filter(Boolean)
+        .filter((id) => id !== order.email_id);
+      if (messageIds.length === 0) continue;
+
+      for (const msgId of messageIds) {
+        // Skip anything already tied to ANY order — either this same order
+        // seen on a prior tick, or a genuinely different package from the
+        // same retailer that the main scan already picked up.
+        const { rows: seen } = await query<{ id: number }>(
+          `SELECT id FROM orders WHERE user_name = $1 AND email_id = $2 LIMIT 1`,
+          [userName, msgId]
+        );
+        if (seen.length > 0) continue;
+
+        const detail = await gmail.users.messages.get({ userId: "me", id: msgId, format: "full" });
+        const headers = detail.data.payload?.headers ?? [];
+        const getHeader = (name: string) =>
+          headers.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value ?? "";
+        const subject = getHeader("Subject");
+        const from = getHeader("From");
+        const body = extractBodyFromPayload((detail.data.payload ?? {}) as GmailPart);
+        if (!body || body.length < 50) continue;
+
+        const result = await classifyEmail(from, subject, body);
+        if (!result || result.action !== "save_to_orders" || !result.order) continue;
+
+        const wrote = await handleOrderResult(userName, msgId, from, subject, result.order);
+        if (wrote) {
+          updated++;
+          logger.info(
+            { orderId: order.id, msgId, subject },
+            "[OrderScanner] Status-update scan — merged a follow-up email into an existing no-tracking order"
+          );
+        }
+      }
+    } catch (err) {
+      logger.warn({ err, orderId: order.id, senderEmail: order.sender_email }, "[OrderScanner] Status-update scan failed for order");
+    }
+  }
+
+  return { updated };
 }

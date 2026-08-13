@@ -71,6 +71,7 @@ export interface Order {
   tracking_events: TrackingEvent[];
   last_tracked_at: string | null;
   easypost_tracker_id: string | null;
+  sender_email: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -125,6 +126,12 @@ export async function ensureOrdersTable(): Promise<void> {
     await query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS status_color text`).catch(() => {});
     await query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS status_detail text`).catch(() => {});
     await query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS easypost_tracker_id text`).catch(() => {});
+    // Sender address of the email that created the order — lets
+    // scanOrderStatusUpdates() (gmailOrderScanner.ts) search specifically for
+    // follow-up emails from the SAME retailer/platform for orders that have
+    // no real carrier tracking number (Amazon Logistics, Narvar-templated
+    // retailers, etc.) and so can only ever be updated by a later email.
+    await query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS sender_email text`).catch(() => {});
     logger.info("[Orders] Table ready");
   } catch (err) {
     logger.warn({ err }, "[Orders] Startup migration warning");
@@ -152,6 +159,26 @@ export async function getOrders(userName = NATIVE_USER): Promise<Order[]> {
        expected_date ASC NULLS LAST,
        created_at DESC`,
     [userName, sevenDaysAgo]
+  );
+  return rows.map((r) => ({
+    ...r,
+    tracking_events: (r.tracking_events as unknown as TrackingEvent[]) ?? [],
+  }));
+}
+
+// Orders that can ONLY ever be updated by a later email — no real carrier
+// tracking number, so no EasyPost tracker was ever possible (Amazon
+// Logistics, Narvar-templated retailers like Peter Millar, etc.). Used by
+// scanOrderStatusUpdates() (gmailOrderScanner.ts) to know which orders need
+// a targeted, sender-scoped Gmail search for follow-up status emails.
+export async function getOrdersNeedingEmailFollowup(userName = NATIVE_USER): Promise<Order[]> {
+  const { rows } = await query<Order>(
+    `SELECT * FROM orders
+     WHERE user_name = $1
+       AND tracking_number IS NULL
+       AND status != 'delivered'
+       AND sender_email IS NOT NULL`,
+    [userName]
   );
   return rows.map((r) => ({
     ...r,

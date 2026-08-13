@@ -42,7 +42,7 @@ import { getEmailScanSettings } from "../email/emailScanSettings.js";
 import { scanReservationEmails } from "./reservationScanner.js";
 import { checkForConflict, addOneHour } from "../email/meetingScanner.js";
 import { query } from "../db.js";
-import { handleOrderResult } from "../orders/gmailOrderScanner.js";
+import { handleOrderResult, scanOrderStatusUpdates } from "../orders/gmailOrderScanner.js";
 
 const TZ = "UTC";
 
@@ -458,6 +458,25 @@ async function runScan(userName: string): Promise<void> {
       }
     } catch (err) {
       logger.warn({ err, userName }, "[ReservationScanner] Scan failed — skipping");
+    }
+  }
+
+  // ── Order status-update scan ─────────────────────────────────────────────
+  // Same reasoning as the reservation scan above: orders with no carrier
+  // tracking number (Amazon Logistics, Narvar-templated retailers) can only
+  // ever be updated by a later email, and the social scan's is:unread scope
+  // means that email is invisible the moment it gets marked read by anything
+  // other than this scan — a notification preview, the Gmail app, etc. This
+  // is a narrow, sender-scoped search (see scanOrderStatusUpdates) so it's
+  // cheap even running on the same cadence as the social scan.
+  if (shouldScanSocial) {
+    try {
+      const { updated } = await scanOrderStatusUpdates(userName);
+      if (updated > 0) {
+        logger.info({ userName, count: updated }, "[OrderScanner] Status-update scan — orders updated from follow-up emails");
+      }
+    } catch (err) {
+      logger.warn({ err, userName }, "[OrderScanner] Status-update scan failed — skipping");
     }
   }
 
