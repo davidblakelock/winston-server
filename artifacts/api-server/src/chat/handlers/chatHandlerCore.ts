@@ -339,6 +339,82 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     log,
   } = req;
 
+  // ── Email-triage fast path ───────────────────────────────────────────────────
+  // A bare "trash it" / "archive it" / "mark it read" / "next" mid-triage was
+  // paying for the full pipeline — the always-on context Promise.all (profile,
+  // lists, calendar, reminders, history) plus a full Sonnet call with the
+  // entire system prompt — just to resolve a three-way deterministic choice.
+  // Observed live at 3-5s per step. These commands are only unambiguous
+  // because a triage session is already open (nothing else is plausibly being
+  // asked), so this only fires in that narrow window; anything that doesn't
+  // tightly match, or any other flow being mid-turn, falls through to the full
+  // pipeline unchanged — never worse than before, just not faster.
+  const fastTriageSession = getTriageSession(sessionUserName);
+  if (fastTriageSession && getPendingEmailReply(sessionUserName) === null) {
+    const trimmed = message.trim().toLowerCase().replace(/[.!]+$/, "");
+    const TRASH_RE   = /^(trash|trash it|trash that|delete|delete it|delete that|get rid of it|remove it)$/;
+    const ARCHIVE_RE = /^(archive|archive it|archive that)$/;
+    const DONE_RE     = /^(mark (it |this )?(as )?read|mark read|done|keep it|keep|leave it|leave it alone|skip|skip it|skip that|next|next one|next email|move on)$/;
+
+    let triageAction: "trash" | "archive" | "markRead" | null = null;
+    if (TRASH_RE.test(trimmed)) triageAction = "trash";
+    else if (ARCHIVE_RE.test(trimmed)) triageAction = "archive";
+    else if (DONE_RE.test(trimmed)) triageAction = "markRead";
+
+    const currentEmail = fastTriageSession.emails[fastTriageSession.currentIndex];
+    if (triageAction && currentEmail) {
+      const fastProfile = await getProfile(sessionUserName).catch(() => null);
+      const doneAction = triageAction === "markRead"
+        ? (fastProfile?.emailDoneAction ?? "mark_read")
+        : triageAction;
+
+      if (doneAction === "trash") {
+        await trashEmail(currentEmail.gmailId, sessionUserName).catch(() => {});
+      } else if (doneAction === "archive") {
+        await archiveEmail(currentEmail.gmailId, sessionUserName).catch(() => {});
+      } else {
+        await markEmailRead(currentEmail.gmailId, sessionUserName).catch(() => {});
+        if (fastProfile?.emailDoneAction === "archive") {
+          await archiveEmail(currentEmail.gmailId, sessionUserName).catch(() => {});
+        }
+      }
+      log.info({ gmailId: currentEmail.gmailId, triageAction, doneAction }, "[chatHandlerCore] Triage fast path");
+
+      let fastReply: string;
+      if (triageAction === "trash") fastReply = "Trashed.";
+      else if (triageAction === "archive") fastReply = "Archived.";
+      else fastReply = "Got it.";
+
+      const nextEmail = advanceTriageSession(sessionUserName);
+      if (nextEmail) {
+        const session = getTriageSession(sessionUserName);
+        broadcastToUser(sessionUserName, "email_card", {
+          type: "email_card",
+          gmailId: nextEmail.gmailId,
+          from: nextEmail.from,
+          subject: nextEmail.subject,
+          snippet: nextEmail.snippet,
+          index: (session?.currentIndex ?? 0) + 1,
+          total: session ? session.emails.length : 0,
+        });
+      } else {
+        fastReply = "You're all caught up — inbox handled!";
+        broadcastToUser(sessionUserName, "email_done", {
+          type: "email_done",
+          text: fastReply,
+        });
+      }
+
+      const fastMessageId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      runPostProcessing(sessionUserName, message, fastReply, req.history.slice(-ACTIVE_CONTEXT_LIMIT), fastProfile, deviceId, fastMessageId);
+      return {
+        reply: fastReply,
+        action: { type: "email_action", gmailId: currentEmail.gmailId, emailAction: triageAction },
+        messageId: fastMessageId,
+      };
+    }
+  }
+
   // ── Wind-down opener short-circuit ──────────────────────────────────────────
   // The message that OPENS tonight's check-in (isWinddownOpener from the web's
   // winddownRequest flag, or the literal "Evening Check In" text the native
@@ -586,12 +662,13 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
       `To: ${pendingEmailReply.to}\n` +
       `Subject: ${pendingEmailReply.subject}\n` +
       `Current draft:\n"${pendingEmailReply.draftBody}"\n\n` +
-      `Handle the user's response naturally:\n` +
+      `If this message is actually about that draft, handle it naturally:\n` +
       `- If they approve (yes, looks good, send it, perfect, etc.) → emit [ACTION:email_send]\n` +
       `- If they give direction or want changes → end your reply with [ACTION:email_revise|feedback=<their exact words>]. The server recomposes the draft from that feedback — do not try to write the revised draft yourself here.\n` +
       `- If they say 'send that word for word' or 'use exactly what I typed' → end your reply with [ACTION:email_send|body=<their exact typed text>], using their exact text verbatim, not a paraphrase.\n` +
       `- If they cancel → emit [ACTION:email_cancel]\n` +
-      `Emitting the action tag is not optional — a friendly sentence alone ("Sounds good, I'll make that change") does not actually revise or send anything; only the tag does. Never claim a change was made unless you emitted [ACTION:email_revise] in the same reply.`;
+      `Emitting the action tag is not optional when they ARE responding to it — a friendly sentence alone ("Sounds good, I'll make that change") does not actually revise or send anything; only the tag does. Never claim a change was made unless you emitted [ACTION:email_revise] in the same reply.\n` +
+      `If this message is clearly about something else instead (a different email, an unrelated request) — most likely because they moved on without resolving this draft — just handle that normally and don't mention the draft at all; it's still here waiting whenever they do come back to it.`;
   }
 
   // Attic cleanup flow in progress — inject the proposed candidate list so
@@ -1670,6 +1747,14 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     case "check_email": {
       finalReply = "Let me pull up your inbox...";
 
+      // Starting a fresh triage pass is a clear signal any still-open reply
+      // draft from a previous pass was abandoned — drop it now rather than
+      // let it keep getting injected into this new session's turns.
+      if (pendingEmailReply !== null) {
+        setPendingEmailReply(sessionUserName, null);
+        log.info({ droppedGmailId: pendingEmailReply.gmailId }, "[chatHandlerCore] Dropped stale pending email draft — starting a fresh check_email");
+      }
+
       const companionDisplayName = getCompanionDisplayName(
         userProfile?.companionPersona ?? null,
         userProfile?.companionName ?? null
@@ -1757,6 +1842,15 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     // ── email_action ─────────────────────────────────────────────────────────
     case "email_action": {
       if (action.gmailId && action.emailAction) {
+        // Acting on a DIFFERENT email than a still-open reply draft is a clear
+        // signal the user moved on without resolving it — drop it now instead
+        // of leaving it to keep getting silently injected into every future
+        // turn for the rest of its TTL (see [Pending Email Draft] above).
+        if (pendingEmailReply !== null && pendingEmailReply.gmailId !== action.gmailId) {
+          setPendingEmailReply(sessionUserName, null);
+          log.info({ droppedGmailId: pendingEmailReply.gmailId }, "[chatHandlerCore] Dropped stale pending email draft — user moved to a different email");
+        }
+
         const doneAction = action.emailAction === "markRead"
           ? (userProfile?.emailDoneAction ?? "mark_read")
           : action.emailAction;
