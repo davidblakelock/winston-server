@@ -78,6 +78,8 @@ import {
   classifyConfirmationIntent,
   classifySmsFollowupIntent,
   composeTextMessage,
+  extractInlineIntent,
+  detectToneOverride,
   type SmsPayload,
 } from "../../text/textMessageComposer.js";
 import { getPendingReservation } from "../../restaurants/restaurantIntelligence.js";
@@ -1630,20 +1632,50 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
         const name    = contact?.name ?? recipientName;
         const tone    = "casual" as const;
 
-        if (action.smsBody) {
-          // Claude already composed a body — go straight to confirmation
-          setPendingText(sessionUserName, {
-            phase:          "awaiting_confirmation",
-            recipientName:  name,
-            recipientPhone: phone,
-            tone,
-            composedBody:   action.smsBody,
-          });
-          finalReply =
-            `Here's what I've got for ${name}:\n\n"${action.smsBody}"\n\n` +
-            `Does that work? Say yes and I'll hand it off to your Messages app so you can tap Send.`;
+        // Claude explicitly composing and passing body= depends on it
+        // reliably noticing the message already had content — confirmed
+        // live that a fully-specified, unambiguous request ("Send Susan a
+        // text. [full content]. Make it witty") still got asked back
+        // instead of used. Don't depend on that alone: if the raw message
+        // itself has real content beyond just naming the recipient,
+        // compose from it directly, same as the (already-working)
+        // awaiting_intent continuation path does on a retry.
+        const inlineIntent = action.smsBody ?? extractInlineIntent(message);
+
+        if (inlineIntent) {
+          const effectiveTone = detectToneOverride(message) ?? tone;
+          try {
+            const composedBody = action.smsBody
+              ? action.smsBody
+              : (await composeTextMessage({
+                  recipientName: name,
+                  tone: effectiveTone,
+                  userIntent: inlineIntent,
+                  senderName: userProfile?.name ?? sessionUserName,
+                })).body;
+
+            setPendingText(sessionUserName, {
+              phase:          "awaiting_confirmation",
+              recipientName:  name,
+              recipientPhone: phone,
+              tone:           effectiveTone,
+              composedBody,
+            });
+            finalReply =
+              `Here's what I've got for ${name}:\n\n"${composedBody}"\n\n` +
+              `Does that work? Say yes and I'll hand it off to your Messages app so you can tap Send.`;
+          } catch (err) {
+            log.warn({ err }, "[chatHandlerCore] send_sms inline compose failed");
+            setPendingText(sessionUserName, {
+              phase:          "awaiting_intent",
+              recipientName:  name,
+              recipientPhone: phone,
+              tone,
+            });
+            finalReply = `What would you like to say to ${name}?`;
+          }
         } else {
-          // Ask what to say
+          // Genuinely nothing to go on yet ("text Susan" with no other content) — ask
           setPendingText(sessionUserName, {
             phase:          "awaiting_intent",
             recipientName:  name,
@@ -1652,7 +1684,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
           });
           finalReply = `What would you like to say to ${name}?`;
         }
-        log.info({ recipientName: name, hasPhone: !!phone }, "[chatHandlerCore] SMS flow started");
+        log.info({ recipientName: name, hasPhone: !!phone, composedInline: !!inlineIntent }, "[chatHandlerCore] SMS flow started");
       }
       break;
     }

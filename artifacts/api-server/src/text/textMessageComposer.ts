@@ -79,6 +79,34 @@ export function extractTextTargetName(message: string): string | null {
   return null;
 }
 
+// Returns whatever text follows the "text <name>" / "send <name> a text"
+// trigger phrase, trimmed — content the user already dictated in the SAME
+// message as the request to text someone (e.g. "text Susan I'll be 10 min
+// late" -> "I'll be 10 min late"). Returns null when there's nothing
+// substantial left (a bare "text Susan"), so callers can tell "start the
+// ask-what-to-say flow" apart from "compose immediately from what's already
+// here" — added after confirming live that depending on Claude to notice
+// this itself and pass a composed body isn't reliable: a fully-specified,
+// unambiguous message ("Send Susan a text. [full content]. Make it witty")
+// still got asked back "what would you like to say?" instead of used.
+export function extractInlineIntent(message: string): string | null {
+  const stripped = message.replace(PREAMBLE, "").trim();
+
+  const m1 = TEXT_TRIGGER_VERB_FIRST.exec(stripped);
+  if (m1) {
+    const rest = stripped.slice(m1.index + m1[0].length).replace(/^[:,.\s-]+/, "").trim();
+    return rest.length >= 10 ? rest : null;
+  }
+
+  const m2 = TEXT_TRIGGER_NAME_FIRST.exec(stripped);
+  if (m2) {
+    const rest = stripped.slice(m2.index + m2[0].length).replace(/^[:,.\s-]+/, "").trim();
+    return rest.length >= 10 ? rest : null;
+  }
+
+  return null;
+}
+
 // ── Tone override detection ───────────────────────────────────────────────────
 
 const TONE_PATTERNS: Array<[RegExp, MessageTone]> = [
