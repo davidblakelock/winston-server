@@ -128,31 +128,29 @@ Go to My Life to record any thoughts.`;
 
 // Strips a leading self-narration preamble Claude sometimes emits despite
 // the prompt's explicit "no meta-commentary, begin directly with the
-// greeting" instruction. Observed live in several phrasings, including a
-// full editorial-reasoning paragraph ("I now have everything I need. The
-// UPI odd news page turned up the bear-in-the-pool story... Here is the
-// briefing:") that the original narrower start-of-string regex didn't
-// catch — "I now have" wasn't covered (only "now I have"), and the
-// paragraph explaining story/joke selection reasoning had no pattern at
-// all. Two independent strategies, tried in order:
-//
-// 1. A "hand-off" phrase like "here is/here's the briefing:" is a strong,
-//    unambiguous signal on its own — the real briefing would never refer to
-//    itself as "the briefing" — so if found anywhere before the real
-//    content, everything up to and including it is cut, regardless of how
-//    the preamble before it was phrased.
-// 2. Otherwise, fall back to matching known leak-start phrasings at the very
-//    start of the text and cutting through the next blank line.
-//
-// Does nothing if neither matches, so it can't eat legitimate content.
+// greeting" instruction. This kept resurfacing in new phrasings that the
+// previous wording-specific regexes didn't cover — "Here's the briefing:",
+// "I now have everything I need", "Now I'll write the briefing:", each
+// requiring its own patch as a new one showed up live. Rather than keep
+// chasing wording, anchor on the one thing that's actually structurally
+// guaranteed: the real briefing always starts with "☕" (the fixed header
+// emoji the prompt requires). Leaked reasoning/research notes never happen
+// to contain that character, so finding its first occurrence and slicing
+// from there strips ANY leaked preamble regardless of how it's worded.
+// The wording-specific patterns are kept only as a fallback for the rare
+// case for the ☕ marker itself is missing entirely.
 function stripMetaPreamble(text: string): string {
+  const headerIdx = text.indexOf("☕");
+  if (headerIdx > 0) return text.slice(headerIdx).trimStart();
+  if (headerIdx === 0) return text;
+
   const handoff = /here'?s?\s+(?:is\s+)?the briefing:?/i;
   const handoffMatch = handoff.exec(text);
   if (handoffMatch) {
     return text.slice(handoffMatch.index + handoffMatch[0].length).trimStart();
   }
 
-  const leakStart = /^\s*(?:now i have|i now have|good[\s—-]+i(?:'ve| have| now have)|i(?:'ve| have) (?:got|gathered|found) everything|here'?s what i (?:found|have|gathered)|let me (?:write|put together|pull this together))\b/i;
+  const leakStart = /^\s*(?:now i have|i now have|good[\s—-]+i(?:'ve| have| now have)|i(?:'ve| have) (?:got|gathered|found) everything|here'?s what i (?:found|have|gathered)|let me (?:write|put together|pull this together)|now i'?ll write|i'?ll (?:now )?write the briefing)\b/i;
   if (!leakStart.test(text)) return text;
   const blankLineIdx = text.search(/\n\s*\n/);
   return blankLineIdx === -1 ? text : text.slice(blankLineIdx).trimStart();

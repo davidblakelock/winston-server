@@ -44,6 +44,15 @@ export function normalizeTtsText(text: string): string {
   // "10:30" (bare) → "10 30"
   s = s.replace(/\b(\d{1,2}):(\d{2})\b/g, "$1 $2");
 
+  // ── Score-style number ranges ─────────────────────────────────────────────
+  // "2–5" as a bare en-dash between two numbers is ambiguous for TTS — it can
+  // come out sounding reversed even though the text is correct. The Morning
+  // Run Down's sports section specifically formats scores with an en-dash
+  // (never a hyphen — see SPORTS rule in briefingPregenerate.ts), so scoping
+  // to that exact character avoids touching hyphenated numbers elsewhere
+  // (phone numbers, "10-15 minutes", date ranges, etc.).
+  s = s.replace(/\b(\d{1,3})–(\d{1,3})\b/g, "$1 to $2");
+
   // ── Address abbreviations ─────────────────────────────────────────────────
   // Order matters: more specific (e.g. "Blvd") before shorter ones ("Bl")
   // Trailing period optional; word boundary required to avoid false positives.

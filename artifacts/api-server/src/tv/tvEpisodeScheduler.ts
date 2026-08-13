@@ -2,7 +2,7 @@ import cron from "node-cron";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
 import { getActiveUsers, type ActiveUser } from "../onboarding/onboardingManager.js";
-import { getWatchedShows } from "./showManager.js";
+import { getWatchedShows, backfillMissingTvmazeIds } from "./showManager.js";
 import { fetchEpisodesForDate, type ScheduledEpisode } from "./tvmaze.js";
 import { sendFcmNotification } from "../push/fcmSender.js";
 
@@ -54,6 +54,14 @@ async function markNotified(
 // ── Per-user episode check ────────────────────────────────────────────────────
 
 async function checkEpisodesForUser(userName: string): Promise<void> {
+  const backfilled = await backfillMissingTvmazeIds(userName).catch((err) => {
+    logger.warn({ err, userName }, "[TVEpisode] backfillMissingTvmazeIds failed");
+    return 0;
+  });
+  if (backfilled > 0) {
+    logger.info({ userName, backfilled }, "[TVEpisode] Resolved previously-unmatched show(s) to a tvmaze ID");
+  }
+
   const shows = await getWatchedShows(userName);
   const watchedIds = shows.filter((s) => s.tvmazeId).map((s) => s.tvmazeId!);
   if (!watchedIds.length) return;

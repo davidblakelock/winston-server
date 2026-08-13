@@ -87,6 +87,34 @@ export async function addWatchedShow(
   return { success: true, showName, alreadyExists: false };
 }
 
+// TVmaze ID is only resolved once, at add time (addWatchedShow above) — if
+// that lookup fails for any reason (transient network blip, rate limit),
+// the show is left with tvmaze_id = null permanently, since nothing ever
+// retries it. tvEpisodeScheduler.ts silently drops any show with a null ID
+// from its check, so a one-time failure meant that show could never be
+// checked for new episodes again. This re-attempts the lookup for anything
+// still unresolved — cheap to call on every scheduled check since it's a
+// no-op once every show has an ID.
+export async function backfillMissingTvmazeIds(userName = NATIVE_STORED_NAME): Promise<number> {
+  const { rows } = await query<{ id: number; show_name: string }>(
+    `SELECT id, show_name FROM watched_shows WHERE user_name = $1 AND tvmaze_id IS NULL`,
+    [userName]
+  );
+  if (rows.length === 0) return 0;
+
+  let resolved = 0;
+  for (const row of rows) {
+    const tvShow = await searchShow(row.show_name).catch(() => null);
+    if (!tvShow?.id) continue;
+    await query(
+      `UPDATE watched_shows SET tvmaze_id = $1, network = $2, genres = $3, status = $4 WHERE id = $5`,
+      [tvShow.id, tvShow.network, tvShow.genres.join(", ") || null, tvShow.status, row.id]
+    ).catch(() => {});
+    resolved++;
+  }
+  return resolved;
+}
+
 export async function removeWatchedShow(rawName: string, userName = NATIVE_STORED_NAME): Promise<string | null> {
   const result = await query(
     `DELETE FROM watched_shows
