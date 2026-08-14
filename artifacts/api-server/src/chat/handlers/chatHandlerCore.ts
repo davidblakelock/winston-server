@@ -357,11 +357,23 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     const TRASH_RE   = /^(trash|trash it|trash that|delete|delete it|delete that|get rid of it|remove it)$/;
     const ARCHIVE_RE = /^(archive|archive it|archive that)$/;
     const DONE_RE     = /^(mark (it |this )?(as )?read|mark read|done|keep it|keep|leave it|leave it alone|skip|skip it|skip that|next|next one|next email|move on)$/;
+    // The native app's own triage-card buttons (EmailCard.tsx via
+    // handleEmailDelete/handleEmailDone in app/index.tsx) send full canned
+    // sentences — 'Delete the email from X about "Y"' — not terse
+    // voice-style phrases. Confirmed live these never matched the patterns
+    // above, so every button tap paid for the full pipeline regardless of
+    // this fast path existing. They always refer to the CURRENT triage
+    // card by construction (the button only exists on that card), so the
+    // leading verb alone is enough to classify the action — the from/
+    // subject text that follows is irrelevant here.
+    const TRASH_PREFIX_RE   = /^(delete|trash) the email\b/;
+    const ARCHIVE_PREFIX_RE = /^archive the email\b/;
+    const DONE_PREFIX_RE    = /^mark done the email\b/;
 
     let triageAction: "trash" | "archive" | "markRead" | null = null;
-    if (TRASH_RE.test(trimmed)) triageAction = "trash";
-    else if (ARCHIVE_RE.test(trimmed)) triageAction = "archive";
-    else if (DONE_RE.test(trimmed)) triageAction = "markRead";
+    if (TRASH_RE.test(trimmed) || TRASH_PREFIX_RE.test(trimmed)) triageAction = "trash";
+    else if (ARCHIVE_RE.test(trimmed) || ARCHIVE_PREFIX_RE.test(trimmed)) triageAction = "archive";
+    else if (DONE_RE.test(trimmed) || DONE_PREFIX_RE.test(trimmed)) triageAction = "markRead";
 
     const currentEmail = fastTriageSession.emails[fastTriageSession.currentIndex];
     if (triageAction && currentEmail) {
