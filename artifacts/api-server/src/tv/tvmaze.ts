@@ -28,26 +28,48 @@ function localYMD(date: Date, tz = "UTC"): string {
   }).format(date);
 }
 
+const RETRY_DELAYS_MS = [500, 1500]; // 3 attempts total
+
+// A show stuck with tvmaze_id = null used to be caught only by the once-a-day
+// backfill sweep (backfillMissingTvmazeIds in showManager.ts) — fine as a
+// backstop, but confirmed live that a single flaky/rate-limited call here was
+// the actual cause for 5 of 8 watched shows (including well-known titles like
+// Ted Lasso, not just ambiguous ones), so a same-day episode could be missed
+// entirely before the backfill ever got a chance to run. Retrying here fixes
+// it at the source instead of leaning on that backstop.
 export async function searchShow(name: string): Promise<TVShow | null> {
-  try {
-    const res = await fetch(
-      `https://api.tvmaze.com/search/shows?q=${encodeURIComponent(name)}`
-    );
-    if (!res.ok) return null;
-    const results = await res.json() as any[];
-    if (!results.length) return null;
-    const show = results[0].show;
-    return {
-      id: show.id,
-      name: show.name,
-      network: show.network?.name ?? show.webChannel?.name ?? null,
-      genres: show.genres ?? [],
-      status: show.status ?? "Unknown",
-      summary: show.summary?.replace(/<[^>]*>/g, "").slice(0, 300) ?? undefined,
-    };
-  } catch {
-    return null;
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+    try {
+      const res = await fetch(
+        `https://api.tvmaze.com/search/shows?q=${encodeURIComponent(name)}`
+      );
+      if (!res.ok) {
+        if (attempt < RETRY_DELAYS_MS.length) {
+          await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt]));
+          continue;
+        }
+        return null;
+      }
+      const results = await res.json() as any[];
+      if (!results.length) return null;
+      const show = results[0].show;
+      return {
+        id: show.id,
+        name: show.name,
+        network: show.network?.name ?? show.webChannel?.name ?? null,
+        genres: show.genres ?? [],
+        status: show.status ?? "Unknown",
+        summary: show.summary?.replace(/<[^>]*>/g, "").slice(0, 300) ?? undefined,
+      };
+    } catch {
+      if (attempt < RETRY_DELAYS_MS.length) {
+        await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt]));
+        continue;
+      }
+      return null;
+    }
   }
+  return null;
 }
 
 export async function getScheduleForDate(
