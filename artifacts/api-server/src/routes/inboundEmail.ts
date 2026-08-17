@@ -77,10 +77,10 @@ function sniffImageMimeType(buf: Buffer): string | null {
 const MAX_CONTENT_CHARS = 8000;
 
 // ── Inbound email webhook ─────────────────────────────────────────────────────
-// The Attic's email-forward path: forward anything with "the attic" anywhere
-// in the subject line (case-insensitive — "put it in the attic", "in the
-// attic", "store it in the attic", etc. all match) to save+<username>@... and
-// its raw content lands in attic_items. This route used to also extract
+// The Attic's email-forward path: forward anything with "attic" anywhere in
+// the subject line (case-insensitive — "Attic", "put it in the attic", "in
+// the attic", "store it in the attic", etc. all match) to save+<username>@...
+// and its raw content lands in attic_items. This route used to also extract
 // structured My-Records data from forwards (trip/warranty/subscription/etc.)
 // but that use case is handled by email scanning now — that branch has been
 // removed rather than kept alongside this one.
@@ -149,8 +149,8 @@ router.post(
       return;
     }
 
-    if (!/the attic/i.test(subject)) {
-      process.stdout.write("[InboundEmail] subject doesn't mention 'the attic' — skipping\n");
+    if (!/\battic\b/i.test(subject)) {
+      process.stdout.write("[InboundEmail] subject doesn't mention 'attic' — skipping\n");
       await logInbound({ recipient, username, sender, subject, textLength: text.length, imageCount: 0, outcome: "skipped-no-recognized-keyword" });
       return;
     }
