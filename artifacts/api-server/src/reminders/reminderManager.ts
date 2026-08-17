@@ -59,22 +59,38 @@ export async function createReminder(input: ReminderInput): Promise<ReminderRow>
   const resolvedTz   = input.timezone   ?? "UTC";
 
   // ── Duplicate guard ──────────────────────────────────────────────────────────
-  // Only block genuine double-submits: same user + text + fire_at created within
-  // the last 5 seconds.  A wider window (matching on fire_at alone) was dropping
-  // legitimate second reminders because computeFireAt rounds seconds to 0, making
-  // two "remind me in 2 min" requests set 30 s apart produce the same fire_at.
+  // Widened from 5s to 2 minutes — confirmed live the narrow window let a real
+  // duplicate through: same text, same explicit fire_at, two separate
+  // chat-native requests 22 seconds apart (each got its own distinct reply
+  // from Claude, so this wasn't one request retried in transit — genuinely
+  // two turns, whether from the user repeating themselves or the client
+  // double-sending). Both created their own pending reminder and both fired.
+  //
+  // The original 5s window existed to avoid a DIFFERENT problem: a RELATIVE
+  // request ("remind me in 2 min") re-evaluates "now + 2min" at whatever
+  // moment it's actually said, and computeFireAt rounds seconds to 0 — so two
+  // separate "in 2 min" requests a bit apart could coincidentally land on the
+  // identical fire_at and get wrongly collapsed into one. That risk is
+  // specific to relative phrasing; it doesn't apply to an ABSOLUTE time like
+  // "at 3:00 PM", which computes to the identical fire_at deterministically
+  // regardless of when it's said — there's no coincidence to worry about,
+  // just a real repeat. A 2-minute window comfortably catches the kind of
+  // gap observed here (and a plausible "wasn't sure it took, said it again")
+  // while keeping the residual risk for the relative-time case low — and
+  // even in that edge case, the outcome is just "one reminder instead of two
+  // at the exact same moment," not a lost reminder.
   const { rows: existing } = await query<ReminderRow>(
     `SELECT * FROM reminders
       WHERE user_name     = $1
         AND reminder_text = $2
         AND fire_at       = $3
         AND status        = 'pending'
-        AND created_at    > NOW() - INTERVAL '5 seconds'
+        AND created_at    > NOW() - INTERVAL '2 minutes'
       LIMIT 1`,
     [resolvedUser, input.reminderText, input.fireAt]
   );
   if (existing.length > 0) {
-    // Genuine double-submit within 5 s — return the existing row without inserting
+    // Genuine double-submit within the window — return the existing row without inserting
     return existing[0];
   }
 

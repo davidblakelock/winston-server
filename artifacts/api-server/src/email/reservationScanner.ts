@@ -17,7 +17,7 @@ import { logger } from "../lib/logger.js";
 import { query } from "../db.js";
 import { sendFcmNotification } from "../push/fcmSender.js";
 import { MODEL_HAIKU } from "../lib/models.js";
-import { insertUserRecord } from "../records/recordsManager.js";
+import { insertUserRecord, getRecentRecordsContextBlock } from "../records/recordsManager.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -293,6 +293,14 @@ export async function scanReservationEmails(
 
   const results: ScannedReservation[] = [];
 
+  // Fetched once per scan, not per email — reused across every candidate so
+  // the classifier below can recognize a second/third email about a trip
+  // already on file instead of creating a duplicate row for it. This scanner
+  // writes to the same user_records table as emailClassifier.ts's
+  // save_to_records path and needs the identical dedup context for the same
+  // reason (see getRecentRecordsContextBlock in recordsManager.ts).
+  const existingRecordsBlock = await getRecentRecordsContextBlock(userName).catch(() => "None on file.");
+
   for (const msgId of messageIds.slice(0, 30)) {
     try {
       // Deliberately ignores deleted_at — a gmail_id that's ever been processed
@@ -345,6 +353,10 @@ Everything else must be skipped — including service appointments (vehicle or h
 Also skip price-alerts, fare-trackers, "prices dropped," saved-search notifications, and any other browsing/tracking email from a travel search site or aggregator (Google Flights, Google Hotels, Kayak, Skyscanner, Hopper, etc.) — these are never the airline/hotel/vendor itself and never represent an actual booking, no matter how specific the date, route, or price mentioned. Skip these even though they reference real dates and destinations.
 
 An email IS worth saving if it contains a genuine booking/confirmation/registration reference number, OR explicit confirmed-booking language ("your booking is confirmed," "e-ticket," "itinerary number," "your reservation is confirmed") — regardless of purchase size. A date and a destination alone are not enough.
+
+EXISTING RECORDS ALREADY ON FILE (check before deciding — confirmed live as the actual cause of duplicate records: a second or third email about a trip already on file, sometimes worded slightly differently, getting saved as a brand new one instead of being recognized as the same booking):
+${existingRecordsBlock}
+If this email is about the same trip/vendor/rough date as one of those, it is NOT a new record — return {"skip": true} instead, even if this email has its own reference number or itinerary details (a hold's temporary code and its later e-ticket number are expected to differ; that's not a new booking, and the recordsManager upsert logic handles merging the two together downstream — your job here is just not to treat an already-known trip as brand new).
 
 If it IS worth saving, return ONLY this JSON — no explanation, no markdown:
 {

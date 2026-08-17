@@ -29,6 +29,47 @@ export async function ensureUserRecordsColumns(): Promise<void> {
   `).catch(() => {});
 }
 
+// ── Dedup context for classifiers ──────────────────────────────────────────────
+// The real root cause of duplicate records (e.g. two separate rows for the
+// same home inspection, pulled from two different emails in the same
+// back-and-forth thread): classification happens per-email, in complete
+// isolation — the classifier has no way to know an event is already on file,
+// so an existing prompt instruction ("never treat a reminder about an
+// appointment you already have on file as a new record") was structurally
+// unenforceable, no matter how it was worded. This gives both scanners
+// (reservationScanner.ts, emailClassifier.ts via backgroundEmailScanner.ts)
+// the missing context — the user's own recent/upcoming records — so that
+// instruction has something to actually check against. Scoped to the last 60
+// days OR a future date_start, since a duplicate is only worth catching while
+// the original is still relevant; ancient history isn't worth the prompt
+// tokens.
+export async function getRecentRecordsContextBlock(userName: string): Promise<string> {
+  try {
+    const { rows } = await query<{
+      category: string;
+      vendor_name: string;
+      date_start: string | null;
+      notes: string | null;
+    }>(
+      `SELECT category, vendor_name, date_start, notes
+       FROM user_records
+       WHERE user_name = $1
+         AND deleted_at IS NULL
+         AND (created_at > NOW() - INTERVAL '60 days' OR date_start >= CURRENT_DATE)
+       ORDER BY created_at DESC
+       LIMIT 30`,
+      [userName]
+    );
+    if (rows.length === 0) return "None on file.";
+    return rows
+      .map((r) => `- ${r.vendor_name} (${r.category})${r.date_start ? ` — ${r.date_start}` : ""}${r.notes ? `: ${r.notes}` : ""}`)
+      .join("\n");
+  } catch (err) {
+    logger.warn({ err, userName }, "[Records] getRecentRecordsContextBlock failed");
+    return "None on file.";
+  }
+}
+
 // ── Social scan DB-backed state (mirrors order_sync_state) ────────────────────
 
 export async function ensureSocialScanStateTable(): Promise<void> {
@@ -137,22 +178,35 @@ export async function insertUserRecord(
     }
   }
 
-  // Priority 1.5: no exact confirmation-number match — for trip records,
-  // fall back to same vendor within the last 7 days (this app's existing
-  // staleness window elsewhere) and merge into that rather than inserting
-  // a new row for what's overwhelmingly likely the same booking's next
-  // status update (hold → confirmed).
-  if (record.category === "trip" && record.vendorName) {
+  // Priority 1.5: no exact confirmation-number match — for one-off-event
+  // categories (trip, warranty), fall back to a fuzzy same-vendor match
+  // within a recent window and merge into that rather than inserting a new
+  // row. Deliberately excludes subscription/vehicle_registration: those
+  // recur legitimately (a new renewal genuinely isn't "the same" booking as
+  // last year's), so "same vendor again soon" must NOT auto-merge there.
+  //
+  // Vendor match is a bidirectional prefix check, not exact equality —
+  // confirmed live as the actual cause of a real duplicate: two emails from
+  // the same inspector's back-and-forth thread extracted the vendor as "NPI
+  // - NE Tarrant County" in one and "NPI - NE Tarrant County (Chas
+  // Dohanich)" in the other. Exact lower() equality treats those as two
+  // different vendors; this catches one being a prefix of the other, which
+  // is what "same business, slightly different extraction" actually looks
+  // like in practice. Window widened from 7 to 14 days since these events
+  // are often scheduled — and re-mentioned across a thread — further out
+  // than a trip booking's hold-to-confirmation gap.
+  const DEDUP_ELIGIBLE_CATEGORIES = ["trip", "warranty"];
+  if (DEDUP_ELIGIBLE_CATEGORIES.includes(record.category) && record.vendorName) {
     const recent = await query<{ id: number }>(
       `SELECT id FROM user_records
        WHERE user_name = $1
-         AND category = 'trip'
-         AND lower(vendor_name) = lower($2)
+         AND category = $3
+         AND (lower(vendor_name) LIKE lower($2) || '%' OR lower($2) LIKE lower(vendor_name) || '%')
          AND deleted_at IS NULL
-         AND created_at > NOW() - INTERVAL '7 days'
+         AND created_at > NOW() - INTERVAL '14 days'
        ORDER BY created_at DESC
        LIMIT 1`,
-      [userName, record.vendorName]
+      [userName, record.vendorName, record.category]
     );
     if (recent.rows.length > 0) {
       await query(
@@ -187,8 +241,8 @@ export async function insertUserRecord(
         ]
       );
       logger.info(
-        { id: recent.rows[0]!.id, vendorName: record.vendorName, newConfirmationNumber: record.confirmationNumber },
-        "[Records] Merged trip record into recent same-vendor record — no shared confirmation number (hold → confirmation)"
+        { id: recent.rows[0]!.id, category: record.category, vendorName: record.vendorName, newConfirmationNumber: record.confirmationNumber },
+        "[Records] Merged record into recent same-vendor record — no shared confirmation number (fuzzy vendor match)"
       );
       return "updated";
     }

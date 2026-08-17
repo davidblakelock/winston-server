@@ -37,7 +37,7 @@ import { sendFcmNotification } from "../push/fcmSender.js";
 import { classifyEmail } from "../email/emailClassifier.js";
 import type { ClassifiedEmail } from "../email/emailClassifier.js";
 import type { DetectedMeetingRequest } from "../email/emailMeetingManager.js";
-import { insertUserRecord, getLastSocialScanAt, updateLastSocialScanAt } from "../records/recordsManager.js";
+import { insertUserRecord, getLastSocialScanAt, updateLastSocialScanAt, getRecentRecordsContextBlock } from "../records/recordsManager.js";
 import { getEmailScanSettings } from "../email/emailScanSettings.js";
 import { scanReservationEmails } from "./reservationScanner.js";
 import { checkForConflict, addOneHour } from "../email/meetingScanner.js";
@@ -260,6 +260,11 @@ async function fetchAndClassify(
 
   logger.info({ userName, label, count: messageIds.length }, "[BgEmailScanner] Candidate emails found");
 
+  // Fetched once per batch, not per email — reused across every candidate
+  // in this run so classifyEmail can tell a genuinely new record apart from
+  // a second email about one already on file (see getRecentRecordsContextBlock).
+  const existingRecordsBlock = await getRecentRecordsContextBlock(userName).catch(() => "None on file.");
+
   let processed = 0;
   let skipped = 0;
 
@@ -277,7 +282,7 @@ async function fetchAndClassify(
       if (body.includes("<")) body = stripHtml(body);
       if (body.length < 30) { skipped++; continue; }
 
-      const result = await classifyEmail(from, subject, body, vacationMode);
+      const result = await classifyEmail(from, subject, body, vacationMode, existingRecordsBlock);
       if (!result) { skipped++; continue; }
 
       await handler(userName, msgId, from, subject, body, result);
