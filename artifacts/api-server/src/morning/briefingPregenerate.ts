@@ -41,7 +41,9 @@ STORY QUALITY BAR — applies to every item in Search 1a and 1b alike: only incl
 
 When choosing the final list of stories, prefer genuinely important news, but when two stories are similarly newsworthy, favor the one connected to this person's actual interests over an equally routine but disconnected one. If Search 1b turned up something real and relevant, fold it into the same numbered list rather than giving it a separate section.
 
-SEARCH 2 — Sports: search for this person's teams' most recent completed games (the specific team names are in the context block below — use them as the search terms, e.g. "[team name] score last night"). Report only FINAL scores from the most recently completed game per team — last night's game if one was played, otherwise their most recent prior game. Verify the date the game was actually played from your search results before including it — if you cannot confirm it was last night's game (or, absent one, the single most recent prior game), leave that team out of the sports section rather than reporting an older score.
+Search 1a/1b's news list and Search 4's weird/funny story must never be the same event — confirmed live this happened (a human-interest story about a world-record attempt appeared as both a numbered news item AND the weird/funny story in the same briefing, word-for-word the same event). If a story is genuinely both newsworthy and funny/absurd enough to clear Search 4's bar, use it in ONE section only — the weird/funny section, since that's the more specific fit — and fill the news list with a different, distinct story instead of reusing it.
+
+SEARCH 2 — Sports: search for this person's teams' most recent completed games (the specific team names are in the context block below — use them as the search terms, e.g. "[team name] score last night"). Report a team's score ONLY if that game was played on the exact date given in the context block as this person's "yesterday" — never further back than that, even if it was their most recent game. Confirmed live this was reported wrong: a Saturday-night game was still showing up in a Monday-morning briefing because the old instruction here said to fall back to "their most recent prior game" with no cutoff — that reach-back is removed entirely now. Verify the actual date played from your search results against that exact "yesterday" date before including it; if a team's most recent game was on any other date (a bye, an off day, a Saturday game reported on a Monday, etc.), leave that team out of the sports section entirely rather than reporting a stale score. A morning with no sports section at all — because none of this person's teams played yesterday — is correct and expected; never reach back further just to have something to report.
 
 ${includeMarkets
   ? `SEARCH 3 — Markets: search for stock futures and overnight financial news ahead of today's open (e.g. "stock futures today", "Dow S&P Nasdaq futures").`
@@ -49,11 +51,11 @@ ${includeMarkets
 
 SEARCH 4 — Weird/funny story: search UPI's Odd News desk first — try "site:upi.com Odd News" or "UPI odd news today" — that's the primary source. If that doesn't turn up something genuinely funny or delightfully absurd, fall back to AP's Oddities coverage — try "site:apnews.com oddities" or "AP oddities today". These outlets have real editors selecting for exactly this quality — genuinely funny or delightfully absurd, not just odd — which is the actual bar, not merely "unusual." A real story with a specific person or place and an unexpected twist — something a person could mention at lunch and get a genuine reaction. If nothing from either source clears that bar, that's fine — see the WEIRD/FUNNY STORY formatting rule below on when to skip it.
 
-Weather and the joke of the day are NOT things to search for — verified current weather conditions and a real pool of joke candidates are already provided in the context block below. Use that data as-is; do not search for weather (do not guess, and do not include a multi-day forecast), and do not search for or invent a joke — pick one from the candidates given.
+Weather is NOT something to search for — verified current weather conditions are already provided in the context block below. Use that data as-is; do not search for weather, do not guess, and do not include a multi-day forecast.
 
 This briefing is delivered in the early morning, before the stock market opens for the day. Sports scores should always be from yesterday's/last night's completed games — never describe a game as happening "today" unless you've confirmed via search that it already occurred earlier the same calendar day in this person's timezone. Never give a live/current stock quote or price snapshot — the market is closed at this hour and a snapshot price is meaningless.
 
-After completing all searches above, write a genuinely enjoyable Morning Run Down covering: the weather from the context block, the to-dos and calendar events from the context block, the news from Search 1, the markets info from Search 3, the sports scores from Search 2, the story from Search 4, and a joke picked from the verified candidates in the context block. Use only real, current, verified information from your searches (and the verified weather/to-dos/calendar data) — never invent facts, venues, dates, scores, or weather. EVERY section — including Weather — gets its own header (an emoji plus a short title, one line, on its own); vary the emoji and phrasing day to day, but never fold a section into the opening greeting or another section instead of giving it a header. Beyond that, style is your call — vary the wording and exact phrasing day to day rather than repeating an identical script every time. Overall length should come from covering enough distinct topics, not from writing at length about any single one of them.
+After completing all searches above, write a genuinely enjoyable Morning Run Down covering: the weather from the context block, the to-dos and calendar events from the context block, the news from Search 1, the markets info from Search 3, the sports scores from Search 2, and the story from Search 4. Use only real, current, verified information from your searches (and the verified weather/to-dos/calendar data) — never invent facts, venues, dates, scores, or weather. EVERY section — including Weather — gets its own header (an emoji plus a short title, one line, on its own); vary the emoji and phrasing day to day, but never fold a section into the opening greeting or another section instead of giving it a header. Beyond that, style is your call — vary the wording and exact phrasing day to day rather than repeating an identical script every time. Overall length should come from covering enough distinct topics, not from writing at length about any single one of them.
 
 WEATHER: Give this section its own header, separate from the opening greeting (the greeting itself should just be a short "good morning" line, nothing else). One or two sentences using only the verified weather data from the context block — conditions, temperature, high/low. Never guess, never add a multi-day forecast.
 
@@ -63,7 +65,7 @@ NEWS ITEM LENGTH — HARD LIMIT: Each of the 5 news items gets a headline plus e
 
 NEUTRALITY — CRITICAL: Report only the concrete fact of what happened (who, what, when) — never characterize it, never editorialize, never take a side or imply one is right, never speculate on motives or consequences, never use loaded or opinionated language. This applies to every item, political or not, and applies even when the search results themselves are framed with opinion or analysis — strip that out and report just the underlying fact. Specifically banned: reaction/framing sentences or clauses tacked onto the fact, like "a serious escalation," "not a new headline, but...," "worth flagging," "tough one," "wine country in crisis," or any other editorial aside — if you catch yourself writing one, delete it rather than keep it as a second sentence. The one sentence you keep is always the fact itself, never your reaction to the fact.
 
-SPORTS: State the result unambiguously, spelling out who won — e.g. "[Team] beat [Opponent], 5–2" or "[Team] lost to [Opponent], 2–5" — always this-person's-team's-score first, opponent's second, and always paired with "beat"/"lost to" so the order can never be misread as reversed. Never just list "team, score, opponent" without saying who won. Do not mention upcoming games, schedules, or say a team is "set to play today" — this section covers only what already happened, never what's coming up.
+SPORTS: State the result unambiguously, spelling out who won, and always give the WINNING score first and the LOSING score second in the number pair — regardless of which team is this person's team. If [Team] won: "[Team] beat [Opponent], 5–2" (5 is [Team]'s own score, since they won). If [Team] lost: "[Team] lost to [Opponent], 5–2" (5 is [Opponent]'s winning score, 2 is [Team]'s — [Team] is still named first as the subject, but the winning number always leads). Confirmed live this was reported backwards — the previous instruction here said to always put this person's own team's score first even in a loss, which reads wrong ("Rangers lost, 2–5" is not how a loss is reported; "Rangers lost, 5–2" is). Always paired with "beat"/"lost to" so who won is never ambiguous even though the score order doesn't track whose team is being discussed. Never just list "team, score, opponent" without saying who won. Do not mention upcoming games, schedules, or say a team is "set to play today" — this section covers only what already happened, never what's coming up.
 
 MARKETS & INVESTING — HARD LIMIT: ${includeMarkets
   ? `Two or three sentences, total, no more. Futures direction for the major indices (Dow, S&P, Nasdaq), plus the ONE or TWO biggest overnight drivers (an earnings report, Fed commentary, a major economic data release, a geopolitical development) — not a survey of everything moving markets today. This section should read as a quick heads-up, not a market column; it must never come out longer than the news section combined. Frame it as what the trading day ahead holds, not a snapshot of where things stood at some overnight timestamp — don't reference a specific time or timezone for any price or figure.`
@@ -71,17 +73,15 @@ MARKETS & INVESTING — HARD LIMIT: ${includeMarkets
 
 WEIRD/FUNNY STORY: From Search 4's results, pick the single most genuinely funny or delightfully absurd story you found — something a person could mention at lunch and get a real reaction, not just "huh, weird." Skip anything that's political, crime-related, cruel, sad, or just a routine "odd but not funny" wire-service item with no real twist — most generic search results will be exactly that, which is why Search 4 points you at outlets that actually curate for this quality specifically. Use only real facts from what you found — never invent specific details to make a story land better. If nothing from Search 4 genuinely clears this bar, skip this section entirely rather than settling for a weak one — a missing story is better than a boring one.
 
-JOKE OF THE DAY: The context block gives you a real pool of joke candidates (VERIFIED JOKE CANDIDATES) — pick exactly ONE to deliver, the single funniest and most genuinely tellable one in the whole list. This is a judgment call, and it matters: think about what someone who's actually good at telling jokes would tell a friend, not what a dad-jokes calendar would print. Skip — do not pick — anything that's just a pun or wordplay for its own sake ("...because he's a fungi," "algae-bra," anything where the punchline is a play on words rather than a real idea or twist), and skip generic "why did the X cross the Y" riddle-format jokes too. Favor candidates with a genuine idea, an ironic turn, an observation, or a story — the kind of joke that gets a real laugh, not a groan. A good pick can be one line or several; length isn't the criterion, wit is. Give the one you pick straight — don't explain why it's funny, don't apologize for it, don't over-introduce it, just tell it. If NONE of the candidates are genuinely good by this bar, skip this section entirely rather than settling for a weak one — a missing joke is better than a bad one.
-
 FORMATTING — CRITICAL: Write in clean, plain, readable prose only — this will be read aloud via text-to-speech, so it must sound natural when spoken. Never include citation brackets, markdown links, raw URLs, "utm_source" parameters, "#:~:text=" fragment identifiers, or any link syntax anywhere in the output. When you want to credit a source, say it in plain spoken words woven into the sentence — e.g. "according to the AP" or "Axios reports" — never as a clickable link or bracketed reference. Do NOT include a "Sources:" section, footer, bibliography, or list of links anywhere, including at the end. The entire output must read as clean spoken prose from start to finish with zero raw URLs or citation markup of any kind.
 
-Do not include ANY meta-commentary, narration, or explanation of your own process or reasoning anywhere in the output, in any form — this is the single most important rule in this prompt, and it covers more than just a leading sentence. Banned, no matter where in the output it appears: narrating what you're about to do or just did ("Now I have everything I need," "Let me search for...", "Here is the briefing:"); explaining or justifying an editorial choice you made — which story you picked and why, which weird/funny story you rejected and why (e.g. "the wing-walker story was already used yesterday," "the raccoon story is too local"), why a section is missing, why a game hasn't happened yet, why no joke was available; addressing the reader/operator directly about the process ("let me know if you have questions," "here's my reasoning"). None of that belongs in the output under any circumstances — if a section has nothing to say, it simply doesn't appear, with zero explanation of why. The very first character of your output must be the start of the actual greeting — not a sentence about you, your process, or your reasoning — and the very last character must be the end of the My Life line described below, nothing appended after it.
+Do not include ANY meta-commentary, narration, or explanation of your own process or reasoning anywhere in the output, in any form — this is the single most important rule in this prompt, and it covers more than just a leading sentence. Banned, no matter where in the output it appears: narrating what you're about to do or just did ("Now I have everything I need," "Let me search for...", "Here is the briefing:"); explaining or justifying an editorial choice you made — which story you picked and why, which weird/funny story you rejected and why (e.g. "the wing-walker story was already used yesterday," "the raccoon story is too local"), why a section is missing, why a game hasn't happened yet; addressing the reader/operator directly about the process ("let me know if you have questions," "here's my reasoning"). None of that belongs in the output under any circumstances — if a section has nothing to say, it simply doesn't appear, with zero explanation of why. The very first character of your output must be the start of the actual greeting — not a sentence about you, your process, or your reasoning — and the very last character must be the end of the My Life line described below, nothing appended after it.
 
 THE MORNING STOIC: Give this section the header "🧘 The Morning Stoic" (keep this exact header — the one part of the output that does NOT vary day to day). Go straight from the header into today's Stoic quote from the context block, delivered essentially as given — the exact words, attributed naturally (e.g. "As Marcus Aurelius wrote..." or "Epictetus wrote..."). Do not add any framing or lead-in sentence before the quote — no scene-setting, no "there is something to be said for..." — the header leads directly into the quote itself. Immediately after the quote, in exactly ONE sentence, say what it actually means today in genuinely plain, ordinary English — the way you'd explain it to a friend over coffee. Do NOT reach for any specific metaphor domain — not technology, not engineering, not sports, not cooking. No "processor," "RAM," "system," "framework," "install," "run," or any other word that belongs to computers or machinery. No philosophy jargon, no "the Stoics believed," no lecturing. Vary the wording of this one sentence day to day. Close the section — and the entire briefing — with exactly this line, unchanged every day: "Go to My Life to record any thoughts." Nothing after it.
 
 For loose style reference only (not a required template), here is a briefing this person said they liked:
 
-(This example is showing you TONE AND STRUCTURE ONLY. Every fact, story, quote, and detail in your actual output must come from your own fresh search results for today (or, for the joke, from the verified candidates given, and for weather/to-dos/calendar, from the verified context data). Do not reuse, paraphrase, or reproduce ANY specific fact, story, or detail from this example under any circumstances. If your search doesn't turn up a good weird/funny story, or none of the joke candidates are genuinely good, skip that section entirely rather than reusing the example. Any place names, cities, venues, team opponents, scores, jokes, to-dos, or events shown in brackets below are placeholders — never use a real one from this example in your actual output.)
+(This example is showing you TONE AND STRUCTURE ONLY. Every fact, story, quote, and detail in your actual output must come from your own fresh search results for today, or, for weather/to-dos/calendar, from the verified context data. Do not reuse, paraphrase, or reproduce ANY specific fact, story, or detail from this example under any circumstances. If your search doesn't turn up a good weird/funny story, skip that section entirely rather than reusing the example. Any place names, cities, venues, team opponents, scores, to-dos, or events shown in brackets below are placeholders — never use a real one from this example in your actual output.)
 
 [EXAMPLE 1]
 ☕ David's Daily Brief
@@ -116,9 +116,6 @@ Last night's results for [this person's home teams]: [Team] beat [Opponent], fin
 
 😂 No Politics, Just Weird
 [a real, current lighthearted news story — something genuinely funny or delightfully absurd from Search 4, not invented]
-
-😄 Joke of the Day
-[the single funniest, genuinely tellable joke picked from the verified candidates — not a pun, not a riddle, delivered straight, no explanation]
 
 🧘 The Morning Stoic
 "The important thing is not to stop questioning." — Albert Einstein
@@ -223,53 +220,11 @@ async function resolveWeatherCoords(
   return null;
 }
 
-// ── Joke of the day — a real source, not a web search ────────────────────────
-// Back on JokeAPI (v2.jokeapi.dev) — free and keyless. API Ninjas'
-// /v1/jokeoftheday replaced this for a while but its free tier turned out to
-// be eval/demo-only (returns "Invalid API Key" for every real request, even
-// with a correct key, unless the account is on a paid plan) — silently, since
-// a non-ok response here was never logged, so the joke section had likely
-// been empty for a while before that surfaced. JokeAPI's "Misc" category
-// (which already excludes its own separate "Pun" category) still has real
-// puns mixed in — its categorization is loose — confirmed via live testing:
-// roughly 1 in 10 "single"-type jokes and well over half of "twopart"-type
-// jokes came back as pun/wordplay construction even inside Misc. So this
-// fetches a pool of 10 candidates (both formats — a good joke isn't always
-// one line) rather than trusting any single result, and leaves the actual
-// judgment call — genuinely funny vs. just wordplay — to Claude, which is
-// what distinguishes them, not an API parameter.
-async function fetchJokeCandidates(): Promise<string[]> {
-  try {
-    const res = await fetch(
-      "https://v2.jokeapi.dev/joke/Misc?blacklistFlags=nsfw,racist,sexist,political,religious&amount=10",
-      { signal: AbortSignal.timeout(6000) }
-    );
-    if (!res.ok) {
-      logger.warn({ status: res.status }, "[DailyBrief] JokeAPI request failed — skipping joke of the day");
-      return [];
-    }
-    const data = await res.json() as {
-      error?: boolean;
-      jokes?: Array<{ type: string; joke?: string; setup?: string; delivery?: string }>;
-    };
-    if (data.error || !data.jokes) {
-      logger.warn({ data }, "[DailyBrief] JokeAPI returned an error — skipping joke of the day");
-      return [];
-    }
-    return data.jokes
-      .map((j) => j.type === "single" ? j.joke ?? null : (j.setup && j.delivery ? `${j.setup} ${j.delivery}` : null))
-      .filter((t): t is string => !!t?.trim());
-  } catch (err) {
-    logger.warn({ err }, "[DailyBrief] JokeAPI fetch threw — skipping joke of the day");
-    return [];
-  }
-}
-
 // ── Your Day — plain to-dos, verified from the database ──────────────────────
 // Open-ended to-dos (no fire_at) plus anything specifically scheduled for
 // today — a reminder timed for 3pm today belongs in "your day" just as much
 // as an undated to-do does. No LLM involvement: this is rendered plainly by
-// Claude straight from what's fetched here, same pattern as weather/jokes.
+// Claude straight from what's fetched here, same pattern as weather.
 async function fetchTodayTodos(userName: string, tz: string): Promise<string[]> {
   try {
     const { rows } = await query<{ reminder_text: string }>(
@@ -289,13 +244,12 @@ async function fetchTodayTodos(userName: string, tz: string): Promise<string[]> 
 
 // ── Context-gathering for generateDailyBrief ──────────────────────────────────
 async function buildDailyBriefContext(userName: string): Promise<{ block: string; includeMarkets: boolean }> {
-  const [profile, goals, profileItems, memories, stoic, jokeCandidates, recentBriefings] = await Promise.all([
+  const [profile, goals, profileItems, memories, stoic, recentBriefings] = await Promise.all([
     getProfile(userName).catch(() => null),
     getGoals(userName).catch((): Awaited<ReturnType<typeof getGoals>> => []),
     getProfileItems(undefined, userName).catch((): Awaited<ReturnType<typeof getProfileItems>> => []),
     getRecentMemories(7).catch(() => []),
     getStoicForUser(userName).catch(() => null),
-    fetchJokeCandidates(),
     getRecentBriefingTexts(userName, 2).catch(() => []),
   ]);
 
@@ -357,10 +311,6 @@ async function buildDailyBriefContext(userName: string): Promise<{ block: string
   const memoriesBlock = formatMemoriesForContext(memories);
   const stoicLine = stoic ? `"${stoic.quote}" — ${stoic.author} (${stoic.source})` : "none available today";
 
-  const jokeCandidatesBlock = jokeCandidates.length > 0
-    ? jokeCandidates.map((j, i) => `${i + 1}. ${j}`).join("\n")
-    : "None available today — skip the joke of the day section entirely rather than inventing one or searching for one.";
-
   const recentBriefingsBlock = recentBriefings.length > 0
     ? recentBriefings.map((t, i) => `[Briefing from ${i === 0 ? "yesterday" : i + 1 + " days ago"}]\n${t}`).join("\n\n")
     : "None on file — this is either the first briefing or none were saved recently.";
@@ -368,11 +318,18 @@ async function buildDailyBriefContext(userName: string): Promise<{ block: string
   const today = new Date().toLocaleDateString("en-US", {
     weekday: "long", year: "numeric", month: "long", day: "numeric",
   });
+  // For SEARCH 2's sports freshness cutoff — computed here rather than left
+  // to the model's own date arithmetic, since getting this wrong is exactly
+  // how a Saturday-night score ended up in a Monday-morning briefing before.
+  const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toLocaleDateString("en-US", {
+    timeZone: tz, weekday: "long", year: "numeric", month: "long", day: "numeric",
+  });
   const localWeekday = new Date().toLocaleDateString("en-US", { timeZone: tz, weekday: "short" });
   const includeMarkets = localWeekday !== "Sat" && localWeekday !== "Sun";
 
   const block =
 `Today's date: ${today}
+This person's "yesterday" (the ONLY date a sports score may be reported from — see SEARCH 2): ${yesterday}
 Name: ${name}
 City: ${city}
 VERIFIED WEATHER DATA for ${city} (use exactly this — do not search for or guess weather): ${weatherLine}
@@ -385,9 +342,7 @@ Active goals: ${goalsLine}
 ${profileItemsBlock}
 Recent context: ${memoriesBlock || "no recent conversation memories"}
 Today's reflection: ${stoicLine}
-VERIFIED JOKE CANDIDATES (real jokes from a dedicated source — pick exactly ONE to deliver, do not invent your own, do not search for one):
-${jokeCandidatesBlock}
-RECENT BRIEFINGS (for avoiding repeats only — never read this back or reference it directly): the weird/funny story, the joke, and the news angles below were already delivered recently. Today's actual news will naturally differ since real events happened since then, but do not pick the same weird/funny story, the same joke, or lean on the same angle for an interest-tied story again — if your search for a fresh weird/funny story doesn't turn up something different from what's shown here, skip that section rather than repeat it.
+RECENT BRIEFINGS (for avoiding repeats only — never read this back or reference it directly): the weird/funny story and the news angles below were already delivered recently. Today's actual news will naturally differ since real events happened since then, but do not pick the same weird/funny story, or lean on the same angle for an interest-tied story again — if your search for a fresh weird/funny story doesn't turn up something different from what's shown here, skip that section rather than repeat it.
 ${recentBriefingsBlock}`;
 
   return { block, includeMarkets };
@@ -464,7 +419,7 @@ async function callDailyBriefViaClaude(input: string, userName: string): Promise
 // along with the old scheduled pre-generation pipeline), so two overlapping
 // calls for the same user each run a full independent Sonnet + web_search
 // generation, producing two genuinely different briefings (different top
-// stories, different joke) shown back to back. Confirmed live: this is
+// stories, different weird/funny pick) shown back to back. Confirmed live: this is
 // reachable from a single user action — the morning-push notification's
 // trigger message has no client-side "generating…" feedback, so a user who
 // doesn't see anything happen yet can easily end up sending the trigger a
