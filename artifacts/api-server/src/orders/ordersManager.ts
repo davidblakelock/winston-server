@@ -141,7 +141,10 @@ export async function ensureOrdersTable(): Promise<void> {
 // ── Query helpers ──────────────────────────────────────────────────────────────
 
 export async function getOrders(userName = NATIVE_USER): Promise<Order[]> {
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  // Retention window after delivery — originally 7 days (an unrequested
+  // default picked at build time, not something the user asked for);
+  // shortened to 3 per explicit user request.
+  const retentionCutoff = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
   const { rows } = await query<Order>(
     `SELECT * FROM orders
      WHERE user_name = $1
@@ -158,7 +161,7 @@ export async function getOrders(userName = NATIVE_USER): Promise<Order[]> {
             ELSE 5 END,
        expected_date ASC NULLS LAST,
        created_at DESC`,
-    [userName, sevenDaysAgo]
+    [userName, retentionCutoff]
   );
   return rows.map((r) => ({
     ...r,

@@ -338,7 +338,34 @@ export async function scanOrdersOnly(userName: string): Promise<OrderScanResult>
 // merge tier (the same one that already makes Amazon's Ordered → Shipped →
 // Delivered emails update one row instead of creating duplicates) does the
 // actual merge — this only has to find the candidate emails.
+// Merging a follow-up email into an existing order (upsertOrder, all three
+// priority tiers) never overwrites that order's email_id — it's reserved for
+// the order's original identity email, by design (COALESCE(email_id, ...) /
+// omitted from the UPDATE entirely). That's correct for identity, but it
+// means the `WHERE email_id = $2` "already seen" check below can only ever
+// match that one original email — every later follow-up (a "ready to ship"
+// after "order confirmed", etc.) fails that check forever and gets
+// re-fetched and re-sent to Claude on every single hourly tick indefinitely.
+// Confirmed live: the same "ready to ship" email for order 321 was
+// reprocessed 7+ times over as many hours, wastefully and with a real risk
+// of a later pass extracting a slightly different value than an earlier one
+// and silently overwriting a field that was already correct. Track
+// processed follow-up email IDs separately so each one is only ever
+// evaluated once, independent of the order's own identity email_id.
+async function ensureFollowupLogTable(): Promise<void> {
+  await query(`
+    CREATE TABLE IF NOT EXISTS order_followup_scan_log (
+      user_name  text NOT NULL,
+      email_id   text NOT NULL,
+      scanned_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (user_name, email_id)
+    )
+  `).catch(() => {});
+}
+const _followupLogTableInit = ensureFollowupLogTable();
+
 export async function scanOrderStatusUpdates(userName: string): Promise<{ updated: number }> {
+  await _followupLogTableInit;
   const orders = await getOrdersNeedingEmailFollowup(userName);
   if (orders.length === 0) return { updated: 0 };
 
@@ -375,6 +402,12 @@ export async function scanOrderStatusUpdates(userName: string): Promise<{ update
         );
         if (seen.length > 0) continue;
 
+        const { rows: alreadyProcessed } = await query<{ email_id: string }>(
+          `SELECT email_id FROM order_followup_scan_log WHERE user_name = $1 AND email_id = $2 LIMIT 1`,
+          [userName, msgId]
+        );
+        if (alreadyProcessed.length > 0) continue;
+
         const detail = await gmail.users.messages.get({ userId: "me", id: msgId, format: "full" });
         const headers = detail.data.payload?.headers ?? [];
         const getHeader = (name: string) =>
@@ -385,6 +418,15 @@ export async function scanOrderStatusUpdates(userName: string): Promise<{ update
         if (!body || body.length < 50) continue;
 
         const result = await classifyEmail(from, subject, body);
+        // Mark processed once a real classification came back — regardless of
+        // outcome — so a routine/irrelevant follow-up doesn't get re-sent to
+        // Claude every hour forever. Deliberately NOT marked on a thrown
+        // error above (network/Gmail hiccup) — that should still retry next tick.
+        await query(
+          `INSERT INTO order_followup_scan_log (user_name, email_id) VALUES ($1, $2)
+           ON CONFLICT (user_name, email_id) DO NOTHING`,
+          [userName, msgId]
+        ).catch(() => {});
         if (!result || result.action !== "save_to_orders" || !result.order) continue;
 
         const wrote = await handleOrderResult(userName, msgId, from, subject, result.order);
