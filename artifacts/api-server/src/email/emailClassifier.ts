@@ -164,7 +164,7 @@ Decide what action this email warrants, if any. Return ONLY valid JSON:
     "status": "ordered" | "shipped" | "in_transit" | "out_for_delivery" | "delivered" | "refunded" | null,
     "direction": "outbound" | "return",
     "expectedDate": "YYYY-MM-DD or null",
-    "orderTotal": "$XX.XX — the order total for direction=outbound, or the refund amount for a direction=return refund-confirmation email — or null",
+    "orderTotal": "$XX.XX — the order total for direction=outbound, or the refund amount ONLY when status=refunded (a return in transit or just-received often quotes an ESTIMATED refund — leave this null then, not the estimate; upsertOrder fills this field once and never overwrites an already-set value, so an early estimate would permanently block the real confirmed amount from ever landing here) — or null",
     "orderUrl": "string or null"
   },
 
