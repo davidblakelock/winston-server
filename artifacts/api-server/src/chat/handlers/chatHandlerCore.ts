@@ -671,14 +671,25 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
 
   // Email reply flow in progress — inject draft context so Claude can decide
   // naturally via email_send / email_revise / email_cancel action tags.
+  // gmailId is only ever set for a real triage-reply (email_reply's own
+  // handler always populates it from a real email); email_compose sets it to
+  // '' for a fresh compose to a new contact. The revision instruction has to
+  // differ by which one this is — a triage reply's revision goes through
+  // composeEmailReply (short, "reply" framing, no search, built for exactly
+  // that), but a fresh compose needs Claude to draft the full thing itself
+  // and hand it over via body=, or it collapses to that same short generic
+  // reply-shaped text regardless of what the email actually needs to say.
   if (pendingEmailReply !== null) {
+    const isTriageReply = !!pendingEmailReply.gmailId;
     dynamicPrompt += `\n\n[Pending Email Draft for ${pendingEmailReply.recipientName}]\n` +
       `To: ${pendingEmailReply.to}\n` +
       `Subject: ${pendingEmailReply.subject}\n` +
       `Current draft:\n"${pendingEmailReply.draftBody}"\n\n` +
       `If this message is actually about that draft, handle it naturally:\n` +
       `- If they approve (yes, looks good, send it, perfect, etc.) → emit [ACTION:email_send]\n` +
-      `- If they give direction or want changes → end your reply with [ACTION:email_revise|feedback=<their exact words>]. The server recomposes the draft from that feedback — do not try to write the revised draft yourself here.\n` +
+      (isTriageReply
+        ? `- If they give direction or want changes → end your reply with [ACTION:email_revise|feedback=<their exact words>]. The server recomposes the draft from that feedback — do not try to write the revised draft yourself here.\n`
+        : `- If they give direction or want changes → redraft the FULL email yourself (same freedom as the original draft — research, length, structure all up to what actually fits) and end your reply with [ACTION:email_revise|body=<the complete updated email>]. Do not use feedback= here — it routes through a generic short-reply composer that isn't built for this and will flatten whatever you drafted; body= is what makes your own redraft actually save.\n`) +
       `- If they say 'send that word for word' or 'use exactly what I typed' → end your reply with [ACTION:email_send|body=<their exact typed text>], using their exact text verbatim, not a paraphrase.\n` +
       `- If they cancel → emit [ACTION:email_cancel]\n` +
       `Emitting the action tag is not optional when they ARE responding to it — a friendly sentence alone ("Sounds good, I'll make that change") does not actually revise or send anything; only the tag does. Never claim a change was made unless you emitted [ACTION:email_revise] in the same reply.\n` +
@@ -955,7 +966,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
         action = { type: "email_send", body: parts.body ?? null };
         break;
       case "email_revise":
-        action = { type: "email_revise", feedback: parts.feedback ?? null };
+        action = { type: "email_revise", feedback: parts.feedback ?? null, body: parts.body ?? null };
         break;
       case "email_cancel":
         action = { type: "email_cancel" };
@@ -2103,6 +2114,24 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     // ── email_revise ──────────────────────────────────────────────────────────
     case "email_revise": {
       if (pendingEmailReply) {
+        // A fresh compose (pendingEmailReply.gmailId === '', set that way by
+        // email_compose) now carries the FULL email Claude itself drafted in
+        // body= — see the dynamicPrompt injections above. composeEmailReply()
+        // was never a fit for that case: it's purpose-built for short
+        // meeting-reply emails (its own signature takes proposedDateTimeStr/
+        // isOpenEnded), hardcodes "2-4 sentences," has no web_search access,
+        // and treats pendingEmailReply.subject as an "original email subject"
+        // that's simply '' for a fresh compose. Confirmed live: routing a
+        // fresh compose through it collapsed a well-researched, formatted
+        // multi-paragraph draft into a generic one-paragraph reply. Only
+        // fall back to composeEmailReply for an actual triage-reply revision
+        // (gmailId set, feedback-only, no body) — the case it was built for.
+        if (action.body?.trim()) {
+          setPendingEmailReply(sessionUserName, { ...pendingEmailReply, draftBody: action.body.trim() });
+          finalReply = `Here's the draft: "${action.body.trim()}" — does that work?`;
+          break;
+        }
+
         const displayName = userProfile?.name ?? sessionUserName;
         try {
           const revised = await composeEmailReply(
@@ -2157,7 +2186,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
             userName: sessionUserName,
             createdAt: Date.now(),
           });
-          dynamicPrompt += `\n\n[Email Compose — ${name} (${email})]\nThe user wants to compose a new email to ${name}. Ask them what they'd like to say, or offer to draft something based on context. Once you know what they want to say, end your reply with [ACTION:email_revise|feedback=<what they want to say, in their words>] — the server writes the actual draft from that and shows it next turn; do not write the draft yourself here, it will not be saved. Once a draft has been shown, handle confirmation naturally: approve → [ACTION:email_send]; more changes → [ACTION:email_revise|feedback=<their words>]; cancel → [ACTION:email_cancel].`;
+          dynamicPrompt += `\n\n[Email Compose — ${name} (${email})]\nThe user wants to compose a new email to ${name}. If you don't yet know what they want to say, ask — don't guess. Once you know (from this message or their reply), draft the FULL email yourself — research with web_search if it'd genuinely improve it, use whatever length and structure (headers, bullet points) actually fit the content, the way you would if you were just writing it directly. This is unlike a quick reply-to-an-email draft: there's no length cap and no "keep it brief" expectation here, match the effort to what they asked for. End your reply with [ACTION:email_revise|body=<the complete drafted email, exactly as it should be sent>] — that's what actually saves it; describing the draft in your own reply text without this tag saves nothing, and the next "send it" would go out empty. Once a draft has been shown, handle confirmation naturally: approve → [ACTION:email_send]; more changes → redraft it yourself again and emit [ACTION:email_revise|body=<the updated complete email>]; cancel → [ACTION:email_cancel].`;
         } else {
           finalReply = `I couldn't find an email address for ${name} in your contacts. Can you provide their email address?`;
         }
