@@ -32,6 +32,24 @@ function mapTrackingDetails(details: { status: string; message: string; datetime
   }));
 }
 
+// This account's FedEx carrier account is EasyPost's own zero-credential
+// "FedEx Default" reseller account (confirmed via EasyPost support), not a
+// linked personal FedEx account — but Tracker.create only resolves to it
+// when the carrier string is "FedExDefault", not the plain "FedEx" the
+// email classifier extracts. Passing "FedEx" as-is made every FedEx
+// tracker fail with CREDENTIALS_NOT_FOUND, since EasyPost was matching it
+// against a real personal-account carrier slot that was never configured
+// (and doesn't need to be, for this account type) instead of the working
+// default one. Confirmed live: order 321's tracker only succeeded once
+// this normalization was applied.
+const CARRIER_ALIASES: Record<string, string> = {
+  fedex: "FedExDefault",
+};
+
+function normalizeCarrier(carrier: string): string {
+  return CARRIER_ALIASES[carrier.trim().toLowerCase()] ?? carrier;
+}
+
 export async function createTracker(
   trackingNumber: string,
   carrier?: string
@@ -39,7 +57,7 @@ export async function createTracker(
   try {
     const tracker = await client.Tracker.create({
       tracking_code: trackingNumber,
-      ...(carrier ? { carrier } : {}),
+      ...(carrier ? { carrier: normalizeCarrier(carrier) } : {}),
     });
 
     return {
