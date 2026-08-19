@@ -2017,9 +2017,28 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
     // ── email_send ────────────────────────────────────────────────────────────
     case "email_send": {
       if (pendingEmailReply) {
+        const body = action.body?.trim() || pendingEmailReply.draftBody;
+
+        // Confirmed live as a real failure, not a hypothetical: Claude can
+        // emit [ACTION:email_compose] and, in the very same reply, narrate a
+        // full drafted email as ordinary chat text instead of routing it
+        // through [ACTION:email_revise|feedback=...] (the only thing that
+        // actually persists a draft into pendingEmailReply.draftBody — see
+        // the email_compose prompt instruction). The user sees what looks
+        // like a real draft, says "send it," and this handler has nothing to
+        // put in the mailto body — Gmail opens with the message blank.
+        // Sharpened the prompt to stop Claude drafting inline, but that's
+        // still a prompt-only rule; this is the deterministic backstop so a
+        // future miss fails loud (ask for the content again) instead of
+        // silently sending an empty email.
+        if (!body) {
+          finalReply = `I don't actually have a draft saved for that yet — what would you like the email to say?`;
+          log.warn({ to: pendingEmailReply.to }, "[email_send] No draft body available — asking instead of sending empty");
+          break;
+        }
+
         const subject = pendingEmailReply.subject ||
           `Following up — ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
-        const body = action.body?.trim() || pendingEmailReply.draftBody;
         const mailtoUri =
           `mailto:${encodeURIComponent(pendingEmailReply.to)}` +
           `?subject=${encodeURIComponent(subject)}` +
@@ -2032,38 +2051,51 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
           mailtoUri,
         };
         broadcastToUser(sessionUserName, "email-compose", { type: "email_compose", ...emailPayload });
+
+        // A freshly composed email to a new contact (email_compose sets
+        // gmailId/gmailThreadId to '' — see that case below) was never part
+        // of a triage session, so there's no "next card" to advance to and
+        // no inbox to be "caught up" on. This handler used to run the
+        // triage-advance/complete logic unconditionally for every send,
+        // whether or not one was ever in progress — confirmed live as the
+        // cause of a compose-to-a-new-contact send coming back with "You're
+        // all caught up — inbox handled!" tacked onto it, a message about a
+        // triage session that was never happening.
+        const isTriageReply = !!pendingEmailReply.gmailId;
         clearPendingEmailReply(sessionUserName);
 
-        // Advance triage to next email
-        const nextEmail = advanceTriageSession(sessionUserName);
-        if (nextEmail) {
-          const session = getTriageSession(sessionUserName);
-          broadcastToUser(sessionUserName, "email_card", {
-            type: "email_card",
-            gmailId: nextEmail.gmailId,
-            from: nextEmail.from,
-            subject: nextEmail.subject,
-            snippet: nextEmail.snippet,
-            index: (session?.currentIndex ?? 0) + 1,
-            total: session ? session.emails.length : 0,
-          });
-          log.info({ gmailId: nextEmail.gmailId }, "[email_send] Advanced to next email card");
+        if (isTriageReply) {
+          const nextEmail = advanceTriageSession(sessionUserName);
+          if (nextEmail) {
+            const session = getTriageSession(sessionUserName);
+            broadcastToUser(sessionUserName, "email_card", {
+              type: "email_card",
+              gmailId: nextEmail.gmailId,
+              from: nextEmail.from,
+              subject: nextEmail.subject,
+              snippet: nextEmail.snippet,
+              index: (session?.currentIndex ?? 0) + 1,
+              total: session ? session.emails.length : 0,
+            });
+            log.info({ gmailId: nextEmail.gmailId }, "[email_send] Advanced to next email card");
+          } else {
+            broadcastToUser(sessionUserName, "email_done", {
+              type: "email_done",
+              text: "You're all caught up — inbox handled!",
+            });
+            broadcastToUser(sessionUserName, "speak_sync", {
+              text: "You're all caught up — inbox handled!",
+              messageId: `email-done-${Date.now()}`,
+              initiated_by: null,
+            });
+            log.info("[email_send] Triage complete");
+          }
+          clearPendingMeetingRequests(sessionUserName);
+          finalReply = `The reply is ready. Your email app should open with it pre-filled for ${pendingEmailReply.recipientName} — hit send when you're ready. I can't send it directly; that part's yours.`;
         } else {
-          broadcastToUser(sessionUserName, "email_done", {
-            type: "email_done",
-            text: "You're all caught up — inbox handled!",
-          });
-          broadcastToUser(sessionUserName, "speak_sync", {
-            text: "You're all caught up — inbox handled!",
-            messageId: `email-done-${Date.now()}`,
-            initiated_by: null,
-          });
-          log.info("[email_send] Triage complete");
+          finalReply = `Your email to ${pendingEmailReply.recipientName} is ready. Your email app should open with it pre-filled — hit send when you're ready. I can't send it directly; that part's yours.`;
         }
-
-        clearPendingMeetingRequests(sessionUserName);
-        finalReply = `The reply is ready. Your email app should open with it pre-filled for ${pendingEmailReply.recipientName} — hit send when you're ready. I can't send it directly; that part's yours.`;
-        log.info({ to: pendingEmailReply.to }, "[chatHandlerCore] Email packaged for send");
+        log.info({ to: pendingEmailReply.to, isTriageReply }, "[chatHandlerCore] Email packaged for send");
       }
       break;
     }
