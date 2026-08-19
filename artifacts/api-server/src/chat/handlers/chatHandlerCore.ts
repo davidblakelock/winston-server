@@ -972,7 +972,7 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
         action = { type: "email_cancel" };
         break;
       case "email_compose":
-        action = { type: "email_compose", recipientName: parts.to ?? null };
+        action = { type: "email_compose", recipientName: parts.to ?? null, body: parts.body ?? null };
         break;
       case "sms_send":
         action = { type: "sms_send", body: parts.body ?? null };
@@ -2182,11 +2182,27 @@ export async function handleNewChat(req: NewChatRequest): Promise<NewChatRespons
             to: email,
             recipientName: name,
             subject: '',
-            draftBody: '',
+            draftBody: action.body?.trim() ?? '',
             userName: sessionUserName,
             createdAt: Date.now(),
           });
-          dynamicPrompt += `\n\n[Email Compose — ${name} (${email})]\nThe user wants to compose a new email to ${name}. If you don't yet know what they want to say, ask — don't guess. Once you know (from this message or their reply), draft the FULL email yourself — research with web_search if it'd genuinely improve it, use whatever length and structure (headers, bullet points) actually fit the content, the way you would if you were just writing it directly. This is unlike a quick reply-to-an-email draft: there's no length cap and no "keep it brief" expectation here, match the effort to what they asked for. End your reply with [ACTION:email_revise|body=<the complete drafted email, exactly as it should be sent>] — that's what actually saves it; describing the draft in your own reply text without this tag saves nothing, and the next "send it" would go out empty. Once a draft has been shown, handle confirmation naturally: approve → [ACTION:email_send]; more changes → redraft it yourself again and emit [ACTION:email_revise|body=<the updated complete email>]; cancel → [ACTION:email_cancel].`;
+
+          if (action.body?.trim()) {
+            // Claude already drafted the full email in this same reply (the
+            // base prompt's "case 2" — enough info was already given, e.g.
+            // "email Fred about X and Y") and put it in body=, so there's
+            // nothing left to ask and no need for a second round trip to
+            // Claude just to generate a "what would you like to say?"
+            // question nobody needs. Show the draft immediately.
+            finalReply = `Here's the draft: "${action.body.trim()}" — does that work?`;
+          } else {
+            // Claude doesn't have enough to draft yet (base prompt's "case
+            // 1") — leave finalReply unset so the natural "what would you
+            // like to say?" question gets generated with this context
+            // visible, and set up guidance for whichever turn the content
+            // actually arrives on.
+            dynamicPrompt += `\n\n[Email Compose — ${name} (${email})]\nThe user wants to compose a new email to ${name} but hasn't said what it should say yet. Ask them. Once they tell you (this reply or theirs), draft the FULL email yourself — research with web_search if it'd genuinely improve it, whatever length and structure the content actually calls for, no "keep it brief" default — and end your reply with [ACTION:email_revise|body=<the complete drafted email, exactly as it should be sent>], which is what actually saves it. Once a draft has been shown, handle confirmation naturally: approve → [ACTION:email_send]; more changes → redraft it yourself and emit [ACTION:email_revise|body=<the updated complete email>]; cancel → [ACTION:email_cancel].`;
+          }
         } else {
           finalReply = `I couldn't find an email address for ${name} in your contacts. Can you provide their email address?`;
         }
