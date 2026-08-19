@@ -15,7 +15,7 @@ import {
   isKeyTrackingStatus,
   type TrackingEvent,
 } from "./easypostManager.js";
-import { resolveOrderStatus, type OrderStatus } from "./ordersManager.js";
+import { resolveOrderStatus, type OrderStatus, type OrderDirection } from "./ordersManager.js";
 
 export interface FreshTrackerResult {
   status: string; // EasyPost's raw status vocabulary — mapped internally
@@ -34,8 +34,9 @@ export async function applyEasyPostTrackerUpdate(
     item_name: string;
     retailer: string;
     status: OrderStatus;
+    direction: OrderDirection;
   }>(
-    `SELECT id, user_name, item_name, retailer, status
+    `SELECT id, user_name, item_name, retailer, status, direction
      FROM orders WHERE easypost_tracker_id = $1`,
     [trackerId]
   );
@@ -95,28 +96,52 @@ export async function applyEasyPostTrackerUpdate(
   // the user for — matches the guard already in place for reservation pushes:
   // don't re-fire the same notification for information they already have.
   if (isKeyTrackingStatus(tracker.status) && resolvedStatus !== order.status) {
-    const messages: Record<string, { title: string; body: string }> = {
-      out_for_delivery: {
-        title: "📦 Out for Delivery",
-        body: `Your ${order.item_name} from ${order.retailer} is out for delivery!`,
-      },
-      delivered: {
-        title: "✅ Delivered!",
-        body: `Your ${order.item_name} from ${order.retailer} has been delivered.`,
-      },
-      available_for_pickup: {
-        title: "📮 Ready for Pickup",
-        body: `Your ${order.item_name} from ${order.retailer} is available for pickup.`,
-      },
-      return_to_sender: {
-        title: "↩️ Returned to Sender",
-        body: `Your ${order.item_name} from ${order.retailer} is being returned.`,
-      },
-      failure: {
-        title: "⚠️ Delivery Failed",
-        body: `Delivery failed for your ${order.item_name} from ${order.retailer}.`,
-      },
-    };
+    // "delivered" is the one status virtually every return actually
+    // reaches, and it means the opposite of what it means for an outbound
+    // order — the retailer received it back, not the user receiving
+    // something — so it needs its own copy rather than reusing the
+    // outbound wording. The others are rare enough for a return (EasyPost's
+    // "out for delivery"/"returned to sender"/"failure" describe the
+    // carrier's leg to whatever the destination is, which is informational
+    // either way) that outbound-flavored copy isn't actively misleading.
+    const messages: Record<string, { title: string; body: string }> =
+      order.direction === "return"
+        ? {
+            delivered: {
+              title: "↩️ Return Delivered",
+              body: `Your return of ${order.item_name} has arrived at ${order.retailer}.`,
+            },
+            out_for_delivery: {
+              title: "📦 Return In Transit",
+              body: `Your return of ${order.item_name} is on its way to ${order.retailer}.`,
+            },
+            failure: {
+              title: "⚠️ Return Delivery Failed",
+              body: `Delivery of your return (${order.item_name}) to ${order.retailer} failed.`,
+            },
+          }
+        : {
+            out_for_delivery: {
+              title: "📦 Out for Delivery",
+              body: `Your ${order.item_name} from ${order.retailer} is out for delivery!`,
+            },
+            delivered: {
+              title: "✅ Delivered!",
+              body: `Your ${order.item_name} from ${order.retailer} has been delivered.`,
+            },
+            available_for_pickup: {
+              title: "📮 Ready for Pickup",
+              body: `Your ${order.item_name} from ${order.retailer} is available for pickup.`,
+            },
+            return_to_sender: {
+              title: "↩️ Returned to Sender",
+              body: `Your ${order.item_name} from ${order.retailer} is being returned.`,
+            },
+            failure: {
+              title: "⚠️ Delivery Failed",
+              body: `Delivery failed for your ${order.item_name} from ${order.retailer}.`,
+            },
+          };
 
     const msg = messages[tracker.status];
     if (msg) {

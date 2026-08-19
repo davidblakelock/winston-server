@@ -11,7 +11,17 @@ export type OrderStatus =
   | "out_for_delivery"
   | "delivered"
   | "delayed"
-  | "exception";
+  | "exception"
+  | "refunded";
+
+// "outbound" (default) is the retailer shipping something TO the user — the
+// only direction this table used to track. "return" is the user shipping
+// something BACK to a retailer. Deliberately the same table, same status
+// column, same tracking pipeline (EasyPost doesn't know or care which
+// direction a package is moving) — a return is just an order whose
+// lifecycle can additionally reach "refunded" once a refund-confirmation
+// email arrives, a step outbound orders never have.
+export type OrderDirection = "outbound" | "return";
 
 // Real lifecycle rank for "only move status forward" checks — NOT the same
 // as the union's declaration order above, and deliberately not a plain
@@ -31,6 +41,11 @@ const ORDER_STATUS_RANK: Record<OrderStatus, number> = {
   delayed: 2,
   exception: 2,
   delivered: 3,
+  // Return-only: a refund-confirmation email is a business event on top of
+  // the physical delivery EasyPost already reported, not a shipping status —
+  // it can only ever move a return forward from "delivered", never appear
+  // on an outbound order.
+  refunded: 4,
 };
 
 // Resolves what an order's status should become given its current value and
@@ -62,9 +77,13 @@ export interface Order {
   tracking_number: string | null;
   carrier: string | null;
   status: OrderStatus;
+  direction: OrderDirection;
   status_color: string | null;
   status_detail: string | null;
   expected_date: string | null;
+  // Order total for an outbound row; reused to hold the refund amount for a
+  // return row once a refund-confirmation email reports one — same "one
+  // dollar figure worth showing" role either way, not worth a second column.
   order_total: string | null;
   email_id: string | null;
   order_url: string | null;
@@ -83,6 +102,7 @@ export interface NewOrder {
   tracking_number?: string | null;
   carrier?: string | null;
   status?: OrderStatus;
+  direction?: OrderDirection;
   expected_date?: string | null;
   order_total?: string | null;
   email_id?: string | null;
@@ -132,6 +152,10 @@ export async function ensureOrdersTable(): Promise<void> {
     // no real carrier tracking number (Amazon Logistics, Narvar-templated
     // retailers, etc.) and so can only ever be updated by a later email.
     await query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS sender_email text`).catch(() => {});
+    // "outbound" (retailer → user, the only direction this table used to
+    // track) vs "return" (user → retailer). Same table on purpose — a
+    // return is tracked through the identical pipeline, just flagged.
+    await query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS direction text NOT NULL DEFAULT 'outbound'`).catch(() => {});
     logger.info("[Orders] Table ready");
   } catch (err) {
     logger.warn({ err }, "[Orders] Startup migration warning");
@@ -141,16 +165,20 @@ export async function ensureOrdersTable(): Promise<void> {
 // ── Query helpers ──────────────────────────────────────────────────────────────
 
 export async function getOrders(userName = NATIVE_USER): Promise<Order[]> {
-  // Retention window after delivery — originally 7 days (an unrequested
-  // default picked at build time, not something the user asked for);
-  // shortened to 3 per explicit user request.
+  // Retention window after the terminal status — originally 7 days (an
+  // unrequested default picked at build time, not something the user asked
+  // for); shortened to 3 per explicit user request. "Terminal" differs by
+  // direction: an outbound order is done at "delivered"; a return isn't
+  // done at "delivered" (that just means the retailer received the package
+  // back) — it's done at "refunded". A return sitting at "delivered" with
+  // no refund yet must never age out just because 3 days passed.
   const retentionCutoff = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
   const { rows } = await query<Order>(
     `SELECT * FROM orders
      WHERE user_name = $1
        AND (
-         status != 'delivered'
-         OR (status = 'delivered' AND updated_at > $2)
+         (direction = 'outbound' AND (status != 'delivered' OR updated_at > $2))
+         OR (direction = 'return' AND (status != 'refunded' OR updated_at > $2))
        )
      ORDER BY
        CASE WHEN status = 'out_for_delivery' THEN 0
@@ -158,7 +186,8 @@ export async function getOrders(userName = NATIVE_USER): Promise<Order[]> {
             WHEN status = 'shipped'           THEN 2
             WHEN status = 'ordered'           THEN 3
             WHEN status = 'delivered'         THEN 4
-            ELSE 5 END,
+            WHEN status = 'refunded'          THEN 5
+            ELSE 6 END,
        expected_date ASC NULLS LAST,
        created_at DESC`,
     [userName, retentionCutoff]
@@ -169,18 +198,31 @@ export async function getOrders(userName = NATIVE_USER): Promise<Order[]> {
   }));
 }
 
-// Orders that can ONLY ever be updated by a later email — no real carrier
-// tracking number, so no EasyPost tracker was ever possible (Amazon
-// Logistics, Narvar-templated retailers like Peter Millar, etc.). Used by
-// scanOrderStatusUpdates() (gmailOrderScanner.ts) to know which orders need
-// a targeted, sender-scoped Gmail search for follow-up status emails.
+// Orders that can ONLY ever be updated by a later email. Two cases:
+//   1. No real carrier tracking number, so no EasyPost tracker was ever
+//      possible (Amazon Logistics, Narvar-templated retailers like Peter
+//      Millar, etc.) — the original, only case this covered.
+//   2. A tracked RETURN that's already reached "delivered" (the retailer
+//      received the package back). EasyPost has nothing further to report
+//      at that point — the one thing that can still happen, a refund being
+//      issued, is a financial event only an email will ever announce, and a
+//      tracked return is otherwise invisible to this function once it has a
+//      tracking_number, same as it would be for an outbound order that
+//      genuinely has nothing left to hear about after delivery.
+// Used by scanOrderStatusUpdates() (gmailOrderScanner.ts) to know which
+// orders need a targeted, sender-scoped Gmail search for follow-up emails.
 export async function getOrdersNeedingEmailFollowup(userName = NATIVE_USER): Promise<Order[]> {
   const { rows } = await query<Order>(
     `SELECT * FROM orders
      WHERE user_name = $1
-       AND tracking_number IS NULL
-       AND status != 'delivered'
-       AND sender_email IS NOT NULL`,
+       AND sender_email IS NOT NULL
+       AND (
+         (tracking_number IS NULL AND (
+           (direction = 'outbound' AND status != 'delivered')
+           OR (direction = 'return' AND status != 'refunded')
+         ))
+         OR (direction = 'return' AND tracking_number IS NOT NULL AND status = 'delivered')
+       )`,
     [userName]
   );
   return rows.map((r) => ({
@@ -330,8 +372,8 @@ export async function upsertOrder(
     // where we see the same email again (e.g. on a force-sync).
     const { rows } = await query<Order>(
       `INSERT INTO orders
-         (user_name, retailer, item_name, order_number, tracking_number, carrier, status, expected_date, order_total, email_id, order_url)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         (user_name, retailer, item_name, order_number, tracking_number, carrier, status, direction, expected_date, order_total, email_id, order_url)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
        ON CONFLICT (user_name, email_id)
        WHERE email_id IS NOT NULL
        DO UPDATE SET
@@ -349,6 +391,7 @@ export async function upsertOrder(
         order.retailer, order.item_name,
         order.order_number ?? null, order.tracking_number ?? null,
         order.carrier ?? null, order.status ?? "ordered",
+        order.direction ?? "outbound",
         order.expected_date ?? null, order.order_total ?? null,
         order.email_id ?? null, order.order_url ?? null,
       ]

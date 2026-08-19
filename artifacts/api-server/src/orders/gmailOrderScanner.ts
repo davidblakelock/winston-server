@@ -98,7 +98,9 @@ export async function handleOrderResult(
     const upserted = await upsertOrder(userName, {
       retailer, item_name: itemName, order_number: order.orderNumber ?? null,
       tracking_number: trackingNumber, carrier, status: initialStatus as OrderStatus,
+      direction: order.direction ?? "outbound",
       expected_date: expectedDate, email_id: msgId,
+      order_total: order.orderTotal ?? null,
     });
 
     if (!upserted) {
@@ -139,8 +141,10 @@ export async function handleOrderResult(
     order_number: order.orderNumber,
     carrier: order.carrier,
     status: order.status!,
+    direction: order.direction ?? "outbound",
     expected_date: order.expectedDate,
     email_id: msgId,
+    order_total: order.orderTotal ?? null,
   });
 
   if (upserted) {
