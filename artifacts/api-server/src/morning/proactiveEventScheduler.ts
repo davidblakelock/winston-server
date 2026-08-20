@@ -193,6 +193,38 @@ interface WebSearchItem {
   url: string | null;
 }
 
+// The model's final JSON is free-form text generated AFTER the web_search
+// tool calls, not a direct echo of the search results — nothing stops it
+// from writing a plausible-sounding item (real venue, invented specifics)
+// that no search result actually returned. Confirmed live: a "Blind Bishop
+// Saturday Wine Tasting hosted by a Master of Wine" that does not exist.
+// The same class of bug already had a real fix elsewhere in this codebase
+// (chatHandlerCore.ts's offer_save handler, guarding against a hallucinated
+// URL reaching storage) — same fix here: collect the URLs/hosts the web
+// search tool actually returned this turn, and only trust an item whose
+// claimed URL matches one of them. An item with no matching real URL is
+// dropped rather than trusted on the model's word alone.
+function extractRealSearchUrls(content: Anthropic.Messages.ContentBlock[]): { urls: Set<string>; hosts: Set<string> } {
+  const urls = new Set<string>();
+  const hosts = new Set<string>();
+  const hostOf = (u: string): string | null => {
+    try { return new URL(u).hostname.replace(/^www\./, "").toLowerCase(); }
+    catch { return null; }
+  };
+  for (const block of content) {
+    if (block.type === "web_search_tool_result" && Array.isArray(block.content)) {
+      for (const result of block.content) {
+        if (result.type === "web_search_result" && result.url) {
+          urls.add(result.url);
+          const h = hostOf(result.url);
+          if (h) hosts.add(h);
+        }
+      }
+    }
+  }
+  return { urls, hosts };
+}
+
 async function searchSupplementalActivities(city: string, interests: string[], runContext: RunContext): Promise<Candidate[]> {
   const today = new Date().toISOString().slice(0, 10);
   const windowLabel = runContext === "weekend" ? "this coming weekend (Friday through Sunday)" : "this week";
@@ -207,6 +239,8 @@ This person's interests: ${interests.length ? interests.join(", ") : "no specifi
 
 Search for what's happening in ${city} ${windowLabel} in these categories specifically. Skip anything that's really a concert, sports game, or theater show — those come from a different source and would be a duplicate.
 
+Only include an item if a search result actually named it — its "url" field must be the exact URL of the search result you found it on. Do not write an item from general knowledge or a guess about what's "probably" happening; if you're not looking at a search result that confirms it's happening in the stated window, leave it out. An empty array is a correct answer if search didn't turn up anything real.
+
 After searching, return ONLY a JSON array — no explanation, no markdown fences:
 [
   {
@@ -214,7 +248,7 @@ After searching, return ONLY a JSON array — no explanation, no markdown fences
     "description": "one sentence — what it is, why it might matter",
     "venue": "location name or null",
     "eventDate": "YYYY-MM-DD or null if recurring/ongoing",
-    "url": "direct link or null"
+    "url": "the exact URL of the search result this came from"
   }
 ]
 
@@ -234,7 +268,22 @@ Today is ${today}. Only include things happening ${windowLabel}. Return between 
     const items = JSON.parse(jsonMatch[0]) as WebSearchItem[];
     if (!Array.isArray(items)) return [];
 
-    return items
+    const { urls: realUrls, hosts: realHosts } = extractRealSearchUrls(response.content);
+    const hostOf = (u: string): string | null => {
+      try { return new URL(u).hostname.replace(/^www\./, "").toLowerCase(); }
+      catch { return null; }
+    };
+    const grounded: WebSearchItem[] = [];
+    const dropped: WebSearchItem[] = [];
+    for (const i of items) {
+      const isReal = !!i.url && (realUrls.has(i.url) || (hostOf(i.url) !== null && realHosts.has(hostOf(i.url)!)));
+      (isReal ? grounded : dropped).push(i);
+    }
+    if (dropped.length > 0) {
+      logger.warn({ city, dropped: dropped.map((d) => ({ name: d.name, venue: d.venue, url: d.url })) }, "[Proactive Discovery] Dropping web-search items with no matching real search result — likely fabricated");
+    }
+
+    return grounded
       .filter((i) => i.name && i.name.length > 3)
       .map((i): Candidate => ({
         category: "activity",
@@ -334,6 +383,48 @@ async function markNotified(userName: string, key: string): Promise<void> {
   }
 }
 
+// Drop anything already shown to this user before spending a ranking call on
+// it. Two passes: exact key match first (cheap, catches the common case —
+// structurally stable sources dedup perfectly on this alone), then a fuzzy
+// token-overlap pass for dateless candidates that didn't exact-match —
+// catches AI-regenerated wording drift from the web-search source that exact
+// matching structurally can't (see fuzzyMatchExisting doc comment). Shared by
+// both the scheduled push (checkUserForEvent) and the ad-hoc chat query
+// (searchLocalActivities) — the latter previously skipped this entirely,
+// which is why the same farmers market came back on every single "what
+// should I do this weekend" ask: nothing recorded that it had already been
+// surfaced, so nothing in the ranking pool ever moved past a picked repeat
+// candidate.
+async function filterUnnotifiedCandidates(userName: string, candidates: Candidate[]): Promise<Candidate[]> {
+  const keys = candidates.map((c) => candidateKey(c));
+  const exactMatch = await Promise.all(keys.map((k) => hasBeenNotified(userName, k)));
+
+  const datelessKeysByCategory = new Map<CandidateCategory, string[]>();
+  const fuzzyMatch: (string | null)[] = new Array(candidates.length).fill(null);
+  for (let i = 0; i < candidates.length; i++) {
+    if (exactMatch[i]) continue;
+    const c = candidates[i]!;
+    if (c.dateISO) continue; // dated events rely on exact date matching only
+    if (!datelessKeysByCategory.has(c.category)) {
+      datelessKeysByCategory.set(c.category, await getDatelessKeysForCategory(userName, c.category));
+    }
+    fuzzyMatch[i] = fuzzyMatchExisting(c, datelessKeysByCategory.get(c.category)!);
+  }
+
+  const alreadyCovered = candidates.map((_, i) => exactMatch[i] || fuzzyMatch[i] !== null);
+  const skippedLog = candidates
+    .map((c, i) => ({
+      name: c.name, venue: c.venue, key: keys[i],
+      via: exactMatch[i] ? "exact" as const : fuzzyMatch[i] ? "fuzzy" as const : null,
+      matchedKey: exactMatch[i] ? keys[i] : fuzzyMatch[i],
+    }))
+    .filter((c) => c.via !== null);
+  if (skippedLog.length > 0) {
+    logger.info({ userName, skipped: skippedLog }, "[Proactive Discovery] Dedup — skipping already-shown candidates");
+  }
+  return candidates.filter((_, i) => !alreadyCovered[i]);
+}
+
 // ── Combined personalized ranking — ONE Claude call across all sources ────
 // Mirrors the relevance-scoring approach from the retired
 // localContentScanner.ts, applied across heterogeneous candidate types.
@@ -369,6 +460,8 @@ ${list}
 ${biasLine}
 
 Pick 4-6 that this specific person would genuinely enjoy — a mix across categories is fine but not required; only pick things that truly fit their interests. Be selective: if fewer than 4 genuinely fit, return fewer (even zero). Never pad the list with a weak match just to reach 4-6.
+
+Keep each reason grounded in what's actually in the candidate's own description above and the person's real profile facts — e.g. "matches your interest in live music" or "fits your love of wine" is fine. Do not invent a specific comparison (a sound-alike artist, a stylistic claim) that isn't something you actually know to be true of that candidate — a local/opening act sharing a genre tag with a favorite artist is not the same as actually sounding like them, and stating it as fact when it's a guess is misleading.
 
 Return ONLY a JSON array of the chosen item numbers with a one-sentence reason each — no explanation, no markdown fences:
 [{"index": 3, "reason": "why this fits them specifically"}]`;
@@ -500,6 +593,13 @@ async function sendPicksNotification(userName: string, city: string, picks: Rank
     })),
   });
 
+  await markPicksNotified(userName, picks);
+}
+
+// Shared tail step for both the scheduled push (above) and the ad-hoc chat
+// query (searchLocalActivities, below) — whichever surfaces a candidate
+// first claims its dedup key, so the other doesn't repeat it later.
+async function markPicksNotified(userName: string, picks: RankedPick[]): Promise<void> {
   const markedKeys = picks.map((p) => ({ name: p.candidate.name, venue: p.candidate.venue, key: candidateKey(p.candidate) }));
   logger.info({ userName, markedKeys }, "[Proactive Discovery] Dedup — marking these keys notified");
   await Promise.all(picks.map((p) => markNotified(userName, candidateKey(p.candidate))));
@@ -555,8 +655,18 @@ async function resolveUserEventContext(userName: string): Promise<{
 // dominate event-listing SEO rather than anything actually matching the
 // user's interests. Reuses the exact same three-source gathering +
 // personalized ranking already proven in the scheduled Monday/Thursday
-// pipeline below — just without the "already notified" dedup or push send,
-// since this is a live answer, not a scheduled notification.
+// pipeline below.
+//
+// This originally skipped the "already notified" dedup entirely (reasoning:
+// "this is a live answer, not a scheduled notification"), which is exactly
+// why the same farmers market pick came back on every single ask — nothing
+// ever recorded that it had already been shown, so nothing prevented an
+// identical top-ranked pick from resurfacing every time this ran, on the
+// same day or a week later. Now runs the same filterUnnotifiedCandidates
+// pass the scheduled push uses, and marks its own picks notified afterward
+// (markPicksNotified) — so a repeat ask doesn't repeat a pick already given,
+// and the Monday/Thursday push won't hand back something chat already
+// covered either.
 export async function searchLocalActivities(
   userName: string,
   runContext: RunContext = "week",
@@ -571,14 +681,18 @@ export async function searchLocalActivities(
     searchNewRestaurants(city),
   ]);
 
-  const candidates: Candidate[] = [
+  let candidates: Candidate[] = [
     ...eventsToCandidates(events),
     ...activities,
     ...restaurants,
   ];
   if (candidates.length === 0) return { city, picks: [] };
 
+  candidates = await filterUnnotifiedCandidates(userName, candidates);
+  if (candidates.length === 0) return { city, picks: [] };
+
   const picks = await rankCandidates(candidates, profileContext, city, runContext);
+  if (picks.length > 0) await markPicksNotified(userName, picks);
   return { city, picks };
 }
 
@@ -609,39 +723,7 @@ export async function checkUserForEvent(user: ActiveUser, runContext: RunContext
     return;
   }
 
-  // Drop anything already notified before spending a ranking call on it.
-  // Two passes: exact key match first (cheap, catches the common case —
-  // structurally stable sources dedup perfectly on this alone), then a
-  // fuzzy token-overlap pass for dateless candidates that didn't exact-match
-  // — catches AI-regenerated wording drift from the web-search source that
-  // exact matching structurally can't (see fuzzyMatchExisting doc comment).
-  const keys = candidates.map((c) => candidateKey(c));
-  const exactMatch = await Promise.all(keys.map((k) => hasBeenNotified(userName, k)));
-
-  const datelessKeysByCategory = new Map<CandidateCategory, string[]>();
-  const fuzzyMatch: (string | null)[] = new Array(candidates.length).fill(null);
-  for (let i = 0; i < candidates.length; i++) {
-    if (exactMatch[i]) continue;
-    const c = candidates[i]!;
-    if (c.dateISO) continue; // dated events rely on exact date matching only
-    if (!datelessKeysByCategory.has(c.category)) {
-      datelessKeysByCategory.set(c.category, await getDatelessKeysForCategory(userName, c.category));
-    }
-    fuzzyMatch[i] = fuzzyMatchExisting(c, datelessKeysByCategory.get(c.category)!);
-  }
-
-  const alreadyCovered = candidates.map((_, i) => exactMatch[i] || fuzzyMatch[i] !== null);
-  const skippedLog = candidates
-    .map((c, i) => ({
-      name: c.name, venue: c.venue, key: keys[i],
-      via: exactMatch[i] ? "exact" as const : fuzzyMatch[i] ? "fuzzy" as const : null,
-      matchedKey: exactMatch[i] ? keys[i] : fuzzyMatch[i],
-    }))
-    .filter((c) => c.via !== null);
-  if (skippedLog.length > 0) {
-    logger.info({ userName, skipped: skippedLog }, "[Proactive Discovery] Dedup — skipping already-notified candidates");
-  }
-  candidates = candidates.filter((_, i) => !alreadyCovered[i]);
+  candidates = await filterUnnotifiedCandidates(userName, candidates);
 
   if (candidates.length === 0) {
     logger.info({ userName, city }, "[Proactive Discovery] All candidates already notified — skipping");
