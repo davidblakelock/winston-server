@@ -173,9 +173,9 @@ Return ONLY valid JSON:
 - relationship: string or null ("daughter", "wife", "son", "friend", etc.)
 
 Examples:
-"Olivia's birthday is October 15th" → {"personName":"Olivia","eventType":"birthday","month":10,"day":15,"year":null,"relationship":"daughter"}
-"my anniversary with Susan is June 3rd" → {"personName":"Susan","eventType":"anniversary","month":6,"day":3,"year":null,"relationship":"wife"}
-"my anniversary with Susan is June 3rd, we got married in 2008" → {"personName":"Susan","eventType":"anniversary","month":6,"day":3,"year":2008,"relationship":"wife"}`,
+"Jordan's birthday is October 15th" → {"personName":"Jordan","eventType":"birthday","month":10,"day":15,"year":null,"relationship":null}
+"my anniversary with Jamie is June 3rd" → {"personName":"Jamie","eventType":"anniversary","month":6,"day":3,"year":null,"relationship":"spouse"}
+"my anniversary with Jamie is June 3rd, we got married in 2008" → {"personName":"Jamie","eventType":"anniversary","month":6,"day":3,"year":2008,"relationship":"spouse"}`,
     messages: [{ role: "user", content: message }],
   });
 

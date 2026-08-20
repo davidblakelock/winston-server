@@ -315,7 +315,7 @@ export async function handleEmailCalendar(params: HandleEmailCalendarParams): Pr
       }
     } else {
       clearPendingDelete(sessionUserName);
-      contextBlock += `\n\n[Calendar Delete Cancelled]\nDavid chose NOT to delete "${pd.summary}". Acknowledge warmly — e.g. "Got it, keeping your ${pd.summary} on the calendar."`;
+      contextBlock += `\n\n[Calendar Delete Cancelled]\nThe user chose NOT to delete "${pd.summary}". Acknowledge warmly — e.g. "Got it, keeping your ${pd.summary} on the calendar."`;
     }
   } else if (isCalendarWriteOp) {
     const hasWriteScope = await hasCalendarWriteScope(sessionUserName).catch(() => false);

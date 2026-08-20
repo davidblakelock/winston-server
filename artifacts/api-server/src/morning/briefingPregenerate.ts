@@ -84,12 +84,12 @@ For loose style reference only (not a required template), here is a briefing thi
 (This example is showing you TONE AND STRUCTURE ONLY. Every fact, story, quote, and detail in your actual output must come from your own fresh search results for today, or, for weather/to-dos/calendar, from the verified context data. Do not reuse, paraphrase, or reproduce ANY specific fact, story, or detail from this example under any circumstances. If your search doesn't turn up a good weird/funny story, skip that section entirely rather than reusing the example. Any place names, cities, venues, team opponents, scores, to-dos, or events shown in brackets below are placeholders — never use a real one from this example in your actual output.)
 
 [EXAMPLE 1]
-☕ David's Daily Brief
+☕ [Name]'s Daily Brief
 Friday, July 17, 2026
 Good morning!
 
 🌤️ Weather
-Dallas is starting clear at [temp]°F, feeling like [temp]°F, with a high of [temp]°F expected — [chance]% chance of rain.
+[City] is starting clear at [temp]°F, feeling like [temp]°F, with a high of [temp]°F expected — [chance]% chance of rain.
 
 📋 Your Day
 - [to-do text, verbatim from the context block]

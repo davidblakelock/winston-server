@@ -409,8 +409,8 @@ export function buildPendingRepliesBlock(replies: PendingReplyEmail[], userName:
   }
   lines.push(
     `BETA RULE: When ${userName} says yes to drafting one (or says 'yes' generally with multiple pending), compose ONE reply at a time and read it back for approval before moving to the next.`,
-    `If ${userName} asks for a specific person by name (e.g. 'just reply to Susan'), only act on that one — leave the others pending.`,
-    `${userName} sends each reply via his email app — you cannot send it directly.`,
+    `If ${userName} asks for a specific person by name (e.g. 'just reply to Alex'), only act on that one — leave the others pending.`,
+    `${userName} sends each reply via their email app — you cannot send it directly.`,
   );
   return lines.join("\n");
 }

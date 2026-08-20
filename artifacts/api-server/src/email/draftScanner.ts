@@ -144,9 +144,9 @@ async function analyzeAndDraft(
     weekday: "long", month: "long", day: "numeric", year: "numeric",
   });
 
-  const prompt = `You are David Blake Lock's AI assistant reviewing his inbox. Today is ${today}.
+  const prompt = `You are the user's AI assistant reviewing their inbox. Today is ${today}.
 
-Analyze this email and determine if David needs to reply. Return ONLY valid JSON.
+Analyze this email and determine if the user needs to reply. Return ONLY valid JSON.
 
 From: ${from}
 Subject: ${subject}
@@ -160,13 +160,13 @@ Return JSON:
   "needsReply": true | false,
   "reason": "one-sentence reason why reply is needed, or null if not",
   "originalSummary": "1-2 sentence summary of what the email says",
-  "suggestedReply": "a warm, brief, professional reply draft from David's perspective — or null if needsReply is false"
+  "suggestedReply": "a warm, brief, professional reply draft from the user's perspective — or null if needsReply is false"
 }
 
 An email NEEDS a reply only if ALL of these are true:
 - It is from a real, identifiable human (not a service, system, or mailing list)
-- It contains a direct question, request, or action item addressed personally to David
-- A human is clearly waiting for David's specific response
+- It contains a direct question, request, or action item addressed personally to the user
+- A human is clearly waiting for the user's specific response
 
 An email does NOT need a reply if ANY of these apply:
 - Auto-reply, out-of-office, or vacation response
@@ -174,8 +174,8 @@ An email does NOT need a reply if ANY of these apply:
 - This inbox is monitored / unmonitored notice
 - Automated notification, receipt, shipping update, invoice, or statement
 - Marketing email, newsletter, or promotion
-- The sender says replies are not monitored or asks David not to reply
-- CC or BCC only — David is not the primary recipient
+- The sender says replies are not monitored or asks the user not to reply
+- CC or BCC only — the user is not the primary recipient
 - FYI-only with no action requested
 - A no-reply or automated address sent it
 - The body reads like a form letter or template response

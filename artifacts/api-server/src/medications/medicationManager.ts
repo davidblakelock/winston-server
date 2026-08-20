@@ -328,7 +328,7 @@ ${medList}
 For each REAL, meaningful interaction between these specific drugs — things actually worth knowing about, not minor or theoretical ones — describe:
 - Which drugs are involved
 - How serious it is (moderate / high / critical)
-- What the actual risk is, in one plain sentence (e.g. "Taking Aleve with Meloxicam raises your risk of stomach bleeding.")
+- What the actual risk is, in one plain sentence (e.g. "Taking these two together raises your risk of stomach bleeding.")
 - What to watch for, in a short phrase (e.g. "Stomach pain or dark stools")
 
 Also note, for each drug: a few common things to avoid (foods, OTC products, supplements) and a few common side effects — briefly, in plain language.

@@ -359,7 +359,7 @@ export async function runPatternObservation(userName: string): Promise<void> {
     `• Examples of the RIGHT tone:\n` +
     `  - "You've mentioned feeling stuck three times this month — always after a heavy week. What would unstuck look like for you?"\n` +
     `  - "You've said you feel most alive after time outdoors. You have a clear afternoon today."\n` +
-    `  - "You've brought up calling Olivia three times and haven't yet. What's in the way?"\n` +
+    `  - "You've brought up making that call three times and haven't yet. What's in the way?"\n` +
     `• If anything concerning emerges — anxiety, persistent sadness, isolation — acknowledge it warmly and gently suggest talking to someone. Do NOT diagnose.\n` +
     `• If there is no genuine pattern: return exactly the word null.\n\n` +
     `If a real pattern exists: return ONLY the observation sentence.\n` +

@@ -658,7 +658,7 @@ export async function patternObservationPass(userName: string): Promise<void> {
     `• Examples of the RIGHT tone:\n` +
     `  - "You've mentioned feeling stuck three times this month — always after a heavy week. What would unstuck look like for you?"\n` +
     `  - "You've said you feel most alive after time outdoors. You have a clear afternoon today."\n` +
-    `  - "You've brought up calling Olivia three times and haven't yet. What's in the way?"\n` +
+    `  - "You've brought up making that call three times and haven't yet. What's in the way?"\n` +
     `• If anything concerning emerges — anxiety, persistent sadness, isolation — acknowledge it warmly and gently suggest talking to someone. Do NOT diagnose.\n` +
     `• RECENCY MATTERS: each item shows how long ago it was said. A real pattern needs at least one occurrence from the last week or so still active — three mentions that all happened 3-4 weeks ago with nothing since is a pattern that already ended, not one worth surfacing now. Don't treat old repeated items as current just because they repeat.\n` +
     `• If there is no genuine pattern: set observation to null.\n\n` +

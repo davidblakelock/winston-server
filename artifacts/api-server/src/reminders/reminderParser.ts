@@ -40,7 +40,7 @@ export async function extractReminder(message: string, tz: string): Promise<Extr
   const extraction = await anthropic.messages.create({
     model: MODEL_HAIKU,
     max_tokens: 256,
-    system: `You extract reminder details from natural language. Current time in Dallas, TX: ${nowCT} (24-hour clock).
+    system: `You extract reminder details from natural language. Current local time: ${nowCT} (24-hour clock).
 
 For relative times ("in 5 minutes", "in 1 hour", "in 30 minutes") add the offset to the EXACT current time shown above and output the result in 24-hour HH:MM format. Do not round to a convenient hour or half-hour.
 
@@ -65,14 +65,14 @@ Return ONLY valid JSON with these fields:
     "monthly:<day>"        (every month on that day number)
                            e.g. every month on the 15th → "monthly:15"
                            e.g. the first of every month → "monthly:1"
-- forContact: string or null — if the reminder is FOR another person (not the user themselves), their first name only (e.g. "Sarah"). Null if the reminder is for the user.
+- forContact: string or null — if the reminder is FOR another person (not the user themselves), their first name only (e.g. "Alex"). Null if the reminder is for the user.
 
 Examples:
-"remind me to call Olivia at 3pm" → {"reminderText":"call Olivia","time":"15:00","dayOfWeek":null,"nextWeek":false,"isTomorrow":false,"explicitDate":null,"isRecurring":false,"recurring":null,"forContact":null}
-"remind Sarah to call the dentist at 3pm" → {"reminderText":"call the dentist","time":"15:00","dayOfWeek":null,"nextWeek":false,"isTomorrow":false,"explicitDate":null,"isRecurring":false,"recurring":null,"forContact":null}
-"set a reminder for Sarah to take her medication at 8am" → {"reminderText":"take her medication","time":"08:00","dayOfWeek":null,"nextWeek":false,"isTomorrow":false,"explicitDate":null,"isRecurring":false,"recurring":null,"forContact":null}
+"remind me to call Jordan at 3pm" → {"reminderText":"call Jordan","time":"15:00","dayOfWeek":null,"nextWeek":false,"isTomorrow":false,"explicitDate":null,"isRecurring":false,"recurring":null,"forContact":null}
+"remind Alex to call the dentist at 3pm" → {"reminderText":"call the dentist","time":"15:00","dayOfWeek":null,"nextWeek":false,"isTomorrow":false,"explicitDate":null,"isRecurring":false,"recurring":null,"forContact":"Alex"}
+"set a reminder for Alex to take her medication at 8am" → {"reminderText":"take her medication","time":"08:00","dayOfWeek":null,"nextWeek":false,"isTomorrow":false,"explicitDate":null,"isRecurring":false,"recurring":null,"forContact":"Alex"}
 "remind me to take my medication every morning at 7am" → {"reminderText":"take my medication","time":"07:00","dayOfWeek":null,"nextWeek":false,"isTomorrow":false,"explicitDate":null,"isRecurring":true,"recurring":"daily","forContact":null}
-"remind me to walk Winston every weekday at 8am" → {"reminderText":"walk Winston","time":"08:00","dayOfWeek":null,"nextWeek":false,"isTomorrow":false,"explicitDate":null,"isRecurring":true,"recurring":"weekdays","forContact":null}
+"remind me to walk the dog every weekday at 8am" → {"reminderText":"walk the dog","time":"08:00","dayOfWeek":null,"nextWeek":false,"isTomorrow":false,"explicitDate":null,"isRecurring":true,"recurring":"weekdays","forContact":null}
 "remind me every Tuesday and Thursday at 6am to stretch" → {"reminderText":"stretch","time":"06:00","dayOfWeek":null,"nextWeek":false,"isTomorrow":false,"explicitDate":null,"isRecurring":true,"recurring":"weekly:tue,thu","forContact":null}
 "remind me every Monday at 9am" → {"reminderText":"remind me","time":"09:00","dayOfWeek":null,"nextWeek":false,"isTomorrow":false,"explicitDate":null,"isRecurring":true,"recurring":"weekly:mon","forContact":null}
 "remind me on the 15th of every month at noon to pay rent" → {"reminderText":"pay rent","time":"12:00","dayOfWeek":null,"nextWeek":false,"isTomorrow":false,"explicitDate":null,"isRecurring":true,"recurring":"monthly:15","forContact":null}

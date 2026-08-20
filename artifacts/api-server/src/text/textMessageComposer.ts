@@ -279,7 +279,7 @@ export async function composeTextMessage(opts: ComposeTextOptions): Promise<Comp
     `- Keep the message roughly the same length as the original intent — do not pad or expand it.\n` +
     `- Preserve all proper nouns, names, specific details, and references exactly as given.\n` +
     `CORRECT witty rewrite of "I'll be 10 minutes late": "Running fashionably 10 minutes behind — fashion waits for no one 😅"\n` +
-    `WRONG rewrite: "Hey Susan! Running a bit behind — I'll be there in about 10 minutes. Can't wait to see you! 😘"\n\n` +
+    `WRONG rewrite: "Hey! Running a bit behind — I'll be there in about 10 minutes. Can't wait to see you! 😘"\n\n` +
     `TONE: ${toneInstruction}\n\n` +
     `WHAT ${senderName.toUpperCase()} WANTS TO SAY:\n${userIntent}\n\n` +
     `Write ONLY the message body. No preamble. No explanation. No quotes around it. ` +

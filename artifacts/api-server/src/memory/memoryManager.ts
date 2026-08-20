@@ -63,8 +63,8 @@ export async function generateMemorySummary(
     `Review this conversation between ${user} and their AI companion ${companion}. ` +
     `Write a memory note capturing what's worth remembering for future conversations. ` +
     `Focus on:\n` +
-    `- Physical health mentions (pain, energy, how activities like pickleball or running went)\n` +
-    `- Family and relationship updates (Olivia, Susan, etc.)\n` +
+    `- Physical health mentions (pain, energy, how physical activities or hobbies went)\n` +
+    `- Family and relationship updates (people they mentioned by name)\n` +
     `- Plans ${user} mentioned (things they said they'd do, try, call, or visit)\n` +
     `- Mood, feelings, or things weighing on them\n` +
     `- New experiences (restaurants tried, things done for the first time, events attended)\n` +
@@ -85,7 +85,7 @@ export async function generateMemorySummary(
     `for something that would help a future conversation feel like it remembers ${user} — an exploration of ` +
     `a topic, a stated curiosity, general context about their life — not an event that already happened ` +
     `(that's the summary above) and not something they intend to do (that's a task, elsewhere). Write it as ` +
-    `ONE plain third-person sentence, e.g. "David explored jazz styles and Dallas venues." Use null if ` +
+    `ONE plain third-person sentence, e.g. "${user} explored a new music genre and some local venues." Use null if ` +
     `nothing like this came up — most conversations won't have one; don't force it.\n\n` +
     `Return ONLY valid JSON in exactly this shape — no explanation, no markdown code fences:\n` +
     `{\n` +
@@ -411,7 +411,7 @@ export function formatMemoriesForContext(memories: ConversationMemory[]): string
       `[Recent — last 5 days — active follow-up appropriate for general topics]\n` +
       recent.join("\n\n") +
       `\n\nFor these recent memories, use them naturally — the way a close friend would. ` +
-      `Reference them when relevant (e.g., "Did you end up calling Olivia?"). ` +
+      `Reference them when relevant (e.g., "Did you end up making that call you mentioned?"). ` +
       `Don't recite them robotically or all at once. Let them inform how you engage, not dominate it.\n` +
       `HEALTH RULE: NEVER proactively ask about a health complaint, pain, injury, or soreness ` +
       `(knee pain, back pain, feeling sick, etc.) mentioned more than 5 days ago unless the user brings it up themselves. ` +
