@@ -21,7 +21,6 @@ import { startMorningPushScheduler } from "./push/morningPushScheduler";
 import { startBillScheduler } from "./bills/billScheduler";
 import { startDatesScheduler } from "./dates/datesScheduler";
 import { startCalendarSyncScheduler, ensureCalendarSyncTable } from "./departure/calendarSyncScheduler";
-import { ensureRelationshipTable } from "./relationships/relationshipManager";
 import { startProactiveEventScheduler } from "./morning/proactiveEventScheduler";
 import { initConcertsTable, startVenueMonitorScheduler } from "./morning/venueMonitor";
 import { runBriefingCacheMigrations } from "./morning/briefingCache";
@@ -204,12 +203,6 @@ app.listen(port, async (err) => {
   } catch (e) {
     logger.warn({ err: e }, "onboarding/user_profiles table initialization warning");
   }
-  try {
-    await ensureRelationshipTable();
-  } catch (e) {
-    logger.warn({ err: e }, "relationship table initialization warning");
-  }
-
   // Isolated so a failure in the block above never skips the calendar migration
   try {
     await ensureCalendarSyncTable();
