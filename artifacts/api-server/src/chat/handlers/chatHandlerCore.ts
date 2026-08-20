@@ -328,7 +328,54 @@ function normalizeListName(raw: string): string {
 
 // ── Main handler ──────────────────────────────────────────────────────────────
 
+// ── Duplicate-request guard ──────────────────────────────────────────────────
+// A notification tap on a killed/backgrounded app can trigger Android's own
+// relaunch cascade — confirmed live via Railway logs (2026-08-20): a single
+// Morning Run Down tap produced SIX separate drainPendingMessage reads of the
+// same pending message across what were clearly multiple concurrent app
+// process instances, TWO of which independently completed the full
+// /api/chat-native round trip (two full replies, two chat_sync/speak_sync
+// broadcasts, five rejected duplicate TTS requests). Every previous fix for
+// this class of bug (drainPendingMessage's own recheck-before-delete guard,
+// the SSE same-device filter removal, etc.) worked at the client layer,
+// racing against SecureStore reads/writes that aren't atomic across genuinely
+// separate app processes — no amount of client-side sequencing closes that
+// race, because there is no single process to sequence within. This closes
+// it at the one place that IS single-threaded per request: the server. Same
+// principle already proven for TTS (routes/tts.ts's own "duplicate request
+// within window" guard) — applied here to the layer duplicate TTS calls,
+// duplicate renders, and lost audio all actually originate from.
+const _inFlightOrRecentChats = new Map<string, { promise: Promise<NewChatResponse>; startedAt: number }>();
+const CHAT_DEDUP_WINDOW_MS = 10_000; // observed cascades converge within 1-3s; ample margin without blocking a genuine quick repeat
+
+function chatDedupKey(userName: string, message: string): string {
+  return `${userName}::${message.trim().toLowerCase()}`;
+}
+
 export async function handleNewChat(req: NewChatRequest): Promise<NewChatResponse> {
+  const key = chatDedupKey(req.sessionUserName, req.message);
+  const now = Date.now();
+  const existing = _inFlightOrRecentChats.get(key);
+  if (existing && now - existing.startedAt < CHAT_DEDUP_WINDOW_MS) {
+    req.log.info(
+      { userName: req.sessionUserName, message: req.message, ageMs: now - existing.startedAt },
+      "[chatHandlerCore] Duplicate chat request within window — returning the shared in-flight/recent response instead of re-running the pipeline"
+    );
+    return existing.promise;
+  }
+
+  const promise = handleNewChatInner(req);
+  _inFlightOrRecentChats.set(key, { promise, startedAt: now });
+  promise.catch(() => {}).finally(() => {
+    setTimeout(() => {
+      const current = _inFlightOrRecentChats.get(key);
+      if (current && current.promise === promise) _inFlightOrRecentChats.delete(key);
+    }, CHAT_DEDUP_WINDOW_MS);
+  });
+  return promise;
+}
+
+async function handleNewChatInner(req: NewChatRequest): Promise<NewChatResponse> {
   const {
     sessionUserName,
     message,
