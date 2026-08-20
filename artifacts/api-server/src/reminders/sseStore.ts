@@ -2,15 +2,46 @@ import type { Response } from "express";
 
 const clients = new Map<string, Response>();
 const clientUsers = new Map<string, string>(); // clientId → userName
+// clientId → deviceId. Populated at connect time (unlike clientUsers, which
+// waits on an async session lookup) — this is what lets a reconnect evict
+// its own predecessor immediately, before that predecessor has necessarily
+// even been user-registered yet.
+const clientDevices = new Map<string, string>();
 
-export function addClient(id: string, res: Response): void {
+export function addClient(id: string, res: Response, deviceId?: string | null): void {
+  // A client's own reconnect (network blip, backgrounding, app relaunch)
+  // does not reliably deliver a clean TCP close to the server for the
+  // connection it's replacing — confirmed live: a second SSE connection for
+  // the same user opened while the first was still registered, and every
+  // broadcast for the rest of that session went to both. One went to a
+  // socket nobody was listening on, the other reached whichever component
+  // instance's onSpeakSync handler raced it — both are equally real
+  // failure modes (a wasted push, or two independent playback attempts on
+  // the same device fighting over audio focus). Evicting any existing
+  // connection for the same deviceId on connect keeps exactly one live SSE
+  // connection per physical device — a genuinely different device (its own
+  // deviceId) is untouched and keeps its own connection.
+  if (deviceId) {
+    for (const [existingId, existingDeviceId] of clientDevices) {
+      if (existingDeviceId === deviceId && existingId !== id) {
+        const stale = clients.get(existingId);
+        try { stale?.end(); } catch { /* already dead */ }
+        clients.delete(existingId);
+        clientUsers.delete(existingId);
+        clientDevices.delete(existingId);
+        console.log(`SSE: evicted stale connection id=${existingId} for deviceId=${deviceId} — superseded by id=${id}`);
+      }
+    }
+    clientDevices.set(id, deviceId);
+  }
   clients.set(id, res);
-  console.log(`SSE: client connected id=${id} — total connected: ${clients.size}`);
+  console.log(`SSE: client connected id=${id} deviceId=${deviceId ?? "unknown"} — total connected: ${clients.size}`);
 }
 
 export function removeClient(id: string): void {
   clients.delete(id);
   clientUsers.delete(id);
+  clientDevices.delete(id);
   console.log(`SSE: client disconnected id=${id} — total connected: ${clients.size}`);
 }
 

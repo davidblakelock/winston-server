@@ -26,7 +26,8 @@ const sseHandler = async (req: Request, res: Response) => {
   res.flushHeaders();
 
   res.write(`: connected\n\n`);
-  addClient(clientId, res);
+  const deviceId = (req.query.deviceId as string | undefined) ?? null;
+  addClient(clientId, res, deviceId);
 
   // Identify the connected user so we can route user-specific events (e.g. chat_sync).
   // Check query param first (standard EventSource), then Authorization header (react-native-sse)
