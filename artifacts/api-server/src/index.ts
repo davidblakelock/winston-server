@@ -27,7 +27,6 @@ import { runBriefingCacheMigrations } from "./morning/briefingCache";
 import { syncPeopleDatesToImportantDates } from "./people/peopleManager.js";
 import { ensureContactsTable } from "./google/contacts";
 import { ensureJournalInsightsTable, startJournalPatternScheduler } from "./journal/journalPatternAnalyzer";
-import { ensureMoodTable } from "./mood/moodManager";
 import { ensureFollowupsTable } from "./followups/followupManager";
 import { ensureMemoryArchiveTable } from "./memory/memoryArchiveManager";
 import { ensureJournalSourceColumn } from "./routes/journal";
@@ -211,11 +210,10 @@ app.listen(port, async (err) => {
   }
 
   try {
-    await ensureMoodTable();
     await ensureFollowupsTable();
     await ensureMemoryArchiveTable();
     await ensureJournalSourceColumn();
-    logger.info("[startup] mood_checkins, conversation_followups, memory_archive, journal source column ready");
+    logger.info("[startup] conversation_followups, memory_archive, journal source column ready");
   } catch (e) {
     logger.warn({ err: e }, "New feature table initialization warning");
   }

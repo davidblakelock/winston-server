@@ -185,7 +185,7 @@ function sanitizeBriefText(text: string): string {
 // before speech so it's spoken as plain "My Life", not read-aloud brackets.
 // If the model didn't reproduce the line exactly, this simply doesn't match
 // and the plain text stands — no error, just no link that day.
-function injectMyLifeLink(text: string): string {
+export function injectMyLifeLink(text: string): string {
   return text.replace(
     /Go to My Life to record any thoughts\.?/,
     "Go to [My Life](winstonnative://mylife) to record any thoughts."
