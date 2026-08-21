@@ -128,7 +128,7 @@ export async function generateOpeningMessage(
     }
     if (evts) {
       for (const e of evts) {
-        const time = e.allDay ? "All day" : ((e as { startTime?: string }).startTime ?? "");
+        const time = e.allDay ? "All day" : e.start;
         lines.push(`- ${time ? `${time}: ` : ""}${e.summary}`);
       }
     }
