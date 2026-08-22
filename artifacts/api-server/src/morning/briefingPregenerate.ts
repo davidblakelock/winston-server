@@ -25,23 +25,20 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 // the same compound instruction and reliably issued multiple real, distinct,
 // well-formed queries — including autonomous follow-up searches to refine a
 // weak result. That's the actual fix; the instruction content below is
-// largely unchanged except for the interest-search addition and the
-// exclusion list restored to Search 1.
+// largely unchanged except for the exclusion list restored to Search 1.
+// (A personal-interest search once fed a second slot into this list —
+// removed per explicit user direction: the 5 stories should be 5 pure
+// global stories, nothing about this person's own life. Daily Discovery,
+// added later, is the actual personalization vehicle now.)
 
-function buildDailyBriefInstruction(interestPicks: string[], includeMarkets: boolean): string {
-  const interestSearchBlock = interestPicks.length > 0
-    ? `\n\nSEARCH 1b — Personal interest news: search specifically for recent news connected to: ${interestPicks.join(", ")}. This is in addition to Search 1a, not instead of it — the goal is to surface something genuinely newsworthy tied to what this person actually cares about. If nothing real turns up, that's fine — don't force it.`
-    : "";
-
+function buildDailyBriefInstruction(includeMarkets: boolean): string {
   return `You are about to write a Morning Run Down. Before writing anything, perform the searches below as separate, well-formed queries, one topic at a time — do not combine them into one query, and do not search using the biographical context block that follows this instruction (that block is background for personalizing the writing later, not a search query).
 
-SEARCH 1a — National news: search for today's top US and world news headlines. Aim for 5 real stories worth knowing — major national and international stories only. Do not include hyper-local news from a single city or small region — local government votes, local development projects, local tribal/community news. Exclude stock market and business-finance stories here — that's covered separately in Search 3 — and exclude AI industry/tech company news (product launches, funding rounds, model releases) unless it's genuinely historic.${interestSearchBlock}
+SEARCH 1 — National news: search for today's top US and world news headlines. Aim for 5 real stories worth knowing — major national and international stories only, picked purely on global/national importance. Do not include hyper-local news from a single city or small region — local government votes, local development projects, local tribal/community news. Exclude stock market and business-finance stories here — that's covered separately in Search 3 — and exclude AI industry/tech company news (product launches, funding rounds, model releases) unless it's genuinely historic. This list is deliberately NOT personalized — nothing about this person's own interests, hobbies, or life should influence which 5 stories make the cut; that's what Daily Discovery is for. Pick the 5 that would matter to any informed reader, full stop.
 
-STORY QUALITY BAR — applies to every item in Search 1a and 1b alike: only include a story if your search results let you state who/what/when clearly and specifically. If the results are thin, contradictory, or leave the basic facts unclear (you can't say what actually happened or to whom), drop it and use a different story instead — an incoherent story is worse than one fewer story. Also exclude recurring event announcements and PR/marketing-style items with no real news hook — "X festival returns this year," "Nth-annual Y classic announced," a venue's routine seasonal promotion — these aren't news even when they technically connect to one of this person's interests; an interest-tied search should surface an actual event, development, or story involving that interest, not a calendar listing.
+STORY QUALITY BAR: only include a story if your search results let you state who/what/when clearly and specifically. If the results are thin, contradictory, or leave the basic facts unclear (you can't say what actually happened or to whom), drop it and use a different story instead — an incoherent story is worse than one fewer story. Also exclude recurring event announcements and PR/marketing-style items with no real news hook — "X festival returns this year," "Nth-annual Y classic announced," a venue's routine seasonal promotion — these aren't news.
 
-When choosing the final list of stories, prefer genuinely important news, but when two stories are similarly newsworthy, favor the one connected to this person's actual interests over an equally routine but disconnected one. If Search 1b turned up something real and relevant, fold it into the same numbered list rather than giving it a separate section.
-
-Search 1a/1b's news list and Search 4's weird/funny story must never be the same event — confirmed live this happened (a human-interest story about a world-record attempt appeared as both a numbered news item AND the weird/funny story in the same briefing, word-for-word the same event). If a story is genuinely both newsworthy and funny/absurd enough to clear Search 4's bar, use it in ONE section only — the weird/funny section, since that's the more specific fit — and fill the news list with a different, distinct story instead of reusing it.
+Search 1's news list and Search 4's weird/funny story must never be the same event — confirmed live this happened (a human-interest story about a world-record attempt appeared as both a numbered news item AND the weird/funny story in the same briefing, word-for-word the same event). If a story is genuinely both newsworthy and funny/absurd enough to clear Search 4's bar, use it in ONE section only — the weird/funny section, since that's the more specific fit — and fill the news list with a different, distinct story instead of reusing it.
 
 SEARCH 2 — Sports: search for this person's teams' most recent completed games (the specific team names are in the context block below — use them as the search terms, e.g. "[team name] score last night"). Report a team's score ONLY if that game was played on the exact date given in the context block as this person's "yesterday" — never further back than that, even if it was their most recent game. Confirmed live this was reported wrong: a Saturday-night game was still showing up in a Monday-morning briefing because the old instruction here said to fall back to "their most recent prior game" with no cutoff — that reach-back is removed entirely now. Verify the actual date played from your search results against that exact "yesterday" date before including it; if a team's most recent game was on any other date (a bye, an off day, a Saturday game reported on a Monday, etc.), leave that team out of the sports section entirely rather than reporting a stale score. A morning with no sports section at all — because none of this person's teams played yesterday — is correct and expected; never reach back further just to have something to report.
 
@@ -71,7 +68,9 @@ MARKETS & INVESTING: ${includeMarkets
   ? `Write this as a real short market column, not a one-line heads-up — comparable in length to the news section, not capped under it. Cover: futures direction for the major indices; the actual story behind the move (what's driving it, not just that it's happening); which sectors are leading and which are lagging, and why; any real signal from a second asset class if there is one (bonds, gold, oil, the dollar) and what it implies. If there's a specific upcoming date genuinely worth flagging (an earnings report, a Fed decision, a major data release), name it and say why it matters. Close with a one-sentence investor takeaway — the "so what" for someone thinking in months, not the next hour. Use only what your search actually returned; if the search results are thin, write a shorter section rather than inventing detail to fill space. Frame it as what the trading day ahead holds, not a snapshot of an overnight timestamp — don't reference a specific time or timezone for any price or figure.`
   : `It's the weekend — US markets are closed, so skip the search and keep this section to exactly one line: "Markets are closed for the weekend." Nothing else — no recap of Friday's close, no preview of Monday.`}
 
-WEIRD/FUNNY STORY — LENGTH LIMIT: From Search 4's results, pick one or two genuinely funny or delightfully absurd stories you found — something a person could mention at lunch and get a real reaction, not just "huh, weird." Two short items is the target when you have two good ones; one is fine if that's all you found. Each item gets 2-3 sentences, no more — the hook, the key specific detail, maybe one line of color. This is a quick, punchy palate-cleanser, not a feature story — no extended backstory, no tangents about where an award's name came from, no multi-sentence windup before the actual point. Skip anything that's political, crime-related, cruel, sad, or just a routine "odd but not funny" wire-service item with no real twist — most generic search results will be exactly that, which is why Search 4 points you at outlets that actually curate for this quality specifically. Use only real facts from what you found — never invent specific details to make a story land better. If nothing from Search 4 genuinely clears this bar, skip this section entirely rather than settling for a weak one — a missing story is better than a boring one.
+WEIRD/FUNNY STORY — HARD LIMIT: From Search 4's results, pick one or two genuinely funny or delightfully absurd stories you found — something a person could mention at lunch and get a real reaction, not just "huh, weird." Two short items is the target when you have two good ones; one is fine if that's all you found. Each item gets EXACTLY TWO sentences, no exceptions — sentence one states the hook (who/what happened), sentence two adds the one specific detail that makes it land. Before moving to the next item, count your sentences: if there's a third sentence, or a "wrap-up" line, or a wry closer, delete it. This has drifted long before (confirmed live: a two-sentence instruction produced four- and five-sentence items with an invented closing quip tacked on each time) — treat two sentences as a hard wall, not a suggestion.
+
+Do not add a closing punchline, wisecrack, or "tracks perfectly" / "no résumé update necessary" / "did not have a good [day]" style wit of your own — that's invented color, not something Search 4 actually returned, and it's the main reason this section keeps running long. Report the specific real facts the source gave you and stop; the story itself is the punchline, you don't need to add one. Use only real facts from what you found — never invent specific details, backstory, or embellishment to make a story land better. This is a quick, punchy palate-cleanser, not a feature story. Skip anything that's political, crime-related, cruel, sad, or just a routine "odd but not funny" wire-service item with no real twist — most generic search results will be exactly that, which is why Search 4 points you at outlets that actually curate for this quality specifically. If nothing from Search 4 genuinely clears this bar, skip this section entirely rather than settling for a weak one — a missing story is better than a boring one.
 
 DAILY DISCOVERY: Give this section the header "📚 Daily Discovery". Recommend one book — real, existing, correctly attributed to its actual author — that this specific person would plausibly enjoy, reasoned from the real context you've been given: their interests/hobbies, active goals, the profile-items block, and recent conversation memories. Say in 1-2 sentences why it fits THEM specifically, citing the actual real thing it connects to (e.g. "given how much time you spend on the water" if boating is a real listed hobby) — not a generic "you'll love this" with no stated reason. If nothing in the context block gives you a genuine, specific angle on this person's taste, skip this section entirely rather than picking something generic and inventing a reason it fits — a missing section is honest; a fabricated connection is not. Never invent a detail about the book itself (plot, author, publication year, awards, adaptations) — if you're not confident a claimed fact is real, leave it out rather than state it. This section is about books specifically, not movies/shows/podcasts, even if those are what the context actually shows interest in.
 
@@ -116,7 +115,7 @@ Futures point [direction] ahead of the open for the Dow, S&P 500, and Nasdaq. [T
 Last night's results for [this person's home teams]: [Team] beat [Opponent], final score [X–Y]. [Team] fell to [Opponent], final score [X–Y]. Internationally, [a real result from a competition this person follows].
 
 😂 No Politics, Just Weird
-[A real, current lighthearted story in 2-3 sentences — the hook, the key detail, done.] [A second short one if you found two — same length, same energy.]
+[A real, current lighthearted story in exactly two sentences — the hook, then the one detail that makes it land. No closing quip.] [A second one, same length, if you found two — no closing quip on this one either.]
 
 📚 Daily Discovery
 [Real book title] by [real author]. [1-2 sentences on why it fits THIS person specifically, tied to a real, stated interest, goal, or recent conversation — not a generic pitch.]
@@ -352,26 +351,6 @@ ${recentBriefingsBlock}`;
   return { block, includeMarkets };
 }
 
-// Rotates through hobbies/music genres/favorite artists (sports teams are
-// already covered by Search 2, so left out here) so the interest-driven
-// search targets something different day to day rather than the same pick
-// every time. Deterministic on day-of-year — no state to track.
-async function getDailyInterestPicks(userName: string, count = 2): Promise<string[]> {
-  const profile = await getProfile(userName).catch(() => null);
-  const pool = [
-    ...(profile?.hobbies ?? []),
-    ...(profile?.musicGenres ?? []),
-    ...(profile?.favoriteArtists ?? []),
-  ];
-  if (pool.length === 0) return [];
-  const dayOfYear = Math.floor((Date.now() - Date.UTC(new Date().getUTCFullYear(), 0, 0)) / 86_400_000);
-  const picks: string[] = [];
-  for (let i = 0; i < count && i < pool.length; i++) {
-    picks.push(pool[(dayOfYear + i) % pool.length]!);
-  }
-  return picks;
-}
-
 async function callDailyBriefViaClaude(input: string, userName: string): Promise<string | null> {
   try {
     const resp = await anthropic.messages.create({
@@ -447,12 +426,9 @@ export async function generateDailyBrief(userName: string): Promise<string | nul
 
 async function generateDailyBriefOnce(userName: string): Promise<string | null> {
   try {
-    const [{ block: contextBlock, includeMarkets }, interestPicks] = await Promise.all([
-      buildDailyBriefContext(userName),
-      getDailyInterestPicks(userName),
-    ]);
+    const { block: contextBlock, includeMarkets } = await buildDailyBriefContext(userName);
 
-    const input = `${buildDailyBriefInstruction(interestPicks, includeMarkets)}\n\n${contextBlock}`;
+    const input = `${buildDailyBriefInstruction(includeMarkets)}\n\n${contextBlock}`;
 
     let text = await callDailyBriefViaClaude(input, userName);
     if (!text) {
