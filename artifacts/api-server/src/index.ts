@@ -12,7 +12,6 @@ import { startWinddownScheduler } from "./winddown/winddownScheduler";
 import { ensureWinddownTables } from "./winddown/winddownManager";
 import { ensureUsersTable } from "./auth/passwordAuth";
 import { ensureMemoryTable } from "./memory/memoryManager";
-import { ensureProfileTable } from "./profile/profileManager";
 import { NATIVE_STORED_NAME } from "./auth/middleware";
 import { ensureOnboardingTable } from "./onboarding/onboardingManager";
 import { startMedicationScheduler } from "./medications/medicationScheduler";
@@ -191,11 +190,6 @@ app.listen(port, async (err) => {
     await ensureMemoryTable();
   } catch (e) {
     logger.warn({ err: e }, "memory table initialization warning");
-  }
-  try {
-    await ensureProfileTable();
-  } catch (e) {
-    logger.warn({ err: e }, "profile_items table initialization warning");
   }
   try {
     await ensureOnboardingTable();

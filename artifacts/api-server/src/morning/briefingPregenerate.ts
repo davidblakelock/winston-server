@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { getRecentMemories, formatMemoriesForContext } from "../memory/memoryManager.js";
-import { getProfileItems, formatProfileForContext } from "../profile/profileManager.js";
+import { getRestaurants, formatRestaurantsForContext } from "../profile/profileManager.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
 import { logger } from "../lib/logger.js";
 import { getStoicForUser } from "../stoic/stoicManager.js";
@@ -73,7 +73,7 @@ WEIRD/FUNNY STORY — HARD LIMIT: From Search 4's results, pick one or two genui
 
 Do not add a closing punchline, wisecrack, or "tracks perfectly" / "no résumé update necessary" / "did not have a good [day]" style wit of your own — that's invented color, not something Search 4 actually returned, and it's the main reason this section keeps running long. Report the specific real facts the source gave you and stop; the story itself is the punchline, you don't need to add one. Use only real facts from what you found — never invent specific details, backstory, or embellishment to make a story land better. This is a quick, punchy palate-cleanser, not a feature story. Skip anything that's political, crime-related, cruel, sad, or just a routine "odd but not funny" wire-service item with no real twist — most generic search results will be exactly that, which is why Search 4 points you at outlets that actually curate for this quality specifically. If nothing from Search 4 genuinely clears this bar, skip this section entirely rather than settling for a weak one — a missing story is better than a boring one.
 
-DAILY DISCOVERY: Give this section a header of "📚 Daily Discovery" if the pick is a book, or a different single emoji + "Daily Discovery" that actually fits the category (🎬 for a film/show, 🎵 for an album/artist, 🎙️ for a podcast, 🍽️ for a recipe/restaurant, 🗺️ for a place/activity, etc.) — match the header to what you're actually recommending, don't default to the book emoji out of habit. Recommend ONE real, specific thing this person would plausibly enjoy — a book, film, show, album, podcast episode, recipe, restaurant, place, or activity, whichever genuinely fits what the context below actually shows interest in. Do not default to books just because that's the familiar choice; let their real hobbies, goals, and activity decide the category each day, and vary the category day to day rather than picking the same one repeatedly (check RECENT BRIEFINGS below). Reason from the real context you've been given: their interests/hobbies, active goals, the profile-items block, the Attic/life-capture/chat activity block, and recent conversation memories. Say in 1-2 sentences why it fits THEM specifically, citing the actual real thing it connects to (e.g. "given how much time you spend on the water" if boating is a real listed hobby, or referencing something specific from the Attic/activity block) — not a generic "you'll love this" with no stated reason. If nothing in the context block gives you a genuine, specific angle on this person's taste, skip this section entirely rather than picking something generic and inventing a reason it fits — a missing section is honest; a fabricated connection is not. Never invent a detail about the thing itself (a book's plot/author, a film's cast, a restaurant's menu, an album's tracklist) — if you're not confident a claimed fact is real, leave it out rather than state it.
+DAILY DISCOVERY: Give this section a header of "📚 Daily Discovery" if the pick is a book, or a different single emoji + "Daily Discovery" that actually fits the category (🎬 for a film/show, 🎵 for an album/artist, 🎙️ for a podcast, 🍽️ for a recipe/restaurant, 🗺️ for a place/activity, etc.) — match the header to what you're actually recommending, don't default to the book emoji out of habit. Recommend ONE real, specific thing this person would plausibly enjoy — a book, film, show, album, podcast episode, recipe, restaurant, place, or activity, whichever genuinely fits what the context below actually shows interest in. Do not default to books just because that's the familiar choice; let their real hobbies, goals, and activity decide the category each day, and vary the category day to day rather than picking the same one repeatedly (check RECENT BRIEFINGS below). Reason from the real context you've been given: their interests/hobbies, active goals, favorite restaurants, the Attic/life-capture/chat activity block, and recent conversation memories. Say in 1-2 sentences why it fits THEM specifically, citing the actual real thing it connects to (e.g. "given how much time you spend on the water" if boating is a real listed hobby, or referencing something specific from the Attic/activity block) — not a generic "you'll love this" with no stated reason. If nothing in the context block gives you a genuine, specific angle on this person's taste, skip this section entirely rather than picking something generic and inventing a reason it fits — a missing section is honest; a fabricated connection is not. Never invent a detail about the thing itself (a book's plot/author, a film's cast, a restaurant's menu, an album's tracklist) — if you're not confident a claimed fact is real, leave it out rather than state it.
 
 FORMATTING — CRITICAL: Write in clean, plain, readable prose only — this will be read aloud via text-to-speech, so it must sound natural when spoken. Never include citation brackets, markdown links, raw URLs, "utm_source" parameters, "#:~:text=" fragment identifiers, or any link syntax anywhere in the output. When you want to credit a source, say it in plain spoken words woven into the sentence — e.g. "according to the AP" or "Axios reports" — never as a clickable link or bracketed reference. Do NOT include a "Sources:" section, footer, bibliography, or list of links anywhere, including at the end. The entire output must read as clean spoken prose from start to finish with zero raw URLs or citation markup of any kind.
 
@@ -248,10 +248,10 @@ async function fetchTodayTodos(userName: string, tz: string): Promise<string[]> 
 
 // ── Context-gathering for generateDailyBrief ──────────────────────────────────
 async function buildDailyBriefContext(userName: string): Promise<{ block: string; includeMarkets: boolean }> {
-  const [profile, goals, profileItems, memories, stoic, recentBriefings, atticActivity] = await Promise.all([
+  const [profile, goals, restaurants, memories, stoic, recentBriefings, atticActivity] = await Promise.all([
     getProfile(userName).catch(() => null),
     getGoals(userName).catch((): Awaited<ReturnType<typeof getGoals>> => []),
-    getProfileItems(undefined, userName).catch((): Awaited<ReturnType<typeof getProfileItems>> => []),
+    getRestaurants(userName).catch((): Awaited<ReturnType<typeof getRestaurants>> => []),
     getRecentMemories(7).catch(() => []),
     getStoicForUser(userName).catch(() => null),
     getRecentBriefingTexts(userName, 2).catch(() => []),
@@ -306,7 +306,7 @@ async function buildDailyBriefContext(userName: string): Promise<{ block: string
   if (profile?.sportsTeams)            interestParts.push(`sports teams: ${profile.sportsTeams}`);
   const interestsLine = interestParts.length > 0 ? interestParts.join("; ") : "no specific interests on file";
 
-  const profileItemsBlock = formatProfileForContext(profileItems);
+  const restaurantsBlock = formatRestaurantsForContext(restaurants);
 
   // Aspirational goals are deliberately excluded from the daily brief — they
   // aren't being actively worked, so "next steps" framing doesn't fit them.
@@ -356,7 +356,7 @@ VERIFIED CALENDAR EVENTS for today (use exactly this list — do not search for,
 ${calendarBlock}
 Interests: ${interestsLine}
 Active goals: ${goalsLine}
-${profileItemsBlock}
+${restaurantsBlock}
 Recent context: ${memoriesBlock || "no recent conversation memories"}
 Attic / life-capture / chat activity from the last 30 days (raw, across sources — Daily Discovery's real material, most of it never actionable enough to belong anywhere else in this briefing):
 ${atticActivityBlock}

@@ -8,7 +8,6 @@ import {
   updateGoogleContact,
   type Contact as GoogleContact,
 } from "../../google/contacts.js";
-import { addProfileItem } from "../../profile/profileManager.js";
 import { createPerson } from "../../people/peopleManager.js";
 import { createProvider } from "../../providers/providerManager.js";
 
@@ -75,7 +74,6 @@ export async function handleContact(params: HandleContactParams): Promise<Contac
         if (isCompoundContactAndSave && result.contacts && result.contacts.length === 1) {
           const found = result.contacts[0];
           await saveCuratedContact(found, sessionUserName);
-          await addProfileItem("people", found.name, [found.phone, found.email, found.address].filter(Boolean).join(" | ") || null, sessionUserName).catch(() => {});
           contextBlock += (
             `\n\n[Compound Contact Request — Lookup + Save Complete]\n` +
             `Found in Google Contacts: ${found.name}` +

@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { query } from "../db.js";
 import { logger } from "../lib/logger.js";
-import { addProfileItem } from "../profile/profileManager.js";
+import { addRestaurant } from "../profile/profileManager.js";
 import { getUserLocationContext } from "../lib/userTimezone.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
 
@@ -234,9 +234,9 @@ export async function saveMemory(
 // sportsTeams: a single comma-separated text column on user_profiles (NOT an
 //   array) — append new teams to the existing string.
 // restaurants: NOT a user_profiles column — the dedicated restaurants table
-//   (routes/lists.ts / profileManager.ts's addRestaurantItem) is the real live
-//   home for restaurants, so route through the existing addProfileItem()
-//   category="restaurants" path, which already handles dedup + URL lookup.
+//   (routes/lists.ts / profileManager.ts's addRestaurant) is the real live
+//   home for restaurants, so route through the existing addRestaurant(),
+//   which already handles dedup + URL lookup.
 async function saveExtractedFacts(facts: ExtractedFacts, userName: string): Promise<void> {
   const profile = await getProfile(userName).catch(() => null);
   if (!profile) return;
@@ -252,7 +252,7 @@ async function saveExtractedFacts(facts: ExtractedFacts, userName: string): Prom
     for (const name of facts.restaurants) {
       const cleanName = name?.trim();
       if (!cleanName) continue;
-      await addProfileItem("restaurants", cleanName, null, userName).catch((err) => {
+      await addRestaurant(cleanName, null, userName).catch((err) => {
         logger.warn({ err, userName, name: cleanName }, "Failed to save extracted restaurant fact (non-fatal)");
       });
     }
@@ -284,7 +284,7 @@ export async function applyProfileFact(
     case "restaurants": {
       const cleanName = value?.trim();
       if (cleanName) {
-        await addProfileItem("restaurants", cleanName, null, userName).catch((err) => {
+        await addRestaurant(cleanName, null, userName).catch((err) => {
           logger.warn({ err, userName, name: cleanName }, "Failed to apply accepted restaurant profile fact (non-fatal)");
         });
       }

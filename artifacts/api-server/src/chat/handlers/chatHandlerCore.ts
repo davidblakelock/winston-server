@@ -11,8 +11,8 @@ import {
   type UserProfile,
 } from "../../onboarding/onboardingManager.js";
 import {
-  getProfileItems,
-  formatProfileForContext,
+  getRestaurants,
+  formatRestaurantsForContext,
 } from "../../profile/profileManager.js";
 import { getPeople, type KeyPerson } from "../../people/peopleManager.js";
 import {
@@ -539,7 +539,7 @@ async function handleNewChatInner(req: NewChatRequest): Promise<NewChatResponse>
   // ── Load always-on context in parallel ─────────────────────────────────────
   const [
     userProfile,
-    profileItems,
+    restaurants,
     keyPeople,
     allLists,
     pendingReminderRows,
@@ -547,7 +547,7 @@ async function handleNewChatInner(req: NewChatRequest): Promise<NewChatResponse>
     dbHistory,
   ] = await Promise.all([
     getProfile(sessionUserName).catch(() => null),
-    getProfileItems(undefined, sessionUserName).catch(() => []),
+    getRestaurants(sessionUserName).catch((): Awaited<ReturnType<typeof getRestaurants>> => []),
     getPeople(sessionUserName).catch((): KeyPerson[] => []),
     getAllLists(sessionUserName).catch(() => ({} as Record<string, string[]>)),
     query<{ id: number; reminder_text: string; fire_at: string; for_contact: string | null }>(
@@ -604,7 +604,7 @@ async function handleNewChatInner(req: NewChatRequest): Promise<NewChatResponse>
   const stableSystem = corePrompt + profileContextBlock;
 
   // ── Build dynamic system prompt ──────────────────────────────────────────────
-  const profileItemsBlock = formatProfileForContext(profileItems, sessionUserName);
+  const restaurantsBlock = formatRestaurantsForContext(restaurants);
 
   const activeScreenBlock = requestContext
     ? `\n\n[Active Screen: ${requestContext} list]\nWhen adding items without specifying a list, use "${requestContext}".`
@@ -612,7 +612,7 @@ async function handleNewChatInner(req: NewChatRequest): Promise<NewChatResponse>
 
   let dynamicPrompt =
     getCurrentDateTimeBlock(timezone) +
-    profileItemsBlock +
+    restaurantsBlock +
     buildListsBlock(allLists, requestContext) +
     buildRemindersBlock(pendingReminderRows, timezone) +
     buildCalendarBlock(todayEvents, timezone) +
