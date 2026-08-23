@@ -11,6 +11,7 @@ import { MODEL_SONNET } from "../lib/models.js";
 import { getRecentBriefingTexts, saveBriefingText } from "./briefingCache.js";
 import { fetchTodayEvents } from "../google/calendar.js";
 import { query } from "../db.js";
+import { fetchFromAdapters, recencyLabel } from "../connectionEngine/memorySourceAdapters.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -52,7 +53,7 @@ Weather is NOT something to search for — verified current weather conditions a
 
 This briefing is delivered in the early morning, before the stock market opens for the day. Sports scores should always be from yesterday's/last night's completed games — never describe a game as happening "today" unless you've confirmed via search that it already occurred earlier the same calendar day in this person's timezone. Never give a live/current stock quote or price snapshot — the market is closed at this hour and a snapshot price is meaningless.
 
-After completing all searches above, write a genuinely enjoyable Morning Run Down covering: the weather from the context block, the to-dos and calendar events from the context block, the news from Search 1, the markets info from Search 3, the sports scores from Search 2, the story from Search 4, and a Daily Discovery book pick reasoned from the context block (see below — no search needed for this one). Use only real, current, verified information from your searches (and the verified weather/to-dos/calendar data) — never invent facts, venues, dates, scores, or weather. EVERY section — including Weather — gets its own header (an emoji plus a short title, one line, on its own); vary the emoji and phrasing day to day, but never fold a section into the opening greeting or another section instead of giving it a header. Beyond that, style is your call — vary the wording and exact phrasing day to day rather than repeating an identical script every time. Overall length should come from covering enough distinct topics, not from writing at length about any single one of them.
+After completing all searches above, write a genuinely enjoyable Morning Run Down covering: the weather from the context block, the to-dos and calendar events from the context block, the news from Search 1, the markets info from Search 3, the sports scores from Search 2, the story from Search 4, and a Daily Discovery pick reasoned from the context block (see below — no search needed for this one). Use only real, current, verified information from your searches (and the verified weather/to-dos/calendar data) — never invent facts, venues, dates, scores, or weather. EVERY section — including Weather — gets its own header (an emoji plus a short title, one line, on its own); vary the emoji and phrasing day to day, but never fold a section into the opening greeting or another section instead of giving it a header. Beyond that, style is your call — vary the wording and exact phrasing day to day rather than repeating an identical script every time. Overall length should come from covering enough distinct topics, not from writing at length about any single one of them.
 
 WEATHER: Give this section its own header, separate from the opening greeting (the greeting itself should just be a short "good morning" line, nothing else). One or two sentences using only the verified weather data from the context block — conditions, temperature, high/low. Never guess, never add a multi-day forecast.
 
@@ -72,7 +73,7 @@ WEIRD/FUNNY STORY — HARD LIMIT: From Search 4's results, pick one or two genui
 
 Do not add a closing punchline, wisecrack, or "tracks perfectly" / "no résumé update necessary" / "did not have a good [day]" style wit of your own — that's invented color, not something Search 4 actually returned, and it's the main reason this section keeps running long. Report the specific real facts the source gave you and stop; the story itself is the punchline, you don't need to add one. Use only real facts from what you found — never invent specific details, backstory, or embellishment to make a story land better. This is a quick, punchy palate-cleanser, not a feature story. Skip anything that's political, crime-related, cruel, sad, or just a routine "odd but not funny" wire-service item with no real twist — most generic search results will be exactly that, which is why Search 4 points you at outlets that actually curate for this quality specifically. If nothing from Search 4 genuinely clears this bar, skip this section entirely rather than settling for a weak one — a missing story is better than a boring one.
 
-DAILY DISCOVERY: Give this section the header "📚 Daily Discovery". Recommend one book — real, existing, correctly attributed to its actual author — that this specific person would plausibly enjoy, reasoned from the real context you've been given: their interests/hobbies, active goals, the profile-items block, and recent conversation memories. Say in 1-2 sentences why it fits THEM specifically, citing the actual real thing it connects to (e.g. "given how much time you spend on the water" if boating is a real listed hobby) — not a generic "you'll love this" with no stated reason. If nothing in the context block gives you a genuine, specific angle on this person's taste, skip this section entirely rather than picking something generic and inventing a reason it fits — a missing section is honest; a fabricated connection is not. Never invent a detail about the book itself (plot, author, publication year, awards, adaptations) — if you're not confident a claimed fact is real, leave it out rather than state it. This section is about books specifically, not movies/shows/podcasts, even if those are what the context actually shows interest in.
+DAILY DISCOVERY: Give this section a header of "📚 Daily Discovery" if the pick is a book, or a different single emoji + "Daily Discovery" that actually fits the category (🎬 for a film/show, 🎵 for an album/artist, 🎙️ for a podcast, 🍽️ for a recipe/restaurant, 🗺️ for a place/activity, etc.) — match the header to what you're actually recommending, don't default to the book emoji out of habit. Recommend ONE real, specific thing this person would plausibly enjoy — a book, film, show, album, podcast episode, recipe, restaurant, place, or activity, whichever genuinely fits what the context below actually shows interest in. Do not default to books just because that's the familiar choice; let their real hobbies, goals, and activity decide the category each day, and vary the category day to day rather than picking the same one repeatedly (check RECENT BRIEFINGS below). Reason from the real context you've been given: their interests/hobbies, active goals, the profile-items block, the Attic/life-capture/chat activity block, and recent conversation memories. Say in 1-2 sentences why it fits THEM specifically, citing the actual real thing it connects to (e.g. "given how much time you spend on the water" if boating is a real listed hobby, or referencing something specific from the Attic/activity block) — not a generic "you'll love this" with no stated reason. If nothing in the context block gives you a genuine, specific angle on this person's taste, skip this section entirely rather than picking something generic and inventing a reason it fits — a missing section is honest; a fabricated connection is not. Never invent a detail about the thing itself (a book's plot/author, a film's cast, a restaurant's menu, an album's tracklist) — if you're not confident a claimed fact is real, leave it out rather than state it.
 
 FORMATTING — CRITICAL: Write in clean, plain, readable prose only — this will be read aloud via text-to-speech, so it must sound natural when spoken. Never include citation brackets, markdown links, raw URLs, "utm_source" parameters, "#:~:text=" fragment identifiers, or any link syntax anywhere in the output. When you want to credit a source, say it in plain spoken words woven into the sentence — e.g. "according to the AP" or "Axios reports" — never as a clickable link or bracketed reference. Do NOT include a "Sources:" section, footer, bibliography, or list of links anywhere, including at the end. The entire output must read as clean spoken prose from start to finish with zero raw URLs or citation markup of any kind.
 
@@ -117,8 +118,8 @@ Last night's results for [this person's home teams]: [Team] beat [Opponent], fin
 😂 No Politics, Just Weird
 [A real, current lighthearted story in exactly two sentences — the hook, then the one detail that makes it land. No closing quip.] [A second one, same length, if you found two — no closing quip on this one either.]
 
-📚 Daily Discovery
-[Real book title] by [real author]. [1-2 sentences on why it fits THIS person specifically, tied to a real, stated interest, goal, or recent conversation — not a generic pitch.]
+[matching emoji] Daily Discovery
+[One real, specific thing — a book, film, album, podcast, recipe, restaurant, place, or activity, whichever category genuinely fits today]. [1-2 sentences on why it fits THIS person specifically, tied to a real, stated interest, goal, or something from their Attic/activity — not a generic pitch.]
 
 🧘 The Morning Stoic
 "The important thing is not to stop questioning." — Albert Einstein
@@ -247,13 +248,23 @@ async function fetchTodayTodos(userName: string, tz: string): Promise<string[]> 
 
 // ── Context-gathering for generateDailyBrief ──────────────────────────────────
 async function buildDailyBriefContext(userName: string): Promise<{ block: string; includeMarkets: boolean }> {
-  const [profile, goals, profileItems, memories, stoic, recentBriefings] = await Promise.all([
+  const [profile, goals, profileItems, memories, stoic, recentBriefings, atticActivity] = await Promise.all([
     getProfile(userName).catch(() => null),
     getGoals(userName).catch((): Awaited<ReturnType<typeof getGoals>> => []),
     getProfileItems(undefined, userName).catch((): Awaited<ReturnType<typeof getProfileItems>> => []),
     getRecentMemories(7).catch(() => []),
     getStoicForUser(userName).catch(() => null),
     getRecentBriefingTexts(userName, 2).catch(() => []),
+    // Attic items, life captures, and chat facts — a 30-day window (taste
+    // signals build up slowly; this is deliberately much wider than the
+    // 1-3 day "did something need action today" window other features in
+    // this codebase use the same adapters for). Added specifically to give
+    // Daily Discovery (below) real material beyond the bare profile fields
+    // it was previously limited to — confirmed on inspection that Attic,
+    // life captures, and chat facts were never actually reaching this
+    // briefing at all despite being real, live sources of what this person
+    // is actually into.
+    fetchFromAdapters(userName, ["attic_item", "life_capture", "chat_fact"], 30).catch((): Awaited<ReturnType<typeof fetchFromAdapters>> => []),
   ]);
 
   const name = profile?.name ?? userName;
@@ -312,6 +323,9 @@ async function buildDailyBriefContext(userName: string): Promise<{ block: string
     : "no active goals";
 
   const memoriesBlock = formatMemoriesForContext(memories);
+  const atticActivityBlock = atticActivity.length > 0
+    ? atticActivity.slice(0, 20).map((it) => `- (${it.context}, ${recencyLabel(it.occurredAt)}) ${it.content}`).join("\n")
+    : "None on file.";
   const stoicLine = stoic ? `"${stoic.quote}" — ${stoic.author} (${stoic.source})` : "none available today";
 
   const recentBriefingsBlock = recentBriefings.length > 0
@@ -344,8 +358,10 @@ Interests: ${interestsLine}
 Active goals: ${goalsLine}
 ${profileItemsBlock}
 Recent context: ${memoriesBlock || "no recent conversation memories"}
+Attic / life-capture / chat activity from the last 30 days (raw, across sources — Daily Discovery's real material, most of it never actionable enough to belong anywhere else in this briefing):
+${atticActivityBlock}
 Today's reflection: ${stoicLine}
-RECENT BRIEFINGS (for avoiding repeats only — never read this back or reference it directly): the weird/funny story, the Daily Discovery book pick, and the news angles below were already delivered recently. Today's actual news will naturally differ since real events happened since then, but do not pick the same weird/funny story, recommend the same book again, or lean on the same angle for an interest-tied story again — if your search for a fresh weird/funny story doesn't turn up something different from what's shown here, skip that section rather than repeat it; same for Daily Discovery if you can't think of a genuinely different book that still fits.
+RECENT BRIEFINGS (for avoiding repeats only — never read this back or reference it directly): the weird/funny story, the Daily Discovery pick, and the news angles below were already delivered recently. Today's actual news will naturally differ since real events happened since then, but do not pick the same weird/funny story, recommend the same Daily Discovery pick again, or lean on the same angle for an interest-tied story again — if your search for a fresh weird/funny story doesn't turn up something different from what's shown here, skip that section rather than repeat it; same for Daily Discovery if you can't think of a genuinely different pick that still fits.
 ${recentBriefingsBlock}`;
 
   return { block, includeMarkets };
