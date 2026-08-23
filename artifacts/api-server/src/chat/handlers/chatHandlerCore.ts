@@ -107,6 +107,12 @@ const MODEL_SONNET = "claude-sonnet-4-6";
 const ACTIVE_CONTEXT_LIMIT = 20;
 const TODAY_EVENTS_TTL_MS  = 5 * 60 * 1000;
 
+// Per-user turn counter for the periodic saveMemory trigger below — see that
+// call site's comment for why this exists instead of the array-length check
+// it replaced. In-memory only (resets on restart); that's fine for "run this
+// roughly every 4 turns," not a correctness requirement.
+const _turnCounts = new Map<string, number>();
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export type ActionType =
@@ -2480,9 +2486,27 @@ function runPostProcessing(
     { role: "user",      content: userMessage },
     { role: "assistant", content: aiReply },
   ];
-  if (updatedHistory.length >= 4 && updatedHistory.length % 4 === 0) {
+  // Was `updatedHistory.length % 4 === 0` — history is always
+  // req.history.slice(-ACTIVE_CONTEXT_LIMIT) (20), so updatedHistory.length
+  // permanently locks to 22 the moment any conversation exceeds 20 prior
+  // messages, and 22 % 4 is 2, never 0. Confirmed live: conversation_memories
+  // has had zero rows ever, for an account with weeks of real daily use —
+  // this could only ever have fired during someone's first ~10 exchanges,
+  // before the slice cap took hold, and never again after. Not
+  // restaurant-specific, not extraction-quality-specific — the periodic
+  // memory-save trigger itself was mathematically unreachable once anyone's
+  // history grew past the context window, which happens almost immediately
+  // for daily use. Replaced with a real turn counter that isn't derived from
+  // a capped array.
+  const turnCount = (_turnCounts.get(userName) ?? 0) + 1;
+  _turnCounts.set(userName, turnCount);
+  if (turnCount % 4 === 0) {
     import("../../memory/memoryManager.js").then(({ saveMemory }) =>
-      saveMemory(updatedHistory, companionName, userName).catch(() => {})
-    ).catch(() => {});
+      saveMemory(updatedHistory, companionName, userName).catch((err) =>
+        logger.warn({ err, userName }, "[chatHandlerCore] saveMemory failed")
+      )
+    ).catch((err) =>
+      logger.warn({ err, userName }, "[chatHandlerCore] saveMemory dynamic import failed")
+    );
   }
 }
