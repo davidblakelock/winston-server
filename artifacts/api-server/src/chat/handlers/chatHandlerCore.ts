@@ -1873,15 +1873,20 @@ async function handleNewChatInner(req: NewChatRequest): Promise<NewChatResponse>
           const emails = await fetchAndSummarizeEmails(15, undefined, sessionUserName);
 
           if (!emails || emails.length === 0) {
+            // No speak_sync here — email_digest's own client-side handler
+            // (onEmailDigest) already calls speakResponse directly, and
+            // broadcastToUser already fans this out to every connected
+            // device. The speak_sync broadcast that used to follow this was
+            // pure duplication: identical text dispatched to TTS twice,
+            // ~100ms apart, guaranteed to race. Confirmed live — the
+            // monotonic client-side token guard discarded one attempt as
+            // stale (after its fetch had already succeeded) and the
+            // server's own duplicate-request guard 409'd the other, so
+            // neither ever played and the digest went out in total silence.
             broadcastToUser(sessionUserName, "email_digest", {
               type: "email_digest",
               text: "Your inbox is clear — no unread emails right now.",
               totalCount: 0,
-            });
-            broadcastToUser(sessionUserName, "speak_sync", {
-              text: "Your inbox is clear — no unread emails right now.",
-              messageId: `email-${Date.now()}`,
-              initiated_by: null,
             });
             return;
           }
@@ -1911,16 +1916,12 @@ async function handleNewChatInner(req: NewChatRequest): Promise<NewChatResponse>
 
           const firstEmail = emails[0];
 
-          // Push digest
+          // Push digest — no speak_sync alongside this; see the "inbox is
+          // clear" branch above for why that pairing is a guaranteed race.
           broadcastToUser(sessionUserName, "email_digest", {
             type: "email_digest",
             text: digestText,
             totalCount: emails.length,
-          });
-          broadcastToUser(sessionUserName, "speak_sync", {
-            text: digestText,
-            messageId: `email-digest-${Date.now()}`,
-            initiated_by: null,
           });
 
           // Push first email card
@@ -1993,14 +1994,11 @@ async function handleNewChatInner(req: NewChatRequest): Promise<NewChatResponse>
             total: cardTotal,
           });
         } else {
+          // No speak_sync here either — onEmailDone already calls
+          // speakResponse directly, same reasoning as email_digest above.
           broadcastToUser(sessionUserName, "email_done", {
             type: "email_done",
             text: "You're all caught up — inbox handled!",
-          });
-          broadcastToUser(sessionUserName, "speak_sync", {
-            text: "You're all caught up — inbox handled!",
-            messageId: `email-done-${Date.now()}`,
-            initiated_by: null,
           });
         }
       }
