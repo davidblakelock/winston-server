@@ -165,12 +165,24 @@ export async function setWinddownActive(userName: string, active: boolean): Prom
 // near-simultaneous messages (voice segments, retries, quick back-to-back turns)
 // each read active=true before either one's UPDATE commits, causing both to be
 // treated as "the" reply. Only the caller that gets a row back won the claim.
+//
+// 30-minute expiry added after confirming live in life_captures: this used to
+// have no time bound at all, so "active" just meant "waiting for literally the
+// next message, whenever it comes" — a message sent hours later, on a totally
+// different topic, still got claimed as tonight's reflection and written to My
+// Life. Confirmed twice: a wake-word test ("Are you there?") claimed ~5 min
+// after activation, and a stray "Evening wind down" utterance claimed 47
+// minutes after that night's real 9pm firing, both saved verbatim as if they
+// were personal reflections. 30 minutes covers a normal "read the prompt, type
+// a reply" gap without leaving the window open for the rest of the evening —
+// past that, a message is just a message again, not an assumed reply.
 export async function claimWinddownReply(userName: string): Promise<boolean> {
   const { timezone: tz } = await getUserLocationContext(userName);
   const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
   const { rows } = await query<{ id: number }>(
     `UPDATE winddown_state SET active = false
      WHERE user_name = $1 AND trigger_date = $2 AND active = true
+       AND triggered_at >= now() - interval '30 minutes'
      RETURNING id`,
     [userName, today]
   );
