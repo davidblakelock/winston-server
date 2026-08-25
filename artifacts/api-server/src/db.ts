@@ -101,6 +101,18 @@ function interpolate(sql: string, params: unknown[]): string {
 // CTE wrapper: WITH __r AS (%s) SELECT … FROM __r).
 // exec_dml_ret's own definition uses only RETURN (not RETURNING) so it's
 // invisible to exec_sql's word-boundary regex and installs via the DDL branch.
+//
+// MUST be called on the raw SQL template (before param interpolation) — the
+// bare /\breturning\b/i regex has no way to tell real SQL syntax from the
+// word "returning" sitting inside a data value once params are embedded as
+// string literals. Confirmed live: a Morning Run Down's closing line ("keep
+// returning to...") got interpolated into a plain INSERT INTO chat_messages
+// with no actual RETURNING clause, tripped this check, got routed through
+// exec_dml_ret, and failed with "WITH query __r does not have a RETURNING
+// clause" — silently dropping that reply from chat history (and, same bug,
+// the same morning's pregenerated-briefing cache write). Any INSERT/UPDATE/
+// DELETE whose interpolated data happens to contain that word anywhere was
+// equally at risk, not just this one call site.
 function isDmlWithReturning(sql: string): boolean {
   const trimmed = sql.trimStart();
   return (
@@ -111,12 +123,13 @@ function isDmlWithReturning(sql: string): boolean {
 
 // ---------- REST exec_sql / exec_dml_ret call ----------
 async function execViaRest<T extends pg.QueryResultRow>(
-  sql: string
+  sql: string,
+  isDmlRetHint: boolean
 ): Promise<pg.QueryResult<T>> {
   let sqlToSend: string;
   let isDmlRet = false;
 
-  if (isDmlWithReturning(sql)) {
+  if (isDmlRetHint) {
     // Escape single-quotes in the SQL string for safe embedding as a SQL literal
     const escaped = sql.replace(/'/g, "''");
     sqlToSend = `SELECT exec_dml_ret('${escaped}')`;
@@ -181,8 +194,11 @@ export async function query<T extends pg.QueryResultRow = pg.QueryResultRow>(
   params?: unknown[]
 ): Promise<pg.QueryResult<T>> {
   if (await useSupabase()) {
+    // Checked against the template, not the interpolated string — see
+    // isDmlWithReturning's comment for why that distinction matters.
+    const isDmlRetHint = isDmlWithReturning(text);
     const sql = params?.length ? interpolate(text, params) : text;
-    return execViaRest<T>(sql);
+    return execViaRest<T>(sql, isDmlRetHint);
   }
   const pool = await getLocalPool();
   return pool.query<T>(text, params);
