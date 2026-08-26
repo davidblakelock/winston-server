@@ -6,6 +6,12 @@ export interface WinddownSettings {
   scheduledTime: string;
 }
 
+// Every statement below is .catch()-guarded on purpose, including the
+// CREATE TABLE IF NOT EXISTS ones that would rarely fail — one statement
+// here once had no guard (see the seed-row INSERT's own comment below) and
+// silently blocked every migration after it, on every server startup,
+// until caught by a direct schema check against production. Nothing in
+// this function should ever again be able to take the rest of it down.
 export async function ensureWinddownTables(): Promise<void> {
   await query(`
     CREATE TABLE IF NOT EXISTS winddown_settings (
@@ -15,17 +21,28 @@ export async function ensureWinddownTables(): Promise<void> {
       story_day_of_week varchar(10) NOT NULL DEFAULT 'sunday',
       updated_at timestamptz NOT NULL DEFAULT NOW()
     )
-  `);
+  `).catch(() => {});
   // Migration: add story_day_of_week if missing from existing installations
   await query(`
     ALTER TABLE winddown_settings ADD COLUMN IF NOT EXISTS story_day_of_week varchar(10) NOT NULL DEFAULT 'sunday'
   `).catch(() => {});
+  // Pre-multi-user seed row, now permanently broken by the NOT NULL
+  // user_name constraint added below (line 32) — this INSERT never supplies
+  // user_name, so it throws every single time. It had no .catch(), so that
+  // exception was rejecting this ENTIRE function on every server startup,
+  // silently skipping every migration statement after it — including, most
+  // recently, the scheduled_push_sent column added for claimScheduledPush
+  // (never actually got created despite the deploy succeeding). Confirmed
+  // live via a direct schema check against the production DB. This seed
+  // row is obsolete anyway now that every real row carries a user_name;
+  // catching it here just stops it from taking the rest of this function
+  // down with it.
   await query(`
     INSERT INTO winddown_settings (enabled, scheduled_time)
     VALUES (true, '21:00')
     ON CONFLICT (id) DO NOTHING
     RETURNING id
-  `);
+  `).catch(() => {});
   // Migration: add per-user support to winddown_settings
   await query(`ALTER TABLE winddown_settings ADD COLUMN IF NOT EXISTS user_name TEXT`).catch(() => {});
   await query(`UPDATE winddown_settings SET user_name = 'davidblakelock' WHERE user_name IS NULL`).catch(() => {});
@@ -38,7 +55,7 @@ export async function ensureWinddownTables(): Promise<void> {
       note text NOT NULL,
       created_at timestamptz NOT NULL DEFAULT NOW()
     )
-  `);
+  `).catch(() => {});
   await query(`
     CREATE TABLE IF NOT EXISTS winddown_state (
       id serial PRIMARY KEY,
@@ -47,7 +64,7 @@ export async function ensureWinddownTables(): Promise<void> {
       active boolean NOT NULL DEFAULT true,
       tonight_message text
     )
-  `);
+  `).catch(() => {});
   // Add tonight_message column if it doesn't exist (migration for existing installs)
   await query(`
     ALTER TABLE winddown_state ADD COLUMN IF NOT EXISTS tonight_message text
