@@ -5,8 +5,8 @@ import { sendFcmNotification } from "../push/fcmSender.js";
 import { query } from "../db.js";
 import {
   getSettings,
-  hasFiredToday,
-  markFiredToday,
+  claimScheduledPush,
+  setWinddownActive,
   saveTonightMessage,
 } from "./winddownManager.js";
 
@@ -223,30 +223,34 @@ export function startWinddownScheduler(): void {
         // 15-minute catch window — provides recovery from brief server restarts without
         // allowing the notification to fire drastically late.
         if (minutesPast < 0 || minutesPast >= 15) continue;
-        if (await hasFiredToday(userName)) {
-          console.log(`EVENING_CHECK_IN: already fired today — skipping`);
-          continue;
-        }
 
-        console.log(`EVENING_CHECK_IN: firing at ${localTime}`);
-        // Mark fired FIRST to prevent double-fire on subsequent ticks within the
-        // window — markFiredToday's INSERT...WHERE NOT EXISTS is atomic, and now
-        // its claimed/not-claimed result is actually checked: skip sending if
-        // someone else (e.g. an old+new server instance briefly overlapping
-        // during a rolling deploy) already claimed today's slot. Previously this
-        // result was discarded and the push sent regardless either way, which is
-        // exactly the check-then-act race that produced two separate winddown
-        // notifications (and two generated messages) for the same evening. A
-        // transient DB error on the claim itself still lets the push through,
-        // matching the prior fail-open behavior for that case specifically.
-        const claimedFireSlot = await markFiredToday(userName).catch((err) => {
-          logger.warn({ err }, "Evening check-in: markFiredToday failed — push will still be sent");
+        // Claims TONIGHT'S SCHEDULED push specifically — not just "does a
+        // winddown_state row exist for today," which used to be the same
+        // hasFiredToday/markFiredToday check chatHandlerCore.ts's opener
+        // branch and /api/winddown/activate also touch. Confirmed live: a
+        // row got created at 5:29am (hours before this schedule), and the
+        // real 9pm push silently never fired because hasFiredToday already
+        // read true for the rest of the day. claimScheduledPush's own
+        // atomic UPDATE ... WHERE scheduled_push_sent = false also still
+        // covers the old check-then-act race this replaced (two server
+        // instances briefly overlapping during a rolling deploy). A
+        // transient DB error on the claim itself still lets the push
+        // through, matching the prior fail-open behavior for that case.
+        const claimedFireSlot = await claimScheduledPush(userName).catch((err) => {
+          logger.warn({ err }, "Evening check-in: claimScheduledPush failed — push will still be sent");
           return true;
         });
         if (!claimedFireSlot) {
-          console.log(`EVENING_CHECK_IN: slot already claimed elsewhere — skipping`);
+          console.log(`EVENING_CHECK_IN: already fired today — skipping`);
           continue;
         }
+        console.log(`EVENING_CHECK_IN: firing at ${localTime}`);
+        // Reopen the reply-claim window for tonight specifically — the row
+        // may already exist (and be active=false, already replied to) from
+        // an earlier same-day trigger; this is the real scheduled check-in,
+        // so it gets its own fresh window regardless of that history.
+        await setWinddownActive(userName, true).catch((err) =>
+          logger.warn({ err, userName }, "Evening check-in: setWinddownActive failed"));
         logger.info({ userName, time: settings.scheduledTime }, "Evening check-in initiated");
 
         const profile = await getProfile(userName).catch(() => null);

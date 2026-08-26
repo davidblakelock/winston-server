@@ -69,6 +69,10 @@ export async function ensureWinddownTables(): Promise<void> {
   // Add journal columns if missing from existing installs (referenced in queries but not in original schema)
   await query(`ALTER TABLE winddown_state ADD COLUMN IF NOT EXISTS journal_offer_pending boolean NOT NULL DEFAULT false`).catch(() => {});
   await query(`ALTER TABLE winddown_state ADD COLUMN IF NOT EXISTS journal_captured boolean NOT NULL DEFAULT false`).catch(() => {});
+  // Dedicated flag for "has tonight's SCHEDULED 9pm push specifically been
+  // sent" — separate from the row's mere existence. See claimScheduledPush's
+  // comment for why this had to be split out from markFiredToday/hasFiredToday.
+  await query(`ALTER TABLE winddown_state ADD COLUMN IF NOT EXISTS scheduled_push_sent boolean NOT NULL DEFAULT false`).catch(() => {});
 }
 
 export async function getSettings(userName: string): Promise<WinddownSettings> {
@@ -105,16 +109,6 @@ export async function updateSettings(
   return merged;
 }
 
-export async function hasFiredToday(userName: string): Promise<boolean> {
-  const { timezone: tz } = await getUserLocationContext(userName);
-  const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
-  const { rows } = await query(
-    `SELECT 1 FROM winddown_state WHERE user_name = $1 AND trigger_date = $2`,
-    [userName, today]
-  );
-  return rows.length > 0;
-}
-
 // Returns whether THIS call actually claimed today's slot (true) or someone
 // else already had (false) — the INSERT...WHERE NOT EXISTS was already
 // atomic, but the boolean was previously discarded (Promise<void>) and the
@@ -135,6 +129,40 @@ export async function markFiredToday(userName: string): Promise<boolean> {
      SELECT $1, $2 WHERE NOT EXISTS (
        SELECT 1 FROM winddown_state WHERE user_name = $1 AND trigger_date = $2
      )
+     RETURNING id`,
+    [userName, today]
+  );
+  return rows.length > 0;
+}
+
+// Atomically claims TONIGHT'S SCHEDULED push specifically — independent of
+// whether a winddown_state row for today already exists from some OTHER
+// path (chatHandlerCore.ts's isWinddownOpener branch fires on the literal
+// text "Evening Check In" arriving via any route, not just tonight's real
+// push; /api/winddown/activate is a separate manual-trigger endpoint). Both
+// of those used to share hasFiredToday/markFiredToday with the scheduler —
+// meaning if EITHER fired earlier in the day for any reason, hasFiredToday
+// returned true and the scheduler silently skipped the real 9pm push for
+// the rest of the day. Confirmed live: a winddown_state row for a given day
+// existed with triggered_at at 5:29am — hours before the 9pm schedule —
+// and that night's real check-in never fired at all. Ensures the row
+// exists first (idempotent, same as markFiredToday), then claims this
+// dedicated flag with its own atomic UPDATE ... WHERE ... = false, so only
+// the scheduler's own successful firing can ever set it, regardless of
+// what else touched this row earlier in the day.
+export async function claimScheduledPush(userName: string): Promise<boolean> {
+  const { timezone: tz } = await getUserLocationContext(userName);
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
+  await query(
+    `INSERT INTO winddown_state (user_name, trigger_date)
+     SELECT $1, $2 WHERE NOT EXISTS (
+       SELECT 1 FROM winddown_state WHERE user_name = $1 AND trigger_date = $2
+     )`,
+    [userName, today]
+  );
+  const { rows } = await query<{ id: number }>(
+    `UPDATE winddown_state SET scheduled_push_sent = true
+     WHERE user_name = $1 AND trigger_date = $2 AND scheduled_push_sent = false
      RETURNING id`,
     [userName, today]
   );

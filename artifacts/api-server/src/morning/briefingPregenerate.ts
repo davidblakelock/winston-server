@@ -37,7 +37,7 @@ function buildDailyBriefInstruction(includeMarkets: boolean): string {
 
 SEARCH 1 — National news: search for today's top US and world news headlines, leaning on major wire services and national/international outlets (Reuters, AP, and comparable outlets) as your primary sources — the same standard Search 4 already uses for its outlets below. Aim for 5 real stories worth knowing — major national and international stories only, picked purely on global/national importance. Do not include hyper-local news from a single city or small region — local government votes, local development projects, local tribal/community news. Exclude stock market and business-finance stories here — that's covered separately in Search 3 — and exclude AI industry/tech company news (product launches, funding rounds, model releases) unless it's genuinely historic. Also exclude sports, entertainment, and single-event spectacle stories — a race, an awards show, a celebrity story — these draw wire coverage but rarely carry real consequence, and sports is already covered separately in Search 2 — unless the story is genuinely historic. This list is deliberately NOT personalized — nothing about this person's own interests, hobbies, or life should influence which 5 stories make the cut; that's what Daily Discovery is for.
 
-SELECTION: gather more candidate stories than you need, then check each one against this test before it's allowed into the final 5 — would a well-informed person feel out of the loop at work today for not knowing this? If the honest answer is no, drop it; a story being real, true, and covered by wire services isn't enough on its own to earn a spot. Also apply a diversity check across your final 5: don't let two stories cover the same narrow topic (two sports-adjacent stories, two entertainment stories) when that crowds out real national/international news — a mix of hard news beats a cluster of similar softer stories.
+SELECTION: gather more candidate stories than you need, then check each one against this test before it's allowed into the final 5 — would a well-informed person feel out of the loop at work today for not knowing this? If the honest answer is no, drop it; a story being real, true, and covered by wire services isn't enough on its own to earn a spot. Also apply a diversity check across your final 5: don't let two stories cover the same narrow topic (two sports-adjacent stories, two entertainment stories) when that crowds out real national/international news — a mix of hard news beats a cluster of similar softer stories. Do this evaluation silently — it's reasoning you do before writing, never text you output. Confirmed live this has gone wrong before: treating this step as something to show led to visibly drafting the entire briefing more than once in the same response ("Now let me write the full briefing," a full draft, "Now writing the full piece," another full draft) — that's the meta-commentary ban below in a different form, and it applies here just as much. Land on your final 5 first, then write the briefing itself exactly once, start to finish.
 
 STORY QUALITY BAR: only include a story if your search results let you state who/what/when clearly and specifically. If the results are thin, contradictory, or leave the basic facts unclear (you can't say what actually happened or to whom), drop it and use a different story instead — an incoherent story is worse than one fewer story. Also exclude recurring event announcements and PR/marketing-style items with no real news hook — "X festival returns this year," "Nth-annual Y classic announced," a venue's routine seasonal promotion — these aren't news.
 
@@ -149,7 +149,17 @@ Go to My Life to record any thoughts.`;
 // The wording-specific patterns are kept only as a fallback for the rare
 // case for the ☕ marker itself is missing entirely.
 function stripMetaPreamble(text: string): string {
-  const headerIdx = text.indexOf("☕");
+  // lastIndexOf, not indexOf — confirmed live: Claude sometimes visibly
+  // drafts the whole briefing more than once in one response ("Now let me
+  // write the full briefing," a full draft, "Now writing the full piece,"
+  // another full draft...), each one starting with this same "☕" header.
+  // callDailyBriefViaClaude's extraction has no way to tell that apart from
+  // one continuous fragmented answer, so every draft — plus the narration
+  // between them — ends up concatenated into one string. Taking the FIRST
+  // "☕" only strips a leaked preamble before a single real draft; it leaves
+  // every earlier wasted draft fully intact. Taking the LAST one discards
+  // all of that and keeps only the final, most complete attempt.
+  const headerIdx = text.lastIndexOf("☕");
   if (headerIdx > 0) return text.slice(headerIdx).trimStart();
   if (headerIdx === 0) return text;
 
@@ -379,7 +389,13 @@ async function callDailyBriefViaClaude(input: string, userName: string): Promise
   try {
     const resp = await anthropic.messages.create({
       model:      MODEL_SONNET,
-      max_tokens: 4000,
+      // Was 4000 — confirmed live that's tight even for one clean draft of
+      // this briefing (5 detailed news items at 2-4 sentences each, markets,
+      // sports, weird story, discovery, closing reflection), and genuinely
+      // insufficient on the occasions Claude drafts the whole thing more
+      // than once in one response: two wasted attempts ate most of the
+      // budget before the real one started, and it got cut off mid-sentence.
+      max_tokens: 8000,
       tools:      [{ type: "web_search_20250305", name: "web_search" }],
       messages:   [{ role: "user", content: input }],
     });

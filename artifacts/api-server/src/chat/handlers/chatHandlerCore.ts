@@ -1141,6 +1141,27 @@ async function handleNewChatInner(req: NewChatRequest): Promise<NewChatResponse>
     );
   }
 
+  // Same forced-override pattern as morning_rundown above, and for the same
+  // reason: "Check my email" is the literal text the email-scan notification
+  // sends as its trigger message, with no client-side signal (unlike
+  // isWinddownOpener's explicit flag) marking it as such — so, unlike
+  // "Evening Check In", it was never given a guaranteed action and depended
+  // entirely on Claude correctly reading intent from the bare phrase.
+  // Confirmed live: with recent history containing an unrelated topic (a
+  // mushroom recipe search), Claude merged both into one reply — narrated
+  // "pulling up your inbox" but only actually emitted the recipe action,
+  // never check_email — so the notification tap silently never checked
+  // email at all. This is message-driven, not a narration recovery: force
+  // the real action whenever the request is unambiguous, regardless of
+  // what else Claude decided to do in the same turn.
+  if (action.type !== "check_email" && /\bcheck (my )?(email|emails|inbox)\b/i.test(message)) {
+    action = { type: "check_email" };
+    log.warn(
+      { message, claudeAction: tagMatch?.[1] ?? "none", reply: finalReply.slice(0, 200) },
+      "[chatHandlerCore] Forced check_email — explicit request but Claude did something else instead of emitting the tag"
+    );
+  }
+
   log.info({ actionType: action.type, tag: tagMatch?.[1] ?? "none" }, "[chatHandlerCore] Action parsed");
 
   // ── Execute action ───────────────────────────────────────────────────────────
