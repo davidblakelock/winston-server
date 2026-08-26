@@ -17,7 +17,7 @@ import { logger } from "../lib/logger.js";
 import { query } from "../db.js";
 import { sendFcmNotification } from "../push/fcmSender.js";
 import { MODEL_HAIKU } from "../lib/models.js";
-import { insertUserRecord, getRecentRecordsContextBlock } from "../records/recordsManager.js";
+import { insertUserRecord, getRecentRecordsContextBlock, cancelUserRecord } from "../records/recordsManager.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -342,25 +342,31 @@ export async function scanReservationEmails(
       const extractResp = await anthropic.messages.create({
         model: MODEL_HAIKU,
         max_tokens: 500,
-        system: `You are reviewing an email to determine if it is a trip confirmation or a vehicle registration renewal notice worth saving to the user's personal records.
+        system: `You are reviewing an email to determine if it is a trip confirmation, a vehicle registration renewal notice, or a CANCELLATION of a trip already on the user's records.
 
-Only two categories are save-worthy:
+Three outcomes are possible:
 - trip: restaurant reservation, flight, hotel, car rental, vacation rental, cruise, tour
 - vehicle_registration: specifically a vehicle registration renewal notice or deadline (e.g. DMV registration renewal) — NOT a service appointment, NOT a repair, NOT any other vehicle-related email
+- cancellation: this email explicitly states an existing booking was cancelled, refunded, voided, or removed — see the CANCELLATION section below, not the same thing as a minor detail change.
 
-Everything else must be skipped — including service appointments (vehicle or home), warranties, subscriptions, retail/food order confirmations, and generic reminders. Service and DMV appointments are already on the user's calendar and add no value here; retail/food orders are handled elsewhere. If this email is not a trip confirmation or a vehicle registration renewal notice, return exactly: {"skip": true}
+Everything else must be skipped — including service appointments (vehicle or home), warranties, subscriptions, retail/food order confirmations, and generic reminders. Service and DMV appointments are already on the user's calendar and add no value here; retail/food orders are handled elsewhere. If this email is none of the three outcomes above, return exactly: {"skip": true}
 
 Also skip price-alerts, fare-trackers, "prices dropped," saved-search notifications, and any other browsing/tracking email from a travel search site or aggregator (Google Flights, Google Hotels, Kayak, Skyscanner, Hopper, etc.) — these are never the airline/hotel/vendor itself and never represent an actual booking, no matter how specific the date, route, or price mentioned. Skip these even though they reference real dates and destinations.
 
-An email IS worth saving if it contains a genuine booking/confirmation/registration reference number, OR explicit confirmed-booking language ("your booking is confirmed," "e-ticket," "itinerary number," "your reservation is confirmed") — regardless of purchase size. A date and a destination alone are not enough.
+An email IS worth saving as a new trip if it contains a genuine booking/confirmation/registration reference number, OR explicit confirmed-booking language ("your booking is confirmed," "e-ticket," "itinerary number," "your reservation is confirmed") — regardless of purchase size. A date and a destination alone are not enough.
 
 EXISTING RECORDS ALREADY ON FILE (check before deciding — confirmed live as the actual cause of duplicate records: a second or third email about a trip already on file, sometimes worded slightly differently, getting saved as a brand new one instead of being recognized as the same booking):
 ${existingRecordsBlock}
-If this email is about the same trip/vendor/rough date as one of those, it is NOT a new record — return {"skip": true} instead, even if this email has its own reference number or itinerary details (a hold's temporary code and its later e-ticket number are expected to differ; that's not a new booking, and the recordsManager upsert logic handles merging the two together downstream — your job here is just not to treat an already-known trip as brand new).
+If this email is about the same trip/vendor/rough date as one of those AND is just a duplicate confirmation, reminder, or minor detail update — same booking, still happening, nothing invalidated — it is NOT a new record — return {"skip": true} instead, even if this email has its own reference number or itinerary details (a hold's temporary code and its later e-ticket number are expected to differ; that's not a new booking, and the recordsManager upsert logic handles merging the two together downstream — your job here is just not to treat an already-known trip as brand new).
 
-If it IS worth saving, return ONLY this JSON — no explanation, no markdown:
+CANCELLATION: if this email explicitly states the booking was cancelled, refunded, voided, or is no longer happening (e.g. "your reservation has been cancelled," "this booking is no longer active," "your refund has been processed") — as opposed to a routine reminder or a minor detail change to a booking that's still on — match it against the EXISTING RECORDS above by vendor and rough date and return exactly:
+{"skip": false, "outcome": "cancellation", "vendorName": "<vendor name matching the existing record as closely as possible>", "dateStart": "<YYYY-MM-DD of the cancelled booking if known, or null>"}
+Confirmed live this matters: a genuine cancellation email for an existing reservation was previously silently dropped because it looked like a duplicate of the confirmation already on file — a cancellation must be recognized and acted on, not treated as noise.
+
+If it IS a new booking worth saving, return ONLY this JSON — no explanation, no markdown:
 {
   "skip": false,
+  "outcome": "new",
   "category": "trip|vehicle_registration",
   "label": "brief type label e.g. Hotel, Flight, Restaurant Reservation, Car Rental, Vehicle Registration",
   "vendorName": "business or vendor name",
@@ -385,6 +391,7 @@ Today is ${new Date().toISOString().slice(0, 10)}. Only use upcoming or recent d
 
       let parsed: {
         skip?: boolean;
+        outcome?: string;
         category?: string;
         label?: string;
         vendorName?: string;
@@ -406,6 +413,55 @@ Today is ${new Date().toISOString().slice(0, 10)}. Only use upcoming or recent d
 
       // Claude decided this isn't a confirmation worth saving
       if (parsed.skip === true) continue;
+
+      // Cancellation of an existing booking — a different action entirely
+      // from saving a new record. This branch handles the whole thing and
+      // continues to the next email rather than falling through to the
+      // trip/vehicle_registration save path below.
+      if (parsed.outcome === "cancellation") {
+        if (!parsed.vendorName) continue;
+        const cancelled = await cancelUserRecord(userName, parsed.vendorName, parsed.dateStart ?? null);
+        // Mark this gmail_id processed with a direct insert — deliberately
+        // NOT routed through insertUserRecord, whose fuzzy same-vendor merge
+        // logic (14-day window) exists to merge multiple emails about the
+        // SAME booking. That's the wrong behavior here: if this user has a
+        // second, unrelated, still-active reservation at the same vendor
+        // within that window, insertUserRecord's merge would fold this
+        // marker's mostly-null fields (and gmail_id) into THAT record
+        // instead — silently corrupting or orphaning a booking that was
+        // never cancelled. A plain gmail_id-keyed insert can't do that.
+        // Inserted pre-deleted since this row never represents an active
+        // booking itself, just an audit trail of the cancellation email.
+        await query(
+          `INSERT INTO user_records (user_name, category, vendor_name, date_start, notes, gmail_id, deleted_at)
+           VALUES ($1, 'trip', $2, $3, $4, $5, NOW())
+           ON CONFLICT (user_name, gmail_id) WHERE gmail_id IS NOT NULL DO NOTHING`,
+          [
+            userName,
+            parsed.vendorName,
+            parsed.dateStart ?? null,
+            cancelled
+              ? `Cancellation processed — removed the matching ${parsed.vendorName} reservation from My Records.`
+              : `Cancellation email for ${parsed.vendorName} — no matching reservation found on file to remove.`,
+            msgId,
+          ]
+        ).catch((err) => logger.warn({ err, msgId }, "[ReservationScanner] Failed to save cancellation marker"));
+
+        if (cancelled) {
+          logger.info({ userName, vendor: parsed.vendorName }, "[ReservationScanner] Cancellation matched and removed from My Records");
+          await sendFcmNotification({
+            userName,
+            notificationType: "reservation-cancelled",
+            title: `${parsed.vendorName} reservation cancelled`,
+            body: "Removed from My Records.",
+            data: { action: "navigate", screen: "/travel" },
+          }).catch(() => {});
+        } else {
+          logger.info({ userName, vendor: parsed.vendorName }, "[ReservationScanner] Cancellation detected but no matching record found — nothing to remove");
+        }
+        continue;
+      }
+
       if (!parsed.vendorName || !parsed.category) continue;
 
       // Only trip and vehicle_registration are save-worthy — anything else

@@ -287,3 +287,38 @@ export async function insertUserRecord(
     return "inserted";
   }
 }
+
+// ── Cancellation ──────────────────────────────────────────────────────────────
+// Soft-deletes the existing record a cancellation email refers to. Before this
+// existed, a cancellation email had nowhere to go — the classifier could only
+// create/merge records, never remove one, so a genuinely cancelled reservation
+// stayed in My Records indefinitely until the user found and deleted it by
+// hand. Called from reservationScanner.ts when the classifier returns
+// outcome: "cancellation".
+//
+// Same bidirectional-prefix vendor match insertUserRecord's own dedup uses,
+// for the same reason: extraction wording for the same business varies email
+// to email ("The Restaurant" vs "The Restaurant (Sollano 16)"). Prefers an
+// exact date_start match among same-vendor candidates when one is available;
+// falls back to the most recent matching-vendor record otherwise, since a
+// cancellation email doesn't always restate the original date.
+export async function cancelUserRecord(
+  userName: string,
+  vendorName: string,
+  originalDate: string | null,
+): Promise<boolean> {
+  const { rows } = await query<{ id: number; date_start: string | null }>(
+    `SELECT id, date_start FROM user_records
+     WHERE user_name = $1
+       AND deleted_at IS NULL
+       AND (lower(vendor_name) LIKE lower($2) || '%' OR lower($2) LIKE lower(vendor_name) || '%')
+     ORDER BY created_at DESC`,
+    [userName, vendorName]
+  );
+  if (rows.length === 0) return false;
+
+  const target = (originalDate ? rows.find((r) => r.date_start === originalDate) : undefined) ?? rows[0]!;
+  await query(`UPDATE user_records SET deleted_at = NOW() WHERE id = $1`, [target.id]);
+  logger.info({ userName, id: target.id, vendorName, originalDate }, "[Records] Cancellation matched and soft-deleted");
+  return true;
+}
