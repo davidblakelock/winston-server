@@ -3,7 +3,7 @@ import { sendFcmNotification } from "./fcmSender.js";
 import { logger } from "../lib/logger.js";
 import { getWatchedShows } from "../tv/showManager.js";
 import { fetchEpisodesForDate } from "../tv/tvmaze.js";
-import { checkMiddayNews } from "../news/newsManager.js";
+import { checkForBreakingNews, shouldPollBreakingNews } from "../news/newsManager.js";
 import {
   loadStaticContextFromDb,
   claimMorningPushSlot,
@@ -31,6 +31,14 @@ const WAKE_WINDOW_MINUTES = 120;
 // inside their own request.
 const PREGEN_LEAD_MINUTES = 30;
 
+// How often to poll for breaking news, and how late in the day to keep
+// polling. 30 min keeps well within NewsAPI's free-tier 100 requests/day
+// (this is the only feature in the codebase that calls NewsAPI at all) while
+// still catching a same-day major story reasonably close to when it broke.
+// 10pm cutoff — no real value interrupting sleep hours with midnight news.
+const BREAKING_NEWS_POLL_INTERVAL_MINUTES = 30;
+const BREAKING_NEWS_END_MINUTES = 22 * 60;
+
 // ── Local time helpers ─────────────────────────────────────────────────────────
 
 function getCurrentTimeForUser(user: ActiveUser): string {
@@ -56,9 +64,10 @@ function minutesSinceWake(localTime: string, wakeTime: string): number {
 }
 
 // ── Per-user state tracking ────────────────────────────────────────────────────
-// Note: morningPushDone is now DB-backed via wasPushSentToday().
+// Note: morningPushDone is now DB-backed via wasPushSentToday(). Breaking
+// news throttling/dedup is DB-backed too, inside checkForBreakingNews's own
+// state (see newsManager.ts) — no in-memory map needed for it here.
 
-const middayCheckDone: Map<string, string>  = new Map();
 const pregenDone: Map<string, string>       = new Map();
 
 const _retryCount = new Map<string, number>();
@@ -223,30 +232,34 @@ async function runPerUserChecks(): Promise<void> {
       }).catch((err) => logger.warn({ err, userName }, "[MorningPush] Pregenerate DB flag check error"));
     }
 
-    // 12:00 PM local time: check for significant breaking news since morning briefing.
-    // Guard is DB-backed so server restarts don't cause duplicate midday checks.
-    if (localTime === "12:00" && middayCheckDone.get(userName) !== today) {
-      middayCheckDone.set(userName, today); // in-memory fast-path
-      const dbFlagKey = `midday_check_done:${userName}`;
-      wasDailyFlagSet(dbFlagKey, today).then((alreadyDone) => {
-        if (alreadyDone) {
-          logger.info({ userName, today }, "[MiddayNews] Skipped — DB flag already set for today");
-          return;
-        }
-        setDailyFlag(dbFlagKey, today).catch(() => {});
-        checkMiddayNews(userName)
+    // Breaking news: poll periodically from wake time through 10pm local,
+    // instead of a single fixed check at noon — a once-a-day snapshot
+    // misses anything that breaks outside that exact minute until the next
+    // day's check, by which point it's no longer breaking. Throttling and
+    // "already alerted today" dedup both live in checkForBreakingNews's own
+    // DB-persisted state (see its comment) — this just decides the window
+    // to poll within; shouldPollBreakingNews decides whether this tick
+    // actually fires a real check.
+    const localMinutesNow = (() => {
+      const [h, m] = localTime.split(":").map(Number);
+      return h * 60 + m;
+    })();
+    if (minsSince >= 0 && localMinutesNow <= BREAKING_NEWS_END_MINUTES) {
+      shouldPollBreakingNews(userName, BREAKING_NEWS_POLL_INTERVAL_MINUTES).then((should) => {
+        if (!should) return;
+        checkForBreakingNews(userName)
           .then(async (story) => {
             if (!story) return; // Nothing significant — send nothing
             await sendFcmNotification({
               userName,
-              notificationType: "midday-news",
+              notificationType: "breaking-news",
               title: "Breaking News",
               body: story,
             });
-            logger.info({ userName, story: story.slice(0, 80) }, "[MiddayNews] Push sent");
+            logger.info({ userName, story: story.slice(0, 80) }, "[BreakingNews] Push sent");
           })
-          .catch((err) => logger.warn({ err, userName }, "[MiddayNews] Check error"));
-      }).catch((err) => logger.warn({ err, userName }, "[MiddayNews] DB flag check error"));
+          .catch((err) => logger.warn({ err, userName }, "[BreakingNews] Check error"));
+      }).catch((err) => logger.warn({ err, userName }, "[BreakingNews] shouldPoll check error"));
     }
   }
 }

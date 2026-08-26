@@ -1,13 +1,25 @@
 /**
  * NewsAPI.org Integration
  *
- * Fetches real-time headlines from Reuters and AP via NewsAPI.org.
+ * Fetches real-time headlines from AP and BBC via NewsAPI.org.
  * Free tier: 100 requests/day — sufficient for one morning briefing + midday check per day.
  *
  * Required env var: NEWS_API_KEY
  * Get a free key at https://newsapi.org
  *
- * API: https://newsapi.org/v2/top-headlines?sources=reuters,the-associated-press&pageSize=30
+ * Source IDs were wrong for a long time and nobody noticed because the
+ * failure is silent: "reuters" does not exist in NewsAPI's source catalog
+ * at all (confirmed live against /v2/top-headlines/sources — no source with
+ * that id, or with "reuters" in it, is offered even on paid tiers), and
+ * "the-associated-press" should be "associated-press". A request with bad
+ * source ids doesn't error — it just returns status "ok" with zero
+ * articles, which looks identical to "quiet news day" everywhere downstream
+ * (fetchNewsApiHeadlines logs count=0 same as a real empty result, and the
+ * caller just sees no headlines and skips). Swapped in "bbc-news" as the
+ * second source to restore real two-wire-service coverage now that Reuters
+ * itself isn't available through this API.
+ *
+ * API: https://newsapi.org/v2/top-headlines?sources=associated-press,bbc-news&pageSize=30
  */
 
 import { logger } from "../lib/logger.js";
@@ -42,12 +54,12 @@ export function formatArticlesForClaude(
 }
 
 /**
- * Fetch top headlines from Reuters + AP News via NewsAPI.org.
+ * Fetch top headlines from AP + BBC News via NewsAPI.org.
  * Returns normalized ScrapedArticle objects compatible with the rest of the news pipeline.
- * Sources: reuters, the-associated-press (both available on the free tier).
+ * Sources: associated-press, bbc-news (both confirmed valid and available on the free tier).
  */
 export async function fetchNewsApiHeadlines(
-  sources  = "reuters,the-associated-press",
+  sources  = "associated-press,bbc-news",
   pageSize = 30,
 ): Promise<ScrapedArticle[]> {
   const apiKey = getNewsApiKey();
@@ -88,6 +100,14 @@ export async function fetchNewsApiHeadlines(
     if (data.status !== "ok" || !Array.isArray(data.articles)) {
       logger.warn({ status: data.status }, "[NewsAPI] Unexpected response status");
       return [];
+    }
+    // A bad/nonexistent source id doesn't error — it returns status "ok"
+    // with zero results, indistinguishable downstream from a genuinely
+    // quiet news moment. That silence is exactly how the wrong "reuters"
+    // source id went unnoticed for a long time. Warn (not just info) so a
+    // future source-id mistake is loud instead of silent.
+    if (data.totalResults === 0) {
+      logger.warn({ sources, totalResults: data.totalResults }, "[NewsAPI] Zero results — check the source ids are still valid, not just that today is quiet");
     }
 
     const articles = data.articles
