@@ -250,11 +250,26 @@ async function runPerUserChecks(): Promise<void> {
         checkForBreakingNews(userName)
           .then(async (story) => {
             if (!story) return; // Nothing significant — send nothing
+            // Same send_message pattern as email-scan/morning-briefing/
+            // winddown pushes — without a data payload, tapping this just
+            // opened the app to whatever screen was already showing, with
+            // no way to see or ask about the story itself. This opens
+            // straight to the main chat screen and auto-sends a question
+            // about it, so the full story (and anything the user asks
+            // after) comes back through the normal chat flow, web_search
+            // included. Strip the "Breaking: " lead-in from the outgoing
+            // question — it's the right prefix for the notification body,
+            // redundant inside a sentence asking about it.
+            const storyDetail = story.replace(/^Breaking:\s*/i, "").trim();
             await sendFcmNotification({
               userName,
               notificationType: "breaking-news",
               title: "Breaking News",
               body: story,
+              data: {
+                action: "send_message",
+                message: `Tell me more about this breaking news: "${storyDetail}"`,
+              },
             });
             logger.info({ userName, story: story.slice(0, 80) }, "[BreakingNews] Push sent");
           })
