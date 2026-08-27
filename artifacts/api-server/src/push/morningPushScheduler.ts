@@ -268,7 +268,20 @@ async function runPerUserChecks(): Promise<void> {
               body: story,
               data: {
                 action: "send_message",
-                message: `Tell me more about this breaking news: "${storyDetail}"`,
+                // "a fresh, unrelated topic" clause added after a confirmed
+                // live failure: this message landed right after a run of
+                // "mark done the email about X" -> "Done."/"Got it." turns,
+                // and Claude carried that acknowledgment pattern forward
+                // onto this completely unrelated message, opening the reply
+                // with a hallucinated "Done on that email." before actually
+                // answering about the story. Nothing was wrongly marked
+                // done server-side (actionType was "none") - it was purely
+                // a stray, misattributed line from recency bias in the
+                // conversation history. Telling the model explicitly that
+                // this is a new, standalone topic gives it a reason not to
+                // reach for whatever acknowledgment shape the last few turns
+                // happened to be in.
+                message: `Tell me more about this breaking news — a new, unrelated topic, nothing to do with anything else we were just discussing: "${storyDetail}"`,
               },
             });
             logger.info({ userName, story: story.slice(0, 80) }, "[BreakingNews] Push sent");
