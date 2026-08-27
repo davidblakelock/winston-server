@@ -225,15 +225,51 @@ function extractRealSearchUrls(content: Anthropic.Messages.ContentBlock[]): { ur
   return { urls, hosts };
 }
 
+// This search's category list used to be a single fixed set ("wine
+// tastings, farmers markets, pop-up shops, local meetups, art walks"),
+// verbatim, every single run — confirmed live as the real reason picks kept
+// repeating: the personalized ranking step can only choose from what
+// actually got searched for, and every run searched for the exact same five
+// categories with no variation. Rotating through several groups by week
+// number means a genuinely different slice of what's happening gets
+// searched each week, instead of permanently narrowing the candidate pool
+// to the same five buckets forever.
+const CATEGORY_GROUPS: { categories: string; searchTerms: string }[] = [
+  {
+    categories: "wine tastings, farmers markets, pop-up shops, local meetups, art walks",
+    searchTerms: "wine tastings, farmers markets, pop-ups, local meetups, and art walks",
+  },
+  {
+    categories: "comedy shows, trivia nights, karaoke, open mic nights, small-venue live music",
+    searchTerms: "comedy shows, trivia nights, karaoke, open mic nights, and small-venue live music",
+  },
+  {
+    categories: "food festivals, night markets, beer or spirits tastings, seasonal fairs, cooking classes",
+    searchTerms: "food festivals, night markets, beer or spirits tastings, seasonal fairs, and cooking classes",
+  },
+  {
+    categories: "museum exhibits, gallery openings, author talks or lectures, book club events, cultural festivals",
+    searchTerms: "museum exhibits, gallery openings, author talks or lectures, book club events, and cultural festivals",
+  },
+];
+
+function currentCategoryGroup(): { categories: string; searchTerms: string } {
+  const now = new Date();
+  const oneJan = new Date(now.getFullYear(), 0, 1);
+  const weekNum = Math.ceil((((now.getTime() - oneJan.getTime()) / 86400000) + oneJan.getDay() + 1) / 7);
+  return CATEGORY_GROUPS[weekNum % CATEGORY_GROUPS.length]!;
+}
+
 async function searchSupplementalActivities(city: string, interests: string[], runContext: RunContext): Promise<Candidate[]> {
   const today = new Date().toISOString().slice(0, 10);
   const windowLabel = runContext === "weekend" ? "this coming weekend (Friday through Sunday)" : "this week";
+  const group = currentCategoryGroup();
   try {
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-6",
       max_tokens: 1500,
       tools: [{ type: "web_search_20250305" as const, name: "web_search" }],
-      system: `You are finding local activities in ${city} that ticket-aggregator sites like Ticketmaster typically don't list — wine tastings, farmers markets, pop-up shops, local meetups, art walks, and similar community/small-scale events.
+      system: `You are finding local activities in ${city} that ticket-aggregator sites like Ticketmaster typically don't list — ${group.categories}, and similar community/small-scale events.
 
 This person's interests: ${interests.length ? interests.join(", ") : "no specific interests on file — find broadly appealing options"}
 
@@ -255,7 +291,7 @@ After searching, return ONLY a JSON array — no explanation, no markdown fences
 Today is ${today}. Only include things happening ${windowLabel}. Return between 0 and 6 items — quality over quantity, return an empty array if nothing genuinely fits.`,
       messages: [{
         role: "user",
-        content: `Find wine tastings, farmers markets, pop-ups, local meetups, and art walks in ${city} happening ${windowLabel}.`,
+        content: `Find ${group.searchTerms} in ${city} happening ${windowLabel}.`,
       }],
     });
 
@@ -350,6 +386,15 @@ export async function ensureProactiveMessageLogTable(): Promise<void> {
       UNIQUE (user_name, message_type, sent_date)
     )
   `).catch((err) => logger.warn({ err }, "[Proactive Discovery] ensureProactiveMessageLogTable failed"));
+  // name/venue: a dated candidate's key is category:name:date — the date
+  // changes every week for a recurring series, so the key alone can't answer
+  // "have I already shown this same standing series, just on a different
+  // date." Storing name/venue separately alongside the key gives
+  // hasRecentRecurringMatch something real to fuzzy-compare against.
+  // Existing rows predate this and will have NULL here — harmless, they
+  // simply can't match on the recurring-series check, same as before.
+  await query(`ALTER TABLE proactive_message_log ADD COLUMN IF NOT EXISTS name TEXT`).catch(() => {});
+  await query(`ALTER TABLE proactive_message_log ADD COLUMN IF NOT EXISTS venue TEXT`).catch(() => {});
 }
 
 function todayStr(): string {
@@ -369,14 +414,46 @@ async function hasBeenNotified(userName: string, key: string): Promise<boolean> 
   }
 }
 
-async function markNotified(userName: string, key: string): Promise<void> {
+// Recurring-series cooldown — a WEEKLY dated event (a standing wine tasting,
+// a weekly market) gets a genuinely fresh date every occurrence, so the
+// exact-key dedup above (which intentionally includes the date, so a
+// different one-off show still gets its own shot) never recognizes it as
+// something already offered. Confirmed live as the actual cause of the same
+// venue resurfacing indefinitely, once a week, forever. This checks recent
+// (last `withinDays`) same-category notifications for a fuzzy name+venue
+// match regardless of date — if the same standing series was already
+// offered recently, skip it again even though today's specific date is new.
+const RECURRING_COOLDOWN_DAYS = 21;
+
+async function hasRecentRecurringMatch(
+  userName: string,
+  category: CandidateCategory,
+  name: string,
+  venue: string | null,
+): Promise<boolean> {
+  try {
+    const { rows } = await query<{ name: string | null; venue: string | null }>(
+      `SELECT name, venue FROM proactive_message_log
+       WHERE user_name = $1 AND message_type LIKE $2
+         AND sent_date >= CURRENT_DATE - ($3 || ' days')::interval
+         AND name IS NOT NULL`,
+      [userName, `${category}:%`, RECURRING_COOLDOWN_DAYS.toString()]
+    );
+    const candidateTokens = tokenSet(`${name} ${venue ?? ""}`);
+    return rows.some((r) => jaccardSimilarity(candidateTokens, tokenSet(`${r.name} ${r.venue ?? ""}`)) >= FUZZY_MATCH_THRESHOLD);
+  } catch {
+    return false;
+  }
+}
+
+async function markNotified(userName: string, key: string, name: string, venue: string | null): Promise<void> {
   try {
     await query(
-      `INSERT INTO proactive_message_log (user_name, message_type, sent_date)
-       VALUES ($1, $2, $3)
+      `INSERT INTO proactive_message_log (user_name, message_type, sent_date, name, venue)
+       VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (user_name, message_type, sent_date) DO NOTHING
        RETURNING user_name`,
-      [userName, key, todayStr()]
+      [userName, key, todayStr(), name, venue]
     );
   } catch (err) {
     logger.warn({ err, userName }, "[Proactive Discovery] Failed to mark sent");
@@ -401,21 +478,30 @@ async function filterUnnotifiedCandidates(userName: string, candidates: Candidat
 
   const datelessKeysByCategory = new Map<CandidateCategory, string[]>();
   const fuzzyMatch: (string | null)[] = new Array(candidates.length).fill(null);
+  const recurringMatch: boolean[] = new Array(candidates.length).fill(false);
   for (let i = 0; i < candidates.length; i++) {
     if (exactMatch[i]) continue;
     const c = candidates[i]!;
-    if (c.dateISO) continue; // dated events rely on exact date matching only
+    if (c.dateISO) {
+      // Dated events rely on exact date matching for the "is this the exact
+      // same occurrence" question — but a WEEKLY recurring series gets a
+      // genuinely fresh date every time, so exact matching alone can't tell
+      // "brand new one-off show" apart from "the same standing series, one
+      // week later." This catches the latter regardless of date.
+      recurringMatch[i] = await hasRecentRecurringMatch(userName, c.category, c.name, c.venue);
+      continue;
+    }
     if (!datelessKeysByCategory.has(c.category)) {
       datelessKeysByCategory.set(c.category, await getDatelessKeysForCategory(userName, c.category));
     }
     fuzzyMatch[i] = fuzzyMatchExisting(c, datelessKeysByCategory.get(c.category)!);
   }
 
-  const alreadyCovered = candidates.map((_, i) => exactMatch[i] || fuzzyMatch[i] !== null);
+  const alreadyCovered = candidates.map((_, i) => exactMatch[i] || fuzzyMatch[i] !== null || recurringMatch[i]);
   const skippedLog = candidates
     .map((c, i) => ({
       name: c.name, venue: c.venue, key: keys[i],
-      via: exactMatch[i] ? "exact" as const : fuzzyMatch[i] ? "fuzzy" as const : null,
+      via: exactMatch[i] ? "exact" as const : fuzzyMatch[i] ? "fuzzy" as const : recurringMatch[i] ? "recurring" as const : null,
       matchedKey: exactMatch[i] ? keys[i] : fuzzyMatch[i],
     }))
     .filter((c) => c.via !== null);
@@ -602,7 +688,7 @@ async function sendPicksNotification(userName: string, city: string, picks: Rank
 async function markPicksNotified(userName: string, picks: RankedPick[]): Promise<void> {
   const markedKeys = picks.map((p) => ({ name: p.candidate.name, venue: p.candidate.venue, key: candidateKey(p.candidate) }));
   logger.info({ userName, markedKeys }, "[Proactive Discovery] Dedup — marking these keys notified");
-  await Promise.all(picks.map((p) => markNotified(userName, candidateKey(p.candidate))));
+  await Promise.all(picks.map((p) => markNotified(userName, candidateKey(p.candidate), p.candidate.name, p.candidate.venue)));
 }
 
 // ── Per-user orchestration ──────────────────────────────────────────────────
