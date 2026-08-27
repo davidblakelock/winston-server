@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { logger } from "../lib/logger.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
+import { getUserLocationContext } from "../lib/userTimezone.js";
 import { getCachedResult, setCachedResult } from "../lib/resultCache.js";
 import {
   formatArticlesForClaude,
@@ -99,7 +100,8 @@ async function saveState(userName: string, state: BreakingNewsState): Promise<vo
  * which doesn't survive server restarts cleanly.
  */
 export async function shouldPollBreakingNews(userName: string, intervalMinutes: number): Promise<boolean> {
-  const todayKey = new Date().toLocaleDateString("en-CA");
+  const { timezone: tz } = await getUserLocationContext(userName);
+  const todayKey = new Date().toLocaleDateString("en-CA", { timeZone: tz });
   const state = await loadState(userName, todayKey);
   if (!state.lastPolledAt) return true;
   const elapsedMin = (Date.now() - new Date(state.lastPolledAt).getTime()) / 60000;
@@ -124,7 +126,14 @@ export async function checkForBreakingNews(userName: string): Promise<string | n
     return null;
   }
 
-  const todayKey = new Date().toLocaleDateString("en-CA");
+  // Both date keys must use the user's own timezone, not the server's (UTC) —
+  // confirmed live as the actual cause of same-evening repeat alerts: UTC
+  // midnight falls at 7pm Central, so the "today" boundary used to roll over
+  // mid-evening, wiping the alertedStories dedup list while a story from
+  // earlier that same Central-time evening was often still in the headlines
+  // and got re-flagged as new on the very next poll.
+  const { timezone: tz } = await getUserLocationContext(userName);
+  const todayKey = new Date().toLocaleDateString("en-CA", { timeZone: tz });
   const state = await loadState(userName, todayKey);
 
   const current: ScrapedArticle[] =
