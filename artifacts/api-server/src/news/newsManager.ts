@@ -176,6 +176,13 @@ export async function checkForBreakingNews(userName: string): Promise<string | n
     `or a substantial new development in an ongoing major story. NOT a routine update, NOT sports scores, ` +
     `NOT local news, NOT celebrity news, NOT anything that can wait until tomorrow morning, and NOT ` +
     `something already covered by the "already alerted today" list above unless there's a real, substantial development.\n\n` +
+    `RECENCY — check the "(Xh ago)"/"(Xd ago)" tag on each headline before flagging it. This is a check for what JUST broke, ` +
+    `not a list of currently-prominent stories — a headline sitting at the top of "top headlines" for a day or more because ` +
+    `it's still getting follow-up coverage is not breaking news anymore, no matter how significant the original event was. ` +
+    `Only flag something published within roughly the last few hours. Confirmed live this went wrong before: a celebrity ` +
+    `death got flagged as "breaking" a full 33 hours after the original article ran, because nothing checked how old the ` +
+    `headline actually was — genuinely important, but nowhere near new by the time it fired. If the most significant item ` +
+    `on the list is already many hours old, the honest answer is NONE, not "important enough to flag anyway."\n\n` +
     `If YES: Respond with a single sentence starting with "Breaking: " that summarises what happened. ` +
     `Max 20 words. Specific and factual.\n` +
     `If NO: Respond with exactly "NONE".\n\n` +

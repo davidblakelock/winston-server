@@ -39,7 +39,33 @@ export interface ScrapedArticle {
   source:      string;
 }
 
-/** Numbered headline list for Claude to read, with brief description if available. */
+// Hours-level granularity, not recencyLabel's (memorySourceAdapters.ts)
+// day-level "today"/"yesterday" — breaking-news judgment needs to tell a
+// story from 2 hours ago apart from one sitting in top-headlines from 20+
+// hours ago, both of which "today" would call the same thing.
+function hoursAgoLabel(publishedAt: string): string {
+  const hoursAgo = (Date.now() - new Date(publishedAt).getTime()) / 3_600_000;
+  if (hoursAgo < 1) return "<1h ago";
+  if (hoursAgo < 24) return `${Math.floor(hoursAgo)}h ago`;
+  return `${Math.floor(hoursAgo / 24)}d ago`;
+}
+
+/**
+ * Numbered headline list for Claude to read, with brief description and
+ * publish recency if available.
+ *
+ * The recency label was missing entirely until confirmed live as the cause
+ * of a real false alarm: NewsAPI's "top-headlines" endpoint is not a "just
+ * broke" feed — it returns whatever's currently prominent, which routinely
+ * includes a story from a day or more ago that's still sitting in rotation
+ * (a celebrity death, an ongoing story getting follow-up coverage). Without
+ * a timestamp in what Claude actually reads, it has no way to tell "this
+ * just happened" apart from "this is still trending from yesterday" — it
+ * can only judge importance, never recency, because recency was never shown
+ * to it. Confirmed live: Tim Curry's death, reported by BBC 33 hours before
+ * a "breaking news" push fired for it — the article was genuinely
+ * important, just not remotely new by the time it got flagged.
+ */
 export function formatArticlesForClaude(
   articles: ScrapedArticle[],
   label:    string,
@@ -48,7 +74,8 @@ export function formatArticlesForClaude(
   if (articles.length === 0) return "";
   const lines = articles.slice(0, limit).map((a, i) => {
     const desc = a.description ? ` — ${a.description.slice(0, 100).trim()}` : "";
-    return `${i + 1}. [${a.source}] ${a.title}${desc}`;
+    const when = a.publishedAt ? ` (${hoursAgoLabel(a.publishedAt)})` : "";
+    return `${i + 1}. [${a.source}]${when} ${a.title}${desc}`;
   });
   return `[${label}]\n${lines.join("\n")}`;
 }
