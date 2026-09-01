@@ -485,6 +485,15 @@ export async function getRecentListItems(
 // keeps working completely unmodified, since archived rows simply aren't in
 // that table anymore.
 
+// .catch() added after a confirmed live crash: a transient Supabase probe
+// timeout (see db.ts's useSupabase comment) routed this query onto the
+// unreachable local-Postgres fallback, and this IIFE had nothing to catch
+// the rejection — an unhandled rejection at module-load time, which crashes
+// the whole Node process outright, not just this one table's init. This is
+// the actual mechanism behind a real crash loop: process crashes, Railway
+// restarts it, the same transient condition (or its aftermath) recurs,
+// crashes again. Every other table-init call in this codebase already
+// guards itself the same way; this one didn't.
 const _listArchiveTableInit = (async () => {
   await query(`
     CREATE TABLE IF NOT EXISTS list_items_archive (
@@ -499,7 +508,7 @@ const _listArchiveTableInit = (async () => {
       archived_at timestamptz NOT NULL DEFAULT now()
     )
   `);
-})();
+})().catch((err) => logger.error({ err }, "[ListManager] list_items_archive table init failed"));
 
 export const DEFAULT_LIST_ARCHIVE_THRESHOLD_DAYS = 120; // longer than
 // Attic's 60 — list items tend to be more deliberate/curated (a wish list,

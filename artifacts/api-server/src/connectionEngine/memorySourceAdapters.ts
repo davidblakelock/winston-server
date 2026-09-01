@@ -20,6 +20,7 @@
  */
 
 import { query } from "../db.js";
+import { logger } from "../lib/logger.js";
 import { getRecentCaptures } from "../lifeCaptures/lifeCapturesManager.js";
 import { getRecentAtticItems } from "../attic/atticItemsManager.js";
 import { getRecentListItems } from "../lists/listManager.js";
@@ -158,6 +159,9 @@ export async function fetchFromAdapters(
 // own INSERT (applyObservationCorrection) instead of creating this table
 // itself.
 
+// .catch() added after a confirmed live crash caused by the same unguarded-IIFE
+// pattern in listManager.ts (see its comment) — an uncaught rejection here at
+// module-load time would crash the whole Node process, not just this table's init.
 export const ensureUserCorrectionsTable = (async () => {
   await query(`
     CREATE TABLE IF NOT EXISTS user_corrections (
@@ -169,7 +173,7 @@ export const ensureUserCorrectionsTable = (async () => {
       created_at                timestamptz NOT NULL DEFAULT now()
     )
   `);
-})();
+})().catch((err) => logger.error({ err }, "[MemorySourceAdapters] user_corrections table init failed"));
 
 export interface UserCorrection {
   id:                        number;

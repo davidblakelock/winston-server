@@ -127,6 +127,9 @@ export async function generateMemorySummary(
   }
 }
 
+// .catch() added after a confirmed live crash caused by the same unguarded-IIFE
+// pattern in listManager.ts (see its comment) — an uncaught rejection here at
+// module-load time would crash the whole Node process, not just this table's init.
 const _chatFactsTableInit = (async () => {
   await query(`
     CREATE TABLE IF NOT EXISTS chat_facts (
@@ -137,7 +140,7 @@ const _chatFactsTableInit = (async () => {
     )
   `);
   await query(`CREATE INDEX IF NOT EXISTS chat_facts_user_created_idx ON chat_facts (user_name, created_at DESC)`);
-})();
+})().catch((err) => logger.error({ err }, "[MemoryManager] chat_facts table init failed"));
 
 export interface ChatFact {
   id:         number;

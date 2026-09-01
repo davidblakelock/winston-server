@@ -18,6 +18,23 @@ const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY ?? "";
 // Resolved once at startup by probeSupabase(); shared Promise prevents concurrent probes
 let _useSupabase: boolean | null = null;
 let _probePromise: Promise<boolean> | null = null;
+let _lastFailedProbeAt = 0;
+// DATABASE_URL is never configured in production — the local-Postgres
+// fallback below is unreachable there. Confirmed live as a real outage
+// (not a theoretical one): probeSupabase's 15s fetch timed out once (a
+// transient network blip, not a real Supabase outage — it recovered
+// seconds later), and because a failed probe used to be cached in
+// _useSupabase forever, that single timeout permanently routed every
+// subsequent query for the rest of that process's life onto a pg.Pool
+// with no connection string, which defaults to localhost:5432 — nothing
+// is listening there, so every query failed with ECONNREFUSED. One of
+// those (an unguarded module-load INSERT with no .catch — see
+// listManager.ts's fix) crashed the whole process outright, which
+// restarted, re-probed, hit the same transient condition again, and
+// crashed again — a real crash loop, not a one-off. This is what the
+// user experienced as "app stopped working, login wouldn't take, blank
+// screen" while traveling: not a client bug, the server was down.
+const PROBE_RETRY_COOLDOWN_MS = 30_000;
 
 async function probeSupabase(): Promise<boolean> {
   if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) return false;
@@ -54,9 +71,25 @@ async function probeSupabase(): Promise<boolean> {
 // All concurrent callers share a single probe Promise — prevents race condition where
 // module-level query() calls in pushManager.ts fire multiple concurrent probes,
 // one of which may fail and permanently cache _useSupabase = false.
+//
+// Once TRUE, trusted for the process lifetime (no reason to keep re-checking
+// a connection that's confirmed working). Once FALSE, only trusted for
+// PROBE_RETRY_COOLDOWN_MS — a transient blip must not lock the whole server
+// onto the (in production, guaranteed-broken) local fallback forever; the
+// next call after the cooldown re-probes and self-heals the moment Supabase
+// is reachable again, instead of requiring a manual restart.
 async function useSupabase(): Promise<boolean> {
-  if (_useSupabase !== null) return _useSupabase;
-  if (!_probePromise) _probePromise = probeSupabase();
+  if (_useSupabase === true) return true;
+  if (_useSupabase === false && Date.now() - _lastFailedProbeAt < PROBE_RETRY_COOLDOWN_MS) {
+    return false;
+  }
+  if (!_probePromise) {
+    _probePromise = probeSupabase().then((ok) => {
+      _probePromise = null;
+      if (!ok) _lastFailedProbeAt = Date.now();
+      return ok;
+    });
+  }
   _useSupabase = await _probePromise;
   return _useSupabase;
 }
