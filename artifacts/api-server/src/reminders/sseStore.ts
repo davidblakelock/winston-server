@@ -1,6 +1,16 @@
-import type { Response } from "express";
+// Transport-agnostic push client registry. Originally SSE-only; now backs
+// both the legacy SSE connections (routes/reminders.ts, kept alive only
+// until every installed app build has switched to WebSocket — see
+// websocket/wsPushServer.ts's module comment) and the new WebSocket
+// connections, behind the same PushClient interface, so every one of the
+// ~40 broadcast()/broadcastToUser() call sites elsewhere in the codebase
+// needed zero changes for the migration.
+export interface PushClient {
+  send(event: string, data: unknown): void;
+  close(): void;
+}
 
-const clients = new Map<string, Response>();
+const clients = new Map<string, PushClient>();
 const clientUsers = new Map<string, string>(); // clientId → userName
 // clientId → deviceId. Populated at connect time (unlike clientUsers, which
 // waits on an async session lookup) — this is what lets a reconnect evict
@@ -8,106 +18,83 @@ const clientUsers = new Map<string, string>(); // clientId → userName
 // even been user-registered yet.
 const clientDevices = new Map<string, string>();
 
-export function addClient(id: string, res: Response, deviceId?: string | null): void {
+export function addClient(id: string, client: PushClient, deviceId?: string | null): void {
   // A client's own reconnect (network blip, backgrounding, app relaunch)
-  // does not reliably deliver a clean TCP close to the server for the
-  // connection it's replacing — confirmed live: a second SSE connection for
+  // does not reliably deliver a clean disconnect to the server for the
+  // connection it's replacing — confirmed live: a second connection for
   // the same user opened while the first was still registered, and every
   // broadcast for the rest of that session went to both. One went to a
   // socket nobody was listening on, the other reached whichever component
   // instance's onSpeakSync handler raced it — both are equally real
   // failure modes (a wasted push, or two independent playback attempts on
   // the same device fighting over audio focus). Evicting any existing
-  // connection for the same deviceId on connect keeps exactly one live SSE
+  // connection for the same deviceId on connect keeps exactly one live
   // connection per physical device — a genuinely different device (its own
-  // deviceId) is untouched and keeps its own connection.
+  // deviceId) is untouched and keeps its own connection. Applies equally
+  // regardless of which transport either connection is on.
   if (deviceId) {
     for (const [existingId, existingDeviceId] of clientDevices) {
       if (existingDeviceId === deviceId && existingId !== id) {
         const stale = clients.get(existingId);
-        try { stale?.end(); } catch { /* already dead */ }
+        try { stale?.close(); } catch { /* already dead */ }
         clients.delete(existingId);
         clientUsers.delete(existingId);
         clientDevices.delete(existingId);
-        console.log(`SSE: evicted stale connection id=${existingId} for deviceId=${deviceId} — superseded by id=${id}`);
+        console.log(`Push: evicted stale connection id=${existingId} for deviceId=${deviceId} — superseded by id=${id}`);
       }
     }
     clientDevices.set(id, deviceId);
   }
-  clients.set(id, res);
-  console.log(`SSE: client connected id=${id} deviceId=${deviceId ?? "unknown"} — total connected: ${clients.size}`);
+  clients.set(id, client);
+  console.log(`Push: client connected id=${id} deviceId=${deviceId ?? "unknown"} — total connected: ${clients.size}`);
 }
 
 export function removeClient(id: string): void {
   clients.delete(id);
   clientUsers.delete(id);
   clientDevices.delete(id);
-  console.log(`SSE: client disconnected id=${id} — total connected: ${clients.size}`);
+  console.log(`Push: client disconnected id=${id} — total connected: ${clients.size}`);
 }
 
 export function registerClientUser(clientId: string, userName: string): void {
   clientUsers.set(clientId, userName);
-  console.log(`SSE: registered user="${userName}" for clientId=${clientId}`);
+  console.log(`Push: registered user="${userName}" for clientId=${clientId}`);
 }
 
 export function broadcast(event: string, data: unknown): void {
-  const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   const total = clients.size;
   let sent = 0;
   let failed = 0;
-  for (const [clientId, res] of clients) {
+  for (const [clientId, client] of clients) {
     try {
-      res.write(payload);
-      (res as unknown as { flush?: () => void }).flush?.();
+      client.send(event, data);
       sent++;
     } catch {
       failed++;
-      console.warn(`SSE: broadcast write failed for client ${clientId} — removing stale connection`);
+      console.warn(`Push: broadcast send failed for client ${clientId} — removing stale connection`);
       clients.delete(clientId);
       clientUsers.delete(clientId);
+      clientDevices.delete(clientId);
     }
   }
-  console.log(`SSE: broadcast event="${event}" — sent to ${sent}/${total} clients${failed > 0 ? ` (${failed} stale removed)` : ""}`);
+  console.log(`Push: broadcast event="${event}" — sent to ${sent}/${total} clients${failed > 0 ? ` (${failed} stale removed)` : ""}`);
 }
 
 export function broadcastToUser(userName: string, event: string, data: unknown): void {
-  const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   let sent = 0;
-  for (const [clientId, res] of clients) {
+  for (const [clientId, client] of clients) {
     if (clientUsers.get(clientId) !== userName) continue;
     try {
-      res.write(payload);
-      (res as unknown as { flush?: () => void }).flush?.();
+      client.send(event, data);
       sent++;
     } catch {
-      console.warn(`SSE: broadcastToUser write failed for client ${clientId} — removing stale`);
+      console.warn(`Push: broadcastToUser send failed for client ${clientId} — removing stale`);
       clients.delete(clientId);
       clientUsers.delete(clientId);
+      clientDevices.delete(clientId);
     }
   }
-  console.log(`SSE: broadcastToUser user="${userName}" event="${event}" — sent to ${sent} clients`);
-}
-
-/**
- * Send an SSE event to a single specific device (by deviceId / clientId).
- * Used when only the originating device should receive a message.
- */
-export function sendToDevice(deviceId: string, event: string, data: unknown): void {
-  const res = clients.get(deviceId);
-  if (!res) {
-    console.log(`SSE: sendToDevice — no client found for deviceId=${deviceId}`);
-    return;
-  }
-  const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-  try {
-    res.write(payload);
-    (res as unknown as { flush?: () => void }).flush?.();
-    console.log(`SSE: sendToDevice event="${event}" deviceId=${deviceId} — sent`);
-  } catch {
-    console.warn(`SSE: sendToDevice write failed for deviceId=${deviceId} — removing stale`);
-    clients.delete(deviceId);
-    clientUsers.delete(deviceId);
-  }
+  console.log(`Push: broadcastToUser user="${userName}" event="${event}" — sent to ${sent} clients`);
 }
 
 export function clientCount(): number {

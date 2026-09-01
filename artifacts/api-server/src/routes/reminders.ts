@@ -2,7 +2,7 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import express from "express";
 import { randomUUID } from "crypto";
 import { query } from "../db.js";
-import { addClient, removeClient, broadcast, registerClientUser } from "../reminders/sseStore.js";
+import { addClient, removeClient, broadcast, registerClientUser, type PushClient } from "../reminders/sseStore.js";
 import { createReminder, markReminderDone } from "../reminders/reminderManager.js";
 import { validateSession } from "../auth/sessionAuth.js";
 import { authenticate } from "../auth/middleware.js";
@@ -15,7 +15,26 @@ const router: IRouter = Router();
 let dueCache: { data: unknown[]; expiry: number } | null = null;
 const DUE_CACHE_TTL_MS = 10_000;
 
-// ── SSE stream ────────────────────────────────────────────────────────────────
+// ── SSE stream (legacy) ──────────────────────────────────────────────────────
+// Kept alive purely for backward compatibility during the WebSocket rollout —
+// confirmed live that react-native-sse's XHR transport reconnects roughly
+// every 5 seconds on Android, permanently losing any broadcast that lands in
+// the gap (see websocket/wsPushServer.ts for the replacement). The native
+// client switches to WebSocket in this same change, but that switch only
+// reaches a device once a new build is installed — this route has to keep
+// working for whatever's already on the phone until then. Safe to delete
+// once every installed build is confirmed on WebSocket.
+class SSEPushClient implements PushClient {
+  constructor(private res: Response) {}
+  send(event: string, data: unknown): void {
+    this.res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    (this.res as unknown as { flush?: () => void }).flush?.();
+  }
+  close(): void {
+    try { this.res.end(); } catch { /* already dead */ }
+  }
+}
+
 const sseHandler = async (req: Request, res: Response) => {
   const clientId = randomUUID();
 
@@ -27,7 +46,7 @@ const sseHandler = async (req: Request, res: Response) => {
 
   res.write(`: connected\n\n`);
   const deviceId = (req.query.deviceId as string | undefined) ?? null;
-  addClient(clientId, res, deviceId);
+  addClient(clientId, new SSEPushClient(res), deviceId);
 
   // Identify the connected user so we can route user-specific events (e.g. chat_sync).
   // Check query param first (standard EventSource), then Authorization header (react-native-sse)

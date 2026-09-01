@@ -4,6 +4,7 @@ console.log('RAILWAY_GIT_COMMIT_SHA=', process.env.RAILWAY_GIT_COMMIT_SHA);
 console.log('RAILWAY_GIT_BRANCH=', process.env.RAILWAY_GIT_BRANCH);
 console.log(`[startup] Build commit: ${__GIT_COMMIT__}`);
 import app from "./app";
+import { setupWebSocketServer } from "./websocket/wsPushServer";
 import { logger } from "./lib/logger";
 import { setSchedulersEnabled } from "./routes/health";
 import { query } from "./db";
@@ -65,7 +66,7 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-app.listen(port, async (err) => {
+const server = app.listen(port, async (err) => {
   if (err) {
     logger.error({ err }, "Error listening on port");
     process.exit(1);
@@ -695,3 +696,7 @@ app.listen(port, async (err) => {
     logger.warn({ err: e }, "Startup migration warning: medication_reminder_times backfill");
   }
 });
+
+// Attached to the same http.Server immediately — doesn't need to wait on the
+// async startup diagnostics above, which are unrelated to accepting upgrades.
+setupWebSocketServer(server);
