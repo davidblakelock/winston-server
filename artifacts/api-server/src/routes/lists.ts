@@ -545,6 +545,21 @@ router.post("/lists/shopping", async (req: Request, res: Response) => {
   const manualUrl = rawUrl?.trim() || null;
   if (!item?.trim()) { res.status(400).json({ error: "item is required" }); return; }
 
+  // Splits "milk, eggs, bread" typed into the app's own add-item field into
+  // 3 separate items. Confirmed live: that field posts here with the raw
+  // text as a single string, and this route never had any splitting logic
+  // at all — the earlier comma→semicolon fix (commit 8def519) only ever
+  // touched the chat/voice path's add_list_item action tag, a completely
+  // separate route. Safe to split on every comma here specifically (unlike
+  // the generic /lists/:listName route used by recipes/notes/restaurants,
+  // where a comma is often just prose punctuation inside one entry) because
+  // shopping items are always short, atomic nouns — nobody types a
+  // multi-clause sentence into a grocery list. A manually-attached URL only
+  // ever applies to a single-item add (e.g. saving a product page), so it's
+  // dropped for a multi-item split rather than wrongly attached to all of them.
+  const items = item.split(",").map((s) => s.trim()).filter(Boolean);
+  const itemUrl = items.length === 1 ? manualUrl : null;
+
   const targetUser = ownerUserName?.trim() ?? userName;
 
   if (targetUser !== userName) {
@@ -553,67 +568,98 @@ router.post("/lists/shopping", async (req: Request, res: Response) => {
       res.status(403).json({ error: "You do not have permission to add to this list" });
       return;
     }
-    const { rows: existing } = await query<{ id: number }>(
-      `SELECT id FROM list_items
-       WHERE user_name = $1 AND list_name = 'shopping' AND lower(item_text) = lower($2)`,
-      [targetUser, item.trim()]
-    );
-    if (existing.length > 0) {
+    const addedByLabel = await getRequesterLabel(targetUser, userName).catch(() => userName);
+    const added: ShoppingItem[] = [];
+    const duplicates: string[] = [];
+
+    for (const text of items) {
+      const { rows: existing } = await query<{ id: number }>(
+        `SELECT id FROM list_items
+         WHERE user_name = $1 AND list_name = 'shopping' AND lower(item_text) = lower($2)`,
+        [targetUser, text]
+      );
+      if (existing.length > 0) {
+        duplicates.push(text);
+        continue;
+      }
+      const { rows } = await query<ShoppingItem>(
+        `INSERT INTO list_items (user_name, list_name, item_text, added_by, url)
+         VALUES ($1, 'shopping', $2, $3, $4)
+         ON CONFLICT (user_name, list_name, lower(item_text)) DO NOTHING
+         RETURNING id, item_text, category, added_by, url, created_at`,
+        [targetUser, text, addedByLabel, itemUrl]
+      );
+      const newItem = rows[0];
+      if (newItem) {
+        added.push(newItem);
+        categorizeAndUpdateItem(newItem.id, newItem.item_text).catch(() => {});
+      }
+    }
+
+    if (duplicates.length > 0) {
       await sendFcmNotification({
         userName,
         notificationType: 'list-sync',
-        title: 'Already on the list',
-        body: `"${item.trim()}" is already on ${targetUser}'s shopping list`,
+        title: duplicates.length === 1 ? 'Already on the list' : 'Some items already on the list',
+        body: `"${duplicates.join('", "')}" already on ${targetUser}'s shopping list`,
         data: { tag: `list-dup-${userName}` },
       }).catch(() => {});
-      res.json({ item: null, duplicate: true, message: `"${item.trim()}" is already on that list` });
-      return;
     }
-    const addedByLabel = await getRequesterLabel(targetUser, userName).catch(() => userName);
-    const { rows } = await query<ShoppingItem>(
-      `INSERT INTO list_items (user_name, list_name, item_text, added_by, url)
-       VALUES ($1, 'shopping', $2, $3, $4)
-       ON CONFLICT (user_name, list_name, lower(item_text)) DO NOTHING
-       RETURNING id, item_text, category, added_by, url, created_at`,
-      [targetUser, item.trim(), addedByLabel, manualUrl]
-    );
-    const newItem = rows[0];
-    if (newItem) {
-      categorizeAndUpdateItem(newItem.id, newItem.item_text).catch(() => {});
+    if (added.length > 0) {
       await sendFcmNotification({
         userName: targetUser,
         notificationType: 'list-sync',
         title: `${addedByLabel} added to your shopping list`,
-        body: item.trim(),
+        body: added.map((i) => i.item_text).join(', '),
         data: {
-          tag: `list-shared-add-${newItem.id}`,
+          tag: `list-shared-add-${added[0].id}`,
           deepLink: 'winston://lists?tab=shopping',
-          companionMessage: `${addedByLabel} added "${item.trim()}" to your shopping list.`,
+          companionMessage: `${addedByLabel} added "${added.map((i) => i.item_text).join('", "')}" to your shopping list.`,
         },
       }).catch(() => {});
     }
-    res.json({ item: newItem ?? null });
+    // Single-item add keeps the original response shape (item/duplicate/message)
+    // so nothing that only ever sent one item at a time sees a shape change.
+    if (items.length === 1) {
+      res.json(
+        added[0]
+          ? { item: added[0] }
+          : { item: null, duplicate: true, message: `"${items[0]}" is already on that list` }
+      );
+      return;
+    }
+    res.json({ items: added, duplicates });
     return;
   }
 
   try {
-    const { rows } = await query<ShoppingItem>(
-      `INSERT INTO list_items (user_name, list_name, item_text, url)
-       VALUES ($1, 'shopping', $2, $3)
-       ON CONFLICT (user_name, list_name, lower(item_text))
-       DO UPDATE SET item_text = EXCLUDED.item_text,
-                     url = CASE WHEN EXCLUDED.url IS NOT NULL THEN EXCLUDED.url ELSE list_items.url END
-       RETURNING id, item_text, category, added_by, url, created_at`,
-      [userName, item.trim(), manualUrl]
-    );
-    const newItem = rows[0];
-
-    if (newItem) {
-      categorizeAndUpdateItem(newItem.id, newItem.item_text).catch(() => {});
-      syncListItemToConnections("shopping", [newItem.item_text], userName).catch(() => {});
+    const added: ShoppingItem[] = [];
+    for (const text of items) {
+      const { rows } = await query<ShoppingItem>(
+        `INSERT INTO list_items (user_name, list_name, item_text, url)
+         VALUES ($1, 'shopping', $2, $3)
+         ON CONFLICT (user_name, list_name, lower(item_text))
+         DO UPDATE SET item_text = EXCLUDED.item_text,
+                       url = CASE WHEN EXCLUDED.url IS NOT NULL THEN EXCLUDED.url ELSE list_items.url END
+         RETURNING id, item_text, category, added_by, url, created_at`,
+        [userName, text, itemUrl]
+      );
+      const newItem = rows[0];
+      if (newItem) {
+        added.push(newItem);
+        categorizeAndUpdateItem(newItem.id, newItem.item_text).catch(() => {});
+      }
+    }
+    if (added.length > 0) {
+      syncListItemToConnections("shopping", added.map((i) => i.item_text), userName).catch(() => {});
     }
 
-    res.json({ item: newItem });
+    // Single-item add keeps the original { item } response shape.
+    if (items.length === 1) {
+      res.json({ item: added[0] ?? null });
+      return;
+    }
+    res.json({ items: added });
   } catch (err) {
     req.log.warn({ err }, "Shopping list POST error");
     res.status(500).json({ error: "Failed to add item" });
