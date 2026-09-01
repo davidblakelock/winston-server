@@ -200,8 +200,23 @@ export async function checkForBreakingNews(userName: string): Promise<string | n
       .map((b) => (b as { type: "text"; text: string }).text)
       .join("").trim();
 
-    if (!text || /^none$/i.test(text)) {
-      logger.info({ userName }, "[BreakingNews] No significant new story — skipping push");
+    // Checking for an exact "NONE" match used to be the only gate here, but
+    // Haiku doesn't reliably follow "respond with exactly NONE" — confirmed
+    // live, repeatedly, the same morning this was found: it kept answering
+    // "NONE\n\n<a paragraph explaining why nothing qualifies>" instead. That
+    // extra paragraph made the old /^none$/i check (anchored, exact-match
+    // only) fail, so the whole explanation — starting with the literal word
+    // "NONE" — fell through and got treated as a genuine story: pushed as a
+    // real "Breaking News" notification, wired into a "tell me more about
+    // this breaking news" chat trigger, and appended to alertedStories,
+    // where it then bloated every subsequent poll's "already alerted"
+    // block too. Happened 4 times in one morning before this was caught.
+    // Checking for the actual instructed positive format ("Breaking: ...")
+    // instead of trying to enumerate every way the model might phrase "no"
+    // is the more robust fix — anything that doesn't match the format we
+    // told it to use for a real story is treated as no story, full stop.
+    if (!text || !/^breaking:\s/i.test(text)) {
+      logger.info({ userName, rawResponse: text.slice(0, 200) }, "[BreakingNews] No significant new story — skipping push");
       await saveState(userName, state);
       return null;
     }
