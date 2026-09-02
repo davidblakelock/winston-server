@@ -77,6 +77,15 @@ export async function generateMemorySummary(
 
   const prompt =
     `Review this conversation between ${user} and their AI companion ${companion}. ` +
+    `IMPORTANT: only extract facts from what ${user} themselves actually said, never from ${companion}'s ` +
+    `own replies — even a confident, detailed ${companion} statement is not evidence of anything real. ` +
+    `Confirmed live: a one-off speculative line in a ${companion} reply ("developing an interest in wine, ` +
+    `with potential future travel to Europe" — ${user} never said "Europe") got extracted as a fact here, ` +
+    `which then appeared in a future ${companion} reply as established context, which got extracted again, ` +
+    `more confidently each time, escalating over a week into a fully invented "actively researching Burgundy ` +
+    `ahead of an upcoming Europe trip" storyline with zero basis in anything ${user} ever said. ${companion}'s ` +
+    `own past turns (including generated content like a Morning Run Down or Evening Wind Down message) must ` +
+    `be read only as context for understanding ${user}'s turns, never mined as a source of facts about ${user}.\n\n` +
     `Write a memory note capturing what's worth remembering for future conversations. ` +
     `Focus on:\n` +
     `- Physical health mentions (pain, energy, how physical activities or hobbies went)\n` +
@@ -88,21 +97,24 @@ export async function generateMemorySummary(
     `Write the memory note in concise third-person notes. Be specific with names and details. ` +
     `If the conversation was only about setting reminders, managing lists, or checking the weather ` +
     `with no personal substance worth remembering, use the literal string "SKIP" as the summary.\n\n` +
-    `Also identify any DURABLE facts about ${user} mentioned in this conversation — lasting ` +
-    `preferences, not one-off events. Use the same judgment as the SKIP rule above: only include ` +
-    `something if it's genuinely durable.\n` +
+    `Also identify any DURABLE facts ${user} mentioned about themselves in this conversation — lasting ` +
+    `preferences ${user} actually stated, not one-off events, and not anything only ${companion} said. Use ` +
+    `the same judgment as the SKIP rule above: only include something if it's genuinely durable.\n` +
     `- hobbies: any new hobby or interest mentioned\n` +
     `- favoriteArtists: any new artist or musician mentioned as one they like\n` +
     `- restaurants: any new restaurant mentioned as a favorite or one they enjoyed\n` +
     `- sportsTeams: any new sports team mentioned as one they follow\n\n` +
-    `Also, separately: is there a broader durable interest or context revealed in this conversation that ` +
-    `doesn't fit any of the structured fields above, and is NOT a task, plan, or intention (those already ` +
-    `have their own destinations — a reminder, a to-do, a goal — and must never be duplicated here)? This is ` +
-    `for something that would help a future conversation feel like it remembers ${user} — an exploration of ` +
-    `a topic, a stated curiosity, general context about their life — not an event that already happened ` +
-    `(that's the summary above) and not something they intend to do (that's a task, elsewhere). Write it as ` +
-    `ONE plain third-person sentence, e.g. "${user} explored a new music genre and some local venues." Use null if ` +
-    `nothing like this came up — most conversations won't have one; don't force it.\n\n` +
+    `Also, separately: did ${user} themselves reveal a broader durable interest or context in THIS ` +
+    `conversation — something ${user} actually said, not something ${companion} said or already assumed — ` +
+    `that doesn't fit any of the structured fields above, and is NOT a task, plan, or intention (those ` +
+    `already have their own destinations — a reminder, a to-do, a goal — and must never be duplicated here)? ` +
+    `This is for something that would help a future conversation feel like it remembers ${user} — an ` +
+    `exploration of a topic, a stated curiosity, general context about their life — not an event that ` +
+    `already happened (that's the summary above) and not something they intend to do (that's a task, ` +
+    `elsewhere). Do not restate, rephrase, or "confirm" a prior chatFact just because it's mentioned again ` +
+    `by ${companion} somewhere in this history — only a genuinely new statement from ${user} counts. Write ` +
+    `it as ONE plain third-person sentence, e.g. "${user} explored a new music genre and some local venues." ` +
+    `Use null if nothing like this came up — most conversations won't have one; don't force it.\n\n` +
     `Return ONLY valid JSON in exactly this shape — no explanation, no markdown code fences:\n` +
     `{\n` +
     `  "summary": "<the memory note, or the literal string SKIP>",\n` +
