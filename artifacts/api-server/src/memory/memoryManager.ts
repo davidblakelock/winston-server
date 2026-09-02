@@ -27,6 +27,22 @@ export async function ensureMemoryTable(): Promise<void> {
       updated_at timestamptz NOT NULL DEFAULT NOW()
     )
   `);
+  // The UNIQUE inline above only ever applies the first time this statement
+  // actually creates the table — CREATE TABLE IF NOT EXISTS is a full no-op
+  // once the table exists, constraint included, regardless of whether that
+  // existing table matches this definition. Confirmed live: the deployed
+  // table had no unique constraint on conversation_date at all (only the
+  // id primary key), meaning it predates this column definition being
+  // written — every saveMemory() call has been failing on ON CONFLICT
+  // (conversation_date) ever since, silently (saveMemory swallows the error
+  // and just returns/logs, never surfaced as a user-visible failure). A
+  // unique index is added separately here, idempotently, since Postgres
+  // has no ADD CONSTRAINT IF NOT EXISTS — ON CONFLICT works against a
+  // unique index the same as an inline constraint.
+  await query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS conversation_memories_date_uidx
+      ON conversation_memories (conversation_date)
+  `).catch((err) => logger.warn({ err }, "[MemoryManager] conversation_memories unique index init failed"));
 }
 
 // ── Durable facts extracted from a conversation, alongside the narrative summary ──
