@@ -75,7 +75,25 @@ export async function generateMemorySummary(
     .map((m) => `${m.role === "user" ? user : companion}: ${m.content}`)
     .join("\n\n");
 
+  // Confirmed live: without seeing what's already saved, this extraction
+  // has no way to recognize "already know this, just said with more detail
+  // this time" versus a genuinely new hobby — a single real "wine" interest
+  // grew into 6 near-duplicate hobbies entries over two weeks, each more
+  // elaborate than the last ("wine appreciation" -> "wine appreciation and
+  // geography of wine production" -> "wine research and appreciation,
+  // particularly Burgundy and terroir"), which then fed an ever-more-
+  // confident "wine geography" narrative into every subsequent briefing.
+  // mergeJsonbArrayFact has its own word-overlap backstop for whatever gets
+  // through anyway, but stopping it here — where the model can actually
+  // read the existing list — is the real fix.
+  const existingProfile = userName ? await getProfile(userName).catch(() => null) : null;
+  const existingHobbiesLine = existingProfile?.hobbies?.length
+    ? `Already-known hobbies/interests (do NOT re-add one of these, even worded ` +
+      `differently or more specifically — only a genuinely NEW hobby counts): ${existingProfile.hobbies.join(", ")}\n\n`
+    : "";
+
   const prompt =
+    existingHobbiesLine +
     `Review this conversation between ${user} and their AI companion ${companion}. ` +
     `IMPORTANT: only extract facts from what ${user} themselves actually said, never from ${companion}'s ` +
     `own replies — even a confident, detailed ${companion} statement is not evidence of anything real. ` +
@@ -100,7 +118,9 @@ export async function generateMemorySummary(
     `Also identify any DURABLE facts ${user} mentioned about themselves in this conversation — lasting ` +
     `preferences ${user} actually stated, not one-off events, and not anything only ${companion} said. Use ` +
     `the same judgment as the SKIP rule above: only include something if it's genuinely durable.\n` +
-    `- hobbies: any new hobby or interest mentioned\n` +
+    `- hobbies: any new hobby or interest mentioned, not already covered by the already-known list above. ` +
+    `Use a short, general name (1-3 words, e.g. "wine", "flat-top cooking", "classic cars") — never a long ` +
+    `elaborated description, since that's how the same hobby ends up saved many times with escalating detail.\n` +
     `- favoriteArtists: any new artist or musician mentioned as one they like\n` +
     `- restaurants: any new restaurant mentioned as a favorite or one they enjoyed\n` +
     `- sportsTeams: any new sports team mentioned as one they follow\n\n` +
@@ -324,6 +344,39 @@ export async function applyProfileFact(
   }
 }
 
+// Backstop for whatever gets past the prompt-level "already-known" check in
+// generateMemorySummary — catches "wine" vs "wine appreciation and geography
+// of wine production" as the same underlying hobby even though they're not
+// an exact string match, by treating any shared significant word (4+
+// letters, singularized) as a duplicate signal. Confirmed live as the
+// actual mechanism behind a single real hobby growing into 6 near-duplicate
+// entries over two weeks: exact-match dedup alone let every new elaboration
+// through since none of them were literally identical text.
+const MERGE_DEDUP_STOPWORDS = new Set(["with", "that", "this", "from", "have", "been", "into", "their", "about", "which", "particularly"]);
+
+function significantWords(s: string): Set<string> {
+  return new Set(
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .map((w) => (w.length > 4 && w.endsWith("s") ? w.slice(0, -1) : w))
+      .filter((w) => w.length >= 4 && !MERGE_DEDUP_STOPWORDS.has(w))
+  );
+}
+
+function overlapsExisting(newFact: string, existing: string[]): boolean {
+  const newWords = significantWords(newFact);
+  if (newWords.size === 0) return false;
+  return existing.some((e) => {
+    const existingWords = significantWords(e);
+    for (const w of newWords) {
+      if (existingWords.has(w)) return true;
+    }
+    return false;
+  });
+}
+
 async function mergeJsonbArrayFact(
   userName: string,
   column: "hobbies" | "favorite_artists",
@@ -335,7 +388,9 @@ async function mergeJsonbArrayFact(
   const existingLower = new Set(existing.map((v) => v.toLowerCase().trim()));
   const additions = newFacts
     .map((v) => v?.trim())
-    .filter((v): v is string => !!v && !existingLower.has(v.toLowerCase()));
+    .filter((v): v is string =>
+      !!v && !existingLower.has(v.toLowerCase()) && !overlapsExisting(v, existing)
+    );
   if (additions.length === 0) return;
 
   const merged = [...existing, ...additions];
