@@ -252,6 +252,18 @@ export async function upsertOrder(
     // ── Priority 1: match by tracking_number ────────────────────────────────
     // "Order shipped" email arrives with same TN as an earlier "order confirmed"
     // email that already stored the TN — just update the existing row.
+    //
+    // expected_date's CASE (here and in the two merge branches below):
+    // confirmed live an order sat at status "out_for_delivery" while
+    // expected_date still showed 4 days out — a plain COALESCE(new, old)
+    // keeps the stale estimate from the original order-confirmation email
+    // whenever the follow-up email's own date extraction comes back null,
+    // which is the common case for an "out for delivery" notification (it
+    // usually just says "arriving today" in prose, nothing a date-extractor
+    // reliably parses). Once a status update says the package is out for
+    // delivery or already delivered, the old ship-date estimate is
+    // definitionally superseded regardless of whether the new email restated
+    // an explicit date — CURRENT_DATE is correct in both cases.
     if (order.tracking_number) {
       const { rows: byTN } = await query<Order>(
         `SELECT * FROM orders WHERE user_name = $1 AND tracking_number = $2 LIMIT 1`,
@@ -266,7 +278,7 @@ export async function upsertOrder(
              order_number    = COALESCE($5, order_number),
              carrier         = COALESCE($6, carrier),
              status          = $7,
-             expected_date   = COALESCE($8::date, expected_date),
+             expected_date   = CASE WHEN $7 IN ('out_for_delivery', 'delivered') THEN CURRENT_DATE ELSE COALESCE($8::date, expected_date) END,
              order_total     = COALESCE($9, order_total),
              email_id        = COALESCE(email_id, $10),
              order_url       = COALESCE($11, order_url),
@@ -303,7 +315,7 @@ export async function upsertOrder(
                tracking_number = $3,
                carrier         = COALESCE($4, carrier),
                status          = $5,
-               expected_date   = COALESCE($6::date, expected_date),
+               expected_date   = CASE WHEN $5 IN ('out_for_delivery', 'delivered') THEN CURRENT_DATE ELSE COALESCE($6::date, expected_date) END,
                order_total     = COALESCE($7, order_total),
                order_url       = COALESCE($8, order_url),
                updated_at      = now()
@@ -345,7 +357,7 @@ export async function upsertOrder(
              item_name       = COALESCE($4, item_name),
              carrier         = COALESCE($5, carrier),
              status          = $6,
-             expected_date   = COALESCE($7::date, expected_date),
+             expected_date   = CASE WHEN $6 IN ('out_for_delivery', 'delivered') THEN CURRENT_DATE ELSE COALESCE($7::date, expected_date) END,
              order_total     = COALESCE($8, order_total),
              email_id        = COALESCE(email_id, $9),
              updated_at      = now()
