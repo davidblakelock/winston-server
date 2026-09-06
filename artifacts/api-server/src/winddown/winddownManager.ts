@@ -253,3 +253,23 @@ export async function getTonightMessage(userName: string): Promise<string | null
   return rows.length > 0 ? (rows[0].tonight_message ?? null) : null;
 }
 
+// Confirmed live: winddown had no equivalent of Daily Discovery's
+// "RECENT BRIEFINGS" dedup block — nothing let generateOpeningMessage see
+// what it already said on a prior night, so the same stale-to-do/Attic-
+// derived suggestion (beats 3-5) kept getting repeated night after night
+// verbatim as long as the underlying item stayed inside the 3-day activity
+// window, instead of correctly going quiet once nothing new had happened
+// since it was last mentioned.
+export async function getRecentWinddownMessages(userName: string, nights: number): Promise<string[]> {
+  const { timezone: tz } = await getUserLocationContext(userName);
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
+  const { rows } = await query<{ tonight_message: string | null }>(
+    `SELECT tonight_message FROM winddown_state
+     WHERE user_name = $1 AND trigger_date < $2 AND tonight_message IS NOT NULL
+     ORDER BY trigger_date DESC
+     LIMIT $3`,
+    [userName, today, nights]
+  );
+  return rows.map((r) => r.tonight_message).filter((m): m is string => !!m);
+}
+

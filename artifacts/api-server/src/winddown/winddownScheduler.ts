@@ -8,6 +8,7 @@ import {
   claimScheduledPush,
   setWinddownActive,
   saveTonightMessage,
+  getRecentWinddownMessages,
 } from "./winddownManager.js";
 
 import { getProfile, getActiveUsers, getCompanionDisplayName, buildPersonaPreamble } from "../onboarding/onboardingManager.js";
@@ -154,6 +155,23 @@ export async function generateOpeningMessage(
     logger.warn({ err, userName }, "[Winddown] Recent cross-source activity pull failed");
   }
 
+  // See getRecentWinddownMessages's comment — without this, beats 3-5 kept
+  // repeating the same stale-to-do/Attic-derived suggestion night after
+  // night for as long as the underlying item stayed inside the 3-day
+  // activity window above, since nothing told the model it had already
+  // said this.
+  let recentWinddownsBlock = "";
+  try {
+    const recentMessages = await getRecentWinddownMessages(userName, 2);
+    if (recentMessages.length > 0) {
+      recentWinddownsBlock = recentMessages
+        .map((m, i) => `[Winddown from ${i === 0 ? "last night" : i + 1 + " nights ago"}]\n${m}`)
+        .join("\n\n");
+    }
+  } catch (err) {
+    logger.warn({ err, userName }, "[Winddown] Recent winddown history pull failed");
+  }
+
   const prompt =
     buildPersonaPreamble(profile?.companionPersona ?? null, profile?.personalityStyle ?? null) +
     `You are ${companionName}, ${displayName}'s trusted personal companion. Dry, warm, never gushing. It's ${dayName} evening in ${city}.\n\n` +
@@ -161,12 +179,13 @@ export async function generateOpeningMessage(
     (staleTodosContext ? `Open to-dos with how long they've been sitting:\n${staleTodosContext}\n` : "") +
     `VERIFIED SCHEDULE FOR TOMORROW (use exactly this — do not search for, invent, or add to it):\n${tomorrowScheduleBlock}\n` +
     (recentActivityContext ? `What ${displayName} saved, added, or mentioned in the last few days (raw, across sources):\n${recentActivityContext}\n` : "") +
+    (recentWinddownsBlock ? `\nRECENT WINDDOWN MESSAGES (for avoiding repeats only — never read this back or reference it directly): if beat 3, 4, or 5 below would repeat the same to-do, calendar suggestion, or reminder suggestion already made in one of these, and nothing new has happened since to justify mentioning it again, skip that beat entirely rather than repeating it — going quiet is correct here, not a failure.\n${recentWinddownsBlock}\n` : "") +
     `\nWrite tonight's evening wind-down message. Cover what genuinely applies, in roughly this order:\n\n` +
     `1. A brief, warm greeting — no recap of today's completed reminders or calendar events; that adds nothing, skip it entirely.\n\n` +
     `2. Tomorrow's schedule, under its own line/header, listing the VERIFIED SCHEDULE FOR TOMORROW above plainly — one item per line, verbatim, no commentary, no editorializing, no "busy day ahead" framing. If it says "None.", skip this whole beat rather than writing "nothing tomorrow" filler.\n\n` +
-    `3. If any open to-dos have been sitting a while (ages are shown above), gently name the one or two stalest ones and ask if ${displayName} wants to knock it out, update it, or just let it go. Never list every open to-do — just what's genuinely gone stale. Skip this beat entirely if nothing's actually been sitting long enough to be worth mentioning.\n\n` +
-    `4. If the recent activity above points at something that should probably be on the calendar but isn't — a plan, an appointment, an intention someone mentioned — name it specifically and ask if it should be added. Skip if nothing genuinely fits; never manufacture a suggestion just to fill this beat.\n\n` +
-    `5. If the recent activity above points at something worth a reminder that doesn't have one — a commitment, something to follow up on, a thing worth not forgetting — name it specifically and offer to set it. Skip if nothing fits.\n\n` +
+    `3. If any open to-dos have been sitting a while (ages are shown above), gently name the one or two stalest ones and ask if ${displayName} wants to knock it out, update it, or just let it go. Never list every open to-do — just what's genuinely gone stale. Skip this beat entirely if nothing's actually been sitting long enough to be worth mentioning, or if you already named this same to-do in a recent winddown above with nothing new since.\n\n` +
+    `4. If the recent activity above points at something that should probably be on the calendar but isn't — a plan, an appointment, an intention someone mentioned — name it specifically and ask if it should be added. Skip if nothing genuinely fits, or if this is the same suggestion from a recent winddown above; never manufacture a suggestion just to fill this beat.\n\n` +
+    `5. If the recent activity above points at something worth a reminder that doesn't have one — a commitment, something to follow up on, a thing worth not forgetting — name it specifically and offer to set it. Skip if nothing fits, or if this is the same suggestion from a recent winddown above.\n\n` +
     `6. Close with a short reminder of one of Stoicism's actual core practices — the evening review, examining the day just lived and what's ahead, a real habit Seneca and Epictetus both wrote about — phrased as a genuine, low-pressure invitation to spend a few minutes on it now, either here or in My Life. Vary the wording night to night, but keep it grounded in that real practice rather than inventing a fake quote. Never use the word "journal" or "journaling." End the entire message with exactly this line, unchanged: "Go to My Life to record any thoughts." Nothing after it.\n\n` +
     (peopleContext ? `Weave in a key person naturally only if it genuinely fits — don't force it.\n` : "") +
     `Keep beats 1 and 3-5 as natural blended prose, not headers or bullets — only beat 2 (tomorrow's schedule) and the fixed closing line break that pattern. Keep the whole message tight — a handful of sentences plus the schedule list, not an essay. Most nights, several of beats 3-5 will have nothing to say — that's expected, not a failure; don't stretch to fill them. Sound like a perceptive friend catching up, not a report or a checklist being read aloud.`;

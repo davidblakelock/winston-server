@@ -535,7 +535,10 @@ export async function dotConnectorPass(userName: string): Promise<void> {
   const { text: goalContext, goals } = await fetchGoalContext(userName);
   const stoicPhaseContext = await fetchStoicPhaseContext(userName);
 
+  const todayStr = new Date().toLocaleDateString("en-US", { timeZone: tz, weekday: "long", year: "numeric", month: "long", day: "numeric" });
+
   const prompt =
+    `Today's date: ${todayStr}\n\n` +
     `${firstName}'s personal reflections and saved items from the last 30 days (numbered):\n${itemLines}\n\n` +
     `Profile: lives in ${city}, interests include ${interests.slice(0, 6).join(", ") || "various things"}.` +
     formatCorrectionContext(corrections) + formatRecentSurfacedContext(recentSurfaced) + goalContext + stoicPhaseContext + `\n\n` +
@@ -547,6 +550,7 @@ export async function dotConnectorPass(userName: string): Promise<void> {
     `• No vague life advice ("you should prioritize rest", "consider reconnecting with family").\n` +
     `• No suggestions about things already in progress or recently acted on.\n` +
     `• RECENCY MATTERS: each item shows how long ago it was said (today / N days ago / N weeks ago). This is a "right now" nudge, not a memory lane trip — weight items from the last several days heavily and treat anything 2+ weeks old as probably no longer live unless something recent still points at it too. Don't build a suggestion off a single stale item just because it's still inside the 30-day window.\n` +
+    `• HOW RECENTLY SOMETHING WAS SAID IS NOT THE SAME AS WHETHER IT HAS ALREADY HAPPENED — check both. A trip, reservation, or event with a specific date or timeframe (a named holiday, "next month," a booked reservation) needs that date compared against today's date above. Confirmed live this went wrong: a trip mentioned days before it happened got suggested again as "still on the table, want me to check dates" — twice, once for the original planning and once again after the trip had already concluded — because the item itself was inside the recency window even though the trip it described was not. If the described event's date has plausibly already passed relative to today, it is completed, not upcoming — never suggest researching, booking, or checking dates for something that has already happened, no matter how recently it was mentioned.\n` +
     `• The suggestion must be ONE natural conversational sentence Winston would say — under 25 words.\n` +
     `• Example format: "You mentioned wanting an exotic trip — you have a clear week in September. Want me to start looking at options?"\n\n` +
     `Return ONLY this JSON, no markdown:\n` +
@@ -1021,7 +1025,14 @@ export async function weeklyGiftPass(userName: string): Promise<string | null> {
     `have a difficult conversation and you had it. You mentioned feeling more settled than you have in months. ` +
     `And you said twice that you're exactly where you want to be. That's worth carrying into this week."\n` +
     `• Start with a phrase like "Before the week starts —" or "Something worth noting from this week —"\n` +
-    `Write the paragraph now.`;
+    `• NOT EVERY WEEK HAS A GENUINE INSIGHT IN IT: the ${items.length}-item floor above only checks there's ` +
+    `enough raw material to READ, not enough to say something REAL about. A handful of disconnected, mundane ` +
+    `items (a couple of saved links, an existing subscription, routine browsing) does not automatically add up ` +
+    `to a meaningful pattern, and reaching for one anyway is exactly how you end up forcing a connection that ` +
+    `doesn't hold together — naming unrelated things in the same breath and asserting they mean something as a ` +
+    `substitute for actually finding a real thread. If that's genuinely what this week looks like, respond with ` +
+    `the single word SKIP and nothing else — a quiet week with no gift is honest; a manufactured one is not.\n\n` +
+    `Write the paragraph now, or respond with SKIP.`;
 
   try {
     const resp = await anthropic.messages.create({
@@ -1034,7 +1045,15 @@ export async function weeklyGiftPass(userName: string): Promise<string | null> {
       .map((b) => (b as { type: "text"; text: string }).text)
       .join("").trim();
 
-    if (!text) return null;
+    // Lenient prefix check, not an exact match — confirmed live elsewhere in
+    // this codebase (breaking-news's "NONE" detection) that a model asked
+    // for an exact sentinel will often add an explanation after it anyway;
+    // requiring an exact match let the whole explanation — including the
+    // sentinel word — leak through as if it were real content.
+    if (!text || /^skip\b/i.test(text)) {
+      logger.info({ userName }, "[ConnectionEngine] WeeklyGift: skipped — not enough for a genuine insight");
+      return null;
+    }
 
     await query(
       `DELETE FROM observations WHERE user_name = $1 AND observation_type = 'weekly_gift' AND status = 'pending'`,
