@@ -15,7 +15,7 @@ import { getProfile, getActiveUsers, getCompanionDisplayName, buildPersonaPreamb
 import { getPeople } from "../people/peopleManager.js";
 import { NATIVE_STORED_NAME } from "../auth/middleware.js";
 import { fetchTomorrowEvents } from "../google/calendar.js";
-import { fetchFromAdapters, recencyLabel } from "../connectionEngine/memorySourceAdapters.js";
+import { recencyLabel } from "../connectionEngine/memorySourceAdapters.js";
 import { injectMyLifeLink } from "../morning/briefingPregenerate.js";
 import { logger } from "../lib/logger.js";
 
@@ -31,29 +31,39 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 // Today's recap (what reminders fired, what calendar events already
 // happened) was deliberately removed — confirmed with the user it added no
 // value; a rehash of today's completed alerts isn't a reason to open the
-// app. What's left: tomorrow's real schedule, a stale-open-to-do check, a
-// calendar-gap check, a reminder-worthy check, and a closing Stoic-reflection
-// invitation. Most nights several of the middle beats have nothing to say
-// and are skipped outright — only tomorrow's schedule and the closing are
-// effectively always present.
+// app. What's left: tomorrow's real schedule, a stale-open-to-do check, an
+// explicit-commitment-gap check, and a closing Stoic-reflection invitation.
+// Most nights the middle beats have nothing to say and are skipped
+// outright — only tomorrow's schedule and the closing are effectively
+// always present. Confirmed with the user this is the intent, not a bug to
+// fix: a quiet wind-down most nights, leaving room for the closing
+// reflection, beats a wind-down that always finds something to say.
 //
-// Two sources removed entirely, both confirmed non-functional on inspection
-// rather than just unwanted: "this morning's mood" read from a table nothing
-// ever wrote to (saveMoodCheckin() had zero callers anywhere in the
-// codebase — always null in practice); and the "pending observation" /
-// "recently surfaced" context pulled from the connection engine's
-// observations table. That table's getRecentSurfacedObservations() filters
-// only by age (30 days), not by status — so an observation the user already
-// dismissed or the system suppressed still gets handed to Claude here as
-// "something you noticed," with only a soft "don't repeat unless it's a
-// genuinely different angle" instruction standing between that and it
-// resurfacing. Confirmed live: a bartending-school observation (created
-// from a July 27th Attic entry, already dismissed/suppressed twice, Aug 6
-// and Aug 16) came back in an evening message with new framing weeks later.
-// The 1-day cross-source activity window below was NOT the cause of that —
-// its date filter is real and correctly scoped — but it's widened to 3 days
-// anyway, since 1 day was too narrow for beats 4/5 (calendar-gap,
-// reminder-worthy) to ever have real material to work with.
+// Three sources removed entirely over time, each confirmed non-functional
+// or actively harmful on inspection rather than just unwanted:
+// - "This morning's mood" read from a table nothing ever wrote to
+//   (saveMoodCheckin() had zero callers anywhere in the codebase — always
+//   null in practice).
+// - The "pending observation" / "recently surfaced" context pulled from the
+//   connection engine's observations table. That table's
+//   getRecentSurfacedObservations() filters only by age (30 days), not by
+//   status — so an observation the user already dismissed or the system
+//   suppressed still got handed to Claude here as "something you noticed,"
+//   with only a soft "don't repeat unless it's a genuinely different angle"
+//   instruction standing between that and it resurfacing. Confirmed live: a
+//   bartending-school observation (created from a July 27th Attic entry,
+//   already dismissed/suppressed twice, Aug 6 and Aug 16) came back in an
+//   evening message with new framing weeks later.
+// - The "calendar-gap"/"reminder-worthy" beats that reasoned from raw
+//   Attic/list/chat_fact activity over a multi-day window, trying to infer
+//   a hidden action item from ambient saved-item noise (recipes, links,
+//   bookmarks that were never commitments to begin with). Confirmed live
+//   this kept manufacturing connections that weren't real — the same
+//   failure shape the Attic's own dot-connector/weekly-gift passes have
+//   separately (see connectionEngineManager.ts). Replaced with a much
+//   narrower check: does today's actual conversation contain an explicit
+//   commitment that isn't already captured as a reminder? That's real
+//   signal (the user's own words, today), not inference from a bookmark.
 
 export async function generateOpeningMessage(
   companionName: string,
@@ -139,20 +149,31 @@ export async function generateOpeningMessage(
     tomorrowScheduleBlock = "None.";
   }
 
-  // Today's raw cross-source activity — what did they save, add to a list, or
-  // mention recently that might genuinely need a calendar entry or a
-  // reminder that doesn't exist yet. Same adapters the connection engine's
-  // own passes use (fetchFromAdapters). 3-day window — see the top-of-file
-  // comment for why this isn't 1 day, and why widening it isn't the fix for
-  // the stale-observation problem it might look related to.
-  let recentActivityContext = "";
+  // Replaces the old "reason from ambient Attic/list/chat_fact activity"
+  // source entirely — confirmed live that inferring a hidden action item
+  // from raw saved-item noise (recipes, links, bookmarks that were never
+  // commitments to begin with) kept manufacturing connections that weren't
+  // real, the same failure the Attic's own dot-connector/weekly-gift passes
+  // have separately. This only looks for something with real signal: an
+  // explicit commitment ${displayName} actually stated today, cross-checked
+  // against what's already captured so a genuine miss gets caught without
+  // re-litigating something already handled. Deliberately today-only, not a
+  // multi-day window — this is checking for something that slipped through
+  // today specifically, not trawling for a pattern.
+  let todaysCommitmentsContext = "";
   try {
-    const recentItems = await fetchFromAdapters(userName, ["life_capture", "attic_item", "list_item", "chat_fact"], 3);
-    if (recentItems.length > 0) {
-      recentActivityContext = recentItems.map((it) => `- (${it.context}, ${recencyLabel(it.occurredAt)}) ${it.content}`).join("\n");
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
+    const { rows } = await query<{ content: string }>(
+      `SELECT content FROM chat_messages
+       WHERE user_name = $1 AND role = 'user' AND (created_at AT TIME ZONE $2)::date = $3::date
+       ORDER BY created_at ASC`,
+      [userName, tz, today]
+    );
+    if (rows.length > 0) {
+      todaysCommitmentsContext = rows.map((r) => `- ${r.content}`).join("\n");
     }
   } catch (err) {
-    logger.warn({ err, userName }, "[Winddown] Recent cross-source activity pull failed");
+    logger.warn({ err, userName }, "[Winddown] Today's conversation pull failed");
   }
 
   // See getRecentWinddownMessages's comment — without this, beats 3-5 kept
@@ -178,17 +199,16 @@ export async function generateOpeningMessage(
     (peopleContext ? `${displayName}'s key people: ${peopleContext}.\n` : "") +
     (staleTodosContext ? `Open to-dos with how long they've been sitting:\n${staleTodosContext}\n` : "") +
     `VERIFIED SCHEDULE FOR TOMORROW (use exactly this — do not search for, invent, or add to it):\n${tomorrowScheduleBlock}\n` +
-    (recentActivityContext ? `What ${displayName} saved, added, or mentioned in the last few days (raw, across sources):\n${recentActivityContext}\n` : "") +
-    (recentWinddownsBlock ? `\nRECENT WINDDOWN MESSAGES (for avoiding repeats only — never read this back or reference it directly): if beat 3, 4, or 5 below would repeat the same to-do, calendar suggestion, or reminder suggestion already made in one of these, and nothing new has happened since to justify mentioning it again, skip that beat entirely rather than repeating it — going quiet is correct here, not a failure.\n${recentWinddownsBlock}\n` : "") +
+    (todaysCommitmentsContext ? `${displayName}'s own messages from today's conversation, verbatim, in order (most of this is routine — email deletes, list adds, quick questions — ignore all of that):\n${todaysCommitmentsContext}\n` : "") +
+    (recentWinddownsBlock ? `\nRECENT WINDDOWN MESSAGES (for avoiding repeats only — never read this back or reference it directly): if beat 3 or 4 below would repeat the same to-do or commitment already named in one of these, and nothing new has happened since to justify mentioning it again, skip that beat entirely rather than repeating it — going quiet is correct here, not a failure.\n${recentWinddownsBlock}\n` : "") +
     `\nWrite tonight's evening wind-down message. Cover what genuinely applies, in roughly this order:\n\n` +
     `1. A brief, warm greeting — no recap of today's completed reminders or calendar events; that adds nothing, skip it entirely.\n\n` +
     `2. Tomorrow's schedule, under its own line/header, listing the VERIFIED SCHEDULE FOR TOMORROW above plainly — one item per line, verbatim, no commentary, no editorializing, no "busy day ahead" framing. If it says "None.", skip this whole beat rather than writing "nothing tomorrow" filler.\n\n` +
     `3. If any open to-dos have been sitting a while (ages are shown above), gently name the one or two stalest ones and ask if ${displayName} wants to knock it out, update it, or just let it go. Never list every open to-do — just what's genuinely gone stale. Skip this beat entirely if nothing's actually been sitting long enough to be worth mentioning, or if you already named this same to-do in a recent winddown above with nothing new since.\n\n` +
-    `4. If the recent activity above points at something that should probably be on the calendar but isn't — a plan, an appointment, an intention someone mentioned — name it specifically and ask if it should be added. Skip if nothing genuinely fits, or if this is the same suggestion from a recent winddown above; never manufacture a suggestion just to fill this beat.\n\n` +
-    `5. If the recent activity above points at something worth a reminder that doesn't have one — a commitment, something to follow up on, a thing worth not forgetting — name it specifically and offer to set it. Skip if nothing fits, or if this is the same suggestion from a recent winddown above.\n\n` +
-    `6. Close with a short reminder of one of Stoicism's actual core practices — the evening review, examining the day just lived and what's ahead, a real habit Seneca and Epictetus both wrote about — phrased as a genuine, low-pressure invitation to spend a few minutes on it now, either here or in My Life. Vary the wording night to night, but keep it grounded in that real practice rather than inventing a fake quote. Never use the word "journal" or "journaling." End the entire message with exactly this line, unchanged: "Go to My Life to record any thoughts." Nothing after it.\n\n` +
+    `4. Read today's messages above for a moment where ${displayName} explicitly said, in plain language, that they intend to DO something — call someone, follow up, take care of something, handle a task — NOT a routine command (deleting an email, checking a list, asking a question is not a commitment). Check it against the open to-dos above: if it's already captured there, or already set as a reminder, say nothing — this beat exists to catch what's MISSING, not to restate what's already tracked. If you find a genuine, explicit, uncaptured commitment, name it in one sentence and ask if they want it set as a reminder. This has to be something ${displayName} actually said today — never infer or guess at an intention from a saved link, a list item, or a vibe. If nothing in today's messages clears that bar, skip this beat entirely — most nights will have nothing here, and that's correct, not a failure.\n\n` +
+    `5. Close with a short reminder of one of Stoicism's actual core practices — the evening review, examining the day just lived and what's ahead, a real habit Seneca and Epictetus both wrote about — phrased as a genuine, low-pressure invitation to spend a few minutes on it now, either here or in My Life. Vary the wording night to night, but keep it grounded in that real practice rather than inventing a fake quote. Never use the word "journal" or "journaling." End the entire message with exactly this line, unchanged: "Go to My Life to record any thoughts." Nothing after it.\n\n` +
     (peopleContext ? `Weave in a key person naturally only if it genuinely fits — don't force it.\n` : "") +
-    `Keep beats 1 and 3-5 as natural blended prose, not headers or bullets — only beat 2 (tomorrow's schedule) and the fixed closing line break that pattern. Keep the whole message tight — a handful of sentences plus the schedule list, not an essay. Most nights, several of beats 3-5 will have nothing to say — that's expected, not a failure; don't stretch to fill them. Sound like a perceptive friend catching up, not a report or a checklist being read aloud.`;
+    `Keep beats 1, 3, and 4 as natural blended prose, not headers or bullets — only beat 2 (tomorrow's schedule) and the fixed closing line break that pattern. Keep the whole message tight — a handful of sentences plus the schedule list, not an essay. Most nights, beats 3 and 4 will have nothing to say — that's expected, not a failure; don't stretch to fill them. A quiet wind-down that leaves room for the closing reflection is the goal here, not a report or a checklist being read aloud.`;
 
   try {
     const response = await anthropic.messages.create({
