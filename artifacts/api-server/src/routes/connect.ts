@@ -43,7 +43,7 @@ router.post("/connect/invite", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
 
-  const { yourName } = req.body as { yourName?: string };
+  const { yourName, recipientTarget } = req.body as { yourName?: string; recipientTarget?: string };
 
   if (!yourName) {
     res.status(400).json({ error: "yourName is required (how you want to appear to the other user)" });
@@ -51,7 +51,7 @@ router.post("/connect/invite", async (req: Request, res: Response) => {
   }
 
   try {
-    const { inviteToken, id } = await createInvite(userName, yourName);
+    const { inviteToken, id } = await createInvite(userName, yourName, recipientTarget);
     req.log.info({ userName, id }, "[Connect] Invite created");
     res.json({
       inviteToken,

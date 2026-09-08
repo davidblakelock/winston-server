@@ -55,6 +55,16 @@ export async function ensureConnectTables(): Promise<void> {
   // Add birthday/key-date columns if they don't exist yet
   await query(`ALTER TABLE winston_connections ADD COLUMN IF NOT EXISTS date_of_birth DATE`);
   await query(`ALTER TABLE winston_connections ADD COLUMN IF NOT EXISTS key_dates JSONB DEFAULT '[]'`);
+  // What the requester typed into the invite modal identifying who it's
+  // for (a name, phone number, email — whatever they entered) — confirmed
+  // live this was never captured anywhere: the client already sent it
+  // (recipientTarget) but the route never read it and no column existed to
+  // put it in, so a still-pending invite had no way to answer "who is this
+  // for" at all. The UI was displaying requester_label instead (how the
+  // REQUESTER labeled themselves) purely because it was the only string on
+  // the row remotely related to a person — which meant a pending invite
+  // literally showed the user's own name back to them.
+  await query(`ALTER TABLE winston_connections ADD COLUMN IF NOT EXISTS recipient_target TEXT`);
 
   logger.info("[Connect] Tables ready");
 }
@@ -105,6 +115,7 @@ export interface WinstonConnection {
   invite_token: string;
   requester_label: string | null;
   recipient_label: string | null;
+  recipient_target: string | null;
   created_at: string;
   accepted_at: string | null;
 }
@@ -130,14 +141,15 @@ export interface SharedListItem {
 
 export async function createInvite(
   requesterUserName: string,
-  requesterLabel: string
+  requesterLabel: string,
+  recipientTarget?: string | null
 ): Promise<{ inviteToken: string; id: number }> {
   const token = randomBytes(16).toString("hex");
   const { rows } = await query<{ id: number }>(
-    `INSERT INTO winston_connections (requester_user_name, requester_label, invite_token, status)
-     VALUES ($1, $2, $3, 'pending')
+    `INSERT INTO winston_connections (requester_user_name, requester_label, invite_token, status, recipient_target)
+     VALUES ($1, $2, $3, 'pending', $4)
      RETURNING id`,
-    [requesterUserName, requesterLabel, token]
+    [requesterUserName, requesterLabel, token, recipientTarget?.trim() || null]
   );
   return { inviteToken: token, id: rows[0]!.id };
 }
