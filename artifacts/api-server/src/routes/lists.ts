@@ -23,6 +23,8 @@ import { extractReminder, computeFireAt, computeFireAtForDate, resolveNextDayOfW
 import { nextOccurrenceForPattern } from "../reminders/recurringUtils.js";
 import { getProfile } from "../onboarding/onboardingManager.js";
 import { createReminder } from "../reminders/reminderManager.js";
+import { addWatchedShow } from "../tv/showManager.js";
+import { searchShow } from "../tv/tvmaze.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -263,30 +265,103 @@ router.get("/lists/tv-shows", async (req: Request, res: Response) => {
 });
 
 // POST /api/lists/tv-shows — add a show directly from the UI
+// Routes through addWatchedShow() (showManager.ts) — confirmed live this
+// previously did a raw INSERT with no TVmaze lookup at all, unlike the
+// chat/voice add path, which already used addWatchedShow(). That's the
+// actual reason a mistyped/incomplete title (e.g. "Gentlemen" instead of
+// "The Gentlemen") stuck around with no metadata: not a failed lookup, no
+// lookup was ever attempted for anything added via this button.
 router.post("/lists/tv-shows", async (req: Request, res: Response) => {
   const userName = await authenticate(req, res);
   if (!userName) return;
   const item = ((req.body?.item ?? "") as string).trim();
   if (!item) { res.status(400).json({ error: "item required" }); return; }
   try {
-    const { rows } = await query<{ id: number; show_name: string }>(
-      `INSERT INTO watched_shows (user_name, show_name)
-       SELECT $1, $2
-       WHERE NOT EXISTS (
-         SELECT 1 FROM watched_shows WHERE user_name = $1 AND lower(show_name) = lower($2)
-       )
-       RETURNING id, show_name`,
-      [userName, item]
-    );
-    if (rows.length === 0) {
+    const result = await addWatchedShow(item, userName);
+    if (!result.success) {
       res.status(409).json({ error: "Show already in list" });
       return;
     }
-    req.log.info({ userName, show: item }, "[TV Shows] Added via UI");
-    res.json({ item: { id: rows[0].id, item_text: rows[0].show_name, created_at: new Date().toISOString() } });
+    const { rows } = await query<{ id: number }>(
+      `SELECT id FROM watched_shows WHERE user_name = $1 AND show_name = $2`,
+      [userName, result.showName]
+    );
+    req.log.info({ userName, show: result.showName }, "[TV Shows] Added via UI");
+    res.json({ item: { id: rows[0]?.id ?? null, item_text: result.showName, created_at: new Date().toISOString() } });
   } catch (err) {
     req.log.warn({ err }, "TV Shows list POST error");
     res.status(500).json({ error: "Failed to add show" });
+  }
+});
+
+// PUT /api/lists/tv-shows/:id — rename a show (e.g. correcting a TVmaze
+// mismatch like "Gentlemen" -> "The Gentlemen"). Confirmed live this never
+// existed: the client's generic edit modal unconditionally PUTs to
+// /api/lists/:listName/:id, which for every OTHER list type correctly
+// targets list_items — but TV shows live in their own dedicated
+// watched_shows table (see the GET/POST/DELETE routes here), never in
+// list_items. That generic PUT matched zero rows and returned 404, which
+// the client never checked — so an edit looked like it saved (modal
+// closed, list refetched) while silently changing nothing.
+//
+// Also re-runs the TVmaze lookup with the corrected name — the whole
+// reason someone renames a show is usually that the original title didn't
+// resolve correctly, so this is the natural place to also backfill the
+// genres/network/status/tvmaze_id that a bad initial match left null.
+// Best-effort: a failed lookup here just leaves those fields as they were,
+// same fallback addWatchedShow already uses on add.
+router.put("/lists/tv-shows/:id", async (req: Request, res: Response) => {
+  const userName = await authenticate(req, res);
+  if (!userName) return;
+  const { id } = req.params;
+  const item = ((req.body?.item ?? "") as string).trim();
+  if (!item) { res.status(400).json({ error: "item is required" }); return; }
+  try {
+    const tvShow = await searchShow(item).catch(() => null);
+    const { rows } = await query<{ id: number; show_name: string }>(
+      `UPDATE watched_shows
+       SET show_name  = $1,
+           tvmaze_id  = COALESCE($2, tvmaze_id),
+           network    = COALESCE($3, network),
+           genres     = COALESCE($4, genres),
+           status     = COALESCE($5, status)
+       WHERE id = $6 AND user_name = $7
+       RETURNING id, show_name`,
+      [
+        tvShow?.name ?? item,
+        tvShow?.id ?? null,
+        tvShow?.network ?? null,
+        tvShow?.genres?.join(", ") ?? null,
+        tvShow?.status ?? null,
+        id, userName,
+      ]
+    );
+    if (rows.length === 0) {
+      res.status(404).json({ error: "Show not found" });
+      return;
+    }
+    req.log.info({ userName, id, show: rows[0].show_name }, "[TV Shows] Renamed via UI");
+    res.json({ item: { id: rows[0].id, item_text: rows[0].show_name, created_at: new Date().toISOString() } });
+  } catch (err) {
+    // watched_shows has a unique index on (user_name, lower(show_name)) —
+    // renaming into a collision with an already-tracked show throws here
+    // rather than silently merging two rows. Checked by message text, not
+    // just the pg error .code (23505): db.ts's Supabase REST path — the
+    // one actually active in production — wraps every DB error into a
+    // plain Error with no .code property at all, only a message string
+    // ("Supabase exec_sql error: <raw postgres message>"), so .code alone
+    // would silently never match there. Checking both covers the local
+    // pg.Pool fallback (real .code) and the Supabase path (message text)
+    // that's actually in use.
+    const isDupKey =
+      (err as { code?: string })?.code === "23505" ||
+      (err instanceof Error && /duplicate key value violates unique constraint/i.test(err.message));
+    if (isDupKey) {
+      res.status(409).json({ error: "You're already tracking a show with that name" });
+      return;
+    }
+    req.log.warn({ err }, "TV Shows list PUT error");
+    res.status(500).json({ error: "Failed to update show" });
   }
 });
 
