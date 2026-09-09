@@ -62,8 +62,23 @@ export function computeNextDueDate(bill: Bill, from: Date = new Date(), tz = "UT
   if (bill.frequency === "monthly") {
     let candidate = clampDay(todayY, todayM, bill.dueDay);
     // Use getUTC* since clampDay now creates noon-UTC dates
+    //
+    // Was `bill.dueDay <= todayD` — confirmed live this silently skipped the
+    // reminder entirely, with no log line at all (the "already past" branch
+    // this feeds has no logging), for any unpaid bill on the exact day it's
+    // due: the moment today's date-of-month reaches dueDay, this jumped
+    // straight to NEXT month's due date, so daysUntil ballooned to ~30 and
+    // fell outside reminderLeadDays before the caller's window check ever
+    // saw a legitimate "due today" (daysUntil === 0). The rest of the
+    // codebase already has real, written "due today" copy for this exact
+    // case (billManager.ts's buildBillReminderMessage, billScheduler.ts's
+    // notification title) — it was simply unreachable, since this function
+    // never actually returned today's date once today's date matched
+    // dueDay. Strictly-less-than keeps this month's due date as the
+    // candidate through the due date itself, only rolling to next month the
+    // day AFTER it passes unpaid.
     if (candidate.getUTCFullYear() < todayY ||
-        (candidate.getUTCFullYear() === todayY && candidate.getUTCMonth() + 1 === todayM && bill.dueDay <= todayD)) {
+        (candidate.getUTCFullYear() === todayY && candidate.getUTCMonth() + 1 === todayM && bill.dueDay < todayD)) {
       const nextM = todayM === 12 ? 1 : todayM + 1;
       const nextY = todayM === 12 ? todayY + 1 : todayY;
       candidate = clampDay(nextY, nextM, bill.dueDay);

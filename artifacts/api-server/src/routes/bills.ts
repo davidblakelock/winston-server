@@ -25,7 +25,7 @@ function computeFireAt(dateStr: string, hourLocal: number, tz: string): Date {
 // Adds computed display fields to a raw Bill. Used by GET /bills and all paid
 // endpoints so the native app can update local state without a re-fetch.
 function enrichBill(b: Awaited<ReturnType<typeof getBills>>[number], now = new Date(), TZ = "UTC") {
-  const nextDueDate = computeNextDueDate(b, now);
+  const nextDueDate = computeNextDueDate(b, now, TZ);
   const nextDueDateISO = nextDueDate.toLocaleDateString("en-CA", { timeZone: TZ });
   const nextDueDateLabel = nextDueDate.toLocaleDateString("en-US", { timeZone: TZ, month: "long", day: "numeric" });
   const todayStr = now.toLocaleDateString("en-CA", { timeZone: TZ });

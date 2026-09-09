@@ -64,11 +64,28 @@ async function checkBillsForUser(userName: string, userTz: string): Promise<void
       }
     }
 
-    const nextDueDate = computeNextDueDate(bill, now);
+    // userTz explicitly passed — was defaulting to computeNextDueDate's own
+    // "UTC" fallback, inconsistent with the user-timezone-aware "today"
+    // (getLocalDateString(userTz)) used everywhere else in this function.
+    // Low real-world impact today given the localHour >= 8 gate above
+    // already keeps every actual check comfortably inside the same UTC
+    // calendar day for a behind-UTC timezone, but that's incidental to the
+    // gate, not something this call should silently depend on.
+    const nextDueDate = computeNextDueDate(bill, now, userTz);
     const daysUntil = daysBetween(now, nextDueDate, userTz);
 
-    // Only notify within the lead window
-    if (daysUntil < 0 || daysUntil > bill.reminderLeadDays) continue;
+    // Only notify within the lead window. No log line here previously —
+    // confirmed live this let a bill (Citi Credit Card) fall out of the
+    // window with zero trace in the logs, indistinguishable from the bill
+    // never having been checked at all. Logging every skip here, not just
+    // the two branches above that already had one.
+    if (daysUntil < 0 || daysUntil > bill.reminderLeadDays) {
+      logger.info(
+        { billId: bill.id, name: bill.name, daysUntil, reminderLeadDays: bill.reminderLeadDays, userName },
+        "[BILLS] Outside reminder window — skipping"
+      );
+      continue;
+    }
 
     // Atomically claim the send slot in the DB BEFORE pushing.
     // This prevents double-fires across server restarts: if the UPDATE returns
