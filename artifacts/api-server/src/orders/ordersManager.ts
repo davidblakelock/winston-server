@@ -173,12 +173,40 @@ export async function getOrders(userName = NATIVE_USER): Promise<Order[]> {
   // back) — it's done at "refunded". A return sitting at "delivered" with
   // no refund yet must never age out just because 3 days passed.
   const retentionCutoff = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+  // Separate cutoff for the no-tracking-number staleness exclusion below —
+  // a plain DATE comparison against expected_date, not a timestamptz.
+  const staleDateCutoff = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toLocaleDateString("en-CA");
   const { rows } = await query<Order>(
     `SELECT * FROM orders
      WHERE user_name = $1
        AND (
          (direction = 'outbound' AND (status != 'delivered' OR updated_at > $2))
          OR (direction = 'return' AND (status != 'refunded' OR updated_at > $2))
+       )
+       -- Confirmed live: an Amazon order with no real carrier tracking
+       -- number (Amazon Logistics/Narvar-style — see upsertOrder's own
+       -- comments) can get physically combined into the same delivery as a
+       -- SEPARATE order Amazon assigns its own order number to. When that
+       -- happens, Amazon's actual "delivered" email is often only ever sent
+       -- for ONE of the two order numbers — the other has nothing left to
+       -- ever update it, since there's no tracking number for EasyPost to
+       -- poll and no further email is coming. Before this, that order sat
+       -- at "out_for_delivery" (or whatever its last real status was)
+       -- forever, with no way to resolve — the terminal-status retention
+       -- window above never applies because it never reaches a terminal
+       -- status. This only affects orders with NO tracking number (a
+       -- TRACKED order still gets real EasyPost updates and might
+       -- genuinely still be in transit no matter how late, so it's left
+       -- alone regardless of age) that are well past their own expected
+       -- delivery date with nothing left to check — treated the same as
+       -- the terminal-state case: stop showing it as active, without
+       -- claiming a status we don't actually know to be true.
+       AND NOT (
+         tracking_number IS NULL
+         AND direction = 'outbound'
+         AND status != 'delivered'
+         AND expected_date IS NOT NULL
+         AND expected_date < $3
        )
      ORDER BY
        CASE WHEN status = 'out_for_delivery' THEN 0
@@ -190,7 +218,7 @@ export async function getOrders(userName = NATIVE_USER): Promise<Order[]> {
             ELSE 6 END,
        expected_date ASC NULLS LAST,
        created_at DESC`,
-    [userName, retentionCutoff]
+    [userName, retentionCutoff, staleDateCutoff]
   );
   return rows.map((r) => ({
     ...r,
