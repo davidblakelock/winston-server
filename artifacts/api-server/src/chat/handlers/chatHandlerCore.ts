@@ -49,6 +49,7 @@ import {
 } from "../../attic/atticItemsManager.js";
 import { getProactivePicks } from "../../morning/proactiveEventScheduler.js";
 import { getCurrentDateTimeBlock } from "../getCurrentDateTimeBlock.js";
+import { autoUpdateItemUrl } from "../../lists/autoUrlLookup.js";
 import {
   getAllLists,
   addItems,
@@ -1266,6 +1267,20 @@ async function handleNewChatInner(req: NewChatRequest): Promise<NewChatResponse>
           try {
             const inserted = await addItems(listName, items, sessionUserName, undefined, resolvedNotes, resolvedUrl);
             if (inserted.length > 0) batchCategorizeAndUpdateItems(inserted).catch(() => {});
+            // Confirmed live: a restaurant added this way (a plain chat
+            // request naming just the restaurant, no url= from Claude) never
+            // got its official site looked up at all — routes/lists.ts's own
+            // direct-add endpoint has always done this for items added
+            // through the app's own UI, but this action-driven path never
+            // called it, so a chat-added restaurant/place silently stayed
+            // without a website while an identically-added one from the app
+            // UI got one automatically. No-ops for list types other than
+            // restaurant/place, and for anything that already has a url.
+            if (!resolvedUrl) {
+              for (const row of inserted) {
+                autoUpdateItemUrl(row.id, row.item_text, listName).catch(() => {});
+              }
+            }
             await syncListItemToConnections(listName, items, sessionUserName).catch(() => {});
             log.info({ listName, items, hasNotes: !!resolvedNotes, hasUrl: !!resolvedUrl, fromOffer: !!offerCandidate }, "[chatHandlerCore] List items added");
           } catch (err) {
@@ -1633,6 +1648,13 @@ async function handleNewChatInner(req: NewChatRequest): Promise<NewChatResponse>
             pendingListConflict.url
           );
           if (inserted.length > 0) batchCategorizeAndUpdateItems(inserted).catch(() => {});
+          // See the add_todo case's comment on this same call — same gap,
+          // same fix.
+          if (!pendingListConflict.url) {
+            for (const row of inserted) {
+              autoUpdateItemUrl(row.id, row.item_text, pendingListConflict.listName).catch(() => {});
+            }
+          }
           log.info({ listName: pendingListConflict.listName, title: pendingListConflict.title }, "[chatHandlerCore] Notepad list converted and save completed");
         } catch (err) {
           log.warn({ err }, "[chatHandlerCore] convert_notepad_confirm failed");
@@ -1663,6 +1685,11 @@ async function handleNewChatInner(req: NewChatRequest): Promise<NewChatResponse>
           const inserted = await addItems(listName, items, sessionUserName);
           if (listName.toLowerCase() === "shopping" && inserted.length > 0) {
             batchCategorizeAndUpdateItems(inserted).catch(() => {});
+          }
+          // See the add_todo case's comment on this same call — same gap,
+          // same fix. This path never has a resolved url of its own.
+          for (const row of inserted) {
+            autoUpdateItemUrl(row.id, row.item_text, listName).catch(() => {});
           }
           await syncListItemToConnections(listName, items, sessionUserName).catch(() => {});
         } catch (err) {
