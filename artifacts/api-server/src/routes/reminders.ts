@@ -31,6 +31,8 @@ class SSEPushClient implements PushClient {
     (this.res as unknown as { flush?: () => void }).flush?.();
   }
   close(): void {
+    // No close-code concept over SSE — eviction and a plain close look
+    // identical here, same as always.
     try { this.res.end(); } catch { /* already dead */ }
   }
 }

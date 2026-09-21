@@ -7,7 +7,11 @@
 // needed zero changes for the migration.
 export interface PushClient {
   send(event: string, data: unknown): void;
-  close(): void;
+  // `reason` lets a WebSocket implementation send a distinct close code for
+  // an eviction versus a plain close — see wsPushServer.ts's WSPushClient
+  // and useWebSocket.ts's onclose handler for why that distinction matters.
+  // SSE has no equivalent concept and ignores it.
+  close(reason?: "evicted"): void;
 }
 
 const clients = new Map<string, PushClient>();
@@ -36,7 +40,7 @@ export function addClient(id: string, client: PushClient, deviceId?: string | nu
     for (const [existingId, existingDeviceId] of clientDevices) {
       if (existingDeviceId === deviceId && existingId !== id) {
         const stale = clients.get(existingId);
-        try { stale?.close(); } catch { /* already dead */ }
+        try { stale?.close("evicted"); } catch { /* already dead */ }
         clients.delete(existingId);
         clientUsers.delete(existingId);
         clientDevices.delete(existingId);

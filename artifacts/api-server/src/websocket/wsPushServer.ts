@@ -37,13 +37,28 @@ interface LivenessTrackedSocket extends WebSocket {
   isAlive?: boolean;
 }
 
+// Custom close code (private-use range, 4000-4999) for an eviction close
+// specifically — lets the client tell "a newer connection for this same
+// device has taken over" apart from an ordinary network drop. Confirmed
+// live: without this distinction, an orphaned instance that never ran its
+// own unmount cleanup (a still-open question — see hooks/useVoice.ts's
+// mountedRef comments for the same class of issue elsewhere) kept losing
+// the eviction race, retrying blindly every 3s, winning the slot back,
+// getting evicted again by the real instance's own reconnect — a
+// perpetual connect/evict/reconnect storm between two live instances that
+// neither side had any way to recognize it had already lost.
+const EVICTED_CLOSE_CODE = 4001;
+
 class WSPushClient implements PushClient {
   constructor(private ws: WebSocket) {}
   send(event: string, data: unknown): void {
     this.ws.send(JSON.stringify({ type: event, data }));
   }
-  close(): void {
-    try { this.ws.close(); } catch { /* already dead */ }
+  close(reason?: "evicted"): void {
+    try {
+      if (reason === "evicted") this.ws.close(EVICTED_CLOSE_CODE, "evicted");
+      else this.ws.close();
+    } catch { /* already dead */ }
   }
 }
 
