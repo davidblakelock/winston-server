@@ -66,23 +66,58 @@ function decodeEntities(s: string): string {
 }
 
 // ── Step 1: page fetch ────────────────────────────────────────────────────────
+// Returns the resolved (post-redirect) URL alongside the html, even on
+// failure — a share link (share.google, threads.com/share, etc.) forwarded
+// by email is never the real content URL, it's a redirect through it.
+// Confirmed live: a share.google link followed its full redirect chain to a
+// real recipe blog post and STILL 403'd as one continuous request, but a
+// fresh, direct, single-hop fetch of that exact same resolved URL succeeded
+// immediately with real schema.org/Recipe JSON-LD — some sites' bot
+// protection reacts to the redirect chain itself (referrer, hop count),
+// not the destination. If the first attempt fails and a redirect actually
+// happened, retry once with a clean fetch straight to the resolved URL
+// before giving up. Either way, returning the resolved URL lets the caller
+// hand something a web_search fallback can actually work with instead of
+// an opaque short link with zero semantic content of its own.
 
-async function fetchPageHtml(url: string): Promise<string | null> {
+interface PageFetchResult {
+  html: string | null;
+  resolvedUrl: string;
+}
+
+async function fetchPageHtmlOnce(url: string): Promise<{ resp: Response | null; text: string | null }> {
   try {
     const resp = await fetch(url, {
       headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36" },
       redirect: "follow",
       signal: AbortSignal.timeout(10000),
     });
-    if (!resp.ok) {
-      logger.warn({ url, status: resp.status }, "[RecipeEmailImport] page fetch returned non-OK status");
-      return null;
-    }
-    return await resp.text();
+    return { resp, text: resp.ok ? await resp.text() : null };
   } catch (err) {
     logger.warn({ err, url }, "[RecipeEmailImport] page fetch failed");
-    return null;
+    return { resp: null, text: null };
   }
+}
+
+async function fetchPageHtml(url: string): Promise<PageFetchResult> {
+  const first = await fetchPageHtmlOnce(url);
+  const resolvedUrl = first.resp?.url || url;
+
+  if (first.resp?.ok) return { html: first.text, resolvedUrl };
+
+  if (first.resp) {
+    logger.warn({ url, resolvedUrl, status: first.resp.status }, "[RecipeEmailImport] page fetch returned non-OK status");
+  }
+
+  if (resolvedUrl !== url) {
+    const retry = await fetchPageHtmlOnce(resolvedUrl);
+    if (retry.resp?.ok) {
+      logger.info({ url, resolvedUrl }, "[RecipeEmailImport] retry against resolved URL succeeded after original chain failed");
+      return { html: retry.text, resolvedUrl };
+    }
+  }
+
+  return { html: null, resolvedUrl };
 }
 
 // ── Step 2a: schema.org/Recipe JSON-LD extraction (the cheap, common path) ───
@@ -346,29 +381,39 @@ export async function importRecipeFromEmail(params: ImportRecipeParams): Promise
   const hasSubstantialPastedText = remainingText.length >= CONTENT_TEXT_THRESHOLD;
 
   let result: ParsedRecipe | null = null;
-  const sourceUrl = url; // kept as a reference either way; only fetched in the link-only branch
+  // Reassigned to the resolved (post-redirect) URL once fetchPageHtml runs —
+  // a share.google/threads-share/etc. link forwarded by email is never
+  // itself the real content, and saving it as the recipe's source url would
+  // leave the user with a link that may not even resolve the same way
+  // later. See fetchPageHtml's doc comment.
+  let sourceUrl = url;
 
   if (!trimmed) {
     // No body text at all — a bare forwarded photo/screenshot. Images below
     // are the only chance at extraction.
   } else if (url && !hasSubstantialPastedText) {
     // Just a link — fetch and extract from the page.
-    const html = await fetchPageHtml(url);
+    const { html, resolvedUrl } = await fetchPageHtml(url);
+    sourceUrl = resolvedUrl;
     if (!html) {
       // Direct fetch blocked (bot protection, or the site opts out of AI
       // crawling entirely) — try web_search as a genuinely different path
-      // before giving up. See extractRecipeViaWebSearch's doc comment.
-      result = await extractRecipeViaWebSearch(url);
+      // before giving up. Uses the RESOLVED url, not the original share
+      // link — confirmed live, a web_search call given an opaque
+      // share.google link has no semantic content to search with at all,
+      // while the real destination URL it redirects to is something
+      // web_search can actually work with.
+      result = await extractRecipeViaWebSearch(resolvedUrl);
       if (result) {
-        logger.info({ userName, url, title: result.title }, "[RecipeEmailImport] extracted via web_search fallback (direct fetch was blocked)");
+        logger.info({ userName, url, resolvedUrl, title: result.title }, "[RecipeEmailImport] extracted via web_search fallback (direct fetch was blocked)");
       } else {
-        logger.info({ userName, url, subject }, "[RecipeEmailImport] no recipe found — skipping");
+        logger.info({ userName, url, resolvedUrl, subject }, "[RecipeEmailImport] no recipe found — skipping");
         return false;
       }
     } else {
       result = extractRecipeJsonLd(html);
       if (result) {
-        logger.info({ userName, url, title: result.title }, "[RecipeEmailImport] extracted via JSON-LD");
+        logger.info({ userName, url: resolvedUrl, title: result.title }, "[RecipeEmailImport] extracted via JSON-LD");
       } else {
         const stripped = stripHtmlAggressive(html);
         result = await extractRecipeViaClaude(
@@ -376,7 +421,7 @@ export async function importRecipeFromEmail(params: ImportRecipeParams): Promise
           "this webpage's text (already stripped of scripts/nav/ads, but may still contain some unrelated site content mixed in)"
         );
         if (result) {
-          logger.info({ userName, url, title: result.title }, "[RecipeEmailImport] extracted via Claude fallback (no JSON-LD found)");
+          logger.info({ userName, url: resolvedUrl, title: result.title }, "[RecipeEmailImport] extracted via Claude fallback (no JSON-LD found)");
         }
       }
     }
