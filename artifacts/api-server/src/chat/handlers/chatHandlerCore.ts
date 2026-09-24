@@ -1163,6 +1163,29 @@ async function handleNewChatInner(req: NewChatRequest): Promise<NewChatResponse>
     );
   }
 
+  // Confirmed live: asked "What did you find for me?" — the exact trigger
+  // phrase the proactive-picks notification sends — with the real picks
+  // correctly injected into this same turn's prompt (see the "[Your Recent
+  // Picks]" block above). Claude still emitted [ACTION:morning_rundown]
+  // anyway, even though that flow is explicitly instructed to answer
+  // naturally with no tag at all. The morning_rundown handler then
+  // overwrote Claude's own (already-correct) narrative reply with the
+  // cached Morning Run Down text, verbatim, byte-for-byte matching that
+  // morning's real briefing — asked what was found for the weekend, got
+  // the day's news instead. Unlike the two overrides above (which force a
+  // MISSING tag back on), this one suppresses a WRONG one: if the trigger
+  // is this notification's own phrase and picks were genuinely injected
+  // this turn, morning_rundown is never correct here — fall back to "none"
+  // so Claude's own tag-stripped narrative (already grounded in the real
+  // picks) is what actually reaches the user.
+  if (action.type === "morning_rundown" && pendingProactivePicks !== null && /^what did you find\b/i.test(message.trim())) {
+    action = { type: "none" };
+    log.warn(
+      { message, reply: finalReply.slice(0, 200) },
+      "[chatHandlerCore] Suppressed incorrect morning_rundown tag on a proactive-picks trigger"
+    );
+  }
+
   log.info({ actionType: action.type, tag: tagMatch?.[1] ?? "none" }, "[chatHandlerCore] Action parsed");
 
   // ── Execute action ───────────────────────────────────────────────────────────
