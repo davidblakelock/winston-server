@@ -416,6 +416,26 @@ async function callDailyBriefViaClaude(input: string, userName: string): Promise
     const searchCount = resp.content.filter((b) => b.type === "server_tool_use").length;
     logger.info({ userName, searchCount }, "[DailyBrief] Search call count for this run");
 
+    // Confirmed live (Sept 28): the Markets section reported futures up when
+    // they were actually down that morning, and there was no way to tell
+    // whether that was Claude misreading a real result or a stale/mismatched
+    // source, because only the search COUNT was ever logged — never the
+    // query or what came back. Logging query + url/title/page_age (not
+    // encrypted_content, which isn't human-readable) here so the next
+    // incident like this has real evidence instead of a guess.
+    resp.content.forEach((b) => {
+      if (b.type === "server_tool_use" && b.name === "web_search") {
+        logger.info({ userName, query: (b.input as { query?: string })?.query }, "[DailyBrief] web_search query");
+      }
+      if (b.type === "web_search_tool_result") {
+        const content = b.content;
+        const results = Array.isArray(content)
+          ? content.map((r) => ({ url: r.url, title: r.title, pageAge: r.page_age }))
+          : content;
+        logger.info({ userName, results }, "[DailyBrief] web_search results");
+      }
+    });
+
     // web_search is a server-side tool — a single response interleaves
     // "text" blocks with server_tool_use/web_search_tool_result blocks as
     // Claude narrates between searches ("Let me check today's headlines...",
