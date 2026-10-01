@@ -47,7 +47,7 @@ import {
   DEFAULT_ARCHIVE_THRESHOLD_DAYS,
   type PendingAtticCleanup,
 } from "../../attic/atticItemsManager.js";
-import { getProactivePicks } from "../../morning/proactiveEventScheduler.js";
+import { getProactivePicks, type PendingProactivePick } from "../../morning/proactiveEventScheduler.js";
 import { getCurrentDateTimeBlock } from "../getCurrentDateTimeBlock.js";
 import { autoUpdateItemUrl } from "../../lists/autoUrlLookup.js";
 import {
@@ -272,6 +272,34 @@ function buildListsBlock(allLists: Record<string, string[]>, skipList?: string |
     }
   }
   return block;
+}
+
+function formatProactivePicksList(picks: PendingProactivePick[]): string {
+  return picks
+    .map((p, i) => {
+      const when = p.dateLabel || p.dateISO || "ongoing";
+      const where = p.venue ? ` at ${p.venue}` : "";
+      const link = p.url ? `\n   Link: ${p.url}` : "";
+      return `${i + 1}. [${p.category}] "${p.name}"${where} — ${when}. ${p.reason}${link}`;
+    })
+    .join("\n");
+}
+
+// Deterministic fallback for the proactive-picks reveal — used when Claude's
+// own free-text reply can't be trusted (see the morning_rundown suppression
+// override below). Built straight from the same real pick data the prompt
+// itself is grounded in, so it's always correct and complete even if the
+// model's narrative wasn't.
+function formatProactivePicksReply(city: string, picks: PendingProactivePick[]): string {
+  const items = picks
+    .map((p) => {
+      const when = p.dateLabel || p.dateISO || "ongoing";
+      const where = p.venue ? ` at ${p.venue}` : "";
+      const link = p.url ? ` — [more info](${p.url})` : "";
+      return `- **${p.name}**${where} — ${when}. ${p.reason}${link}`;
+    })
+    .join("\n");
+  return `Here's what I found for you in ${city}:\n\n${items}`;
 }
 
 function buildRemindersBlock(
@@ -778,16 +806,9 @@ async function handleNewChatInner(req: NewChatRequest): Promise<NewChatResponse>
   // worth grounding a reply in.
   const PROACTIVE_PICKS_STALE_MS = 5 * 24 * 60 * 60 * 1000; // 5 days
   if (pendingProactivePicks !== null && Date.now() - pendingProactivePicks.generatedAt < PROACTIVE_PICKS_STALE_MS) {
-    const list = pendingProactivePicks.picks
-      .map((p, i) => {
-        const when = p.dateLabel || p.dateISO || "ongoing";
-        const where = p.venue ? ` at ${p.venue}` : "";
-        const link = p.url ? `\n   Link: ${p.url}` : "";
-        return `${i + 1}. [${p.category}] "${p.name}"${where} — ${when}. ${p.reason}${link}`;
-      })
-      .join("\n");
+    const list = formatProactivePicksList(pendingProactivePicks.picks);
     dynamicPrompt += `\n\n[Your Recent Picks — proactive suggestions already generated for __USER__ in ${pendingProactivePicks.city}]\n${list}\n\n` +
-      `This is what you actually found and picked — the notification that brought them here deliberately didn't name them, so this is the reveal. If __USER__'s message is a short, generic question like "what did you find," "what did you find for me," or similar — that means THIS, always, regardless of what was discussed earlier in the conversation. Answer with these picks specifically; do not continue a prior unrelated topic just because it happens to be the most recent thing in the conversation history above — this notification tap is a fresh request, not a continuation. Present the list naturally in your own words (don't just repeat this block verbatim). Every pick above that has a Link MUST have that exact URL included in this very reply, formatted as a markdown link (e.g. "[get tickets](https://...)" or "[more info](https://...)") — this is not optional and not conditional on whether they ask for it; they expect to be able to tap straight through to it from the reveal itself. Only skip the link for a pick that has none. If they later ask for more detail or "why this one," answer from this real information — don't guess or re-search.`;
+      `This is what you actually found and picked — the notification that brought them here deliberately didn't name them, so this is the reveal. If __USER__'s message is a short, generic question like "what did you find," "what did you find for me," or similar — that means THIS, always, regardless of what was discussed earlier in the conversation. Answer with these picks specifically; do not continue a prior unrelated topic just because it happens to be the most recent thing in the conversation history above — this notification tap is a fresh request, not a continuation. Do NOT mention, offer, or allude to a daily/morning briefing in this reply, even if one appears earlier in this conversation's history (e.g. yesterday's briefing) — seeing a past briefing in history is not a cue to also deliver a new one right now; that is a separate request the user did not make this turn, and this reply is about these picks only. Present the list naturally in your own words (don't just repeat this block verbatim). Every pick above that has a Link MUST have that exact URL included in this very reply, formatted as a markdown link (e.g. "[get tickets](https://...)" or "[more info](https://...)") — this is not optional and not conditional on whether they ask for it; they expect to be able to tap straight through to it from the reveal itself. Only skip the link for a pick that has none. If they later ask for more detail or "why this one," answer from this real information — don't guess or re-search.`;
   }
 
   // Save-offer flow in progress — inject what was actually offered so a
@@ -1169,21 +1190,33 @@ async function handleNewChatInner(req: NewChatRequest): Promise<NewChatResponse>
   // Picks]" block above). Claude still emitted [ACTION:morning_rundown]
   // anyway, even though that flow is explicitly instructed to answer
   // naturally with no tag at all. The morning_rundown handler then
-  // overwrote Claude's own (already-correct) narrative reply with the
-  // cached Morning Run Down text, verbatim, byte-for-byte matching that
-  // morning's real briefing — asked what was found for the weekend, got
-  // the day's news instead. Unlike the two overrides above (which force a
-  // MISSING tag back on), this one suppresses a WRONG one: if the trigger
-  // is this notification's own phrase and picks were genuinely injected
-  // this turn, morning_rundown is never correct here — fall back to "none"
-  // so Claude's own tag-stripped narrative (already grounded in the real
-  // picks) is what actually reaches the user.
+  // overwrote Claude's own narrative reply with the cached Morning Run Down
+  // text, verbatim, byte-for-byte matching that morning's real briefing —
+  // asked what was found for the weekend, got the day's news instead.
+  // Unlike the two overrides above (which force a MISSING tag back on),
+  // this one suppresses a WRONG one.
+  //
+  // The original version of this fix assumed Claude's tag-stripped text was
+  // always "already-correct" and just let it through once the tag was
+  // suppressed. Confirmed live that assumption was wrong (Oct 1, Thursday):
+  // with a full Morning Run Down from the day before sitting in recent
+  // conversation history, Claude opened with "let me hit both of those at
+  // once... here's your fresh Thursday briefing — and right after, your
+  // local picks reveal" and THEN emitted the tag — meaning everything
+  // before the tag was just a preamble promising two things, not an actual
+  // answer, and the real picks reveal was never written at all. Suppressing
+  // the tag alone left that orphaned promise as the entire reply. Don't
+  // trust Claude's free text for this case anymore — replace it outright
+  // with a deterministic reveal built from the same real pick data the
+  // prompt was grounded in, so the user gets a correct, complete answer
+  // regardless of what Claude's narrative did.
   if (action.type === "morning_rundown" && pendingProactivePicks !== null && /^what did you find\b/i.test(message.trim())) {
     action = { type: "none" };
     log.warn(
       { message, reply: finalReply.slice(0, 200) },
-      "[chatHandlerCore] Suppressed incorrect morning_rundown tag on a proactive-picks trigger"
+      "[chatHandlerCore] Suppressed incorrect morning_rundown tag on a proactive-picks trigger — replacing reply with deterministic picks reveal"
     );
+    finalReply = formatProactivePicksReply(pendingProactivePicks.city, pendingProactivePicks.picks);
   }
 
   log.info({ actionType: action.type, tag: tagMatch?.[1] ?? "none" }, "[chatHandlerCore] Action parsed");
