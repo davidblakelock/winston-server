@@ -406,14 +406,47 @@ async function mergeSportsTeams(
   existing: string | null,
   newTeams: string[]
 ): Promise<void> {
-  const existingStr = existing ?? "";
-  const existingLower = existingStr.toLowerCase();
-  const additions = newTeams
-    .map((t) => t?.trim())
-    .filter((t): t is string => !!t && !existingLower.includes(t.toLowerCase()));
+  // Confirmed live (Oct 7): this used to check only whether the new team's
+  // exact phrase already appeared in the existing string — so "Rangers"
+  // and "Texas Rangers" (or "cowboys" and "Dallas Cowboys") were treated as
+  // two different teams, since neither phrase literally contains the
+  // other's EXACT casing/wording as a substring in the direction checked.
+  // That let the list snowball over many conversations into
+  // "Rangers, cowboys, Texas Rangers, Dallas Cowboys, Dallas Rangers" —
+  // five entries for what's really two teams, including a team name
+  // ("Dallas Rangers") that doesn't exist. The bare "Rangers" then got fed
+  // straight into the daily brief's sports search as its own literal query
+  // ("Rangers score last night"), which — now that the Texas Rangers'
+  // season is over and the NHL season has started — matched the New York
+  // Rangers instead. Dedup now checks existing entries individually and in
+  // both directions, so a new candidate that's a superset or subset of an
+  // existing entry (by whole word, case-insensitive) is recognized as the
+  // same team instead of appended as a new one.
+  const existingParts = (existing ?? "")
+    .split(",")
+    .map((t) => t.trim())
+    .filter(Boolean);
+  const existingLower = existingParts.map((t) => t.toLowerCase());
+
+  const isSameTeam = (a: string, b: string): boolean => {
+    const wordsA = a.split(/\s+/);
+    const wordsB = b.split(/\s+/);
+    const [shorter, longer] = wordsA.length <= wordsB.length ? [wordsA, wordsB] : [wordsB, wordsA];
+    return shorter.every((w) => longer.includes(w));
+  };
+
+  const additions: string[] = [];
+  for (const raw of newTeams) {
+    const t = raw?.trim();
+    if (!t) continue;
+    const tLower = t.toLowerCase();
+    if (existingLower.some((e) => isSameTeam(e, tLower))) continue;
+    if (additions.some((a) => isSameTeam(a.toLowerCase(), tLower))) continue;
+    additions.push(t);
+  }
   if (additions.length === 0) return;
 
-  const merged = [existingStr, ...additions].filter(Boolean).join(", ");
+  const merged = [...existingParts, ...additions].join(", ");
   await query(
     `UPDATE user_profiles SET sports_teams = $1 WHERE user_name = $2`,
     [merged, userName]
